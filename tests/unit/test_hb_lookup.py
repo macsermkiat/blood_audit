@@ -19,6 +19,7 @@ Constants chosen for human-readable fixtures:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 from hypothesis import given, settings
@@ -328,6 +329,35 @@ class TestTieBreaking:
         # item_no=42 wins → value is 10.0, not 8.0.
         assert result.value_g_dl == 10.0
 
+    def test_tied_peak_prior_is_deterministic_under_reordering(self) -> None:
+        # Two priors share the highest Hb value in the 6h window. The
+        # "peak prior" reported in the delta-Hb window's audit fields must
+        # not depend on caller's input order; the convention is to prefer
+        # the more recent of the tied pair (and finally the highest
+        # item_no), matching _select_current.
+        forward = lookup_hb(
+            observations=[
+                _obs(offset_hours=0, value=8.0, item_no=3),
+                _obs(offset_hours=3, value=12.0, item_no=2),
+                _obs(offset_hours=5, value=12.0, item_no=1),
+            ],
+            anchor_utc=ANCHOR,
+        )
+        reverse = lookup_hb(
+            observations=[
+                _obs(offset_hours=5, value=12.0, item_no=1),
+                _obs(offset_hours=3, value=12.0, item_no=2),
+                _obs(offset_hours=0, value=8.0, item_no=3),
+            ],
+            anchor_utc=ANCHOR,
+        )
+        # Whole-window equality is the strongest cross-ordering contract.
+        assert forward.delta_hb_windows == reverse.delta_hb_windows
+        # And the chosen peak prior is the more recent of the tied pair.
+        win_6h = _window(forward, hours=6)
+        assert win_6h.prior_value_g_dl == 12.0
+        assert win_6h.prior_datetime_utc == ANCHOR - timedelta(hours=3)
+
     def test_same_datetime_tie_break_is_deterministic_under_reordering(self) -> None:
         # The contract must not depend on input ordering.
         forward = lookup_hb(
@@ -634,6 +664,21 @@ class TestHbObservationInvariants:
             HbObservation(
                 value_g_dl=10.0,
                 datetime_utc=datetime(2026, 5, 15, 12, 0, 0),  # no tzinfo
+                source="HEMATOLOGY",
+                item_no=1,
+            )
+
+    def test_non_utc_tz_aware_datetime_rejected(self) -> None:
+        # Per the project's tz contract (see RowTimestamp): the persisted
+        # timestamp is UTC. A Bangkok-aware datetime carries the right
+        # instant in tzinfo but would, if accepted here, propagate as
+        # `datetime_utc` in the public lookup output — silently leaking a
+        # local time into downstream classifiers.
+        bangkok = ZoneInfo("Asia/Bangkok")
+        with pytest.raises(ValidationError):
+            HbObservation(
+                value_g_dl=10.0,
+                datetime_utc=datetime(2026, 5, 15, 19, 0, 0, tzinfo=bangkok),
                 source="HEMATOLOGY",
                 item_no=1,
             )
