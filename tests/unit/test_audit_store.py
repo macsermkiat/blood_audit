@@ -829,6 +829,33 @@ class TestIdentifiersAreFilesystemSafe:
         assert row.audit_id == good
 
 
+class TestRuntimeDependenciesDeclared:
+    """Codex P1 round 7: ``bba.audit_store`` imports :mod:`pydantic` at module
+    load. Production installs without dev dependencies (e.g. wheel install,
+    ``uv sync --no-dev``) must therefore see ``pydantic`` in
+    ``[project].dependencies`` — not just in the dev dependency group.
+
+    Parsing ``pyproject.toml`` here keeps the contract explicit: a future
+    refactor that demotes pydantic back into dev-only would fail this test
+    before it could ship a broken wheel.
+    """
+
+    def test_pydantic_in_runtime_dependencies(self) -> None:
+        import tomllib
+        from pathlib import Path as _Path
+
+        project_root = _Path(__file__).resolve().parents[2]
+        pyproject = tomllib.loads((project_root / "pyproject.toml").read_text())
+
+        deps = pyproject["project"]["dependencies"]
+
+        assert any(d.startswith("pydantic") for d in deps), (
+            f"pydantic must be declared in [project].dependencies "
+            f"because bba.audit_store imports it at module load; "
+            f"got {deps!r}"
+        )
+
+
 class TestIdempotencyMarkerIncludesCodeVersion:
     """Codex P2 round 2: ``AuditStoreConfig.code_version`` docstring promises
     that a code-version bump invalidates the cached completion marker so a
