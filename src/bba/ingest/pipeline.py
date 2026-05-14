@@ -25,6 +25,7 @@ from typing import cast, get_args
 from bba.ingest.hashing import compute_run_id, content_hash
 from bba.ingest.models import CSVTable, IngestConfig, IngestResult
 from bba.ingest.schemas import (
+    IncompleteInputError,
     SchemaDriftError,
     get_schema,
     schema_fingerprint,
@@ -59,6 +60,12 @@ def ingest(config: IngestConfig) -> IngestResult:
     """
     known_tables: tuple[CSVTable, ...] = cast("tuple[CSVTable, ...]", get_args(CSVTable))
 
+    if not config.input_dir.exists() or not config.input_dir.is_dir():
+        raise IncompleteInputError(
+            f"input_dir {str(config.input_dir)!r} is missing or not a directory; "
+            f"a complete HOSxP export of {len(known_tables)} CSVs is required"
+        )
+
     per_file_hashes: dict[CSVTable, str] = {}
     validated: list[CSVTable] = []
 
@@ -87,6 +94,14 @@ def ingest(config: IngestConfig) -> IngestResult:
             )
         per_file_hashes[table] = content_hash(csv_path)
         validated.append(table)
+
+    missing_tables = sorted(set(known_tables) - set(validated))
+    if missing_tables:
+        # No marker is written: the raise sits above the run_id/marker logic.
+        raise IncompleteInputError(
+            f"input_dir is missing {len(missing_tables)} of {len(known_tables)} "
+            f"required HOSxP tables: {missing_tables}"
+        )
 
     input_csv_hash = _aggregate_input_hash(per_file_hashes)
     run_id = compute_run_id(input_csv_hash, schema_fingerprint(), config.code_version)
