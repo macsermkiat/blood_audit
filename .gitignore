@@ -35,3 +35,8 @@ data/encrypted/
 data/raw/
 *.csv
 !tests/fixtures/**/*.csv
+
+# Claude Code — per-machine overrides (project-tracked settings.json IS committed)
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/.ralph-loop.local.md
