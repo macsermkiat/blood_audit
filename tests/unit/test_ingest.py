@@ -434,3 +434,84 @@ class TestIngestResultShape:
         second = ingest(cfg)
         assert second.run_id == first.run_id
         assert second.skipped_idempotent is True
+
+
+# =============================================================================
+# Codex-review follow-ups for issue #3
+# =============================================================================
+
+
+class TestSchemaMissingRequiredColumn:
+    """Codex P2 (pipeline.py:74-75): the drift check only rejected unknown
+    columns; a CSV that omitted a required column slipped past, was hashed,
+    and marked complete. Missing required columns must fail loud just like
+    unknown ones — downstream joins rely on every declared column."""
+
+    def test_missing_required_column_raises_schema_drift_error(
+        self, tmp_path: Path
+    ) -> None:
+        in_dir = tmp_path / "in"
+        in_dir.mkdir()
+        # BDVST declares HN, AN, REQNO, BDVSTST, REQTYPE, CANCELDATE.
+        # This CSV provides only HN + AN — REQNO and four others are missing.
+        (in_dir / "BDVST.csv").write_text("HN,AN\n123,456\n", encoding="utf-8")
+        cfg = IngestConfig(
+            input_dir=in_dir,
+            output_dir=tmp_path / "out",
+            code_version="test-0.0.1",
+        )
+        with pytest.raises(SchemaDriftError) as exc_info:
+            ingest(cfg)
+        msg = str(exc_info.value)
+        # Helpful error must surface a specific missing column + the table.
+        assert "REQNO" in msg, f"drift error did not name missing column REQNO: {msg!r}"
+        assert "BDVST" in msg, f"drift error did not name the source table: {msg!r}"
+
+    def test_missing_column_check_does_not_write_complete_marker(
+        self, tmp_path: Path
+    ) -> None:
+        # No partial state must be left behind when drift is detected.
+        in_dir = tmp_path / "in"
+        in_dir.mkdir()
+        out_dir = tmp_path / "out"
+        (in_dir / "BDVST.csv").write_text("HN,AN\n123,456\n", encoding="utf-8")
+        cfg = IngestConfig(input_dir=in_dir, output_dir=out_dir, code_version="test")
+        with pytest.raises(SchemaDriftError):
+            ingest(cfg)
+        # The writer must NOT have created any completion marker.
+        markers = list(out_dir.glob("_run_*.complete")) if out_dir.exists() else []
+        assert markers == [], f"drift run leaked a complete marker: {markers}"
+
+
+class TestIngestResultTablesWrittenIsImmutable:
+    """Codex P2 (models.py:65-67): `frozen=True` blocks reassignment but does
+    NOT freeze a nested mutable container, so a caller could `append` to
+    `result.tables_written`. The public output contract promises immutability —
+    use a tuple."""
+
+    def test_tables_written_is_a_tuple(self, tmp_path: Path) -> None:
+        in_dir = tmp_path / "in"
+        in_dir.mkdir()
+        cfg = IngestConfig(
+            input_dir=in_dir,
+            output_dir=tmp_path / "out",
+            code_version="0.0.1",
+        )
+        result = ingest(cfg)
+        assert isinstance(result.tables_written, tuple), (
+            f"tables_written must be a tuple for immutability, got "
+            f"{type(result.tables_written).__name__}"
+        )
+
+    def test_tables_written_cannot_be_appended_to(self, tmp_path: Path) -> None:
+        in_dir = tmp_path / "in"
+        in_dir.mkdir()
+        cfg = IngestConfig(
+            input_dir=in_dir,
+            output_dir=tmp_path / "out",
+            code_version="0.0.1",
+        )
+        result = ingest(cfg)
+        # tuple has no .append; AttributeError is the immutability signal.
+        with pytest.raises(AttributeError):
+            result.tables_written.append("BDVST")  # type: ignore[attr-defined]
