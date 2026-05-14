@@ -31,6 +31,7 @@ from bba.ingest.schemas import (
     all_tables,
     get_schema,
     schema_fingerprint,
+    validate_header,
 )
 from bba.ingest.time_parser import parse_hosxp_time
 from bba.ingest.tz import to_utc
@@ -252,7 +253,55 @@ class TestSchemaCoverage:
 # =============================================================================
 
 
+class TestValidateHeader:
+    """Drift policy lives in schemas.validate_header; the interface IS the test
+    surface (DEEPENING.md). Pipeline-level drift tests below confirm propagation."""
+
+    def test_clean_header_returns_none(self) -> None:
+        cols = list(get_schema("BDVST").columns)
+        # Returns None implicitly when no drift; no exception raised.
+        assert validate_header("BDVST", cols) is None
+
+    def test_clean_header_order_insensitive(self) -> None:
+        cols = list(reversed(list(get_schema("BDVST").columns)))
+        assert validate_header("BDVST", cols) is None
+
+    def test_unknown_column_raises(self) -> None:
+        with pytest.raises(SchemaDriftError) as exc_info:
+            validate_header("BDVST", ["HN", "AN", "REQNO", "BDVSTST", "REQTYPE", "CANCELDATE", "MYSTERY_COL"])
+        msg = str(exc_info.value)
+        assert "MYSTERY_COL" in msg
+        assert "BDVST" in msg
+
+    def test_missing_required_column_raises(self) -> None:
+        # BDVST declares 6 columns; this CSV is missing REQNO.
+        with pytest.raises(SchemaDriftError) as exc_info:
+            validate_header("BDVST", ["HN", "AN", "BDVSTST", "REQTYPE", "CANCELDATE"])
+        msg = str(exc_info.value)
+        assert "REQNO" in msg
+        assert "BDVST" in msg
+
+    def test_unknown_and_missing_both_named(self) -> None:
+        # BDVST: missing REQNO + has extra MYSTERY_COL.
+        with pytest.raises(SchemaDriftError) as exc_info:
+            validate_header("BDVST", ["HN", "AN", "BDVSTST", "REQTYPE", "CANCELDATE", "MYSTERY_COL"])
+        msg = str(exc_info.value)
+        assert "REQNO" in msg
+        assert "MYSTERY_COL" in msg
+
+    def test_empty_header_raises_with_full_missing_list(self) -> None:
+        with pytest.raises(SchemaDriftError) as exc_info:
+            validate_header("BDVST", [])
+        # Empty header is the limit case of "missing everything".
+        msg = str(exc_info.value)
+        for col in get_schema("BDVST").columns:
+            assert col in msg, f"column {col!r} not named in error: {msg!r}"
+
+
 class TestSchemaDriftDetection:
+    """Integration: drift detected by validate_header propagates through ingest()
+    and does NOT write a completion marker (no side-effects on drift)."""
+
     def test_unknown_column_raises_schema_drift_error(self, tmp_path: Path) -> None:
         # Craft a single-table input dir; the BDVST.csv has an unknown column.
         in_dir = tmp_path / "in"

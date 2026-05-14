@@ -126,3 +126,30 @@ def schema_fingerprint() -> str:
             h.update(b":nullable=")
             h.update(b"1" if col.nullable else b"0")
     return h.hexdigest()
+
+
+def validate_header(table: CSVTable, header: list[str]) -> None:
+    """Raise :class:`SchemaDriftError` if ``header`` doesn't match the v1 schema.
+
+    Drift goes both ways and both are fatal:
+
+    * **unknown** — a column in the CSV that the schema does not declare.
+      Untrusted data could be carried into a downstream join.
+    * **missing** — a declared column that the CSV omits. Joins downstream
+      would silently null out, which a partial export can produce without
+      any other warning.
+
+    Returns ``None`` on a clean header. Callers should invoke this before any
+    side-effect (run_id derivation, marker write).
+    """
+    schema = get_schema(table)
+    declared = set(schema.columns)
+    present = set(header)
+    unknown = sorted(present - declared)
+    missing = sorted(declared - present)
+    if unknown or missing:
+        raise SchemaDriftError(
+            f"schema drift in table {table!r}: "
+            f"unknown columns {unknown}, missing required columns {missing} "
+            f"(declared columns: {sorted(declared)})"
+        )

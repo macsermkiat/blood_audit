@@ -26,9 +26,8 @@ from bba.ingest.hashing import compute_run_id, content_hash
 from bba.ingest.models import CSVTable, IngestConfig, IngestResult
 from bba.ingest.schemas import (
     IncompleteInputError,
-    SchemaDriftError,
-    get_schema,
     schema_fingerprint,
+    validate_header,
 )
 from bba.ingest.writer import is_run_complete, mark_run_complete
 
@@ -76,22 +75,10 @@ def ingest(config: IngestConfig) -> IngestResult:
             # the 10 HOSxP tables and operators may stage extra artefacts.
             continue
         table = stem
-        schema = get_schema(table)
-        header = _read_csv_header(csv_path)
-        declared = set(schema.columns)
-        present = set(header)
-        unknown = sorted(present - declared)
-        missing = sorted(declared - present)
-        # Drift goes both ways: unknown columns may carry untrusted data into a
-        # downstream join, and missing required columns silently nullify joins.
-        # Fail loud on either; no partial completion marker is written because
-        # the raise happens before mark_run_complete.
-        if unknown or missing:
-            raise SchemaDriftError(
-                f"schema drift in table {table!r}: "
-                f"unknown columns {unknown}, missing required columns {missing} "
-                f"(declared columns: {sorted(declared)})"
-            )
+        # validate_header concentrates the drift rule (both unknown + missing
+        # columns) with the schema registry. Raises SchemaDriftError before any
+        # side-effect, so a malformed input never writes a completion marker.
+        validate_header(table, _read_csv_header(csv_path))
         per_file_hashes[table] = content_hash(csv_path)
         validated.append(table)
 
