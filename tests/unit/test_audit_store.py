@@ -856,6 +856,128 @@ class TestRuntimeDependenciesDeclared:
         )
 
 
+class TestFilenameStemIsCollisionFree:
+    """Codex P1 round 8: the ``_``-separated filename stem made
+    ``(audit_id='a', run_id='b_c')`` indistinguishable from
+    ``(audit_id='a_b', run_id='c')`` — two distinct valid IDs collapse to
+    the same parquet path. The second write would either silently no-op
+    (marker exists) or overwrite the first's bytes.
+
+    Fix: hash each ID component into a fixed-length hex digest before
+    interpolation. Surface columns still carry the raw values for filtering
+    and debugging.
+    """
+
+    def test_audit_parquet_stem_no_collision_for_underscored_ids(
+        self, tmp_path: Path
+    ) -> None:
+        root = tmp_path / "store"
+        store = AuditStore(AuditStoreConfig(root_dir=root, code_version="v1"))
+
+        store.write(
+            _row(audit_id="a", run_id="b_c"),
+            [_call(call_id="c1", audit_id="a", run_id="b_c")],
+        )
+        store.write(
+            _row(audit_id="a_b", run_id="c"),
+            [_call(call_id="c2", audit_id="a_b", run_id="c")],
+        )
+
+        parquets = sorted((root / "audit_results").glob("*.parquet"))
+        assert len(parquets) == 2, (
+            f"two distinct (audit_id, run_id) pairs collapsed to the same "
+            f"parquet stem: {[p.name for p in parquets]}"
+        )
+
+    def test_call_parquet_stem_no_collision_for_underscored_ids(
+        self, tmp_path: Path
+    ) -> None:
+        root = tmp_path / "store"
+        store = AuditStore(AuditStoreConfig(root_dir=root, code_version="v1"))
+
+        store.write(
+            _row(audit_id="a1", run_id="r1"),
+            [
+                _call(call_id="x", audit_id="a1", run_id="r1"),
+                _call(call_id="x_y", audit_id="a1", run_id="r1"),
+            ],
+        )
+
+        call_parquets = sorted((root / "llm_calls").glob("*.parquet"))
+        assert len(call_parquets) == 2, (
+            f"call_ids 'x' and 'x_y' collapsed under the same slug: "
+            f"{[p.name for p in call_parquets]}"
+        )
+
+    def test_collision_free_round_trip(self, tmp_path: Path) -> None:
+        # Both pairs must be readable back as distinct audit rows.
+        root = tmp_path / "store"
+        store = AuditStore(AuditStoreConfig(root_dir=root, code_version="v1"))
+        store.write(
+            _row(audit_id="a", run_id="b_c", reasoning_summary_en="pair-1"),
+            [_call(call_id="c1", audit_id="a", run_id="b_c")],
+        )
+        store.write(
+            _row(audit_id="a_b", run_id="c", reasoning_summary_en="pair-2"),
+            [_call(call_id="c2", audit_id="a_b", run_id="c")],
+        )
+
+        rows = store.read_audit_results()
+        summaries = {r.reasoning_summary_en for r in rows}
+
+        assert summaries == {"pair-1", "pair-2"}
+
+
+class TestSnapshotViewScopesByCodeVersion:
+    """Codex P2 round 8: SnapshotView materialization keyed only on
+    ``as_of`` was writing every code-version's payload into one daily
+    snapshot, with no way to filter back to a single committed version.
+    Dashboards reading from a post-bump snapshot would double-count rows.
+
+    Fix: snapshot persists ``code_version_slug`` alongside each payload;
+    :meth:`SnapshotView.read_audit_results` accepts an optional
+    ``code_version`` filter symmetric with the store reader.
+    """
+
+    def test_snapshot_view_filters_by_code_version(self, tmp_path: Path) -> None:
+        root = tmp_path / "store"
+        AuditStore(AuditStoreConfig(root_dir=root, code_version="v1.0.0")).write(
+            _row(audit_id="a-shared", run_id="r1", reasoning_summary_en="v1"),
+            [_call(call_id="c-v1", audit_id="a-shared", run_id="r1")],
+        )
+        store_v2 = AuditStore(AuditStoreConfig(root_dir=root, code_version="v2.0.0"))
+        store_v2.write(
+            _row(audit_id="a-shared", run_id="r1", reasoning_summary_en="v2"),
+            [_call(call_id="c-v2", audit_id="a-shared", run_id="r1")],
+        )
+
+        view = SnapshotView.open(store_v2, as_of=date(2026, 5, 1))
+
+        only_v2 = view.read_audit_results(code_version="v2.0.0")
+
+        assert {r.reasoning_summary_en for r in only_v2} == {"v2"}
+
+    def test_snapshot_view_unfiltered_returns_every_version(
+        self, tmp_path: Path
+    ) -> None:
+        root = tmp_path / "store"
+        AuditStore(AuditStoreConfig(root_dir=root, code_version="v1.0.0")).write(
+            _row(audit_id="a-shared", run_id="r1", reasoning_summary_en="v1"),
+            [_call(call_id="c-v1", audit_id="a-shared", run_id="r1")],
+        )
+        store_v2 = AuditStore(AuditStoreConfig(root_dir=root, code_version="v2.0.0"))
+        store_v2.write(
+            _row(audit_id="a-shared", run_id="r1", reasoning_summary_en="v2"),
+            [_call(call_id="c-v2", audit_id="a-shared", run_id="r1")],
+        )
+
+        view = SnapshotView.open(store_v2, as_of=date(2026, 5, 1))
+
+        every = view.read_audit_results()
+
+        assert {r.reasoning_summary_en for r in every} == {"v1", "v2"}
+
+
 class TestIdempotencyMarkerIncludesCodeVersion:
     """Codex P2 round 2: ``AuditStoreConfig.code_version`` docstring promises
     that a code-version bump invalidates the cached completion marker so a
@@ -1169,7 +1291,10 @@ class TestCodeVersionInAuditPaths:
             ],
         )
 
-        call_files = sorted((root / "llm_calls").glob("call_c1_*.parquet"))
+        # Both calls have call_id="c1" but different code_versions, so they
+        # land in distinct files. With hashed-id stems we count via the dir
+        # instead of a raw-id glob.
+        call_files = sorted((root / "llm_calls").glob("*.parquet"))
         assert len(call_files) == 2, (
             "v2 rewrote v1's call file; both code_versions must coexist"
         )
@@ -1238,7 +1363,11 @@ class TestCodeVersionInAuditPaths:
             older_than=datetime(2026, 4, 2, 0, 0, 0, tzinfo=UTC),
         )
 
-        call_files = sorted((root / "llm_calls").glob("call_c-old_*.parquet"))
+        # Only ONE call file in the dataset (v1's), and the migration must
+        # have rewritten it in place (not leaked a second file under the
+        # migrator's slug). With hashed call_ids we can no longer glob by
+        # raw id, so we count via the dir.
+        call_files = sorted((root / "llm_calls").glob("*.parquet"))
         assert len(call_files) == 1, (
             f"migration leaked a second file under the migrator's slug "
             f"instead of rewriting in place: {[p.name for p in call_files]}"
@@ -1359,7 +1488,9 @@ class TestCodeVersionInAuditPaths:
             older_than=datetime(2026, 4, 2, 0, 0, 0, tzinfo=UTC),
         )
 
-        cold_blobs = sorted((root / "cold_storage").glob("c-shared*.json"))
+        # Each version's blob lives at its own path (hashed call_id + slug),
+        # so two blobs are present, one per code_version.
+        cold_blobs = sorted((root / "cold_storage").glob("*.json"))
         assert len(cold_blobs) == 2, (
             f"v2 migration overwrote v1's cold blob: {[p.name for p in cold_blobs]}"
         )

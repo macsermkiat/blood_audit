@@ -311,7 +311,7 @@ class AuditStore:
         """
         slug = code_version_slug if code_version_slug is not None else self._code_version_slug
         self._calls_dir.mkdir(parents=True, exist_ok=True)
-        path = self._calls_dir / f"call_{call.call_id}_{slug}.parquet"
+        path = self._calls_dir / f"call_{_hash_id(call.call_id)}_{slug}.parquet"
         _write_single_record(
             path,
             {
@@ -401,7 +401,9 @@ class AuditStore:
         return self._markers_dir / f"_{parquet_path.stem}.complete"
 
     def _row_stem(self, audit_id: str, run_id: str) -> str:
-        return f"audit_{audit_id}_{run_id}_{self._code_version_slug}"
+        return (
+            f"audit_{_hash_id(audit_id)}_{_hash_id(run_id)}_{self._code_version_slug}"
+        )
 
     @property
     def _code_version_slug(self) -> str:
@@ -416,7 +418,25 @@ def _slugify_code_version(code_version: str) -> str:
     derive the slug from a caller-supplied ``code_version`` string without
     instantiating a store at that version.
     """
-    return hashlib.sha256(code_version.encode("utf-8")).hexdigest()[:16]
+    return _hash_id(code_version)
+
+
+def _hash_id(value: str) -> str:
+    """Stable 16-char sha256 hex prefix of an arbitrary identifier.
+
+    Used to compose filename components so two distinct identifier pairs
+    never produce the same ``_``-separated stem (Codex P1 round 8). For
+    example, with the legacy raw-interpolation scheme
+    ``audit_{audit_id}_{run_id}_{slug}`` the pairs ``("a", "b_c")`` and
+    ``("a_b", "c")`` both produced ``audit_a_b_c_{slug}`` — distinct valid
+    audit rows would clobber each other. With hashed components the
+    pre-image collision space is the sha256 prefix itself, which is
+    cryptographically negligible.
+
+    The raw identifier is still preserved in the parquet's surface columns
+    for filtering and debugging.
+    """
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
 def _write_single_record(path: Path, data: dict[str, str]) -> None:
