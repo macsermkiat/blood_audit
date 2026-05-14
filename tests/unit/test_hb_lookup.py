@@ -118,6 +118,16 @@ class TestParseHbValueRejection:
     def test_none_input(self) -> None:
         assert parse_hb_value(None) is None
 
+    def test_nan_rejected(self) -> None:
+        # float("nan") parses but is not a valid clinical value — reject.
+        assert parse_hb_value("nan") is None
+        assert parse_hb_value("NaN") is None
+
+    def test_infinity_rejected(self) -> None:
+        # float("inf") parses but is non-physiological.
+        assert parse_hb_value("inf") is None
+        assert parse_hb_value("-inf") is None
+
 
 class TestParseHbValueProperty:
     """Property invariants — encode the WHY of numeric validation."""
@@ -588,8 +598,8 @@ class TestPublicOutputsAreImmutable:
                 DeltaHbWindow(
                     window_hours=99,
                     threshold_g_dl=0.0,
-                    earliest_value_g_dl=None,
-                    earliest_datetime_utc=None,
+                    prior_value_g_dl=None,
+                    prior_datetime_utc=None,
                     drop_g_dl=None,
                     triggered=False,
                 )
