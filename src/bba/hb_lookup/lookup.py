@@ -145,7 +145,13 @@ def _delta_window_for(
             triggered=False,
         )
     # The "peak prior" — bigger drop is the more conservative bleed signal.
-    peak = max(priors_in_window, key=lambda o: o.value_g_dl)
+    # Tie-break (same Hb value) by most-recent datetime, then highest
+    # item_no — matches _select_current's convention so the public output
+    # is deterministic regardless of input ordering.
+    peak = max(
+        priors_in_window,
+        key=lambda o: (o.value_g_dl, o.datetime_utc, o.item_no),
+    )
     drop = peak.value_g_dl - current.value_g_dl
     return DeltaHbWindow(
         window_hours=hours,

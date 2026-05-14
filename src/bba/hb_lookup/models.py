@@ -7,7 +7,7 @@ any instance is, by construction, valid input or output for ``lookup_hb``.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -41,9 +41,13 @@ class HbObservation(BaseModel):
 
     @field_validator("datetime_utc")
     @classmethod
-    def _datetime_must_be_tz_aware(cls, v: datetime) -> datetime:
-        if v.tzinfo is None:
-            raise ValueError("datetime_utc must be tz-aware (UTC)")
+    def _datetime_must_be_utc(cls, v: datetime) -> datetime:
+        # Strict-loud per the project's tz contract (see RowTimestamp):
+        # the persisted timestamp is UTC, not "tz-aware in some zone".
+        # Accepting a Bangkok-aware datetime here would silently leak a
+        # local time into downstream classifiers and audit output.
+        if v.tzinfo is None or v.utcoffset() != timedelta(0):
+            raise ValueError("datetime_utc must be tz-aware UTC")
         return v
 
 
