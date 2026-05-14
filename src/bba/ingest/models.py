@@ -58,11 +58,15 @@ class IngestResult(BaseModel):
 
     ``skipped_idempotent=True`` indicates the writer detected an already-complete
     ``run_id`` and no-op'd per PRD §1 (run-level idempotency).
+
+    ``tables_written`` is a tuple — ``frozen=True`` only prevents reassigning the
+    field, not mutating a nested ``list``. A tuple makes the public output
+    contract genuinely immutable.
     """
 
     model_config = ConfigDict(frozen=True)
 
     run_id: str
     rows_written: int
-    tables_written: list[CSVTable]
+    tables_written: tuple[CSVTable, ...]
     skipped_idempotent: bool

@@ -71,11 +71,19 @@ def ingest(config: IngestConfig) -> IngestResult:
         table = stem
         schema = get_schema(table)
         header = _read_csv_header(csv_path)
-        unknown = [c for c in header if c not in schema.columns]
-        if unknown:
+        declared = set(schema.columns)
+        present = set(header)
+        unknown = sorted(present - declared)
+        missing = sorted(declared - present)
+        # Drift goes both ways: unknown columns may carry untrusted data into a
+        # downstream join, and missing required columns silently nullify joins.
+        # Fail loud on either; no partial completion marker is written because
+        # the raise happens before mark_run_complete.
+        if unknown or missing:
             raise SchemaDriftError(
-                f"schema drift in table {table!r}: unknown columns {unknown} "
-                f"(declared columns: {sorted(schema.columns)})"
+                f"schema drift in table {table!r}: "
+                f"unknown columns {unknown}, missing required columns {missing} "
+                f"(declared columns: {sorted(declared)})"
             )
         per_file_hashes[table] = content_hash(csv_path)
         validated.append(table)
@@ -83,11 +91,13 @@ def ingest(config: IngestConfig) -> IngestResult:
     input_csv_hash = _aggregate_input_hash(per_file_hashes)
     run_id = compute_run_id(input_csv_hash, schema_fingerprint(), config.code_version)
 
+    tables_written = tuple(validated)
+
     if is_run_complete(config.output_dir, run_id):
         return IngestResult(
             run_id=run_id,
             rows_written=0,
-            tables_written=validated,
+            tables_written=tables_written,
             skipped_idempotent=True,
         )
 
@@ -99,6 +109,6 @@ def ingest(config: IngestConfig) -> IngestResult:
     return IngestResult(
         run_id=run_id,
         rows_written=0,
-        tables_written=validated,
+        tables_written=tables_written,
         skipped_idempotent=False,
     )
