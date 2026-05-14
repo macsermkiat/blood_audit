@@ -29,6 +29,7 @@ dist/
 .DS_Store
 .vscode/
 .idea/
+.claude/
 
 # Project — encrypted clinical data MUST NEVER be committed
 data/encrypted/
