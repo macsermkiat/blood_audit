@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from pydantic import ValidationError
 
 from bba.vitals_extractor import (
     BT_MAX,
@@ -273,6 +274,21 @@ class TestRegexRejectsOverlongNumbers:
         # "BT 3845" must NOT become bt=38.0 via greedy 2-digit fallback.
         v = extract_vitals_from_text("BT 3845")
         assert v.bt is None
+
+    def test_bp_overlong_dbp_does_not_truncate(self) -> None:
+        # "BP 120/1000" must NOT become dbp=100 (a clean in-bounds DBP) via
+        # greedy 3-digit truncation of "1000". The "/" only protects SBP from
+        # bleeding into DBP — DBP needs its own trailing-digit guard.
+        v = extract_vitals_from_text("BP 120/1000")
+        assert v.dbp is None
+
+    def test_bp_overlong_sbp_does_not_truncate(self) -> None:
+        # "BP 1234/80" with a 4-digit SBP must not match the regex at all
+        # (no in-range SBP prefix can be followed by "/" because "4" is in
+        # the way). Symmetric guarantee with HR/RR/BT.
+        v = extract_vitals_from_text("BP 1234/80")
+        assert v.sbp is None
+        assert v.dbp is None
 
 
 # =============================================================================
@@ -567,3 +583,44 @@ class TestLLMFallbackTypeAlias:
 
         fb: LLMFallback = stub
         assert fb("anything") == VitalSigns()
+
+
+# =============================================================================
+# Regression (codex review, 2026-05-15): tz-aware timestamp contract MUST be
+# enforced at the type boundary. A naive VitalsNote would crash the window
+# filter; a naive anchor would silently bypass the UTC contract because two
+# naive datetimes subtract cleanly but the result is meaningless across zones.
+# =============================================================================
+
+
+class TestTimestampContract:
+    """Naive (tz-unaware) datetimes are rejected at every entry point.
+
+    The ingest layer normalizes order anchors and row timestamps to UTC; this
+    test class is the tripwire that prevents a downstream caller from passing
+    a naive datetime through the validator's gap."""
+
+    def test_vitals_note_rejects_naive_timestamp(self) -> None:
+        with pytest.raises(ValidationError):
+            VitalsNote(
+                source="IPDADMPROGRESS",
+                timestamp=datetime(2026, 5, 14, 12, 0, 0),  # naive — no tzinfo
+                text="BP 120/70",
+            )
+
+    def test_vitals_note_accepts_non_utc_aware_timestamp(self) -> None:
+        # The validator is "tz-aware", not "must-be-UTC" — any non-naive zone
+        # is acceptable because datetime arithmetic between aware datetimes
+        # normalizes to UTC. The ingest layer happens to feed UTC, but the
+        # extractor doesn't need to assert that specifically.
+        bangkok = timezone(timedelta(hours=7))
+        n = VitalsNote(
+            source="IPDADMPROGRESS",
+            timestamp=datetime(2026, 5, 14, 19, 0, 0, tzinfo=bangkok),
+            text="BP 120/70",
+        )
+        assert n.timestamp.tzinfo is not None
+
+    def test_extract_vitals_rejects_naive_anchor(self) -> None:
+        with pytest.raises(ValueError, match="tz-aware"):
+            extract_vitals(anchor=datetime(2026, 5, 14, 12, 0, 0), notes=[])

@@ -69,6 +69,16 @@ def extract_vitals(
     regex-missing fields. Provenance flips to ``LLM_EXTRACTED`` if the
     fallback actually contributed any non-None field that regex missed.
     """
+    if anchor.tzinfo is None:
+        # The window arithmetic ``n.timestamp - anchor`` is only meaningful
+        # when both sides are tz-aware. VitalsNote's AwareDatetime validator
+        # protects the note side; this guard protects the anchor side so a
+        # naive caller cannot silently bypass the UTC contract — see codex
+        # review, 2026-05-15.
+        raise ValueError(
+            "extract_vitals: anchor must be a tz-aware datetime "
+            "(the ingest layer normalizes order anchors to UTC)"
+        )
     in_window = [n for n in notes if abs(n.timestamp - anchor) <= _WINDOW]
 
     if not in_window:
