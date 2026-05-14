@@ -30,13 +30,18 @@ from bba.vitals_extractor.models import VitalSigns
 # inside "BPM", or stray "P" inside "Step" can never satisfy a label.
 #
 # Each captured numeric group is terminated by a ``(?!\d)`` negative lookahead
-# so an OCR-noisy overlong token like "HR 2000" or "RR 500" can NEVER match
-# its in-range prefix ("200", "50") and slip past sanity bounds. Truncation
-# would silently produce wrong-but-plausible vitals with no DATA_ERROR flag,
-# which is exactly the contract this extractor must uphold (codex review,
-# 2026-05-15). BP relies on the structural ``/`` separator for the same
-# protection; the bare "P" form is bounded by a trailing ``\b`` already.
-_BP_RE = re.compile(r"\bBP\s*:?\s*(\d{2,3})\s*/\s*(\d{2,3})", re.IGNORECASE)
+# so an OCR-noisy overlong token like "HR 2000", "RR 500", or "BP 120/1000"
+# can NEVER match its in-range prefix ("200", "50", "100") and slip past
+# sanity bounds. Truncation would silently produce wrong-but-plausible vitals
+# with no DATA_ERROR flag, which is exactly the contract this extractor must
+# uphold (codex review rounds, 2026-05-15). The "/" separator only stops SBP
+# from bleeding into DBP — it does NOT protect DBP from a trailing digit, so
+# DBP needs its own lookahead. The bare "P" form is bounded by a trailing
+# ``\b`` already and so needs no further change.
+_BP_RE = re.compile(
+    r"\bBP\s*:?\s*(\d{2,3})(?!\d)\s*/\s*(\d{2,3})(?!\d)",
+    re.IGNORECASE,
+)
 _HR_RE = re.compile(r"\b(?:HR|PR)\s*:?\s*(\d{2,3})(?!\d)", re.IGNORECASE)
 # RR may carry an observed-variability range ("RR 20-23"); the lower bound is
 # the deterministic floor (clinically: at-or-above this value across the

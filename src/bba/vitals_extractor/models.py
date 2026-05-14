@@ -18,7 +18,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,14 +71,18 @@ class SourceProvenance(StrEnum):
 class VitalsNote(BaseModel):
     """One free-text vitals note: source table + tz-aware timestamp + text.
 
-    ``timestamp`` MUST be tz-aware UTC (the ingest layer's ``RowTimestamp``
-    contract). Naive datetimes are rejected at construction by the pipeline.
+    ``timestamp`` MUST be tz-aware (the ingest layer normalizes every row
+    timestamp to UTC via :class:`bba.ingest.row_timestamp.RowTimestamp`).
+    Pydantic's :class:`AwareDatetime` validator rejects naive datetimes at
+    construction, so a stray naive value never reaches the window filter in
+    :func:`bba.vitals_extractor.pipeline.extract_vitals` and cannot silently
+    bypass the UTC contract.
     """
 
     model_config = ConfigDict(frozen=True)
 
     source: Literal["IPDADMPROGRESS", "IPDNRFOCUSDT"]
-    timestamp: datetime
+    timestamp: AwareDatetime
     text: str
 
 
