@@ -73,6 +73,11 @@ class AuditStore:
 
         Returns ``WriteResult(skipped_idempotent=True)`` if a prior write with
         the same ``(audit_id, run_id)`` already committed.
+
+        Rejects (without any disk side effect) callers that would produce the
+        very invariant violation :meth:`validate_invariants` is designed to
+        catch — empty ``calls``, or any call whose ``audit_id``/``run_id``
+        does not match ``row``.
         """
         if self._marker_path(row.audit_id, row.run_id).exists():
             return WriteResult(
@@ -81,6 +86,9 @@ class AuditStore:
                 llm_calls_written=0,
                 skipped_idempotent=True,
             )
+
+        _validate_calls_match_row(row, calls)
+
         self._persist_llm_calls(calls)
         self._persist_audit_result(row)
         return WriteResult(
@@ -93,13 +101,20 @@ class AuditStore:
     def read_audit_results(
         self, run_id: str | None = None
     ) -> tuple[AuditRow, ...]:
-        """Read all audit rows, optionally filtered to a single ``run_id``."""
+        """Read all audit rows, optionally filtered to a single ``run_id``.
+
+        Commit-marker gated: a parquet file whose ``_audit_<audit_id>_<run_id>.complete``
+        marker is missing is treated as uncommitted (crashed between phase 2a
+        parquet-write and phase 2b mark) and elided from the result.
+        """
         if not self._audit_dir.exists():
             return ()
         rows: list[AuditRow] = []
         for path in sorted(self._audit_dir.glob("*.parquet")):
             entry = _read_single_record(path)
             if run_id is not None and entry["run_id"] != run_id:
+                continue
+            if not self._marker_path(entry["audit_id"], entry["run_id"]).exists():
                 continue
             rows.append(AuditRow.model_validate_json(entry["payload"]))
         return tuple(rows)
@@ -166,11 +181,22 @@ class AuditStore:
             self._persist_call_record(call)
 
     def _persist_audit_result(self, row: AuditRow) -> None:
-        """Phase 2: append ``row`` to ``audit_results.parquet`` and drop the
-        idempotency marker.
+        """Phase 2 (parquet + commit marker): atomically append ``row`` and
+        drop the idempotency / commit marker.
 
         Exposed so tests can force the "audit_results without llm_calls"
         invariant violation without touching disk layout.
+        """
+        self._persist_audit_parquet_only(row)
+        self._mark_complete(row.audit_id, row.run_id)
+
+    def _persist_audit_parquet_only(self, row: AuditRow) -> None:
+        """Phase 2a only: write the audit parquet WITHOUT the commit marker.
+
+        Tests use this to stage a "crashed between phase 2a (parquet write)
+        and phase 2b (mark complete)" state. Production code MUST go through
+        :meth:`_persist_audit_result` or :meth:`write`, which order the
+        sub-phases correctly.
         """
         self._audit_dir.mkdir(parents=True, exist_ok=True)
         path = self._audit_dir / f"audit_{row.audit_id}_{row.run_id}.parquet"
@@ -182,7 +208,6 @@ class AuditStore:
                 "payload": row.model_dump_json(),
             },
         )
-        self._mark_complete(row.audit_id, row.run_id)
 
     # -- Package-internal helpers --------------------------------------------
 
@@ -240,17 +265,52 @@ class AuditStore:
 
 
 def _write_single_record(path: Path, data: dict[str, str]) -> None:
-    """Write one record to ``path`` as a one-row Parquet file.
+    """Write one record to ``path`` as a one-row Parquet file, atomically.
 
     The columns are stored as Arrow ``string`` to keep the on-disk schema
     stable across pydantic-model changes (the full record lives in ``payload``;
     surface columns are duplicated for predicate-pushdown queries).
+
+    Atomicity: writes go to a ``.tmp`` sibling first and only ``Path.replace``
+    onto the final name if ``pq.write_table`` returns successfully. A crash
+    mid-write therefore cannot leave a corrupt final-name file that ``read_*``
+    would later try to open.
     """
     table = pa.table({k: [v] for k, v in data.items()})
-    pq.write_table(table, path)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    pq.write_table(table, tmp)
+    tmp.replace(path)
 
 
 def _read_single_record(path: Path) -> dict[str, str]:
     table = pq.read_table(path)
     record = table.to_pylist()[0]
     return {k: str(v) for k, v in record.items()}
+
+
+def _validate_calls_match_row(row: AuditRow, calls: Sequence[LlmCall]) -> None:
+    """Pre-write check: at least one call, and every call shares the row's
+    ``audit_id`` and ``run_id``.
+
+    Raised before any disk side effect so a rejected write leaves the store
+    clean. PRD §10's transactional-ordering invariant treats an
+    ``audit_results`` row without a matching ``llm_calls`` row as a bug; this
+    check stops the canonical write API from ever producing that state.
+    """
+    if not calls:
+        raise ValueError(
+            f"write() requires at least one llm_call for "
+            f"audit_id={row.audit_id!r}; a commit-marker without any backing "
+            f"call would violate the transactional-ordering invariant"
+        )
+    for call in calls:
+        if call.audit_id != row.audit_id:
+            raise ValueError(
+                f"llm_call.audit_id={call.audit_id!r} does not match "
+                f"audit_row.audit_id={row.audit_id!r}"
+            )
+        if call.run_id != row.run_id:
+            raise ValueError(
+                f"llm_call.run_id={call.run_id!r} does not match "
+                f"audit_row.run_id={row.run_id!r}"
+            )

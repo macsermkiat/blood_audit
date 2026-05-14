@@ -18,11 +18,11 @@ the audit_store re-applies it at the write boundary.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import AfterValidator, BaseModel, ConfigDict
 
 
 Classification = Literal[
@@ -31,6 +31,31 @@ Classification = Literal[
     "NEEDS_REVIEW",
     "INSUFFICIENT_EVIDENCE",
 ]
+
+
+def _ensure_utc(dt: datetime) -> datetime:
+    """Reject naive datetimes; normalize aware non-UTC datetimes to UTC.
+
+    The store-level invariant (PRD §"Tz-aware throughout", CONTEXT.md
+    "tz-aware UTC") is asserted at the model boundary so a naive timestamp
+    cannot leak past construction. Comparisons like
+    ``request_timestamp < older_than`` in cold-storage migration assume both
+    sides are aware; admitting naive values would later raise an opaque
+    ``TypeError: can't compare offset-naive and offset-aware datetimes``.
+    """
+    if dt.tzinfo is None:
+        raise ValueError(
+            "datetime must be tz-aware; naive datetimes are forbidden in the "
+            "audit_store (see CONTEXT.md 'tz-aware UTC')"
+        )
+    return dt.astimezone(UTC)
+
+
+UTCDatetime = Annotated[datetime, AfterValidator(_ensure_utc)]
+"""A ``datetime`` constrained to tz-aware UTC at validation time.
+
+Use on every persisted timestamp. Aware non-UTC inputs are converted to UTC.
+"""
 
 
 class AuditRow(BaseModel):
@@ -54,21 +79,21 @@ class AuditRow(BaseModel):
     # Identity
     audit_id: str
     run_id: str
-    run_timestamp: datetime
+    run_timestamp: UTCDatetime
     hn_hash: str
     an_hash: str
     reqno: str
 
     # Anchor + inputs
-    order_datetime: datetime
+    order_datetime: UTCDatetime
     products_ordered: tuple[str, ...]
     hb_value: float
-    hb_datetime: datetime
+    hb_datetime: UTCDatetime
     hb_freshness: str
     hb_source: str
     vitals_sbp: float | None
     vitals_hr: float | None
-    vitals_timestamp: datetime | None
+    vitals_timestamp: UTCDatetime | None
     vitals_source: str | None
     prior_rbc_units_24h: int
     prior_rbc_units_7d: int
@@ -118,7 +143,7 @@ class LlmCall(BaseModel):
     prompt_cache_id: str | None
     request_json: dict[str, Any]
     response_json: dict[str, Any]
-    request_timestamp: datetime
+    request_timestamp: UTCDatetime
     latency_ms: int
     extended_thinking_blocks: tuple[dict[str, Any], ...] | None
     cold_storage_uri: str | None

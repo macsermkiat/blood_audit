@@ -556,3 +556,233 @@ class TestColdStorageMigration:
         # Already-migrated rows are not re-moved.
         assert second.moved_call_ids == ()
         assert second.bytes_moved == 0
+
+
+# =============================================================================
+# Codex review follow-ups — P1 + P2 (post-GREEN regression guards).
+#
+# Each class below names the specific failure mode it locks down, so a future
+# refactor that re-introduces the bug fails the matching test by name.
+# =============================================================================
+
+
+class TestReadHonorsCommitMarker:
+    """Codex P1: a parquet without its commit marker is uncommitted and MUST
+    NOT be visible to consumers.
+
+    WHY: if a process crashes between the audit-result parquet write and the
+    commit-marker write, leaving the parquet visible would surface an
+    uncommitted classification to the dashboard, report generator, and eval
+    harness — defeating the entire "marker = commit" contract.
+    """
+
+    def test_parquet_without_marker_is_invisible_to_read(
+        self, store: AuditStore
+    ) -> None:
+        # Stage "crashed between phase 2a (parquet write) and phase 2b (mark)".
+        store._persist_llm_calls([_call()])
+        store._persist_audit_parquet_only(_row())
+
+        assert store.read_audit_results() == ()
+
+    def test_parquet_without_marker_is_invisible_when_filtered_by_run_id(
+        self, store: AuditStore
+    ) -> None:
+        store._persist_llm_calls(
+            [_call(call_id="c1", audit_id="a-crashed", run_id="r-crashed")]
+        )
+        store._persist_audit_parquet_only(
+            _row(audit_id="a-crashed", run_id="r-crashed")
+        )
+
+        assert store.read_audit_results(run_id="r-crashed") == ()
+
+    def test_committed_row_alongside_uncommitted_parquet_only_returns_committed(
+        self, store: AuditStore
+    ) -> None:
+        # One full commit, one parquet-only (crashed pre-marker). Reader returns
+        # only the committed one.
+        store.write(
+            _row(audit_id="a-ok", run_id="r-mix"),
+            [_call(call_id="c-ok", audit_id="a-ok", run_id="r-mix")],
+        )
+        store._persist_llm_calls(
+            [_call(call_id="c-bad", audit_id="a-crashed", run_id="r-mix")]
+        )
+        store._persist_audit_parquet_only(
+            _row(audit_id="a-crashed", run_id="r-mix")
+        )
+
+        ids = {r.audit_id for r in store.read_audit_results(run_id="r-mix")}
+        assert ids == {"a-ok"}
+
+
+class TestParquetWriteIsAtomic:
+    """Codex P2: parquet records must land via write-then-rename so a crash
+    mid-write leaves no half-formed final file.
+
+    WHY: a corrupt final-name parquet would be picked up by ``read_*`` and
+    crash the pipeline with an opaque pyarrow error, masking the underlying
+    crash. The same atomicity idiom is already used for the commit marker and
+    the snapshot view; the record writer must match.
+
+    These tests spy on ``pq.write_table`` to lock down the implementation
+    contract (write to ``*.tmp`` then rename) — checking only post-condition
+    state would pass vacuously on a direct-write implementation.
+    """
+
+    def test_audit_record_writes_via_tmp_path_first(
+        self, store: AuditStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from bba.audit_store import store as store_module
+
+        captured: list[Path] = []
+        real = store_module.pq.write_table
+
+        def spy(table: object, path: Path, *args: object, **kwargs: object) -> None:
+            captured.append(Path(path))
+            real(table, path, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(store_module.pq, "write_table", spy)
+
+        store.write(
+            _row(audit_id="a-spy"),
+            [_call(call_id="c-spy", audit_id="a-spy")],
+        )
+
+        assert captured, "pq.write_table was never called"
+        for path in captured:
+            assert path.suffix == ".tmp", (
+                f"pq.write_table wrote directly to {path}; expected a .tmp path"
+            )
+
+    def test_audit_write_leaves_no_tmp_residue_on_success(
+        self, store: AuditStore
+    ) -> None:
+        store.write(_row(audit_id="a1"), [_call(audit_id="a1")])
+
+        audit_tmps = list((store.config.root_dir / "audit_results").glob("*.tmp"))
+        call_tmps = list((store.config.root_dir / "llm_calls").glob("*.tmp"))
+
+        assert audit_tmps == []
+        assert call_tmps == []
+
+    def test_crash_mid_write_leaves_no_final_file(
+        self, store: AuditStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from bba.audit_store import store as store_module
+
+        def boom(*_a: object, **_kw: object) -> None:
+            raise RuntimeError("simulated crash mid-write")
+
+        monkeypatch.setattr(store_module.pq, "write_table", boom)
+
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            store.write(
+                _row(audit_id="a-crash"),
+                [_call(call_id="c-crash", audit_id="a-crash")],
+            )
+
+        final_audit = (
+            store.config.root_dir / "audit_results" / "audit_a-crash_run-aaa.parquet"
+        )
+        final_call = (
+            store.config.root_dir / "llm_calls" / "call_c-crash.parquet"
+        )
+        assert not final_audit.exists()
+        assert not final_call.exists()
+
+
+class TestWriteRejectsMalformedCalls:
+    """Codex P2: ``write(row, calls)`` is the public, canonical path; it must
+    not be able to produce the very invariant violation
+    :meth:`validate_invariants` is designed to catch.
+
+    Three failure modes are rejected at the boundary, before any disk side
+    effect: empty calls, mismatched call.audit_id, mismatched call.run_id.
+    """
+
+    def test_write_rejects_empty_calls(self, store: AuditStore) -> None:
+        with pytest.raises(ValueError, match="at least one"):
+            store.write(_row(), [])
+
+    def test_write_rejects_mismatched_call_audit_id(
+        self, store: AuditStore
+    ) -> None:
+        row = _row(audit_id="a-row")
+        bad = _call(call_id="c1", audit_id="a-other", run_id=row.run_id)
+
+        with pytest.raises(ValueError, match="audit_id"):
+            store.write(row, [bad])
+
+    def test_write_rejects_mismatched_call_run_id(self, store: AuditStore) -> None:
+        row = _row(audit_id="a1", run_id="r-row")
+        bad = _call(call_id="c1", audit_id="a1", run_id="r-other")
+
+        with pytest.raises(ValueError, match="run_id"):
+            store.write(row, [bad])
+
+    def test_rejection_does_not_persist_anything(self, store: AuditStore) -> None:
+        # A failed write must NOT leave the llm_calls partially written —
+        # otherwise we re-create the orphan-call state the rejection was meant
+        # to prevent.
+        with pytest.raises(ValueError):
+            store.write(
+                _row(audit_id="a1"),
+                [_call(call_id="c1", audit_id="OTHER")],
+            )
+
+        assert store.read_audit_results() == ()
+        assert store.read_llm_calls() == ()
+
+
+class TestModelsEnforceTzAwareUTC:
+    """Codex P2: every persisted timestamp is tz-aware UTC. Naive datetimes
+    are rejected at construction; non-UTC aware datetimes are normalized to
+    UTC.
+
+    WHY: the store-level invariant "all persisted timestamps are tz-aware UTC"
+    is asserted in CONTEXT.md and depended on by downstream comparisons
+    (cold-storage cutoff, snapshot rotation). Allowing naive values in
+    silently breaks ``request_timestamp < older_than`` comparisons in
+    migrate_cold_storage, and lets local-time rows leak into the dashboard.
+    """
+
+    def test_audit_row_rejects_naive_run_timestamp(self) -> None:
+        with pytest.raises(ValidationError):
+            _row(run_timestamp=datetime(2026, 5, 1, 12, 0, 0))  # naive
+
+    def test_audit_row_rejects_naive_order_datetime(self) -> None:
+        with pytest.raises(ValidationError):
+            _row(order_datetime=datetime(2026, 5, 1, 8, 30, 0))  # naive
+
+    def test_audit_row_normalizes_non_utc_to_utc(self) -> None:
+        from zoneinfo import ZoneInfo
+
+        bkk = ZoneInfo("Asia/Bangkok")
+        row = _row(run_timestamp=datetime(2026, 5, 1, 12, 0, 0, tzinfo=bkk))
+
+        assert row.run_timestamp == datetime(2026, 5, 1, 5, 0, 0, tzinfo=UTC)
+        assert row.run_timestamp.tzinfo is not None
+        assert row.run_timestamp.utcoffset() == timedelta(0)
+
+    def test_optional_vitals_timestamp_allows_none(self) -> None:
+        row = _row(vitals_timestamp=None, vitals_sbp=None, vitals_hr=None, vitals_source=None)
+
+        assert row.vitals_timestamp is None
+
+    def test_optional_vitals_timestamp_rejects_naive(self) -> None:
+        with pytest.raises(ValidationError):
+            _row(vitals_timestamp=datetime(2026, 5, 1, 8, 0, 0))  # naive
+
+    def test_llm_call_rejects_naive_request_timestamp(self) -> None:
+        with pytest.raises(ValidationError):
+            _call(request_timestamp=datetime(2026, 5, 1, 12, 0, 0))  # naive
+
+    def test_llm_call_normalizes_non_utc_request_timestamp(self) -> None:
+        from zoneinfo import ZoneInfo
+
+        bkk = ZoneInfo("Asia/Bangkok")
+        call = _call(request_timestamp=datetime(2026, 5, 1, 12, 0, 0, tzinfo=bkk))
+
+        assert call.request_timestamp == datetime(2026, 5, 1, 5, 0, 0, tzinfo=UTC)
