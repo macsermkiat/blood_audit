@@ -1073,6 +1073,108 @@ class TestCodeVersionInAuditPaths:
         parquets = sorted(p.name for p in (root / "audit_results").glob("*.parquet"))
         assert len(parquets) == 2
 
+    def test_v2_does_not_overwrite_v1_call_parquet(self, tmp_path: Path) -> None:
+        # call_id reuse across code-version reruns must not overwrite the
+        # earlier file (PRD §10: every API call's record persisted immutably).
+        root = tmp_path / "store"
+        AuditStore(AuditStoreConfig(root_dir=root, code_version="v1.0.0")).write(
+            _row(audit_id="a1", run_id="r1"),
+            [
+                _call(
+                    call_id="c1",
+                    audit_id="a1",
+                    run_id="r1",
+                    response_json={"version_marker": "v1"},
+                )
+            ],
+        )
+        AuditStore(AuditStoreConfig(root_dir=root, code_version="v2.0.0")).write(
+            _row(audit_id="a1", run_id="r1"),
+            [
+                _call(
+                    call_id="c1",
+                    audit_id="a1",
+                    run_id="r1",
+                    response_json={"version_marker": "v2"},
+                )
+            ],
+        )
+
+        call_files = sorted((root / "llm_calls").glob("call_c1_*.parquet"))
+        assert len(call_files) == 2, (
+            "v2 rewrote v1's call file; both code_versions must coexist"
+        )
+
+    def test_read_llm_calls_filters_by_code_version(self, tmp_path: Path) -> None:
+        root = tmp_path / "store"
+        AuditStore(AuditStoreConfig(root_dir=root, code_version="v1.0.0")).write(
+            _row(audit_id="a1", run_id="r1"),
+            [_call(call_id="c-v1", audit_id="a1", run_id="r1")],
+        )
+        store_v2 = AuditStore(AuditStoreConfig(root_dir=root, code_version="v2.0.0"))
+        store_v2.write(
+            _row(audit_id="a1", run_id="r1"),
+            [_call(call_id="c-v2", audit_id="a1", run_id="r1")],
+        )
+
+        only_v2 = store_v2.read_llm_calls(code_version="v2.0.0")
+
+        assert {c.call_id for c in only_v2} == {"c-v2"}
+
+    def test_read_llm_calls_default_returns_every_version(
+        self, tmp_path: Path
+    ) -> None:
+        # Default behavior (no code_version filter) returns calls from every
+        # committed version — symmetric with read_audit_results.
+        root = tmp_path / "store"
+        AuditStore(AuditStoreConfig(root_dir=root, code_version="v1.0.0")).write(
+            _row(audit_id="a1", run_id="r1"),
+            [_call(call_id="c-v1", audit_id="a1", run_id="r1")],
+        )
+        store_v2 = AuditStore(AuditStoreConfig(root_dir=root, code_version="v2.0.0"))
+        store_v2.write(
+            _row(audit_id="a1", run_id="r1"),
+            [_call(call_id="c-v2", audit_id="a1", run_id="r1")],
+        )
+
+        ids = {c.call_id for c in store_v2.read_llm_calls()}
+
+        assert ids == {"c-v1", "c-v2"}
+
+    def test_cold_storage_preserves_original_call_slug(
+        self, tmp_path: Path
+    ) -> None:
+        # Migration must rewrite each call at its ORIGINAL path. If the
+        # migrator runs under a different code_version, the rewrite must not
+        # accidentally land at a new (current-slug) path.
+        root = tmp_path / "store"
+        old_ts = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+        store_v1 = AuditStore(AuditStoreConfig(root_dir=root, code_version="v1.0.0"))
+        store_v1.write(
+            _row(audit_id="a1", run_id="r1"),
+            [
+                _call(
+                    call_id="c-old",
+                    audit_id="a1",
+                    run_id="r1",
+                    request_timestamp=old_ts,
+                )
+            ],
+        )
+
+        # Migrator runs under v2.0.0 (different code_version).
+        store_v2 = AuditStore(AuditStoreConfig(root_dir=root, code_version="v2.0.0"))
+        migrate_cold_storage(
+            store_v2,
+            older_than=datetime(2026, 4, 2, 0, 0, 0, tzinfo=UTC),
+        )
+
+        call_files = sorted((root / "llm_calls").glob("call_c-old_*.parquet"))
+        assert len(call_files) == 1, (
+            f"migration leaked a second file under the migrator's slug "
+            f"instead of rewriting in place: {[p.name for p in call_files]}"
+        )
+
     def test_v2_crash_pre_marker_does_not_leak_under_v1_marker(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

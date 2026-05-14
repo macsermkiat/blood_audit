@@ -37,7 +37,7 @@ ignores), and run_id-scoped reads use a metadata-only column scan.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import pyarrow as pa
@@ -125,14 +125,31 @@ class AuditStore:
             rows.append(AuditRow.model_validate_json(entry["payload"]))
         return tuple(rows)
 
-    def read_llm_calls(self, run_id: str | None = None) -> tuple[LlmCall, ...]:
-        """Read all llm-call rows, optionally filtered to a single ``run_id``."""
+    def read_llm_calls(
+        self,
+        run_id: str | None = None,
+        code_version: str | None = None,
+    ) -> tuple[LlmCall, ...]:
+        """Read all llm-call rows.
+
+        Both filters are optional and AND together when both are supplied.
+        ``code_version`` matches the writer's ``AuditStoreConfig.code_version``;
+        without it, calls from every committed code-version are returned (the
+        default is symmetric with :meth:`read_audit_results`). Pass
+        ``code_version`` to reproduce the exact calls that produced an
+        audit row at a specific version.
+        """
         if not self._calls_dir.exists():
             return ()
+        target_slug = (
+            _slugify_code_version(code_version) if code_version is not None else None
+        )
         rows: list[LlmCall] = []
         for path in sorted(self._calls_dir.glob("*.parquet")):
             entry = _read_single_record(path)
             if run_id is not None and entry["run_id"] != run_id:
+                continue
+            if target_slug is not None and entry["code_version_slug"] != target_slug:
                 continue
             rows.append(LlmCall.model_validate_json(entry["payload"]))
         return tuple(rows)
@@ -222,23 +239,44 @@ class AuditStore:
 
     # -- Package-internal helpers --------------------------------------------
 
-    def _persist_call_record(self, call: LlmCall) -> None:
-        """Write a single :class:`LlmCall` record to its per-call Parquet file.
+    def _persist_call_record(
+        self, call: LlmCall, *, code_version_slug: str | None = None
+    ) -> None:
+        """Write a single :class:`LlmCall` record to its slug-keyed Parquet file.
 
-        Cold-storage migration also calls this to overwrite a call record with
-        the cleared ``extended_thinking_blocks`` + populated ``cold_storage_uri``.
+        ``code_version_slug`` defaults to the current store's slug. Cold-storage
+        migration passes the *original* slug (read off the call's parquet
+        surface column) so the rewrite lands at the same path where the call
+        was first persisted — call_id reuse across code-version reruns
+        therefore never overwrites an earlier file.
         """
+        slug = code_version_slug if code_version_slug is not None else self._code_version_slug
         self._calls_dir.mkdir(parents=True, exist_ok=True)
-        path = self._calls_dir / f"call_{call.call_id}.parquet"
+        path = self._calls_dir / f"call_{call.call_id}_{slug}.parquet"
         _write_single_record(
             path,
             {
                 "call_id": call.call_id,
                 "audit_id": call.audit_id,
                 "run_id": call.run_id,
+                "code_version_slug": slug,
                 "payload": call.model_dump_json(),
             },
         )
+
+    def _iter_call_records(self) -> Iterator[tuple[LlmCall, str]]:
+        """Internal: yield ``(call, code_version_slug)`` pairs for every call file.
+
+        Cold-storage migration uses this so it can preserve each call's
+        original slug on rewrite (rather than re-stamping with the migrator's
+        slug, which would orphan the original file).
+        """
+        if not self._calls_dir.exists():
+            return
+        for path in sorted(self._calls_dir.glob("*.parquet")):
+            entry = _read_single_record(path)
+            call = LlmCall.model_validate_json(entry["payload"])
+            yield call, entry["code_version_slug"]
 
     def _mark_complete(self, audit_id: str, run_id: str) -> None:
         """Drop the commit marker for this row at its slug-keyed path.
@@ -308,14 +346,18 @@ class AuditStore:
 
     @property
     def _code_version_slug(self) -> str:
-        """Stable filesystem-safe slug for ``config.code_version``.
+        """Stable filesystem-safe slug for ``config.code_version``."""
+        return _slugify_code_version(self._config.code_version)
 
-        A 16-char sha256 prefix handles any string (``+``, ``/``, etc.)
-        without filename-escape gymnastics.
-        """
-        return hashlib.sha256(
-            self._config.code_version.encode("utf-8")
-        ).hexdigest()[:16]
+
+def _slugify_code_version(code_version: str) -> str:
+    """Stable filesystem-safe 16-char sha256 prefix of ``code_version``.
+
+    Module-level so :meth:`AuditStore.read_llm_calls` and other consumers can
+    derive the slug from a caller-supplied ``code_version`` string without
+    instantiating a store at that version.
+    """
+    return hashlib.sha256(code_version.encode("utf-8")).hexdigest()[:16]
 
 
 def _write_single_record(path: Path, data: dict[str, str]) -> None:

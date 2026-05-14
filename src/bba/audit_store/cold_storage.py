@@ -35,7 +35,11 @@ def migrate_cold_storage(store: AuditStore, older_than: datetime) -> ColdStorage
     moved: list[str] = []
     bytes_moved = 0
 
-    for call in store.read_llm_calls():
+    # Iterate via _iter_call_records so each call comes paired with the slug
+    # it was originally persisted under. Rewriting at the original slug keeps
+    # the call file at its existing path (no orphaned old file, no leaked
+    # extra file under the migrator's slug — see Codex P1 round 4).
+    for call, original_slug in store._iter_call_records():
         if call.request_timestamp >= older_than:
             continue
         if call.extended_thinking_blocks is None:
@@ -58,7 +62,7 @@ def migrate_cold_storage(store: AuditStore, older_than: datetime) -> ColdStorage
                 "cold_storage_uri": str(cold_path),
             }
         )
-        store._persist_call_record(migrated)
+        store._persist_call_record(migrated, code_version_slug=original_slug)
         moved.append(call.call_id)
 
     return ColdStorageReport(
