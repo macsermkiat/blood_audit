@@ -54,15 +54,17 @@ class DeltaHbWindow(BaseModel):
     drop from that prior to the current observation is at or above
     ``threshold_g_dl``. The "prior" used to compute ``drop_g_dl`` is the
     *highest* Hb in the window — a bigger drop is the more conservative
-    bleed signal.
+    bleed signal, and ``prior_value_g_dl`` / ``prior_datetime_utc`` carry
+    that reference observation so a reviewer can audit which pair fired
+    the threshold.
     """
 
     model_config = ConfigDict(frozen=True)
 
     window_hours: int
     threshold_g_dl: float
-    earliest_value_g_dl: float | None
-    earliest_datetime_utc: datetime | None
+    prior_value_g_dl: float | None
+    prior_datetime_utc: datetime | None
     drop_g_dl: float | None
     triggered: bool
 
