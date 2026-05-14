@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Type-checker / test caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Project — encrypted clinical data MUST NEVER be committed
+data/encrypted/
+data/raw/
+*.csv
+!tests/fixtures/**/*.csv
