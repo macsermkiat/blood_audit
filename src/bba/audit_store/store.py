@@ -100,25 +100,36 @@ class AuditStore:
         )
 
     def read_audit_results(
-        self, run_id: str | None = None
+        self,
+        run_id: str | None = None,
+        code_version: str | None = None,
     ) -> tuple[AuditRow, ...]:
-        """Read all audit rows, optionally filtered to a single ``run_id``.
+        """Read all audit rows. Both filters are optional and AND together
+        when both are supplied.
 
         Commit-marker gated: each parquet file has a matching marker filename
-        derived 1:1 from the parquet's own stem (so the marker is keyed on
-        the same ``(audit_id, run_id, code_version_slug)`` triple). A parquet
-        without its marker is treated as uncommitted (crashed between phase
-        2a and phase 2b) and elided.
+        derived 1:1 from the parquet's own stem. A parquet without its marker
+        is treated as uncommitted (crashed between phase 2a and phase 2b) and
+        elided.
 
-        Returns rows from every committed ``code_version`` — cross-version
-        reads stay consistent for migration / audit / eval.
+        Without ``code_version``, returns rows from every committed version
+        (cross-version reads stay consistent for migration / audit / eval).
+        Pass ``code_version`` to scope to one version — symmetric with
+        :meth:`read_llm_calls`. Use this to disambiguate when a re-run under
+        a new code_version commits a second row at the same
+        ``(audit_id, run_id)``.
         """
         if not self._audit_dir.exists():
             return ()
+        target_slug = (
+            _slugify_code_version(code_version) if code_version is not None else None
+        )
         rows: list[AuditRow] = []
         for path in sorted(self._audit_dir.glob("*.parquet")):
             entry = _read_single_record(path)
             if run_id is not None and entry["run_id"] != run_id:
+                continue
+            if target_slug is not None and entry["code_version_slug"] != target_slug:
                 continue
             if not self._marker_for_parquet(path).exists():
                 continue

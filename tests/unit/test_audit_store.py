@@ -787,6 +787,48 @@ class TestModelsEnforceTzAwareUTC:
         assert call.request_timestamp == datetime(2026, 5, 1, 5, 0, 0, tzinfo=UTC)
 
 
+class TestIdentifiersAreFilesystemSafe:
+    """Codex P2 round 6: ``audit_id``, ``run_id``, ``call_id`` are interpolated
+    into filenames. Raw upstream strings containing ``/`` or path-traversal
+    segments would let writes land outside the intended dataset directory.
+
+    The defense lives at the model boundary: identifiers must match a
+    conservative pattern (``[A-Za-z0-9._-]+`` plus a non-empty + non-``./..``
+    check) so the persistence layer can compose paths with raw interpolation
+    safely.
+    """
+
+    @pytest.mark.parametrize("bad", ["", "../etc", "foo/bar", "foo\\bar", ".", ".."])
+    def test_audit_row_rejects_unsafe_audit_id(self, bad: str) -> None:
+        with pytest.raises(ValidationError):
+            _row(audit_id=bad)
+
+    @pytest.mark.parametrize("bad", ["", "../etc", "foo/bar", "foo\\bar", ".", ".."])
+    def test_audit_row_rejects_unsafe_run_id(self, bad: str) -> None:
+        with pytest.raises(ValidationError):
+            _row(run_id=bad)
+
+    @pytest.mark.parametrize("bad", ["", "../etc", "foo/bar", "foo\\bar", ".", ".."])
+    def test_llm_call_rejects_unsafe_call_id(self, bad: str) -> None:
+        with pytest.raises(ValidationError):
+            _call(call_id=bad)
+
+    @pytest.mark.parametrize("bad", ["foo/bar", "../etc"])
+    def test_llm_call_rejects_unsafe_audit_id(self, bad: str) -> None:
+        with pytest.raises(ValidationError):
+            _call(audit_id=bad)
+
+    @pytest.mark.parametrize("bad", ["foo/bar", "../etc"])
+    def test_llm_call_rejects_unsafe_run_id(self, bad: str) -> None:
+        with pytest.raises(ValidationError):
+            _call(run_id=bad)
+
+    @pytest.mark.parametrize("good", ["audit-001", "REQ_123", "abc.def", "x_y-z.1"])
+    def test_safe_ids_accepted(self, good: str) -> None:
+        row = _row(audit_id=good)
+        assert row.audit_id == good
+
+
 class TestIdempotencyMarkerIncludesCodeVersion:
     """Codex P2 round 2: ``AuditStoreConfig.code_version`` docstring promises
     that a code-version bump invalidates the cached completion marker so a
@@ -1174,6 +1216,30 @@ class TestCodeVersionInAuditPaths:
             f"migration leaked a second file under the migrator's slug "
             f"instead of rewriting in place: {[p.name for p in call_files]}"
         )
+
+    def test_read_audit_results_filters_by_code_version(
+        self, tmp_path: Path
+    ) -> None:
+        """``read_audit_results`` exposes a ``code_version`` filter symmetric
+        with ``read_llm_calls``. WHY: SnapshotView materializes from the
+        unfiltered read, and dashboards/eval need to scope to a specific
+        committed version to disambiguate cross-version duplicates."""
+        root = tmp_path / "store"
+        AuditStore(AuditStoreConfig(root_dir=root, code_version="v1.0.0")).write(
+            _row(audit_id="a-shared", run_id="r1", reasoning_summary_en="v1"),
+            [_call(call_id="c-v1", audit_id="a-shared", run_id="r1")],
+        )
+        store_v2 = AuditStore(AuditStoreConfig(root_dir=root, code_version="v2.0.0"))
+        store_v2.write(
+            _row(audit_id="a-shared", run_id="r1", reasoning_summary_en="v2"),
+            [_call(call_id="c-v2", audit_id="a-shared", run_id="r1")],
+        )
+
+        v1_rows = store_v2.read_audit_results(code_version="v1.0.0")
+        v2_rows = store_v2.read_audit_results(code_version="v2.0.0")
+
+        assert {r.reasoning_summary_en for r in v1_rows} == {"v1"}
+        assert {r.reasoning_summary_en for r in v2_rows} == {"v2"}
 
     def test_reconcile_scopes_orphans_by_code_version(
         self, tmp_path: Path

@@ -17,6 +17,7 @@ the audit_store re-applies it at the write boundary.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -56,6 +57,44 @@ UTCDatetime = Annotated[datetime, AfterValidator(_ensure_utc)]
 """A ``datetime`` constrained to tz-aware UTC at validation time.
 
 Use on every persisted timestamp. Aware non-UTC inputs are converted to UTC.
+"""
+
+
+_SAFE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _validate_safe_id(value: str) -> str:
+    """Reject identifiers that would be unsafe to interpolate into a
+    filesystem path component.
+
+    ``audit_id``, ``run_id``, ``call_id`` flow directly into Parquet
+    filenames (``audit_<audit_id>_<run_id>_<slug>.parquet`` etc.). An
+    upstream string containing ``/``, ``\\``, or a path-traversal segment
+    would cause writes to escape the intended dataset directory or land in
+    unintended subdirectories. The defense lives at the model boundary so
+    the persistence layer can compose paths with raw interpolation safely.
+
+    Allow-list: non-empty, ``[A-Za-z0-9._-]+``, not exactly ``.`` or ``..``.
+    """
+    if not value:
+        raise ValueError("identifier must not be empty")
+    if not _SAFE_ID_PATTERN.match(value):
+        raise ValueError(
+            f"identifier must match [A-Za-z0-9._-]+ to be a safe filesystem "
+            f"path component (got {value!r})"
+        )
+    if value in {".", ".."}:
+        raise ValueError(
+            f"identifier must not be a path-traversal segment (got {value!r})"
+        )
+    return value
+
+
+SafeId = Annotated[str, AfterValidator(_validate_safe_id)]
+"""A ``str`` constrained to a filesystem-safe identifier shape.
+
+Use on every field that flows into a Parquet filename: ``audit_id``,
+``run_id``, ``call_id``.
 """
 
 
@@ -160,8 +199,8 @@ class AuditRow(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     # Identity
-    audit_id: str
-    run_id: str
+    audit_id: SafeId
+    run_id: SafeId
     run_timestamp: UTCDatetime
     hn_hash: str
     an_hash: str
@@ -230,9 +269,9 @@ class LlmCall(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    call_id: str
-    audit_id: str
-    run_id: str
+    call_id: SafeId
+    audit_id: SafeId
+    run_id: SafeId
     model_id: str
     anthropic_version: str
     prompt_cache_id: str | None
