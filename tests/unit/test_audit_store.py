@@ -1175,6 +1175,155 @@ class TestCodeVersionInAuditPaths:
             f"instead of rewriting in place: {[p.name for p in call_files]}"
         )
 
+    def test_reconcile_scopes_orphans_by_code_version(
+        self, tmp_path: Path
+    ) -> None:
+        """A v2 orphan call must be detected even when v1 has committed the
+        same ``audit_id`` — the call belongs to v2's reproducibility chain,
+        not v1's, so it cannot be "covered" by v1's audit row.
+        """
+        root = tmp_path / "store"
+
+        # v1 fully committed: audit row + call.
+        AuditStore(AuditStoreConfig(root_dir=root, code_version="v1.0.0")).write(
+            _row(audit_id="a-shared", run_id="r1"),
+            [_call(call_id="c-v1", audit_id="a-shared", run_id="r1")],
+        )
+
+        # v2 phase 1 only (simulate crash before audit-row commit).
+        store_v2 = AuditStore(AuditStoreConfig(root_dir=root, code_version="v2.0.0"))
+        store_v2._persist_llm_calls(
+            [_call(call_id="c-v2-orphan", audit_id="a-shared", run_id="r1")]
+        )
+
+        report = store_v2.reconcile("r1")
+
+        assert "c-v2-orphan" in report.orphan_call_ids
+
+    def test_validate_invariants_scopes_by_code_version(
+        self, tmp_path: Path
+    ) -> None:
+        """A v2 audit row without v2 calls must raise even when v1 has matching
+        calls — v1's calls don't reproduce the v2 row."""
+        root = tmp_path / "store"
+
+        # v1 fully committed.
+        AuditStore(AuditStoreConfig(root_dir=root, code_version="v1.0.0")).write(
+            _row(audit_id="a-shared", run_id="r1"),
+            [_call(call_id="c-v1", audit_id="a-shared", run_id="r1")],
+        )
+
+        # v2 audit row staged without v2 calls (test-only injection).
+        store_v2 = AuditStore(AuditStoreConfig(root_dir=root, code_version="v2.0.0"))
+        store_v2._persist_audit_result(_row(audit_id="a-shared", run_id="r1"))
+
+        with pytest.raises(TransactionalOrderingError, match="a-shared"):
+            store_v2.validate_invariants("r1")
+
+    def test_cold_storage_blob_path_per_version_does_not_overwrite(
+        self, tmp_path: Path
+    ) -> None:
+        """A shared ``call_id`` between v1 and v2 reruns must produce
+        distinct cold-storage blobs — one per version. Otherwise the later
+        migration overwrites the earlier blob and both rewritten rows point
+        at the *same* URI, so the older call is no longer recoverable.
+        """
+        root = tmp_path / "store"
+        old_ts = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+
+        AuditStore(AuditStoreConfig(root_dir=root, code_version="v1.0.0")).write(
+            _row(audit_id="a1", run_id="r1"),
+            [
+                _call(
+                    call_id="c-shared",
+                    audit_id="a1",
+                    run_id="r1",
+                    request_timestamp=old_ts,
+                    extended_thinking_blocks=(
+                        {"type": "thinking", "text": "v1 thought"},
+                    ),
+                )
+            ],
+        )
+        store_v2 = AuditStore(AuditStoreConfig(root_dir=root, code_version="v2.0.0"))
+        store_v2.write(
+            _row(audit_id="a1", run_id="r1"),
+            [
+                _call(
+                    call_id="c-shared",
+                    audit_id="a1",
+                    run_id="r1",
+                    request_timestamp=old_ts,
+                    extended_thinking_blocks=(
+                        {"type": "thinking", "text": "v2 thought"},
+                    ),
+                )
+            ],
+        )
+
+        migrate_cold_storage(
+            store_v2,
+            older_than=datetime(2026, 4, 2, 0, 0, 0, tzinfo=UTC),
+        )
+
+        cold_blobs = sorted((root / "cold_storage").glob("c-shared*.json"))
+        assert len(cold_blobs) == 2, (
+            f"v2 migration overwrote v1's cold blob: {[p.name for p in cold_blobs]}"
+        )
+
+    def test_cold_storage_uri_resolves_to_correct_version_content(
+        self, tmp_path: Path
+    ) -> None:
+        """After migration, each rewritten call's ``cold_storage_uri`` must
+        point at its own version's blob content — not the last writer's."""
+        import json as _json
+
+        root = tmp_path / "store"
+        old_ts = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+
+        AuditStore(AuditStoreConfig(root_dir=root, code_version="v1.0.0")).write(
+            _row(audit_id="a1", run_id="r1"),
+            [
+                _call(
+                    call_id="c-shared",
+                    audit_id="a1",
+                    run_id="r1",
+                    request_timestamp=old_ts,
+                    extended_thinking_blocks=(
+                        {"type": "thinking", "text": "v1 thought"},
+                    ),
+                )
+            ],
+        )
+        store_v2 = AuditStore(AuditStoreConfig(root_dir=root, code_version="v2.0.0"))
+        store_v2.write(
+            _row(audit_id="a1", run_id="r1"),
+            [
+                _call(
+                    call_id="c-shared",
+                    audit_id="a1",
+                    run_id="r1",
+                    request_timestamp=old_ts,
+                    extended_thinking_blocks=(
+                        {"type": "thinking", "text": "v2 thought"},
+                    ),
+                )
+            ],
+        )
+        migrate_cold_storage(
+            store_v2,
+            older_than=datetime(2026, 4, 2, 0, 0, 0, tzinfo=UTC),
+        )
+
+        v1_calls = store_v2.read_llm_calls(code_version="v1.0.0")
+        v2_calls = store_v2.read_llm_calls(code_version="v2.0.0")
+
+        v1_blob = _json.loads(Path(v1_calls[0].cold_storage_uri or "").read_text())
+        v2_blob = _json.loads(Path(v2_calls[0].cold_storage_uri or "").read_text())
+
+        assert v1_blob[0]["text"] == "v1 thought"
+        assert v2_blob[0]["text"] == "v2 thought"
+
     def test_v2_crash_pre_marker_does_not_leak_under_v1_marker(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

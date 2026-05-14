@@ -156,39 +156,84 @@ class AuditStore:
 
     def validate_invariants(self, run_id: str) -> None:
         """Raise :class:`TransactionalOrderingError` if any ``audit_results`` row
-        for ``run_id`` lacks a matching ``llm_calls`` row.
+        for ``run_id`` lacks a matching ``llm_calls`` row *at its own
+        code_version*.
 
+        The pairing key is ``(audit_id, code_version_slug)`` — v1's calls
+        don't satisfy v2's audit row, even when ``audit_id`` is the same.
         The opposite direction (orphan calls) is handled by :meth:`reconcile`;
         that is not an error.
         """
-        audit_ids_with_results = {r.audit_id for r in self.read_audit_results(run_id=run_id)}
-        audit_ids_with_calls = {c.audit_id for c in self.read_llm_calls(run_id=run_id)}
-        offenders = audit_ids_with_results - audit_ids_with_calls
+        audit_pairs = {
+            (row.audit_id, slug)
+            for row, slug in self._iter_audit_records()
+            if row.run_id == run_id
+        }
+        call_pairs = {
+            (call.audit_id, slug)
+            for call, slug in self._iter_call_records()
+            if call.run_id == run_id
+        }
+        offenders = audit_pairs - call_pairs
         if offenders:
-            offenders_sorted = sorted(offenders)
+            offending_ids = sorted({audit_id for audit_id, _slug in offenders})
             raise TransactionalOrderingError(
                 f"audit_results without matching llm_calls for run_id={run_id!r}: "
-                f"{offenders_sorted}"
+                f"{offending_ids}"
             )
 
     def reconcile(self, run_id: str) -> ReconciliationReport:
-        """Find ``llm_calls`` rows that have no matching ``audit_results`` row.
+        """Find ``llm_calls`` rows that have no matching ``audit_results`` row
+        *at the same ``code_version_slug``*.
 
         These are the expected fallout of a crash after phase 1 but before
-        phase 2. The report names them so the operator can re-emit or quarantine.
+        phase 2. The report names them so the operator can re-emit or
+        quarantine. A v1 audit row never satisfies a v2 call: the pairing is
+        per-version, since the call belongs to its writer's reproducibility
+        chain.
         """
-        audit_ids_with_results = {r.audit_id for r in self.read_audit_results(run_id=run_id)}
-        calls = self.read_llm_calls(run_id=run_id)
-        orphan_call_ids = tuple(
-            c.call_id for c in calls if c.audit_id not in audit_ids_with_results
-        )
-        audit_ids_with_calls = {c.audit_id for c in calls}
+        audit_pairs = {
+            (row.audit_id, slug)
+            for row, slug in self._iter_audit_records()
+            if row.run_id == run_id
+        }
+        audit_ids_with_results = {audit_id for audit_id, _slug in audit_pairs}
+
+        orphan_call_ids: list[str] = []
+        seen_call_pairs: set[tuple[str, str]] = set()
+        for call, slug in self._iter_call_records():
+            if call.run_id != run_id:
+                continue
+            seen_call_pairs.add((call.audit_id, slug))
+            if (call.audit_id, slug) not in audit_pairs:
+                orphan_call_ids.append(call.call_id)
+
+        audit_ids_with_calls = {audit_id for audit_id, _slug in seen_call_pairs}
         orphan_audit_ids = tuple(sorted(audit_ids_with_results - audit_ids_with_calls))
+
         return ReconciliationReport(
             run_id=run_id,
-            orphan_call_ids=orphan_call_ids,
+            orphan_call_ids=tuple(orphan_call_ids),
             orphan_audit_ids=orphan_audit_ids,
         )
+
+    def _iter_audit_records(self) -> Iterator[tuple[AuditRow, str]]:
+        """Internal: yield ``(audit_row, code_version_slug)`` pairs for every
+        *committed* audit row.
+
+        Marker-gated (same elision rule as :meth:`read_audit_results`):
+        uncommitted parquets are not surfaced. Used by :meth:`reconcile` and
+        :meth:`validate_invariants` so pairing logic operates on the
+        ``(audit_id, slug)`` key rather than just ``audit_id``.
+        """
+        if not self._audit_dir.exists():
+            return
+        for path in sorted(self._audit_dir.glob("*.parquet")):
+            if not self._marker_for_parquet(path).exists():
+                continue
+            entry = _read_single_record(path)
+            row = AuditRow.model_validate_json(entry["payload"])
+            yield row, entry["code_version_slug"]
 
     # -- Phase-level seams (test-only; prod callers use :meth:`write`) --------
 
@@ -224,7 +269,9 @@ class AuditStore:
         The parquet filename includes the ``code_version`` slug so a v2
         re-run with the same ``(audit_id, run_id)`` lands in a *new* file
         rather than overwriting v1's bytes — the append-only contract holds
-        under version bumps.
+        under version bumps. The slug also lands as a surface column so
+        :meth:`reconcile` and :meth:`validate_invariants` can pair audit
+        rows with their version-matching calls.
         """
         self._audit_dir.mkdir(parents=True, exist_ok=True)
         path = self._audit_parquet_path(row.audit_id, row.run_id)
@@ -233,6 +280,7 @@ class AuditStore:
             {
                 "audit_id": row.audit_id,
                 "run_id": row.run_id,
+                "code_version_slug": self._code_version_slug,
                 "payload": row.model_dump_json(),
             },
         )

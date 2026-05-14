@@ -45,7 +45,11 @@ def migrate_cold_storage(store: AuditStore, older_than: datetime) -> ColdStorage
         if call.extended_thinking_blocks is None:
             continue  # already migrated — idempotency invariant
 
-        cold_path = store.cold_storage_dir / f"{call.call_id}.json"
+        # Blob filename includes the call's original slug so multiple
+        # code-version reruns of the same call_id do not overwrite each
+        # other's cold blobs (each rewritten row's cold_storage_uri must
+        # resolve to its own version's content — see Codex P2 round 5).
+        cold_path = store.cold_storage_dir / f"{call.call_id}_{original_slug}.json"
         # _deep_thaw recursively unwraps MappingProxyType + frozen tuples
         # so json.dumps sees plain dict/list. The field is frozen for
         # in-memory immutability (PRD §"persisted immutably") but the
