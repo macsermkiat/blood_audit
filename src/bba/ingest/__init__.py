@@ -12,9 +12,11 @@ from bba.ingest.models import (
     CSVTable,
     IngestConfig,
     IngestResult,
+    ParsedTimeOfDay,
     ParseResult,
 )
 from bba.ingest.pipeline import ingest
+from bba.ingest.row_timestamp import RowTimestamp
 from bba.ingest.run_identity import RunIdentity
 from bba.ingest.schemas import (
     IncompleteInputError,
@@ -25,7 +27,6 @@ from bba.ingest.schemas import (
     validate_header,
 )
 from bba.ingest.time_parser import parse_hosxp_time
-from bba.ingest.tz import to_utc
 
 __all__ = [
     "CSVTable",
@@ -33,6 +34,8 @@ __all__ = [
     "IngestConfig",
     "IngestResult",
     "ParseResult",
+    "ParsedTimeOfDay",
+    "RowTimestamp",
     "RunIdentity",
     "SchemaDriftError",
     "all_tables",
@@ -41,6 +44,5 @@ __all__ = [
     "ingest",
     "parse_hosxp_time",
     "schema_fingerprint",
-    "to_utc",
     "validate_header",
 ]

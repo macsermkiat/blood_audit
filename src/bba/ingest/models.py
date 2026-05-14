@@ -7,7 +7,7 @@ parse_warning=<reason>)``, never a wrong-but-plausible datetime.
 
 from __future__ import annotations
 
-from datetime import datetime
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -27,17 +27,34 @@ CSVTable = Literal[
 ]
 
 
+@dataclass(frozen=True, slots=True)
+class ParsedTimeOfDay:
+    """A clock time-of-day (no date) parsed from a HOSxP time column.
+
+    Time alone does not pin a moment. Callers MUST combine a ``ParsedTimeOfDay``
+    with the row's date column via :class:`~bba.ingest.row_timestamp.RowTimestamp`
+    before persisting; this type's purpose is to prevent the date from being
+    invented at parse time (which previously meant a sentinel ``1900-01-01``
+    that callers had to remember to ignore).
+    """
+
+    hour: int
+    minute: int
+    second: int
+
+
 class ParseResult(BaseModel):
-    """Result of strict HOSxP time/datetime parsing.
+    """Result of strict HOSxP time parsing.
 
     Invariant: exactly one of ``value`` and ``parse_warning`` is non-None.
     Unrecognized inputs produce ``value=None, parse_warning="…"`` — never a
-    silently shifted datetime.
+    silently shifted time. ``value`` is a :class:`ParsedTimeOfDay`, not a
+    ``datetime`` — see that type's docstring for why.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
-    value: datetime | None
+    value: ParsedTimeOfDay | None
     parse_warning: str | None
     raw: str
 

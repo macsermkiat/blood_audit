@@ -9,7 +9,7 @@ No implementation exists yet; every test MUST fail in this scaffold commit.
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -22,9 +22,11 @@ from bba.ingest.models import (
     CSVTable,
     IngestConfig,
     IngestResult,
+    ParsedTimeOfDay,
     ParseResult,
 )
 from bba.ingest.pipeline import ingest
+from bba.ingest.row_timestamp import RowTimestamp
 from bba.ingest.run_identity import RunIdentity
 from bba.ingest.schemas import (
     IncompleteInputError,
@@ -35,7 +37,6 @@ from bba.ingest.schemas import (
     validate_header,
 )
 from bba.ingest.time_parser import parse_hosxp_time
-from bba.ingest.tz import to_utc
 
 
 REQUIRED_TABLES: tuple[CSVTable, ...] = (
@@ -326,21 +327,61 @@ class TestSchemaDriftDetection:
 # =============================================================================
 
 
-class TestTimezoneNormalization:
+class TestRowTimestamp:
+    """The deepened module: combine (date, ParsedTimeOfDay, tz) → tz-aware UTC.
+
+    The old standalone ``to_utc`` helper had no real call site; the conversion
+    only ever matters when a row's date column meets the parsed time, so the
+    rule lives with that combination and tests target it there."""
+
     def test_bangkok_local_to_utc_subtracts_seven_hours(self) -> None:
         # Asia/Bangkok is fixed UTC+07:00 (no DST since 1920); 15:00 local → 08:00 UTC.
-        local = datetime(2026, 5, 14, 15, 0, 0)
-        utc = to_utc(local, tz="Asia/Bangkok")
-        assert utc.tzinfo is not None, "to_utc must return a tz-aware datetime"
-        assert utc.utcoffset() == timedelta(0), "tzinfo must be UTC, not a local zone"
-        assert (utc.year, utc.month, utc.day, utc.hour, utc.minute) == (2026, 5, 14, 8, 0)
+        ts = RowTimestamp.from_parts(
+            date(2026, 5, 14), ParsedTimeOfDay(15, 0, 0), tz="Asia/Bangkok"
+        )
+        assert ts.utc.tzinfo is not None, "from_parts must return a tz-aware datetime"
+        assert ts.utc.utcoffset() == timedelta(0), "tzinfo must be UTC"
+        assert (ts.utc.year, ts.utc.month, ts.utc.day, ts.utc.hour, ts.utc.minute) == (
+            2026,
+            5,
+            14,
+            8,
+            0,
+        )
 
     def test_midnight_local_crosses_day_boundary(self) -> None:
         # Month-boundary correctness (PRD §1, fix E31): 2026-05-15 03:00 +07
         # ↦ 2026-05-14 20:00 UTC — must NOT bucket as the 15th.
-        local = datetime(2026, 5, 15, 3, 0, 0)
-        utc = to_utc(local, tz="Asia/Bangkok")
-        assert (utc.year, utc.month, utc.day, utc.hour) == (2026, 5, 14, 20)
+        ts = RowTimestamp.from_parts(date(2026, 5, 15), ParsedTimeOfDay(3, 0, 0))
+        assert (ts.utc.year, ts.utc.month, ts.utc.day, ts.utc.hour) == (
+            2026,
+            5,
+            14,
+            20,
+        )
+
+    def test_default_tz_is_bangkok(self) -> None:
+        # The default arg encodes the PRD's source-zone choice; an off-default
+        # caller has to be explicit.
+        ts_default = RowTimestamp.from_parts(date(2026, 5, 14), ParsedTimeOfDay(15, 0, 0))
+        ts_bangkok = RowTimestamp.from_parts(
+            date(2026, 5, 14), ParsedTimeOfDay(15, 0, 0), tz="Asia/Bangkok"
+        )
+        assert ts_default == ts_bangkok
+
+    def test_parsed_time_of_day_round_trips_into_row_timestamp(self) -> None:
+        # End-to-end: a raw HOSxP time string flows through the parser into a
+        # ParsedTimeOfDay, then combines with a date column into a UTC moment.
+        parsed = parse_hosxp_time("083045")
+        assert isinstance(parsed.value, ParsedTimeOfDay)
+        ts = RowTimestamp.from_parts(date(2026, 5, 14), parsed.value)
+        # 08:30:45 +07 → 01:30:45 UTC.
+        assert (ts.utc.hour, ts.utc.minute, ts.utc.second) == (1, 30, 45)
+
+    def test_row_timestamp_is_frozen(self) -> None:
+        ts = RowTimestamp.from_parts(date(2026, 5, 14), ParsedTimeOfDay(15, 0, 0))
+        with pytest.raises(Exception):
+            ts.utc = datetime(1970, 1, 1)  # type: ignore[misc]
 
 
 # =============================================================================
