@@ -235,6 +235,47 @@ class TestSanityBoundsEnforcement:
 
 
 # =============================================================================
+# Regression (codex review, 2026-05-15): overlong numeric tokens must NOT
+# silently match their in-range prefix. "HR 2000" used to extract hr=200 with
+# no vitals_data_error flag — sanity-bound enforcement was bypassed by a
+# greedy regex truncation. The trailing (?!\d) closes that gap.
+# =============================================================================
+
+
+class TestRegexRejectsOverlongNumbers:
+    """Each label-value regex must reject digit runs longer than its declared
+    width — silent truncation would populate a wrong value with no DATA_ERROR
+    flag, defeating the whole sanity-bounds contract."""
+
+    def test_hr_four_digit_token_does_not_truncate(self) -> None:
+        # "HR 2000" must NOT become hr=200; either reject or flag, never
+        # silently populate.
+        v = extract_vitals_from_text("HR 2000")
+        assert v.hr is None
+
+    def test_pr_four_digit_token_does_not_truncate(self) -> None:
+        v = extract_vitals_from_text("PR 1500")
+        assert v.hr is None
+
+    def test_rr_three_digit_token_does_not_truncate(self) -> None:
+        # "RR 500" must NOT become rr=50.
+        v = extract_vitals_from_text("RR 500")
+        assert v.rr is None
+
+    def test_rr_range_overlong_second_does_not_truncate(self) -> None:
+        # Range tail noise: "RR 20-2345" should still yield rr=20 from the
+        # first group, but the range second digit must not consume "23" out
+        # of "2345" (the regression case for noisy range parsing).
+        v = extract_vitals_from_text("RR 20-2345")
+        assert v.rr == 20
+
+    def test_bt_overlong_integer_does_not_truncate(self) -> None:
+        # "BT 3845" must NOT become bt=38.0 via greedy 2-digit fallback.
+        v = extract_vitals_from_text("BT 3845")
+        assert v.bt is None
+
+
+# =============================================================================
 # AC: ±6 h window selection from anchor; most-recent-before-order preferred.
 # =============================================================================
 

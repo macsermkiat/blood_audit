@@ -28,16 +28,27 @@ from bba.vitals_extractor.models import VitalSigns
 # Compiled once at import. Case-insensitive so "Temp" / "temp" / "TEMP" all
 # qualify, and word-boundary-anchored so "PR" inside "PRESCRIPTION", "BP"
 # inside "BPM", or stray "P" inside "Step" can never satisfy a label.
+#
+# Each captured numeric group is terminated by a ``(?!\d)`` negative lookahead
+# so an OCR-noisy overlong token like "HR 2000" or "RR 500" can NEVER match
+# its in-range prefix ("200", "50") and slip past sanity bounds. Truncation
+# would silently produce wrong-but-plausible vitals with no DATA_ERROR flag,
+# which is exactly the contract this extractor must uphold (codex review,
+# 2026-05-15). BP relies on the structural ``/`` separator for the same
+# protection; the bare "P" form is bounded by a trailing ``\b`` already.
 _BP_RE = re.compile(r"\bBP\s*:?\s*(\d{2,3})\s*/\s*(\d{2,3})", re.IGNORECASE)
-_HR_RE = re.compile(r"\b(?:HR|PR)\s*:?\s*(\d{2,3})", re.IGNORECASE)
+_HR_RE = re.compile(r"\b(?:HR|PR)\s*:?\s*(\d{2,3})(?!\d)", re.IGNORECASE)
 # RR may carry an observed-variability range ("RR 20-23"); the lower bound is
 # the deterministic floor (clinically: at-or-above this value across the
 # observation window).
-_RR_RE = re.compile(r"\bRR\s*:?\s*(\d{1,2})(?:\s*[-–]\s*\d{1,2})?", re.IGNORECASE)
+_RR_RE = re.compile(
+    r"\bRR\s*:?\s*(\d{1,2})(?!\d)(?:\s*[-–]\s*\d{1,2}(?!\d))?",
+    re.IGNORECASE,
+)
 # "P" alone is RR per the issue grouping; constrain to 1-2 digits + word
 # boundary so it cannot consume a pulse-shaped 3-digit value.
 _P_RR_RE = re.compile(r"\bP\s*:?\s*(\d{1,2})\b", re.IGNORECASE)
-_BT_RE = re.compile(r"\b(?:BT|Temp)\s*:?\s*(\d{2,3}(?:\.\d+)?)", re.IGNORECASE)
+_BT_RE = re.compile(r"\b(?:BT|Temp)\s*:?\s*(\d{2,3}(?:\.\d+)?)(?!\d)", re.IGNORECASE)
 
 
 def extract_vitals_from_text(text: str) -> VitalSigns:
