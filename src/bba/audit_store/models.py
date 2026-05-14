@@ -17,12 +17,13 @@ the audit_store re-applies it at the write boundary.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from types import MappingProxyType
 from typing import Annotated, Any, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict
+from pydantic import AfterValidator, BaseModel, ConfigDict, field_serializer
 
 
 Classification = Literal[
@@ -58,6 +59,34 @@ Use on every persisted timestamp. Aware non-UTC inputs are converted to UTC.
 """
 
 
+def _freeze_dict_items(
+    items: Sequence[Mapping[str, Any]],
+) -> tuple[Mapping[str, Any], ...]:
+    """Return a tuple of read-only ``MappingProxyType`` views over copies of
+    each input dict.
+
+    Each input dict is shallow-copied (to detach from the caller's reference,
+    so a later mutation on the caller's side cannot leak into the model) and
+    then wrapped in :class:`types.MappingProxyType`, which raises ``TypeError``
+    on ``__setitem__``. The audit-record immutability promise (``frozen=True``
+    + tuple containers) extends to the nested JSON contents.
+    """
+    return tuple(MappingProxyType(dict(item)) for item in items)
+
+
+FrozenJsonList = Annotated[
+    tuple[dict[str, Any], ...],
+    AfterValidator(_freeze_dict_items),
+]
+"""A ``tuple`` of immutable, read-only JSON-shaped mappings.
+
+Use for ``indications_json``-style fields where the schema is dynamic but the
+contents must not be mutated after model construction. Pair with the model's
+``_serialize_frozen_json_list`` field serializer so JSON output is plain
+``list[dict]`` regardless of in-memory representation.
+"""
+
+
 class AuditRow(BaseModel):
     """One audited RBC order. Persisted immutably to ``audit_results.parquet``.
 
@@ -68,10 +97,11 @@ class AuditRow(BaseModel):
     * Pipeline outputs — what the deterministic + LLM stack concluded.
     * Reproducibility metadata — every byte needed to re-derive the call.
 
-    The dict fields (``indications_json``, ``negative_evidence_json``,
-    ``delta_hb_window_results``) are typed as ``tuple[dict[str, Any], ...]``
-    rather than free dicts: a tuple makes the field genuinely immutable
-    (``frozen=True`` only prevents reassignment, not nested mutation).
+    The nested-dict fields (``indications_json``, ``negative_evidence_json``,
+    ``delta_hb_window_results``) use :data:`FrozenJsonList`, which wraps each
+    dict in :class:`types.MappingProxyType` so post-construction mutation
+    raises ``TypeError``. The model's frozen contract therefore extends
+    through the JSON contents, not just the outer container.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -98,14 +128,14 @@ class AuditRow(BaseModel):
     prior_rbc_units_24h: int
     prior_rbc_units_7d: int
     cohort_threshold: float
-    delta_hb_window_results: tuple[dict[str, Any], ...]
+    delta_hb_window_results: FrozenJsonList
 
     # Pipeline outputs
     rule_classification: Classification
     final_classification: Classification
     cohort_applied: str
-    indications_json: tuple[dict[str, Any], ...]
-    negative_evidence_json: tuple[dict[str, Any], ...]
+    indications_json: FrozenJsonList
+    negative_evidence_json: FrozenJsonList
     confidence: float
     reasoning_summary_thai: str
     reasoning_summary_en: str
@@ -122,6 +152,18 @@ class AuditRow(BaseModel):
     verifier_pass: bool
     verifier_retries: int
     escalated_to_opus: bool
+
+    @field_serializer(
+        "indications_json", "negative_evidence_json", "delta_hb_window_results"
+    )
+    def _serialize_frozen_json_list(
+        self, value: tuple[Mapping[str, Any], ...]
+    ) -> list[dict[str, Any]]:
+        """Unwrap :class:`MappingProxyType` items back to plain ``dict`` for
+        JSON output, so payloads serialize to ``[{...}, {...}]`` regardless
+        of in-memory representation.
+        """
+        return [dict(item) for item in value]
 
 
 class LlmCall(BaseModel):

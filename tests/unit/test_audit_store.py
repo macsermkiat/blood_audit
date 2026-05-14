@@ -786,3 +786,113 @@ class TestModelsEnforceTzAwareUTC:
         call = _call(request_timestamp=datetime(2026, 5, 1, 12, 0, 0, tzinfo=bkk))
 
         assert call.request_timestamp == datetime(2026, 5, 1, 5, 0, 0, tzinfo=UTC)
+
+
+class TestIdempotencyMarkerIncludesCodeVersion:
+    """Codex P2 round 2: ``AuditStoreConfig.code_version`` docstring promises
+    that a code-version bump invalidates the cached completion marker so a
+    re-run is forced. The marker must therefore be keyed on ``code_version``
+    in addition to ``audit_id`` + ``run_id``.
+
+    WHY: a change to audit-store-layer code (schema bump on the payload
+    column, fix to audit_id derivation, etc.) that re-uses an upstream
+    ``run_id`` would otherwise silently no-op as "already done" and the
+    reviewer dashboard would keep showing the stale classification.
+    """
+
+    def test_code_version_bump_forces_rewrite(self, tmp_path: Path) -> None:
+        root = tmp_path / "store"
+        AuditStore(AuditStoreConfig(root_dir=root, code_version="v1.0.0")).write(
+            _row(), [_call()]
+        )
+
+        result_v2 = AuditStore(
+            AuditStoreConfig(root_dir=root, code_version="v2.0.0")
+        ).write(_row(), [_call()])
+
+        assert result_v2.skipped_idempotent is False
+
+    def test_same_code_version_still_idempotent(self, tmp_path: Path) -> None:
+        root = tmp_path / "store"
+        cfg = AuditStoreConfig(root_dir=root, code_version="v1.0.0")
+        AuditStore(cfg).write(_row(), [_call()])
+
+        result = AuditStore(cfg).write(_row(), [_call()])
+
+        assert result.skipped_idempotent is True
+
+    def test_cross_version_reads_remain_visible(self, tmp_path: Path) -> None:
+        # Reads MUST stay code_version-agnostic: a v2 process must still be
+        # able to inspect what v1 committed (for migration, audit, eval).
+        # Idempotency is about whether to write again; visibility of prior
+        # committed data is a separate concern.
+        root = tmp_path / "store"
+        AuditStore(AuditStoreConfig(root_dir=root, code_version="v1.0.0")).write(
+            _row(audit_id="a-v1", run_id="r1"),
+            [_call(call_id="c-v1", audit_id="a-v1", run_id="r1")],
+        )
+
+        v2_store = AuditStore(AuditStoreConfig(root_dir=root, code_version="v2.0.0"))
+        rows = v2_store.read_audit_results()
+
+        assert len(rows) == 1
+        assert rows[0].audit_id == "a-v1"
+
+
+class TestNestedJsonImmutability:
+    """Codex P2 round 2: ``frozen=True`` + tuple containers only guard the
+    outer shell. Each dict inside ``indications_json`` /
+    ``negative_evidence_json`` / ``delta_hb_window_results`` must itself be
+    immutable, otherwise a cached or shared model can be mutated post-hoc
+    and the "persisted immutably" promise breaks.
+
+    WHY: the audit chain must be reconstructible six months later (PRD
+    §"Output schema"). A nested-dict mutation between construction and
+    persistence would produce an in-memory model whose JSON payload does not
+    match what the row claims to contain.
+    """
+
+    def test_indications_json_dicts_reject_mutation(self) -> None:
+        row = _row()
+        with pytest.raises(TypeError):
+            row.indications_json[0]["code"] = "MUTATED"  # type: ignore[index]
+
+    def test_negative_evidence_json_dicts_reject_mutation(self) -> None:
+        row = _row(
+            negative_evidence_json=(
+                {"code": "no_bleed", "quote": "stable", "source_id": "X:1"},
+            ),
+        )
+        with pytest.raises(TypeError):
+            row.negative_evidence_json[0]["code"] = "MUTATED"  # type: ignore[index]
+
+    def test_delta_hb_window_results_dicts_reject_mutation(self) -> None:
+        row = _row()
+        with pytest.raises(TypeError):
+            row.delta_hb_window_results[0]["window"] = "MUTATED"  # type: ignore[index]
+
+    def test_input_dict_mutation_does_not_leak_into_model(self) -> None:
+        """Caller-held reference to the input dict cannot mutate the model.
+
+        The validator must defensively copy each input dict before wrapping,
+        so a later mutation on the caller's side leaves the persisted model
+        unchanged.
+        """
+        original = {"code": "A", "quote": "q", "source_id": "s", "confidence": 0.9}
+        row = _row(indications_json=(original,))
+
+        original["code"] = "MUTATED"
+
+        assert row.indications_json[0]["code"] == "A"
+
+    def test_immutability_survives_json_round_trip(self, store: AuditStore) -> None:
+        # Deep-immutability machinery must not break model_dump_json /
+        # read-back equality.
+        row = _row()
+        store.write(row, [_call()])
+
+        rt = store.read_audit_results()[0]
+
+        assert rt == row
+        with pytest.raises(TypeError):
+            rt.indications_json[0]["code"] = "MUTATED"  # type: ignore[index]

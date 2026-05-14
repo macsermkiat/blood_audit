@@ -79,7 +79,7 @@ class AuditStore:
         catch — empty ``calls``, or any call whose ``audit_id``/``run_id``
         does not match ``row``.
         """
-        if self._marker_path(row.audit_id, row.run_id).exists():
+        if self._is_already_committed(row.audit_id, row.run_id):
             return WriteResult(
                 audit_id=row.audit_id,
                 run_id=row.run_id,
@@ -230,11 +230,31 @@ class AuditStore:
         )
 
     def _mark_complete(self, audit_id: str, run_id: str) -> None:
+        """Drop the commit marker, stamped with the current ``code_version``.
+
+        The marker filename is keyed on ``(audit_id, run_id)`` (version-agnostic,
+        so cross-version reads stay consistent); the *content* is the writer's
+        ``code_version``, consulted by :meth:`_is_already_committed` to decide
+        whether a same-key re-run should no-op.
+        """
         self._markers_dir.mkdir(parents=True, exist_ok=True)
         target = self._marker_path(audit_id, run_id)
         tmp = target.with_suffix(target.suffix + ".tmp")
-        tmp.write_text("ok\n", encoding="utf-8")
+        tmp.write_text(self._config.code_version + "\n", encoding="utf-8")
         tmp.replace(target)
+
+    def _is_already_committed(self, audit_id: str, run_id: str) -> bool:
+        """True iff a commit marker exists AND it was written by this
+        ``code_version``.
+
+        A marker stamped with a *different* ``code_version`` does not count
+        as committed-for-this-run — the docstring on ``AuditStoreConfig``
+        promises that a code-version bump forces a re-run.
+        """
+        marker = self._marker_path(audit_id, run_id)
+        if not marker.exists():
+            return False
+        return marker.read_text(encoding="utf-8").strip() == self._config.code_version
 
     # -- Paths ---------------------------------------------------------------
 
