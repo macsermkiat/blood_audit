@@ -20,6 +20,11 @@ env/
 htmlcov/
 coverage.xml
 
+# Build artefacts
+build/
+dist/
+*.egg-info/
+
 # Editor / OS
 .DS_Store
 .vscode/

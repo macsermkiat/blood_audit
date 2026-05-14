@@ -17,6 +17,12 @@ blood-audit = "blood_audit:main"
 requires = ["uv_build>=0.9.24,<0.10.0"]
 build-backend = "uv_build"
 
+[tool.uv.build-backend]
+# uv_build's default infers the wheel module from the project name (blood_audit).
+# We ship two top-level packages under src/, so list both explicitly — otherwise
+# `pip install blood-audit` produces a wheel that lacks `bba.ingest`.
+module-name = ["bba", "blood_audit"]
+
 [dependency-groups]
 dev = [
     "hypothesis>=6.152.7",
