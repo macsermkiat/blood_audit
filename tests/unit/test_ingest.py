@@ -261,11 +261,11 @@ class TestValidateHeader:
     def test_clean_header_returns_none(self) -> None:
         cols = list(get_schema("BDVST").columns)
         # Returns None implicitly when no drift; no exception raised.
-        assert validate_header("BDVST", cols) is None
+        validate_header("BDVST", cols)
 
     def test_clean_header_order_insensitive(self) -> None:
         cols = list(reversed(list(get_schema("BDVST").columns)))
-        assert validate_header("BDVST", cols) is None
+        validate_header("BDVST", cols)
 
     def test_unknown_column_raises(self) -> None:
         with pytest.raises(SchemaDriftError) as exc_info:
@@ -540,7 +540,7 @@ class TestPublicOutputsAreImmutable:
         r = parse_hosxp_time("083045")
         assert isinstance(r, ParseResult)
         with pytest.raises(ValidationError):
-            r.value = datetime(2026, 1, 1)  # type: ignore[misc]
+            r.value = datetime(2026, 1, 1)  # type: ignore[misc, assignment]
 
     def test_ingest_result_from_pipeline_is_frozen(
         self, tmp_path: Path, complete_hosxp_dir: Path
