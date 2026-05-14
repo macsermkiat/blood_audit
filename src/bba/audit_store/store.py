@@ -208,7 +208,6 @@ class AuditStore:
             for row, slug in self._iter_audit_records()
             if row.run_id == run_id
         }
-        audit_ids_with_results = {audit_id for audit_id, _slug in audit_pairs}
 
         orphan_call_ids: list[str] = []
         seen_call_pairs: set[tuple[str, str]] = set()
@@ -219,8 +218,14 @@ class AuditStore:
             if (call.audit_id, slug) not in audit_pairs:
                 orphan_call_ids.append(call.call_id)
 
-        audit_ids_with_calls = {audit_id for audit_id, _slug in seen_call_pairs}
-        orphan_audit_ids = tuple(sorted(audit_ids_with_results - audit_ids_with_calls))
+        # Orphan audit detection MUST stay version-scoped: a v2 audit row
+        # without v2 calls is still orphaned even when v1 has a call for the
+        # same audit_id. Compute the difference on (audit_id, slug) pairs
+        # and only project to audit_ids for the report (Codex P2 round 9).
+        orphan_audit_pairs = audit_pairs - seen_call_pairs
+        orphan_audit_ids = tuple(
+            sorted({audit_id for audit_id, _slug in orphan_audit_pairs})
+        )
 
         return ReconciliationReport(
             run_id=run_id,

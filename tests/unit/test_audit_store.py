@@ -1422,6 +1422,38 @@ class TestCodeVersionInAuditPaths:
 
         assert "c-v2-orphan" in report.orphan_call_ids
 
+    def test_reconcile_orphan_audits_scoped_by_code_version(
+        self, tmp_path: Path
+    ) -> None:
+        """A v2 audit row without v2 calls is an orphan audit *of v2* even
+        when v1 has a matching call for the same ``audit_id``. The
+        :class:`ReconciliationReport.orphan_audit_ids` field must be derived
+        from a ``(audit_id, slug)`` pair-set difference, not an id-level
+        difference, otherwise v1's calls falsely "cover" v2's orphan row.
+
+        WHY: the operator running reconcile under v2 will miss a row that
+        cannot be reproduced from v2 calls, and the audit chain claim
+        "every classification reproducible from frozen hashes" silently
+        fails on the supported code-version rerun.
+        """
+        root = tmp_path / "store"
+
+        # v1 fully committed.
+        AuditStore(AuditStoreConfig(root_dir=root, code_version="v1.0.0")).write(
+            _row(audit_id="a-shared", run_id="r1"),
+            [_call(call_id="c-v1", audit_id="a-shared", run_id="r1")],
+        )
+
+        # v2 audit row staged without v2 calls (test-only injection).
+        store_v2 = AuditStore(AuditStoreConfig(root_dir=root, code_version="v2.0.0"))
+        store_v2._persist_audit_result(_row(audit_id="a-shared", run_id="r1"))
+
+        report = store_v2.reconcile("r1")
+
+        assert "a-shared" in report.orphan_audit_ids, (
+            "v2's orphan audit row was masked by v1's call for the same audit_id"
+        )
+
     def test_validate_invariants_scopes_by_code_version(
         self, tmp_path: Path
     ) -> None:
