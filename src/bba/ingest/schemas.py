@@ -29,6 +29,16 @@ class SchemaDriftError(Exception):
     """
 
 
+class IncompleteInputError(Exception):
+    """Raised when the input directory is missing one or more canonical HOSxP CSVs.
+
+    The error message names the missing tables so operators can fix the export
+    before re-running. This is distinct from :class:`SchemaDriftError` (per-table
+    column drift); ``IncompleteInputError`` is about the registry-level *set* of
+    tables that must be present for an ingest to be meaningful.
+    """
+
+
 def _str(nullable: bool = True) -> Column:
     return Column(str, nullable=nullable, coerce=True)
 

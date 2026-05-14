@@ -16,6 +16,7 @@ from bba.ingest.models import (
 )
 from bba.ingest.pipeline import ingest
 from bba.ingest.schemas import (
+    IncompleteInputError,
     SchemaDriftError,
     all_tables,
     get_schema,
@@ -27,6 +28,7 @@ from bba.ingest.writer import is_run_complete
 
 __all__ = [
     "CSVTable",
+    "IncompleteInputError",
     "IngestConfig",
     "IngestResult",
     "ParseResult",

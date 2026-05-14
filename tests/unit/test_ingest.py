@@ -26,6 +26,7 @@ from bba.ingest.models import (
 )
 from bba.ingest.pipeline import ingest
 from bba.ingest.schemas import (
+    IncompleteInputError,
     SchemaDriftError,
     all_tables,
     get_schema,
@@ -48,6 +49,31 @@ REQUIRED_TABLES: tuple[CSVTable, ...] = (
     "IPDNRFOCUSDT",
     "UnUSE_Patient_Background",
 )
+
+
+def _write_complete_hosxp(in_dir: Path) -> None:
+    """Populate ``in_dir`` with a minimal valid CSV for every required HOSxP table.
+
+    Header columns are derived from the live pandera schemas so the fixture
+    follows future schema bumps without manual edits. Each file has the header
+    plus one empty-string row, which is enough to exercise the header-drift
+    and run-id paths without depending on per-row parsing (#4-#7).
+    """
+    in_dir.mkdir(parents=True, exist_ok=True)
+    for table in REQUIRED_TABLES:
+        schema = get_schema(table)
+        cols = list(schema.columns)
+        header = ",".join(cols)
+        row = ",".join("" for _ in cols)
+        (in_dir / f"{table}.csv").write_text(f"{header}\n{row}\n", encoding="utf-8")
+
+
+@pytest.fixture
+def complete_hosxp_dir(tmp_path: Path) -> Path:
+    """A fully-populated minimal HOSxP input dir for tests that need ingest to succeed."""
+    in_dir = tmp_path / "in"
+    _write_complete_hosxp(in_dir)
+    return in_dir
 
 
 # =============================================================================
@@ -392,13 +418,11 @@ class TestPublicOutputsAreImmutable:
         with pytest.raises(ValidationError):
             r.value = datetime(2026, 1, 1)  # type: ignore[misc]
 
-    def test_ingest_result_from_pipeline_is_frozen(self, tmp_path: Path) -> None:
-        # A fully-valid empty input dir; the second call must short-circuit
-        # idempotently and return a frozen IngestResult either way.
-        in_dir = tmp_path / "in"
-        in_dir.mkdir()
+    def test_ingest_result_from_pipeline_is_frozen(
+        self, tmp_path: Path, complete_hosxp_dir: Path
+    ) -> None:
         cfg = IngestConfig(
-            input_dir=in_dir,
+            input_dir=complete_hosxp_dir,
             output_dir=tmp_path / "out",
             code_version="0.0.1",
         )
@@ -409,11 +433,11 @@ class TestPublicOutputsAreImmutable:
 
 
 class TestIngestResultShape:
-    def test_pipeline_returns_run_id_and_idempotency_flag(self, tmp_path: Path) -> None:
-        in_dir = tmp_path / "in"
-        in_dir.mkdir()
+    def test_pipeline_returns_run_id_and_idempotency_flag(
+        self, tmp_path: Path, complete_hosxp_dir: Path
+    ) -> None:
         cfg = IngestConfig(
-            input_dir=in_dir,
+            input_dir=complete_hosxp_dir,
             output_dir=tmp_path / "out",
             code_version="0.0.1",
         )
@@ -422,11 +446,11 @@ class TestIngestResultShape:
         assert first.skipped_idempotent is False
         assert isinstance(first.run_id, str) and len(first.run_id) == 64
 
-    def test_pipeline_second_call_is_idempotent_noop(self, tmp_path: Path) -> None:
-        in_dir = tmp_path / "in"
-        in_dir.mkdir()
+    def test_pipeline_second_call_is_idempotent_noop(
+        self, tmp_path: Path, complete_hosxp_dir: Path
+    ) -> None:
         cfg = IngestConfig(
-            input_dir=in_dir,
+            input_dir=complete_hosxp_dir,
             output_dir=tmp_path / "out",
             code_version="0.0.1",
         )
@@ -489,11 +513,11 @@ class TestIngestResultTablesWrittenIsImmutable:
     `result.tables_written`. The public output contract promises immutability —
     use a tuple."""
 
-    def test_tables_written_is_a_tuple(self, tmp_path: Path) -> None:
-        in_dir = tmp_path / "in"
-        in_dir.mkdir()
+    def test_tables_written_is_a_tuple(
+        self, tmp_path: Path, complete_hosxp_dir: Path
+    ) -> None:
         cfg = IngestConfig(
-            input_dir=in_dir,
+            input_dir=complete_hosxp_dir,
             output_dir=tmp_path / "out",
             code_version="0.0.1",
         )
@@ -503,11 +527,11 @@ class TestIngestResultTablesWrittenIsImmutable:
             f"{type(result.tables_written).__name__}"
         )
 
-    def test_tables_written_cannot_be_appended_to(self, tmp_path: Path) -> None:
-        in_dir = tmp_path / "in"
-        in_dir.mkdir()
+    def test_tables_written_cannot_be_appended_to(
+        self, tmp_path: Path, complete_hosxp_dir: Path
+    ) -> None:
         cfg = IngestConfig(
-            input_dir=in_dir,
+            input_dir=complete_hosxp_dir,
             output_dir=tmp_path / "out",
             code_version="0.0.1",
         )
@@ -515,3 +539,68 @@ class TestIngestResultTablesWrittenIsImmutable:
         # tuple has no .append; AttributeError is the immutability signal.
         with pytest.raises(AttributeError):
             result.tables_written.append("BDVST")  # type: ignore[attr-defined]
+
+
+# =============================================================================
+# Codex pass-2 P1: reject incomplete input directories
+# =============================================================================
+
+
+class TestIncompleteInputRejection:
+    """Codex P1 (pipeline.py:91-92): an input_dir that is missing, empty, or
+    lacks one of the 10 canonical HOSxP CSVs used to get hashed and marked
+    complete — making a typo or partial export look successful, with the
+    incomplete run no-op'd as idempotent on retry. Every "incomplete set"
+    must fail loud."""
+
+    def test_missing_input_dir_raises(self, tmp_path: Path) -> None:
+        nonexistent = tmp_path / "does-not-exist"
+        cfg = IngestConfig(
+            input_dir=nonexistent,
+            output_dir=tmp_path / "out",
+            code_version="test",
+        )
+        with pytest.raises(IncompleteInputError) as exc_info:
+            ingest(cfg)
+        assert "does-not-exist" in str(exc_info.value) or "missing" in str(exc_info.value).lower()
+
+    def test_empty_input_dir_raises(self, tmp_path: Path) -> None:
+        in_dir = tmp_path / "in"
+        in_dir.mkdir()
+        cfg = IngestConfig(
+            input_dir=in_dir, output_dir=tmp_path / "out", code_version="test"
+        )
+        with pytest.raises(IncompleteInputError) as exc_info:
+            ingest(cfg)
+        # Error must name at least one missing canonical table.
+        msg = str(exc_info.value)
+        assert any(table in msg for table in REQUIRED_TABLES), (
+            f"empty-dir error did not name any missing table: {msg!r}"
+        )
+
+    def test_missing_one_table_raises(
+        self, tmp_path: Path, complete_hosxp_dir: Path
+    ) -> None:
+        # Remove a single canonical CSV; the rest are fine.
+        (complete_hosxp_dir / "Lab.csv").unlink()
+        cfg = IngestConfig(
+            input_dir=complete_hosxp_dir,
+            output_dir=tmp_path / "out",
+            code_version="test",
+        )
+        with pytest.raises(IncompleteInputError) as exc_info:
+            ingest(cfg)
+        assert "Lab" in str(exc_info.value)
+
+    def test_incomplete_run_does_not_write_complete_marker(
+        self, tmp_path: Path
+    ) -> None:
+        # The raise must happen before any marker is written.
+        in_dir = tmp_path / "in"
+        in_dir.mkdir()
+        out_dir = tmp_path / "out"
+        cfg = IngestConfig(input_dir=in_dir, output_dir=out_dir, code_version="test")
+        with pytest.raises(IncompleteInputError):
+            ingest(cfg)
+        markers = list(out_dir.glob("_run_*.complete")) if out_dir.exists() else []
+        assert markers == [], f"incomplete run leaked a complete marker: {markers}"
