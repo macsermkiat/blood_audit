@@ -1,13 +1,15 @@
-"""End-to-end ingest orchestration: CSV → pandera validation → DuckDB+Parquet.
+"""End-to-end ingest orchestration: CSV → header validation → run-identity → noop-or-mark.
 
 Public entry point: :func:`ingest`. Per PRD §1:
 
 * discover the 10 HOSxP CSVs in ``config.input_dir`` by file stem;
+* fail loud (:class:`IncompleteInputError`) if the input dir is missing or
+  any canonical CSV is absent;
 * validate each header against its pandera schema, raising
-  :class:`~bba.ingest.schemas.SchemaDriftError` loudly on any unknown column;
-* derive ``run_id`` from the input content hashes + schema fingerprint +
-  code version;
-* short-circuit when the writer reports the ``run_id`` already complete
+  :class:`SchemaDriftError` on unknown or missing columns;
+* derive a :class:`RunIdentity` from the input content hashes + schema
+  fingerprint + code version;
+* short-circuit when the identity reports itself complete on disk
   (``skipped_idempotent=True``).
 
 The Phase-1 implementation focuses on header validation and the idempotency
@@ -17,29 +19,18 @@ the validated dataframes.
 
 from __future__ import annotations
 
-import hashlib
 import csv
 from pathlib import Path
 from typing import cast, get_args
 
-from bba.ingest.hashing import compute_run_id, content_hash
+from bba.ingest.hashing import content_hash
 from bba.ingest.models import CSVTable, IngestConfig, IngestResult
+from bba.ingest.run_identity import RunIdentity
 from bba.ingest.schemas import (
     IncompleteInputError,
     schema_fingerprint,
     validate_header,
 )
-from bba.ingest.writer import is_run_complete, mark_run_complete
-
-
-def _aggregate_input_hash(per_file_hashes: dict[CSVTable, str]) -> str:
-    h = hashlib.sha256()
-    for table in sorted(per_file_hashes):
-        h.update(table.encode("utf-8"))
-        h.update(b":")
-        h.update(per_file_hashes[table].encode("utf-8"))
-        h.update(b"\n")
-    return h.hexdigest()
 
 
 def _read_csv_header(path: Path) -> list[str]:
@@ -52,10 +43,11 @@ def _read_csv_header(path: Path) -> list[str]:
 
 
 def ingest(config: IngestConfig) -> IngestResult:
-    """Ingest the configured CSV directory into the Parquet store.
+    """Ingest the configured CSV directory.
 
-    See module docstring for the contract. On any header drift the function
-    raises :class:`SchemaDriftError` before mutating ``output_dir``.
+    See module docstring for the contract. Raises before any side-effect on
+    drift or incomplete input — so a malformed input dir never writes a
+    completion marker.
     """
     known_tables: tuple[CSVTable, ...] = cast("tuple[CSVTable, ...]", get_args(CSVTable))
 
@@ -75,29 +67,25 @@ def ingest(config: IngestConfig) -> IngestResult:
             # the 10 HOSxP tables and operators may stage extra artefacts.
             continue
         table = stem
-        # validate_header concentrates the drift rule (both unknown + missing
-        # columns) with the schema registry. Raises SchemaDriftError before any
-        # side-effect, so a malformed input never writes a completion marker.
         validate_header(table, _read_csv_header(csv_path))
         per_file_hashes[table] = content_hash(csv_path)
         validated.append(table)
 
     missing_tables = sorted(set(known_tables) - set(validated))
     if missing_tables:
-        # No marker is written: the raise sits above the run_id/marker logic.
         raise IncompleteInputError(
             f"input_dir is missing {len(missing_tables)} of {len(known_tables)} "
             f"required HOSxP tables: {missing_tables}"
         )
 
-    input_csv_hash = _aggregate_input_hash(per_file_hashes)
-    run_id = compute_run_id(input_csv_hash, schema_fingerprint(), config.code_version)
-
+    identity = RunIdentity.from_inputs(
+        per_file_hashes, schema_fingerprint(), config.code_version
+    )
     tables_written = tuple(validated)
 
-    if is_run_complete(config.output_dir, run_id):
+    if identity.is_complete(config.output_dir):
         return IngestResult(
-            run_id=run_id,
+            run_id=identity.run_id,
             rows_written=0,
             tables_written=tables_written,
             skipped_idempotent=True,
@@ -106,10 +94,10 @@ def ingest(config: IngestConfig) -> IngestResult:
     # Per-row Parquet writes land here in subsequent tickets (#4–#7). For now
     # the idempotency boundary is the marker file — once written, this run_id
     # is considered complete.
-    mark_run_complete(config.output_dir, run_id)
+    identity.mark_complete(config.output_dir)
 
     return IngestResult(
-        run_id=run_id,
+        run_id=identity.run_id,
         rows_written=0,
         tables_written=tables_written,
         skipped_idempotent=False,

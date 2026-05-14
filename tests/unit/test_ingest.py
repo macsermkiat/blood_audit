@@ -17,7 +17,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from pydantic import ValidationError
 
-from bba.ingest.hashing import compute_run_id, content_hash
+from bba.ingest.hashing import content_hash
 from bba.ingest.models import (
     CSVTable,
     IngestConfig,
@@ -25,6 +25,7 @@ from bba.ingest.models import (
     ParseResult,
 )
 from bba.ingest.pipeline import ingest
+from bba.ingest.run_identity import RunIdentity
 from bba.ingest.schemas import (
     IncompleteInputError,
     SchemaDriftError,
@@ -35,7 +36,6 @@ from bba.ingest.schemas import (
 )
 from bba.ingest.time_parser import parse_hosxp_time
 from bba.ingest.tz import to_utc
-from bba.ingest.writer import is_run_complete
 
 
 REQUIRED_TABLES: tuple[CSVTable, ...] = (
@@ -376,45 +376,79 @@ class TestNaiveDatetimeBan:
 # =============================================================================
 
 
-class TestRunIdContract:
+class TestRunIdentity:
+    """RunIdentity concentrates the run_id formula and the on-disk completion-marker
+    convention. The interface IS the test surface (DEEPENING.md)."""
+
     def test_run_id_is_sha256_of_concatenated_inputs(self) -> None:
         # The concatenation order is part of the public contract (PRD §1, fix E32).
-        a = "a" * 64  # plausible sha256 hex of input
-        b = "b" * 64  # plausible schema fingerprint
+        a = "a" * 64
+        b = "b" * 64
         v = "0.1.0"
         expected = hashlib.sha256((a + b + v).encode("utf-8")).hexdigest()
-        assert compute_run_id(a, b, v) == expected
+        assert RunIdentity.from_components(a, b, v).run_id == expected
 
     def test_same_inputs_same_run_id(self) -> None:
-        assert compute_run_id("x", "y", "z") == compute_run_id("x", "y", "z")
+        assert (
+            RunIdentity.from_components("x", "y", "z").run_id
+            == RunIdentity.from_components("x", "y", "z").run_id
+        )
 
     def test_run_id_changes_when_any_component_changes(self) -> None:
-        base = compute_run_id("x", "y", "z")
-        assert compute_run_id("X", "y", "z") != base
-        assert compute_run_id("x", "Y", "z") != base
-        assert compute_run_id("x", "y", "Z") != base
+        base = RunIdentity.from_components("x", "y", "z").run_id
+        assert RunIdentity.from_components("X", "y", "z").run_id != base
+        assert RunIdentity.from_components("x", "Y", "z").run_id != base
+        assert RunIdentity.from_components("x", "y", "Z").run_id != base
 
     def test_run_id_is_64_char_hex(self) -> None:
-        rid = compute_run_id("x", "y", "z")
+        rid = RunIdentity.from_components("x", "y", "z").run_id
         assert isinstance(rid, str) and len(rid) == 64
         int(rid, 16)  # parses as hex
 
+    def test_from_inputs_invariant_under_dict_order(self) -> None:
+        # The aggregate-hash step must sort by table; the same dict in different
+        # iteration orders must yield the same run_id (cross-platform reproducibility).
+        a: dict[CSVTable, str] = {"BDVST": "h1", "Lab": "h2", "MED": "h3"}
+        b: dict[CSVTable, str] = {"MED": "h3", "BDVST": "h1", "Lab": "h2"}
+        assert (
+            RunIdentity.from_inputs(a, "schema-fp", "v1").run_id
+            == RunIdentity.from_inputs(b, "schema-fp", "v1").run_id
+        )
 
-class TestIsRunComplete:
+    def test_identity_is_frozen(self) -> None:
+        identity = RunIdentity.from_components("x", "y", "z")
+        # @dataclass(frozen=True) raises FrozenInstanceError on attribute set.
+        with pytest.raises(Exception):
+            identity.run_id = "other"  # type: ignore[misc]
+
+
+class TestRunIdentityCompletion:
+    """is_complete / mark_complete describe one on-disk protocol."""
+
+    def test_fresh_identity_is_not_complete(self, tmp_path: Path) -> None:
+        identity = RunIdentity(run_id="feedface" * 8)
+        # tmp_path exists but no marker has been written.
+        assert identity.is_complete(tmp_path) is False
+
     def test_missing_output_dir_is_not_complete(self, tmp_path: Path) -> None:
-        # A run that has never written anywhere is, by definition, incomplete.
-        assert is_run_complete(tmp_path, "feedface" * 8) is False
+        identity = RunIdentity(run_id="feedface" * 8)
+        nonexistent = tmp_path / "does-not-exist"
+        assert identity.is_complete(nonexistent) is False
 
-    def test_independent_run_ids_do_not_collide(self, tmp_path: Path) -> None:
-        # The completion check must be scoped to the specific run_id.
+    def test_mark_then_is_complete(self, tmp_path: Path) -> None:
+        identity = RunIdentity(run_id="cafebabe" * 8)
         out = tmp_path / "out"
-        out.mkdir()
-        a = "a" * 64
-        b = "b" * 64
-        # Without any side-effects, both must be False — and the function must
-        # at minimum be callable on a fresh directory.
-        assert is_run_complete(out, a) is False
-        assert is_run_complete(out, b) is False
+        identity.mark_complete(out)
+        assert identity.is_complete(out) is True
+
+    def test_independent_identities_do_not_collide(self, tmp_path: Path) -> None:
+        # Marking A complete must not mark B complete.
+        a = RunIdentity(run_id="a" * 64)
+        b = RunIdentity(run_id="b" * 64)
+        out = tmp_path / "out"
+        a.mark_complete(out)
+        assert a.is_complete(out) is True
+        assert b.is_complete(out) is False
 
 
 class TestSchemaFingerprintStable:
