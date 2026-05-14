@@ -14,7 +14,30 @@ orchestrated in :mod:`bba.vitals_extractor.pipeline`, gated on the AC rule
 
 from __future__ import annotations
 
+import re
+
+from bba.vitals_extractor.bounds import (
+    is_bt_valid,
+    is_dbp_valid,
+    is_hr_valid,
+    is_rr_valid,
+    is_sbp_valid,
+)
 from bba.vitals_extractor.models import VitalSigns
+
+# Compiled once at import. Case-insensitive so "Temp" / "temp" / "TEMP" all
+# qualify, and word-boundary-anchored so "PR" inside "PRESCRIPTION", "BP"
+# inside "BPM", or stray "P" inside "Step" can never satisfy a label.
+_BP_RE = re.compile(r"\bBP\s*:?\s*(\d{2,3})\s*/\s*(\d{2,3})", re.IGNORECASE)
+_HR_RE = re.compile(r"\b(?:HR|PR)\s*:?\s*(\d{2,3})", re.IGNORECASE)
+# RR may carry an observed-variability range ("RR 20-23"); the lower bound is
+# the deterministic floor (clinically: at-or-above this value across the
+# observation window).
+_RR_RE = re.compile(r"\bRR\s*:?\s*(\d{1,2})(?:\s*[-–]\s*\d{1,2})?", re.IGNORECASE)
+# "P" alone is RR per the issue grouping; constrain to 1-2 digits + word
+# boundary so it cannot consume a pulse-shaped 3-digit value.
+_P_RR_RE = re.compile(r"\bP\s*:?\s*(\d{1,2})\b", re.IGNORECASE)
+_BT_RE = re.compile(r"\b(?:BT|Temp)\s*:?\s*(\d{2,3}(?:\.\d+)?)", re.IGNORECASE)
 
 
 def extract_vitals_from_text(text: str) -> VitalSigns:
@@ -24,11 +47,65 @@ def extract_vitals_from_text(text: str) -> VitalSigns:
 
     * BP: ``BP 110/60``, ``BP:118/63``
     * HR: ``PR108``, ``HR 97``
-    * RR: ``P 14``, ``RR 20-23`` (range → lower bound)
+    * RR: ``P 14``, ``RR 20-23`` (range -> lower bound)
     * BT: ``BT 38.4``, ``Temp 37``
 
     Missing or out-of-bound values yield ``None`` for that field. The function
     is total: it never raises on malformed input.
     """
-    del text  # signature pinned; body implemented in the GREEN phase
-    raise NotImplementedError("extract_vitals_from_text — RED phase (issue #6)")
+    vitals, _discards = _extract_with_discards(text)
+    return vitals
+
+
+def _extract_with_discards(text: str) -> tuple[VitalSigns, frozenset[str]]:
+    """Like :func:`extract_vitals_from_text` but also report which fields had a
+    regex hit that was rejected by sanity bounds.
+
+    The discard set drives the pipeline's :class:`VitalsFlag.DATA_ERROR` flag.
+    Module-private because the public surface stays a single ``VitalSigns``;
+    only :mod:`bba.vitals_extractor.pipeline` needs the discard signal.
+    """
+    discards: set[str] = set()
+
+    sbp: int | None = None
+    dbp: int | None = None
+    if m := _BP_RE.search(text):
+        s, d = int(m.group(1)), int(m.group(2))
+        if is_sbp_valid(s):
+            sbp = s
+        else:
+            discards.add("sbp")
+        if is_dbp_valid(d):
+            dbp = d
+        else:
+            discards.add("dbp")
+
+    hr: int | None = None
+    if m := _HR_RE.search(text):
+        h = int(m.group(1))
+        if is_hr_valid(h):
+            hr = h
+        else:
+            discards.add("hr")
+
+    rr: int | None = None
+    # Try the canonical RR label first; the bare "P" form is only a fallback
+    # so a note that contains both "P 80" (pulse) and "RR 16" extracts rr=16
+    # without spuriously discarding the pulse value as out-of-RR-bounds.
+    rr_match = _RR_RE.search(text) or _P_RR_RE.search(text)
+    if rr_match:
+        r = int(rr_match.group(1))
+        if is_rr_valid(r):
+            rr = r
+        else:
+            discards.add("rr")
+
+    bt: float | None = None
+    if m := _BT_RE.search(text):
+        b = float(m.group(1))
+        if is_bt_valid(b):
+            bt = b
+        else:
+            discards.add("bt")
+
+    return VitalSigns(sbp=sbp, dbp=dbp, hr=hr, rr=rr, bt=bt), frozenset(discards)
