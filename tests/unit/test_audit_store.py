@@ -683,14 +683,13 @@ class TestParquetWriteIsAtomic:
                 [_call(call_id="c-crash", audit_id="a-crash")],
             )
 
-        final_audit = (
-            store.config.root_dir / "audit_results" / "audit_a-crash_run-aaa.parquet"
-        )
-        final_call = (
-            store.config.root_dir / "llm_calls" / "call_c-crash.parquet"
-        )
-        assert not final_audit.exists()
-        assert not final_call.exists()
+        # Audit parquet filename now includes a code_version slug — glob the
+        # (audit_id, run_id) prefix and confirm no final-name file exists.
+        audit_dir = store.config.root_dir / "audit_results"
+        call_path = store.config.root_dir / "llm_calls" / "call_c-crash.parquet"
+
+        assert list(audit_dir.glob("audit_a-crash_run-aaa_*.parquet")) == []
+        assert not call_path.exists()
 
 
 class TestWriteRejectsMalformedCalls:
@@ -896,3 +895,212 @@ class TestNestedJsonImmutability:
         assert rt == row
         with pytest.raises(TypeError):
             rt.indications_json[0]["code"] = "MUTATED"  # type: ignore[index]
+
+
+class TestNestedJsonDeepImmutability:
+    """Codex P2 round 3: top-level ``MappingProxyType`` is insufficient when
+    JSON payloads contain *nested* dicts or lists. The freeze must recurse
+    into nested containers; otherwise the reproducibility contract breaks
+    one level deep.
+    """
+
+    def test_nested_dict_inside_item_rejects_mutation(self) -> None:
+        row = _row(
+            indications_json=(
+                {
+                    "code": "B1",
+                    "quote": "q",
+                    "source_id": "s",
+                    "confidence": 0.9,
+                    "metadata": {"source": "labexm", "note": "fresh"},
+                },
+            ),
+        )
+
+        with pytest.raises(TypeError):
+            row.indications_json[0]["metadata"]["note"] = "MUTATED"  # type: ignore[index]
+
+    def test_nested_list_inside_item_becomes_tuple(self) -> None:
+        row = _row(
+            indications_json=(
+                {
+                    "code": "B1",
+                    "quote": "q",
+                    "source_id": "s",
+                    "confidence": 0.9,
+                    "tags": ["acute", "tachycardia"],
+                },
+            ),
+        )
+
+        # Lists in input are frozen to tuples; index assignment on a tuple
+        # raises TypeError.
+        assert isinstance(row.indications_json[0]["tags"], tuple)
+        with pytest.raises(TypeError):
+            row.indications_json[0]["tags"][0] = "MUTATED"  # type: ignore[index]
+
+    def test_caller_nested_dict_mutation_does_not_leak(self) -> None:
+        nested = {"source": "labexm", "note": "fresh"}
+        original = {
+            "code": "B1",
+            "quote": "q",
+            "source_id": "s",
+            "confidence": 0.9,
+            "metadata": nested,
+        }
+        row = _row(indications_json=(original,))
+
+        nested["note"] = "MUTATED_AFTER"
+
+        assert row.indications_json[0]["metadata"]["note"] == "fresh"
+
+    def test_deep_freeze_round_trip_preserves_equality(
+        self, store: AuditStore
+    ) -> None:
+        row = _row(
+            indications_json=(
+                {
+                    "code": "B1",
+                    "quote": "q",
+                    "source_id": "s",
+                    "confidence": 0.9,
+                    "metadata": {"source": "labexm"},
+                    "tags": ["acute", "tachy"],
+                },
+            ),
+        )
+        store.write(row, [_call()])
+
+        rt = store.read_audit_results()[0]
+
+        assert rt == row
+
+
+class TestLlmCallNestedJsonImmutability:
+    """Codex P2 round 3: ``request_json``, ``response_json``, and
+    ``extended_thinking_blocks`` on :class:`LlmCall` are the per-API-call
+    reproducibility record. They need the same defensive deep-copy /
+    read-only treatment as :class:`AuditRow`'s JSON fields.
+    """
+
+    def test_request_json_rejects_top_level_mutation(self) -> None:
+        call = _call(request_json={"system": "x", "messages": []})
+
+        with pytest.raises(TypeError):
+            call.request_json["system"] = "MUTATED"  # type: ignore[index]
+
+    def test_request_json_rejects_nested_mutation(self) -> None:
+        call = _call(
+            request_json={"system": "x", "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+        with pytest.raises(TypeError):
+            call.request_json["messages"][0]["role"] = "MUTATED"  # type: ignore[index]
+
+    def test_response_json_rejects_mutation(self) -> None:
+        call = _call(response_json={"id": "msg_1", "stop_reason": "tool_use"})
+
+        with pytest.raises(TypeError):
+            call.response_json["id"] = "MUTATED"  # type: ignore[index]
+
+    def test_extended_thinking_block_rejects_mutation(self) -> None:
+        call = _call(
+            extended_thinking_blocks=({"type": "thinking", "text": "thought A"},),
+        )
+
+        with pytest.raises(TypeError):
+            call.extended_thinking_blocks[0]["type"] = "MUTATED"  # type: ignore[index]
+
+    def test_caller_dict_mutation_does_not_leak_into_call(self) -> None:
+        original_request = {"system": "A", "messages": [{"role": "user"}]}
+        call = _call(request_json=original_request)
+
+        original_request["system"] = "MUTATED"
+        original_request["messages"][0]["role"] = "MUTATED"
+
+        assert call.request_json["system"] == "A"
+        assert call.request_json["messages"][0]["role"] == "user"
+
+    def test_extended_thinking_none_is_still_allowed(self) -> None:
+        # The freeze on tuple-of-dicts must not reject None — purely
+        # deterministic short-circuits won't include thinking blocks.
+        call = _call(extended_thinking_blocks=None)
+
+        assert call.extended_thinking_blocks is None
+
+    def test_llm_call_round_trip_preserves_equality_with_freeze(
+        self, store: AuditStore
+    ) -> None:
+        call = _call(
+            request_json={"system": "x", "messages": [{"role": "user", "content": "hi"}]},
+            response_json={"id": "msg_1", "stop_reason": "tool_use", "usage": {"input": 100}},
+            extended_thinking_blocks=({"type": "thinking", "text": "step 1"},),
+        )
+        store.write(_row(), [call])
+
+        rt = store.read_llm_calls()[0]
+
+        assert rt == call
+
+
+class TestCodeVersionInAuditPaths:
+    """Codex P1 round 3: a code-version rerun reusing the same
+    ``(audit_id, run_id)`` must not overwrite the previous parquet file.
+    The audit-result parquet and its commit marker each carry a
+    code-version slug so v1 and v2 land in distinct files, preserving the
+    append-only contract under code bumps.
+
+    WHY: if v2 writes to the same path as v1, a crash before marking
+    complete leaves v2's uncommitted bytes under v1's marker — readers
+    would surface a payload that no run has actually committed. Even on
+    success, v1's bytes are gone — the audit chain claim "every
+    classification reproducible from frozen hashes" is violated.
+    """
+
+    def test_v2_does_not_overwrite_v1_parquet(self, tmp_path: Path) -> None:
+        root = tmp_path / "store"
+        AuditStore(AuditStoreConfig(root_dir=root, code_version="v1.0.0")).write(
+            _row(audit_id="a1", run_id="r1"),
+            [_call(call_id="c1", audit_id="a1", run_id="r1")],
+        )
+
+        AuditStore(AuditStoreConfig(root_dir=root, code_version="v2.0.0")).write(
+            _row(audit_id="a1", run_id="r1", reasoning_summary_en="v2 reasoning"),
+            [_call(call_id="c2", audit_id="a1", run_id="r1")],
+        )
+
+        # Both versions' parquet files must coexist on disk.
+        parquets = sorted(p.name for p in (root / "audit_results").glob("*.parquet"))
+        assert len(parquets) == 2
+
+    def test_v2_crash_pre_marker_does_not_leak_under_v1_marker(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "store"
+        store_v1 = AuditStore(AuditStoreConfig(root_dir=root, code_version="v1.0.0"))
+        store_v1.write(
+            _row(audit_id="a1", run_id="r1", reasoning_summary_en="v1 reasoning"),
+            [_call(call_id="c1", audit_id="a1", run_id="r1")],
+        )
+
+        # Crash v2 between phase 2a (parquet) and phase 2b (marker).
+        store_v2 = AuditStore(AuditStoreConfig(root_dir=root, code_version="v2.0.0"))
+
+        original_mark = store_v2._mark_complete
+
+        def crash_before_mark(*_a: object, **_kw: object) -> None:
+            raise RuntimeError("simulated crash pre-marker")
+
+        monkeypatch.setattr(store_v2, "_mark_complete", crash_before_mark)
+        with pytest.raises(RuntimeError):
+            store_v2.write(
+                _row(audit_id="a1", run_id="r1", reasoning_summary_en="v2 reasoning"),
+                [_call(call_id="c2", audit_id="a1", run_id="r1")],
+            )
+        monkeypatch.setattr(store_v2, "_mark_complete", original_mark)
+
+        # The v1-committed row must still be readable; the v2 parquet must
+        # NOT be surfaced under the v1 marker (no payload mismatch leakage).
+        rows = store_v1.read_audit_results()
+        assert len(rows) == 1
+        assert rows[0].reasoning_summary_en == "v1 reasoning"

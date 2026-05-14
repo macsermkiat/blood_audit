@@ -36,6 +36,7 @@ ignores), and run_id-scoped reads use a metadata-only column scan.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -103,9 +104,14 @@ class AuditStore:
     ) -> tuple[AuditRow, ...]:
         """Read all audit rows, optionally filtered to a single ``run_id``.
 
-        Commit-marker gated: a parquet file whose ``_audit_<audit_id>_<run_id>.complete``
-        marker is missing is treated as uncommitted (crashed between phase 2a
-        parquet-write and phase 2b mark) and elided from the result.
+        Commit-marker gated: each parquet file has a matching marker filename
+        derived 1:1 from the parquet's own stem (so the marker is keyed on
+        the same ``(audit_id, run_id, code_version_slug)`` triple). A parquet
+        without its marker is treated as uncommitted (crashed between phase
+        2a and phase 2b) and elided.
+
+        Returns rows from every committed ``code_version`` — cross-version
+        reads stay consistent for migration / audit / eval.
         """
         if not self._audit_dir.exists():
             return ()
@@ -114,7 +120,7 @@ class AuditStore:
             entry = _read_single_record(path)
             if run_id is not None and entry["run_id"] != run_id:
                 continue
-            if not self._marker_path(entry["audit_id"], entry["run_id"]).exists():
+            if not self._marker_for_parquet(path).exists():
                 continue
             rows.append(AuditRow.model_validate_json(entry["payload"]))
         return tuple(rows)
@@ -197,9 +203,14 @@ class AuditStore:
         and phase 2b (mark complete)" state. Production code MUST go through
         :meth:`_persist_audit_result` or :meth:`write`, which order the
         sub-phases correctly.
+
+        The parquet filename includes the ``code_version`` slug so a v2
+        re-run with the same ``(audit_id, run_id)`` lands in a *new* file
+        rather than overwriting v1's bytes — the append-only contract holds
+        under version bumps.
         """
         self._audit_dir.mkdir(parents=True, exist_ok=True)
-        path = self._audit_dir / f"audit_{row.audit_id}_{row.run_id}.parquet"
+        path = self._audit_parquet_path(row.audit_id, row.run_id)
         _write_single_record(
             path,
             {
@@ -230,31 +241,28 @@ class AuditStore:
         )
 
     def _mark_complete(self, audit_id: str, run_id: str) -> None:
-        """Drop the commit marker, stamped with the current ``code_version``.
+        """Drop the commit marker for this row at its slug-keyed path.
 
-        The marker filename is keyed on ``(audit_id, run_id)`` (version-agnostic,
-        so cross-version reads stay consistent); the *content* is the writer's
-        ``code_version``, consulted by :meth:`_is_already_committed` to decide
-        whether a same-key re-run should no-op.
+        The marker filename mirrors the audit parquet's stem (with an
+        underscore prefix and ``.complete`` extension), so the two files
+        are paired 1:1 and the marker contents need only signal "ok".
         """
         self._markers_dir.mkdir(parents=True, exist_ok=True)
         target = self._marker_path(audit_id, run_id)
         tmp = target.with_suffix(target.suffix + ".tmp")
-        tmp.write_text(self._config.code_version + "\n", encoding="utf-8")
+        tmp.write_text("ok\n", encoding="utf-8")
         tmp.replace(target)
 
     def _is_already_committed(self, audit_id: str, run_id: str) -> bool:
-        """True iff a commit marker exists AND it was written by this
-        ``code_version``.
+        """True iff a commit marker for this exact
+        ``(audit_id, run_id, code_version)`` exists.
 
-        A marker stamped with a *different* ``code_version`` does not count
-        as committed-for-this-run — the docstring on ``AuditStoreConfig``
-        promises that a code-version bump forces a re-run.
+        A marker written by a *different* ``code_version`` lives at a
+        different path and does not count — the docstring on
+        :class:`AuditStoreConfig` promises that a code-version bump forces
+        a re-run, and the disjoint paths make that structural.
         """
-        marker = self._marker_path(audit_id, run_id)
-        if not marker.exists():
-            return False
-        return marker.read_text(encoding="utf-8").strip() == self._config.code_version
+        return self._marker_path(audit_id, run_id).exists()
 
     # -- Paths ---------------------------------------------------------------
 
@@ -280,8 +288,34 @@ class AuditStore:
         """Public so :func:`migrate_cold_storage` can spill blocks here."""
         return self._config.root_dir / "cold_storage"
 
+    def _audit_parquet_path(self, audit_id: str, run_id: str) -> Path:
+        return self._audit_dir / f"{self._row_stem(audit_id, run_id)}.parquet"
+
     def _marker_path(self, audit_id: str, run_id: str) -> Path:
-        return self._markers_dir / f"_audit_{audit_id}_{run_id}.complete"
+        return self._markers_dir / f"_{self._row_stem(audit_id, run_id)}.complete"
+
+    def _marker_for_parquet(self, parquet_path: Path) -> Path:
+        """Marker path paired with a given audit parquet.
+
+        The marker filename is the parquet stem with an ``_`` prefix and a
+        ``.complete`` extension, so the pairing is structural — no need to
+        re-parse ``audit_id``/``run_id``/``code_version`` out of either side.
+        """
+        return self._markers_dir / f"_{parquet_path.stem}.complete"
+
+    def _row_stem(self, audit_id: str, run_id: str) -> str:
+        return f"audit_{audit_id}_{run_id}_{self._code_version_slug}"
+
+    @property
+    def _code_version_slug(self) -> str:
+        """Stable filesystem-safe slug for ``config.code_version``.
+
+        A 16-char sha256 prefix handles any string (``+``, ``/``, etc.)
+        without filename-escape gymnastics.
+        """
+        return hashlib.sha256(
+            self._config.code_version.encode("utf-8")
+        ).hexdigest()[:16]
 
 
 def _write_single_record(path: Path, data: dict[str, str]) -> None:

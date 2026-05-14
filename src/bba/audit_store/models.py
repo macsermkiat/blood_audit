@@ -59,31 +59,84 @@ Use on every persisted timestamp. Aware non-UTC inputs are converted to UTC.
 """
 
 
+def _deep_freeze(value: Any) -> Any:
+    """Recursively convert ``value`` into a structurally-immutable form.
+
+    Mapping → :class:`MappingProxyType` over a dict whose values are themselves
+    deep-frozen. ``Sequence`` (except ``str``/``bytes``) → ``tuple`` whose
+    elements are deep-frozen. Other scalars are returned as-is (``str``,
+    ``int``, ``bool``, ``float``, ``None`` are already immutable). The
+    function defensively copies each level so a later mutation on a
+    caller-held reference cannot leak through; without this, a nested dict
+    or list inside a JSON payload would remain writable through the model.
+    """
+    if isinstance(value, Mapping):
+        return MappingProxyType({k: _deep_freeze(v) for k, v in value.items()})
+    if isinstance(value, str | bytes):
+        return value
+    if isinstance(value, Sequence):
+        return tuple(_deep_freeze(item) for item in value)
+    return value
+
+
+def _deep_thaw(value: Any) -> Any:
+    """Inverse of :func:`_deep_freeze`: rebuild plain ``dict``/``list`` from
+    :class:`MappingProxyType`/``tuple`` nests.
+
+    Used by the field serializers so JSON output is plain Python containers
+    regardless of the in-memory frozen representation. Also used by
+    ``cold_storage`` to feed ``json.dumps``, which cannot serialize
+    ``MappingProxyType`` directly.
+    """
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        return {k: _deep_thaw(v) for k, v in value.items()}
+    if isinstance(value, str | bytes):
+        return value
+    if isinstance(value, Sequence):
+        return [_deep_thaw(item) for item in value]
+    return value
+
+
 def _freeze_dict_items(
     items: Sequence[Mapping[str, Any]],
 ) -> tuple[Mapping[str, Any], ...]:
-    """Return a tuple of read-only ``MappingProxyType`` views over copies of
-    each input dict.
+    """Return a tuple of deeply-frozen read-only mappings.
 
-    Each input dict is shallow-copied (to detach from the caller's reference,
-    so a later mutation on the caller's side cannot leak into the model) and
-    then wrapped in :class:`types.MappingProxyType`, which raises ``TypeError``
-    on ``__setitem__``. The audit-record immutability promise (``frozen=True``
-    + tuple containers) extends to the nested JSON contents.
+    Each input dict is recursively frozen via :func:`_deep_freeze`, so nested
+    dicts become :class:`MappingProxyType` and nested lists become tuples.
     """
-    return tuple(MappingProxyType(dict(item)) for item in items)
+    return tuple(_deep_freeze(item) for item in items)
+
+
+def _freeze_single_dict(item: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Return a deeply-frozen view of ``item``."""
+    return _deep_freeze(item)
 
 
 FrozenJsonList = Annotated[
     tuple[dict[str, Any], ...],
     AfterValidator(_freeze_dict_items),
 ]
-"""A ``tuple`` of immutable, read-only JSON-shaped mappings.
+"""A ``tuple`` of deeply-immutable JSON-shaped mappings.
 
 Use for ``indications_json``-style fields where the schema is dynamic but the
-contents must not be mutated after model construction. Pair with the model's
-``_serialize_frozen_json_list`` field serializer so JSON output is plain
-``list[dict]`` regardless of in-memory representation.
+contents — including nested dicts and lists — must not be mutated after
+model construction. Pair with a ``field_serializer`` that calls
+:func:`_deep_thaw` so JSON output is plain ``list[dict]`` regardless of
+in-memory representation.
+"""
+
+
+FrozenJsonDict = Annotated[
+    dict[str, Any],
+    AfterValidator(_freeze_single_dict),
+]
+"""A deeply-immutable JSON-shaped mapping (single dict, not tuple-of-dicts).
+
+Use for ``request_json``/``response_json`` fields on :class:`LlmCall` where
+the payload is a single dynamic-schema dict.
 """
 
 
@@ -159,11 +212,11 @@ class AuditRow(BaseModel):
     def _serialize_frozen_json_list(
         self, value: tuple[Mapping[str, Any], ...]
     ) -> list[dict[str, Any]]:
-        """Unwrap :class:`MappingProxyType` items back to plain ``dict`` for
-        JSON output, so payloads serialize to ``[{...}, {...}]`` regardless
-        of in-memory representation.
+        """Recursively unwrap frozen containers back to plain ``dict``/``list``
+        for JSON output. Nested :class:`MappingProxyType` and frozen tuples
+        round-trip back to themselves on re-validation via :func:`_deep_freeze`.
         """
-        return [dict(item) for item in value]
+        return [_deep_thaw(item) for item in value]
 
 
 class LlmCall(BaseModel):
@@ -183,12 +236,18 @@ class LlmCall(BaseModel):
     model_id: str
     anthropic_version: str
     prompt_cache_id: str | None
-    request_json: dict[str, Any]
-    response_json: dict[str, Any]
+    request_json: FrozenJsonDict
+    response_json: FrozenJsonDict
     request_timestamp: UTCDatetime
     latency_ms: int
-    extended_thinking_blocks: tuple[dict[str, Any], ...] | None
+    extended_thinking_blocks: FrozenJsonList | None
     cold_storage_uri: str | None
+
+    @field_serializer("request_json", "response_json", "extended_thinking_blocks")
+    def _serialize_frozen_payload(self, value: Any) -> Any:
+        """Recursively thaw the per-call reproducibility record for JSON
+        output (``None``-safe for ``extended_thinking_blocks``)."""
+        return _deep_thaw(value)
 
 
 class AuditStoreConfig(BaseModel):

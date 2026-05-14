@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from bba.audit_store.models import ColdStorageReport
+from bba.audit_store.models import ColdStorageReport, _deep_thaw
 from bba.audit_store.store import AuditStore
 
 
@@ -42,8 +42,12 @@ def migrate_cold_storage(store: AuditStore, older_than: datetime) -> ColdStorage
             continue  # already migrated — idempotency invariant
 
         cold_path = store.cold_storage_dir / f"{call.call_id}.json"
+        # _deep_thaw recursively unwraps MappingProxyType + frozen tuples
+        # so json.dumps sees plain dict/list. The field is frozen for
+        # in-memory immutability (PRD §"persisted immutably") but the
+        # cold blob is a passive byte record.
         blob = json.dumps(
-            list(call.extended_thinking_blocks), ensure_ascii=False
+            _deep_thaw(call.extended_thinking_blocks), ensure_ascii=False
         ).encode("utf-8")
         cold_path.write_bytes(blob)
         bytes_moved += len(blob)
