@@ -12,6 +12,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
+
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from bba.audit_store.models import AuditRow
 from bba.audit_store.store import AuditStore
@@ -33,8 +37,34 @@ class SnapshotView:
     @classmethod
     def open(cls, store: AuditStore, as_of: date) -> SnapshotView:
         """Materialize-if-needed and return a handle to the snapshot for ``as_of``."""
-        raise NotImplementedError
+        snapshot_path = _snapshot_path(store, as_of)
+        if not snapshot_path.exists():
+            _materialize(store, snapshot_path)
+        return cls(store=store, as_of=as_of)
 
     def read_audit_results(self) -> tuple[AuditRow, ...]:
         """Read every audit row visible at this snapshot's materialization point."""
-        raise NotImplementedError
+        snapshot_path = _snapshot_path(self.store, self.as_of)
+        if not snapshot_path.exists():
+            return ()
+        table = pq.read_table(snapshot_path)
+        payloads = table.column("payload").to_pylist()
+        return tuple(AuditRow.model_validate_json(p) for p in payloads)
+
+
+def _snapshot_path(store: AuditStore, as_of: date) -> Path:
+    return store.snapshots_dir / f"audit_results_{as_of.isoformat()}.parquet"
+
+
+def _materialize(store: AuditStore, snapshot_path: Path) -> None:
+    """Freeze the current ``audit_results`` set into ``snapshot_path``.
+
+    Writes atomically (write-then-rename) so a crash mid-write cannot leave a
+    half-formed snapshot that future opens would mistake for materialized.
+    """
+    store.snapshots_dir.mkdir(parents=True, exist_ok=True)
+    payloads = [row.model_dump_json() for row in store.read_audit_results()]
+    table = pa.table({"payload": payloads})
+    tmp = snapshot_path.with_suffix(snapshot_path.suffix + ".tmp")
+    pq.write_table(table, tmp)
+    tmp.replace(snapshot_path)

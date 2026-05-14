@@ -15,6 +15,7 @@ for the two affected fields.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 
 from bba.audit_store.models import ColdStorageReport
@@ -26,6 +27,37 @@ def migrate_cold_storage(store: AuditStore, older_than: datetime) -> ColdStorage
     with ``request_timestamp < older_than``.
 
     Returns the call_ids touched and the total bytes moved. The migration is
-    idempotent: calling twice with the same cutoff is a no-op on the second run.
+    idempotent: a call already migrated (``extended_thinking_blocks is None``)
+    is skipped on the second run.
     """
-    raise NotImplementedError
+    store.cold_storage_dir.mkdir(parents=True, exist_ok=True)
+
+    moved: list[str] = []
+    bytes_moved = 0
+
+    for call in store.read_llm_calls():
+        if call.request_timestamp >= older_than:
+            continue
+        if call.extended_thinking_blocks is None:
+            continue  # already migrated — idempotency invariant
+
+        cold_path = store.cold_storage_dir / f"{call.call_id}.json"
+        blob = json.dumps(
+            list(call.extended_thinking_blocks), ensure_ascii=False
+        ).encode("utf-8")
+        cold_path.write_bytes(blob)
+        bytes_moved += len(blob)
+
+        migrated = call.model_copy(
+            update={
+                "extended_thinking_blocks": None,
+                "cold_storage_uri": str(cold_path),
+            }
+        )
+        store._persist_call_record(migrated)
+        moved.append(call.call_id)
+
+    return ColdStorageReport(
+        moved_call_ids=tuple(moved),
+        bytes_moved=bytes_moved,
+    )
