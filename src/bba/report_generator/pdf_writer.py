@@ -110,15 +110,36 @@ _FOOTER_PDF_FIELDS: tuple[str, ...] = (
 carry the same reproducibility identifiers in the same order.
 """
 
+_FOOTER_PDF_LINE_1: tuple[str, ...] = (
+    "policy_version",
+    "model_id",
+    "redactor_version",
+)
+_FOOTER_PDF_LINE_2: tuple[str, ...] = (
+    "redactor_model_sha",
+    "prompt_hash",
+    "evidence_bundle_hash",
+)
+"""Six-field footer split across two printed lines.
 
-def _footer_text(footer: ReportFooter, sep: str) -> str:
-    """Return all six footer identifiers joined by ``sep``."""
-    return sep.join(f"{field}: {getattr(footer, field)}" for field in _FOOTER_PDF_FIELDS)
+The single-line layout at 7pt would overflow the 540pt printable width
+of a LETTER page for realistic SHA-bearing field values (~700pt rendered
+length). Wrapping by-half keeps every field visible while preserving
+the persisted CSV's identifier order — the policy / model / redactor
+trio sits above the three content-hash fields.
+"""
+
+
+def _footer_line(footer: ReportFooter, fields: Sequence[str], sep: str) -> str:
+    """Render one footer line as ``"name: value | name: value | ..."``."""
+    return sep.join(f"{field}: {getattr(footer, field)}" for field in fields)
 
 
 def _footer_paragraph(footer: ReportFooter) -> Paragraph:
     styles = getSampleStyleSheet()
-    return Paragraph(_footer_text(footer, " &nbsp; | &nbsp; "), styles["Italic"])
+    line1 = _footer_line(footer, _FOOTER_PDF_LINE_1, " &nbsp; | &nbsp; ")
+    line2 = _footer_line(footer, _FOOTER_PDF_LINE_2, " &nbsp; | &nbsp; ")
+    return Paragraph(f"{line1}<br/>{line2}", styles["Italic"])
 
 
 def render_report_pdf(
@@ -133,16 +154,23 @@ def render_report_pdf(
     cover page. The full six-field reproducibility footer
     (``policy_version`` / ``model_id`` / ``redactor_version`` /
     ``redactor_model_sha`` / ``prompt_hash`` / ``evidence_bundle_hash``)
-    appears on every page so a printed-then-detached page still carries
-    the complete reproducibility chain.
+    appears on every page across two lines (single-line layout would
+    overflow the printable width for realistic SHA values) so a
+    printed-then-detached page still carries the complete
+    reproducibility chain.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    page_footer = _footer_text(footer, " | ")
+    page_footer_line_1 = _footer_line(footer, _FOOTER_PDF_LINE_1, " | ")
+    page_footer_line_2 = _footer_line(footer, _FOOTER_PDF_LINE_2, " | ")
 
     def _on_page(canvas, doc) -> None:  # type: ignore[no-untyped-def]
         canvas.saveState()
         canvas.setFont("Helvetica", 7)
-        canvas.drawString(0.5 * inch, 0.4 * inch, page_footer)
+        # Line 2 (the hashes) sits closer to the page edge; line 1 sits
+        # above it. Both are inside the 0.5-inch bottom margin reserved
+        # by ``bottomMargin`` on ``SimpleDocTemplate``.
+        canvas.drawString(0.5 * inch, 0.50 * inch, page_footer_line_1)
+        canvas.drawString(0.5 * inch, 0.36 * inch, page_footer_line_2)
         canvas.restoreState()
 
     doc = SimpleDocTemplate(

@@ -44,7 +44,7 @@ Cross-cutting invariants:
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -57,19 +57,15 @@ from bba.report_generator import (
     CSV_NEWLINE,
     PDF_MAGIC,
     SECTION_NAMES,
-    CohortExceptionRow,
     EmptyInputError,
     HospitalTrendRow,
-    IndicationDistributionRow,
     MonthlyReportRow,
     PhysicianOwnViewRow,
-    PipelineHealthRow,
     ReportArtifacts,
     ReportFooter,
     ReportGenerationError,
     ReportInputs,
     ReportSection,
-    SectionName,
     WardScorecardRow,
     aggregate_cohort_exception,
     aggregate_hospital_trend,
@@ -682,6 +678,28 @@ class TestFooterStamping:
         footer_row = lines[1]
         assert "PR17.2-v1" in footer_row
         assert "sha-bundle-001" in footer_row
+
+    def test_empty_section_emits_numeric_placeholders(
+        self, tmp_path: Path
+    ) -> None:
+        # An empty pipeline_health section must produce cells that parse
+        # as their declared numeric type — blank strings would NaN-poison
+        # a downstream pandas read of total_orders / *_rate columns.
+        section = ReportSection(
+            name="pipeline_health", rows=(), footer=_footer()
+        )
+        out = write_section_csv(section, tmp_path)
+        lines = out.read_text(encoding="utf-8").splitlines()
+        # pipeline_health columns: total_orders, classified_orders,
+        # needs_review_count, needs_review_rate,
+        # insufficient_evidence_count, insufficient_evidence_rate
+        sentinel_cells = lines[1].split(",")
+        assert sentinel_cells[0] == "0"  # total_orders (int)
+        assert sentinel_cells[1] == "0"  # classified_orders (int)
+        assert sentinel_cells[2] == "0"  # needs_review_count (int)
+        assert sentinel_cells[3] == "0.0"  # needs_review_rate (float)
+        assert sentinel_cells[4] == "0"  # insufficient_evidence_count (int)
+        assert sentinel_cells[5] == "0.0"  # insufficient_evidence_rate (float)
 
 
 # =============================================================================

@@ -59,6 +59,27 @@ def section_filename(name: SectionName) -> str:
     return f"{name}.csv"
 
 
+_EMPTY_SECTION_DEFAULTS: dict[SectionName, tuple[str, ...]] = {
+    "hospital_trend": ("", "0", "0", "0", "0", "0", "0.0"),
+    "ward_scorecard": ("", "0", "0", "0", "0", "0", "0.0"),
+    "physician_own_view": ("", "0", "0.0", "0.0", "0.0", "0.0"),
+    "indication_distribution": ("", "0", "0.0"),
+    "cohort_exception": ("", "0", "0", "0.0"),
+    "pipeline_health": ("0", "0", "0", "0.0", "0", "0.0"),
+}
+"""Sentinel-row values for an empty section, one tuple per section.
+
+When a section's ``rows`` is empty the writer emits one synthetic data
+row carrying these placeholders plus the populated footer. Using type-
+appropriate zeros (``0`` for int columns, ``0.0`` for float columns,
+``""`` for string / date columns) keeps a downstream consumer's
+numeric-column parser working on the sentinel row — empty strings in
+``total_orders`` or ``inappropriate_rate`` would NaN-poison a pandas
+read; ``0`` / ``0.0`` parse cleanly and semantically mean "zero orders
+in this empty section".
+"""
+
+
 def _data_columns(section_name: SectionName) -> tuple[str, ...]:
     """Return the data columns for ``section_name`` in canonical order.
 
@@ -201,7 +222,13 @@ def _render_csv_text(section: ReportSection) -> str:
         for row in section.rows:
             writer.writerow(_row_to_cells(row, data_cols) + footer_cells)
     else:
-        writer.writerow([""] * len(data_cols) + footer_cells)
+        empty_cells = list(_EMPTY_SECTION_DEFAULTS[section.name])
+        assert len(empty_cells) == len(data_cols), (
+            f"_EMPTY_SECTION_DEFAULTS[{section.name!r}] has "
+            f"{len(empty_cells)} cells, but the section has "
+            f"{len(data_cols)} data columns"
+        )
+        writer.writerow(empty_cells + footer_cells)
     return buf.getvalue()
 
 
