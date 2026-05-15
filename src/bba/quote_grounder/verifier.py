@@ -26,17 +26,28 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from bba.quote_grounder.layers import (
+    MIN_QUOTE_LENGTH,
+    contiguous_match,
+    find_cited_source,
+    lab_tuple_match,
+    min_length_ok,
+    nfc_normalize,
+    within_doc_unique,
+)
 from bba.quote_grounder.models import (
     Citation,
+    EvidenceSource,
     NLIEntailmentGate,
     Verdict,
+    VerdictReason,
     VerdictTuple,
 )
 
 
 def verify_citation(
     citation: Citation,
-    sources: Sequence,  # Sequence[EvidenceSource] — kept generic to avoid a circular import at scaffold time
+    sources: Sequence[EvidenceSource],
     *,
     nli_gate: NLIEntailmentGate | None = None,
     min_length: int | None = None,
@@ -52,12 +63,16 @@ def verify_citation(
     The function is pure: no I/O, no global mutation, no logging.
     Identical inputs yield identical outputs.
     """
-    raise NotImplementedError
+    threshold = MIN_QUOTE_LENGTH if min_length is None else min_length
+    reason = _evaluate(citation, sources, nli_gate=nli_gate, min_length=threshold)
+    return Verdict(
+        passed=reason is VerdictReason.PASS, reason=reason, citation=citation
+    )
 
 
 def verify_citations(
     citations: Sequence[Citation],
-    sources: Sequence,  # Sequence[EvidenceSource]
+    sources: Sequence[EvidenceSource],
     *,
     nli_gate: NLIEntailmentGate | None = None,
     min_length: int | None = None,
@@ -69,4 +84,50 @@ def verify_citations(
     in place — mirroring the immutability contract of the audit_store
     persisted record (``indications_json``).
     """
-    raise NotImplementedError
+    return tuple(
+        verify_citation(c, sources, nli_gate=nli_gate, min_length=min_length)
+        for c in citations
+    )
+
+
+def _evaluate(
+    citation: Citation,
+    sources: Sequence[EvidenceSource],
+    *,
+    nli_gate: NLIEntailmentGate | None,
+    min_length: int,
+) -> VerdictReason:
+    """Run the layers in canonical order; return the first-failed reason.
+
+    Kept as a separate function from :func:`verify_citation` so the Verdict
+    construction sits in one place and the layer logic stays a pure
+    "input → reason" computation. The short-circuit order is the contract;
+    moving any branch up or down re-labels failure modes.
+    """
+    if not citation.quote:
+        return VerdictReason.EMPTY_QUOTE
+
+    source = find_cited_source(citation.cited_id, sources)
+    if source is None:
+        return VerdictReason.CITED_ID_NOT_FOUND
+
+    quote_n = nfc_normalize(citation.quote)
+    if not min_length_ok(quote_n, minimum=min_length):
+        return VerdictReason.TOO_SHORT
+
+    source_n = nfc_normalize(source.text)
+    if not contiguous_match(quote_n, source_n):
+        return VerdictReason.NO_CONTIGUOUS_MATCH
+
+    if not within_doc_unique(quote_n, source_n):
+        return VerdictReason.NOT_UNIQUE
+
+    if citation.lab_tuple is not None and not lab_tuple_match(
+        citation.lab_tuple, source_n
+    ):
+        return VerdictReason.LAB_TUPLE_MISMATCH
+
+    if nli_gate is not None and not nli_gate(premise=source_n, hypothesis=quote_n):
+        return VerdictReason.NLI_NOT_ENTAILED
+
+    return VerdictReason.PASS

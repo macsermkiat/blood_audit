@@ -33,4 +33,24 @@ def confusion_matrix(
     lengths; silently truncating would corrupt the metric the acceptance
     target ("verifier-as-classifier ≥ ...") is graded against.
     """
-    raise NotImplementedError
+    if len(verdicts) != len(gold_labels):
+        raise ValueError(
+            f"confusion_matrix: verdicts and gold_labels must have equal "
+            f"length (got {len(verdicts)} vs {len(gold_labels)})"
+        )
+    tp = tn = fp = fn = 0
+    for verdict, gold in zip(verdicts, gold_labels, strict=True):
+        if gold and verdict.passed:
+            tp += 1
+        elif gold and not verdict.passed:
+            fn += 1
+        elif not gold and verdict.passed:
+            fp += 1
+        else:
+            tn += 1
+    return ConfusionMatrix(
+        true_positive=tp,
+        true_negative=tn,
+        false_positive=fp,
+        false_negative=fn,
+    )

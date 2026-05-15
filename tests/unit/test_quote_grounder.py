@@ -16,7 +16,7 @@ import sys
 import unicodedata
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 from pydantic import ValidationError
 
@@ -729,10 +729,14 @@ class TestPropertyOneCharEditRejection:
     @given(idx=st.integers(min_value=0, max_value=len(_QUOTE_E1_VALID) - 1))
     @settings(max_examples=50, deadline=None)
     def test_deletion_breaks_grounding(self, idx: int) -> None:
-        # Deletion: drop one char. The result either fails Layer 2 (no
-        # contiguous run) or Layer 5 (below MIN_QUOTE_LENGTH for the boundary
-        # case). Either way: rejection.
+        # Deletion: drop one char. When the result is no longer a contiguous
+        # substring of the source, the verdict must reject. Boundary
+        # deletions (first/last char) sometimes leave a string still present
+        # in the source — assume(...) filters those so the property holds on
+        # the cases where it can: any 1-char deletion that genuinely changes
+        # the surface form against the source produces a rejection.
         mutated = _QUOTE_E1_VALID[:idx] + _QUOTE_E1_VALID[idx + 1 :]
+        assume(mutated not in _SOURCE_E1_TEXT)
         verdict = verify_citation(_cit(mutated, "E1"), _bundle())
         assert verdict.passed is False
 
