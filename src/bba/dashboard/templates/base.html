@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}bba.dashboard{% endblock %}</title>
+  <!-- Tailwind CSS (CDN, dev/prototype use; production builds compiled CSS) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- HTMX (CDN) -->
+  <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+  <header class="bg-white border-b border-slate-200 px-6 py-3">
+    <nav class="flex gap-4 text-sm font-medium">
+      <a href="/queue" class="hover:text-indigo-600">Queue</a>
+      <a href="/pipeline-health" class="hover:text-indigo-600">Pipeline Health</a>
+    </nav>
+  </header>
+  <main class="px-6 py-6">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

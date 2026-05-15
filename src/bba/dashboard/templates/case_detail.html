@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Case {{ detail.audit_id }} · bba.dashboard{% endblock %}
+{% block content %}
+<section class="max-w-3xl">
+  <h1 class="text-2xl font-semibold mb-1">Case {{ detail.audit_id }}</h1>
+  <p class="text-sm text-slate-500 mb-4">run {{ detail.run_id }}</p>
+
+  <div class="bg-white border border-slate-200 rounded p-4 mb-4">
+    <h2 class="font-semibold mb-2">Classification</h2>
+    <dl class="grid grid-cols-2 gap-y-1 text-sm">
+      <dt class="text-slate-500">final</dt><dd>{{ detail.final_classification }}</dd>
+      <dt class="text-slate-500">rule-based</dt><dd>{{ detail.rule_classification }}</dd>
+      <dt class="text-slate-500">confidence</dt><dd>{{ "%.2f"|format(detail.confidence) }}</dd>
+      <dt class="text-slate-500">needs review</dt><dd>{{ detail.needs_human_review }}</dd>
+      <dt class="text-slate-500">reason</dt><dd>{{ detail.review_reason or "—" }}</dd>
+    </dl>
+  </div>
+
+  <div class="bg-white border border-slate-200 rounded p-4 mb-4">
+    <h2 class="font-semibold mb-2">Order</h2>
+    <dl class="grid grid-cols-2 gap-y-1 text-sm">
+      <dt class="text-slate-500">order datetime</dt><dd>{{ detail.order_datetime.isoformat() }}</dd>
+      <dt class="text-slate-500">Hb at order</dt><dd>{{ "%.1f"|format(detail.hb_value) }}</dd>
+    </dl>
+  </div>
+
+  <div class="bg-white border border-slate-200 rounded p-4 mb-4">
+    <h2 class="font-semibold mb-2">Patient identifiers</h2>
+    {% if detail.unredacted %}
+      <div class="mb-2 rounded bg-amber-50 border border-amber-300 px-3 py-2 text-sm">
+        <strong>Un-redacted access — logged to phi_access_log.</strong>
+      </div>
+      <dl class="grid grid-cols-2 gap-y-1 text-sm">
+        <dt class="text-slate-500">HN</dt><dd class="font-mono">{{ detail.raw_hn }}</dd>
+        <dt class="text-slate-500">AN</dt><dd class="font-mono">{{ detail.raw_an }}</dd>
+      </dl>
+    {% else %}
+      <p class="text-sm text-slate-600 mb-2">Redacted view. Request break-glass below to view un-redacted identifiers.</p>
+      <form hx-post="/case/{{ detail.audit_id }}/break-glass" hx-swap="outerHTML" class="space-y-2">
+        <textarea name="justification" required minlength="1" rows="3" placeholder="Clinical justification (required)" class="w-full rounded border border-slate-300 p-2 text-sm"></textarea>
+        <button type="submit" class="rounded bg-amber-600 text-white px-3 py-1 text-sm">Break-glass un-redact</button>
+      </form>
+    {% endif %}
+  </div>
+
+  <div class="bg-white border border-slate-200 rounded p-4 mb-4">
+    <h2 class="font-semibold mb-2">Reasoning (EN)</h2>
+    <p class="text-sm whitespace-pre-line">{{ detail.reasoning_summary_en }}</p>
+  </div>
+</section>
+{% endblock %}

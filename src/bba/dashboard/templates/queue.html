@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}NEEDS_REVIEW queue · bba.dashboard{% endblock %}
+{% block content %}
+<section>
+  <h1 class="text-2xl font-semibold mb-4">NEEDS_REVIEW queue</h1>
+  <form class="flex gap-3 mb-4 text-sm" hx-get="/queue" hx-target="#queue-table" hx-swap="outerHTML">
+    <label class="flex items-center gap-2">Sort by
+      <select name="sort_key" class="rounded border border-slate-300 px-2 py-1">
+        <option value="order_datetime" {% if sort_key == "order_datetime" %}selected{% endif %}>order datetime</option>
+        <option value="hb_value" {% if sort_key == "hb_value" %}selected{% endif %}>hemoglobin</option>
+        <option value="confidence" {% if sort_key == "confidence" %}selected{% endif %}>confidence</option>
+        <option value="audit_id" {% if sort_key == "audit_id" %}selected{% endif %}>audit id</option>
+      </select>
+    </label>
+    <label class="flex items-center gap-2">Direction
+      <select name="sort_direction" class="rounded border border-slate-300 px-2 py-1">
+        <option value="desc" {% if sort_direction == "desc" %}selected{% endif %}>descending</option>
+        <option value="asc" {% if sort_direction == "asc" %}selected{% endif %}>ascending</option>
+      </select>
+    </label>
+    <button type="submit" class="rounded bg-indigo-600 text-white px-3 py-1">Apply</button>
+  </form>
+  {% include "_queue_table.html" %}
+</section>
+{% endblock %}
