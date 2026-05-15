@@ -115,9 +115,13 @@ def upgrade() -> None:
     )
 
     # ----- Trigger guard function -----------------------------------------
-    # SECURITY DEFINER + LANGUAGE plpgsql; raises with SQLSTATE 'P0001' so
-    # the Python store can detect the violation by SQLSTATE rather than by
-    # parsing the message string.
+    # Raises with SQLSTATE 'P0001' so the Python store detects the violation
+    # by SQLSTATE rather than by parsing the message string. The user-facing
+    # message is deliberately terse: TG_OP / TG_TABLE_NAME are written to
+    # the Postgres server log by the standard RAISE EXCEPTION machinery, so
+    # an operator debugging a violation still has the full context — but a
+    # bad actor probing the schema does not get free schema disclosure
+    # from the client-side error.
     op.execute(
         """
         CREATE OR REPLACE FUNCTION review_actions_block_mutation()
@@ -125,9 +129,7 @@ def upgrade() -> None:
         LANGUAGE plpgsql
         AS $$
         BEGIN
-            RAISE EXCEPTION
-                'append_only_violation: % is forbidden on % (PRD §16)',
-                TG_OP, TG_TABLE_NAME
+            RAISE EXCEPTION 'append_only_violation'
                 USING ERRCODE = 'P0001';
         END;
         $$;

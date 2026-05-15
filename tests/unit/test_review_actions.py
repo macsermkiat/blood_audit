@@ -102,26 +102,46 @@ def _postgres_container() -> Iterator[object]:
         yield pg
 
 
+_TEST_ROLES_TO_DROP: tuple[str, ...] = (
+    "review_actions_app",
+    "writer_role",
+    "owner_role",
+    "table_owner",
+    "shady_member",
+)
+"""Roles tests create that must be dropped between runs.
+
+Schema-CASCADE drop removes tables and grants attached to them but leaves
+the roles themselves; without explicit cleanup, a second test that tries
+to ``CREATE ROLE`` with the same name would fail."""
+
+
 def _reset_database(config: ReviewActionsConfig) -> None:
-    """Drop and recreate the ``public`` schema so each test starts clean.
+    """Drop and recreate the ``public`` schema and all test-created roles.
 
     The session-scoped Postgres container is shared; without a reset, prior
-    tests' rows / migration head leak into the next test and corrupt
-    ordering / freshness assertions. ``DROP SCHEMA ... CASCADE`` removes
-    the migration's tables, sequences, triggers, and the alembic_version
-    table in one shot. The application role is also dropped so the next
-    test's migration creates it fresh (and resets its password).
+    tests' rows / migration head / custom roles leak into the next test.
+    ``DROP SCHEMA ... CASCADE`` removes the migration's tables, sequences,
+    triggers, and the alembic_version table in one shot; an explicit role
+    sweep handles roles (which live outside any schema).
     """
     with psycopg.connect(config.dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute("DROP SCHEMA IF EXISTS public CASCADE")
             cur.execute("CREATE SCHEMA public")
             cur.execute("GRANT ALL ON SCHEMA public TO PUBLIC")
-            cur.execute(
-                "DO $$ BEGIN IF EXISTS ("
-                "SELECT 1 FROM pg_roles WHERE rolname = 'review_actions_app'"
-                ") THEN DROP ROLE review_actions_app; END IF; END $$;"
-            )
+            for role in _TEST_ROLES_TO_DROP:
+                # REASSIGN OWNED + DROP OWNED handle objects still owned by
+                # the role outside the public schema; both are idempotent.
+                cur.execute(
+                    f"DO $$ BEGIN IF EXISTS ("
+                    f"SELECT 1 FROM pg_roles WHERE rolname = '{role}'"
+                    f") THEN "
+                    f" EXECUTE 'REASSIGN OWNED BY {role} TO CURRENT_USER'; "
+                    f" EXECUTE 'DROP OWNED BY {role}'; "
+                    f" EXECUTE 'DROP ROLE {role}'; "
+                    f"END IF; END $$;"
+                )
 
 
 def _swap_dsn_credentials(
@@ -1121,7 +1141,8 @@ class TestStorePrivilegeCheck:
 
 
 class TestSchemaDriftDetection:
-    """The store rejects a drifted schema (missing trigger / outdated head)."""
+    """The store rejects a drifted schema (missing/disabled/swapped trigger,
+    drifted alembic head, multi-head graph)."""
 
     def test_missing_trigger_is_rejected(
         self, app_config: ReviewActionsConfig,
@@ -1147,6 +1168,56 @@ class TestSchemaDriftDetection:
             ):
                 store.record_action(_action_input())
 
+    def test_disabled_trigger_is_rejected(
+        self, app_config: ReviewActionsConfig,
+        postgres_config: ReviewActionsConfig,
+    ) -> None:
+        """``ALTER TABLE ... DISABLE TRIGGER`` keeps the row in
+        ``pg_trigger`` but neuters the guard. The integrity check must
+        examine ``tgenabled``, not just the row's existence."""
+        with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "ALTER TABLE review_actions "
+                    "DISABLE TRIGGER review_actions_block_update"
+                )
+        with ReviewActionsStore(
+            app_config, migrations_root=REPO_ROOT / "migrations"
+        ) as store:
+            with pytest.raises(
+                MigrationStateError, match="not enabled"
+            ):
+                store.record_action(_action_input())
+
+    def test_trigger_bound_to_wrong_function_is_rejected(
+        self, app_config: ReviewActionsConfig,
+        postgres_config: ReviewActionsConfig,
+    ) -> None:
+        """An attacker who swaps the trigger function for a no-op silently
+        disables the guard while leaving ``pg_trigger`` populated. The
+        integrity check verifies the function name on each trigger row."""
+        with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "CREATE OR REPLACE FUNCTION noop_guard() "
+                    "RETURNS TRIGGER LANGUAGE plpgsql AS "
+                    "$$ BEGIN RETURN NULL; END; $$"
+                )
+                cur.execute(
+                    "DROP TRIGGER review_actions_block_update "
+                    "ON review_actions"
+                )
+                cur.execute(
+                    "CREATE TRIGGER review_actions_block_update "
+                    "BEFORE UPDATE ON review_actions "
+                    "FOR EACH ROW EXECUTE FUNCTION noop_guard()"
+                )
+        with ReviewActionsStore(
+            app_config, migrations_root=REPO_ROOT / "migrations"
+        ) as store:
+            with pytest.raises(MigrationStateError, match="noop_guard"):
+                store.record_action(_action_input())
+
     def test_alembic_revision_drift_is_rejected(
         self, app_config: ReviewActionsConfig,
         postgres_config: ReviewActionsConfig,
@@ -1162,6 +1233,156 @@ class TestSchemaDriftDetection:
             app_config, migrations_root=REPO_ROOT / "migrations"
         ) as store:
             with pytest.raises(MigrationStateError, match="revision drift"):
+                store.record_action(_action_input())
+
+    def test_multi_head_alembic_state_is_rejected(
+        self, app_config: ReviewActionsConfig,
+        postgres_config: ReviewActionsConfig,
+    ) -> None:
+        """Forge a multi-head DB state (an unmerged revision graph) by
+        inserting a second row into ``alembic_version``. The migrator's
+        current_revision must refuse to collapse to a scalar."""
+        with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO alembic_version (version_num) "
+                    "VALUES ('phantom_head_for_test')"
+                )
+        with ReviewActionsStore(
+            app_config, migrations_root=REPO_ROOT / "migrations"
+        ) as store:
+            with pytest.raises(MigrationStateError, match="multiple"):
+                store.record_action(_action_input())
+
+
+class TestTriggerActuallyFires:
+    """The trigger guard fires (P0001) even when the role has UPDATE granted.
+
+    The append-only DB-level tests verify the COMBINATION of REVOKE +
+    trigger blocks mutations. They pass even if the trigger is broken,
+    because REVOKE alone produces InsufficientPrivilege. This class isolates
+    the trigger contribution by granting UPDATE/DELETE on a fresh role and
+    asserting the trigger still raises ``append_only_violation``.
+    """
+
+    @pytest.fixture
+    def writer_role_dsn(
+        self,
+        postgres_config: ReviewActionsConfig,
+        app_config: ReviewActionsConfig,
+    ) -> str:
+        """A role with UPDATE/DELETE granted; not the owner, not a superuser.
+
+        The ``app_config`` fixture has already migrated the DB (via the
+        ``app_config`` -> ``postgres_config`` chain). Here we create a
+        privileged-write role and return a DSN connecting as it.
+        """
+        with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "CREATE ROLE writer_role WITH LOGIN PASSWORD 'writer_pw'"
+                )
+                cur.execute(
+                    "GRANT INSERT, SELECT, UPDATE, DELETE "
+                    "ON review_actions TO writer_role"
+                )
+                cur.execute(
+                    "GRANT INSERT, SELECT, UPDATE, DELETE "
+                    "ON phi_access_log TO writer_role"
+                )
+        return _swap_dsn_credentials(
+            postgres_config.dsn, user="writer_role", password="writer_pw"
+        )
+
+    def test_update_with_granted_privilege_still_blocked_by_trigger(
+        self,
+        migrated_store: ReviewActionsStore,
+        writer_role_dsn: str,
+    ) -> None:
+        """A role WITH UPDATE granted still cannot mutate — the trigger
+        raises P0001 ``append_only_violation``. Verifies the trigger guard
+        is doing real work, not just shadow of the REVOKE."""
+        written = migrated_store.record_action(_action_input())
+
+        try:
+            with psycopg.connect(writer_role_dsn, autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE review_actions SET note = %s "
+                        "WHERE action_id = %s",
+                        ("tampered", written.action_id),
+                    )
+        except psycopg.errors.RaiseException as exc:
+            assert exc.sqlstate == "P0001"
+            assert "append_only_violation" in str(exc.diag.message_primary)
+        else:
+            pytest.fail("UPDATE succeeded — trigger did not fire")
+
+    def test_delete_with_granted_privilege_still_blocked_by_trigger(
+        self,
+        migrated_store: ReviewActionsStore,
+        writer_role_dsn: str,
+    ) -> None:
+        """Same as the UPDATE test, for DELETE."""
+        written = migrated_store.record_action(_action_input())
+
+        try:
+            with psycopg.connect(writer_role_dsn, autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM review_actions WHERE action_id = %s",
+                        (written.action_id,),
+                    )
+        except psycopg.errors.RaiseException as exc:
+            assert exc.sqlstate == "P0001"
+        else:
+            pytest.fail("DELETE succeeded — trigger did not fire")
+
+
+class TestOwnerMembershipBypassRejected:
+    """A role with USAGE membership in the table owner can SET ROLE owner
+    and DISABLE TRIGGER. The store's privilege check probes membership via
+    ``pg_has_role``, not just direct ``current_user == owner``."""
+
+    def test_member_of_owner_role_is_rejected(
+        self,
+        postgres_config: ReviewActionsConfig,
+    ) -> None:
+        """Create a non-owner role that is a MEMBER of the owner role.
+        The startup privilege check must catch this path."""
+        apply_migrations(postgres_config)
+        with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                # Create an owner role and transfer table ownership.
+                cur.execute("CREATE ROLE table_owner")
+                cur.execute(
+                    "ALTER TABLE review_actions OWNER TO table_owner"
+                )
+                cur.execute(
+                    "ALTER TABLE phi_access_log OWNER TO table_owner"
+                )
+                # Owner needs the standard grants to stay functional.
+                cur.execute(
+                    "GRANT SELECT ON alembic_version TO table_owner"
+                )
+                # Create a member role and grant membership.
+                cur.execute(
+                    "CREATE ROLE shady_member WITH LOGIN PASSWORD 'pw'"
+                )
+                cur.execute("GRANT table_owner TO shady_member")
+                cur.execute(
+                    "GRANT SELECT ON alembic_version TO shady_member"
+                )
+        member_dsn = _swap_dsn_credentials(
+            postgres_config.dsn, user="shady_member", password="pw"
+        )
+        with ReviewActionsStore(
+            ReviewActionsConfig(dsn=member_dsn),
+            migrations_root=REPO_ROOT / "migrations",
+        ) as store:
+            with pytest.raises(
+                MigrationStateError, match="USAGE membership"
+            ):
                 store.record_action(_action_input())
 
 

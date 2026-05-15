@@ -71,10 +71,12 @@ def current_revision(
     migrations_root: Path = MIGRATIONS_ROOT_DEFAULT,
 ) -> str | None:
     """Return the current alembic revision id, or ``None`` if no migrations
-    have been applied (no ``alembic_version`` table present).
+    have been applied.
 
-    Used by health-check endpoints in the dashboard and by the store's
-    construction-time schema check.
+    Multi-head DBs (a revision graph that branched and was not yet merged)
+    raise :class:`RuntimeError` rather than returning an arbitrary scalar.
+    The store treats that as a fatal schema-drift signal via
+    :class:`bba.review_actions.MigrationStateError`.
     """
     if not migrations_root.exists():
         raise FileNotFoundError(
@@ -85,7 +87,15 @@ def current_revision(
     try:
         with engine.connect() as conn:
             context = MigrationContext.configure(conn)
-            return context.get_current_revision()
+            heads = context.get_current_heads()
+            if len(heads) > 1:
+                raise RuntimeError(
+                    f"alembic DB has multiple current heads: {heads!r}; "
+                    f"the revision graph is in an inconsistent state"
+                )
+            if not heads:
+                return None
+            return heads[0]
     finally:
         engine.dispose()
 
@@ -99,7 +109,9 @@ def head_revision(
 
     Raises:
         FileNotFoundError: ``migrations_root`` does not exist.
-        RuntimeError: no revisions found in ``migrations_root/versions/``.
+        RuntimeError: no revisions found, or the script directory has more
+            than one head (an unmerged branch — the build needs an explicit
+            merge revision before any deployment).
     """
     if not migrations_root.exists():
         raise FileNotFoundError(
@@ -109,12 +121,17 @@ def head_revision(
     alembic_cfg = Config()
     alembic_cfg.set_main_option("script_location", str(migrations_root))
     script = ScriptDirectory.from_config(alembic_cfg)
-    head = script.get_current_head()
-    if head is None:
+    heads = script.get_heads()
+    if len(heads) > 1:
+        raise RuntimeError(
+            f"alembic script directory has multiple heads: {heads!r}; "
+            f"merge them before deploying"
+        )
+    if not heads:
         raise RuntimeError(
             f"no alembic revisions found under {migrations_root}/versions/"
         )
-    return head
+    return heads[0]
 
 
 __all__ = (

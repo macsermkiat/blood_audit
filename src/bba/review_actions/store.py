@@ -43,17 +43,28 @@ from bba.review_actions.models import (
 )
 
 
-_REQUIRED_TRIGGERS: tuple[str, ...] = (
-    "review_actions_block_update",
-    "review_actions_block_delete",
-    "review_actions_block_truncate",
-    "phi_access_log_block_update",
-    "phi_access_log_block_delete",
-    "phi_access_log_block_truncate",
+_REQUIRED_TRIGGER_BINDINGS: tuple[tuple[str, str], ...] = (
+    ("review_actions_block_update", "review_actions"),
+    ("review_actions_block_delete", "review_actions"),
+    ("review_actions_block_truncate", "review_actions"),
+    ("phi_access_log_block_update", "phi_access_log"),
+    ("phi_access_log_block_delete", "phi_access_log"),
+    ("phi_access_log_block_truncate", "phi_access_log"),
 )
-"""The trigger names installed by the initial migration. Verified at
-startup so a partial / drifted schema (e.g., a manually-deleted trigger)
-fails loudly instead of silently accepting mutations."""
+"""``(trigger_name, table_name)`` pairs installed by the initial migration.
+
+The integrity check verifies each pair (a) exists, (b) is bound to the
+named table, (c) is bound to ``review_actions_block_mutation`` (not some
+no-op function), and (d) is in the ``enabled`` state (``tgenabled = 'O'``).
+A drifted schema where the trigger was DISABLEd but not dropped, or where
+the trigger function was swapped, slips past a name-only check."""
+
+
+_REQUIRED_TRIGGER_FUNCTION = "review_actions_block_mutation"
+"""Canonical name of the function bound to every required trigger."""
+
+
+_PROTECTED_TABLES: tuple[str, ...] = ("review_actions", "phi_access_log")
 
 
 _APPEND_ONLY_SQLSTATE = "P0001"
@@ -174,9 +185,25 @@ class ReviewActionsStore:
         """Persist one PHI-access event; return the DB-assigned row.
 
         Callers SHOULD prefer :meth:`access_phi` (context manager) which
-        couples the log write to the un-redacted-text retrieval. The bare
-        ``record_phi_access`` exists for legitimate "log this access I
-        already know happened" patterns (admin tooling, replay).
+        structurally couples the log write to the un-redacted-text
+        retrieval. ``record_phi_access`` exists as a primitive for two
+        legitimate use cases:
+
+        * **Replay tooling** — a log row was lost; record retroactively
+          after reconciliation against application-server logs.
+        * **Out-of-band notification** — an audit job records that an
+          access happened (e.g., a CSV export ran) without going through
+          the dashboard.
+
+        Production dashboards (#26) MUST use :meth:`access_phi`. Linters /
+        code review enforce that boundary at the dashboard layer; this
+        store cannot tell from a write alone whether the caller is the
+        dashboard or the replay tool.
+
+        Audit jobs verify the completeness invariant batch-wise via
+        :meth:`verify_phi_access_completeness` against the audit-row
+        view-log; a gap there is the canonical "the dashboard bypassed
+        access_phi" detector.
         """
         self._ensure_migrated()
         try:
@@ -331,64 +358,34 @@ class ReviewActionsStore:
 
         Three independent checks; each can flag :class:`MigrationStateError`:
 
-        1. **Alembic head match** — the live DB's current revision equals
-           the on-disk head. Catches "schema drifted forward without redeploy"
-           and "you forgot to run apply_migrations".
-        2. **All required triggers present** — every trigger in
-           :data:`_REQUIRED_TRIGGERS` exists on its table. Catches "an
-           operator manually dropped a guard" between migrations.
-        3. **Unprivileged role** — the connecting role is not a superuser
-           and not the owner of the protected tables. Both privileges can
-           bypass the trigger guard via ``ALTER TABLE ... DISABLE TRIGGER``
-           or ``SET session_replication_role = 'replica'``. Skipped when
-           ``require_unprivileged_role=False`` was passed to the constructor.
+        1. **Privilege check** (only if ``require_unprivileged_role=True``):
+           the connecting role is not a superuser, does not own the
+           protected tables, and is not a member of any role that does.
+           All three can bypass the trigger guard via
+           ``ALTER TABLE ... DISABLE TRIGGER`` or ``SET ROLE owner`` then
+           the same. Runs first so a misconfigured role is rejected before
+           the alembic check (which would fail with a confusing
+           ``permission denied for alembic_version`` when the role lacks
+           SELECT on the version table).
 
-        All three are evaluated up-front rather than lazily on first error
-        so the operator sees the full diagnostic, not a sequence of
-        partial-failure messages.
+        2. **Alembic head match** — the live DB's current revision set
+           equals the on-disk head set. Catches "schema drifted forward
+           without redeploy", "forgot to run apply_migrations", and
+           multi-head branches that the migrator can't apply
+           deterministically.
+
+        3. **Trigger guards intact** — every required trigger exists,
+           bound to the right table + right function, and is currently
+           ENABLED. Name-only verification is insufficient: a
+           ``DISABLE TRIGGER`` keeps the row but neuters the guard, and a
+           same-named trigger on the wrong relation would slip past.
         """
         if self._migrated_checked:
             return
 
-        # Run the privilege check FIRST so a misconfigured role (superuser
-        # or table owner) is rejected before the alembic check — which would
-        # otherwise fail with a confusing "permission denied for table
-        # alembic_version" when the role lacks SELECT on the version table.
         if self._require_unprivileged_role:
-            with self._ensure_pool().connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "SELECT current_user, "
-                        " (SELECT rolsuper FROM pg_roles "
-                        "  WHERE rolname = current_user), "
-                        " EXISTS ("
-                        "  SELECT 1 FROM pg_tables "
-                        "  WHERE tablename IN ('review_actions', "
-                        "                      'phi_access_log') "
-                        "  AND tableowner = current_user"
-                        " )"
-                    )
-                    privilege_row = cur.fetchone()
-            if privilege_row is not None:
-                current_user, is_superuser, is_owner = privilege_row
-                if is_superuser:
-                    raise MigrationStateError(
-                        f"connecting role {current_user!r} is a superuser; "
-                        f"superusers can bypass the trigger guard via "
-                        f"DISABLE TRIGGER or session_replication_role. "
-                        f"Use an unprivileged role (e.g., review_actions_app) "
-                        f"or pass require_unprivileged_role=False explicitly"
-                    )
-                if is_owner:
-                    raise MigrationStateError(
-                        f"connecting role {current_user!r} owns the "
-                        f"review_actions / phi_access_log tables; the owner "
-                        f"can bypass the trigger guard. Use an unprivileged "
-                        f"role (e.g., review_actions_app)"
-                    )
+            self._check_role_privileges()
 
-        # Alembic head match (also implicitly checks the alembic_version
-        # table + the migrations_root exists).
         try:
             current = current_revision(
                 self._config, migrations_root=self._migrations_root
@@ -397,6 +394,12 @@ class ReviewActionsStore:
         except FileNotFoundError as exc:
             raise MigrationStateError(
                 f"migrations_root not found: {exc}"
+            ) from exc
+        except RuntimeError as exc:
+            # Migrator surfaces multi-head / no-revisions states as
+            # RuntimeError; treat as fatal schema-drift signal.
+            raise MigrationStateError(
+                f"alembic state error: {exc}"
             ) from exc
         if current is None:
             raise MigrationStateError(
@@ -410,27 +413,125 @@ class ReviewActionsStore:
                 f"or roll the deployment back"
             )
 
-        # All trigger guards present — catches an operator manual-drop
-        # between migrations.
+        self._check_triggers_intact()
+
+        self._migrated_checked = True
+
+    def _check_role_privileges(self) -> None:
+        """Reject DSNs whose role can bypass the trigger guard.
+
+        Three bypass surfaces:
+
+        1. **Superuser** — ``rolsuper`` can ``ALTER TABLE ... DISABLE
+           TRIGGER`` or ``SET session_replication_role = 'replica'``.
+        2. **Direct ownership** — the table's ``tableowner`` can
+           ``DISABLE TRIGGER`` on the table.
+        3. **Owner-role membership** — a role for which ``pg_has_role(
+           current_user, owner, 'USAGE')`` is true can ``SET ROLE owner``
+           and then exercise (2). The membership probe catches this; a
+           direct ``current_user == tableowner`` test does not.
+        """
         with self._ensure_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT tgname FROM pg_trigger "
-                    "WHERE NOT tgisinternal AND tgname = ANY(%s)",
-                    (list(_REQUIRED_TRIGGERS),),
+                    "SELECT current_user, "
+                    " (SELECT rolsuper FROM pg_roles "
+                    "  WHERE rolname = current_user)"
                 )
-                present = {row[0] for row in cur.fetchall()}
-                missing = tuple(
-                    sorted(set(_REQUIRED_TRIGGERS) - present)
+                row = cur.fetchone()
+                if row is None:
+                    raise MigrationStateError(
+                        "could not introspect current role"
+                    )
+                current_user, is_superuser = row
+
+                if is_superuser:
+                    raise MigrationStateError(
+                        f"connecting role {current_user!r} is a superuser; "
+                        f"superusers can bypass the trigger guard via "
+                        f"DISABLE TRIGGER or session_replication_role. "
+                        f"Use an unprivileged role (e.g., "
+                        f"review_actions_app) or pass "
+                        f"require_unprivileged_role=False explicitly"
+                    )
+
+                cur.execute(
+                    "SELECT DISTINCT tableowner FROM pg_tables "
+                    "WHERE tablename = ANY(%s)",
+                    (list(_PROTECTED_TABLES),),
                 )
+                owners = [r[0] for r in cur.fetchall()]
+                for owner in owners:
+                    cur.execute(
+                        "SELECT pg_has_role(%s, %s, 'USAGE')",
+                        (current_user, owner),
+                    )
+                    has_role = cur.fetchone()
+                    if has_role is not None and has_role[0]:
+                        raise MigrationStateError(
+                            f"connecting role {current_user!r} has USAGE "
+                            f"membership in {owner!r}, which owns the "
+                            f"review_actions / phi_access_log tables; "
+                            f"membership enables SET ROLE + DISABLE TRIGGER "
+                            f"bypass. Use a role outside the owner's "
+                            f"membership chain (e.g., review_actions_app)"
+                        )
+
+    def _check_triggers_intact(self) -> None:
+        """Verify every required trigger exists, is bound to the right
+        table + the right function, and is currently enabled.
+
+        Postgres' ``tgenabled`` values:
+          ``'O'`` — origin / enabled (the only acceptable state)
+          ``'D'`` — disabled
+          ``'R'`` — fires on replica only
+          ``'A'`` — fires always
+
+        ``'A'`` would also fire on origin, but the migration installs
+        ``'O'``, so anything else signals drift.
+        """
+        expected_pairs = set(_REQUIRED_TRIGGER_BINDINGS)
+        with self._ensure_pool().connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT t.tgname, c.relname, p.proname, t.tgenabled "
+                    "FROM pg_trigger t "
+                    "JOIN pg_class c ON t.tgrelid = c.oid "
+                    "JOIN pg_proc p ON t.tgfoid = p.oid "
+                    "WHERE NOT t.tgisinternal "
+                    "AND t.tgname = ANY(%s)",
+                    (
+                        [name for name, _ in _REQUIRED_TRIGGER_BINDINGS],
+                    ),
+                )
+                rows = cur.fetchall()
+
+        observed_pairs: set[tuple[str, str]] = set()
+        broken: list[str] = []
+        for tgname, relname, proname, tgenabled in rows:
+            observed_pairs.add((tgname, relname))
+            if proname != _REQUIRED_TRIGGER_FUNCTION:
+                broken.append(
+                    f"trigger {tgname!r} on {relname!r} is bound to "
+                    f"function {proname!r}, expected "
+                    f"{_REQUIRED_TRIGGER_FUNCTION!r}"
+                )
+            if tgenabled != "O":
+                broken.append(
+                    f"trigger {tgname!r} on {relname!r} is not enabled "
+                    f"(tgenabled={tgenabled!r}); the guard does not fire"
+                )
+
+        missing = sorted(expected_pairs - observed_pairs)
         if missing:
             raise MigrationStateError(
-                f"required trigger guards missing: {missing!r}; "
-                f"schema is unsafe to write to (an operator may have "
-                f"DROPped them)"
+                f"required trigger guards missing or bound to the wrong "
+                f"table: {missing!r}; schema is unsafe to write to"
             )
-
-        self._migrated_checked = True
+        if broken:
+            raise MigrationStateError(
+                f"trigger guards are corrupted: {broken}"
+            )
 
     @staticmethod
     def _translate_raise(exc: RaiseException) -> Exception:
