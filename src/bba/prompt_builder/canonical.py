@@ -7,12 +7,15 @@ Mirrors :mod:`bba.evidence_bundle_builder.canonical` and
 issue #21's prompt-cache marker correctness verification: same input ->
 byte-identical canonical envelope -> same hash.
 
-RED-phase scaffold: the helpers below are minimal pure-function
-implementations because the result model validator depends on them at
-construction time — without a working canonical serializer the model
-itself cannot be exercised. The helpers contain no business logic and
-no orchestration; they are infrastructure mirroring the existing module
-pattern.
+Three pieces compose the contract:
+
+* :func:`canonical_serialize` — value -> canonical-JSON string.
+* :func:`compute_prompt_hash` — envelope -> 64-char lowercase hex.
+* :func:`build_envelope` — keyword-only assembly of the eight fields
+  that participate in the audit-chain replay. Adding a field to
+  :class:`PromptBuildResult` without adding it here would silently
+  weaken the hash, so the result-model validator constructs the
+  envelope through this helper.
 """
 
 from __future__ import annotations
