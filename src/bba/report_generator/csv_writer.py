@@ -204,12 +204,16 @@ def _render_csv_text(section: ReportSection) -> str:
     in-memory consumer (e.g., the dashboard preview endpoint) does not
     need to round-trip through the filesystem.
 
-    An empty section emits one synthetic row whose data columns are all
-    empty strings but whose footer columns are populated. Without that
-    row, an empty section's CSV would carry no footer values at all and
-    a downstream consumer could not tell *which* policy / model / redactor
-    versions produced the empty result vs. a stale file in the same
-    directory.
+    An empty section emits one synthetic row whose data columns are
+    type-appropriate sentinel cells (``0`` for int columns, ``0.0`` for
+    float columns, ``""`` for string / date columns; see
+    :data:`_EMPTY_SECTION_DEFAULTS`) and whose footer columns are
+    populated. Without that row, an empty section's CSV would carry no
+    footer values at all and a downstream consumer could not tell
+    *which* policy / model / redactor versions produced the empty result
+    vs. a stale file in the same directory. The typed sentinels keep a
+    numeric-column parser (e.g., pandas ``read_csv``) from NaN-poisoning
+    the row.
     """
     _validate_footer(section.footer)
     data_cols = _data_columns(section.name)
