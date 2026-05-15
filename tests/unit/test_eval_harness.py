@@ -429,27 +429,36 @@ class TestHorvitzThompsonReweighting:
         # higher than base-rate prob), so the *sample* prevalence is biased
         # high. The HT estimator must reweight back to the true population
         # prevalence.
-        # Population: 1000 cases, 100 positives → true prevalence 0.10.
-        # Enriched sample: draw 50 positives (prob 0.50) + 50 negatives
-        # (prob 50/900 ≈ 0.05556). Sample prevalence = 0.50; HT prevalence
-        # should be 0.10.
-        sample = self._two_stratum_sample(
-            stratum_a_pop=1000,
-            stratum_a_pos_pop=100,
-            stratum_a_drawn=100,
-            stratum_a_drawn_pos=50,
-            stratum_b_pop=1,
-            stratum_b_pos_pop=1,
-            stratum_b_drawn=1,
-            stratum_b_drawn_pos=1,
+        # Single stratum: 1000 cases, 100 positives → true prevalence 0.10.
+        # Enriched sample: draw 50 positives (prob 50/100 = 0.50) and 50
+        # negatives (prob 50/900 ≈ 0.05556). Sample prevalence = 0.50;
+        # HT-reweighted prevalence should equal the true 0.10.
+        positives = tuple(
+            _case(audit_id=f"p{i}", pred="INAPPROPRIATE") for i in range(50)
+        )
+        negatives = tuple(
+            _case(audit_id=f"n{i}", pred="APPROPRIATE") for i in range(50)
+        )
+        sample = StratifiedSample(
+            draws=(
+                StratumDraw(
+                    stratum=Stratum.HB_LT_7,
+                    cases=positives + negatives,
+                    population_size=1000,
+                    population_positives=100,
+                    drawn_positives=50,
+                    base_inclusion_probability=50 / 900,
+                    positive_inclusion_probability=50 / 100,
+                ),
+            )
         )
 
         def is_pos(c: AuditCase) -> bool:
             return c.pred_classification == "INAPPROPRIATE"
 
         est = horvitz_thompson_prevalence(sample, is_pos)
-        # Hand-derived: HT prev = (1*100 + 1*1) / (1000+1) = 101/1001 ≈ 0.1009
-        assert est.prevalence == pytest.approx(101.0 / 1001.0, abs=1e-9)
+        # HT: sum(y_i/pi_i) = 50 / 0.5 = 100; / N = 100/1000 = 0.10.
+        assert est.prevalence == pytest.approx(0.10, abs=1e-9)
 
     def test_zero_indicator_yields_zero_prevalence(self) -> None:
         sample = self._two_stratum_sample(

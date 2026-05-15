@@ -11,6 +11,7 @@ without-replacement truth, conservative for the publication report.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 
 from bba.eval_harness.models import (
@@ -20,24 +21,83 @@ from bba.eval_harness.models import (
 )
 
 
+def _case_inclusion_probability(
+    case: AuditCase, *, base_pi: float, positive_pi: float
+) -> float:
+    return positive_pi if case.pred_classification == "INAPPROPRIATE" else base_pi
+
+
 def horvitz_thompson_prevalence(
     sample: StratifiedSample,
     indicator: Callable[[AuditCase], bool],
 ) -> HorvitzThompsonEstimate:
-    """HT estimate of population prevalence under ``indicator``.
+    """HT estimate of population prevalence under ``indicator``."""
+    total_population = sum(d.population_size for d in sample.draws)
+    if total_population == 0:
+        return HorvitzThompsonEstimate(prevalence=0.0, variance=0.0, se=0.0)
 
-    ``indicator`` is a pure function from one :class:`AuditCase` to ``bool``
-    — typically ``lambda c: c.pred_classification == "INAPPROPRIATE"`` or the
-    same for ``gold_classification``. The estimator is:
+    weighted_sum = 0.0
+    variance_sum = 0.0
+    for draw in sample.draws:
+        # Per-stratum HT contribution and variance term. Treat the stratum
+        # as an independent SRS for the variance estimator (Sarndal et al.
+        # 1992, eq 3.4.5); inflates SE slightly vs without-replacement.
+        stratum_weighted = 0.0
+        stratum_weighted_sq = 0.0
+        for case in draw.cases:
+            pi = _case_inclusion_probability(
+                case,
+                base_pi=draw.base_inclusion_probability,
+                positive_pi=draw.positive_inclusion_probability,
+            )
+            if pi <= 0.0:
+                # A case with zero inclusion prob should not appear in the
+                # sample; if it does (e.g., a population with zero positives
+                # somehow yielded a positive case), skip contribution rather
+                # than blow up — the report's other strata still apply.
+                continue
+            y = 1.0 if indicator(case) else 0.0
+            weight = y / pi
+            stratum_weighted += weight
+            stratum_weighted_sq += weight * weight
+        weighted_sum += stratum_weighted
+        # Stratum variance contribution: sum_i (1 - pi_i) * (y_i/pi_i)²
+        # simplified under the SRS-with-replacement approximation to:
+        #   N_h² * Var(weighted_sum_within_stratum) / n_h
+        # Use the canonical sample variance of the within-stratum HT weights.
+        n_h = len(draw.cases)
+        if n_h > 1:
+            mean_w = stratum_weighted / n_h
+            sq_dev = sum(
+                (
+                    (
+                        (1.0 if indicator(c) else 0.0)
+                        / _case_inclusion_probability(
+                            c,
+                            base_pi=draw.base_inclusion_probability,
+                            positive_pi=draw.positive_inclusion_probability,
+                        )
+                    )
+                    - mean_w
+                )
+                ** 2
+                for c in draw.cases
+                if _case_inclusion_probability(
+                    c,
+                    base_pi=draw.base_inclusion_probability,
+                    positive_pi=draw.positive_inclusion_probability,
+                )
+                > 0.0
+            )
+            var_w = sq_dev / (n_h - 1)
+            variance_sum += (n_h * var_w) / (total_population * total_population)
 
-    .. math::
-
-       \\hat{p}_{HT} = \\frac{1}{N} \\sum_{h} \\sum_{i \\in s_h}
-                       \\frac{y_i}{\\pi_{hi}}
-
-    where ``N`` is the total population size summed across strata, ``s_h``
-    is the sample drawn from stratum ``h``, ``y_i`` is ``1`` if the
-    indicator holds for case ``i``, ``π_{hi}`` is the case's inclusion
-    probability (the per-stratum positive- or base-rate from the sampler).
-    """
-    raise NotImplementedError("eval_harness.reweight: RED phase, see issue #20")
+    prevalence = weighted_sum / total_population
+    # Bound the point estimate in [0, 1] — degenerate samples could push it
+    # slightly past 1 under finite-precision arithmetic.
+    prevalence = max(0.0, min(1.0, prevalence))
+    variance = max(0.0, variance_sum)
+    se = math.sqrt(variance)
+    return HorvitzThompsonEstimate(
+        prevalence=prevalence, variance=variance, se=se
+    )
