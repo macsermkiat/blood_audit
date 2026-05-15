@@ -429,15 +429,28 @@ class EvidenceBundle(BaseModel):
                 f"match EvidenceBundle.items count ({len(self.items)})"
             )
 
-        parsed_ids = [
-            item.get("id") if isinstance(item, dict) else None
-            for item in parsed_items
-        ]
-        expected_ids = [it.id for it in self.items]
-        if parsed_ids != expected_ids:
+        # Full structural comparison: re-canonicalize self.items into the
+        # same form parsed_items has, then compare. Catches any payload /
+        # source / timestamp drift between the two halves of the audit
+        # chain, not just ID renames.
+        expected_items_canonical = canonical_serialize(
+            [
+                {
+                    "id": it.id,
+                    "source": it.source,
+                    "timestamp_utc": it.timestamp_utc,
+                    "payload": dict(it.payload),
+                }
+                for it in self.items
+            ]
+        )
+        parsed_items_canonical = canonical_serialize(parsed_items)
+        if expected_items_canonical != parsed_items_canonical:
             raise ValueError(
-                f"canonical_json item IDs {parsed_ids} do not match "
-                f"EvidenceBundle.items IDs {expected_ids}"
+                "canonical_json items disagree with EvidenceBundle.items "
+                "(payload, source, timestamp, or ID mismatch); construct "
+                "via build_evidence_bundle() to maintain the audit-chain "
+                "invariant"
             )
 
         return self

@@ -19,6 +19,7 @@ from bba.evidence_bundle_builder.models import (
     EvidenceBundle,
     EvidenceInputs,
     EvidenceItem,
+    EvidenceSource,
     FocusNote,
     HbRecord,
     MedRecord,
@@ -77,6 +78,25 @@ bundle goes to Anthropic's tokenizer (not OpenAI's) and the published Claude
 tokenization is not stable enough to depend on for a hard cap. 8 K characters
 is roughly 2 K tokens of typical Thai medical text, well inside the prompt
 budget after the system prompt + few-shot examples."""
+
+DROP_PRIORITY: tuple[EvidenceSource, ...] = (
+    "IPDADMPROGRESS",
+    "IPDNRFOCUSDT",
+    "MED",
+    "Vitals",
+    "Lab",
+    "Diagnosis",
+)
+"""Whole-item drop priority for char-cap truncation: lowest-clinical-relevance
+first. ``IPDADMPROGRESS`` and ``IPDNRFOCUSDT`` are long supportive narratives
+that the LLM can audit without; ``MED`` is contextual; ``Vitals`` is the
+bedside state; ``Lab`` (Hb) is the decision-time anemia signal — losing it
+changes what the LLM is auditing; ``Diagnosis`` is the encounter context.
+
+Independent of the source EMISSION order (which is fixed by the canonical-
+ID assignment); without a separate drop priority, a dense MED list would
+silently evict every Lab item before any MED item dropped — exactly inverted
+from clinical relevance."""
 
 
 # =============================================================================
@@ -277,6 +297,34 @@ def _section_label(section: Any) -> str | None:
     return None
 
 
+def _drop_one_by_priority(
+    items: Sequence[EvidenceItem],
+) -> tuple[EvidenceItem, ...]:
+    """Drop ONE item, choosing the lowest-priority source first.
+
+    Walks :data:`DROP_PRIORITY` in order; for the first source group that
+    has at least one item in ``items``, removes the LAST occurrence of
+    that source. Last-occurrence within a source group means:
+    * For ``Lab`` (emitted newest-first), the dropped item is the OLDEST
+      Hb — the most-recent pre-order Hb survives longest.
+    * For other sources (emitted oldest-first), the dropped item is the
+      LATEST entry of that source — older context survives longer because
+      it tends to be the most-prior decision-shaping signal.
+
+    Returns the input unchanged if no source in ``DROP_PRIORITY`` has any
+    items. The caller treats that as a terminal state and either accepts
+    the over-cap bundle or raises :class:`EvidenceBundleTooLargeError`."""
+    items_list = list(items)
+    for source_to_drop in DROP_PRIORITY:
+        last_idx = -1
+        for i, it in enumerate(items_list):
+            if it.source == source_to_drop:
+                last_idx = i
+        if last_idx >= 0:
+            return tuple(items_list[:last_idx] + items_list[last_idx + 1 :])
+    return tuple(items_list)
+
+
 def _drop_empty_progress_items(items: Sequence[EvidenceItem]) -> tuple[EvidenceItem, ...]:
     """Filter out IPDADMPROGRESS items whose section list became empty.
 
@@ -363,7 +411,14 @@ def _enforce_char_cap(
             return current
 
     while current and _bundle_size(anchor, current) > char_cap:
-        current = current[:-1]
+        next_current = _drop_one_by_priority(current)
+        if next_current == current:
+            # Defensive: nothing more to drop (every source covered by
+            # DROP_PRIORITY is exhausted). Fall through to the
+            # below structural check, which will raise if the anchor
+            # envelope alone is over cap.
+            break
+        current = next_current
 
     # Final safety check: if even the anchor envelope alone exceeds char_cap,
     # the cap is structurally unsatisfiable — fail loud rather than ship an

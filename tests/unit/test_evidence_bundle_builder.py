@@ -449,7 +449,63 @@ class TestModelImmutability:
         }
         canonical_json = canonical_serialize(envelope)
         right_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
-        with pytest.raises(ValidationError, match="item IDs"):
+        with pytest.raises(ValidationError, match="items disagree"):
+            EvidenceBundle(
+                items=(item,),
+                canonical_json=canonical_json,
+                bundle_hash=right_hash,
+            )
+
+    def test_bundle_rejects_items_payload_mismatch(self) -> None:
+        # Same id/source/timestamp but different payload contents.
+        item = EvidenceItem(
+            id="E1",
+            source="Diagnosis",
+            timestamp_utc=None,
+            payload={"icd10": "D50.9"},
+        )
+        envelope = {
+            "anchor": {},
+            "items": [
+                {
+                    "id": "E1",
+                    "source": "Diagnosis",
+                    "timestamp_utc": None,
+                    "payload": {"icd10": "X99.9"},  # different code
+                }
+            ],
+        }
+        canonical_json = canonical_serialize(envelope)
+        right_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+        with pytest.raises(ValidationError, match="items disagree"):
+            EvidenceBundle(
+                items=(item,),
+                canonical_json=canonical_json,
+                bundle_hash=right_hash,
+            )
+
+    def test_bundle_rejects_items_source_mismatch(self) -> None:
+        # Same id but different source classification.
+        item = EvidenceItem(
+            id="E1",
+            source="Diagnosis",
+            timestamp_utc=None,
+            payload={"icd10": "D50.9"},
+        )
+        envelope = {
+            "anchor": {},
+            "items": [
+                {
+                    "id": "E1",
+                    "source": "MED",  # mismatched source
+                    "timestamp_utc": None,
+                    "payload": {"icd10": "D50.9"},
+                }
+            ],
+        }
+        canonical_json = canonical_serialize(envelope)
+        right_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+        with pytest.raises(ValidationError, match="items disagree"):
             EvidenceBundle(
                 items=(item,),
                 canonical_json=canonical_json,
@@ -1498,6 +1554,57 @@ class TestHbEmissionAndTruncationPriority:
         ]
         # Newest first: -24, -48, -72, -96 (oldest last).
         assert offsets == [-24.0, -48.0, -72.0, -96.0]
+
+    def test_med_dropped_before_hb_under_tight_cap(self) -> None:
+        # A dense MED list must NOT silently evict the decision-time Hb.
+        # Without the source-aware drop priority, the global tail-drop
+        # would discard every Lab item before any MED item (Lab ID >
+        # MED ID under the canonical-source emission order).
+        hbs = (_hb(offset_hours=-1, value=7.0),)
+        meds = tuple(
+            _med(offset_hours=-h, drug=f"Drug{h}-" + ("x" * 200))
+            for h in (1, 2, 3, 4, 5, 6, 7, 8)
+        )
+        bundle = build_evidence_bundle(
+            inputs=EvidenceInputs(
+                anchor=_anchor(),
+                hb_history=hbs,
+                meds=meds,
+            ),
+            char_cap=1500,
+        )
+        lab_items = _items_by_source(bundle, "Lab")
+        med_items = _items_by_source(bundle, "MED")
+        assert len(lab_items) == 1, (
+            "Hb dropped under tight cap while MED items survived; the "
+            "decision-time anemia signal must outlast lower-priority MED."
+        )
+        assert len(med_items) < 8, (
+            "MEDs should drop FIRST under tight cap; if all 8 survive, "
+            "DROP_PRIORITY is not applied"
+        )
+
+    def test_diagnosis_survives_longest_under_extreme_cap(self) -> None:
+        # Diagnosis is at the END of DROP_PRIORITY — it is the encounter
+        # context and survives until the bundle structurally cannot fit.
+        diagnoses = (DiagnosisRecord(icd10="D50.9"),)
+        meds = tuple(
+            _med(offset_hours=-h, drug=f"Drug{h}-" + ("x" * 200))
+            for h in (1, 2, 3, 4)
+        )
+        bundle = build_evidence_bundle(
+            inputs=EvidenceInputs(
+                anchor=_anchor(),
+                diagnoses=diagnoses,
+                meds=meds,
+            ),
+            char_cap=900,
+        )
+        diag_items = _items_by_source(bundle, "Diagnosis")
+        assert len(diag_items) == 1, (
+            "Diagnosis must survive longest — it's the encounter context "
+            "and bottommost in DROP_PRIORITY"
+        )
 
     def test_hb_truncation_preserves_most_recent_hb(self) -> None:
         # Force whole-item tail-drop by padding the anchor near the cap.
