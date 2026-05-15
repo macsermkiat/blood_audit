@@ -9,7 +9,8 @@ Scope: Phase 1 of the KCMH RBC transfusion audit pipeline. PRD: [issue #1].
 Sections are added per ticket as each module merges to `main`. Currently
 covered: `#3 ingest`, `#4 audit_orders`, `#5 hb_lookup`, `#6 vitals_extractor`,
 `#16 evidence_bundle_builder`, `#17 deid_redactor`, `#18 quote_grounder`,
-`#19 audit_store`, `#25 review_actions`, `#28 report_generator`.
+`#19 audit_store`, `#25 review_actions`, `#26 dashboard`,
+`#28 report_generator`.
 
 ## Ingest concepts (#3)
 
@@ -1190,6 +1191,226 @@ deliberate non-goal:
   zones if scope grows beyond Asia/Bangkok), empty inputs, and
   needs_human_review-flag interactions. Acceptable for a "thin"
   module per the original Codex round-1 INFO note.
+
+## Dashboard concepts (#26)
+
+### Reviewer dashboard
+
+`bba.dashboard` — FastAPI + HTMX + Tailwind reviewer UI per PRD §17.
+Composes `bba.audit_store` (read-only, via the daily DuckDB snapshot view
+from #19) and `bba.review_actions` (Postgres-backed `phi_access_log`
+writes from #25). Owns no persistence of its own; every piece of state
+the dashboard surfaces is read from one of those two upstream stores.
+Module structure: `app.py` (handlers + `create_app` FastAPI factory),
+`models.py` (frozen Pydantic v2 DTOs + injectable-resolver type
+aliases), `exceptions.py` (typed `DashboardError` hierarchy),
+`templates/` (Jinja2: `base.html` + per-view templates +
+`_queue_table.html` HTMX fragment).
+
+### Five views
+
+PRD §17 surface, exposed as five FastAPI routes:
+
+* `GET /queue` — NEEDS_REVIEW triage queue, sortable by
+  `order_datetime` | `hb_value` | `confidence` | `audit_id` via
+  `sort_key`/`sort_direction` query params. HTMX form swaps the
+  table in-place (`hx-target="#queue-table"`, `hx-swap="outerHTML"`).
+* `GET /case/{audit_id}` — case-detail; un-redacted iff the audit is
+  in the reviewer's `care_team_memberships`.
+* `POST /case/{audit_id}/break-glass` — break-glass un-redacted
+  capture; form-encoded `justification` (HTMX form).
+* `GET /scorecard/ward/{ward_id}` — per-ward aggregations (counts +
+  average confidence) over the snapshot.
+* `GET /scorecard/physician/{physician_id}` — per-physician own-view
+  scorecard, route-guarded.
+* `GET /pipeline-health` — NEEDS_REVIEW rate, verifier pass rate,
+  Sonnet→Opus escalation rate, average LLM-call latency.
+
+### DashboardConfig
+
+`bba.dashboard.DashboardConfig` — frozen pydantic v2 model bundling
+every runtime dependency the dashboard composes: the
+`AuditStore` + `ReviewActionsStore` handles, a `snapshot_dir`, a
+`template_dir` override, an optional `default_reviewer` (dev / smoke
+identity), and three injectable resolvers. `arbitrary_types_allowed`
+is enabled because the two store handles are not pydantic models.
+
+### Injectable resolvers
+
+The dashboard does NOT own ward / physician / un-redacted-PHI lookups.
+Three callable type aliases on `DashboardConfig`:
+
+* `UnredactedPhiResolver = Callable[[str, str], tuple[str, str]]` —
+  resolves `(hn_hash, an_hash) → (hn, an)`. Production wires the
+  HIS / de-id-twin store; tests provide a fake.
+* `WardAttributionResolver = Callable[[AuditRow], str]` — resolves
+  an audit row to its ward id (the audit_store schema does not carry
+  `ward_id` directly).
+* `PhysicianAttributionResolver = Callable[[AuditRow], str]` — same
+  shape for physician.
+
+A `DashboardConfig` with `unredacted_phi_resolver=None` causes any
+un-redacted code path to raise `UnredactedSourceUnavailableError`
+(translated to HTTP 503). The dashboard refuses to fabricate
+placeholder PHI — a deploy that forgets to wire the resolver fails
+LOUD. Ward / physician resolvers fall through to sentinel ids
+(`unattributed-ward`, `unattributed-physician`) which are visibly
+broken in rendered output rather than silently misattributed.
+
+### Care-team-of-record gating
+
+`get_case_detail` returns un-redacted PHI iff
+`audit_id ∈ context.reviewer.care_team_memberships`. The reviewer's
+care-team list is set by the auth dependency at request boundary; it
+is not derived from any audit-store column. Outsiders see the
+redacted projection (`unredacted=False`, `raw_hn=raw_an=None`);
+break-glass is the only override path.
+
+### PHI access logging — every surfacing
+
+PRD §17: every un-redacted access writes a `phi_access_log` row. The
+dashboard treats CARE-TEAM access and BREAK-GLASS access as both
+PHI-access events. Both paths route through
+`ReviewActionsStore.access_phi(PhiAccessInput) -> Iterator[...]`
+(from #25). The care-team path passes
+`break_glass_justification=None`; the break-glass path passes the
+reviewer's justification text. The log row is committed at
+`__enter__`, before any un-redacted text is yielded — structurally
+"log before reading", not a developer discipline. A redacted view
+(outsider with no break-glass) writes no log row.
+
+### Break-glass justification flow
+
+`record_break_glass_access(config, context, audit_id, request)`:
+
+1. Re-checks `request.justification` non-empty (defense in depth
+   against a caller that bypasses `BreakGlassRequest`'s
+   `NonEmptyStr` validator via `model_construct`).
+2. Looks up the audit row (404 via `AuditNotFoundError` if missing).
+3. Builds `PhiAccessInput` carrying the justification.
+4. Enters `access_phi(...)` — log row committed here.
+5. Returns the un-redacted `CaseDetail`.
+
+If un-redacted resolution raises (no resolver, HIS unreachable), the
+log row stays committed: PRD §17 treats an attempted access that
+crashed mid-render as still an access for audit purposes.
+
+### Strict own-view route guard
+
+`get_physician_scorecard` denies whenever
+`context.reviewer.physician_id != physician_id`, regardless of role.
+A reviewer with `role='reviewer'` and `physician_id=None` cannot
+enumerate any physician's scorecard through this route, nor can a
+`senior_reviewer`. Cross-physician aggregation (admin / senior
+reviewer fleet view) belongs on a SEPARATE explicitly-privileged
+route — out of scope for #26. The guard was role-conditional in the
+first GitHub PR review pass; the strict role-agnostic form is the
+codex round 4 fix.
+
+### Snapshot-frame consistency
+
+The dashboard reads via `SnapshotView` (from #19) keyed to
+`datetime.now(UTC).date()` — same-day reads share a materialized
+snapshot, mid-batch writes are isolated. `get_pipeline_health`
+extends this discipline to the latency aggregation: it filters
+`audit_store.read_llm_calls()` to the snapshot's `audit_id` set
+before averaging. Without the filter, an `LlmCall` whose audit row
+has not yet committed to the snapshot (PRD §10 writes `llm_calls`
+BEFORE `audit_results`) would skew `average_latency_ms` while not
+contributing to `total_audits` — codex round 4 P2 fix.
+
+### HX-Request fragment vs full-page
+
+The `/queue` route inspects the `HX-Request` header. An HTMX request
+gets `_queue_table.html` (a table-shaped fragment); a plain browser
+navigation gets `queue.html` (full document with nav chrome,
+Tailwind, HTMX script tags). Required because the page's HTMX form
+swaps `#queue-table` with `outerHTML` — returning a full document
+into a table-shaped slot is visually broken once the user
+interacts with sort. Codex round 2 finding.
+
+### get_route_context — overridable auth dependency
+
+`bba.dashboard.app.get_route_context(request)` — a MODULE-LEVEL
+FastAPI dependency that resolves the active `RouteContext`. Stored
+at module level (not a closure inside `create_app`) so production
+replaces it via the canonical FastAPI override mechanism:
+
+```python
+app = create_app(config)
+app.dependency_overrides[get_route_context] = real_auth_dep
+```
+
+The default reads `request.app.state.dashboard_config` (set by
+`create_app`) and returns `config.default_reviewer` if set, else
+raises HTTP 401. The closure form was the codex round 4 P2 finding
+— production could not reach a closure dependency for override.
+
+### DashboardError hierarchy
+
+Five typed exceptions, all subclasses of `DashboardError`, each
+translated to an HTTP response at the route layer:
+
+* `AuditNotFoundError` → 404 — `audit_id` not in today's snapshot.
+* `PhysicianAccessDeniedError` → 403 — strict own-view guard fired.
+* `CareTeamAccessDeniedError` → 403 — reserved for care-team gating
+  failures (currently unused; the no-access path returns a redacted
+  view rather than raising).
+* `MissingJustificationError` → 400 — break-glass with empty / blank
+  justification.
+* `UnredactedSourceUnavailableError` → 503 — un-redacted PHI
+  requested but no resolver is configured.
+* `SnapshotInconsistencyError` — reserved for snapshot-read paths
+  that observe rows off the materialization point (currently a
+  type-existence contract; the snapshot model from #19 makes this
+  unreachable in practice).
+
+### Sentinel attribution ids
+
+`unattributed-ward` / `unattributed-physician` — the fallback values
+returned when no resolver is configured. Deliberately not
+plausible-looking; codex round 1 flagged that earlier fallback names
+(`default-ward`, `default-physician`) silently masked the
+misconfiguration. The sentinel cannot collide with any real
+`SafeId` from production (real ids never carry the literal substring
+`unattributed-`).
+
+### Deferred review (post-merge)
+
+Codex review went through 3 in-session rounds and 1 GitHub PR review
+round (a P1 + two P2 findings, all fixed before merge). Items left
+deferred to follow-up work, not merge blockers:
+
+* **Cross-physician scorecard route** — the strict own-view guard
+  blocks admin / senior-reviewer visibility into other physicians'
+  metrics through `/scorecard/physician/{physician_id}`. The
+  intended path for that visibility is a separate, explicitly
+  privileged endpoint (e.g., `/scorecard/admin/physicians`),
+  out of scope for #26.
+* **Real un-redacted PHI resolver wiring** — production wiring of
+  `UnredactedPhiResolver` to the HIS / de-id-twin store depends on
+  a follow-up ticket that exposes the lookup. The dashboard's
+  failure mode (HTTP 503 + `UnredactedSourceUnavailableError`) is
+  loud enough that the gap is unmistakable in operator testing.
+* **Real ward / physician attribution wiring** — similar story for
+  `WardAttributionResolver` / `PhysicianAttributionResolver`. The
+  `unattributed-*` sentinels render in the dashboard until the
+  registries are wired.
+* **Tailwind / HTMX via CDN** — the templates load both via CDN
+  (`cdn.tailwindcss.com`, `unpkg.com/htmx.org@1.9.10`). Production
+  builds compile Tailwind to a static stylesheet and pin HTMX to a
+  vendored bundle; the CDN form is acceptable for Phase 1 dev /
+  smoke per the "thin" ticket label.
+* **`/queue` no per-reviewer scope** — the queue is currently a
+  global triage surface. `RouteContext` is passed through the
+  handler signature for forward-compatibility (per-reviewer
+  filtering, ward-scoped views) but unused today.
+* **`SnapshotInconsistencyError`** — declared but not raised
+  anywhere in #26. Reserved for a future snapshot-read invariant
+  check; the existing `SnapshotView` design from #19 makes the
+  failure mode structurally unreachable, so the exception lives on
+  in the contract surface as a placeholder rather than a live
+  signal.
 
 ## Vocabulary not in this file
 
