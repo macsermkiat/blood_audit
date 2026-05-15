@@ -9,15 +9,18 @@ of source.
 The wrapper additionally XML-escapes the content (``&``, ``<``, ``>``) so
 a chunk text containing literal ``<evidence>`` substrings cannot break
 the envelope shape the LLM parses.
-
-RED-phase scaffold: every public function below raises
-:class:`NotImplementedError` so the test suite goes red on contract
-assertions, not on import failure.
 """
 
 from __future__ import annotations
 
-from bba.prompt_builder.models import EvidenceChunk
+import unicodedata
+from xml.sax.saxutils import escape
+
+from bba.prompt_builder.models import (
+    EVIDENCE_TAG_CLOSE,
+    EVIDENCE_TAG_OPEN_TEMPLATE,
+    EvidenceChunk,
+)
 
 
 def wrap_evidence(chunk: EvidenceChunk) -> str:
@@ -25,18 +28,18 @@ def wrap_evidence(chunk: EvidenceChunk) -> str:
 
     Output shape: ``<evidence id="{evidence_id}" untrusted="true">{escaped_text}</evidence>``.
     The text is NFC-normalized and XML-escaped (``&`` -> ``&amp;``,
-    ``<`` -> ``&lt;``, ``>`` -> ``&gt;``). The ``evidence_id`` is NOT
-    escaped — Pydantic's pattern validator already constrains it to
-    ``E\\d+``.
+    ``<`` -> ``&lt;``, ``>`` -> ``&gt;``).
     """
-    raise NotImplementedError("RED-phase scaffold; see issue #21")
+    nfc_text = unicodedata.normalize("NFC", chunk.text)
+    escaped = escape(nfc_text)
+    return (
+        f"{EVIDENCE_TAG_OPEN_TEMPLATE.format(evidence_id=chunk.evidence_id)}"
+        f"{escaped}{EVIDENCE_TAG_CLOSE}"
+    )
 
 
 def wrap_evidence_chunks(chunks: tuple[EvidenceChunk, ...]) -> str:
-    """Wrap every chunk and join with a single newline.
-
-    A trailing newline is NOT appended — the join is between-only so the
-    canonical bytes are byte-stable for hashing. Empty input yields the
-    empty string.
-    """
-    raise NotImplementedError("RED-phase scaffold; see issue #21")
+    """Wrap every chunk and join with a single newline (no trailing newline)."""
+    if not chunks:
+        return ""
+    return "\n".join(wrap_evidence(c) for c in chunks)
