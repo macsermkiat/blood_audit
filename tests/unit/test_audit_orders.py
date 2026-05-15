@@ -209,10 +209,21 @@ class TestCancelledExclusion:
     def test_empty_string_canceldate_is_NOT_cancelled(
         self, config: AuditOrdersConfig
     ) -> None:
-        # PRD §1 strict-loud: an empty string is a missing value, not a
-        # cancellation. The filter must not treat ``""`` as a cancel date —
-        # silent string-truthiness would over-exclude.
-        result = build_audit_orders([_input(canceldate=None)], config)
+        # PRD §1 strict-loud: an empty string in a CSV column is the
+        # missing-value sentinel, not a cancellation. The filter must
+        # NOT treat ``""`` as a cancel date — silent string-truthiness
+        # would over-exclude. (Codex review feedback: the prior
+        # assertion passed ``None`` instead of ``""``, so the empty
+        # branch could regress silently.)
+        result = build_audit_orders([_input(canceldate="")], config)
+        assert all(r.reason != "cancelled" for r in result.excluded)
+
+    def test_whitespace_only_canceldate_is_NOT_cancelled(
+        self, config: AuditOrdersConfig
+    ) -> None:
+        # Same rule as empty string: whitespace-only is the missing-value
+        # convention, not a real cancellation timestamp.
+        result = build_audit_orders([_input(canceldate="   ")], config)
         assert all(r.reason != "cancelled" for r in result.excluded)
 
 
@@ -491,6 +502,39 @@ class TestAnchorUnrecoverable:
         with pytest.raises(UnrecoverableAnchorError):
             build_audit_orders([record], config)
 
+    def test_partial_fallback_bdvst_date_missing_raises(
+        self, config: AuditOrdersConfig
+    ) -> None:
+        # Codex review feedback (NEEDS-CHANGES): a partial fallback pair
+        # (date xor time) is just as unrecoverable as a fully missing
+        # pair — there is no synthetic value the pipeline could invent
+        # without violating the strict-loud parser contract. The REQ
+        # pair is also nulled out so the resolver is forced onto the
+        # fallback path.
+        record = _input(
+            req_date=None,
+            req_time=None,
+            bdvst_date=None,  # date missing
+            bdvst_time=ParsedTimeOfDay(hour=10, minute=0, second=0),
+        )
+        with pytest.raises(UnrecoverableAnchorError):
+            build_audit_orders([record], config)
+
+    def test_partial_fallback_bdvst_time_missing_raises(
+        self, config: AuditOrdersConfig
+    ) -> None:
+        # Mirror of the date-missing test: a fallback pair whose time
+        # the strict parser refused (returned None) cannot be promoted
+        # to the anchor.
+        record = _input(
+            req_date=None,
+            req_time=None,
+            bdvst_date=date(2026, 5, 1),
+            bdvst_time=None,  # time unparseable upstream
+        )
+        with pytest.raises(UnrecoverableAnchorError):
+            build_audit_orders([record], config)
+
 
 # =============================================================================
 # AC: Output schema matches PRD §"Output schema" identity + anchor fields
@@ -536,10 +580,16 @@ class TestOutputSchemaIdentityAndAnchor:
         assert dt.utcoffset().total_seconds() == 0
 
     def test_audit_order_is_frozen(self, config: AuditOrdersConfig) -> None:
+        # Pydantic v2 ConfigDict(frozen=True) raises ValidationError on
+        # post-construction mutation. Catching only the specific exception
+        # type ensures this test fails-capable: a no-op setter (or a
+        # different exception caused by an unrelated bug) would no longer
+        # satisfy it.
+        from pydantic import ValidationError
+
         result = build_audit_orders([_input()], config)
         order = result.included[0]
-        # pydantic frozen models raise on attribute assignment after construction
-        with pytest.raises((TypeError, ValueError, Exception)):
+        with pytest.raises(ValidationError):
             order.audit_id = "tampered"  # type: ignore[misc]
 
 
@@ -704,6 +754,135 @@ class TestPropertyPartitionAndIdentity:
         # Same input → same output across calls.
         assert build_audit_id(hn, reqno) == build_audit_id(hn, reqno)
 
+    @given(
+        records_spec=st.lists(
+            st.fixed_dictionaries(
+                {
+                    # bdvstst sampled to cover both eligible {4, 5} and
+                    # ineligible status codes — exercises the status gate.
+                    "bdvstst": st.sampled_from(["1", "3", "4", "5", "6", "7"]),
+                    # reqtype covers in-house P + inter-hospital H + an
+                    # invalid sentinel to confirm the gate generalizes.
+                    "reqtype": st.sampled_from(["P", "H", "X"]),
+                    # Products mix RBC and non-RBC families.
+                    "product": st.sampled_from(
+                        ["LPRC", "LDPRC", "SDR", "FFP", "PLT", "CRYO"]
+                    ),
+                    # canceldate: None, empty (missing), or real timestamp.
+                    "canceldate": st.sampled_from([None, "", "20260501"]),
+                    # an: None and empty both mean OPD.
+                    "an": st.sampled_from([None, "", "AN-001"]),
+                    # diagnosis covers a mix of clean + exclusion codes.
+                    "diag": st.sampled_from(
+                        [
+                            "I50.9",  # clean
+                            "D55.0",  # hemoglobinopathy
+                            "D59.3",  # AIHA
+                            "M31.1",  # TMA
+                            "O09.9",  # obstetric
+                            "D550",  # malformed near-miss (must NOT match D55)
+                        ]
+                    ),
+                    # age sampled across pediatric/adult boundary.
+                    "birth_year": st.integers(min_value=1950, max_value=2015),
+                }
+            ),
+            min_size=0,
+            max_size=20,
+        )
+    )
+    @settings(max_examples=30, suppress_health_check=[HealthCheck.too_slow])
+    def test_partition_invariant_holds_on_generated_records(
+        self, records_spec: list[dict[str, object]]
+    ) -> None:
+        """For any combination of input dimensions, every record lands
+        in exactly one bucket (included xor excluded) and the union
+        covers the input set.
+
+        Codex review (NEEDS-CHANGES): the prior property tests only
+        exercised ``build_audit_id`` and never the pipeline's partition
+        behavior. This test generates real ``BloodOrderInput`` records
+        and asserts the foundational partition invariant across the
+        full rule matrix.
+        """
+        config = AuditOrdersConfig(code_version="prop-test")
+        inputs = [
+            _input(
+                reqno=f"REQ-{i:04d}",
+                bdvstst=str(spec["bdvstst"]),
+                reqtype=str(spec["reqtype"]),
+                products=(str(spec["product"]),),
+                canceldate=spec["canceldate"],  # type: ignore[arg-type]
+                an=spec["an"],  # type: ignore[arg-type]
+                diagnosis_codes=(str(spec["diag"]),),
+                birthdate=date(int(spec["birth_year"]), 6, 1),  # type: ignore[arg-type]
+            )
+            for i, spec in enumerate(records_spec)
+        ]
+        result = build_audit_orders(inputs, config)
+        in_reqnos = [o.reqno for o in result.included]
+        ex_reqnos = [e.reqno for e in result.excluded]
+        # Disjoint
+        assert set(in_reqnos).isdisjoint(set(ex_reqnos)), (
+            f"record landed in both buckets: "
+            f"{set(in_reqnos) & set(ex_reqnos)}"
+        )
+        # Total: input count == included + excluded
+        assert len(in_reqnos) + len(ex_reqnos) == len(inputs), (
+            f"partition lost {len(inputs) - len(in_reqnos) - len(ex_reqnos)} "
+            f"records or double-counted"
+        )
+        # Coverage: every input reqno appears somewhere
+        all_input_reqnos = {r.reqno for r in inputs}
+        assert set(in_reqnos) | set(ex_reqnos) == all_input_reqnos, (
+            "partition missed some input reqnos"
+        )
+
+    @given(
+        records_spec=st.lists(
+            st.fixed_dictionaries(
+                {
+                    "bdvstst": st.sampled_from(["4", "5"]),
+                    "product": st.sampled_from(["LPRC", "LDPRC", "SDR"]),
+                    "diag": st.sampled_from(["I50.9", "K92.2"]),  # clean dx
+                }
+            ),
+            min_size=1,
+            max_size=8,
+            unique_by=lambda d: tuple(sorted(d.items())),
+        )
+    )
+    @settings(max_examples=20, suppress_health_check=[HealthCheck.too_slow])
+    def test_audit_ids_unique_within_included_set(
+        self, records_spec: list[dict[str, object]]
+    ) -> None:
+        """audit_id uniqueness in the included set follows from the
+        (hn, reqno) uniqueness contract of the canonical table (one
+        row per (HN, REQNO)).
+
+        Codex review: prior property tests asserted build_audit_id
+        determinism in isolation; this asserts the property *through
+        the pipeline* — i.e., that the pipeline never silently emits
+        two AuditOrders sharing an audit_id, which would corrupt
+        downstream idempotency.
+        """
+        config = AuditOrdersConfig(code_version="prop-test")
+        inputs = [
+            _input(
+                hn=f"HN-{i:04d}",
+                reqno=f"REQ-{i:04d}",
+                bdvstst=str(spec["bdvstst"]),
+                products=(str(spec["product"]),),
+                diagnosis_codes=(str(spec["diag"]),),
+            )
+            for i, spec in enumerate(records_spec)
+        ]
+        result = build_audit_orders(inputs, config)
+        ids = [o.audit_id for o in result.included]
+        assert len(ids) == len(set(ids)), (
+            "pipeline emitted duplicate audit_id for distinct (hn, reqno) pairs"
+        )
+
 
 # =============================================================================
 # Adversarial fixtures — Round-1/Round-2 review concerns
@@ -728,24 +907,22 @@ class TestAdversarialIcdMatching:
     def test_d550_without_dot_is_NOT_d55(
         self, config: AuditOrdersConfig
     ) -> None:
-        # ``"D550"`` is malformed ICD-10 — there is no D550 chapter. The
-        # prefix matcher must not treat "D55" as a substring; it is a
-        # 3-char ICD chapter code that should be followed by ``.`` or end.
-        # If this test fails, the matcher is overbroad and could exclude
-        # unrelated future codes.
+        # ICD-10 chapters are 3-char ``<letter><digit><digit>``, optionally
+        # followed by a dot and a subcategory. ``"D550"`` has four chars
+        # without a dot — it is NOT a D55 subcategory, just a malformed
+        # near-miss. A raw ``startswith("D55")`` would silently broaden
+        # the hard-exclusion to D550 and any future D55x code; the
+        # matcher must enforce the dot-or-end boundary.
+        #
+        # Codex review feedback (NEEDS-CHANGES): the prior assertion
+        # allowed either outcome and so was not failing-capable. This
+        # is the strict form.
         result = build_audit_orders(
             [_input(diagnosis_codes=("D550",))], config
         )
-        # Either it's correctly NOT excluded (clean prefix logic), or it
-        # is excluded as hemoglobinopathy (matching legacy HOSxP exports
-        # that drop the dot). We accept either *but* the rule MUST be
-        # explicit about which: lowercase "d55", numerics-only "550",
-        # or punctuation must NOT match.
-        for r in result.excluded:
-            assert r.reason in {"hemoglobinopathy"}, (
-                "D550 should only match hemoglobinopathy if the rule explicitly "
-                "accepts dotless ICD-10; never any other reason"
-            )
+        assert all(
+            r.reason != "hemoglobinopathy" for r in result.excluded
+        ), "D550 must NOT match the D55 chapter without a dot boundary"
 
     def test_lowercase_d55_does_not_match(
         self, config: AuditOrdersConfig

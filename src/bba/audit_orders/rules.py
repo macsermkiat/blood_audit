@@ -108,11 +108,16 @@ def check_status(record: BloodOrderInput) -> ExcludedRecord | None:
 
 
 def check_cancelled(record: BloodOrderInput) -> ExcludedRecord | None:
-    """Reject records with a non-null ``canceldate``.
+    """Reject records with a non-null, non-empty ``canceldate``.
 
     Per the issue: ``cancelled (CANCELDATE not null)`` is hard-excluded.
+
+    A whitespace-only or empty string is treated as the CSV missing-value
+    sentinel (consistent with PRD §1's strict-loud convention) — an empty
+    cell in HOSxP exports means "not cancelled", not "cancelled with no
+    date". Only a non-empty value triggers the exclusion.
     """
-    if record.canceldate is None:
+    if record.canceldate is None or record.canceldate.strip() == "":
         return None
     return ExcludedRecord(
         hn=record.hn,
@@ -194,20 +199,55 @@ def check_age(record: BloodOrderInput, anchor_date: date) -> ExcludedRecord | No
     return None
 
 
+def _code_matches_prefix(code: str, prefix: str) -> bool:
+    """True iff ``code`` belongs to the ICD-10 chapter denoted by ``prefix``.
+
+    ICD-10 codes follow ``<letter><digit><digit>[.subcategory]`` (e.g.,
+    ``D55``, ``D55.0``). A "chapter prefix" can be one of:
+
+    * single letter (e.g., ``"O"``) — matches any code starting with that
+      letter followed by a digit (the 3-char category form);
+    * 3-char category code (e.g., ``"D55"``) — matches the bare code or
+      the code followed by ``"."`` and a subcategory;
+    * subcategory code (e.g., ``"M31.1"``) — matches the bare code or
+      the code followed by ``"."`` and further subdivisions.
+
+    The boundary check rejects malformed near-misses like ``"D550"``
+    (which is NOT ``D55`` + dot — it's a different chapter), per the
+    Codex review of issue #4. A raw ``startswith`` would collapse the
+    boundary and silently broaden the hard-exclusion set.
+    """
+    if not code.startswith(prefix):
+        return False
+    if len(code) == len(prefix):
+        return True
+    next_char = code[len(prefix)]
+    if next_char == ".":
+        return True
+    # Single-letter chapter prefixes (e.g., "O") can be continued by a
+    # digit to form the 3-char category (O00, O80, etc.). Multi-char
+    # prefixes do not get the digit-continuation pass — that's what
+    # disambiguates "D550" from a real D55 subcategory.
+    if len(prefix) == 1 and next_char.isdigit():
+        return True
+    return False
+
+
 def _first_matching_code(
     codes: tuple[str, ...], prefixes: frozenset[str]
 ) -> str | None:
-    """Return the first ICD-10 code in ``codes`` that starts with any of
-    ``prefixes``, or ``None`` if no match.
+    """Return the first ICD-10 code in ``codes`` that matches any of
+    ``prefixes`` under the boundary rules of :func:`_code_matches_prefix`,
+    or ``None`` if no match.
 
-    Case-sensitive ``str.startswith``: ICD-10 is uppercase by convention,
-    and tolerating lowercase would also tolerate other formatting drift
-    (e.g., trailing whitespace, half-width digits) that we have not
-    explicitly opted in to.
+    Case-sensitive: ICD-10 is uppercase by convention, and tolerating
+    lowercase would also tolerate other formatting drift (e.g., trailing
+    whitespace, half-width digits) that we have not explicitly opted
+    in to.
     """
     for code in codes:
         for prefix in prefixes:
-            if code.startswith(prefix):
+            if _code_matches_prefix(code, prefix):
                 return code
     return None
 
