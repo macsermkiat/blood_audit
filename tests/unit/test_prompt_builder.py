@@ -966,6 +966,17 @@ class TestModelsValidation:
         c = EvidenceChunk(evidence_id="E42", source="MED", text="furosemide")
         assert c.evidence_id == "E42"
 
+    def test_evidence_chunk_rejects_blank_text(self) -> None:
+        # Regression for codex review #21 round 4 P2: a chunk with
+        # empty / whitespace-only text wraps to an empty <evidence/>
+        # envelope; the LLM has nothing to cite and quote_grounder has
+        # nothing to ground against. Reject at the model boundary so
+        # the all-blank payload cannot slip past EMPTY_EVIDENCE routing.
+        with pytest.raises(ValidationError):
+            EvidenceChunk(evidence_id="E1", source="MED", text="")
+        with pytest.raises(ValidationError):
+            EvidenceChunk(evidence_id="E1", source="MED", text="   \n\t  ")
+
     def test_few_shot_example_rejects_empty_fields(self) -> None:
         with pytest.raises(ValidationError):
             FewShotExample(name="", user_payload="x", assistant_output="y")

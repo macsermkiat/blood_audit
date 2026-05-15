@@ -30,6 +30,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    field_validator,
     model_validator,
 )
 
@@ -190,6 +191,24 @@ class EvidenceChunk(BaseModel):
     evidence_id: str = Field(min_length=1, pattern=r"^E\d+$")
     source: str = Field(min_length=1)
     text: str
+
+    @field_validator("text")
+    @classmethod
+    def _text_must_be_non_blank(cls, v: str) -> str:
+        # A whitespace-only chunk renders to ``<evidence id="..."
+        # untrusted="true"></evidence>`` after wrapping — there is
+        # nothing for the LLM to cite and nothing for
+        # :mod:`bba.quote_grounder` to ground against. If upstream has
+        # no real content for a slot, omit the chunk entirely; the
+        # builder routes zero-chunks to ``EMPTY_EVIDENCE`` /
+        # NEEDS_REVIEW. Codex review #21 round 4 P2.
+        if not v.strip():
+            raise ValueError(
+                "EvidenceChunk.text must contain non-whitespace content "
+                "(omit the chunk if upstream has no content for this slot; "
+                "the builder routes zero-chunks to NEEDS_REVIEW)"
+            )
+        return v
 
 
 class FewShotExample(BaseModel):
