@@ -5,12 +5,11 @@ committee-approved exemplars. It is the LAST cacheable block (Anthropic
 prompt-cache marker boundary), so its byte stability across audit rows
 is required for cache-hit rate (PRD §"Stack" — Anthropic Batch API +
 prompt caching).
-
-RED-phase scaffold: :func:`build_few_shot_block` raises
-:class:`NotImplementedError`.
 """
 
 from __future__ import annotations
+
+import unicodedata
 
 from bba.prompt_builder.models import FewShotExample
 
@@ -18,16 +17,19 @@ from bba.prompt_builder.models import FewShotExample
 def build_few_shot_block(examples: tuple[FewShotExample, ...]) -> str:
     """Concatenate ``examples`` into a single cacheable user-role text block.
 
-    Output contract:
-
-    * NFC-normalized.
-    * Empty ``examples`` yields the empty string (the caller's
-      :func:`build_prompt` then omits the few-shot block entirely).
-    * Stable ordering: input order is preserved (the clinical committee
-      ranks examples, and reordering would change the LLM's
-      prioritization signal).
-    * No trailing newline; between-example separator is exactly
-      ``"\\n\\n"`` so the byte boundary is unambiguous when the block
-      lands inside the cache boundary.
+    Output contract: NFC-normalized; empty input -> empty string; input
+    order preserved; between-example separator is ``"\\n\\n"``; no
+    trailing newline.
     """
-    raise NotImplementedError("RED-phase scaffold; see issue #21")
+    if not examples:
+        return ""
+    rendered_examples: list[str] = []
+    for ex in examples:
+        rendered = (
+            f"Example: {ex.name}\n"
+            f"<input>\n{ex.user_payload}\n</input>\n"
+            f"<assistant_output>\n{ex.assistant_output}\n</assistant_output>"
+        )
+        rendered_examples.append(rendered)
+    block = "\n\n".join(rendered_examples)
+    return unicodedata.normalize("NFC", block)
