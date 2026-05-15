@@ -680,6 +680,81 @@ class TestFocusEmissionOrderInBundle:
         assert offsets == [-1.0, -2.0, -3.0, -4.0, -5.0, 1.0, 2.0, 3.0, 4.0, 5.0]
 
 
+class TestTimestampTieDeterminism:
+    """When records share an exact timestamp, the kept-set + emission order
+    + bundle hash must be a function of CONTENT, not input position.
+
+    Python's stable sort means a key that ties on timestamp leaves input
+    order untouched — operationally invisible most of the time, but lethal
+    for the AC ('input reorderings produce same hash') because chart
+    exports do produce minute-resolution timestamps that collide. The fix
+    is a TOTAL sort key with a content-derived tiebreak (text / drug /
+    vital values), tested below for each affected source."""
+
+    def test_focus_notes_at_same_timestamp_hash_invariant_under_reorder(self) -> None:
+        # Two pre-anchor focus notes charted at the same minute (-1h),
+        # plus two post-anchor at the same minute (+2h).
+        notes_a = (
+            _focus(offset_hours=-1, text="alpha"),
+            _focus(offset_hours=-1, text="bravo"),
+            _focus(offset_hours=2, text="charlie"),
+            _focus(offset_hours=2, text="delta"),
+        )
+        notes_b = tuple(reversed(notes_a))
+        bundle_a = _build_minimal(focus_notes=notes_a)
+        bundle_b = _build_minimal(focus_notes=notes_b)
+        assert bundle_a.bundle_hash == bundle_b.bundle_hash
+        # And the emission order is content-derived: alphabetical text
+        # tiebreak under reverse=True for the before side, ascending for the
+        # after side. Both sides start with text-DESC under the helper's
+        # ``reverse=True`` (timestamp DESC implies text DESC too).
+        focus_ids = [it.id for it in _items_by_source(bundle_a, "IPDNRFOCUSDT")]
+        focus_payloads = [
+            it.payload["text"]
+            for it in _items_by_source(bundle_a, "IPDNRFOCUSDT")
+        ]
+        assert len(focus_ids) == 4
+        # Before side: timestamp DESC, then text DESC under the same reverse.
+        # Both at -1h, so text-DESC: "bravo" then "alpha".
+        # After side: timestamp ASC, then text ASC.
+        # Both at +2h, so text-ASC: "charlie" then "delta".
+        assert focus_payloads == ["bravo", "alpha", "charlie", "delta"]
+
+    def test_progress_notes_at_same_timestamp_kept_set_invariant_under_reorder(self) -> None:
+        # 9 progress notes — 8 distinct + 2 sharing offset -1h with different
+        # text. Cap is 8; one of the -1h pair must drop deterministically.
+        notes_a = (
+            _progress(offset_hours=-1, text="alpha"),
+            _progress(offset_hours=-1, text="bravo"),
+            _progress(offset_hours=-2),
+            _progress(offset_hours=-3),
+            _progress(offset_hours=-4),
+            _progress(offset_hours=-5),
+            _progress(offset_hours=-6),
+            _progress(offset_hours=-7),
+            _progress(offset_hours=-8),
+        )
+        notes_b = tuple(reversed(notes_a))
+        bundle_a = _build_minimal(progress_notes=notes_a)
+        bundle_b = _build_minimal(progress_notes=notes_b)
+        assert bundle_a.bundle_hash == bundle_b.bundle_hash
+
+    def test_vitals_at_same_timestamp_and_source_hash_invariant(self) -> None:
+        # Two vitals snapshots from the same source at the same moment with
+        # different SBP. Operationally rare but possible if upstream pushes
+        # duplicate-timestamp rows; without the tiebreak, input order would
+        # leak through.
+        v1 = VitalsRecord(
+            timestamp=ANCHOR_DT, source="IPDADMPROGRESS", sbp=110, hr=80
+        )
+        v2 = VitalsRecord(
+            timestamp=ANCHOR_DT, source="IPDADMPROGRESS", sbp=120, hr=88
+        )
+        a = _build_minimal(vitals=(v1, v2))
+        b = _build_minimal(vitals=(v2, v1))
+        assert a.bundle_hash == b.bundle_hash
+
+
 class TestImpossibleCharCapRaises:
     """Cap enforcement fails loud when even the anchor envelope exceeds cap.
 

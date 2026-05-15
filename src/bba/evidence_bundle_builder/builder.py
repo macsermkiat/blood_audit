@@ -134,12 +134,17 @@ def _cap_progress_closest(
 ) -> tuple[ProgressNote, ...]:
     """Keep the :data:`CAP_PROGRESS` notes closest to ``anchor`` (by abs offset).
 
-    Tiebreak by ``timestamp`` ascending so two equidistant notes (e.g., -1h and
-    +1h) drop in deterministic order — without this, the kept-set could vary
-    across runs whenever the input has a tie at the cap boundary."""
+    Sort key is TOTAL — ``(abs_offset, timestamp, text)``:
+
+    * ``abs_offset`` is the primary signal (closeness to the order anchor).
+    * ``timestamp`` disambiguates -Nh vs +Nh at the same absolute offset.
+    * ``text`` is the final tiebreak so two notes charted at the same minute
+      with different content drop in a deterministic order. Without the text
+      tiebreak, Python's stable-sort would let input order leak through and
+      change the cap-set selection across re-runs of the same data."""
     ranked = sorted(
         notes,
-        key=lambda n: (abs((n.timestamp - anchor).total_seconds()), n.timestamp),
+        key=lambda n: (abs((n.timestamp - anchor).total_seconds()), n.timestamp, n.text),
     )
     return tuple(ranked[:CAP_PROGRESS])
 
@@ -196,6 +201,25 @@ def _vitals_payload(v: VitalsRecord) -> dict[str, Any]:
 
 def _to_utc(ts: datetime) -> datetime:
     return ts.astimezone(UTC)
+
+
+def _vitals_sort_key(v: VitalsRecord) -> tuple[datetime, str, str, str, str, str, str]:
+    """Total sort key over every :class:`VitalsRecord` field.
+
+    Two snapshots from the same source at the exact same moment with
+    different vital values would otherwise tie on ``(timestamp, source)``
+    and let input order leak into the bundle. Using ``str(...)`` for the
+    optional numeric fields sidesteps the ``None``-vs-``int`` comparison
+    error that a raw ``(x.sbp, ...)`` tuple would raise."""
+    return (
+        v.timestamp,
+        v.source,
+        str(v.sbp),
+        str(v.dbp),
+        str(v.hr),
+        str(v.rr),
+        str(v.bt),
+    )
 
 
 # =============================================================================
@@ -391,7 +415,7 @@ def _assign_ids(
             )
         )
 
-    for v in sorted(vitals, key=lambda x: (x.timestamp, x.source)):
+    for v in sorted(vitals, key=_vitals_sort_key):
         items.append(
             EvidenceItem(
                 id=_next_id(),

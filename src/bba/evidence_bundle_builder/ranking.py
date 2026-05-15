@@ -118,14 +118,21 @@ def split_focus_notes_5_5(
 
     No padding when fewer notes are available; when only 3 ``before`` exist,
     3 are returned (the cap is a ceiling, not a target)."""
+    # Sort key includes ``n.text`` so the order is TOTAL — without the
+    # tiebreak, two focus notes charted at the same minute would retain
+    # caller order (Python's stable sort), leaking input shuffle into the
+    # bundle and breaking the reorder-invariance AC. The tiebreak is on the
+    # whole text (the only model field besides timestamp) so any two
+    # genuinely-distinct rows have a deterministic order; two byte-identical
+    # rows are operationally a duplicate and order does not matter for hash.
     before = sorted(
         (n for n in notes if n.timestamp <= anchor),
-        key=lambda n: n.timestamp,
+        key=lambda n: (n.timestamp, n.text),
         reverse=True,
     )[:cap_before]
     after = sorted(
         (n for n in notes if n.timestamp > anchor),
-        key=lambda n: n.timestamp,
+        key=lambda n: (n.timestamp, n.text),
     )[:cap_after]
     return tuple(before) + tuple(after)
 
