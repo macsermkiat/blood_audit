@@ -3,44 +3,116 @@
 Composes the per-step transforms into one pure function:
 
 1. Run :func:`bba.prompt_builder.injection.scan_chunks` over every
-   evidence chunk. Collect the verdict.
-2. Build the system prompt for ``request.task_mode`` /
-   ``request.cohort_threshold`` (:func:`system_prompt_for`).
+   evidence chunk.
+2. Build the system prompt (:func:`system_prompt_for`).
 3. Build the few-shot block (:func:`build_few_shot_block`).
 4. Wrap each evidence chunk in ``<evidence>`` envelopes
    (:func:`wrap_evidence_chunks`).
-5. Assemble the prompt blocks:
-   * system block, cache_marker = ``True`` iff no few-shot block follows
-   * few-shot block (if any), cache_marker = ``True``
-   * user payload block, cache_marker = ``False``
-6. Compute the canonical envelope hash via
-   :func:`bba.prompt_builder.canonical.compute_prompt_hash`.
-7. Decide routing:
-   * injection match -> ``INJECTION_DETECTED``
-   * empty evidence -> ``EMPTY_EVIDENCE``
-   * route_to_needs_review = ``bool(reasons)``
+5. Assemble prompt blocks with cache markers (system end + few-shot end).
+6. Compute the canonical envelope hash.
+7. Decide routing: injection match -> ``INJECTION_DETECTED``; empty
+   evidence -> ``EMPTY_EVIDENCE``; ``route_to_needs_review`` =
+   ``bool(reasons)``.
 8. Return the frozen :class:`PromptBuildResult`.
 
-The function NEVER raises on a routing decision (injection / empty
-evidence): those route via the result. It DOES raise on contract
-violations — :class:`UnknownTaskModeError` if the system-prompt
-selector receives an unknown mode, :class:`UnsupportedCohortThresholdError`
-if the cohort threshold is out of range. Both should be caught by the
-:class:`PromptBuildRequest` validator before reaching the orchestrator;
-they are defense-in-depth raises for internal callers.
-
-RED-phase scaffold: :func:`build_prompt` raises
-:class:`NotImplementedError`.
+The function NEVER raises on a routing decision: those route via the
+result. The audit pipeline (#24) branches on
+:attr:`PromptBuildResult.route_to_needs_review`.
 """
 
 from __future__ import annotations
 
+from bba.prompt_builder.canonical import build_envelope, compute_prompt_hash
+from bba.prompt_builder.envelope import wrap_evidence_chunks
+from bba.prompt_builder.few_shot import build_few_shot_block
+from bba.prompt_builder.injection import scan_chunks
 from bba.prompt_builder.models import (
+    InjectionVerdict,
+    NeedsReviewReason,
+    PromptBlock,
     PromptBuildRequest,
     PromptBuildResult,
 )
+from bba.prompt_builder.system_prompt import system_prompt_for
+
+
+_EMPTY_USER_PAYLOAD: str = "<no_evidence/>"
+"""Placeholder for the trailing user block when evidence is empty.
+
+A :class:`PromptBlock` requires ``text`` of length >= 1, and the
+:class:`PromptBuildResult` envelope is part of the prompt hash. Using a
+fixed sentinel keeps the hash deterministic for the empty-evidence
+case (which always routes to NEEDS_REVIEW anyway, so the LLM never
+sees this payload).
+"""
 
 
 def build_prompt(request: PromptBuildRequest) -> PromptBuildResult:
     """Assemble the system + few-shot + user-payload prompt for ``request``."""
-    raise NotImplementedError("RED-phase scaffold; see issue #21")
+    injection_matches = scan_chunks(request.evidence_chunks)
+
+    system_text = system_prompt_for(
+        task_mode=request.task_mode,
+        cohort_threshold=request.cohort_threshold,
+    )
+    few_shot_text = build_few_shot_block(request.few_shot_examples)
+    user_payload = wrap_evidence_chunks(request.evidence_chunks)
+
+    # Both system end and few-shot end are cache breakpoints — Anthropic's
+    # prompt-cache contract supports up to 4 breakpoints; we use 2 when
+    # few-shot is present so partial-prefix cache hits work (system
+    # alone OR system + few-shot). The trailing user-payload block is
+    # never cacheable: it changes per audit row.
+    has_few_shot = bool(few_shot_text)
+    blocks: list[PromptBlock] = [
+        PromptBlock(role="system", text=system_text, cache_marker=True)
+    ]
+    if has_few_shot:
+        blocks.append(
+            PromptBlock(role="user", text=few_shot_text, cache_marker=True)
+        )
+    blocks.append(
+        PromptBlock(
+            role="user",
+            text=user_payload or _EMPTY_USER_PAYLOAD,
+            cache_marker=False,
+        )
+    )
+
+    reasons: list[NeedsReviewReason] = []
+    if injection_matches.flagged:
+        reasons.append(NeedsReviewReason.INJECTION_DETECTED)
+    if not request.evidence_chunks:
+        reasons.append(NeedsReviewReason.EMPTY_EVIDENCE)
+    route = bool(reasons)
+
+    envelope = build_envelope(
+        blocks=[
+            {"role": b.role, "text": b.text, "cache_marker": b.cache_marker}
+            for b in blocks
+        ],
+        task_mode=request.task_mode,
+        cohort_threshold=request.cohort_threshold,
+        injection_match_categories=[
+            m.category.value for m in injection_matches.matches
+        ],
+        injection_match_pattern_ids=[
+            m.pattern_id for m in injection_matches.matches
+        ],
+        route_to_needs_review=route,
+        needs_review_reasons=[r.value for r in reasons],
+    )
+    prompt_hash = compute_prompt_hash(envelope)
+
+    return PromptBuildResult(
+        blocks=tuple(blocks),
+        task_mode=request.task_mode,
+        cohort_threshold=request.cohort_threshold,
+        injection_verdict=InjectionVerdict(
+            flagged=injection_matches.flagged,
+            matches=injection_matches.matches,
+        ),
+        route_to_needs_review=route,
+        needs_review_reasons=tuple(reasons),
+        prompt_hash=prompt_hash,
+    )
