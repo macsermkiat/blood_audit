@@ -388,7 +388,17 @@ def _assign_ids(
         counter += 1
         return f"E{counter}"
 
-    for d in sorted(diagnoses, key=lambda x: (x.icd10, x.description or "")):
+    # Sort key is TOTAL — ``description is not None`` (a bool, sortable) is
+    # part of the key so a record with ``description=None`` and one with
+    # ``description=""`` order deterministically. Without that bit, both
+    # collapse to the same ``(icd10, "")`` key and Python's stable sort
+    # would let input order leak through, breaking the hash AC despite the
+    # records producing different payloads (None omits the field; "" emits
+    # ``"description": ""``).
+    for d in sorted(
+        diagnoses,
+        key=lambda x: (x.icd10, x.description is not None, x.description or ""),
+    ):
         items.append(
             EvidenceItem(
                 id=_next_id(),
@@ -399,12 +409,20 @@ def _assign_ids(
         )
 
     for p in sorted(progress, key=lambda n: (n.timestamp, n.text)):
+        payload = _progress_payload(p.text)
+        # Skip blank notes (text="") and header-only notes (e.g. "S:\nO:"
+        # with no content) at construction. Without this, an empty E_N
+        # citation ships under the normal-cap path because
+        # _enforce_char_cap returns early when the bundle already fits —
+        # the round-5 truncation-path fix only catches the over-cap path.
+        if not payload.get("sections"):
+            continue
         items.append(
             EvidenceItem(
                 id=_next_id(),
                 source="IPDADMPROGRESS",
                 timestamp_utc=_to_utc(p.timestamp),
-                payload=_progress_payload(p.text),
+                payload=payload,
             )
         )
 

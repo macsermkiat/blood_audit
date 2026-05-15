@@ -783,6 +783,22 @@ class TestTimestampTieDeterminism:
         bundle_b = _build_minimal(progress_notes=notes_b)
         assert bundle_a.bundle_hash == bundle_b.bundle_hash
 
+    def test_diagnosis_none_vs_empty_description_hash_invariant(self) -> None:
+        # Same ICD-10, one record with description=None, one with "".
+        # Their PAYLOADS differ (None omits the field; "" emits
+        # "description": ""), but the sort key must order them
+        # deterministically so reversed input yields the same E1/E2
+        # assignment and the same bundle hash.
+        d_none = DiagnosisRecord(icd10="D50.9", description=None)
+        d_empty = DiagnosisRecord(icd10="D50.9", description="")
+        a = build_evidence_bundle(
+            inputs=EvidenceInputs(anchor=_anchor(), diagnoses=(d_none, d_empty))
+        )
+        b = build_evidence_bundle(
+            inputs=EvidenceInputs(anchor=_anchor(), diagnoses=(d_empty, d_none))
+        )
+        assert a.bundle_hash == b.bundle_hash
+
     def test_vitals_at_same_timestamp_and_source_hash_invariant(self) -> None:
         # Two vitals snapshots from the same source at the same moment with
         # different SBP. Operationally rare but possible if upstream pushes
@@ -893,6 +909,41 @@ class TestVitalsRecordRejectsNonFiniteBt:
     def test_finite_bt_still_constructs(self) -> None:
         v = VitalsRecord(timestamp=ANCHOR_DT, source="IPDADMPROGRESS", bt=37.0)
         assert v.bt == 37.0
+
+
+class TestEmptyProgressItemsNeverConstructed:
+    """Blank or header-only progress notes must NEVER produce an
+    EvidenceItem — not even under the normal-cap path. The round-5 fix
+    handled the truncation path; this class locks in that the construction
+    path also drops empty payloads, since `_enforce_char_cap` returns
+    early when the bundle fits and would never see them otherwise."""
+
+    def test_blank_progress_note_does_not_emit_item(self) -> None:
+        # Empty text → parse_soap_sections returns all-empty → payload
+        # has no sections → no EvidenceItem.
+        bundle = _build_minimal(progress_notes=(_progress(offset_hours=-1, text=""),))
+        assert _items_by_source(bundle, "IPDADMPROGRESS") == ()
+
+    def test_header_only_progress_note_does_not_emit_item(self) -> None:
+        # Headers with no content → all sections empty → no EvidenceItem.
+        bundle = _build_minimal(
+            progress_notes=(_progress(offset_hours=-1, text="S:\nO:\nA:\nP:"),)
+        )
+        assert _items_by_source(bundle, "IPDADMPROGRESS") == ()
+
+    def test_partially_blank_progress_note_emits_only_non_empty_sections(self) -> None:
+        # ASSESSMENT has content, others are blank — item ships with just
+        # the non-empty section; no dead headers in the payload.
+        bundle = _build_minimal(
+            progress_notes=(
+                _progress(offset_hours=-1, text="S:\nO:\nA: anemia\nP:"),
+            )
+        )
+        progress_items = _items_by_source(bundle, "IPDADMPROGRESS")
+        assert len(progress_items) == 1
+        sections = progress_items[0].payload["sections"]
+        labels = {s["label"] for s in sections}
+        assert labels == {"ASSESSMENT"}
 
 
 class TestEmptyProgressItemsPrunedAfterTruncation:

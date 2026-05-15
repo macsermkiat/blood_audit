@@ -52,10 +52,15 @@ interpretation; losing it would change what the LLM is auditing."""
 # P: PRBC"); the line-anchored variant misclassified those entirely as
 # SUBJECTIVE and let truncation drop ASSESSMENT first — exactly inverted from
 # the AC's priority order.
+# Note: the trailing ``\s*`` is INTENTIONALLY OMITTED. Including it would
+# greedy-consume the newline between consecutive header-only lines like
+# ``S:\nO:\n...``, leaving the next "O" without a whitespace boundary so the
+# regex would skip it and misclassify "O:" as content of SUBJECTIVE.
+# strip() on the per-section segment trims any leading whitespace anyway.
 _INLINE_HEADER_PATTERN = re.compile(
     r"(?:^|\s)\s*"
     r"(?P<header>S|Subjective|CC|HPI|O|Objective|A|Assessment|Impression|P|Plan)"
-    r"\s*:\s*",
+    r"\s*:",
     re.IGNORECASE,
 )
 
