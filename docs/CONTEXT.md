@@ -7,7 +7,8 @@ code) when a concept changes shape.
 
 Scope: Phase 1 of the KCMH RBC transfusion audit pipeline. PRD: [issue #1].
 Sections are added per ticket as each module merges to `main`. Currently
-covered: `#3 ingest`, `#5 hb_lookup`, `#6 vitals_extractor`, `#19 audit_store`.
+covered: `#3 ingest`, `#5 hb_lookup`, `#6 vitals_extractor`, `#18 quote_grounder`,
+`#19 audit_store`.
 
 ## Ingest concepts (#3)
 
@@ -202,6 +203,82 @@ Downstream consumers (#8 deterministic_classifier; #16
 evidence_bundle_builder) read these to gate rule branches and to prioritize
 human review.
 
+## Quote-grounder concepts (#18)
+
+### Citation
+
+The LLM-output unit the grounder verifies: a verbatim `quote` attributed
+to a source by `cited_id`, optionally carrying a structured `lab_tuple`.
+Lives in `bba.quote_grounder.models.Citation` (Pydantic frozen). The
+verifier consumes one citation at a time; the audit pipeline (#24) passes
+the LLM's `indications_json` list through `verify_citations` to get a
+parallel tuple of verdicts.
+
+### Evidence source
+
+One redacted source in the bundle: `(source_id, text)`. `source_id` is the
+opaque key the LLM is expected to echo back as a citation's `cited_id`;
+`text` is post-redaction (the `bba.deid_redactor`, #17, runs upstream).
+Bundle-wide `source_id` uniqueness is the upstream bundle builder's
+contract (#16); the grounder treats a duplicate `source_id` as the same
+failure mode as missing-cited_id.
+
+### Six grounding layers
+
+Applied in canonical order; the verifier short-circuits on the first
+failure and the failure's `VerdictReason` names the layer:
+
+1. **NFC normalization** — `nfc_normalize(text)` applies Unicode NFC on
+   both sides before any comparison. Defeats Thai NFC-vs-NFD adversarial
+   fixtures.
+2. **Word-boundary-anchored contiguous match** — the quote must occur as
+   a substring in the cited source AND start/end at a non-alphanumeric
+   character (or string boundary). Defeats concatenated-quote attacks and
+   1-character-shift attacks (deleting a boundary char yields a still-
+   contained substring pinned mid-word).
+3. **Strict cited_id match** — `find_cited_source(cited_id, sources)`
+   returns the unique source whose `source_id` equals `cited_id`, or
+   `None` if zero or ≥2 match. Defeats cross-source attribution.
+4. **Within-document uniqueness** — the quote occurs at exactly one
+   word-boundary-aligned position in the cited source. Defeats short-
+   common-phrase attacks ("no bleeding" appearing in unrelated context).
+5. **Minimum length** — NFC-length ≥ `MIN_QUOTE_LENGTH` (25). PRD §9.
+6. **Numeric-tuple grounding** — for lab citations, the verifier extracts
+   `(analyte, value, unit)` triples from BOTH the quote and the source
+   (`extract_lab_triples`); every quote triple must be present in the
+   source, and any supplied `citation.lab_tuple` must match a triple
+   parsed from the QUOTE (after analyte aliasing — `Hgb`/`Hb`/`hemoglobin`
+   collapse to canonical `hb` — and unit canonicalization).
+7. **Medical-NLI entailment gate** (optional) — `NLIEntailmentGate`
+   protocol callable supplied by the caller. PRD §9 explicitly allows
+   omitting Layer 7 when a medical-domain NLI model is unavailable.
+
+### Verdict + verdict reason
+
+`Verdict(passed, reason, citation)` is the per-citation outcome (Pydantic
+frozen). `reason` is `VerdictReason.PASS` on accept; otherwise one of seven
+mutually-exclusive failure tags matching the canonical short-circuit order.
+Persisted as part of the audit row's `indications_json` so reviewers see
+"why" alongside "rejected".
+
+### Verifier-as-classifier
+
+The grounder's accept/reject decision treated as a binary classification:
+predicted-positive == `Verdict.passed`, gold-positive == "the citation is
+genuinely grounded" (human label). `confusion_matrix(verdicts, labels)`
+produces the 2x2 contingency the eval harness (#20) consumes for the 200-row
+hand-labeled set. The grounder ships a 24-row mini-set in tests to
+regression-guard the function's output shape.
+
+### Pure function
+
+The module performs no I/O, mutates no global state, imports no Anthropic
+SDK / HuggingFace transformers. Determinism is asserted by
+`test_determinism_same_input_same_verdict`; the no-I/O contract by
+`test_no_stdout_or_stderr_writes`. The optional NLI gate is the only
+boundary where a model can be plugged in — and the gate is a Protocol
+callable supplied by the caller, never imported by the grounder.
+
 ## Audit-store concepts (#19)
 
 ### Audit row
@@ -264,7 +341,7 @@ pipeline; downstream modules import from here, never re-define.
 Domain terms used in the broader project but defined elsewhere (PRD issue
 body, or future Phase-1 modules):
 
-* `audit_id`, `cohort_threshold`, `MTP`, `T1.MTP`, `quote_grounder`,
+* `audit_id`, `cohort_threshold`, `MTP`, `T1.MTP`,
   `hallucination_suspect`, etc. — see the PRD (issue #1) for definitions.
 
 Add a concept here when a module exposes it as part of its interface. Update
