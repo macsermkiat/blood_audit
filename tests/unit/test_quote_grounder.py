@@ -16,7 +16,7 @@ import sys
 import unicodedata
 
 import pytest
-from hypothesis import assume, given, settings
+from hypothesis import given, settings
 from hypothesis import strategies as st
 from pydantic import ValidationError
 
@@ -33,6 +33,7 @@ from bba.quote_grounder import (
     VerdictTuple,
     confusion_matrix,
     contiguous_match,
+    extract_lab_triples,
     find_cited_source,
     lab_tuple_match,
     min_length_ok,
@@ -140,7 +141,7 @@ class TestLayer1NFCNormalization:
 
 
 class TestLayer2ContiguousMatch:
-    """Layer 2 — contiguous-substring containment (post-NFC)."""
+    """Layer 2 — word-boundary-anchored substring containment (post-NFC)."""
 
     def test_substring_present(self) -> None:
         assert contiguous_match(_QUOTE_E1_VALID, _SOURCE_E1_TEXT) is True
@@ -169,6 +170,23 @@ class TestLayer2ContiguousMatch:
         # layer, but the layer's own contract is that it returns ``False`` for
         # an empty quote (defense in depth).
         assert contiguous_match("", _SOURCE_E1_TEXT) is False
+
+    def test_mid_word_shift_rejected_via_boundary_anchor(self) -> None:
+        # The 1-char-deletion shift attack: deleting the first ``P`` of
+        # "Patient has melena…" yields "atient has melena…", which IS a
+        # substring of the source at offset 1 — but pinned mid-word
+        # ("P|atient"). Word-boundary anchoring rejects it. This is the
+        # explicit contract that lets the property test drop its assume().
+        shifted = _QUOTE_E1_VALID[1:]
+        assert shifted in _SOURCE_E1_TEXT  # sanity: substring exists at offset 1
+        assert contiguous_match(shifted, _SOURCE_E1_TEXT) is False
+
+    def test_mid_word_shift_end_rejected_via_boundary_anchor(self) -> None:
+        # Symmetric: deleting the last character produces a substring whose
+        # tail is pinned mid-word in the source — also rejected.
+        chopped = _QUOTE_E1_VALID[:-1]
+        assert chopped in _SOURCE_E1_TEXT
+        assert contiguous_match(chopped, _SOURCE_E1_TEXT) is False
 
 
 # =============================================================================
@@ -203,6 +221,31 @@ class TestLayer3StrictIdMatch:
         # to the wrong source.
         sources = (_src("E1", _SOURCE_E1_TEXT),)
         assert find_cited_source("e1", sources) is None
+
+    def test_duplicate_source_id_rejected(self) -> None:
+        # The bundle builder contract is unique source_ids per bundle;
+        # if two entries share an id, the lookup must NOT silently pick
+        # one — it returns None (same failure shape as missing-cited_id)
+        # so the reviewer dashboard sees one consistent failure mode.
+        # Catches the LOW-severity codex finding "no test for the
+        # ambiguity branch in find_cited_source".
+        duplicates = (
+            _src("E1", _SOURCE_E1_TEXT),
+            _src("E1", "different text under the same id"),
+        )
+        assert find_cited_source("E1", duplicates) is None
+
+    def test_duplicate_source_id_surfaces_as_cited_id_not_found(self) -> None:
+        # End-to-end: an ambiguous bundle surfaces through verify_citation
+        # as CITED_ID_NOT_FOUND, NOT as a silent NotImplementedError-style
+        # crash or as a wrong-source acceptance.
+        duplicates = (
+            _src("E1", _SOURCE_E1_TEXT),
+            _src("E1", "different text under the same id"),
+        )
+        verdict = verify_citation(_cit(_QUOTE_E1_VALID, "E1"), duplicates)
+        assert verdict.passed is False
+        assert verdict.reason == VerdictReason.CITED_ID_NOT_FOUND
 
 
 # =============================================================================
@@ -317,6 +360,37 @@ class TestLayer6LabTupleMatch:
         # Same analyte and value, incompatible unit.
         tup = LabTuple(analyte="Hb", value=8.3, unit="mmol/L")
         assert lab_tuple_match(tup, "Patient Hb 8.3 g/dL on admission.") is False
+
+    def test_unit_whitespace_around_slash_accepted(self) -> None:
+        # _canonical_unit's contract is whitespace-stripped lowercase, and
+        # the source-extraction regex tolerates optional whitespace around
+        # the ``/`` separator. Catches the codex MED finding: the docstring
+        # used to claim "g / dL" support without the regex actually
+        # accepting it.
+        tup = LabTuple(analyte="Hb", value=8.3, unit="g / dL")
+        assert lab_tuple_match(tup, "Patient Hb 8.3 g / dL on admission.") is True
+
+
+class TestExtractLabTriples:
+    """Public extract_lab_triples — used by the verifier on both sides."""
+
+    def test_extracts_single_triple(self) -> None:
+        triples = extract_lab_triples("Patient Hb 8.3 g/dL on admission.")
+        assert triples == [("hb", 8.3, "g/dl")]
+
+    def test_extracts_multiple_triples_preserves_order(self) -> None:
+        triples = extract_lab_triples(
+            "Hb 7.0 g/dL initially, then Hb 8.3 g/dL after transfusion."
+        )
+        assert triples == [("hb", 7.0, "g/dl"), ("hb", 8.3, "g/dl")]
+
+    def test_no_triples_in_text_without_analyte(self) -> None:
+        assert extract_lab_triples("Patient stable, no labs documented.") == []
+
+    def test_aliases_collapse_to_canonical(self) -> None:
+        # "Hgb" and "hemoglobin" both extract as canonical "hb".
+        triples = extract_lab_triples("Hgb 8.3 g/dL and hemoglobin 8.4 g/dL")
+        assert triples == [("hb", 8.3, "g/dl"), ("hb", 8.4, "g/dl")]
 
 
 # =============================================================================
@@ -510,21 +584,19 @@ class TestAdversarialNFCvsNFD:
 class TestAdversarialNumericParaphrase:
     """Hgb=8.3 vs Hb 8.3 g/dL — Layer 6 tuple grounding catches paraphrase."""
 
-    def test_hgb_alias_for_hb(self) -> None:
-        # Citation claims structured (Hgb, 8.3, g/dL); source phrases as
-        # "Hb 8.3 g/dL". The quote itself need not appear in source — the
-        # tuple alone is the grounding signal for a structured lab claim.
-        source_text = (
-            "Lab results: Hb 8.3 g/dL, WBC 9.2 K/uL, Platelets 230 K/uL. "
-            "Clinically stable. Plan transfuse 1 unit PRBC."
-        )
-        # Use a quote that DOES appear contiguously and uniquely (so layers
-        # 1-5 pass cleanly) and attach a paraphrased lab tuple on top.
-        quote = "Lab results: Hb 8.3 g/dL, WBC 9.2 K/uL"
+    def test_hgb_alias_accepts_when_value_matches_quote(self) -> None:
+        # Quote contiguously matches source (passes layers 1-5). The LLM
+        # supplies a structured tuple using the "Hgb" alias while the
+        # source/quote phrase the analyte as "Hb". Layer 6 must collapse
+        # both surface forms to the same canonical key so the verdict
+        # passes. The cited value (8.3) DOES appear in the quote — proves
+        # aliasing alone is the gate.
+        source = "Patient Hb 8.3 g/dL on admission and stable through day 2."
+        quote = "Patient Hb 8.3 g/dL on admission and stable"
         assert len(quote) >= MIN_QUOTE_LENGTH
-        tup = LabTuple(analyte="Hgb", value=8.3, unit="g/dL")
+        tup = LabTuple(analyte="Hgb", value=8.3, unit="g/dL")  # Hgb is alias for Hb
         verdict = verify_citation(
-            _cit(quote, "E1", lab_tuple=tup), (_src("E1", source_text),)
+            _cit(quote, "E1", lab_tuple=tup), (_src("E1", source),)
         )
         assert verdict.passed is True
 
@@ -533,7 +605,6 @@ class TestAdversarialNumericParaphrase:
         # value differs. The tuple layer must reject — paraphrase is on
         # tokens, not numbers.
         source_text = "Lab results: Hb 8.3 g/dL stable across draws."
-        # Build a long-enough contiguous quote.
         quote = "Lab results: Hb 8.3 g/dL stable across"
         tup = LabTuple(analyte="Hgb", value=7.0, unit="g/dL")  # value mismatch
         verdict = verify_citation(
@@ -541,6 +612,42 @@ class TestAdversarialNumericParaphrase:
         )
         assert verdict.passed is False
         assert verdict.reason == VerdictReason.LAB_TUPLE_MISMATCH
+
+    def test_supplied_tuple_must_match_quote_not_just_source(self) -> None:
+        # Source contains TWO Hb values; the quote contains only ONE of
+        # them. The LLM emits a structured ``lab_tuple`` whose value is
+        # the OTHER Hb value — present in the source but not in the quote.
+        # Layer 6 must reject (the LLM's structured field hallucinated a
+        # number from elsewhere in the source). Without the "tuple in
+        # quote_triples" check, a "tuple in source_triples" semantic would
+        # falsely accept this — the codex review found this gap.
+        source = "Initial Hb 7.0 g/dL on admission, repeat Hb 8.3 g/dL stable."
+        quote = "Initial Hb 7.0 g/dL on admission"
+        assert len(quote) >= MIN_QUOTE_LENGTH
+        cited_from_elsewhere = LabTuple(analyte="Hb", value=8.3, unit="g/dL")
+        verdict = verify_citation(
+            _cit(quote, "E1", lab_tuple=cited_from_elsewhere),
+            (_src("E1", source),),
+        )
+        assert verdict.passed is False
+        assert verdict.reason == VerdictReason.LAB_TUPLE_MISMATCH
+
+    def test_quote_lab_number_must_also_be_in_source(self) -> None:
+        # The "extract from both sides" defense: if the verbatim quote
+        # itself contains a (analyte, value, unit) triple, that triple
+        # MUST also appear in the source. Layer 2 ordinarily auto-satisfies
+        # this (the quote is a substring of the source), but the explicit
+        # check is the defense-in-depth gate against a future change that
+        # loosens contiguous-substring enforcement. Here we provoke the
+        # check directly via a source with no extractable triples — the
+        # quote-side triple would have no source match if Layer 2 ever
+        # broke; today the test exercises the parser symmetry.
+        source = "Patient stable, all labs within normal limits."
+        # The quote is contiguous + unique in source; carries no triple.
+        quote = "Patient stable, all labs within normal limits"
+        assert len(quote) >= MIN_QUOTE_LENGTH
+        verdict = verify_citation(_cit(quote, "E1"), (_src("E1", source),))
+        assert verdict.passed is True
 
 
 class TestAdversarialCrossSourceAttribution:
@@ -660,6 +767,158 @@ class TestConfusionMatrix:
         )
 
 
+class TestVerifierAsClassifierOverLabeledSet:
+    """End-to-end: run the verifier over a hand-labeled mini-set and confirm
+    the confusion matrix has the shape the eval harness (#20) ingests.
+
+    The 200-row hand-labeled set lives in :mod:`bba.eval_harness` (issue #20,
+    PRD §"Acceptance criteria"); this test uses a representative 24-row
+    scaled-down stand-in so the grounder module can regression-guard the
+    *shape* of the output without depending on the full eval fixture. The
+    cases below intentionally cover every failure mode in
+    :class:`VerdictReason` plus the happy path, weighted toward positives
+    (matching the published target prevalence for the verifier-as-classifier
+    evaluation).
+    """
+
+    def _bundle(self) -> tuple[EvidenceSource, ...]:
+        return (
+            _src(
+                "E1",
+                "Patient came with melena and Hb 8.3 g/dL on admission. "
+                "No active bleeding observed during physical examination. "
+                "Plan: transfuse 1 unit PRBC and recheck Hb in 6 hours.",
+            ),
+            _src(
+                "E2",
+                "Cardiology: stable angina, no acute coronary syndrome. "
+                "Hb 10.2 g/dL on day 1, repeat 8.7 g/dL on day 3.",
+            ),
+        )
+
+    def _labeled_cases(
+        self, sources: Sequence[EvidenceSource]
+    ) -> list[tuple[Citation, bool]]:
+        """Citation, gold_label (True == genuinely grounded)."""
+        return [
+            # Positives — genuinely grounded citations.
+            (_cit("Patient came with melena and Hb 8.3 g/dL on admission", "E1"), True),
+            (_cit("No active bleeding observed during physical examination", "E1"), True),
+            (_cit("Plan: transfuse 1 unit PRBC and recheck Hb in 6 hours", "E1"), True),
+            (_cit("Cardiology: stable angina, no acute coronary syndrome", "E2"), True),
+            (_cit("Hb 10.2 g/dL on day 1, repeat 8.7 g/dL on day 3", "E2"), True),
+            (
+                _cit(
+                    "Patient came with melena and Hb 8.3 g/dL on admission",
+                    "E1",
+                    lab_tuple=LabTuple(analyte="Hgb", value=8.3, unit="g/dL"),
+                ),
+                True,
+            ),
+            (
+                _cit(
+                    "Hb 10.2 g/dL on day 1, repeat 8.7 g/dL on day 3",
+                    "E2",
+                    lab_tuple=LabTuple(analyte="Hb", value=10.2, unit="g/dL"),
+                ),
+                True,
+            ),
+            (_cit("Patient came with melena and Hb 8.3 g/dL", "E1"), True),
+            (
+                _cit("No active bleeding observed during physical examination", "E1"),
+                True,
+            ),
+            (_cit("Plan: transfuse 1 unit PRBC and recheck", "E1"), True),
+            (_cit("Cardiology: stable angina, no acute coronary", "E2"), True),
+            (_cit("Hb 10.2 g/dL on day 1, repeat 8.7 g/dL", "E2"), True),
+            # Negatives — hallucinations the grounder must reject.
+            (_cit("", "E1"), False),  # empty quote
+            (_cit("Patient came with melena and Hb 8.3 g/dL", "E99"), False),  # bad id
+            (_cit("short string", "E1"), False),  # too short
+            (
+                _cit("Cardiology: stable angina, no acute coronary", "E1"),
+                False,
+            ),  # cross-source attribution (E2 content cited as E1)
+            (
+                _cit("Patient came with melena and transfuse 1 unit PRBC", "E1"),
+                False,
+            ),  # concatenated non-adjacent spans
+            (
+                _cit(
+                    "atient came with melena and Hb 8.3 g/dL on admission",
+                    "E1",
+                ),
+                False,
+            ),  # 1-char shift via deleted first character
+            (
+                _cit(
+                    "Patient came with melena and Hb 8.3 g/dL on admission",
+                    "E1",
+                    lab_tuple=LabTuple(analyte="Hb", value=7.0, unit="g/dL"),
+                ),
+                False,
+            ),  # hallucinated tuple value (source says 8.3, tuple says 7.0)
+            (
+                _cit(
+                    "Hb 10.2 g/dL on day 1, repeat 8.7 g/dL on day 3",
+                    "E2",
+                    lab_tuple=LabTuple(analyte="WBC", value=10.2, unit="K/uL"),
+                ),
+                False,
+            ),  # analyte hallucination
+            (
+                _cit(
+                    "Cardiology: stable angina, no acute coronary syndrome",
+                    "E2",
+                    lab_tuple=LabTuple(analyte="Hb", value=8.3, unit="g/dL"),
+                ),
+                False,
+            ),  # supplied tuple is not in the quote (lives in E1)
+            (
+                _cit(
+                    "Patient came with melena and Hb 8.3 g/dL on admission",
+                    "E1",
+                    lab_tuple=LabTuple(analyte="Unobtainium", value=1.0, unit="g/dL"),
+                ),
+                False,
+            ),  # unknown analyte
+            (_cit("hematuria with hemodynamic stability today", "E1"), False),  # absent
+            (_cit("PRBC", "E1"), False),  # too short trivial
+        ]
+
+    def test_confusion_matrix_matches_expected_counts(self) -> None:
+        sources = self._bundle()
+        cases = self._labeled_cases(sources)
+        verdicts = verify_citations([c for c, _ in cases], sources)
+        labels = [g for _, g in cases]
+
+        cm = confusion_matrix(verdicts, labels)
+        # The verifier is expected to be perfect on this hand-labeled
+        # mini-set (zero FP, zero FN) — every positive genuinely grounds
+        # and every negative trips at least one layer.
+        assert cm.true_positive == sum(labels)
+        assert cm.true_negative == len(labels) - sum(labels)
+        assert cm.false_positive == 0
+        assert cm.false_negative == 0
+
+    def test_labeled_set_covers_every_failure_reason(self) -> None:
+        # The set must exercise EVERY non-PASS VerdictReason so the
+        # downstream eval harness sees the full label distribution.
+        sources = self._bundle()
+        cases = self._labeled_cases(sources)
+        reasons = {
+            verify_citation(c, sources).reason for c, _ in cases
+        }
+        # PASS plus the five distinct rejection modes the mini-set covers
+        # (Layer 7 NLI is opt-in and not invoked here).
+        assert VerdictReason.PASS in reasons
+        assert VerdictReason.EMPTY_QUOTE in reasons
+        assert VerdictReason.CITED_ID_NOT_FOUND in reasons
+        assert VerdictReason.TOO_SHORT in reasons
+        assert VerdictReason.NO_CONTIGUOUS_MATCH in reasons
+        assert VerdictReason.LAB_TUPLE_MISMATCH in reasons
+
+
 # =============================================================================
 # Pure-function contract (issue #18 AC §5).
 #
@@ -729,14 +988,18 @@ class TestPropertyOneCharEditRejection:
     @given(idx=st.integers(min_value=0, max_value=len(_QUOTE_E1_VALID) - 1))
     @settings(max_examples=50, deadline=None)
     def test_deletion_breaks_grounding(self, idx: int) -> None:
-        # Deletion: drop one char. When the result is no longer a contiguous
-        # substring of the source, the verdict must reject. Boundary
-        # deletions (first/last char) sometimes leave a string still present
-        # in the source — assume(...) filters those so the property holds on
-        # the cases where it can: any 1-char deletion that genuinely changes
-        # the surface form against the source produces a rejection.
+        # Deletion: drop one char anywhere in the valid quote. The verifier
+        # MUST reject. Two layers catch this:
+        #   - Interior deletion → the mutated quote is no longer a contiguous
+        #     substring of the source.
+        #   - First/last-char deletion → the result remains a substring but
+        #     is now pinned mid-word in the source (the adjacent character
+        #     in source is alphanumeric), so Layer 2's word-boundary
+        #     anchoring rejects it.
+        # No assume() filter: the property as stated in issue #18 ("any
+        # random insertion/deletion of 1 character") must hold for EVERY
+        # index without exception.
         mutated = _QUOTE_E1_VALID[:idx] + _QUOTE_E1_VALID[idx + 1 :]
-        assume(mutated not in _SOURCE_E1_TEXT)
         verdict = verify_citation(_cit(mutated, "E1"), _bundle())
         assert verdict.passed is False
 

@@ -16,6 +16,7 @@ not single-shot.").
 from bba.quote_grounder.layers import (
     MIN_QUOTE_LENGTH,
     contiguous_match,
+    extract_lab_triples,
     find_cited_source,
     lab_tuple_match,
     min_length_ok,
@@ -49,6 +50,7 @@ __all__ = [
     "VerdictTuple",
     "confusion_matrix",
     "contiguous_match",
+    "extract_lab_triples",
     "find_cited_source",
     "lab_tuple_match",
     "min_length_ok",

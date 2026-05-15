@@ -11,9 +11,12 @@ Canonical layer order (the order the verifier short-circuits in):
 1. EMPTY_QUOTE — trivial guard
 2. CITED_ID_NOT_FOUND — Layer 3 (no source to compare against)
 3. TOO_SHORT — Layer 5 (cheap reject before substring scan)
-4. NO_CONTIGUOUS_MATCH — Layer 2
+4. NO_CONTIGUOUS_MATCH — Layer 2 (word-boundary-aligned)
 5. NOT_UNIQUE — Layer 4 (only reached when the substring exists)
-6. LAB_TUPLE_MISMATCH — Layer 6 (only when the citation carries a tuple)
+6. LAB_TUPLE_MISMATCH — Layer 6 (always evaluated; ALWAYS reaches this
+   layer when steps 1-5 pass so an LLM that emits a hallucinated number
+   in either the structured ``lab_tuple`` field OR inside the verbatim
+   quote text cannot slip through)
 7. NLI_NOT_ENTAILED — Layer 7 (only when an NLI gate is provided)
 
 The order is part of the contract: tests assert that, given a citation that
@@ -28,9 +31,11 @@ from collections.abc import Sequence
 
 from bba.quote_grounder.layers import (
     MIN_QUOTE_LENGTH,
+    _canonical_analyte,
+    _canonical_unit,
     contiguous_match,
+    extract_lab_triples,
     find_cited_source,
-    lab_tuple_match,
     min_length_ok,
     nfc_normalize,
     within_doc_unique,
@@ -38,6 +43,7 @@ from bba.quote_grounder.layers import (
 from bba.quote_grounder.models import (
     Citation,
     EvidenceSource,
+    LabTuple,
     NLIEntailmentGate,
     Verdict,
     VerdictReason,
@@ -122,12 +128,49 @@ def _evaluate(
     if not within_doc_unique(quote_n, source_n):
         return VerdictReason.NOT_UNIQUE
 
-    if citation.lab_tuple is not None and not lab_tuple_match(
-        citation.lab_tuple, source_n
-    ):
+    if not _lab_grounded(citation.lab_tuple, quote_n, source_n):
         return VerdictReason.LAB_TUPLE_MISMATCH
 
     if nli_gate is not None and not nli_gate(premise=source_n, hypothesis=quote_n):
         return VerdictReason.NLI_NOT_ENTAILED
 
     return VerdictReason.PASS
+
+
+def _lab_grounded(
+    cited_tuple: LabTuple | None, quote: str, source: str
+) -> bool:
+    """Verify lab-citation tuple integrity across quote and source.
+
+    Two checks:
+
+    1. Every (analyte, value, unit) triple parseable from the QUOTE must
+       also be parseable from the SOURCE. With Layer 2 enforced this is
+       auto-satisfied — but the explicit check is defense-in-depth against
+       a future change that loosens Layer 2's contiguous-substring rule.
+    2. If the LLM supplied a structured :class:`LabTuple` on the citation,
+       it must match a triple parsed from the QUOTE (after analyte aliasing
+       + unit canonicalization). Catches the "verbatim quote one Hb value
+       but emit a different Hb value in the structured tuple" hallucination
+       — a real failure mode given that the LLM may copy unrelated source
+       numbers into the structured field.
+
+    Returns ``True`` when both pass (vacuously when the quote contains no
+    extractable triples and no structured tuple is supplied).
+    """
+    quote_triples = extract_lab_triples(quote)
+    source_triples = extract_lab_triples(source)
+
+    for qt in quote_triples:
+        if qt not in source_triples:
+            return False
+
+    if cited_tuple is not None:
+        analyte = _canonical_analyte(cited_tuple.analyte)
+        if analyte is None:
+            return False
+        target = (analyte, cited_tuple.value, _canonical_unit(cited_tuple.unit))
+        if target not in quote_triples:
+            return False
+
+    return True
