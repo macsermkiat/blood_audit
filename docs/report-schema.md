@@ -8,30 +8,59 @@ preview, and the downstream consumers that grep/join the CSVs.
 
 ```
 <output_dir>/
-  hospital_trend.csv
-  ward_scorecard.csv
-  physician_own_view.csv
-  indication_distribution.csv
-  cohort_exception.csv
-  pipeline_health.csv
-  report_<YYYY-MM-DD>.pdf
+  hospital_trend.csv                              # committee
+  ward_scorecard.csv                              # committee
+  indication_distribution.csv                     # committee
+  cohort_exception.csv                            # committee
+  pipeline_health.csv                             # committee
+  physician_own_view_<physician_id>.csv           # one per requested physician
+  report_<YYYY-MM-DD>.pdf                         # committee PDF
 ```
 
 The PDF filename embeds the first-of-month date (`report_2026-05-01.pdf`).
 
+**Per-physician separation.** The physician own-view does **not** ship as a
+single committee CSV because that file would expose every physician's own
+rate to every recipient. Instead the generator emits one
+`physician_own_view_<physician_id>.csv` per physician requested in
+`ReportInputs.physician_ids_for_own_view`. Each file contains exactly one
+data row plus the reproducibility footer; distributing the file to that
+physician therefore never leaks another physician's rate. PRD user story
+#10: "comparing my RBC ordering against peer-anonymous benchmarks ...
+without being publicly identified."
+
+The committee PDF still renders a physician-own-view table for the
+committee's internal review.
+
 ## Reproducibility footer
 
-Every CSV data row carries three additional columns at the end:
+Every CSV data row (and the synthetic row emitted for an empty section)
+carries six additional columns at the end:
 
-| Column            | Meaning                                                                            |
-|-------------------|------------------------------------------------------------------------------------|
-| `policy_version`  | KCMH PR-17.x policy revision that drove the deterministic classifier.              |
-| `model_id`        | Snapshot-pinned Anthropic model ID that produced the LLM classification.           |
-| `redactor_version`| Version of the `macsermkiat/thai-medical-deid` redactor that processed the bundle. |
+| Column                 | Meaning                                                                            |
+|------------------------|------------------------------------------------------------------------------------|
+| `policy_version`       | KCMH PR-17.x policy revision that drove the deterministic classifier.              |
+| `model_id`             | Snapshot-pinned Anthropic model ID that produced the LLM classification.           |
+| `redactor_version`     | Version of the `macsermkiat/thai-medical-deid` redactor that processed the bundle. |
+| `redactor_model_sha`   | SHA of the redactor's HuggingFace model checkpoint.                                |
+| `prompt_hash`          | SHA of the system prompt + few-shot bundle the LLM call used.                      |
+| `evidence_bundle_hash` | SHA of the canonical evidence-bundle schema the run used.                          |
+
+The ticket scope (issue #28) names only the first three; the rest follow
+PRD §"Output schema" so the reproducibility chain remains intact for a
+six-month-later audit (PRD §"Reproducibility = we have the original answer").
 
 Stamping the footer **per row** (rather than only in a trailing line) keeps the
 reproducibility chain intact under `grep`, `awk`, or partial-section extracts.
-The PDF carries the same three identifiers on every page.
+The PDF carries the same six identifiers on every page.
+
+## Month bucketing
+
+`ReportInputs.month` is a `date` at day-1 of the month. The filter bucket
+is half-open `[month_local_start, next_month_local_start)` interpreted in
+Asia/Bangkok (PRD §"Tz-aware throughout": datetimes stored UTC, rendered
+Asia/Bangkok). An order at 23:00 Bangkok on the 31st belongs to the
+month it was placed locally, not to the UTC-month it happens to fall in.
 
 ## CSV section schemas
 
@@ -63,9 +92,10 @@ One row per distinct `ward_id`, sorted ascending.
 | `insufficient_evidence`  | int    |                                        |
 | `inappropriate_rate`     | float  |                                        |
 
-### `physician_own_view.csv`
+### `physician_own_view_<physician_id>.csv`
 
-One row per `physician_id` in `ReportInputs.physician_ids_for_own_view`.
+One file per `physician_id` in `ReportInputs.physician_ids_for_own_view`;
+each file contains exactly one data row.
 Peer benchmarks are quartile statistics computed over **all** physicians with
 at least one order in the month — not only the requested subset — so a small
 subset cannot mis-report the population distribution.
@@ -112,12 +142,14 @@ the breakdown sums to the total.
 
 Single-row summary of the month's operational health.
 
-| Column                | Type  | Notes                                                                                       |
-|-----------------------|-------|---------------------------------------------------------------------------------------------|
-| `total_orders`        | int   |                                                                                             |
-| `classified_orders`   | int   | Rows where `final_classification ∈ {APPROPRIATE, INAPPROPRIATE}`.                            |
-| `needs_review_count`  | int   | Rows where `final_classification = NEEDS_REVIEW` **or** `needs_human_review` flag is set.   |
-| `needs_review_rate`   | float | `needs_review_count / total_orders`, in `[0, 1]`.                                            |
+| Column                          | Type  | Notes                                                                                       |
+|---------------------------------|-------|---------------------------------------------------------------------------------------------|
+| `total_orders`                  | int   |                                                                                             |
+| `classified_orders`             | int   | Rows where `final_classification ∈ {APPROPRIATE, INAPPROPRIATE}`.                            |
+| `needs_review_count`            | int   | Rows where `final_classification = NEEDS_REVIEW` **or** `needs_human_review` flag is set.   |
+| `needs_review_rate`             | float | `needs_review_count / total_orders`, in `[0, 1]`.                                            |
+| `insufficient_evidence_count`   | int   | Rows where `final_classification = INSUFFICIENT_EVIDENCE`. PRD §"Documentation absence ≠ INAPPROPRIATE": its own bucket. |
+| `insufficient_evidence_rate`    | float | `insufficient_evidence_count / total_orders`, in `[0, 1]`.                                   |
 
 ## Encoding conventions
 

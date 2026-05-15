@@ -26,6 +26,7 @@ from bba.report_generator.aggregate import (
 from bba.report_generator.csv_writer import (
     CSV_ENCODING,
     CSV_NEWLINE,
+    physician_own_view_filename,
     section_filename,
     write_section_csv,
 )
@@ -88,6 +89,7 @@ __all__ = [
     "aggregate_ward_scorecard",
     "filter_rows_for_month",
     "generate_monthly_report",
+    "physician_own_view_filename",
     "render_report_pdf",
     "section_filename",
     "write_section_csv",

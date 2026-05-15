@@ -113,13 +113,31 @@ FirstOfMonth = Annotated[date, AfterValidator(_ensure_first_of_month)]
 
 
 class ReportFooter(BaseModel):
-    """Reproducibility footer stamped on every CSV row and the PDF.
+    """Reproducibility footer stamped on every CSV row and every PDF page.
 
-    Per PRD §"Output schema": ``policy_version``, ``model_id``,
-    ``redactor_version`` are the three identifiers needed to re-derive any
-    report line from the source AuditRows. They are required (not optional)
-    on every artifact; the empty string is rejected because "we forgot to
-    stamp" is the failure mode this footer exists to prevent.
+    Per PRD §"Output schema" the *full* reproducibility metadata set for
+    any persisted artifact is six identifiers; together they let a
+    downstream auditor re-derive any report line from the source
+    AuditRows. They are required (not optional) on every artifact; the
+    empty string is rejected because "we forgot to stamp" is the failure
+    mode this footer exists to prevent.
+
+    * ``policy_version`` — KCMH PR-17.x policy revision that drove the
+      deterministic classifier.
+    * ``model_id`` — snapshot-pinned Anthropic model identifier.
+    * ``redactor_version`` — version of the ``thai-medical-deid`` package.
+    * ``redactor_model_sha`` — SHA of the redactor's HuggingFace model.
+    * ``prompt_hash`` — SHA of the system prompt + few-shot bundle.
+    * ``evidence_bundle_hash`` — SHA of the canonical evidence-bundle
+      schema (the input contract for the LLM call). Note: per-row
+      evidence-bundle hashes live on the individual AuditRows, not on
+      the report footer — this field pins the *schema* the run used.
+
+    The ticket scope (issue #28) names only three of these explicitly
+    (``policy_version``, ``model_id``, ``redactor_version``); the other
+    three come from the broader PRD §"Output schema" so the
+    reproducibility chain remains intact for an auditor six months later
+    (PRD §"Reproducibility = we have the original answer").
     """
 
     model_config = ConfigDict(frozen=True)
@@ -127,6 +145,9 @@ class ReportFooter(BaseModel):
     policy_version: str = Field(min_length=1)
     model_id: str = Field(min_length=1)
     redactor_version: str = Field(min_length=1)
+    redactor_model_sha: str = Field(min_length=1)
+    prompt_hash: str = Field(min_length=1)
+    evidence_bundle_hash: str = Field(min_length=1)
 
 
 # =============================================================================
@@ -251,10 +272,29 @@ class CohortExceptionRow(BaseModel):
 class PipelineHealthRow(BaseModel):
     """One row in the pipeline-health summary section.
 
-    Tracks the operational health of the monthly run: how many orders the
-    pipeline classified end-to-end vs. how many fell to ``NEEDS_REVIEW``
-    or ``INSUFFICIENT_EVIDENCE``. A spike in ``needs_review_rate`` is the
-    signal the committee uses to flag silent regression in the LLM stack.
+    Tracks the operational health of the monthly run by splitting orders
+    into three mutually exclusive operational buckets:
+
+    * ``classified_orders`` — pipeline reached a confident terminal
+      label (``final_classification`` is ``APPROPRIATE`` or
+      ``INAPPROPRIATE``).
+    * ``needs_review_count`` — ``final_classification == NEEDS_REVIEW``
+      *or* the deterministic classifier set the ``needs_human_review``
+      flag on an otherwise-confident row (the committee's
+      spot-check policy adds this second contribution).
+    * ``insufficient_evidence_count`` — ``final_classification ==
+      INSUFFICIENT_EVIDENCE``. PRD §"Documentation absence ≠
+      INAPPROPRIATE": this is its own bucket, not a review bucket; a
+      spike here signals a *documentation* regression upstream rather
+      than an LLM regression.
+
+    The three buckets are mutually exclusive on the
+    ``final_classification`` axis but ``needs_review_count`` can also
+    count rows whose terminal label is APPROPRIATE/INAPPROPRIATE — those
+    rows contribute to both ``classified_orders`` and
+    ``needs_review_count``. The schema does not assert
+    ``classified + needs_review + insufficient_evidence == total``
+    because of that overlap.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -263,6 +303,8 @@ class PipelineHealthRow(BaseModel):
     classified_orders: int = Field(ge=0)
     needs_review_count: int = Field(ge=0)
     needs_review_rate: float = Field(ge=0.0, le=1.0)
+    insufficient_evidence_count: int = Field(ge=0)
+    insufficient_evidence_rate: float = Field(ge=0.0, le=1.0)
 
 
 # =============================================================================
@@ -291,15 +333,23 @@ class ReportInputs(BaseModel):
 class ReportArtifacts(BaseModel):
     """The output of :func:`generate_monthly_report`.
 
-    Every section gets a CSV path; the PDF is a single file containing all
-    six sections plus the footer. ``csv_paths`` is keyed by
-    :data:`SectionName` so the caller can pull a specific section without
-    string-indexing.
+    Five committee-wide section CSVs land in ``csv_paths``; the
+    per-physician own-view section is **not** a committee artifact and
+    is structurally separated into ``physician_own_view_csv_paths``,
+    one file per ``physician_id``. The PDF is a single committee
+    document.
+
+    The per-physician separation enforces the "own-data only" property
+    from PRD user story #10 ("comparing my RBC ordering against
+    peer-anonymous benchmarks ... without being publicly identified")
+    at the artifact level rather than relying on a downstream caller to
+    filter rows before distribution.
     """
 
     model_config = ConfigDict(frozen=True)
 
     csv_paths: Mapping[SectionName, Path]
+    physician_own_view_csv_paths: Mapping[str, Path]
     pdf_path: Path
     footer: ReportFooter
 

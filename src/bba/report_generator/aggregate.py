@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from bba.report_generator.models import (
     Classification,
@@ -29,35 +30,62 @@ from bba.report_generator.models import (
 )
 
 
-def _next_month_start(month: FirstOfMonth) -> datetime:
-    """Return the UTC timestamp of the first instant of ``month + 1 month``.
+REPORT_TZ = ZoneInfo("Asia/Bangkok")
+"""Local timezone for the monthly report bucket.
 
-    Used as the half-open upper bound of the month filter. Computed by
-    adding 32 days and snapping back to day-1 (rather than using
-    ``relativedelta``) so the report-generator has no third-party
-    date-arithmetic dependency.
+PRD §"Tz-aware throughout": datetimes stored UTC, rendered Asia/Bangkok.
+User story #19: "I want all datetimes stored as UTC in Parquet and
+rendered as Asia/Bangkok in the dashboard, so that month-boundary orders
+bucket correctly." A monthly report that filtered by UTC month would
+mis-bucket orders placed in the last 7 hours of the local month (those
+land in the *next* UTC month) — the report month is a hospital business
+month, not a UTC month.
+"""
+
+
+def _next_month_first_of(month: FirstOfMonth) -> datetime:
+    """Return the first instant of the month *after* ``month`` (local TZ).
+
+    Computed by adding 32 days and snapping back to day-1 (rather than
+    using ``relativedelta``) so the report-generator has no third-party
+    date-arithmetic dependency. The returned ``datetime`` is **naive**
+    on purpose — the caller attaches :data:`REPORT_TZ`.
     """
     next_anywhere = month.replace(day=28) + timedelta(days=10)
     next_first = next_anywhere.replace(day=1)
-    return datetime(next_first.year, next_first.month, 1, tzinfo=UTC)
+    return datetime(next_first.year, next_first.month, 1)
 
 
-def _month_start_utc(month: FirstOfMonth) -> datetime:
-    return datetime(month.year, month.month, 1, tzinfo=UTC)
+def _month_bounds_utc(month: FirstOfMonth) -> tuple[datetime, datetime]:
+    """Return the half-open UTC bounds ``[lower, upper)`` for ``month``
+    interpreted in Asia/Bangkok local time.
+
+    A row whose ``order_datetime`` (already UTC by validation) lies in
+    ``[lower, upper)`` is in the local-month bucket. The conversion via
+    :data:`REPORT_TZ` is the place where the PRD's "stored UTC, rendered
+    Asia/Bangkok" rule is enforced for monthly bucketing.
+    """
+    lower_local = datetime(month.year, month.month, 1, tzinfo=REPORT_TZ)
+    upper_local = _next_month_first_of(month).replace(tzinfo=REPORT_TZ)
+    return lower_local.astimezone(UTC), upper_local.astimezone(UTC)
 
 
 def filter_rows_for_month(
     rows: Sequence[MonthlyReportRow], month: FirstOfMonth
 ) -> tuple[MonthlyReportRow, ...]:
-    """Return only the rows whose ``order_datetime`` falls inside ``month``.
+    """Return only the rows whose ``order_datetime`` falls inside
+    ``month`` *in Asia/Bangkok local time*.
 
-    Boundaries are UTC, half-open ``[month, next_month)``. An order
-    timestamped at exactly ``next_month`` 00:00 UTC belongs to the *next*
-    month, not this one. The :data:`UTCDatetime` validator guarantees the
-    comparison is well-defined.
+    Boundaries are half-open ``[month_local_start, next_month_local_start)``,
+    converted to UTC for the comparison. PRD §"Tz-aware throughout":
+    datetimes are stored UTC and rendered Asia/Bangkok; the monthly
+    report bucket is the hospital business month, not the UTC month.
+
+    The :data:`UTCDatetime` validator on :class:`MonthlyReportRow`
+    guarantees ``order_datetime`` is tz-aware so the comparison is
+    well-defined.
     """
-    lower = _month_start_utc(month)
-    upper = _next_month_start(month)
+    lower, upper = _month_bounds_utc(month)
     return tuple(r for r in rows if lower <= r.order_datetime < upper)
 
 
@@ -276,23 +304,24 @@ def aggregate_pipeline_health(
     """Return a single :class:`PipelineHealthRow` summarising the month's
     operational health.
 
-    ``classified_orders`` counts rows whose ``final_classification`` is
-    ``APPROPRIATE`` or ``INAPPROPRIATE`` (i.e., the pipeline reached a
-    confident terminal label). ``needs_review_count`` counts rows whose
-    ``final_classification`` is ``NEEDS_REVIEW`` *or* whose
-    ``needs_human_review`` flag is set (some appropriate/inappropriate
-    classifications are still flagged for human spot-check by policy).
+    See :class:`PipelineHealthRow` for the bucket definitions. The
+    ``INSUFFICIENT_EVIDENCE`` bucket is split out from the review
+    bucket so the committee can distinguish "LLM is uncertain"
+    (``NEEDS_REVIEW``) from "documentation absent" (``INSUFFICIENT_EVIDENCE``)
+    — PRD §"Documentation absence ≠ INAPPROPRIATE".
     """
-    if not rows:
+    total = len(rows)
+    if not total:
         return (
             PipelineHealthRow(
                 total_orders=0,
                 classified_orders=0,
                 needs_review_count=0,
                 needs_review_rate=0.0,
+                insufficient_evidence_count=0,
+                insufficient_evidence_rate=0.0,
             ),
         )
-    total = len(rows)
     classified = sum(
         1
         for r in rows
@@ -303,11 +332,16 @@ def aggregate_pipeline_health(
         for r in rows
         if r.final_classification == "NEEDS_REVIEW" or r.needs_human_review
     )
+    insufficient = sum(
+        1 for r in rows if r.final_classification == "INSUFFICIENT_EVIDENCE"
+    )
     return (
         PipelineHealthRow(
             total_orders=total,
             classified_orders=classified,
             needs_review_count=needs_review,
             needs_review_rate=_rate(needs_review, total),
+            insufficient_evidence_count=insufficient,
+            insufficient_evidence_rate=_rate(insufficient, total),
         ),
     )

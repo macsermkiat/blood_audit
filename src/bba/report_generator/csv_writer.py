@@ -39,8 +39,11 @@ _FOOTER_COLUMNS: tuple[str, ...] = (
     "policy_version",
     "model_id",
     "redactor_version",
+    "redactor_model_sha",
+    "prompt_hash",
+    "evidence_bundle_hash",
 )
-"""The three footer columns appended after every section's data columns.
+"""The six footer columns appended after every section's data columns.
 Order matches :class:`ReportFooter` field order so the writer never has to
 reach into the model's introspection API to discover the column order.
 """
@@ -106,6 +109,8 @@ def _data_columns(section_name: SectionName) -> tuple[str, ...]:
             "classified_orders",
             "needs_review_count",
             "needs_review_rate",
+            "insufficient_evidence_count",
+            "insufficient_evidence_rate",
         ),
     }
     return columns_by_section[section_name]
@@ -148,6 +153,9 @@ def _footer_cells(footer: ReportFooter) -> list[str]:
         footer.policy_version,
         footer.model_id,
         footer.redactor_version,
+        footer.redactor_model_sha,
+        footer.prompt_hash,
+        footer.evidence_bundle_hash,
     ]
 
 
@@ -173,6 +181,13 @@ def _render_csv_text(section: ReportSection) -> str:
     Implemented separately from :func:`write_section_csv` so a future
     in-memory consumer (e.g., the dashboard preview endpoint) does not
     need to round-trip through the filesystem.
+
+    An empty section emits one synthetic row whose data columns are all
+    empty strings but whose footer columns are populated. Without that
+    row, an empty section's CSV would carry no footer values at all and
+    a downstream consumer could not tell *which* policy / model / redactor
+    versions produced the empty result vs. a stale file in the same
+    directory.
     """
     _validate_footer(section.footer)
     data_cols = _data_columns(section.name)
@@ -181,30 +196,62 @@ def _render_csv_text(section: ReportSection) -> str:
     buf = io.StringIO()
     writer = csv.writer(buf, lineterminator=CSV_NEWLINE)
     writer.writerow(header)
-    for row in section.rows:
-        writer.writerow(_row_to_cells(row, data_cols) + footer_cells)
+    if section.rows:
+        for row in section.rows:
+            writer.writerow(_row_to_cells(row, data_cols) + footer_cells)
+    else:
+        writer.writerow([""] * len(data_cols) + footer_cells)
     return buf.getvalue()
 
 
-def write_section_csv(section: ReportSection, output_dir: Path) -> Path:
-    """Write ``section`` to ``output_dir / f"{section.name}.csv"`` and return
-    the resulting :class:`Path`.
+def write_section_csv(
+    section: ReportSection,
+    output_dir: Path,
+    *,
+    filename_override: str | None = None,
+) -> Path:
+    """Write ``section`` to ``output_dir`` and return the resulting :class:`Path`.
 
-    The output path is derived deterministically from ``section.name`` so a
-    second call with the same section overwrites the first (idempotent
-    re-run is a project-wide contract; see ``bba.audit_store``).
+    With ``filename_override=None`` (the default) the output filename is
+    derived deterministically from ``section.name`` via
+    :func:`section_filename`. The override exists for the per-physician
+    own-view case: each physician's CSV needs a distinct filename
+    (``physician_own_view_<physician_id>.csv``) so the artifact set is
+    structurally one-physician-per-file rather than a single CSV
+    containing every physician's rates.
 
-    Raises :class:`FileNotFoundError` if ``output_dir`` does not exist; the
-    caller (the orchestrator) is responsible for creating the directory.
-    Raises :class:`FooterStampError` if the section's footer has any empty
-    field.
+    A second call with the same section + filename overwrites the first
+    (idempotent re-run is a project-wide contract; see ``bba.audit_store``).
+
+    Raises :class:`FileNotFoundError` if ``output_dir`` does not exist;
+    the caller (the orchestrator) is responsible for creating the
+    directory.  Raises :class:`FooterStampError` if the section's footer
+    has any empty field.
     """
     if not output_dir.exists():
         raise FileNotFoundError(
             f"output_dir {output_dir} does not exist; "
             "the caller must create it before invoking write_section_csv"
         )
-    out_path = output_dir / section_filename(section.name)
+    filename = filename_override or section_filename(section.name)
+    out_path = output_dir / filename
     text = _render_csv_text(section)
     out_path.write_text(text, encoding=CSV_ENCODING, newline="")
     return out_path
+
+
+def physician_own_view_filename(physician_id: str) -> str:
+    """Return the canonical per-physician own-view CSV filename.
+
+    Pinned so the orchestrator and any external consumer (the dashboard
+    download handler, the email-distribution job) agree on the filename
+    without re-encoding the convention in two places.
+
+    ``physician_id`` is the upstream-hashed identifier from
+    :class:`MonthlyReportRow`; it is already a safe filename component
+    because the upstream contract requires a non-empty string and the
+    hashing layer produces a fixed-alphabet output. The filename pattern
+    embeds the section name so a per-physician artifact remains
+    visually distinct from a committee section CSV.
+    """
+    return f"physician_own_view_{physician_id}.csv"

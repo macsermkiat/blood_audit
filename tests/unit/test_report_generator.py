@@ -79,6 +79,7 @@ from bba.report_generator import (
     aggregate_ward_scorecard,
     filter_rows_for_month,
     generate_monthly_report,
+    physician_own_view_filename,
     render_report_pdf,
     section_filename,
     write_section_csv,
@@ -131,6 +132,9 @@ def _footer() -> ReportFooter:
         policy_version="PR17.2-v1",
         model_id="claude-sonnet-4-6-2026-04-01",
         redactor_version="deid-th-1.3.0",
+        redactor_model_sha="sha-abcdef0123456789",
+        prompt_hash="sha-prompt-001",
+        evidence_bundle_hash="sha-bundle-001",
     )
 
 
@@ -246,6 +250,9 @@ class TestModelImmutability:
                 policy_version="",
                 model_id="m",
                 redactor_version="r",
+                redactor_model_sha="s",
+                prompt_hash="p",
+                evidence_bundle_hash="e",
             )
 
     def test_hospital_trend_row_rejects_out_of_range_rate(self) -> None:
@@ -498,12 +505,27 @@ class TestPipelineHealthAggregation:
         )
         result = aggregate_pipeline_health(rows)
         assert len(result) == 1
-        assert result[0].total_orders == 4
-        assert result[0].classified_orders == 2
-        # NEEDS_REVIEW is counted regardless of the human-review flag;
-        # the flag adds APPROPRIATE/INAPPROPRIATE rows that were spot-
-        # checked by policy.
-        assert result[0].needs_review_count >= 1
+        r = result[0]
+        assert r.total_orders == 4
+        assert r.classified_orders == 2
+        # NEEDS_REVIEW is the review bucket; INSUFFICIENT_EVIDENCE has
+        # its own bucket so a documentation regression upstream is
+        # visible separately from an LLM-uncertainty regression.
+        assert r.needs_review_count == 1
+        assert r.insufficient_evidence_count == 1
+        assert r.needs_review_rate == pytest.approx(0.25)
+        assert r.insufficient_evidence_rate == pytest.approx(0.25)
+
+    def test_insufficient_evidence_distinct_from_needs_review(self) -> None:
+        # PRD §"Documentation absence ≠ INAPPROPRIATE": a row whose
+        # final_classification is INSUFFICIENT_EVIDENCE must NOT count
+        # toward needs_review_count.
+        rows = (
+            _row(audit_id="x", final_classification="INSUFFICIENT_EVIDENCE"),
+        )
+        r = aggregate_pipeline_health(rows)[0]
+        assert r.needs_review_count == 0
+        assert r.insufficient_evidence_count == 1
 
     def test_needs_review_flag_adds_to_count(self) -> None:
         rows = (
@@ -552,7 +574,14 @@ class TestFooterStamping:
         out = write_section_csv(section, tmp_path)
         text = out.read_text(encoding="utf-8")
         header_line = text.splitlines()[0]
-        for col in ("policy_version", "model_id", "redactor_version"):
+        for col in (
+            "policy_version",
+            "model_id",
+            "redactor_version",
+            "redactor_model_sha",
+            "prompt_hash",
+            "evidence_bundle_hash",
+        ):
             assert col in header_line, f"footer column {col!r} missing from header"
 
     def test_footer_fields_present_on_every_data_row(self, tmp_path: Path) -> None:
@@ -583,11 +612,30 @@ class TestFooterStamping:
         out = write_section_csv(section, tmp_path)
         text = out.read_text(encoding="utf-8")
         data_lines = text.splitlines()[1:]
-        # All data lines reference the footer values
+        # All data lines reference every footer value — the full PRD
+        # reproducibility-metadata set, not just the three named in the
+        # ticket.
         for line in data_lines:
             assert "PR17.2-v1" in line
             assert "claude-sonnet-4-6-2026-04-01" in line
             assert "deid-th-1.3.0" in line
+            assert "sha-abcdef0123456789" in line
+            assert "sha-prompt-001" in line
+            assert "sha-bundle-001" in line
+
+    def test_empty_section_carries_footer_values(self, tmp_path: Path) -> None:
+        # PRD reproducibility: even an empty section must carry the
+        # footer so a downstream consumer can tell which policy / model /
+        # redactor versions produced the empty result.
+        section = ReportSection(
+            name="cohort_exception", rows=(), footer=_footer()
+        )
+        out = write_section_csv(section, tmp_path)
+        lines = out.read_text(encoding="utf-8").splitlines()
+        assert len(lines) >= 2, "empty section must still emit a footer-bearing row"
+        footer_row = lines[1]
+        assert "PR17.2-v1" in footer_row
+        assert "sha-bundle-001" in footer_row
 
 
 # =============================================================================
@@ -621,9 +669,11 @@ class TestGoldenSnapshotHospitalTrend:
         expected = (
             b"month,total_orders,appropriate,inappropriate,needs_review,"
             b"insufficient_evidence,inappropriate_rate,policy_version,"
-            b"model_id,redactor_version\n"
+            b"model_id,redactor_version,redactor_model_sha,prompt_hash,"
+            b"evidence_bundle_hash\n"
             b"2026-05-01,4,1,2,1,0,0.5,PR17.2-v1,"
-            b"claude-sonnet-4-6-2026-04-01,deid-th-1.3.0\n"
+            b"claude-sonnet-4-6-2026-04-01,deid-th-1.3.0,"
+            b"sha-abcdef0123456789,sha-prompt-001,sha-bundle-001\n"
         )
         assert actual == expected
 
@@ -646,13 +696,148 @@ class TestGoldenSnapshotWardScorecard:
         expected = (
             b"ward_id,total_orders,appropriate,inappropriate,needs_review,"
             b"insufficient_evidence,inappropriate_rate,policy_version,"
-            b"model_id,redactor_version\n"
+            b"model_id,redactor_version,redactor_model_sha,prompt_hash,"
+            b"evidence_bundle_hash\n"
             b"WARD-A,2,1,1,0,0,0.5,PR17.2-v1,"
-            b"claude-sonnet-4-6-2026-04-01,deid-th-1.3.0\n"
+            b"claude-sonnet-4-6-2026-04-01,deid-th-1.3.0,"
+            b"sha-abcdef0123456789,sha-prompt-001,sha-bundle-001\n"
             b"WARD-B,1,1,0,0,0,0.0,PR17.2-v1,"
-            b"claude-sonnet-4-6-2026-04-01,deid-th-1.3.0\n"
+            b"claude-sonnet-4-6-2026-04-01,deid-th-1.3.0,"
+            b"sha-abcdef0123456789,sha-prompt-001,sha-bundle-001\n"
         )
         assert actual == expected
+
+
+class TestGoldenSnapshotIndicationDistribution:
+    """Byte-identical CSV for the indication-distribution section."""
+
+    def test_byte_identical_csv(self, tmp_path: Path) -> None:
+        rows = (
+            _row(audit_id="a", indication_codes=("anemia_symptomatic",)),
+            _row(audit_id="b", indication_codes=("anemia_symptomatic",)),
+            _row(audit_id="c", indication_codes=("acute_bleed",)),
+        )
+        section = ReportSection(
+            name="indication_distribution",
+            rows=aggregate_indication_distribution(rows),
+            footer=_footer(),
+        )
+        out = write_section_csv(section, tmp_path)
+        expected = (
+            b"indication_code,total_orders,share,policy_version,model_id,"
+            b"redactor_version,redactor_model_sha,prompt_hash,evidence_bundle_hash\n"
+            b"anemia_symptomatic,2,0.666667,PR17.2-v1,"
+            b"claude-sonnet-4-6-2026-04-01,deid-th-1.3.0,"
+            b"sha-abcdef0123456789,sha-prompt-001,sha-bundle-001\n"
+            b"acute_bleed,1,0.333333,PR17.2-v1,"
+            b"claude-sonnet-4-6-2026-04-01,deid-th-1.3.0,"
+            b"sha-abcdef0123456789,sha-prompt-001,sha-bundle-001\n"
+        )
+        assert out.read_bytes() == expected
+
+
+class TestGoldenSnapshotCohortException:
+    """Byte-identical CSV for the cohort-exception section."""
+
+    def test_byte_identical_csv(self, tmp_path: Path) -> None:
+        rows = (
+            _row(audit_id="a", cohort_applied="cardiac_surgery",
+                 final_classification="INAPPROPRIATE"),
+            _row(audit_id="b", cohort_applied="cardiac_surgery",
+                 final_classification="APPROPRIATE"),
+            _row(audit_id="c", cohort_applied="default",
+                 final_classification="APPROPRIATE"),
+        )
+        section = ReportSection(
+            name="cohort_exception",
+            rows=aggregate_cohort_exception(rows),
+            footer=_footer(),
+        )
+        out = write_section_csv(section, tmp_path)
+        expected = (
+            b"cohort_applied,total_orders,inappropriate,inappropriate_rate,"
+            b"policy_version,model_id,redactor_version,redactor_model_sha,"
+            b"prompt_hash,evidence_bundle_hash\n"
+            b"cardiac_surgery,2,1,0.5,PR17.2-v1,"
+            b"claude-sonnet-4-6-2026-04-01,deid-th-1.3.0,"
+            b"sha-abcdef0123456789,sha-prompt-001,sha-bundle-001\n"
+            b"default,1,0,0.0,PR17.2-v1,"
+            b"claude-sonnet-4-6-2026-04-01,deid-th-1.3.0,"
+            b"sha-abcdef0123456789,sha-prompt-001,sha-bundle-001\n"
+        )
+        assert out.read_bytes() == expected
+
+
+class TestGoldenSnapshotPipelineHealth:
+    """Byte-identical CSV for the pipeline-health section."""
+
+    def test_byte_identical_csv(self, tmp_path: Path) -> None:
+        rows = (
+            _row(audit_id="a", final_classification="APPROPRIATE"),
+            _row(audit_id="b", final_classification="INAPPROPRIATE"),
+            _row(audit_id="c", final_classification="NEEDS_REVIEW"),
+            _row(audit_id="d", final_classification="INSUFFICIENT_EVIDENCE"),
+        )
+        section = ReportSection(
+            name="pipeline_health",
+            rows=aggregate_pipeline_health(rows),
+            footer=_footer(),
+        )
+        out = write_section_csv(section, tmp_path)
+        expected = (
+            b"total_orders,classified_orders,needs_review_count,"
+            b"needs_review_rate,insufficient_evidence_count,"
+            b"insufficient_evidence_rate,policy_version,model_id,"
+            b"redactor_version,redactor_model_sha,prompt_hash,"
+            b"evidence_bundle_hash\n"
+            b"4,2,1,0.25,1,0.25,PR17.2-v1,"
+            b"claude-sonnet-4-6-2026-04-01,deid-th-1.3.0,"
+            b"sha-abcdef0123456789,sha-prompt-001,sha-bundle-001\n"
+        )
+        assert out.read_bytes() == expected
+
+
+class TestGoldenSnapshotPhysicianOwnView:
+    """Byte-identical CSV for a single physician's own-view artifact.
+
+    Asserted against the per-physician filename (one CSV per physician)
+    so the byte-identical contract also pins the structural "own-data
+    only" property from PRD user story #10.
+    """
+
+    def test_byte_identical_csv(self, tmp_path: Path) -> None:
+        # Three physicians with rates {0.0, 0.5, 1.0}.
+        rows = (
+            _row(audit_id="a1", physician_id="phys-A",
+                 final_classification="APPROPRIATE"),
+            _row(audit_id="b1", physician_id="phys-B",
+                 final_classification="APPROPRIATE"),
+            _row(audit_id="b2", physician_id="phys-B",
+                 final_classification="INAPPROPRIATE"),
+            _row(audit_id="c1", physician_id="phys-C",
+                 final_classification="INAPPROPRIATE"),
+        )
+        rendered = aggregate_physician_own_view(rows, ("phys-A",))
+        section = ReportSection(
+            name="physician_own_view", rows=rendered, footer=_footer()
+        )
+        out = write_section_csv(
+            section,
+            tmp_path,
+            filename_override=physician_own_view_filename("phys-A"),
+        )
+        assert out.name == "physician_own_view_phys-A.csv"
+        expected = (
+            b"physician_id,own_total,own_inappropriate_rate,"
+            b"peer_median_inappropriate_rate,peer_p25_inappropriate_rate,"
+            b"peer_p75_inappropriate_rate,policy_version,model_id,"
+            b"redactor_version,redactor_model_sha,prompt_hash,"
+            b"evidence_bundle_hash\n"
+            b"phys-A,1,0.0,0.5,0.25,0.75,PR17.2-v1,"
+            b"claude-sonnet-4-6-2026-04-01,deid-th-1.3.0,"
+            b"sha-abcdef0123456789,sha-prompt-001,sha-bundle-001\n"
+        )
+        assert out.read_bytes() == expected
 
 
 # =============================================================================
@@ -682,7 +867,14 @@ class TestCsvSchemaDocumented:
             assert section_name in text, (
                 f"docs/report-schema.md must reference section {section_name!r}"
             )
-        for footer_field in ("policy_version", "model_id", "redactor_version"):
+        for footer_field in (
+            "policy_version",
+            "model_id",
+            "redactor_version",
+            "redactor_model_sha",
+            "prompt_hash",
+            "evidence_bundle_hash",
+        ):
             assert footer_field in text, (
                 f"docs/report-schema.md must reference footer field "
                 f"{footer_field!r}"
@@ -730,31 +922,69 @@ class TestPdfRendering:
 
 
 class TestMonthBoundaryFiltering:
-    """``filter_rows_for_month`` is half-open ``[month, next_month)``."""
+    """``filter_rows_for_month`` is half-open
+    ``[month_local_start, next_month_local_start)`` in Asia/Bangkok
+    (UTC+7, no DST).
 
-    def test_includes_first_second_of_month(self) -> None:
+    PRD §"Tz-aware throughout": datetimes are stored UTC, rendered
+    Asia/Bangkok. The monthly bucket is the hospital business month
+    (Bangkok local), not the UTC month — an order at 23:00 Bangkok on
+    the 31st must bucket into that local month even though it falls in
+    the next UTC month.
+    """
+
+    def test_includes_first_local_second_of_month(self) -> None:
+        # Bangkok 00:00:00 May 1 == UTC 17:00:00 April 30. The Bangkok-
+        # local "first second of May" belongs to May.
         row = _row(
-            audit_id="boundary",
-            order_datetime=datetime(2026, 5, 1, 0, 0, 0, tzinfo=UTC),
+            audit_id="bkk-may-start",
+            order_datetime=datetime(2026, 4, 30, 17, 0, 0, tzinfo=UTC),
         )
         result = filter_rows_for_month((row,), MONTH)
         assert result == (row,)
 
-    def test_excludes_first_second_of_next_month(self) -> None:
+    def test_excludes_first_local_second_of_next_month(self) -> None:
+        # Bangkok 00:00:00 June 1 == UTC 17:00:00 May 31. The Bangkok-
+        # local "first second of June" must NOT bucket into May.
         row = _row(
-            audit_id="next",
+            audit_id="bkk-jun-start",
+            order_datetime=datetime(2026, 5, 31, 17, 0, 0, tzinfo=UTC),
+        )
+        result = filter_rows_for_month((row,), MONTH)
+        assert result == ()
+
+    def test_includes_last_local_second_of_month(self) -> None:
+        # Bangkok 23:59:59 May 31 == UTC 16:59:59 May 31. The last
+        # Bangkok-local instant of the month is inside the bucket.
+        row = _row(
+            audit_id="bkk-may-end",
+            order_datetime=datetime(2026, 5, 31, 16, 59, 59, tzinfo=UTC),
+        )
+        result = filter_rows_for_month((row,), MONTH)
+        assert result == (row,)
+
+    def test_utc_midnight_of_next_month_is_still_in_local_month(self) -> None:
+        # The PRD-cited bug this test pins: UTC midnight June 1 is 07:00
+        # Bangkok on June 1 — which is *June* locally, not May. A UTC-
+        # bound filter would either include or exclude this depending
+        # on the half-open direction; the Bangkok-bound filter excludes.
+        row = _row(
+            audit_id="utc-jun-midnight",
             order_datetime=datetime(2026, 6, 1, 0, 0, 0, tzinfo=UTC),
         )
         result = filter_rows_for_month((row,), MONTH)
         assert result == ()
 
-    def test_excludes_last_second_of_previous_month(self) -> None:
+    def test_utc_last_second_of_april_is_in_local_may(self) -> None:
+        # 23:59:59 UTC April 30 == 06:59:59 Bangkok May 1, which is May
+        # locally. PRD's "stored UTC, rendered Asia/Bangkok" rule means
+        # this row IS in the May report.
         row = _row(
-            audit_id="prev",
+            audit_id="utc-apr-end",
             order_datetime=datetime(2026, 4, 30, 23, 59, 59, tzinfo=UTC),
         )
         result = filter_rows_for_month((row,), MONTH)
-        assert result == ()
+        assert result == (row,)
 
 
 # =============================================================================
@@ -799,23 +1029,86 @@ class TestClassificationBucketsSum:
 
 
 class TestGenerateMonthlyReport:
-    """``generate_monthly_report`` writes six CSVs + one PDF and raises
+    """``generate_monthly_report`` writes five committee CSVs, one PDF,
+    and one CSV per physician in ``physician_ids_for_own_view``; raises
     on empty input."""
 
-    def test_emits_six_csvs_and_one_pdf(self, tmp_path: Path) -> None:
+    def test_emits_five_committee_csvs_plus_per_physician_and_pdf(
+        self, tmp_path: Path
+    ) -> None:
         rows = (
-            _row(audit_id="a", final_classification="APPROPRIATE"),
-            _row(audit_id="b", final_classification="INAPPROPRIATE"),
+            _row(audit_id="a", physician_id="phys-1",
+                 final_classification="APPROPRIATE"),
+            _row(audit_id="b", physician_id="phys-2",
+                 final_classification="INAPPROPRIATE"),
         )
         artifacts = generate_monthly_report(
-            _inputs(rows, output_dir=tmp_path, physician_ids_for_own_view=("phys-1",))
+            _inputs(
+                rows,
+                output_dir=tmp_path,
+                physician_ids_for_own_view=("phys-1", "phys-2"),
+            )
         )
         assert isinstance(artifacts, ReportArtifacts)
-        for name in SECTION_NAMES:
-            assert name in artifacts.csv_paths
-            assert artifacts.csv_paths[name].exists()
+        # Five committee section CSVs; physician_own_view is NOT a
+        # committee artifact — its data is per-physician.
+        expected_committee = {
+            "hospital_trend",
+            "ward_scorecard",
+            "indication_distribution",
+            "cohort_exception",
+            "pipeline_health",
+        }
+        assert set(artifacts.csv_paths.keys()) == expected_committee
+        for path in artifacts.csv_paths.values():
+            assert path.exists()
+        assert "physician_own_view" not in artifacts.csv_paths
+        # One CSV per physician_id in the requested set.
+        assert set(artifacts.physician_own_view_csv_paths.keys()) == {
+            "phys-1",
+            "phys-2",
+        }
+        for pid, path in artifacts.physician_own_view_csv_paths.items():
+            assert path.exists()
+            assert path.name == f"physician_own_view_{pid}.csv"
         assert artifacts.pdf_path.exists()
         assert artifacts.pdf_path.read_bytes().startswith(PDF_MAGIC)
+
+    def test_per_physician_csv_contains_only_that_physician_row(
+        self, tmp_path: Path
+    ) -> None:
+        # Structural enforcement of PRD user story #10's "own-data only":
+        # each per-physician artifact must contain at most one data row
+        # bearing this physician's identifier.
+        rows = (
+            _row(audit_id="a", physician_id="phys-1"),
+            _row(audit_id="b", physician_id="phys-2"),
+            _row(audit_id="c", physician_id="phys-3"),
+        )
+        artifacts = generate_monthly_report(
+            _inputs(
+                rows,
+                output_dir=tmp_path,
+                physician_ids_for_own_view=("phys-1", "phys-2", "phys-3"),
+            )
+        )
+        for pid, path in artifacts.physician_own_view_csv_paths.items():
+            text = path.read_text(encoding="utf-8")
+            data_lines = text.splitlines()[1:]
+            assert len(data_lines) == 1, (
+                f"per-physician CSV must contain exactly one data row "
+                f"(got {len(data_lines)} for {pid})"
+            )
+            # The single data row begins with this physician's id; no
+            # other physician's id appears in the file.
+            assert data_lines[0].startswith(f"{pid},"), (
+                f"row 1 of {path.name} must begin with the artifact's "
+                f"own physician_id"
+            )
+            for other in {"phys-1", "phys-2", "phys-3"} - {pid}:
+                assert other not in text, (
+                    f"{path.name} leaked another physician's id: {other}"
+                )
 
     def test_empty_input_raises_empty_input_error(self, tmp_path: Path) -> None:
         # Zero rows for the month → operator should be notified, not
