@@ -1142,6 +1142,60 @@ class TestTimestampTieDeterminism:
         )
         assert a.bundle_hash == b.bundle_hash
 
+    def test_progress_note_text_NFC_invariance_for_tied_timestamp(self) -> None:
+        # Round-22: ranking keys NFC-normalize text so NFD vs NFC variants
+        # of the same content sort identically. Without that, a same-time
+        # tied pair "A: é" + "A: f" would lex-order one way while
+        # "A: é" + "A: f" would lex-order another (raw byte
+        # comparison flips before canonical_serialize unifies); the
+        # bundle hash would leak the input encoding form.
+        nfc_text = unicodedata.normalize("NFC", "A: café")
+        nfd_text = unicodedata.normalize("NFD", "A: café")
+        # Build identical bundles using NFC vs NFD text on the same
+        # timestamp; reorder-invariance + NFC-key normalization means
+        # the bundle hash must match.
+        notes_nfc = (
+            _progress(offset_hours=-1, text=nfc_text),
+            _progress(offset_hours=-1, text="A: foo"),
+        )
+        notes_nfd = (
+            _progress(offset_hours=-1, text=nfd_text),
+            _progress(offset_hours=-1, text="A: foo"),
+        )
+        bundle_nfc = _build_minimal(progress_notes=notes_nfc)
+        bundle_nfd = _build_minimal(progress_notes=notes_nfd)
+        assert bundle_nfc.bundle_hash == bundle_nfd.bundle_hash
+
+    def test_focus_note_text_NFC_invariance_for_tied_timestamp(self) -> None:
+        nfc_text = unicodedata.normalize("NFC", "café focus")
+        nfd_text = unicodedata.normalize("NFD", "café focus")
+        notes_nfc = (
+            _focus(offset_hours=-1, text=nfc_text),
+            _focus(offset_hours=-1, text="other focus"),
+        )
+        notes_nfd = (
+            _focus(offset_hours=-1, text=nfd_text),
+            _focus(offset_hours=-1, text="other focus"),
+        )
+        bundle_nfc = _build_minimal(focus_notes=notes_nfc)
+        bundle_nfd = _build_minimal(focus_notes=notes_nfd)
+        assert bundle_nfc.bundle_hash == bundle_nfd.bundle_hash
+
+    def test_med_drug_name_NFC_invariance_for_tied_timestamp(self) -> None:
+        nfc_drug = unicodedata.normalize("NFC", "Café-medication")
+        nfd_drug = unicodedata.normalize("NFD", "Café-medication")
+        meds_nfc = (
+            _med(offset_hours=-1, drug=nfc_drug),
+            _med(offset_hours=-1, drug="Aspirin"),
+        )
+        meds_nfd = (
+            _med(offset_hours=-1, drug=nfd_drug),
+            _med(offset_hours=-1, drug="Aspirin"),
+        )
+        bundle_nfc = _build_minimal(meds=meds_nfc)
+        bundle_nfd = _build_minimal(meds=meds_nfd)
+        assert bundle_nfc.bundle_hash == bundle_nfd.bundle_hash
+
     def test_vitals_at_same_timestamp_and_source_hash_invariant(self) -> None:
         # Two vitals snapshots from the same source at the same moment with
         # different SBP. Operationally rare but possible if upstream pushes
@@ -1870,6 +1924,60 @@ class TestHbEmissionAndTruncationPriority:
             "Stale MED (-72h) survived while immediate MED (-1h) dropped; "
             "MED emission order is not newest-first"
         )
+
+    def test_pre_anchor_vitals_survives_closer_post_anchor_under_cap(self) -> None:
+        # Round-22: bba.vitals_extractor prefers ANY pre-anchor note over
+        # the closest post-anchor one — the audit needs trigger state,
+        # not response. Without the pre/post split, a +5min post-order
+        # vital (closer in absolute distance) would emit before a -1h
+        # pre-order vital and tail-drop would discard the pre-order
+        # decision-state vital first.
+        v_pre = VitalsRecord(
+            timestamp=ANCHOR_DT - timedelta(hours=1),
+            source="IPDADMPROGRESS",
+            sbp=90,  # decision-time low BP
+            hr=110,
+        )
+        v_post = VitalsRecord(
+            timestamp=ANCHOR_DT + timedelta(minutes=5),
+            source="IPDADMPROGRESS",
+            sbp=150,  # post-transfusion higher BP
+            hr=88,
+        )
+        anchor = OrderAnchor(
+            order_datetime=ANCHOR_DT,
+            hn_hash="x" * 200,
+            an_hash="y" * 200,
+            products=("LPRC",),
+        )
+        bundle = build_evidence_bundle(
+            inputs=EvidenceInputs(anchor=anchor, vitals=(v_post, v_pre)),
+            char_cap=950,
+        )
+        vitals_items = _items_by_source(bundle, "Vitals")
+        assert len(vitals_items) == 1, "Expected exactly one vital to survive"
+        assert vitals_items[0].payload["sbp"] == 90, (
+            "Closer post-order vital displaced pre-order decision vital; "
+            "vitals pre/post split missing"
+        )
+
+    def test_vitals_emits_pre_before_post_in_normal_bundle(self) -> None:
+        v_pre = VitalsRecord(
+            timestamp=ANCHOR_DT - timedelta(hours=1),
+            source="IPDADMPROGRESS",
+            sbp=90,
+        )
+        v_post = VitalsRecord(
+            timestamp=ANCHOR_DT + timedelta(minutes=5),
+            source="IPDADMPROGRESS",
+            sbp=150,
+        )
+        bundle = _build_minimal(vitals=(v_post, v_pre))
+        vitals_items = _items_by_source(bundle, "Vitals")
+        assert len(vitals_items) == 2
+        # Pre emits before post (decision context first)
+        assert vitals_items[0].payload["sbp"] == 90
+        assert vitals_items[1].payload["sbp"] == 150
 
     def test_vitals_truncation_preserves_closest_to_anchor(self) -> None:
         # Round-21: Vitals emits closest-first so tail-drop drops the

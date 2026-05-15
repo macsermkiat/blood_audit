@@ -8,6 +8,7 @@ authoritative declaration in the codebase.
 
 from __future__ import annotations
 
+import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -32,6 +33,14 @@ from bba.evidence_bundle_builder.ranking import (
     parse_soap_sections,
     split_focus_notes_5_5,
 )
+
+
+def _nfc(s: str) -> str:
+    """NFC-normalize a sort-key string. Without this, tied-timestamp
+    records whose text differs only by NFC/NFD encoding would order
+    differently before canonical_serialize unifies them, leaking the
+    input encoding into the bundle hash."""
+    return unicodedata.normalize("NFC", s)
 
 
 # =============================================================================
@@ -323,11 +332,14 @@ def _progress_emission_key(
     tail-drop discards the farthest progress note first under cap
     pressure. The cap-selection in :func:`_cap_progress_closest`
     already kept the 8 closest notes; this preserves "closest" through
-    the truncation pass too."""
+    the truncation pass too. The text tiebreak is NFC-normalized so
+    same-time notes whose only difference is Unicode normalization
+    form sort identically — without that, the bundle hash would leak
+    the input encoding even though canonical_serialize unifies it."""
     return (
         abs((p.timestamp - anchor_dt).total_seconds()),
         p.timestamp,
-        p.text,
+        _nfc(p.text),
     )
 
 
@@ -562,7 +574,11 @@ def _assign_ids(
     # ``"description": ""``).
     for d in sorted(
         diagnoses,
-        key=lambda x: (x.icd10, x.description is not None, x.description or ""),
+        key=lambda x: (
+            _nfc(x.icd10),
+            x.description is not None,
+            _nfc(x.description or ""),
+        ),
     ):
         items.append(
             EvidenceItem(
@@ -615,12 +631,12 @@ def _assign_ids(
     # clinical relevance for an audit task.
     pre_meds = sorted(
         (m for m in meds if m.timestamp <= anchor_dt),
-        key=lambda x: (x.timestamp, x.drug),
+        key=lambda x: (x.timestamp, _nfc(x.drug)),
         reverse=True,
     )
     post_meds = sorted(
         (m for m in meds if m.timestamp > anchor_dt),
-        key=lambda x: (x.timestamp, x.drug),
+        key=lambda x: (x.timestamp, _nfc(x.drug)),
     )
     for m in [*pre_meds, *post_meds]:
         items.append(
@@ -656,7 +672,21 @@ def _assign_ids(
             )
         )
 
-    for v in sorted(vitals, key=lambda x: _vitals_emission_key(x, anchor_dt)):
+    # Vitals: pre-anchor (decision-time state) ALWAYS BEFORE post-anchor
+    # (response state). Mirrors :mod:`bba.vitals_extractor` which prefers
+    # any pre-anchor note over the closest post-anchor one — the audit
+    # needs trigger state, not response. Without the split, a +5min
+    # post-order vital could displace a -1h pre-order vital under cap
+    # pressure, exactly inverting clinical relevance for an audit.
+    pre_vitals = sorted(
+        (v for v in vitals if v.timestamp <= anchor_dt),
+        key=lambda x: _vitals_emission_key(x, anchor_dt),
+    )
+    post_vitals = sorted(
+        (v for v in vitals if v.timestamp > anchor_dt),
+        key=lambda x: _vitals_emission_key(x, anchor_dt),
+    )
+    for v in [*pre_vitals, *post_vitals]:
         items.append(
             EvidenceItem(
                 id=_next_id(),

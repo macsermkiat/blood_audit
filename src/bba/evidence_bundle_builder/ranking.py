@@ -20,6 +20,7 @@ directly — the builder pipeline is a thin assembler around them.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 
@@ -157,14 +158,17 @@ def split_focus_notes_5_5(
     # whole text (the only model field besides timestamp) so any two
     # genuinely-distinct rows have a deterministic order; two byte-identical
     # rows are operationally a duplicate and order does not matter for hash.
+    # NFC-normalize the text tiebreak so NFD vs NFC variants of the same
+    # text sort identically — without this, the bundle hash would leak
+    # the input encoding even though canonical_serialize unifies it.
     before = sorted(
         (n for n in notes if n.timestamp <= anchor),
-        key=lambda n: (n.timestamp, n.text),
+        key=lambda n: (n.timestamp, unicodedata.normalize("NFC", n.text)),
         reverse=True,
     )[:cap_before]
     after = sorted(
         (n for n in notes if n.timestamp > anchor),
-        key=lambda n: (n.timestamp, n.text),
+        key=lambda n: (n.timestamp, unicodedata.normalize("NFC", n.text)),
     )[:cap_after]
     return tuple(before) + tuple(after)
 
