@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import unicodedata
 from collections.abc import Mapping, Sequence
 from datetime import datetime
@@ -42,7 +43,24 @@ def _to_jsonable(value: Any) -> Any:
     custom object can't silently land in the bundle and break hash stability
     when its ``__repr__`` changes.
     """
-    if value is None or isinstance(value, bool | int | float):
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        # Reject non-finite floats: Python's ``json.dumps`` emits ``NaN`` /
+        # ``Infinity`` / ``-Infinity`` for these, which RFC 7159 / 8259
+        # forbids — strict downstream parsers (deid_redactor /
+        # prompt_builder / any audit re-hydration tool) would reject them.
+        # The bundle-hash AC requires bytes that round-trip through every
+        # JSON parser, so a non-finite float in a payload is an upstream
+        # bug worth surfacing at construction.
+        if not math.isfinite(value):
+            raise ValueError(
+                f"canonical_serialize: non-finite float {value!r} is not "
+                "valid JSON; reject at the source (vitals/Hb/lab) instead "
+                "of letting it leak into the bundle hash"
+            )
         return value
     if isinstance(value, str):
         return unicodedata.normalize("NFC", value)
@@ -67,11 +85,15 @@ def canonical_serialize(payload: Any) -> str:
     rather than re-emitting via Pydantic, so any drift between the hashed
     bytes and the bytes the LLM receives is impossible by construction.
     """
+    # ``allow_nan=False`` is a backstop for the non-finite-float check in
+    # _to_jsonable: if a future code path bypasses _to_jsonable, json.dumps
+    # raises ValueError instead of emitting invalid JSON.
     return json.dumps(
         _to_jsonable(payload),
         sort_keys=True,
         indent=2,
         ensure_ascii=False,
+        allow_nan=False,
     )
 
 

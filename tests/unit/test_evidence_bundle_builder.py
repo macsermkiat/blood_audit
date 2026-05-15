@@ -755,6 +755,64 @@ class TestTimestampTieDeterminism:
         assert a.bundle_hash == b.bundle_hash
 
 
+class TestCanonicalJSONRejectsNonFiniteFloats:
+    """Non-finite floats (NaN, +Inf, -Inf) must NEVER reach the bundle.
+
+    Python's ``json.dumps`` defaults emit ``NaN`` / ``Infinity`` /
+    ``-Infinity``, which are NOT valid JSON per RFC 7159 / 8259. The
+    bundle-hash AC requires bytes that round-trip through every JSON
+    parser; downstream tooling (deid_redactor, prompt_builder, audit
+    re-hydration) would either reject these tokens or interpret them
+    inconsistently. The serializer fails loud at the boundary so the
+    upstream bug (a buggy vitals extraction, an arithmetic 0/0) is
+    surfaced where it can be fixed."""
+
+    def test_nan_in_payload_raises(self) -> None:
+        with pytest.raises(ValueError, match="non-finite"):
+            canonical_serialize({"x": float("nan")})
+
+    def test_positive_infinity_in_payload_raises(self) -> None:
+        with pytest.raises(ValueError, match="non-finite"):
+            canonical_serialize({"x": float("inf")})
+
+    def test_negative_infinity_in_payload_raises(self) -> None:
+        with pytest.raises(ValueError, match="non-finite"):
+            canonical_serialize({"x": float("-inf")})
+
+    def test_nan_inside_nested_list_raises(self) -> None:
+        # Defense-in-depth: the recursion must fail at any depth, not just
+        # at the top-level dict.
+        with pytest.raises(ValueError, match="non-finite"):
+            canonical_serialize({"items": [{"bt": float("nan")}]})
+
+    def test_finite_floats_still_serialize(self) -> None:
+        # Sanity: 36.5 (a normal body-temperature value) still works.
+        out = canonical_serialize({"bt": 36.5})
+        assert "36.5" in out
+
+
+class TestVitalsRecordRejectsNonFiniteBt:
+    """Defense in depth: VitalsRecord.bt rejects NaN / Inf at construction
+    so the bundle-hash failure surfaces at the upstream call site, not
+    deep inside :func:`build_evidence_bundle`."""
+
+    def test_nan_bt_raises(self) -> None:
+        with pytest.raises(ValidationError):
+            VitalsRecord(timestamp=ANCHOR_DT, source="IPDADMPROGRESS", bt=float("nan"))
+
+    def test_positive_inf_bt_raises(self) -> None:
+        with pytest.raises(ValidationError):
+            VitalsRecord(timestamp=ANCHOR_DT, source="IPDADMPROGRESS", bt=float("inf"))
+
+    def test_negative_inf_bt_raises(self) -> None:
+        with pytest.raises(ValidationError):
+            VitalsRecord(timestamp=ANCHOR_DT, source="IPDADMPROGRESS", bt=float("-inf"))
+
+    def test_finite_bt_still_constructs(self) -> None:
+        v = VitalsRecord(timestamp=ANCHOR_DT, source="IPDADMPROGRESS", bt=37.0)
+        assert v.bt == 37.0
+
+
 class TestImpossibleCharCapRaises:
     """Cap enforcement fails loud when even the anchor envelope exceeds cap.
 

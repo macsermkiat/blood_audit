@@ -253,7 +253,11 @@ class VitalsRecord(BaseModel):
     dbp: int | None = None
     hr: int | None = None
     rr: int | None = None
-    bt: float | None = None
+    # ``allow_inf_nan=False`` rejects NaN / +/-Infinity at construction so a
+    # buggy upstream extractor cannot leak a non-finite float into the
+    # bundle, where the canonical-JSON serializer would otherwise raise mid-
+    # pipeline (still safe, but with a less-targeted error).
+    bt: float | None = Field(default=None, allow_inf_nan=False)
 
 
 class EvidenceInputs(BaseModel):
