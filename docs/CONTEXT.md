@@ -8,7 +8,8 @@ code) when a concept changes shape.
 Scope: Phase 1 of the KCMH RBC transfusion audit pipeline. PRD: [issue #1].
 Sections are added per ticket as each module merges to `main`. Currently
 covered: `#3 ingest`, `#4 audit_orders`, `#5 hb_lookup`, `#6 vitals_extractor`,
-`#16 evidence_bundle_builder`, `#18 quote_grounder`, `#19 audit_store`.
+`#16 evidence_bundle_builder`, `#18 quote_grounder`, `#19 audit_store`,
+`#25 review_actions`.
 
 ## Ingest concepts (#3)
 
@@ -518,6 +519,161 @@ model partitioning every input into either `included: tuple[AuditOrder,
 preserved within each bucket, and identity is deterministic across runs.
 The two pipeline-level Hypothesis property tests assert these invariants
 on generated input matrices.
+
+## Review-actions concepts (#25)
+
+### Review action
+
+A reviewer's verdict on a classified audit row. One of four kinds
+(`ActionKind`): `agree` (confirm the pipeline), `override` (dissent;
+requires `override_reason`), `escalate` (flag for senior review), and
+`use_as_few_shot_candidate` (mark as exemplar — the audit pipeline #24
+reads these back for prompt-cache few-shot blocks).
+`bba.review_actions.models.ReviewAction`. Persisted append-only: revisions
+file new rows rather than mutating prior ones, so the reviewer-decision
+timeline for an audit row never loses a beat.
+
+### Append-only invariant
+
+Defense in depth on the mutable-state contract. Three independent layers,
+each able to stop a mutation alone:
+
+1. **REVOKE** — `UPDATE`, `DELETE`, `TRUNCATE` are revoked from
+   `review_actions_app` and from `PUBLIC` on both tables.
+2. **Trigger guard** — six `BEFORE` triggers (UPDATE / DELETE row + STMT
+   TRUNCATE per table) fire
+   `review_actions_block_mutation`, which raises `SQLSTATE P0001` with
+   message `append_only_violation`.
+3. **Startup integrity check** — see *Schema integrity check* below.
+
+Layer (2) is load-bearing because (1) is bypassable by a superuser
+misconfiguration; layer (3) catches operator drift between migrations
+(a manually-dropped trigger, a re-granted privilege, a swapped guard
+function).
+
+### review_actions_app role
+
+Least-privilege Postgres role the store connects as. Granted only
+`INSERT, SELECT` on the two append-only tables (`review_actions`,
+`phi_access_log`) and `USAGE, SELECT` on their sequences, plus `SELECT`
+on `alembic_version` for the schema-head check. Migrations run as a
+privileged operator role; the app role only ever inserts. The role lives
+in the migration's idempotent `DO`-block so re-running the migration
+against a partially-rolled-back DB does not trip on "role exists".
+
+### PHI access log
+
+Append-only record of every dashboard read of un-redacted text. One row
+per `(reviewer_id, audit_id, hn_hash, an_hash, accessed_at)`, optionally
+carrying `break_glass_justification` for clinical-emergency overrides of
+the standard redaction policy. `bba.review_actions.models.PhiAccessLog`.
+The `hn_hash` / `an_hash` columns are the SHA-256 hashes already computed
+upstream (`bba.deid_redactor` #17); the un-hashed identifiers never enter
+this module.
+
+### Break-glass justification
+
+Reviewer's free-text rationale for accessing PHI outside the standard
+redaction policy (clinical emergency, attending request during code).
+Required by the dashboard layer's break-glass workflow; persisted on
+the `phi_access_log` row so post-hoc audit can trace the override.
+Empty / whitespace-only values are rejected at the model boundary
+(`PhiAccessInput`) — an empty justification defeats the audit trail
+the field exists to defend.
+
+### access_phi context manager
+
+`ReviewActionsStore.access_phi(PhiAccessInput) -> Iterator[PhiAccessLog]`.
+Writes the log row at `__enter__` and yields the persisted row; the
+dashboard wraps its un-redacted-text retrieval in this context so the
+log row is always committed before the text is surfaced. The row stays
+on disk even if the body raises (an attempted access that crashed
+mid-render is still an access for audit purposes). The structural
+pattern is what makes the "log before reading" discipline the obvious
+path in the dashboard code; programmatic enforcement is out of scope
+for this module since the un-redacted text source-of-truth lives upstream.
+
+### Trigger guard
+
+A `BEFORE UPDATE | DELETE | TRUNCATE` trigger raising
+`SQLSTATE P0001 'append_only_violation'`. The trigger function is
+`public.review_actions_block_mutation`; six trigger rows install it on
+the two protected tables. The user-facing message is the bare token
+`append_only_violation` (Codex round 2 — earlier forms included
+`TG_OP` / `TG_TABLE_NAME` and leaked schema details on the client side;
+Postgres' own server-log machinery still records the full operation
+context for operators).
+
+### Schema integrity check
+
+`ReviewActionsStore._ensure_migrated()` runs three independent checks
+exactly once per process lifecycle, before any data mutation:
+
+1. **Privilege check** — the connecting role is not a superuser, does
+   not own a protected table, and is not a `pg_has_role(..., 'MEMBER')`
+   member of the owner role. `'MEMBER'` (vs `'USAGE'`) catches
+   NOINHERIT members who can still `SET ROLE` to the owner and then
+   `DISABLE TRIGGER`.
+2. **Alembic head match** — `current_revision()` and `head_revision()`
+   are equal scalars; both functions raise `RuntimeError` on multi-head
+   DBs or multi-head script directories, which the store wraps into
+   `MigrationStateError`.
+3. **Trigger shape** — every required trigger exists in the `public`
+   schema with the right `(tgname, relname, relnamespace, proname,
+   pronamespace, tgenabled, tgtype)`. Name-only verification is
+   insufficient: a same-named trigger in another schema, a
+   `DISABLE TRIGGER`-ed row, a swapped guard function, or a wrong-event
+   trigger (BEFORE INSERT instead of BEFORE UPDATE) all slip past a
+   simpler check.
+
+Failures flow through `_raise_security(event, message, **fields)` which
+logs a structured `WARNING` to the `bba.review_actions.security` logger
+with stable event tags (`superuser_role_rejected`,
+`owner_role_membership_rejected`, `alembic_revision_drift`,
+`required_triggers_missing`, `trigger_guards_corrupted`,
+`no_alembic_revisions`, `current_role_introspection_failed`) before
+raising `MigrationStateError`.
+
+### MigrationStateError
+
+The single typed exception the store uses for every refused-to-operate
+condition: unmigrated DB, drifted alembic head, missing / disabled /
+swapped / wrong-event trigger, superuser or owner-member role.
+`bba.review_actions.MigrationStateError`. Callers see one exception type
+across all schema-health failure modes; the structured logger
+distinguishes the specific event for alerting / dashboards.
+
+### Multi-head alembic state
+
+A revision graph with two unmerged heads, on disk or in the live DB's
+`alembic_version` table. `current_revision` / `head_revision` raise
+`RuntimeError` rather than silently picking an arbitrary head, and the
+store translates the raise into `MigrationStateError`. Phase-1's single-
+migration history can only enter this state via operator error
+(directly editing `alembic_version`, or branching the script directory);
+catching it loud prevents a deploy from running against a graph the
+migrator cannot apply deterministically.
+
+### AppendOnlyViolationError
+
+The typed exception surfaced to the store's callers when a mutation
+attempted through the store hits the trigger guard (currently only
+reachable via a future defense-in-depth BEFORE INSERT trigger or an
+operator-attached external trigger reusing the SQLSTATE+message
+convention; the canonical UPDATE/DELETE path is blocked by REVOKE
+before the trigger fires). `_translate_raise` matches by `SQLSTATE
+P0001` AND the substring `append_only_violation` in the diagnostic
+message — both must hold so a future P0001 raise for a different reason
+does not get mis-typed.
+
+### Security event logger
+
+`logging.getLogger("bba.review_actions.security")`. Every integrity-check
+rejection emits a `WARNING`-level record with an `extra` dict carrying
+`review_actions_security_event`, `app_name`, and per-event fields
+(`current_user`, `owner`, `missing`, `broken`, `current`, `head`).
+Operators subscribe to alert on repeated bypass attempts; the event tag
+is the stable identifier to grep / route on, never the free-form message.
 
 ## Vocabulary not in this file
 
