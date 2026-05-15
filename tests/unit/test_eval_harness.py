@@ -222,17 +222,24 @@ class TestStratifiedSampling:
             assert len(by_stratum[stratum].cases) == target
 
     def test_inappropriate_enrichment_target_met(self) -> None:
-        # PRD §11: ~138 INAPPROPRIATE-positives per stratum. The sampler must
-        # oversample positives so the per-stratum sensitivity test has the
-        # promised denominator.
+        # PRD §11: "~138 INAPPROPRIATE-positives per stratum." The sampler
+        # oversamples positives toward 138, capped by both the stratum
+        # target and the available positive pool. For the standard PRD
+        # targets, only the adversarial stratum (target=80) is below the
+        # 138 enrichment cap; every other stratum must hit ≥ 138 positives.
         sample = stratified_with_enrichment(
             self._full_population(), _default_targets(), rng_seed=42
         )
-        for draw in sample.draws:
-            assert (
-                draw.drawn_positives
-                >= DEFAULT_INAPPROPRIATE_ENRICHMENT_PER_STRATUM
-            ), f"stratum {draw.stratum} drew {draw.drawn_positives} positives"
+        by_stratum = {d.stratum: d for d in sample.draws}
+        for stratum, target in DEFAULT_STRATUM_TARGETS.items():
+            expected_min = min(
+                DEFAULT_INAPPROPRIATE_ENRICHMENT_PER_STRATUM, target
+            )
+            assert by_stratum[stratum].drawn_positives >= expected_min, (
+                f"stratum {stratum} drew "
+                f"{by_stratum[stratum].drawn_positives} positives "
+                f"(expected ≥ {expected_min})"
+            )
 
     def test_deterministic_with_seed(self) -> None:
         # PRD §"Reproducibility = 'we have the original answer'" — the
