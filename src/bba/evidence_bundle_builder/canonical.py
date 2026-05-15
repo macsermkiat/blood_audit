@@ -16,38 +16,68 @@ the bundle-hash-stability property test relies on this contract.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import unicodedata
+from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import Any
+
+
+def _to_jsonable(value: Any) -> Any:
+    """Recursively convert ``value`` into a json.dumps-compatible primitive.
+
+    Handles the four types the bundle pipeline produces:
+
+    * ``str`` — NFC-normalized so NFD inputs produce byte-identical output.
+    * ``datetime`` — ISO 8601 with explicit UTC offset (the bundle is
+      tz-aware-throughout per CONTEXT.md "tz-aware UTC").
+    * :class:`collections.abc.Mapping` — including ``MappingProxyType``,
+      which the model layer's ``FrozenJsonDict`` produces; ``json.dumps``
+      cannot serialize it directly.
+    * ``Sequence`` (excluding ``str`` / ``bytes``) — including ``tuple``,
+      which the frozen models use in place of ``list``.
+
+    Raises ``TypeError`` for anything else so a stray Pydantic model or
+    custom object can't silently land in the bundle and break hash stability
+    when its ``__repr__`` changes.
+    """
+    if value is None or isinstance(value, bool | int | float):
+        return value
+    if isinstance(value, str):
+        return unicodedata.normalize("NFC", value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Mapping):
+        return {str(k): _to_jsonable(v) for k, v in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        return [_to_jsonable(item) for item in value]
+    raise TypeError(
+        f"canonical_serialize: unsupported type {type(value).__name__!r}; "
+        "convert to a JSON-primitive before serializing"
+    )
 
 
 def canonical_serialize(payload: Any) -> str:
     """Return the canonical JSON string for ``payload``.
 
-    The returned string is the byte sequence the bundle hash is computed
-    over (after UTF-8 encoding). Implementation MUST:
-
-    * sort object keys lexicographically at every nesting level
-    * NFC-normalize every string value (recursively, including nested dicts /
-      lists / tuples) — without this, a Thai diagnosis string in NFD vs NFC
-      would produce two different hashes for the "same" bundle
-    * use 2-space indentation and ``", "`` / ``": "`` separators (i.e., the
-      ``json.dumps`` defaults — fixed at construction so a future caller
-      cannot accidentally pass ``separators=(",", ":")`` and break stability)
-    * NOT emit a trailing newline (the hash is over the raw JSON, not a file)
-
-    Raises ``TypeError`` if ``payload`` contains a non-JSON-encodable type.
+    Sorted keys + 2-space indentation + NFC-normalized strings + no trailing
+    newline. The output is the byte sequence that :func:`bundle_hash`
+    operates on; downstream callers MUST hash this string (encoded UTF-8)
+    rather than re-emitting via Pydantic, so any drift between the hashed
+    bytes and the bytes the LLM receives is impossible by construction.
     """
-    raise NotImplementedError("canonical_serialize: not implemented in RED phase")
+    return json.dumps(
+        _to_jsonable(payload),
+        sort_keys=True,
+        indent=2,
+        ensure_ascii=False,
+    )
 
 
 def bundle_hash(canonical_json: str) -> str:
-    """Return the lowercase SHA-256 hex digest of ``canonical_json`` UTF-8 bytes.
-
-    Always operates on the *output* of :func:`canonical_serialize` — never
-    on a Pydantic ``model_dump_json()`` or ad-hoc ``json.dumps``. Hashing
-    the canonical bytes (not a re-emit) is what makes
-    :data:`EvidenceBundle.bundle_hash` reproducible across pipeline stages.
-    """
-    raise NotImplementedError("bundle_hash: not implemented in RED phase")
+    """Return the lowercase SHA-256 hex digest of ``canonical_json`` UTF-8 bytes."""
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
 
 __all__ = ("bundle_hash", "canonical_serialize")

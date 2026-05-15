@@ -906,7 +906,8 @@ class TestProgressNoteCap8:
             for it in progress_items
         )
         # The 8 smallest absolute offsets among the 12 candidates.
-        assert kept_offsets == [1.0, 2.0, 2.0, 4.0, 4.0, 6.0, 6.0, 8.0]
+        # Symmetric inputs at +/-{1,2,4,6} all make the cut; +/-8 onwards drop.
+        assert kept_offsets == [1.0, 1.0, 2.0, 2.0, 4.0, 4.0, 6.0, 6.0]
 
 
 # =============================================================================
