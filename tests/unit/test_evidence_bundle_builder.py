@@ -1214,6 +1214,77 @@ class TestCanonicalJSONRejectsNonFiniteFloats:
         assert "36.5" in out
 
 
+class TestVitalsRecordEnforcesSanityBounds:
+    """VitalsRecord mirrors :mod:`bba.vitals_extractor.bounds` so a buggy
+    upstream caller cannot persist clinically impossible vitals (sbp=-1,
+    hr=999) as canonical evidence. Hb already mirrors hb_lookup bounds;
+    Vitals consistency closes the same gap for the other half of the
+    deterministic-classifier inputs."""
+
+    def test_sbp_below_lower_bound_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            VitalsRecord(timestamp=ANCHOR_DT, source="IPDADMPROGRESS", sbp=59)
+
+    def test_sbp_above_upper_bound_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            VitalsRecord(timestamp=ANCHOR_DT, source="IPDADMPROGRESS", sbp=221)
+
+    def test_dbp_below_lower_bound_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            VitalsRecord(timestamp=ANCHOR_DT, source="IPDADMPROGRESS", dbp=29)
+
+    def test_dbp_above_upper_bound_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            VitalsRecord(timestamp=ANCHOR_DT, source="IPDADMPROGRESS", dbp=151)
+
+    def test_hr_below_lower_bound_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            VitalsRecord(timestamp=ANCHOR_DT, source="IPDADMPROGRESS", hr=29)
+
+    def test_hr_above_upper_bound_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            VitalsRecord(timestamp=ANCHOR_DT, source="IPDADMPROGRESS", hr=999)
+
+    def test_rr_below_lower_bound_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            VitalsRecord(timestamp=ANCHOR_DT, source="IPDADMPROGRESS", rr=4)
+
+    def test_rr_above_upper_bound_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            VitalsRecord(timestamp=ANCHOR_DT, source="IPDADMPROGRESS", rr=51)
+
+    def test_bt_below_lower_bound_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            VitalsRecord(timestamp=ANCHOR_DT, source="IPDADMPROGRESS", bt=29.9)
+
+    def test_bt_above_upper_bound_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            VitalsRecord(timestamp=ANCHOR_DT, source="IPDADMPROGRESS", bt=43.1)
+
+    def test_inclusive_bounds_accepted(self) -> None:
+        # Boundary values themselves should be valid (inclusive bounds).
+        v = VitalsRecord(
+            timestamp=ANCHOR_DT,
+            source="IPDADMPROGRESS",
+            sbp=60,
+            dbp=30,
+            hr=30,
+            rr=5,
+            bt=30.0,
+        )
+        assert v.sbp == 60
+        v2 = VitalsRecord(
+            timestamp=ANCHOR_DT,
+            source="IPDADMPROGRESS",
+            sbp=220,
+            dbp=150,
+            hr=200,
+            rr=50,
+            bt=43.0,
+        )
+        assert v2.bt == 43.0
+
+
 class TestVitalsRecordRejectsNonFiniteBt:
     """Defense in depth: VitalsRecord.bt rejects NaN / Inf at construction
     so the bundle-hash failure surfaces at the upstream call site, not

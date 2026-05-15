@@ -35,6 +35,19 @@ from pydantic import (
     model_validator,
 )
 
+from bba.vitals_extractor.bounds import (
+    BT_MAX,
+    BT_MIN,
+    DBP_MAX,
+    DBP_MIN,
+    HR_MAX,
+    HR_MIN,
+    RR_MAX,
+    RR_MIN,
+    SBP_MAX,
+    SBP_MIN,
+)
+
 
 # =============================================================================
 # Source enumeration
@@ -252,15 +265,22 @@ class VitalsRecord(BaseModel):
 
     timestamp: AwareDatetime
     source: VitalsNoteSource
-    sbp: int | None = None
-    dbp: int | None = None
-    hr: int | None = None
-    rr: int | None = None
+    # Field constraints mirror :mod:`bba.vitals_extractor.bounds`. The
+    # extractor already rejects out-of-range values at extraction; the
+    # bundle re-applies the same gate so a buggy caller cannot persist
+    # clinically impossible vitals (sbp=-1, hr=999) as canonical evidence.
+    # HbRecord follows the same upstream-bounds-mirroring pattern.
+    sbp: int | None = Field(default=None, ge=SBP_MIN, le=SBP_MAX)
+    dbp: int | None = Field(default=None, ge=DBP_MIN, le=DBP_MAX)
+    hr: int | None = Field(default=None, ge=HR_MIN, le=HR_MAX)
+    rr: int | None = Field(default=None, ge=RR_MIN, le=RR_MAX)
     # ``allow_inf_nan=False`` rejects NaN / +/-Infinity at construction so a
     # buggy upstream extractor cannot leak a non-finite float into the
     # bundle, where the canonical-JSON serializer would otherwise raise mid-
     # pipeline (still safe, but with a less-targeted error).
-    bt: float | None = Field(default=None, allow_inf_nan=False)
+    bt: float | None = Field(
+        default=None, allow_inf_nan=False, ge=BT_MIN, le=BT_MAX
+    )
 
 
 class EvidenceInputs(BaseModel):
