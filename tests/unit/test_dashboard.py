@@ -71,6 +71,7 @@ from bba.dashboard.app import (
     get_case_detail,
     get_physician_scorecard,
     get_pipeline_health,
+    get_route_context,
     get_ward_scorecard,
     list_queue,
     record_break_glass_access,
@@ -644,6 +645,46 @@ class TestFiveViewsRender:
         assert health.average_latency_ms == pytest.approx(100.0)
         assert health.needs_review_rate == pytest.approx(1.0)
 
+    def test_pipeline_health_latency_restricted_to_snapshot_frame(
+        self,
+        config: DashboardConfig,
+        context_in_care_team: RouteContext,
+        audit_store: AuditStore,
+    ) -> None:
+        """Codex round 4 P2: ``llm_calls`` is persisted BEFORE its
+        matching audit row commits (PRD §10 transactional ordering),
+        so a live read of ``llm_calls`` can include calls whose audit
+        is not yet in the snapshot. Pipeline metrics must therefore
+        restrict the latency aggregation to calls whose ``audit_id``
+        appears in the snapshot frame — otherwise the average reflects
+        invisible audits."""
+        # Materialize today's snapshot with audit-001 (latency_ms=100).
+        row_pre, calls_pre = _writeable_audit_row_pair(
+            "audit-001", "run-001"
+        )
+        audit_store.write(row_pre, calls_pre)
+        # First read materializes the snapshot — audit-001 only.
+        get_pipeline_health(config, context_in_care_team)
+
+        # Write a second audit AFTER materialization. Its llm_call
+        # carries a 5000ms latency that would skew the avg dramatically
+        # if it leaked into the snapshot-restricted aggregation.
+        row_post = _audit_row(audit_id="audit-post", run_id="run-post")
+        call_post_dict = _llm_call(
+            audit_id="audit-post", run_id="run-post"
+        ).model_dump()
+        call_post_dict["latency_ms"] = 5000
+        call_post = LlmCall.model_validate(call_post_dict)
+        audit_store.write(row_post, (call_post,))
+
+        health = get_pipeline_health(config, context_in_care_team)
+
+        # Snapshot is frozen at the audit-001 moment; latency must
+        # therefore remain 100ms despite the 5000ms call now living in
+        # the store.
+        assert health.total_audits == 1
+        assert health.average_latency_ms == pytest.approx(100.0)
+
 
 # =============================================================================
 # AC ③ — Break-glass flow: justification required → written to phi_access_log
@@ -874,6 +915,43 @@ class TestPhysicianOwnViewGuard:
             get_physician_scorecard(
                 config, context_physician_other_subject, "phys-002"
             )
+
+    def test_ordinary_reviewer_cannot_view_any_physician_scorecard(
+        self,
+        config: DashboardConfig,
+    ) -> None:
+        """Codex round 4 P1: the previous guard only fired for
+        ``role='physician'``; a reviewer with ``role='reviewer'`` (and
+        ``physician_id=None``) could enumerate any physician's
+        scorecard. The strict own-view guard denies regardless of role
+        — only the subject physician themselves passes."""
+        reviewer = Reviewer(
+            reviewer_id="ordinary-reviewer",
+            name="Ordinary",
+            role="reviewer",
+            physician_id=None,
+        )
+        context = RouteContext(reviewer=reviewer)
+        with pytest.raises(PhysicianAccessDeniedError):
+            get_physician_scorecard(config, context, "phys-001")
+
+    def test_senior_reviewer_cannot_view_other_physician_scorecard(
+        self,
+        config: DashboardConfig,
+    ) -> None:
+        """Even senior reviewers cannot use this route to view another
+        physician's scorecard — cross-physician aggregation belongs on
+        a separate, explicitly privileged endpoint (out of scope for
+        #26)."""
+        reviewer = Reviewer(
+            reviewer_id="senior-reviewer",
+            name="Senior",
+            role="senior_reviewer",
+            physician_id=None,
+        )
+        context = RouteContext(reviewer=reviewer)
+        with pytest.raises(PhysicianAccessDeniedError):
+            get_physician_scorecard(config, context, "phys-001")
 
     @given(
         viewer_physician_id=st.text(
@@ -1174,6 +1252,71 @@ class TestRouteSmoke:
     def test_get_pipeline_health_returns_200(self, client: Any) -> None:
         response = client.get("/pipeline-health")
         assert response.status_code == 200
+
+    def test_auth_dependency_is_overridable_via_dependency_overrides(
+        self,
+        config: DashboardConfig,
+        audit_store: AuditStore,
+    ) -> None:
+        """Codex round 4 P2: the auth dependency was previously a
+        closure inside ``create_app``, so production could not register
+        ``app.dependency_overrides[<dep>] = ...`` without introspecting
+        FastAPI internals. The dependency is now exposed at module
+        level (:func:`get_route_context`) and overridable through the
+        canonical FastAPI mechanism."""
+        from fastapi.testclient import TestClient
+
+        row, calls = _writeable_audit_row_pair("audit-001", "run-001")
+        audit_store.write(row, calls)
+        app = create_app(config)
+
+        # Production wires real auth here; the override replaces the
+        # default-reviewer fallback with a named identity.
+        overridden_reviewer = Reviewer(
+            reviewer_id="override-via-deps",
+            name="Production Auth Identity",
+            role="physician",
+            physician_id="phys-001",
+            care_team_memberships=("audit-001",),
+        )
+
+        def _override() -> RouteContext:
+            return RouteContext(reviewer=overridden_reviewer)
+
+        app.dependency_overrides[get_route_context] = _override
+        try:
+            with TestClient(app) as client:
+                response = client.get("/queue")
+                assert response.status_code == 200
+                # The override resolved successfully — page rendered
+                # without the 401 fallback path.
+                assert "tailwindcss" in response.text
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_routes_return_401_when_no_default_reviewer_and_no_override(
+        self,
+        config_without_unredacted_resolver: DashboardConfig,
+    ) -> None:
+        """When neither the default reviewer nor an override is
+        configured, every route must 401 rather than silently surface
+        unauthenticated content. (The
+        ``config_without_unredacted_resolver`` fixture does set a
+        default reviewer; we build a fresh one here with neither.)"""
+        from fastapi.testclient import TestClient
+
+        bare_config = DashboardConfig(
+            audit_store=config_without_unredacted_resolver.audit_store,
+            review_actions_store=(
+                config_without_unredacted_resolver.review_actions_store
+            ),
+            snapshot_dir=config_without_unredacted_resolver.snapshot_dir,
+            default_reviewer=None,
+        )
+        app = create_app(bare_config)
+        with TestClient(app) as client:
+            response = client.get("/queue")
+            assert response.status_code == 401
 
 
 # =============================================================================

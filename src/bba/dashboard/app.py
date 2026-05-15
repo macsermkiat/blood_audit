@@ -396,23 +396,28 @@ def get_physician_scorecard(
 ) -> PhysicianScorecard:
     """Return the per-physician own-view scorecard.
 
-    Route guard: a reviewer whose ``role == 'physician'`` may ONLY view
-    their own scorecard. A request for another physician's id raises
-    :class:`PhysicianAccessDeniedError` before any data retrieval —
-    PRD §17 makes this the route layer's responsibility, not the UI's.
+    Route guard: strict own-view — a reviewer may ONLY view the
+    scorecard whose ``physician_id`` matches their own
+    ``reviewer.physician_id``. Mismatched ids (including ``None``)
+    raise :class:`PhysicianAccessDeniedError` before any data
+    retrieval.
 
-    Non-physician roles (senior reviewer, admin) are permitted to view
-    arbitrary physician scorecards; the guard is "physician cannot view
-    OTHER's", not "only physicians can view".
+    PRD §17 names this an "own-view-only" surface; an ordinary
+    reviewer (``role='reviewer'``) without an attached physician
+    identity must not be able to enumerate per-physician metrics
+    through this route. Cross-physician views (admin / senior
+    reviewer aggregation) belong on a separate, explicitly
+    privileged route, not behind a role check on this endpoint
+    (codex round 4 P1: role-gated guard let non-physician roles slip
+    through).
     """
-    if (
-        context.reviewer.role == "physician"
-        and context.reviewer.physician_id != physician_id
-    ):
+    if context.reviewer.physician_id != physician_id:
         raise PhysicianAccessDeniedError(
-            f"physician {context.reviewer.physician_id!r} cannot view "
-            f"another physician's scorecard ({physician_id!r}); the "
-            f"per-physician view is own-view-only"
+            f"reviewer {context.reviewer.reviewer_id!r} "
+            f"(role={context.reviewer.role!r}, "
+            f"physician_id={context.reviewer.physician_id!r}) cannot "
+            f"view physician {physician_id!r}'s scorecard; the "
+            f"per-physician view is strict own-view"
         )
     rows = _read_snapshot_rows(config)
     phys_rows = tuple(
@@ -438,17 +443,29 @@ def get_pipeline_health(
 ) -> PipelineHealth:
     """Return pipeline-health aggregations.
 
-    Rates are computed from the snapshot's audit-row set; the average
-    LLM latency is computed from the audit-store's full ``llm_calls``
-    Parquet partition (the snapshot is audit-results-only — latency
-    aggregation reads the underlying call records directly via
-    :meth:`AuditStore.read_llm_calls`).
+    All metrics are computed on the SAME snapshot frame: rates come
+    from the snapshot's audit rows; the latency aggregation is
+    restricted to ``llm_calls`` whose ``audit_id`` appears in that
+    snapshot. The audit_store snapshot is audit-results-only, so the
+    call records are read live via :meth:`AuditStore.read_llm_calls`
+    and then filtered to the snapshot's audit ids.
+
+    Filtering matters during in-flight batch writes: ``llm_calls`` is
+    persisted BEFORE its matching ``audit_results`` row commits (PRD
+    §10 transactional ordering), so a live read of ``llm_calls`` can
+    include calls whose audit row is not yet in the snapshot. Without
+    the filter, ``average_latency_ms`` would include those calls
+    while ``total_audits`` did not — codex round 4 P2.
     """
     del context
     rows = _read_snapshot_rows(config)
     total = len(rows)
-    calls = config.audit_store.read_llm_calls()
-    avg_latency = _average_llm_latency_ms(calls)
+    snapshot_audit_ids = {r.audit_id for r in rows}
+    all_calls = config.audit_store.read_llm_calls()
+    snapshot_calls = tuple(
+        c for c in all_calls if c.audit_id in snapshot_audit_ids
+    )
+    avg_latency = _average_llm_latency_ms(snapshot_calls)
     if total == 0:
         return PipelineHealth(
             total_audits=0,
@@ -492,6 +509,42 @@ def resolve_reviewer(
     return config.default_reviewer
 
 
+def get_route_context(request: FastApiRequest) -> RouteContext:
+    """Module-level FastAPI dependency that resolves the active
+    :class:`RouteContext` for a request.
+
+    Stored at module level (not a closure inside :func:`create_app`)
+    so production can replace it via
+    ``app.dependency_overrides[get_route_context] = my_auth_dep``.
+    The dependency reads :class:`DashboardConfig` from
+    ``request.app.state.dashboard_config`` and falls back to
+    :attr:`DashboardConfig.default_reviewer` — production overrides
+    this dependency entirely; tests can leave the default in place.
+
+    Raises HTTP 401 when neither path resolves a reviewer.
+    """
+    config: DashboardConfig | None = getattr(
+        request.app.state, "dashboard_config", None
+    )
+    if config is None:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "request.app.state.dashboard_config is unset; the app was "
+                "not built via bba.dashboard.create_app"
+            ),
+        )
+    if config.default_reviewer is None:
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "reviewer not resolved; no default reviewer configured "
+                "and no auth dependency overrode this route"
+            ),
+        )
+    return RouteContext(reviewer=config.default_reviewer)
+
+
 # ---------------------------------------------------------------------------
 # FastAPI app factory.
 # ---------------------------------------------------------------------------
@@ -512,31 +565,26 @@ def create_app(config: DashboardConfig) -> FastAPI:
     * :class:`MissingJustificationError` → 400
     * :class:`UnredactedSourceUnavailableError` → 503
 
-    Reviewer identity is resolved via :func:`_route_context_dep`. The
-    dependency returns the configured ``default_reviewer`` (for dev /
-    smoke tests) or raises 401. Production wires a real auth dependency
-    via ``app.dependency_overrides``.
+    Reviewer identity is resolved via :func:`get_route_context` (a
+    module-level dependency so production can override it through
+    ``app.dependency_overrides[get_route_context] = my_auth_dep``).
+    The default returns ``config.default_reviewer`` (for dev / smoke
+    tests) or raises 401 if no default is configured.
     """
     app = FastAPI(title="bba.dashboard", version="0.1.0")
+    # Stash the config on app.state so the module-level
+    # ``get_route_context`` dependency can read it. Production
+    # replaces the dependency entirely via
+    # ``app.dependency_overrides[get_route_context] = ...``; the
+    # default uses ``config.default_reviewer`` for dev / smoke runs.
+    app.state.dashboard_config = config
     template_dir = config.template_dir or _DEFAULT_TEMPLATE_DIR
     templates = Jinja2Templates(directory=str(template_dir))
-
-    def _route_context_dep(request: FastApiRequest) -> RouteContext:
-        del request
-        if config.default_reviewer is None:
-            raise HTTPException(
-                status_code=401,
-                detail=(
-                    "reviewer not resolved; no default reviewer configured "
-                    "and no auth dependency overrode this route"
-                ),
-            )
-        return RouteContext(reviewer=config.default_reviewer)
 
     @app.get("/queue", response_class=HTMLResponse)
     def _queue_route(
         request: FastApiRequest,
-        context: RouteContext = Depends(_route_context_dep),
+        context: RouteContext = Depends(get_route_context),
         sort_key: QueueSortKey = "order_datetime",
         sort_direction: SortDirection = "desc",
     ) -> HTMLResponse:
@@ -564,7 +612,7 @@ def create_app(config: DashboardConfig) -> FastAPI:
     def _case_detail_route(
         request: FastApiRequest,
         audit_id: str,
-        context: RouteContext = Depends(_route_context_dep),
+        context: RouteContext = Depends(get_route_context),
     ) -> HTMLResponse:
         try:
             detail = get_case_detail(config, context, audit_id)
@@ -581,7 +629,7 @@ def create_app(config: DashboardConfig) -> FastAPI:
         request: FastApiRequest,
         audit_id: str,
         justification: str = Form(...),
-        context: RouteContext = Depends(_route_context_dep),
+        context: RouteContext = Depends(get_route_context),
     ) -> HTMLResponse:
         # Accept the justification as form data (what an HTMX-driven
         # form sends); construct the validated request object inside
@@ -609,7 +657,7 @@ def create_app(config: DashboardConfig) -> FastAPI:
     def _ward_scorecard_route(
         request: FastApiRequest,
         ward_id: str,
-        context: RouteContext = Depends(_route_context_dep),
+        context: RouteContext = Depends(get_route_context),
     ) -> HTMLResponse:
         scorecard = get_ward_scorecard(config, context, ward_id)
         return templates.TemplateResponse(
@@ -622,7 +670,7 @@ def create_app(config: DashboardConfig) -> FastAPI:
     def _physician_scorecard_route(
         request: FastApiRequest,
         physician_id: str,
-        context: RouteContext = Depends(_route_context_dep),
+        context: RouteContext = Depends(get_route_context),
     ) -> HTMLResponse:
         try:
             scorecard = get_physician_scorecard(
@@ -637,7 +685,7 @@ def create_app(config: DashboardConfig) -> FastAPI:
     @app.get("/pipeline-health", response_class=HTMLResponse)
     def _pipeline_health_route(
         request: FastApiRequest,
-        context: RouteContext = Depends(_route_context_dep),
+        context: RouteContext = Depends(get_route_context),
     ) -> HTMLResponse:
         health = get_pipeline_health(config, context)
         return templates.TemplateResponse(
@@ -652,6 +700,7 @@ __all__ = (
     "get_case_detail",
     "get_physician_scorecard",
     "get_pipeline_health",
+    "get_route_context",
     "get_ward_scorecard",
     "list_queue",
     "record_break_glass_access",
