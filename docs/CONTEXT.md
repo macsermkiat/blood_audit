@@ -435,6 +435,154 @@ Enum of canonical audit labels: `APPROPRIATE`, `INAPPROPRIATE`,
 `bba.audit_store.models.Classification`. Single source of truth across the
 pipeline; downstream modules import from here, never re-define.
 
+## Eval-harness concepts (#20)
+
+### Stratum
+
+Mutually exclusive partition of the audited-orders population:
+`HB_LT_7`, `HB_7_10`, `HB_GT_10`, `INSUFFICIENT`, `ADVERSARIAL`,
+`COHORT_EXCEPTION`. `bba.eval_harness.models.Stratum`. The stratification
+key is a function of the deterministic-classifier inputs (Hb tier,
+evidence sufficiency, adversarial flag, cohort tag) — never of the LLM
+prediction. Per-stratum target sizes from PRD User Story #25 live in
+`DEFAULT_STRATUM_TARGETS`.
+
+### Stratified-with-enrichment sample
+
+Output of `stratified_with_enrichment(population, targets, rng_seed)`.
+Per stratum: `drawn_positives = clamp(max(enrichment_cap,
+target - pop_negatives), upper=pop_positives)`, remainder filled from
+negatives. PRD §11's "~138 INAPPROPRIATE-positives per stratum" is the
+ceiling; capped by target (adversarial = 80) and the available positive
+pool. Per-stratum RNG fork (`rng.randrange` → sub-seed) means adding a
+stratum to `DEFAULT_STRATUM_TARGETS` does not perturb existing draws.
+
+### Inclusion probability
+
+Per-case probability of being in the sample, recorded per stratum as a
+pair: `positive_inclusion_probability` (drawn_positives / pop_positives)
+and `base_inclusion_probability` (drawn_negatives / pop_negatives).
+Consumed by the HT reweighter to undo the enrichment when the metric
+the report cites is the *population* prevalence rather than the
+*sample* prevalence. `bba.eval_harness.models.StratumDraw`.
+
+### Horvitz-Thompson estimate
+
+Population-prevalence point + variance + SE reweighted by inverse
+inclusion probability. `bba.eval_harness.models.HorvitzThompsonEstimate`.
+Variance uses the canonical Sarndal et al. 1992 eq 3.4.5 SRS-with-
+replacement approximation, computed via the algebraic identity
+`sum((w - mean)²) = sum(w²) - n*mean²`. A drawn case with non-positive
+inclusion probability is a sampling-design bug and raises loud — never
+silently skipped (would bias HT downward).
+
+### Wilson score interval
+
+Binomial-proportion confidence interval bounded in `[0, 1]`.
+`bba.eval_harness.models.WilsonInterval`. PRD §11 mandates the Wilson
+form over the normal approximation — Wilson does not leak out of `[0,1]`
+at boundary prevalences (Hb<7, Hb>10), which would be a regulator-visible
+defect. The inverse-normal quantile is the Acklam (2003) approximation
+(absolute error ≤ 1.15e-9) so scipy is not a runtime dependency.
+
+### Inter-rater agreement bundle
+
+`AgreementResult` carries Cohen's κ, Gwet's AC1, PABAK, and the observed
+agreement together — by design. κ deflates in the high-prevalence Hb>10
+stratum because chance agreement inflates; AC1 (prevalence-resistant
+chance baseline) and PABAK (`2*p_o - 1` for binary,
+`(k*p_o - 1)/(k - 1)` for k-category) stay informative. When κ and AC1
+diverge, the divergence is the prevalence signal the report cites, not
+a coding bug. `bba.eval_harness.agreement.agreement_with_metrics`.
+
+### Cluster-robust SE
+
+CR0 sandwich variance estimator (Liang & Zeger 1986) for a binomial
+proportion: `Var(p̂) = (1/n²) * sum_g (sum_{i ∈ g} (y_i - p̂))²`.
+`bba.eval_harness.models.ClusterRobustEstimate`. Audited orders cluster
+on physician + ward (PRD User Story #31); the naive binomial SE
+understates uncertainty 1.5-2× under this design. Singletons collapse
+to the naive SE by construction. **Refuses on `len(clusters) < 2`** — one
+cluster yields zero residuals → zero-width CI → silent overconfidence.
+
+### Temporal split strategy
+
+`SplitStrategy = Literal["lomo", "blocked"]`, auto-selected by
+`select_split_strategy` from the dataset's calendar-month span (NOT the
+count of distinct months with data). `dataset_month_span` returns the
+inclusive range `(last - first) * 12 + delta + 1`. Span `< 12` → LOMO,
+`≥ 12` → blocked. `bba.eval_harness.splits`. The threshold matches the
+seasonal-confounder horizon (one full year). Below-2-month single-month
+data routes to blocked fallback via `temporal_cv_splits` so the report
+never sees an empty-train fold.
+
+### Temporal split
+
+One train/holdout pair from LOMO or blocked CV. `train_audit_ids` and
+`holdout_audit_ids` are tuples of `audit_id` strings; `holdout_label` is
+`"YYYY-MM"` for LOMO and `"block-N"` for blocked. Splits are 1-1 with
+the original cases — disjoint holdouts, complete coverage.
+`bba.eval_harness.models.TemporalSplit`. Single-case input raises in
+`blocked_temporal_split`; CV is undefined for `n=1`.
+
+### Hierarchical multiple correction
+
+Two-family multiplicity correction returned as
+`HierarchicalCorrectionResult(primary, exploratory, alpha)`. **Primary**
+hypotheses (confirmatory) get family-wise error control via Bonferroni
+(`adjusted_p = min(1, raw_p * k)`); **exploratory** hypotheses
+(hypothesis-generating) get FDR control via Benjamini-Hochberg step-up
+(`q_(i) = min_{j ≥ i} m * p_(j) / j`, capped at 1). The two families
+are corrected *independently* — pooling would inflate primary's any-
+false-positive rate while deflating exploratory's discovery rate.
+`bba.eval_harness.correction`.
+
+### Verifier-as-classifier metrics
+
+`ClassifierMetrics` consumes a `bba.quote_grounder.ConfusionMatrix`
+(produced by #18 over the 200-row hand-labeled verifier-evaluation set)
+and emits accuracy / sensitivity / specificity / PPV / NPV each with a
+Wilson CI, plus a point-only F1. Empty-denominator edge cases (zero
+positives, all-zero matrix) collapse to degenerate `[0, 0]` intervals
+rather than raising — a fresh-pipeline run against an empty labeled set
+still produces a valid (if uninformative) report row.
+`bba.eval_harness.classifier.evaluate_confusion_matrix`.
+
+### Outcome-anchored falsification
+
+`FalsificationResult` grades INAPPROPRIATE predictions against hand-
+coded chart-review outcomes on a labeled subset (PRD §11). Support
+means the patient did not require further transfusion; contradiction
+means `FURTHER_TRANSFUSION_24H` or `DEATH_FROM_ANEMIA_30D`. APPROPRIATE
+predictions are skipped — the falsification target is the pipeline's
+*positive* call, not its negative call. `FalsificationOutcome` is the v1
+3-enum set; additional endpoints (24h Hb response, transfusion
+reactions, doc amendment) are out-of-scope for #20 and tracked under
+follow-up tickets.
+
+### Deferred review (post-merge)
+
+In-session Codex review went through 4 rounds; 7 findings (4 P0 + 3 P2)
+were addressed before merge. Items intentionally **not** in scope and
+documented here so a future reader does not re-litigate:
+
+* **scipy reference in tests** — Wilson CI test fixtures use the
+  precise mathematical formula (≤ 1e-6 agreement with scipy's
+  `binomtest(...).proportion_ci(method='wilson')`), but scipy itself is
+  not a runtime dependency. The publication script may compare against
+  scipy externally; the harness never imports it.
+* **HT variance under without-replacement sampling** — the variance
+  estimator uses the SRS-with-replacement approximation (Sarndal et al.
+  eq 3.4.5), which slightly inflates SE vs the without-replacement
+  truth. Conservative for the regulator submission; tightening it would
+  require finite-population-correction terms that complicate the report
+  writer without changing the headline conclusion.
+* **F1 confidence interval** — `ClassifierMetrics.f1` is a point
+  estimate only. F1 has no published closed-form CI; bootstrapping would
+  couple the harness to a heavy dependency without materially changing
+  the reviewer-grade conclusion. Each component rate (sensitivity, PPV)
+  carries its Wilson CI separately.
+
 ## Audit-orders concepts (#4)
 
 ### Blood-order input
