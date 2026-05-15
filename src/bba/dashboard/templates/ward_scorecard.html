@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Ward {{ scorecard.ward_id }} · bba.dashboard{% endblock %}
+{% block content %}
+<section class="max-w-2xl">
+  <h1 class="text-2xl font-semibold mb-4">Ward scorecard · {{ scorecard.ward_id }}</h1>
+  <div class="bg-white border border-slate-200 rounded p-4">
+    <dl class="grid grid-cols-2 gap-y-1 text-sm">
+      <dt class="text-slate-500">total orders</dt><dd>{{ scorecard.total_orders }}</dd>
+      <dt class="text-slate-500">APPROPRIATE</dt><dd>{{ scorecard.appropriate_count }}</dd>
+      <dt class="text-slate-500">INAPPROPRIATE</dt><dd>{{ scorecard.inappropriate_count }}</dd>
+      <dt class="text-slate-500">NEEDS_REVIEW</dt><dd>{{ scorecard.needs_review_count }}</dd>
+      <dt class="text-slate-500">INSUFFICIENT_EVIDENCE</dt><dd>{{ scorecard.insufficient_evidence_count }}</dd>
+      <dt class="text-slate-500">avg confidence</dt><dd>{{ "%.2f"|format(scorecard.average_confidence) }}</dd>
+    </dl>
+  </div>
+</section>
+{% endblock %}

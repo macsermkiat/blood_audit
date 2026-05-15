@@ -54,6 +54,17 @@ class AuditNotFoundError(DashboardError):
     """
 
 
+class UnredactedSourceUnavailableError(DashboardError):
+    """Raised when un-redacted PHI is requested but no resolver is configured.
+
+    The dashboard does not own un-redacted PHI; production wires an
+    :data:`UnredactedPhiResolver` (HIS / de-id-twin store) into
+    :class:`DashboardConfig`. A deploy that forgets to wire the resolver
+    must fail loud rather than silently fabricate or surface empty values
+    — un-redacted PHI is a clinically meaningful artifact.
+    """
+
+
 class SnapshotInconsistencyError(DashboardError):
     """Raised when the DuckDB snapshot read observes mid-batch-write rows.
 

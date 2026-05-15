@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Pipeline health · bba.dashboard{% endblock %}
+{% block content %}
+<section class="max-w-2xl">
+  <h1 class="text-2xl font-semibold mb-4">Pipeline health</h1>
+  <p class="text-sm text-slate-500 mb-4">Snapshot as of {{ health.snapshot_as_of.isoformat() }}.</p>
+  <div class="bg-white border border-slate-200 rounded p-4">
+    <dl class="grid grid-cols-2 gap-y-1 text-sm">
+      <dt class="text-slate-500">total audits</dt><dd>{{ health.total_audits }}</dd>
+      <dt class="text-slate-500">NEEDS_REVIEW rate</dt><dd>{{ "%.1f%%"|format(health.needs_review_rate * 100) }}</dd>
+      <dt class="text-slate-500">verifier pass rate</dt><dd>{{ "%.1f%%"|format(health.verifier_pass_rate * 100) }}</dd>
+      <dt class="text-slate-500">Sonnet→Opus escalation rate</dt><dd>{{ "%.1f%%"|format(health.escalation_rate * 100) }}</dd>
+      <dt class="text-slate-500">avg latency (ms)</dt><dd>{{ "%.0f"|format(health.average_latency_ms) }}</dd>
+    </dl>
+  </div>
+</section>
+{% endblock %}

@@ -1,38 +1,49 @@
 """FastAPI app factory + handler functions for the reviewer dashboard.
 
-Five views, all rendered via FastAPI + HTMX + Tailwind:
+Five views, all rendered via FastAPI + HTMX + Tailwind (Jinja2 templates
+under ``src/bba/dashboard/templates/``):
 
-* ``GET /queue`` — NEEDS_REVIEW queue (sortable).
+* ``GET /queue`` — NEEDS_REVIEW queue (sortable via ``sort_key`` /
+  ``sort_direction`` query params; HTMX swaps the table in-place).
 * ``GET /case/{audit_id}`` — case-detail (un-redacted gated on
-  care-team-of-record membership).
+  care-team-of-record; ``phi_access_log`` row written on every
+  un-redacted surfacing, care-team or break-glass).
 * ``POST /case/{audit_id}/break-glass`` — break-glass un-redacted access
-  capture; writes a ``phi_access_log`` row BEFORE surfacing un-redacted
-  text.
-* ``GET /scorecard/ward/{ward_id}`` — per-ward scorecard.
+  capture; writes a ``phi_access_log`` row carrying the justification
+  BEFORE surfacing un-redacted text.
+* ``GET /scorecard/ward/{ward_id}`` — per-ward scorecard (attribution
+  via :data:`WardAttributionResolver`).
 * ``GET /scorecard/physician/{physician_id}`` — per-physician own-view
   scorecard (route guard: requesting physician = subject physician).
-* ``GET /pipeline-health`` — pipeline-health dashboard.
+* ``GET /pipeline-health`` — pipeline-health dashboard (NEEDS_REVIEW
+  rate, verifier pass rate, Sonnet→Opus escalation rate, average LLM
+  latency).
 
-The handler functions are exposed for direct unit-test invocation (they
-raise typed :class:`DashboardError` subclasses). The route layer wraps
-each handler and translates :class:`DashboardError` into HTTP responses.
+The handler functions are exposed at module-level for direct unit-test
+invocation; they raise typed :class:`DashboardError` subclasses. The
+route layer wraps each handler and translates :class:`DashboardError`
+into HTTP responses.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Form, HTTPException
 from fastapi import Request as FastApiRequest
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
 
-from bba.audit_store import AuditRow, Classification, SnapshotView
+from bba.audit_store import AuditRow, Classification, LlmCall, SnapshotView
 from bba.dashboard.exceptions import (
     AuditNotFoundError,
     DashboardError,
     MissingJustificationError,
     PhysicianAccessDeniedError,
+    UnredactedSourceUnavailableError,
 )
 from bba.dashboard.models import (
     BreakGlassRequest,
@@ -51,46 +62,78 @@ from bba.review_actions import PhiAccessInput
 
 
 # ---------------------------------------------------------------------------
-# Defaults — the dashboard does not (yet) own a ward / physician registry.
-# PRD §17 attribution-by-registry is out of scope for #26; the defaults
-# below keep the view-layer wiring sound until the registry lands. A future
-# ticket (#XX) wires real attribution; #26 only needs to render the
-# stable surface.
+# Attribution defaults — used only when the caller has not configured a
+# resolver. Codex round 1 flagged that hardcoded defaults silently masked
+# attribution bugs; production deployments MUST inject the real registries.
+# The defaults below are clearly named so a misconfigured deploy shows up
+# in the rendered view as ``unattributed-*`` rather than a plausible-looking
+# placeholder.
 # ---------------------------------------------------------------------------
 
 
-_DEFAULT_WARD_ID = "default-ward"
+_UNATTRIBUTED_WARD_ID = "unattributed-ward"
+_UNATTRIBUTED_PHYSICIAN_ID = "unattributed-physician"
 _DEFAULT_WARD_NAME = "Default Ward"
 _DEFAULT_PHYSICIAN_NAME = "Default Physician"
+_DEFAULT_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 
 
 # ---------------------------------------------------------------------------
-# Pure helpers — projection from AuditRow into view-layer DTOs.
+# Resolver lookups (with safe fallbacks for un-configured deploys).
 # ---------------------------------------------------------------------------
 
 
-def _ward_id_for_row(row: AuditRow) -> str:
+def _ward_id_for_row(config: DashboardConfig, row: AuditRow) -> str:
     """Resolve the ward attribution for an audit row.
 
-    Placeholder until the ward registry (separate ticket) is wired. Every
-    row maps to ``default-ward`` so the queue / ward-scorecard surface
-    renders. Replacing this function is the integration point for the
-    real registry; nothing else in the dashboard needs to change.
+    Delegates to ``config.ward_attribution_resolver`` when configured;
+    otherwise returns :data:`_UNATTRIBUTED_WARD_ID` so a misconfigured
+    deploy is visibly broken rather than silently misattributing.
     """
-    return _DEFAULT_WARD_ID
+    if config.ward_attribution_resolver is None:
+        return _UNATTRIBUTED_WARD_ID
+    return config.ward_attribution_resolver(row)
 
 
-def _physician_id_for_row(row: AuditRow) -> str:
+def _physician_id_for_row(config: DashboardConfig, row: AuditRow) -> str:
     """Resolve the physician attribution for an audit row.
 
-    Placeholder until the physician registry is wired. Returns the same
-    fixed id for all rows so the physician-scorecard surface renders
-    while the registry is still pending.
+    Same pattern as :func:`_ward_id_for_row`. The ``unattributed-physician``
+    sentinel cannot collide with any real :data:`SafeId` from production
+    (real ids never carry the literal substring ``unattributed-``).
     """
-    return "default-physician"
+    if config.physician_attribution_resolver is None:
+        return _UNATTRIBUTED_PHYSICIAN_ID
+    return config.physician_attribution_resolver(row)
 
 
-def _audit_row_to_queue_item(row: AuditRow) -> QueueItem:
+def _resolve_unredacted_phi(
+    config: DashboardConfig, row: AuditRow
+) -> tuple[str, str]:
+    """Resolve un-redacted ``(hn, an)`` for an audit row, or raise.
+
+    The dashboard refuses to surface un-redacted PHI without an explicit
+    resolver — fabricated placeholder values would silently violate the
+    PRD §17 acceptance criterion. A deploy that forgets the resolver
+    fails LOUD via :class:`UnredactedSourceUnavailableError`.
+    """
+    if config.unredacted_phi_resolver is None:
+        raise UnredactedSourceUnavailableError(
+            f"un-redacted PHI requested for audit_id {row.audit_id!r} but "
+            f"no UnredactedPhiResolver is configured; the dashboard refuses "
+            f"to fabricate un-redacted values"
+        )
+    return config.unredacted_phi_resolver(row.hn_hash, row.an_hash)
+
+
+# ---------------------------------------------------------------------------
+# Pure projections — AuditRow → view-layer DTO.
+# ---------------------------------------------------------------------------
+
+
+def _audit_row_to_queue_item(
+    config: DashboardConfig, row: AuditRow
+) -> QueueItem:
     return QueueItem(
         audit_id=row.audit_id,
         run_id=row.run_id,
@@ -99,25 +142,23 @@ def _audit_row_to_queue_item(row: AuditRow) -> QueueItem:
         confidence=row.confidence,
         final_classification=row.final_classification,
         review_reason=row.review_reason,
-        ward_id=_ward_id_for_row(row),
+        ward_id=_ward_id_for_row(config, row),
         hn_hash=row.hn_hash,
         an_hash=row.an_hash,
     )
 
 
 def _audit_row_to_case_detail(
-    row: AuditRow, *, unredacted: bool
+    config: DashboardConfig, row: AuditRow, *, unredacted: bool
 ) -> CaseDetail:
     """Project an AuditRow into a CaseDetail.
 
-    Un-redacted HN/AN are synthetic placeholders for #26 (the un-redacted
-    text source is the de-id store, a separate dependency to be wired in a
-    follow-up). The placeholder is stable per audit_id so view-layer tests
-    can assert structural shape without depending on the real source.
+    When ``unredacted=True``, the un-redacted ``(hn, an)`` is resolved via
+    :func:`_resolve_unredacted_phi`. The dashboard never fabricates
+    placeholder PHI — a deploy without a resolver fails loud.
     """
     if unredacted:
-        raw_hn: str | None = f"hn-actual-{row.audit_id}"
-        raw_an: str | None = f"an-actual-{row.audit_id}"
+        raw_hn, raw_an = _resolve_unredacted_phi(config, row)
     else:
         raw_hn = None
         raw_an = None
@@ -177,6 +218,9 @@ def _aggregate_classifications(
     """Compute the count + average-confidence aggregations for a row set.
 
     Used by both ward and physician scorecards (same aggregation shape).
+    An empty input returns zeros for every count and ``0.0`` for the
+    confidence average (rather than raising) — operators legitimately
+    check wards / physicians with no audited orders today.
     """
     total = len(rows)
     avg_confidence = (
@@ -194,6 +238,30 @@ def _aggregate_classifications(
     }
 
 
+def _average_llm_latency_ms(calls: tuple[LlmCall, ...]) -> float:
+    if not calls:
+        return 0.0
+    return sum(c.latency_ms for c in calls) / len(calls)
+
+
+def _phi_access_input(
+    context: RouteContext, row: AuditRow, *, justification: str | None
+) -> PhiAccessInput:
+    """Build a ``PhiAccessInput`` for the active reviewer + audit row.
+
+    ``justification=None`` is the care-team path (no break-glass override);
+    a non-None justification is the break-glass path. Both are PHI access
+    events and BOTH must land in ``phi_access_log`` (PRD §17).
+    """
+    return PhiAccessInput(
+        reviewer_id=context.reviewer.reviewer_id,
+        audit_id=row.audit_id,
+        hn_hash=row.hn_hash,
+        an_hash=row.an_hash,
+        break_glass_justification=justification,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Handler functions — called directly from unit tests, and indirectly from
 # the route layer in :func:`create_app`. Raise typed :class:`DashboardError`
@@ -208,16 +276,19 @@ def list_queue(
     sort_key: QueueSortKey = "order_datetime",
     sort_direction: SortDirection = "desc",
 ) -> tuple[QueueItem, ...]:
-    """Return the sortable NEEDS_REVIEW queue for the reviewer's scope.
+    """Return the sortable NEEDS_REVIEW queue.
 
     Reads via :class:`bba.audit_store.SnapshotView` (daily-rotated) so an
     in-flight batch write does not produce mid-query inconsistency.
+    Filters to ``final_classification == 'NEEDS_REVIEW'``; the queue is a
+    triage surface, not a general browser.
     """
+    del context  # queue scope is global (PRD §17 — no per-reviewer slice)
     rows = _read_snapshot_rows(config)
     review_rows = tuple(
         r for r in rows if r.final_classification == "NEEDS_REVIEW"
     )
-    items = [_audit_row_to_queue_item(r) for r in review_rows]
+    items = [_audit_row_to_queue_item(config, r) for r in review_rows]
     sort_fn: dict[str, Callable[[QueueItem], Any]] = {
         "order_datetime": lambda i: i.order_datetime,
         "hb_value": lambda i: i.hb_value,
@@ -236,15 +307,23 @@ def get_case_detail(
     """Return the case-detail view for ``audit_id``.
 
     Care-team-of-record gating: when ``audit_id`` is in the reviewer's
-    ``care_team_memberships`` the response is un-redacted. Outsiders see
-    the redacted projection (``unredacted=False``,
-    ``raw_hn``/``raw_an=None``) — the break-glass flow
+    ``care_team_memberships`` the response is un-redacted AND a
+    ``phi_access_log`` row is written (PRD §17 "every un-redacted access
+    writes to phi_access_log" — that applies to the care-team path too,
+    not just break-glass). The write happens BEFORE the un-redacted text
+    is surfaced via :meth:`ReviewActionsStore.access_phi`.
+
+    Outsiders see the redacted projection (``unredacted=False``,
+    ``raw_hn``/``raw_an=None``). The break-glass flow
     (:func:`record_break_glass_access`) is the only way to obtain
     un-redacted access without care-team membership.
     """
     row = _find_audit_row(config, audit_id)
-    unredacted = audit_id in context.reviewer.care_team_memberships
-    return _audit_row_to_case_detail(row, unredacted=unredacted)
+    if audit_id in context.reviewer.care_team_memberships:
+        access = _phi_access_input(context, row, justification=None)
+        with config.review_actions_store.access_phi(access):
+            return _audit_row_to_case_detail(config, row, unredacted=True)
+    return _audit_row_to_case_detail(config, row, unredacted=False)
 
 
 def record_break_glass_access(
@@ -259,8 +338,8 @@ def record_break_glass_access(
     Defense in depth: the justification is re-checked at the handler
     boundary even though :data:`NonEmptyStr` enforces non-empty at
     construction. The test bypasses model validation via
-    ``BreakGlassRequest.model_construct`` to simulate a malformed request
-    that reached the handler.
+    ``BreakGlassRequest.model_construct`` to simulate a malformed
+    request that reached the handler.
 
     The log row is committed BEFORE the un-redacted text is surfaced
     (structurally via :meth:`ReviewActionsStore.access_phi` context
@@ -273,15 +352,11 @@ def record_break_glass_access(
             "without a reviewer-supplied rationale"
         )
     row = _find_audit_row(config, audit_id)
-    access = PhiAccessInput(
-        reviewer_id=context.reviewer.reviewer_id,
-        audit_id=audit_id,
-        hn_hash=row.hn_hash,
-        an_hash=row.an_hash,
-        break_glass_justification=request.justification,
+    access = _phi_access_input(
+        context, row, justification=request.justification
     )
     with config.review_actions_store.access_phi(access):
-        return _audit_row_to_case_detail(row, unredacted=True)
+        return _audit_row_to_case_detail(config, row, unredacted=True)
 
 
 def get_ward_scorecard(
@@ -291,12 +366,16 @@ def get_ward_scorecard(
 ) -> WardScorecard:
     """Return the per-ward aggregation scorecard for ``ward_id``.
 
-    An empty result (ward not represented in today's snapshot) returns a
-    scorecard with zero counts — the operator may legitimately check a
-    ward that has no audited orders today.
+    Attribution via :data:`WardAttributionResolver`. An empty result
+    (ward not represented in today's snapshot) returns a scorecard with
+    zero counts — the operator may legitimately check a ward that has no
+    audited orders today.
     """
+    del context
     rows = _read_snapshot_rows(config)
-    ward_rows = tuple(r for r in rows if _ward_id_for_row(r) == ward_id)
+    ward_rows = tuple(
+        r for r in rows if _ward_id_for_row(config, r) == ward_id
+    )
     aggs = _aggregate_classifications(ward_rows)
     return WardScorecard(
         ward_id=ward_id,
@@ -337,13 +416,13 @@ def get_physician_scorecard(
         )
     rows = _read_snapshot_rows(config)
     phys_rows = tuple(
-        r for r in rows if _physician_id_for_row(r) == physician_id
+        r for r in rows if _physician_id_for_row(config, r) == physician_id
     )
     aggs = _aggregate_classifications(phys_rows)
     return PhysicianScorecard(
         physician_id=physician_id,
         physician_name=_DEFAULT_PHYSICIAN_NAME,
-        ward_id=_DEFAULT_WARD_ID,
+        ward_id=_UNATTRIBUTED_WARD_ID,
         total_orders=int(aggs["total_orders"]),
         appropriate_count=int(aggs["appropriate_count"]),
         inappropriate_count=int(aggs["inappropriate_count"]),
@@ -359,24 +438,24 @@ def get_pipeline_health(
 ) -> PipelineHealth:
     """Return pipeline-health aggregations.
 
-    Rates are computed from the snapshot's row set:
-
-    * ``needs_review_rate`` — fraction of audits flagged NEEDS_REVIEW.
-    * ``verifier_pass_rate`` — fraction with ``verifier_pass=True``.
-    * ``escalation_rate`` — fraction with ``escalated_to_opus=True``.
-    * ``average_latency_ms`` — placeholder (the audit_store snapshot does
-      not include ``LlmCall`` latency rows in the daily view; pulling
-      those in is a follow-up).
+    Rates are computed from the snapshot's audit-row set; the average
+    LLM latency is computed from the audit-store's full ``llm_calls``
+    Parquet partition (the snapshot is audit-results-only — latency
+    aggregation reads the underlying call records directly via
+    :meth:`AuditStore.read_llm_calls`).
     """
+    del context
     rows = _read_snapshot_rows(config)
     total = len(rows)
+    calls = config.audit_store.read_llm_calls()
+    avg_latency = _average_llm_latency_ms(calls)
     if total == 0:
         return PipelineHealth(
             total_audits=0,
             needs_review_rate=0.0,
             verifier_pass_rate=0.0,
             escalation_rate=0.0,
-            average_latency_ms=0.0,
+            average_latency_ms=avg_latency,
             snapshot_as_of=datetime.now(UTC),
         )
     needs_review = _count_classification(rows, "NEEDS_REVIEW")
@@ -387,7 +466,7 @@ def get_pipeline_health(
         needs_review_rate=needs_review / total,
         verifier_pass_rate=verifier_pass / total,
         escalation_rate=escalated / total,
-        average_latency_ms=0.0,
+        average_latency_ms=avg_latency,
         snapshot_as_of=datetime.now(UTC),
     )
 
@@ -399,14 +478,16 @@ def resolve_reviewer(
     """Resolve a reviewer identity from a session id.
 
     Production wires this to a real auth backend via FastAPI's
-    ``app.dependency_overrides``. The default implementation is a fallthrough
-    to :attr:`DashboardConfig.default_reviewer` (set by tests / dev configs).
+    ``app.dependency_overrides``. The default implementation falls
+    through to :attr:`DashboardConfig.default_reviewer` (set by tests /
+    dev configs); the ``reviewer_id`` argument is currently unused
+    because the default-reviewer path is a fixed identity.
     """
+    del reviewer_id
     if config.default_reviewer is None:
         raise DashboardError(
-            f"reviewer_id {reviewer_id!r} could not be resolved; no "
-            f"default reviewer configured and no auth dependency overrode "
-            f"this function"
+            "reviewer could not be resolved: no default reviewer "
+            "configured and no auth dependency overrode this function"
         )
     return config.default_reviewer
 
@@ -419,24 +500,28 @@ def resolve_reviewer(
 def create_app(config: DashboardConfig) -> FastAPI:
     """Construct and return the FastAPI application for the reviewer UI.
 
-    Routes wrap the module-level handler functions and translate
+    Routes render Jinja2 templates under
+    ``src/bba/dashboard/templates/`` (Tailwind via CDN, HTMX via CDN —
+    sufficient for the Phase 1 acceptance criteria; production builds
+    compile Tailwind into a static stylesheet). Each route wraps the
+    corresponding module-level handler and translates
     :class:`DashboardError` subclasses into HTTP responses:
 
     * :class:`AuditNotFoundError` → 404
     * :class:`PhysicianAccessDeniedError` → 403
     * :class:`MissingJustificationError` → 400
-    * :class:`DashboardError` (catch-all) → 500
+    * :class:`UnredactedSourceUnavailableError` → 503
 
-    Reviewer identity is resolved via a FastAPI dependency
-    (:func:`_route_context_dep`). The dependency returns the configured
-    ``default_reviewer`` (for dev / smoke tests) or raises 401. Production
-    wires a real auth dependency via ``app.dependency_overrides``.
+    Reviewer identity is resolved via :func:`_route_context_dep`. The
+    dependency returns the configured ``default_reviewer`` (for dev /
+    smoke tests) or raises 401. Production wires a real auth dependency
+    via ``app.dependency_overrides``.
     """
     app = FastAPI(title="bba.dashboard", version="0.1.0")
+    template_dir = config.template_dir or _DEFAULT_TEMPLATE_DIR
+    templates = Jinja2Templates(directory=str(template_dir))
 
     def _route_context_dep(request: FastApiRequest) -> RouteContext:
-        # ``request`` is unused; accepted so production overrides can
-        # inspect headers / cookies without a signature change.
         del request
         if config.default_reviewer is None:
             raise HTTPException(
@@ -448,64 +533,109 @@ def create_app(config: DashboardConfig) -> FastAPI:
             )
         return RouteContext(reviewer=config.default_reviewer)
 
-    @app.get("/queue")
+    @app.get("/queue", response_class=HTMLResponse)
     def _queue_route(
+        request: FastApiRequest,
         context: RouteContext = Depends(_route_context_dep),
-    ) -> dict[str, Any]:
-        items = list_queue(config, context)
-        return {"items": [item.model_dump(mode="json") for item in items]}
+        sort_key: QueueSortKey = "order_datetime",
+        sort_direction: SortDirection = "desc",
+    ) -> HTMLResponse:
+        items = list_queue(
+            config, context, sort_key=sort_key, sort_direction=sort_direction
+        )
+        return templates.TemplateResponse(
+            request,
+            "queue.html",
+            {
+                "items": items,
+                "sort_key": sort_key,
+                "sort_direction": sort_direction,
+            },
+        )
 
-    @app.get("/case/{audit_id}")
+    @app.get("/case/{audit_id}", response_class=HTMLResponse)
     def _case_detail_route(
+        request: FastApiRequest,
         audit_id: str,
         context: RouteContext = Depends(_route_context_dep),
-    ) -> dict[str, Any]:
+    ) -> HTMLResponse:
         try:
             detail = get_case_detail(config, context, audit_id)
         except AuditNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return detail.model_dump(mode="json")
+        except UnredactedSourceUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return templates.TemplateResponse(
+            request, "case_detail.html", {"detail": detail}
+        )
 
-    @app.post("/case/{audit_id}/break-glass")
+    @app.post("/case/{audit_id}/break-glass", response_class=HTMLResponse)
     def _break_glass_route(
+        request: FastApiRequest,
         audit_id: str,
-        request: BreakGlassRequest,
+        justification: str = Form(...),
         context: RouteContext = Depends(_route_context_dep),
-    ) -> dict[str, Any]:
+    ) -> HTMLResponse:
+        # Accept the justification as form data (what an HTMX-driven
+        # form sends); construct the validated request object inside
+        # the handler so a malformed empty value still surfaces via
+        # the typed MissingJustificationError path.
+        try:
+            break_glass_request = BreakGlassRequest(justification=justification)
+        except Exception as exc:  # pydantic ValidationError → 400
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         try:
             detail = record_break_glass_access(
-                config, context, audit_id, request
+                config, context, audit_id, break_glass_request
             )
         except MissingJustificationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except AuditNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return detail.model_dump(mode="json")
+        except UnredactedSourceUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return templates.TemplateResponse(
+            request, "case_detail.html", {"detail": detail}
+        )
 
-    @app.get("/scorecard/ward/{ward_id}")
+    @app.get("/scorecard/ward/{ward_id}", response_class=HTMLResponse)
     def _ward_scorecard_route(
+        request: FastApiRequest,
         ward_id: str,
         context: RouteContext = Depends(_route_context_dep),
-    ) -> dict[str, Any]:
-        sc = get_ward_scorecard(config, context, ward_id)
-        return sc.model_dump(mode="json")
+    ) -> HTMLResponse:
+        scorecard = get_ward_scorecard(config, context, ward_id)
+        return templates.TemplateResponse(
+            request, "ward_scorecard.html", {"scorecard": scorecard}
+        )
 
-    @app.get("/scorecard/physician/{physician_id}")
+    @app.get(
+        "/scorecard/physician/{physician_id}", response_class=HTMLResponse
+    )
     def _physician_scorecard_route(
+        request: FastApiRequest,
         physician_id: str,
         context: RouteContext = Depends(_route_context_dep),
-    ) -> dict[str, Any]:
+    ) -> HTMLResponse:
         try:
-            sc = get_physician_scorecard(config, context, physician_id)
+            scorecard = get_physician_scorecard(
+                config, context, physician_id
+            )
         except PhysicianAccessDeniedError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
-        return sc.model_dump(mode="json")
+        return templates.TemplateResponse(
+            request, "physician_scorecard.html", {"scorecard": scorecard}
+        )
 
-    @app.get("/pipeline-health")
+    @app.get("/pipeline-health", response_class=HTMLResponse)
     def _pipeline_health_route(
+        request: FastApiRequest,
         context: RouteContext = Depends(_route_context_dep),
-    ) -> dict[str, Any]:
-        return get_pipeline_health(config, context).model_dump(mode="json")
+    ) -> HTMLResponse:
+        health = get_pipeline_health(config, context)
+        return templates.TemplateResponse(
+            request, "pipeline_health.html", {"health": health}
+        )
 
     return app
 

@@ -21,15 +21,51 @@ construction.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict
 
-from bba.audit_store import AuditStore, Classification
+from bba.audit_store import AuditRow, AuditStore, Classification
 from bba.review_actions import ReviewActionsStore
+
+
+# ---------------------------------------------------------------------------
+# Injectable resolvers — the dashboard does not own un-redacted PHI nor
+# ward / physician attribution. Production wires real implementations
+# (HIS / de-id-twin store, ward registry); tests provide fakes.
+# ---------------------------------------------------------------------------
+
+
+UnredactedPhiResolver = Callable[[str, str], tuple[str, str]]
+"""Resolve un-redacted ``(hn, an)`` from their hashes.
+
+Signature: ``(hn_hash: str, an_hash: str) -> (hn: str, an: str)``.
+The dashboard never holds un-redacted PHI in its own storage; this
+callable is the integration point with the HIS or de-id-twin store.
+"""
+
+
+WardAttributionResolver = Callable[[AuditRow], str]
+"""Resolve the ward attribution for an :class:`AuditRow`.
+
+Signature: ``(row: AuditRow) -> ward_id: str``.
+Wired to the ward registry in production; the audit_store schema does not
+carry ward_id directly so attribution is computed at view time.
+"""
+
+
+PhysicianAttributionResolver = Callable[[AuditRow], str]
+"""Resolve the attending-physician attribution for an :class:`AuditRow`.
+
+Signature: ``(row: AuditRow) -> physician_id: str``.
+Wired to the physician registry in production. The per-physician own-view
+route guard reads :attr:`Reviewer.physician_id` against the URL path
+parameter; this resolver is the *data*-side counterpart used by the
+scorecard aggregations.
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +335,21 @@ class DashboardConfig(BaseModel):
     ``app.dependency_overrides`` mechanism; for dev / unit tests the
     default keeps routes reachable without a session.
 
+    ``unredacted_phi_resolver`` is the injectable callable that maps an
+    ``(hn_hash, an_hash)`` pair back to its un-redacted ``(hn, an)``. The
+    dashboard refuses to surface un-redacted PHI when this is ``None``
+    (raises :class:`UnredactedSourceUnavailableError`) — the integration
+    point with the HIS / de-id-twin store is explicit, not implicit.
+
+    ``ward_attribution_resolver`` / ``physician_attribution_resolver``
+    map an audit row to its ward and physician identifiers. The
+    audit_store schema does not carry these directly; production wires
+    real registries, tests provide deterministic fakes.
+
+    ``template_dir`` overrides the default Jinja2 template directory
+    (``src/bba/dashboard/templates/``). Used by tests that ship custom
+    templates and by deployments that themed the dashboard.
+
     ``arbitrary_types_allowed`` is required because :class:`AuditStore` and
     :class:`ReviewActionsStore` are not pydantic models themselves; they're
     composed as runtime handles.
@@ -311,6 +362,9 @@ class DashboardConfig(BaseModel):
     snapshot_dir: Path
     template_dir: Path | None = None
     default_reviewer: Reviewer | None = None
+    unredacted_phi_resolver: UnredactedPhiResolver | None = None
+    ward_attribution_resolver: WardAttributionResolver | None = None
+    physician_attribution_resolver: PhysicianAttributionResolver | None = None
 
 
 __all__: Sequence[str] = (
@@ -319,6 +373,7 @@ __all__: Sequence[str] = (
     "DashboardConfig",
     "NonEmptyStr",
     "Physician",
+    "PhysicianAttributionResolver",
     "PhysicianScorecard",
     "PipelineHealth",
     "QueueItem",
@@ -329,6 +384,8 @@ __all__: Sequence[str] = (
     "SafeId",
     "SortDirection",
     "UTCDatetime",
+    "UnredactedPhiResolver",
     "Ward",
+    "WardAttributionResolver",
     "WardScorecard",
 )

@@ -62,6 +62,7 @@ from bba.dashboard import (
     Reviewer,
     RouteContext,
     SnapshotInconsistencyError,
+    UnredactedSourceUnavailableError,
     Ward,
     WardScorecard,
     create_app,
@@ -189,19 +190,79 @@ def review_actions_store(tmp_path: Path) -> ReviewActionsStore:
 
 
 @pytest.fixture
+def fake_unredacted_resolver() -> Any:
+    """A deterministic un-redacted PHI resolver for unit tests.
+
+    Real production wires this to the HIS / de-id-twin store; the dashboard
+    test boundary just needs a known-good ``(hn, an)`` to assert against
+    the rendered un-redacted case detail.
+    """
+
+    def _resolve(hn_hash: str, an_hash: str) -> tuple[str, str]:
+        return (f"HN-from-hash-{hn_hash}", f"AN-from-hash-{an_hash}")
+
+    return _resolve
+
+
+@pytest.fixture
+def fake_ward_resolver() -> Any:
+    """A static ward-attribution resolver.
+
+    Synthetic test rows are attributed to ``ward-001``; un-mapped audits
+    fall through to ``ward-unmapped`` so a misconfigured fixture is
+    visible in assertions rather than silently bucketed with mapped rows.
+    """
+    ward_by_audit_id = {
+        "audit-001": "ward-001",
+        "audit-pre": "ward-001",
+        "audit-batch-0": "ward-001",
+        "audit-batch-1": "ward-001",
+        "audit-batch-2": "ward-001",
+        "audit-batch-3": "ward-001",
+        "audit-batch-4": "ward-001",
+        "audit-post": "ward-001",
+        "audit-appropriate": "ward-001",
+    }
+
+    def _resolve(row: AuditRow) -> str:
+        return ward_by_audit_id.get(row.audit_id, "ward-unmapped")
+
+    return _resolve
+
+
+@pytest.fixture
+def fake_physician_resolver() -> Any:
+    """A static physician-attribution resolver."""
+    physician_by_audit_id = {
+        "audit-001": "phys-001",
+        "audit-pre": "phys-001",
+        "audit-appropriate": "phys-001",
+    }
+
+    def _resolve(row: AuditRow) -> str:
+        return physician_by_audit_id.get(row.audit_id, "phys-unmapped")
+
+    return _resolve
+
+
+@pytest.fixture
 def config(
     audit_store: AuditStore,
     review_actions_store: ReviewActionsStore,
+    fake_unredacted_resolver: Any,
+    fake_ward_resolver: Any,
+    fake_physician_resolver: Any,
     tmp_path: Path,
 ) -> DashboardConfig:
-    """A DashboardConfig with a permissive default reviewer for routes
-    that don't have a route-context fixture wired (e.g.,
-    :class:`TestRouteSmoke`).
+    """A DashboardConfig with deterministic fakes wired for every
+    injectable dependency.
 
     The default reviewer is a physician with ``physician_id="phys-001"``
     so the physician-scorecard smoke route returns 200 (own-view) rather
     than 403 (cross-view). ``care_team_memberships=("audit-001",)`` makes
-    the case-detail smoke route un-redacted.
+    the case-detail smoke route un-redacted (which also writes to the
+    fake phi_access_log — the care-team un-redacted path is covered by
+    :meth:`TestBreakGlassFlow.test_care_team_unredacted_writes_phi_access_log`).
     """
     return DashboardConfig(
         audit_store=audit_store,
@@ -214,6 +275,37 @@ def config(
             physician_id="phys-001",
             care_team_memberships=("audit-001",),
         ),
+        unredacted_phi_resolver=fake_unredacted_resolver,
+        ward_attribution_resolver=fake_ward_resolver,
+        physician_attribution_resolver=fake_physician_resolver,
+    )
+
+
+@pytest.fixture
+def config_without_unredacted_resolver(
+    audit_store: AuditStore,
+    review_actions_store: ReviewActionsStore,
+    fake_ward_resolver: Any,
+    fake_physician_resolver: Any,
+    tmp_path: Path,
+) -> DashboardConfig:
+    """A DashboardConfig with NO un-redacted PHI resolver — the deploy
+    that forgot to wire the HIS / de-id-twin store.
+
+    Used by :meth:`TestBreakGlassFlow.test_unredacted_without_resolver_fails_loud`
+    to assert the dashboard refuses to fabricate un-redacted PHI.
+    """
+    return DashboardConfig(
+        audit_store=audit_store,
+        review_actions_store=review_actions_store,
+        snapshot_dir=tmp_path / "snapshots",
+        default_reviewer=Reviewer(
+            reviewer_id="default-smoke-reviewer",
+            name="Smoke Reviewer",
+            role="reviewer",
+        ),
+        ward_attribution_resolver=fake_ward_resolver,
+        physician_attribution_resolver=fake_physician_resolver,
     )
 
 
@@ -440,6 +532,11 @@ class TestFiveViewsRender:
 
         assert all(isinstance(item, QueueItem) for item in items)
         assert any(item.audit_id == "audit-001" for item in items)
+        # Behavioral: ward attribution must come through the resolver,
+        # not a hardcoded default. Synthetic ``audit-001`` maps to
+        # ``ward-001`` (see ``fake_ward_resolver``).
+        audit_item = next(i for i in items if i.audit_id == "audit-001")
+        assert audit_item.ward_id == "ward-001"
 
     def test_case_detail_view_renders_with_synthetic_data(
         self,
@@ -454,8 +551,45 @@ class TestFiveViewsRender:
 
         assert isinstance(detail, CaseDetail)
         assert detail.audit_id == "audit-001"
+        # Behavioral: care-team member sees un-redacted via the resolver
+        # (not a fabricated placeholder).
+        assert detail.unredacted is True
+        assert detail.raw_hn == "HN-from-hash-hn-hash-001"
+        assert detail.raw_an == "AN-from-hash-an-hash-001"
 
     def test_ward_scorecard_view_renders_with_synthetic_data(
+        self,
+        config: DashboardConfig,
+        context_in_care_team: RouteContext,
+        audit_store: AuditStore,
+    ) -> None:
+        # Write two NEEDS_REVIEW + one APPROPRIATE row; only the two
+        # NEEDS_REVIEW ones map to ward-001 via the resolver.
+        row_a, calls_a = _writeable_audit_row_pair("audit-001", "run-001")
+        audit_store.write(row_a, calls_a)
+        row_b = _audit_row(
+            audit_id="audit-appropriate",
+            run_id="run-002",
+            final_classification="APPROPRIATE",
+        )
+        audit_store.write(
+            row_b, (_llm_call(audit_id="audit-appropriate", run_id="run-002"),)
+        )
+
+        scorecard = get_ward_scorecard(
+            config, context_in_care_team, "ward-001"
+        )
+
+        assert isinstance(scorecard, WardScorecard)
+        assert scorecard.ward_id == "ward-001"
+        # Behavioral: both audits attribute to ward-001, so total=2.
+        assert scorecard.total_orders == 2
+        assert scorecard.needs_review_count == 1
+        assert scorecard.appropriate_count == 1
+        # Average confidence is 0.85 for both synthetic rows.
+        assert scorecard.average_confidence == pytest.approx(0.85)
+
+    def test_ward_scorecard_unknown_ward_returns_zero_counts(
         self,
         config: DashboardConfig,
         context_in_care_team: RouteContext,
@@ -465,11 +599,11 @@ class TestFiveViewsRender:
         audit_store.write(row, calls)
 
         scorecard = get_ward_scorecard(
-            config, context_in_care_team, "ward-001"
+            config, context_in_care_team, "ward-with-no-rows"
         )
 
-        assert isinstance(scorecard, WardScorecard)
-        assert scorecard.ward_id == "ward-001"
+        assert scorecard.total_orders == 0
+        assert scorecard.average_confidence == 0.0
 
     def test_physician_scorecard_view_renders_with_synthetic_data(
         self,
@@ -486,6 +620,11 @@ class TestFiveViewsRender:
 
         assert isinstance(scorecard, PhysicianScorecard)
         assert scorecard.physician_id == "phys-001"
+        # Behavioral: synthetic audit-001 attributes to phys-001 via the
+        # resolver; the scorecard counts one NEEDS_REVIEW.
+        assert scorecard.total_orders == 1
+        assert scorecard.needs_review_count == 1
+        assert scorecard.appropriate_count == 0
 
     def test_pipeline_health_view_renders_with_synthetic_data(
         self,
@@ -500,6 +639,10 @@ class TestFiveViewsRender:
 
         assert isinstance(health, PipelineHealth)
         assert health.total_audits >= 1
+        # Behavioral: average_latency_ms must reflect synthetic latency
+        # (100ms per call) — Codex round 1 flagged hardcoded 0.0.
+        assert health.average_latency_ms == pytest.approx(100.0)
+        assert health.needs_review_rate == pytest.approx(1.0)
 
 
 # =============================================================================
@@ -623,6 +766,78 @@ class TestBreakGlassFlow:
             reviewer_id="reviewer-outsider", audit_id="audit-001"
         )
         assert len(logs) == 1
+
+    def test_care_team_unredacted_writes_phi_access_log(
+        self,
+        config: DashboardConfig,
+        context_in_care_team: RouteContext,
+        review_actions_store: ReviewActionsStore,
+        audit_store: AuditStore,
+    ) -> None:
+        """PRD §17 says EVERY un-redacted access writes to phi_access_log
+        — not just break-glass. A care-team-of-record member viewing an
+        un-redacted case detail MUST land a row in phi_access_log too
+        (Codex round 1: care-team un-redacted path bypassed logging)."""
+        row, calls = _writeable_audit_row_pair()
+        audit_store.write(row, calls)
+
+        detail = get_case_detail(config, context_in_care_team, "audit-001")
+
+        assert detail.unredacted is True
+        logs = review_actions_store.list_phi_access(
+            reviewer_id="reviewer-care-team", audit_id="audit-001"
+        )
+        assert len(logs) == 1
+        # Care-team path: no break-glass justification (it's the
+        # privileged-by-default access route, not an override).
+        assert logs[0].break_glass_justification is None
+
+    def test_outsider_redacted_view_does_not_write_phi_access_log(
+        self,
+        config: DashboardConfig,
+        context_outsider: RouteContext,
+        review_actions_store: ReviewActionsStore,
+        audit_store: AuditStore,
+    ) -> None:
+        """Redacted access surfaces NO un-redacted PHI → no
+        phi_access_log row. The log records PHI access events, not
+        every page view."""
+        row, calls = _writeable_audit_row_pair()
+        audit_store.write(row, calls)
+
+        get_case_detail(config, context_outsider, "audit-001")
+
+        logs = review_actions_store.list_phi_access(
+            reviewer_id="reviewer-outsider", audit_id="audit-001"
+        )
+        assert logs == ()
+
+    def test_unredacted_without_resolver_fails_loud(
+        self,
+        config_without_unredacted_resolver: DashboardConfig,
+        audit_store: AuditStore,
+    ) -> None:
+        """The dashboard refuses to surface un-redacted PHI when no
+        resolver is configured — fabricated placeholders would silently
+        violate the PRD §17 acceptance criterion.
+
+        Uses a reviewer whose care_team_memberships covers audit-001 so
+        the un-redacted path IS reached (and then fails fast)."""
+        row, calls = _writeable_audit_row_pair()
+        audit_store.write(row, calls)
+        context = RouteContext(
+            reviewer=Reviewer(
+                reviewer_id="r1",
+                name="N",
+                role="reviewer",
+                care_team_memberships=("audit-001",),
+            )
+        )
+
+        with pytest.raises(UnredactedSourceUnavailableError):
+            get_case_detail(
+                config_without_unredacted_resolver, context, "audit-001"
+            )
 
 
 # =============================================================================
@@ -748,22 +963,28 @@ class TestSnapshotReadPath:
         context_in_care_team: RouteContext,
         audit_store: AuditStore,
     ) -> None:
-        """Snapshot is materialized; a subsequent live write must not
-        appear in the queue read from the snapshot."""
+        """Materialize the daily snapshot via a first read, then a live
+        write MUST NOT appear in a subsequent same-day read. This is the
+        PRD §17 + #19 isolation guarantee — the dashboard reads from the
+        frozen materialization point, not the live store."""
         row, calls = _writeable_audit_row_pair("audit-pre", "run-pre")
         audit_store.write(row, calls)
 
         items_before = list_queue(config, context_in_care_team)
         ids_before = {item.audit_id for item in items_before}
+        assert "audit-pre" in ids_before  # baseline: pre-write IS visible
 
+        # Live write AFTER snapshot materialization.
         row_new, calls_new = _writeable_audit_row_pair("audit-post", "run-post")
         audit_store.write(row_new, calls_new)
 
         items_after = list_queue(config, context_in_care_team)
         ids_after = {item.audit_id for item in items_after}
 
-        # Same-day snapshot: post-write must NOT leak into the read.
-        assert "audit-post" not in ids_after - ids_before
+        # The materialized snapshot is frozen → post-write is invisible.
+        assert "audit-post" not in ids_after
+        # And the original row is still there (no regression).
+        assert ids_after == ids_before
 
     def test_concurrent_batch_write_does_not_corrupt_snapshot_read(
         self,
@@ -771,35 +992,56 @@ class TestSnapshotReadPath:
         context_in_care_team: RouteContext,
         audit_store: AuditStore,
     ) -> None:
-        """Read while a batch writer is appending — the read MUST observe a
-        consistent point-in-time row set, never a partial mid-batch view."""
+        """A reader concurrent with a batch writer MUST observe a stable
+        point-in-time row set: every queue item it returns existed BEFORE
+        the batch writer started (snapshot frozen at materialization).
+        Mid-batch writes never appear in the reader's result."""
         row_pre, calls_pre = _writeable_audit_row_pair("audit-pre", "run-pre")
         audit_store.write(row_pre, calls_pre)
 
+        # Materialize the snapshot BEFORE the batch writer starts so we
+        # have a deterministic "pre-batch" materialization point.
+        items_pre = list_queue(config, context_in_care_team)
+        ids_pre = {it.audit_id for it in items_pre}
+
         write_errors: list[BaseException] = []
+        batch_started = threading.Event()
+        reader_done = threading.Event()
 
         def _batch_writer() -> None:
             try:
+                batch_started.set()
                 for i in range(5):
                     r, c = _writeable_audit_row_pair(
                         f"audit-batch-{i}", f"run-batch-{i}"
                     )
                     audit_store.write(r, c)
-            except BaseException as exc:  # pragma: no cover - test diagnostic
+                    if not reader_done.is_set():
+                        # Yield briefly so the reader's concurrent read
+                        # interleaves with the writes (not just batched
+                        # after).
+                        threading.Event().wait(0.001)
+            except BaseException as exc:  # pragma: no cover
                 write_errors.append(exc)
 
         writer = threading.Thread(target=_batch_writer)
         writer.start()
         try:
-            items = list_queue(config, context_in_care_team)
+            batch_started.wait(timeout=2.0)
+            items_concurrent = list_queue(config, context_in_care_team)
+            reader_done.set()
         finally:
-            writer.join()
+            writer.join(timeout=5.0)
 
         assert not write_errors, f"batch writer raised: {write_errors!r}"
-        # The read result must be a tuple of QueueItems (point-in-time
-        # consistent); we don't assert size because the snapshot's
-        # materialization point is implementation-defined.
-        assert all(isinstance(it, QueueItem) for it in items)
+        # Stability: the concurrent read result equals the pre-batch read
+        # (snapshot was frozen — no batch row leaked in).
+        ids_concurrent = {it.audit_id for it in items_concurrent}
+        assert ids_concurrent == ids_pre
+        # And no batch id appears.
+        assert not any(
+            it.audit_id.startswith("audit-batch-") for it in items_concurrent
+        )
 
     def test_inconsistency_surfaces_as_typed_exception(
         self,
@@ -844,17 +1086,54 @@ class TestRouteSmoke:
     def test_get_queue_returns_200(self, client: Any) -> None:
         response = client.get("/queue")
         assert response.status_code == 200
+        assert "text/html" in response.headers["content-type"]
+        # Tailwind + HTMX must be present in the rendered queue view
+        # (FastAPI + HTMX + Tailwind is the PRD §17 acceptance shape).
+        assert "tailwindcss" in response.text
+        assert "htmx.org" in response.text
+
+    def test_get_queue_accepts_sort_query_params(
+        self, client: Any, audit_store: AuditStore
+    ) -> None:
+        """Sortability is exposed via query params on the route. Codex
+        round 1: the handler accepted sort args but the route did not
+        forward them, so the queue was effectively unsortable through
+        the UI."""
+        # Seed two rows with different Hb so we can observe sort order.
+        row_low = _audit_row(audit_id="audit-low", run_id="run-low")
+        row_high = _audit_row(audit_id="audit-high", run_id="run-high")
+        # The default _audit_row uses hb_value=6.5; override one to differ.
+        row_high_dict = row_high.model_dump()
+        row_high_dict["hb_value"] = 8.5
+        row_high = AuditRow.model_validate(row_high_dict)
+        audit_store.write(row_low, (_llm_call(audit_id="audit-low", run_id="run-low"),))
+        audit_store.write(
+            row_high, (_llm_call(audit_id="audit-high", run_id="run-high"),)
+        )
+
+        response = client.get("/queue?sort_key=hb_value&sort_direction=asc")
+        assert response.status_code == 200
+        assert "audit-low" in response.text
+        assert "audit-high" in response.text
+        # Lower Hb appears before higher in ascending order.
+        assert response.text.index("audit-low") < response.text.index(
+            "audit-high"
+        )
 
     def test_get_case_detail_returns_200(self, client: Any) -> None:
         response = client.get("/case/audit-001")
         assert response.status_code == 200
 
     def test_post_break_glass_returns_200(self, client: Any) -> None:
+        # HTMX submits form-encoded bodies; the route accepts a Form
+        # field rather than JSON so the dashboard's UI works without a
+        # client-side JSON shim.
         response = client.post(
             "/case/audit-001/break-glass",
-            json={"justification": "Clinical review per attending"},
+            data={"justification": "Clinical review per attending"},
         )
         assert response.status_code == 200
+        assert "text/html" in response.headers["content-type"]
 
     def test_get_ward_scorecard_returns_200(self, client: Any) -> None:
         response = client.get("/scorecard/ward/ward-001")
