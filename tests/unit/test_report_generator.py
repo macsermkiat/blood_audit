@@ -482,6 +482,25 @@ class TestIndicationDistributionAggregation:
         codes = {r.indication_code for r in result}
         assert codes == {"anemia_symptomatic", "acute_bleed"}
 
+    def test_duplicated_indication_code_within_one_order_counts_once(
+        self,
+    ) -> None:
+        # If an upstream join produces a tuple with the same code repeated
+        # (e.g., ("anemia", "anemia")), this order must contribute 1 to
+        # that code's count, not 2. Otherwise ``total_orders`` for the
+        # code can exceed len(rows) and ``share`` can exceed 1.0.
+        rows = (
+            _row(
+                audit_id="dupe",
+                indication_codes=("anemia_symptomatic", "anemia_symptomatic"),
+            ),
+        )
+        result = aggregate_indication_distribution(rows)
+        assert len(result) == 1
+        assert result[0].indication_code == "anemia_symptomatic"
+        assert result[0].total_orders == 1
+        assert result[0].share <= 1.0
+
     def test_sorted_by_frequency_desc_then_code_asc(self) -> None:
         rows = (
             _row(audit_id="a", indication_codes=("c",)),
@@ -564,6 +583,23 @@ class TestPipelineHealthAggregation:
         # toward needs_review_count.
         rows = (
             _row(audit_id="x", final_classification="INSUFFICIENT_EVIDENCE"),
+        )
+        r = aggregate_pipeline_health(rows)[0]
+        assert r.needs_review_count == 0
+        assert r.insufficient_evidence_count == 1
+
+    def test_insufficient_evidence_with_review_flag_stays_in_one_bucket(
+        self,
+    ) -> None:
+        # An INSUFFICIENT_EVIDENCE row that also has needs_human_review=True
+        # must NOT also count toward needs_review_count — that would let a
+        # documentation-absence spike masquerade as an LLM-review spike.
+        rows = (
+            _row(
+                audit_id="x",
+                final_classification="INSUFFICIENT_EVIDENCE",
+                needs_human_review=True,
+            ),
         )
         r = aggregate_pipeline_health(rows)[0]
         assert r.needs_review_count == 0

@@ -258,7 +258,14 @@ def aggregate_indication_distribution(
     """
     counter: Counter[str] = Counter()
     for row in rows:
-        for code in row.indication_codes:
+        # Deduplicate within one order's indication tuple: each *distinct*
+        # code contributes 1 per order, never N for a code that repeats
+        # in the input. The schema contract is "one row per distinct
+        # indication code, one contribution per (order, distinct code)";
+        # a duplicate from an upstream join would otherwise inflate
+        # ``total_orders`` past ``len(rows)`` and could push ``share``
+        # above 1.0.
+        for code in set(row.indication_codes):
             counter[code] += 1
     total_orders = len(rows)
     items = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
@@ -327,10 +334,22 @@ def aggregate_pipeline_health(
         for r in rows
         if r.final_classification in ("APPROPRIATE", "INAPPROPRIATE")
     )
+    # PipelineHealthRow's contract: needs_review_count counts NEEDS_REVIEW
+    # rows *plus* APPROPRIATE/INAPPROPRIATE rows whose needs_human_review
+    # flag is set (committee spot-check policy). It must NOT also pick up
+    # INSUFFICIENT_EVIDENCE rows — those are documentation-absence, not
+    # LLM-uncertainty, and live in their own bucket. Without this guard
+    # an upstream that sets needs_human_review on an INSUFFICIENT_EVIDENCE
+    # row would double-count it (review + insufficient) and a
+    # documentation-absence spike would masquerade as an LLM-review spike.
     needs_review = sum(
         1
         for r in rows
-        if r.final_classification == "NEEDS_REVIEW" or r.needs_human_review
+        if r.final_classification == "NEEDS_REVIEW"
+        or (
+            r.final_classification in ("APPROPRIATE", "INAPPROPRIATE")
+            and r.needs_human_review
+        )
     )
     insufficient = sum(
         1 for r in rows if r.final_classification == "INSUFFICIENT_EVIDENCE"
