@@ -146,7 +146,7 @@ Single-row summary of the month's operational health.
 |---------------------------------|-------|---------------------------------------------------------------------------------------------|
 | `total_orders`                  | int   |                                                                                             |
 | `classified_orders`             | int   | Rows where `final_classification ∈ {APPROPRIATE, INAPPROPRIATE}`.                            |
-| `needs_review_count`            | int   | Rows where `final_classification = NEEDS_REVIEW` **or** `needs_human_review` flag is set.   |
+| `needs_review_count`            | int   | Rows where `final_classification = NEEDS_REVIEW`, **or** `final_classification ∈ {APPROPRIATE, INAPPROPRIATE}` **and** `needs_human_review` flag is set. INSUFFICIENT_EVIDENCE rows are excluded even when the flag is set — they live in `insufficient_evidence_count` only, so a documentation-absence spike is not double-counted as an LLM-review spike. |
 | `needs_review_rate`             | float | `needs_review_count / total_orders`, in `[0, 1]`.                                            |
 | `insufficient_evidence_count`   | int   | Rows where `final_classification = INSUFFICIENT_EVIDENCE`. PRD §"Documentation absence ≠ INAPPROPRIATE": its own bucket. |
 | `insufficient_evidence_rate`    | float | `insufficient_evidence_count / total_orders`, in `[0, 1]`.                                   |
