@@ -73,16 +73,22 @@ def _draw_stratum(
 
     # Enrichment target may exceed available positives OR the stratum target
     # itself (e.g., adversarial stratum with target=80 but enrichment=138 —
-    # impossible to fit 138 positives into 80 slots). The contract is:
-    # drawn_positives = min(enrichment_target, target, available_positives).
-    # The remainder of the stratum target is filled from negatives. PRD §11's
-    # "~138" wording acknowledges the cap; adversarial is the only sub-138
-    # stratum in DEFAULT_STRATUM_TARGETS.
-    desired_positives = min(enrichment_target, target, population_positives)
+    # impossible to fit 138 positives into 80 slots). When negatives are
+    # scarcer than (target - enrichment), the contract is to draw extra
+    # positives to keep the stratum at its target, NOT to fail — codex P0
+    # finding (sampling edge case for scarce negatives). Final contract:
+    #   drawn_positives = clamp(
+    #       max(enrichment_target_capped, target - population_negatives),
+    #       upper = population_positives,
+    #   )
+    enrichment_cap = min(enrichment_target, target, population_positives)
+    negatives_floor = max(0, target - population_negatives)
+    desired_positives = min(
+        max(enrichment_cap, negatives_floor), population_positives
+    )
     desired_negatives = target - desired_positives
-    if desired_negatives > population_negatives:
-        # Not enough negatives even after fully consuming the positive pool.
-        # The stratum cannot meet its target — fail loud.
+    if desired_negatives > population_negatives or desired_positives < 0:
+        # Even at maximum positive draw the stratum cannot meet target.
         raise InsufficientStratumError(
             f"stratum {stratum} cannot meet target {target}: "
             f"pop={population_size}, pos={population_positives}, "

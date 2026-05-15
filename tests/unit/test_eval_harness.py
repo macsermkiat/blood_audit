@@ -328,6 +328,24 @@ class TestStratifiedSampling:
         assert draw.drawn_positives == 40  # all positives, not 138
         assert len(draw.cases) == 140
 
+    def test_scarce_negatives_draws_extra_positives(self) -> None:
+        # Codex P0: if negatives are scarcer than (target - enrichment),
+        # the sampler must draw extra positives to hit the stratum target —
+        # NOT raise. Example: target=140, enrichment=138, pop_pos=500,
+        # pop_neg=1. Need at least 139 positives + 1 negative.
+        pop = _stratum_population(
+            Stratum.COHORT_EXCEPTION, n_total=501, n_positives=500
+        )
+        targets = SamplingTargets(
+            per_stratum={Stratum.COHORT_EXCEPTION: 140},
+            inappropriate_enrichment_per_stratum=138,
+        )
+        sample = stratified_with_enrichment(pop, targets, rng_seed=0)
+        draw = sample.draws[0]
+        assert len(draw.cases) == 140
+        assert draw.drawn_positives == 139  # not 138, to leave room for 1 neg
+        assert draw.drawn_positives + (140 - draw.drawn_positives) == 140
+
 
 # =============================================================================
 # AC ③ Horvitz-Thompson reweighting against known references.
@@ -492,6 +510,70 @@ class TestHorvitzThompsonReweighting:
         est = horvitz_thompson_prevalence(sample, is_pos)
         assert est.variance >= 0
         assert est.se == pytest.approx(est.variance**0.5, abs=1e-12)
+
+    def test_variance_against_hand_computed_reference(self) -> None:
+        # Codex P1: variance must be pinned to a known reference, not just
+        # "≥ 0". Hand-derived under the canonical Sarndal SRS-with-
+        # replacement approximation (eq 3.4.5):
+        #   Var(p̂) = sum_h n_h * Var(w_i within h) / N²
+        # Single stratum, pop=1000, pop_pos=100, drawn 10 pos + 10 neg.
+        # pi_pos = 10/100 = 0.10  → 10 cases with w = 1/0.10 = 10.0
+        # pi_neg = 10/900 ≈ 0.01111 → 10 cases with w = 0 (indicator=0)
+        # mean(w) = 5.0; Var(w) sample = ((10*25)+(10*25))/19 = 500/19
+        #                                = 26.31578947...
+        # Stratum contribution: 20 * (500/19) / 1000² = 10000/19 / 1e6
+        #                       = 526.31578947e-6
+        positives = tuple(
+            _case(audit_id=f"p{i}", pred="INAPPROPRIATE") for i in range(10)
+        )
+        negatives = tuple(
+            _case(audit_id=f"n{i}", pred="APPROPRIATE") for i in range(10)
+        )
+        sample = StratifiedSample(
+            draws=(
+                StratumDraw(
+                    stratum=Stratum.HB_LT_7,
+                    cases=positives + negatives,
+                    population_size=1000,
+                    population_positives=100,
+                    drawn_positives=10,
+                    base_inclusion_probability=10 / 900,
+                    positive_inclusion_probability=10 / 100,
+                ),
+            )
+        )
+
+        def is_pos(c: AuditCase) -> bool:
+            return c.pred_classification == "INAPPROPRIATE"
+
+        est = horvitz_thompson_prevalence(sample, is_pos)
+        expected_var = (20 * (500 / 19)) / (1000.0 * 1000.0)
+        assert est.variance == pytest.approx(expected_var, rel=1e-9)
+        assert est.se == pytest.approx(expected_var**0.5, rel=1e-9)
+
+    def test_drawn_case_with_zero_pi_raises(self) -> None:
+        # Codex P0: a drawn case with non-positive inclusion probability
+        # is a sampling-design bug — the harness must raise, not silently
+        # skip and bias HT downward.
+        sample = StratifiedSample(
+            draws=(
+                StratumDraw(
+                    stratum=Stratum.HB_LT_7,
+                    cases=(_case(audit_id="bad", pred="INAPPROPRIATE"),),
+                    population_size=100,
+                    population_positives=10,
+                    drawn_positives=1,
+                    base_inclusion_probability=0.1,
+                    positive_inclusion_probability=0.0,  # invariant violation
+                ),
+            )
+        )
+
+        def is_pos(c: AuditCase) -> bool:
+            return c.pred_classification == "INAPPROPRIATE"
+
+        with pytest.raises(ValueError):
+            horvitz_thompson_prevalence(sample, is_pos)
 
     def test_prevalence_bounded_in_unit_interval(self) -> None:
         # Even pathologically enriched samples should not produce a HT
@@ -792,6 +874,16 @@ class TestClusterRobustSE:
         with pytest.raises(EmptyInputError):
             cluster_robust_proportion_ci([], [])
 
+    def test_single_cluster_raises(self) -> None:
+        # Codex P0: CR0 with only 1 cluster yields a degenerate zero-width
+        # CI (residuals cancel to exactly zero). The harness must refuse
+        # rather than silently report overconfidence — the regulator-visible
+        # failure mode of cluster-robust SE on under-clustered data.
+        indicators = [True, False, True, False]
+        cluster_ids = ["only-cluster"] * 4
+        with pytest.raises(ValueError):
+            cluster_robust_proportion_ci(indicators, cluster_ids)
+
     def test_cluster_robust_se_at_least_naive_under_positive_icc(self) -> None:
         # Positive intra-cluster correlation → cluster-robust SE ≥ naive SE.
         # Use 6 clusters with strongly correlated outcomes within cluster.
@@ -923,6 +1015,14 @@ class TestSplitStrategyAutoSelect:
         # The threshold itself is exposed for downstream auditing; the
         # behavior must follow its value, not a hardcoded literal here.
         assert LOMO_DATASET_THRESHOLD_MONTHS == 12
+
+    def test_sparse_calendar_span_uses_range_not_density(self) -> None:
+        # Codex P0: span is calendar range, not distinct-month count. A
+        # dataset with only Jan + Dec of the same year SPANS 12 months and
+        # must auto-select blocked, even though only 2 months have data.
+        cases = _monthly_population([(2026, 1), (2026, 12)])
+        assert dataset_month_span(cases) == 12
+        assert select_split_strategy(cases) == "blocked"
 
 
 class TestTemporalCVSplits:

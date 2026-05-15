@@ -59,6 +59,15 @@ def cluster_robust_proportion_ci(
     cluster_sums: dict[str, float] = defaultdict(float)
     for ind, cid in zip(indicators, cluster_ids, strict=True):
         cluster_sums[cid] += (1.0 if ind else 0.0) - p_hat
+    if len(cluster_sums) < 2:
+        # CR0 with a single cluster yields zero variance and a degenerate
+        # zero-width CI — silently overconfident (codex P0). Surface the
+        # design violation so the caller can choose between collecting
+        # multi-cluster data or falling back to a documented naive SE.
+        raise ValueError(
+            "cluster_robust_proportion_ci: at least 2 clusters are required; "
+            f"got {len(cluster_sums)}"
+        )
     cr_variance = sum(u * u for u in cluster_sums.values()) / (n * n)
     cr_se = math.sqrt(cr_variance)
     naive_se = math.sqrt(p_hat * (1.0 - p_hat) / n)

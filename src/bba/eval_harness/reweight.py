@@ -51,44 +51,33 @@ def horvitz_thompson_prevalence(
                 positive_pi=draw.positive_inclusion_probability,
             )
             if pi <= 0.0:
-                # A case with zero inclusion prob should not appear in the
-                # sample; if it does (e.g., a population with zero positives
-                # somehow yielded a positive case), skip contribution rather
-                # than blow up — the report's other strata still apply.
-                continue
+                # A drawn case cannot have zero inclusion probability — the
+                # sampling design is contradicting itself. Silent skip would
+                # bias HT downward without an audit trail (codex P0).
+                raise ValueError(
+                    f"horvitz_thompson_prevalence: case {case.audit_id} in "
+                    f"stratum {draw.stratum} has inclusion probability "
+                    f"{pi!r} — non-positive pi on a drawn case is a "
+                    f"sampling-design bug"
+                )
             y = 1.0 if indicator(case) else 0.0
             weight = y / pi
             stratum_weighted += weight
             stratum_weighted_sq += weight * weight
         weighted_sum += stratum_weighted
         # Stratum variance contribution: sum_i (1 - pi_i) * (y_i/pi_i)²
-        # simplified under the SRS-with-replacement approximation to:
-        #   N_h² * Var(weighted_sum_within_stratum) / n_h
-        # Use the canonical sample variance of the within-stratum HT weights.
+        # under the SRS-with-replacement approximation (Sarndal et al. 1992
+        # eq 3.4.5) simplifies to N_h * Var(w_i) / N², where Var(w_i) is the
+        # sample variance of the within-stratum HT weights. The first-pass
+        # raise above guarantees every drawn case has pi > 0, so the
+        # variance pass can use stratum_weighted / stratum_weighted_sq
+        # directly without a per-case pi guard.
         n_h = len(draw.cases)
         if n_h > 1:
             mean_w = stratum_weighted / n_h
-            sq_dev = sum(
-                (
-                    (
-                        (1.0 if indicator(c) else 0.0)
-                        / _case_inclusion_probability(
-                            c,
-                            base_pi=draw.base_inclusion_probability,
-                            positive_pi=draw.positive_inclusion_probability,
-                        )
-                    )
-                    - mean_w
-                )
-                ** 2
-                for c in draw.cases
-                if _case_inclusion_probability(
-                    c,
-                    base_pi=draw.base_inclusion_probability,
-                    positive_pi=draw.positive_inclusion_probability,
-                )
-                > 0.0
-            )
+            # Sample variance via the algebraic identity:
+            #   sum((w_i - mean)²) = sum(w_i²) - n * mean²
+            sq_dev = stratum_weighted_sq - n_h * mean_w * mean_w
             var_w = sq_dev / (n_h - 1)
             variance_sum += (n_h * var_w) / (total_population * total_population)
 

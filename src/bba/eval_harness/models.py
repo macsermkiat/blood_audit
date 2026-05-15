@@ -292,6 +292,14 @@ class FalsificationOutcome(StrEnum):
     re-admitted for anemia within the follow-up window; it is *contradicted*
     when the patient did require further transfusion within 24 hours or died
     from anemia within 30 days.
+
+    Scope (v1 — issue #20): three outcome categories per the labeled-subset
+    spec. Additional clinical endpoints (24h Hb response, transfusion-
+    reaction occurrence, physician documentation amendment) are
+    *out-of-scope* for v1 and tracked under follow-up tickets. Extending
+    this enum is straightforward — the contradiction set in
+    :mod:`bba.eval_harness.falsification` is the single switch a future
+    ticket would update.
     """
 
     NO_FURTHER_TRANSFUSION = "no_further_transfusion"

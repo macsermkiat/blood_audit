@@ -31,10 +31,23 @@ def _month_tag(case: AuditCase) -> str:
 
 
 def dataset_month_span(cases: Sequence[AuditCase]) -> int:
-    """Number of distinct calendar months present in ``cases``."""
+    """Inclusive calendar-month span between the earliest and latest case.
+
+    The span is the *temporal range* a dataset covers, not the count of
+    distinct months that happen to contain observations (codex P0 finding).
+    A dataset with one case in Jan 2026 and one in Dec 2026 has span 12
+    even though only 2 months have data — the seasonal-confounder horizon
+    the PRD §11 threshold reasons about is the calendar range, not the
+    observed-month density.
+    """
     if not cases:
         raise EmptyInputError("dataset_month_span: cases must be non-empty")
-    return len({_month_tag(c) for c in cases})
+    months = sorted(
+        {(c.order_datetime.year, c.order_datetime.month) for c in cases}
+    )
+    first_year, first_month = months[0]
+    last_year, last_month = months[-1]
+    return (last_year - first_year) * 12 + (last_month - first_month) + 1
 
 
 def select_split_strategy(cases: Sequence[AuditCase]) -> SplitStrategy:
