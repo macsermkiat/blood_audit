@@ -458,12 +458,12 @@ def _write_single_record(path: Path, data: dict[str, str]) -> None:
     """
     table = pa.table({k: [v] for k, v in data.items()})
     tmp = path.with_suffix(path.suffix + ".tmp")
-    pq.write_table(table, tmp)
+    pq.write_table(table, tmp)  # type: ignore[no-untyped-call]
     tmp.replace(path)
 
 
 def _read_single_record(path: Path) -> dict[str, str]:
-    table = pq.read_table(path)
+    table = pq.read_table(path)  # type: ignore[no-untyped-call]
     record = table.to_pylist()[0]
     return {k: str(v) for k, v in record.items()}
 

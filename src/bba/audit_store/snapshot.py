@@ -56,7 +56,7 @@ class SnapshotView:
         snapshot_path = _snapshot_path(self.store, self.as_of)
         if not snapshot_path.exists():
             return ()
-        table = pq.read_table(snapshot_path)
+        table = pq.read_table(snapshot_path)  # type: ignore[no-untyped-call]
         payloads = table.column("payload").to_pylist()
         slugs = table.column("code_version_slug").to_pylist()
         target_slug = (
@@ -88,5 +88,5 @@ def _materialize(store: AuditStore, snapshot_path: Path) -> None:
     slugs = [slug for _row, slug in records]
     table = pa.table({"code_version_slug": slugs, "payload": payloads})
     tmp = snapshot_path.with_suffix(snapshot_path.suffix + ".tmp")
-    pq.write_table(table, tmp)
+    pq.write_table(table, tmp)  # type: ignore[no-untyped-call]
     tmp.replace(snapshot_path)
