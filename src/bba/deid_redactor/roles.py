@@ -7,23 +7,12 @@ the generic ``[PERSON]`` token; the wrapper inspects the original text
 plus surrounding context for each span and upgrades the placeholder to a
 role-specific token.
 
-The mapping is a small lexicon + window-context rule, not an LLM:
-
-* :data:`ATTENDING_CUES` — physician titles / honorifics (``"Dr."``,
-  ``"MD"``, Thai ``"นพ."``, ``"พญ."``, ``"อาจารย์หมอ"``).
-* :data:`NURSE_CUES` — nursing role markers (``"Nurse"``, ``"RN"``, Thai
-  ``"พยาบาล"``).
-* :data:`PATIENT_CUES` — patient-of-record markers (``"Patient"``, Thai
-  ``"ผู้ป่วย"``, ``"คนไข้"``).
-* :data:`FAMILY_CUES` — family-relation markers (``"Mother"``,
-  ``"Father"``, ``"Spouse"``, Thai ``"แม่"``, ``"พ่อ"``, ``"สามี"``,
-  ``"ภรรยา"``, ``"ลูก"``, ``"ญาติ"``).
-
-The classifier looks at the ``ROLE_CONTEXT_WINDOW`` characters of
-original text immediately before AND after the span. Cues are searched
-in that window; first matching family wins (priority order:
-ATTENDING > NURSE > PATIENT > FAMILY). No cue → returns ``None`` and the
-wrapper preserves the generic ``[PERSON]`` token.
+The mapping is a small lexicon + window-context rule, not an LLM. The
+classifier reads the ``ROLE_CONTEXT_WINDOW`` characters of original text
+immediately before AND after the span. Cues are searched in that window;
+first matching family in priority order wins (ATTENDING > NURSE >
+PATIENT > FAMILY). No cue → returns ``None`` and the wrapper preserves
+the generic ``[PERSON]`` token.
 
 Determinism: the lexicon is a module-level constant, the search is a
 case-insensitive substring scan. Pure function; no I/O; deterministic
@@ -32,26 +21,21 @@ output for the bundle-hash stability AC.
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from collections.abc import Sequence
 
+from bba.deid_redactor.exceptions import BackendRedactionError
 from bba.deid_redactor.models import RedactionSpan, RoleClassifier, RoleToken
 
 
 ROLE_CONTEXT_WINDOW: int = 40
-"""Half-window (in characters) of original-text context around a span.
-
-The classifier reads ``[span.start - ROLE_CONTEXT_WINDOW, span.end +
-ROLE_CONTEXT_WINDOW]`` from the original text and searches it for role
-cues. 40 chars is a deliberate sweet spot: large enough to catch
-"the attending physician Dr. ___ stated that..." (cue precedes the name
-by ~15 chars), small enough not to leak the role of the SOAP block's
-prior speaker onto the current one (typical block boundary is ~80 chars).
-"""
+"""Half-window (in characters) of original-text context around a span."""
 
 
 ATTENDING_CUES: tuple[str, ...] = (
     "dr.",
-    "dr ",
+    "dr",
     "md",
     "physician",
     "attending",
@@ -63,24 +47,23 @@ ATTENDING_CUES: tuple[str, ...] = (
 )
 """Substring cues that mark the surrounding context as physician-spoken.
 
-Lowercase (the matcher lowercases the context window). ``"dr "`` with a
-trailing space is paired with ``"dr."`` so we accept both ``"Dr. Smith"``
-and ``"Dr Smith"`` without also matching ``"drainage"`` mid-word.
+ASCII cues are matched with word-boundary regex (``\\b``) so ``"dr"``
+matches ``"Dr. Smith"`` and ``"Dr Smith"`` but not ``"drainage"``. Thai
+cues are matched as raw substrings because Thai script does not use
+inter-word spaces and ``\\b`` does not align with Thai word boundaries.
 """
 
 
 NURSE_CUES: tuple[str, ...] = (
     "nurse",
-    "rn ",
-    "rn.",
+    "rn",
     "พยาบาล",
 )
 
 
 PATIENT_CUES: tuple[str, ...] = (
     "patient",
-    "pt.",
-    "pt ",
+    "pt",
     "ผู้ป่วย",
     "คนไข้",
 )
@@ -93,8 +76,7 @@ FAMILY_CUES: tuple[str, ...] = (
     "wife",
     "husband",
     "daughter",
-    "son ",
-    "son.",
+    "son",
     "parent",
     "family",
     "relative",
@@ -107,17 +89,59 @@ FAMILY_CUES: tuple[str, ...] = (
 )
 
 
-# Priority order — the classifier walks these in sequence and returns the
-# FIRST family whose cue is present. ATTENDING beats NURSE beats PATIENT
-# beats FAMILY because the upstream lexicons may overlap (a SOAP note
-# saying "the nurse told the attending physician Dr. ___" should classify
-# the redacted [PERSON] as ATTENDING, not NURSE — the closer cue wins
-# only when at equal priority).
 _ROLE_PRIORITY: tuple[tuple[RoleToken, tuple[str, ...]], ...] = (
     (RoleToken.ATTENDING, ATTENDING_CUES),
     (RoleToken.NURSE, NURSE_CUES),
     (RoleToken.PATIENT, PATIENT_CUES),
     (RoleToken.FAMILY, FAMILY_CUES),
+)
+
+
+def _is_ascii(text: str) -> bool:
+    """Whether ``text`` is pure ASCII — boundary semantics differ by script."""
+    try:
+        text.encode("ascii")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _compile_role_patterns() -> tuple[tuple[RoleToken, re.Pattern[str]], ...]:
+    """Compile per-role alternation regex from the lexicons.
+
+    ASCII cues are word-boundary anchored (``\\b...\\b``) so ``"dr"`` does
+    not match inside ``"drainage"`` or ``"hydrate"``. Thai cues are bare
+    substrings — the Unicode ``\\b`` definition does not align with Thai
+    word boundaries (Thai script has no inter-word spaces by convention),
+    and substring search is the standard approach in Thai NLP for short
+    lexicon lookups.
+
+    Cues containing a trailing ``.`` (e.g. ``"dr."``, ``"นพ."``) have the
+    period included in the literal; the regex escape preserves it. Such
+    cues use ``\\b`` only on the leading side (the trailing ``.`` is its
+    own non-word-character boundary).
+    """
+    compiled: list[tuple[RoleToken, re.Pattern[str]]] = []
+    for role, cues in _ROLE_PRIORITY:
+        alternatives: list[str] = []
+        for cue in cues:
+            if _is_ascii(cue):
+                escaped = re.escape(cue)
+                if cue.endswith("."):
+                    # trailing period IS the trailing boundary
+                    alternatives.append(rf"\b{escaped}")
+                else:
+                    alternatives.append(rf"\b{escaped}\b")
+            else:
+                alternatives.append(re.escape(cue))
+        compiled.append(
+            (role, re.compile("|".join(alternatives), re.IGNORECASE))
+        )
+    return tuple(compiled)
+
+
+_ROLE_PATTERNS: tuple[tuple[RoleToken, re.Pattern[str]], ...] = (
+    _compile_role_patterns()
 )
 
 
@@ -129,25 +153,32 @@ def extract_context(
 ) -> str:
     """Slice the original-text context around ``span`` (±``window`` chars).
 
-    Returns a single string ``before + " " + after`` so the cue search
-    is a single ``str.find`` instead of two. The two halves are joined
-    by a single space so a cue that straddles the span boundary (e.g.
-    ``"Dr. " + "[PERSON]" + " MD"``) is not glued into a false match.
+    Returns ``before + " " + after`` so the cue search is one ``str.find``
+    instead of two. The two halves are joined by a single space so a cue
+    straddling the span boundary is not glued into a false match.
     """
-    raise NotImplementedError("RED-phase scaffold; see issue #17")
+    pre_start = max(0, span.start - window)
+    pre_end = span.start
+    post_start = span.end
+    post_end = min(len(original_text), span.end + window)
+    before = original_text[pre_start:pre_end]
+    after = original_text[post_start:post_end]
+    return f"{before} {after}"
 
 
 def classify_role_by_cues(context: str) -> RoleToken | None:
     """Return the role implied by cue presence in ``context``, or ``None``.
 
-    Walks :data:`_ROLE_PRIORITY` in order; the first role whose cue list
-    has any substring present in ``context`` (lowercased, NFC-normalized
-    by the wrapper before this call) wins. ``None`` means no cue → leave
-    the span as :attr:`RoleToken.PERSON`.
-
-    Determinism: search order is fixed (lexicon order within a family).
+    Walks the role-priority list in order; the first role whose
+    word-boundary-anchored regex finds a match in the NFC-normalized
+    context wins. ``None`` means no cue → leave the span as
+    :attr:`RoleToken.PERSON`.
     """
-    raise NotImplementedError("RED-phase scaffold; see issue #17")
+    haystack = unicodedata.normalize("NFC", context)
+    for role, pattern in _ROLE_PATTERNS:
+        if pattern.search(haystack):
+            return role
+    return None
 
 
 def default_role_classifier(
@@ -158,18 +189,22 @@ def default_role_classifier(
 ) -> RoleToken | None:
     """The wrapper's built-in :class:`RoleClassifier` implementation.
 
-    Composes :func:`extract_context` + :func:`classify_role_by_cues`.
-    Callers can plug in a custom classifier via the
-    :func:`bba.deid_redactor.redactor.redact_bundle` parameter — useful
-    for evaluation harnesses that want to A/B a richer classifier
-    without forking the wrapper.
-
-    The classifier is called ONLY for spans whose
-    ``entity_type == "PERSON"``. Spans of other types (``"DATE"``,
-    ``"LOCATION"``, ...) bypass classification and are replaced with
-    their type-matching :class:`RoleToken`.
+    Checks the span's own ``original_text`` first (many honorifics —
+    ``"Dr."``, ``"นพ."`` — are inside the redacted name span itself,
+    not in the surrounding context). Falls back to the caller-supplied
+    ``context``.
     """
-    raise NotImplementedError("RED-phase scaffold; see issue #17")
+    span_text = span.original_text or original_text[span.start : span.end]
+    if span_text:
+        derived = classify_role_by_cues(span_text)
+        if derived is not None:
+            return derived
+    if context:
+        return classify_role_by_cues(context)
+    return None
+
+
+_PERSON_PLACEHOLDER: str = RoleToken.PERSON.value
 
 
 def upgrade_person_tokens(
@@ -188,10 +223,38 @@ def upgrade_person_tokens(
 
     Invariant: the number of ``[PERSON]`` placeholders in ``redacted_text``
     must equal the number of ``PERSON``-type entries in ``spans``. A
-    mismatch is a backend contract violation; the wrapper catches it
-    and raises :class:`bba.deid_redactor.exceptions.BackendRedactionError`.
-
-    Other-type tokens (``[DATE]``, ``[LOCATION]``, ...) are NOT touched
-    by this function — the wrapper handles them separately.
+    mismatch raises :class:`BackendRedactionError`.
     """
-    raise NotImplementedError("RED-phase scaffold; see issue #17")
+    person_spans = tuple(s for s in spans if s.entity_type == "PERSON")
+    placeholder_count = redacted_text.count(_PERSON_PLACEHOLDER)
+    if placeholder_count != len(person_spans):
+        raise BackendRedactionError(
+            "PERSON placeholder count mismatch: redacted_text has "
+            f"{placeholder_count} '[PERSON]' tokens but spans has "
+            f"{len(person_spans)} PERSON entries"
+        )
+
+    if not person_spans:
+        return redacted_text
+
+    parts: list[str] = []
+    cursor = 0
+    span_idx = 0
+    placeholder_len = len(_PERSON_PLACEHOLDER)
+
+    while cursor < len(redacted_text):
+        idx = redacted_text.find(_PERSON_PLACEHOLDER, cursor)
+        if idx == -1:
+            parts.append(redacted_text[cursor:])
+            break
+        parts.append(redacted_text[cursor:idx])
+
+        span = person_spans[span_idx]
+        ctx = extract_context(original_text=original_text, span=span)
+        role = classifier(original_text=original_text, context=ctx, span=span)
+        parts.append(role.value if role is not None else _PERSON_PLACEHOLDER)
+
+        cursor = idx + placeholder_len
+        span_idx += 1
+
+    return "".join(parts)

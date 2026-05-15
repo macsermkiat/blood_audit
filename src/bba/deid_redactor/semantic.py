@@ -31,18 +31,21 @@ from bba.deid_redactor.models import (
 )
 
 
-_PERSON_TOKEN_RE: re.Pattern[str] = re.compile(
-    "|".join(re.escape(t.value) for t in PERSON_CLASS_TOKENS)
-)
-"""Alternation regex matching any PERSON-class token literal.
+def _build_token_regex() -> re.Pattern[str]:
+    """Build the PERSON-class alternation regex.
 
-Compiled at module import so the per-note scan is a single ``finditer``
-pass. Iterating :data:`PERSON_CLASS_TOKENS` once at import time also
-freezes the search order — important because Python's :class:`re`
-alternation is left-to-right; reorder the tokens and a substring-
-prefixed token (e.g. ``[PERSON]`` vs a hypothetical ``[PERSONA]``) would
-silently change which match wins.
-"""
+    Sort by descending length so longer alternatives (``[ATTENDING]``) try
+    before shorter ones (``[PERSON]``) that could be substrings under a
+    different vocabulary. With the current vocabulary none of the role
+    tokens prefix another, but the sort guards against future additions.
+    """
+    sorted_tokens = sorted(
+        (t.value for t in PERSON_CLASS_TOKENS), key=len, reverse=True
+    )
+    return re.compile("|".join(re.escape(t) for t in sorted_tokens))
+
+
+_PERSON_TOKEN_RE: re.Pattern[str] = _build_token_regex()
 
 
 def detect_semantic_degradation(
@@ -55,19 +58,21 @@ def detect_semantic_degradation(
     ``redacted_text`` contains *strictly more than* ``threshold``
     PERSON-class token starts.
 
-    Sliding-window semantics: for every PERSON-class token at character
-    position ``p``, count how many other tokens have starts in
-    ``[p, p + window_chars)``. If that count, plus the token at ``p``,
-    exceeds ``threshold``, the flag fires.
-
-    Boundary cases:
-
-    * Empty / short text → ``False`` (no tokens).
-    * Exactly ``threshold`` tokens in a window → ``False`` (strict ``>``).
-    * ``threshold + 1`` tokens overlapping a single ``window_chars``
-      span → ``True``.
-
-    Pure function. Used by
-    :func:`bba.deid_redactor.redactor.redact_bundle` once per note.
+    Pure function. Used by :func:`bba.deid_redactor.redactor.redact_bundle`
+    once per note.
     """
-    raise NotImplementedError("RED-phase scaffold; see issue #17")
+    starts = [m.start() for m in _PERSON_TOKEN_RE.finditer(redacted_text)]
+    if len(starts) <= threshold:
+        return False
+
+    # Sliding window via two pointers: for each "left" anchor, count
+    # the number of starts in [starts[i], starts[i] + window_chars).
+    j = 0
+    for i, left in enumerate(starts):
+        right_bound = left + window_chars
+        while j < len(starts) and starts[j] < right_bound:
+            j += 1
+        in_window = j - i
+        if in_window > threshold:
+            return True
+    return False

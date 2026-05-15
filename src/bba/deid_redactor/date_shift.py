@@ -32,29 +32,22 @@ from datetime import date
 
 
 DATE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\b(?P<y>\d{4})-(?P<m>\d{2})-(?P<d>\d{2})\b"),
-    re.compile(r"\b(?P<y>\d{4})/(?P<m>\d{2})/(?P<d>\d{2})\b"),
-    re.compile(r"\b(?P<d>\d{2})/(?P<m>\d{2})/(?P<y>\d{4})\b"),
-    re.compile(r"\b(?P<d>\d{2})-(?P<m>\d{2})-(?P<y>\d{4})\b"),
+    re.compile(r"(?<![\d\-/])(?P<y>\d{4})-(?P<m>\d{2})-(?P<d>\d{2})(?![\d\-])"),
+    re.compile(r"(?<![\d/])(?P<y>\d{4})/(?P<m>\d{2})/(?P<d>\d{2})(?![\d/])"),
+    re.compile(r"(?<![\d/])(?P<d>\d{2})/(?P<m>\d{2})/(?P<y>\d{4})(?![\d/])"),
+    re.compile(r"(?<![\d\-])(?P<d>\d{2})-(?P<m>\d{2})-(?P<y>\d{4})(?![\d\-])"),
 )
 """The recognized literal-date patterns. ISO forms are tried first; the
 day-first variants follow so a string like ``"2026-05-10"`` is not
-mis-parsed as DD-MM-YYYY. The patterns are word-boundary-anchored
-(``\\b``) to avoid grabbing fragments out of longer identifiers (e.g.
-``"H123-456-789"``).
+mis-parsed as DD-MM-YYYY. The patterns use look-behind / look-ahead
+boundary classes that reject neighbouring digits and the separator char,
+so an identifier-like fragment ``"H123-456-789"`` does not produce a
+false date match.
 """
 
 
 class DateMatch:
-    """One detected date in a note's redacted text.
-
-    Carries the regex span (so the replacer can write back into the
-    string without re-scanning) and the parsed :class:`datetime.date` (so
-    the offset math is unit-testable separately from the regex match).
-    Public-ish — not exported from the module's ``__init__`` but stable
-    so :mod:`bba.deid_redactor.redactor` and the test suite can both
-    pattern-match on it.
-    """
+    """One detected date in a note's redacted text."""
 
     __slots__ = ("start", "end", "parsed")
 
@@ -62,6 +55,9 @@ class DateMatch:
         self.start = start
         self.end = end
         self.parsed = parsed
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"DateMatch(start={self.start}, end={self.end}, parsed={self.parsed!r})"
 
 
 def parse_dates(text: str) -> Sequence[DateMatch]:
@@ -73,18 +69,43 @@ def parse_dates(text: str) -> Sequence[DateMatch]:
 
     Pure function; no side effects, no I/O.
     """
-    raise NotImplementedError("RED-phase scaffold; see issue #17")
+    matches: list[DateMatch] = []
+    claimed: list[tuple[int, int]] = []
+
+    for pattern in DATE_PATTERNS:
+        for m in pattern.finditer(text):
+            start, end = m.start(), m.end()
+            if _overlaps_any(start, end, claimed):
+                continue
+            try:
+                parsed = date(int(m.group("y")), int(m.group("m")), int(m.group("d")))
+            except ValueError:
+                continue
+            matches.append(DateMatch(start=start, end=end, parsed=parsed))
+            claimed.append((start, end))
+
+    matches.sort(key=lambda dm: dm.start)
+    return tuple(matches)
+
+
+def _overlaps_any(start: int, end: int, claimed: Sequence[tuple[int, int]]) -> bool:
+    """Return ``True`` iff ``[start, end)`` overlaps any prior claimed span."""
+    for cs, ce in claimed:
+        if start < ce and cs < end:
+            return True
+    return False
 
 
 def format_offset(*, days: int) -> str:
     """Render a day offset in the canonical ``Day N`` form.
 
     Examples: ``0`` → ``"Day 0"``, ``3`` → ``"Day +3"``, ``-2`` → ``"Day -2"``.
-    The explicit ``+`` sign on positive offsets prevents misreading
-    ``Day 3`` as ``Day 3 of admission`` (an absolute index) — the audit
-    chain semantic is "days SINCE admission", and the sign disambiguates.
     """
-    raise NotImplementedError("RED-phase scaffold; see issue #17")
+    if days == 0:
+        return "Day 0"
+    if days > 0:
+        return f"Day +{days}"
+    return f"Day {days}"
 
 
 def shift_dates_in_text(text: str, *, admission_date: date) -> str:
@@ -95,9 +116,18 @@ def shift_dates_in_text(text: str, *, admission_date: date) -> str:
     (every match in :func:`parse_dates` is replaced) and order-preserving
     (no re-flow of unmatched text).
 
-    Pure function. Returns a NEW string; the input is never mutated
-    (Python strings are immutable, but the spec is explicit here so
-    callers reason about determinism the same way they do for
-    :func:`bba.evidence_bundle_builder.canonical.canonical_serialize`).
+    Pure function. Returns a NEW string; the input is never mutated.
     """
-    raise NotImplementedError("RED-phase scaffold; see issue #17")
+    matches = parse_dates(text)
+    if not matches:
+        return text
+
+    parts: list[str] = []
+    cursor = 0
+    for m in matches:
+        parts.append(text[cursor : m.start])
+        delta_days = (m.parsed - admission_date).days
+        parts.append(format_offset(days=delta_days))
+        cursor = m.end
+    parts.append(text[cursor:])
+    return "".join(parts)

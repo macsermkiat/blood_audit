@@ -5,20 +5,14 @@ strings (recursively), 2-space indent, no trailing newline. The hash is
 ``sha256(canonical_json.encode("utf-8")).hexdigest()`` and underwrites
 the issue #17 AC bundle-hash stability: same input + same redactor
 version → byte-identical canonical JSON → same hash.
-
-Why a separate canonical layer instead of reusing the evidence bundle's
-canonical_serialize? The redacted-bundle hash and the pre-redaction
-:class:`bba.evidence_bundle_builder.EvidenceBundle.bundle_hash` are two
-distinct fields on :class:`bba.audit_store.AuditRow`: the pre-redaction
-hash anchors the evidence-bundle audit chain (#16), the post-redaction
-hash anchors the redactor audit chain (#17 — "Bundle-hash stability:
-same input bundle + same redactor version → same redacted output → same
-hash"). Keeping the two serializers structurally separate prevents a
-refactor on one from silently changing the other.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
+import math
+import unicodedata
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -26,12 +20,25 @@ from typing import Any
 def _nfc_recursive(value: Any) -> Any:
     """NFC-normalize every string reachable from ``value``.
 
-    Mirrors :func:`bba.evidence_bundle_builder.canonical._nfc_recursive`.
     NFC on both keys and values — without it, a note containing Thai NFD
     characters would hash differently on two runs whose only difference
     is the locale-specific normalization of the source CSV.
     """
-    raise NotImplementedError("RED-phase scaffold; see issue #17")
+    if isinstance(value, str):
+        return unicodedata.normalize("NFC", value)
+    if isinstance(value, Mapping):
+        return {
+            (_nfc_recursive(k) if isinstance(k, str) else k): _nfc_recursive(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_nfc_recursive(item) for item in value]
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(
+                f"non-finite float ({value!r}) is not valid JSON per RFC 7159"
+            )
+    return value
 
 
 def canonical_serialize(value: Any) -> str:
@@ -44,29 +51,26 @@ def canonical_serialize(value: Any) -> str:
     * Sorted keys at every mapping level
     * 2-space indent
     * No trailing newline
-    * Rejects non-finite floats (``NaN``, ``±Inf``) — not valid JSON
-      per RFC 7159 and would silently break the bundle-hash invariant
-      if a buggy upstream allowed one to leak through.
-
-    Pure function. Same input → byte-identical output across Python
-    runs, OSes, and process invocations.
+    * Rejects non-finite floats (``NaN``, ``±Inf``)
     """
-    raise NotImplementedError("RED-phase scaffold; see issue #17")
+    normalized = _nfc_recursive(value)
+    return json.dumps(
+        normalized,
+        sort_keys=True,
+        indent=2,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ": "),
+    )
 
 
 def compute_redaction_hash(envelope: Mapping[str, Any]) -> str:
     """SHA-256 of :func:`canonical_serialize`'s UTF-8 bytes.
 
-    ``envelope`` is the canonical view of the
-    :class:`bba.deid_redactor.models.RedactionResult` — see
-    :func:`build_envelope` for its exact shape.
-
-    Returns 64-char lowercase hex. The
-    :class:`bba.deid_redactor.models.RedactionResult` model validator
-    asserts the recorded hash matches this function's output, mirroring
-    the :class:`bba.evidence_bundle_builder.EvidenceBundle` invariant.
+    Returns 64-char lowercase hex.
     """
-    raise NotImplementedError("RED-phase scaffold; see issue #17")
+    canonical = canonical_serialize(envelope)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def build_envelope(
@@ -80,24 +84,14 @@ def build_envelope(
     route_to_needs_review: bool,
     needs_review_reasons: Sequence[str],
 ) -> Mapping[str, Any]:
-    """Assemble the canonical envelope hashed for bundle-hash stability.
-
-    Envelope shape (locked — extras would change the hash silently):
-
-    ``{
-        "notes": [{"note_id", "redacted_text", "semantic_degraded"}, ...],
-        "redactor_version": {"version", "model_sha", "gazetteer_version"},
-        "redacted_age": int,
-        "age_capped": bool,
-        "k_anonymity_size": int,
-        "k_anonymity_passed": bool,
-        "route_to_needs_review": bool,
-        "needs_review_reasons": ["..."],
-    }``
-
-    ``notes`` order MUST match :attr:`RedactionResult.notes` order so the
-    hash is order-sensitive — preserves the "same input → same output"
-    contract end-to-end even when an upstream caller reorders notes
-    between runs.
-    """
-    raise NotImplementedError("RED-phase scaffold; see issue #17")
+    """Assemble the canonical envelope hashed for bundle-hash stability."""
+    return {
+        "notes": [dict(n) for n in notes],
+        "redactor_version": dict(redactor_version),
+        "redacted_age": int(redacted_age),
+        "age_capped": bool(age_capped),
+        "k_anonymity_size": int(k_anonymity_size),
+        "k_anonymity_passed": bool(k_anonymity_passed),
+        "route_to_needs_review": bool(route_to_needs_review),
+        "needs_review_reasons": list(needs_review_reasons),
+    }

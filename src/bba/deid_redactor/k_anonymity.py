@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 
 from bba.deid_redactor.models import K_ANONYMITY_MIN, QuasiIdentifiers
 
@@ -36,10 +37,10 @@ def compute_k_groups(
     conservative interpretation).
 
     Pure function: same input → same mapping. The order of records does
-    NOT affect output. Implementation should use a :class:`collections.Counter`
-    or equivalent — see GREEN phase.
+    NOT affect output.
     """
-    raise NotImplementedError("RED-phase scaffold; see issue #17")
+    counter = _count_qi(records)
+    return MappingProxyType(dict(counter))
 
 
 def k_anonymity_passed(group_size: int, *, k: int = K_ANONYMITY_MIN) -> bool:
@@ -50,15 +51,9 @@ def k_anonymity_passed(group_size: int, *, k: int = K_ANONYMITY_MIN) -> bool:
     :data:`bba.deid_redactor.models.K_ANONYMITY_MIN`; callers can override
     for a stricter (k=10) policy if KCMH compliance later raises the bar.
     """
-    raise NotImplementedError("RED-phase scaffold; see issue #17")
+    return group_size >= k
 
 
-# Module-private helper signature; kept exported only via :func:`compute_k_groups`.
 def _count_qi(records: Sequence[QuasiIdentifiers]) -> Counter[QuasiIdentifiers]:
-    """Implementation seam — :class:`Counter`-backed groupby on QI tuples.
-
-    Separated from :func:`compute_k_groups` so the public surface returns
-    a read-only :class:`Mapping` while the internal counter is freely
-    mutable during construction. GREEN phase will fill the body.
-    """
-    raise NotImplementedError("RED-phase scaffold; see issue #17")
+    """Implementation seam — :class:`Counter`-backed groupby on QI tuples."""
+    return Counter(records)

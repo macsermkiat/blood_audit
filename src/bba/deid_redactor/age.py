@@ -21,11 +21,8 @@ def apply_age_cap(age_years: int, *, cap: int = AGE_CAP) -> tuple[int, bool]:
 
     Returns ``(capped_age, was_capped)``. ``was_capped`` is ``True`` iff
     ``age_years > cap``; an age exactly equal to ``cap`` is NOT capped
-    (it was already inside the safe range). Negative ages would have
-    been rejected at the :class:`RedactionRequest` boundary by Pydantic.
-
-    Pure function. Used by :func:`bba.deid_redactor.redactor.redact_bundle`;
-    not re-exported from the module ``__init__`` because callers should go
-    through the top-level entry point, not patch individual transforms.
+    (it was already inside the safe range).
     """
-    raise NotImplementedError("RED-phase scaffold; see issue #17")
+    if age_years > cap:
+        return cap, True
+    return age_years, False

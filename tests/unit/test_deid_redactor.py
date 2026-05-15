@@ -154,12 +154,30 @@ def _request(
 
 # =============================================================================
 # Public-API surface — the import block at the top of this file IS the
-# collection check; if a re-export is missing, pytest fails before any test
-# runs. Per the RED-phase contract followed by sibling modules
-# (cf. tests/unit/test_quote_grounder.py), constant- and Pydantic-only
-# validation assertions are intentionally omitted: they would pass on this
-# scaffold without exercising any unimplemented behavior.
+# collection check; if a re-export is removed, pytest fails before any test
+# runs. The tuple below pins the surface so ruff does not strip "unused"
+# imports that exist *only* to assert the export shape (mirrors the pattern
+# in :mod:`tests.unit.test_quote_grounder`).
 # =============================================================================
+
+
+_PUBLIC_SURFACE_PINS = (
+    ATTENDING_CUES,
+    DATE_PATTERNS,
+    DateMatch,
+    DateShiftError,
+    DeidRedactorError,
+    FAMILY_CUES,
+    HashMismatchError,
+    KAnonymityGate,
+    NURSE_CUES,
+    PATIENT_CUES,
+    PERSON_CLASS_TOKENS,
+    RedactedNote,
+    RedactorBackend,
+    RoleClassifier,
+    SEMANTIC_WINDOW_CHARS,
+)
 
 
 # =============================================================================
@@ -768,12 +786,16 @@ class TestRedactionResultValidation:
     """The result model's hash-match invariant (mirrors EvidenceBundle)."""
 
     def _valid_result_kwargs(self) -> dict[str, object]:
+        # Version metadata MUST be identical on both halves of the
+        # construction (the envelope and the RedactionResult), otherwise
+        # the model validator's hash-recompute would correctly reject.
+        version = _version()
         envelope = build_envelope(
             notes=[],
             redactor_version={
-                "version": "0.1.0",
-                "model_sha": "deadbeef",
-                "gazetteer_version": "v1",
+                "version": version.version,
+                "model_sha": version.model_sha,
+                "gazetteer_version": version.gazetteer_version,
             },
             redacted_age=65,
             age_capped=False,
@@ -784,7 +806,7 @@ class TestRedactionResultValidation:
         )
         return {
             "notes": (),
-            "redactor_version": _version(),
+            "redactor_version": version,
             "redacted_age": 65,
             "age_capped": False,
             "k_anonymity_size": 10,

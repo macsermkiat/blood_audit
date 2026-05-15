@@ -19,9 +19,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Annotated, Protocol
+from typing import Annotated, Protocol, Self
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 
 # =============================================================================
@@ -401,6 +401,53 @@ class RedactionResult(BaseModel):
     route_to_needs_review: bool
     needs_review_reasons: tuple[NeedsReviewReason, ...]
     redaction_hash: str = Field(min_length=64, max_length=64)
+
+    @model_validator(mode="after")
+    def _hash_must_match_envelope(self) -> Self:
+        # Lazy import to avoid a circular import: canonical depends on
+        # nothing in models at import time, but importing canonical at
+        # module load would create a top-level cycle if canonical ever
+        # learned about models (mirrors the evidence_bundle_builder
+        # pattern).
+        from bba.deid_redactor.canonical import (
+            build_envelope,
+            compute_redaction_hash,
+        )
+
+        if not all(c in "0123456789abcdef" for c in self.redaction_hash):
+            raise ValueError(
+                f"redaction_hash must be lowercase hex (got {self.redaction_hash!r})"
+            )
+
+        envelope = build_envelope(
+            notes=[
+                {
+                    "note_id": n.note_id,
+                    "redacted_text": n.redacted_text,
+                    "semantic_degraded": n.semantic_degraded,
+                }
+                for n in self.notes
+            ],
+            redactor_version={
+                "version": self.redactor_version.version,
+                "model_sha": self.redactor_version.model_sha,
+                "gazetteer_version": self.redactor_version.gazetteer_version,
+            },
+            redacted_age=self.redacted_age,
+            age_capped=self.age_capped,
+            k_anonymity_size=self.k_anonymity_size,
+            k_anonymity_passed=self.k_anonymity_passed,
+            route_to_needs_review=self.route_to_needs_review,
+            needs_review_reasons=[r.value for r in self.needs_review_reasons],
+        )
+        expected = compute_redaction_hash(envelope)
+        if self.redaction_hash != expected:
+            raise ValueError(
+                f"redaction_hash ({self.redaction_hash}) does not match "
+                f"sha256(canonical envelope) ({expected}); construct via "
+                "redact_bundle() to maintain the audit-chain invariant"
+            )
+        return self
 
 
 # =============================================================================
