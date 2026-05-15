@@ -262,6 +262,23 @@ def _section_label(section: Any) -> str | None:
     return None
 
 
+def _drop_empty_progress_items(items: Sequence[EvidenceItem]) -> tuple[EvidenceItem, ...]:
+    """Filter out IPDADMPROGRESS items whose section list became empty.
+
+    A zero-section item gives the LLM an evidence ID with no quoteable
+    content (the prompt_builder + quote_grounder would both treat it as a
+    dead reference). Pruning preserves the canonical-source-order
+    invariant for the surviving items."""
+    return tuple(it for it in items if not _is_empty_progress(it))
+
+
+def _is_empty_progress(item: EvidenceItem) -> bool:
+    if item.source != "IPDADMPROGRESS":
+        return False
+    sections = item.payload.get("sections")
+    return not sections
+
+
 # =============================================================================
 # Top-level pipeline
 # =============================================================================
@@ -321,6 +338,12 @@ def _enforce_char_cap(
 
     for section in reversed(SECTION_PRIORITY):
         current = tuple(_drop_section_from_item(it, section) for it in current)
+        # Prune progress items whose section list is now empty — without
+        # this, the bundle would emit an E_N citation pointing at a
+        # quoteable-empty payload (the LLM has nothing to reference) and
+        # the source-priority order would shield the empty item from the
+        # last-resort whole-item drop pass below.
+        current = _drop_empty_progress_items(current)
         if _bundle_size(anchor, current) <= char_cap:
             return current
 

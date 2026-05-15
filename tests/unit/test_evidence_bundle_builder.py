@@ -531,6 +531,34 @@ class TestSOAPSectionParsing:
         sections = parse_soap_sections("")
         assert sections == {k: "" for k in SECTION_PRIORITY}
 
+    def test_inline_headers_on_one_line_split_correctly(self) -> None:
+        # The clinical reality: many notes pack S/O/A/P onto a single line.
+        # The line-anchored predecessor classified the entire run as
+        # SUBJECTIVE, which inverted the AC's A/P-first priority and let
+        # truncation drop the clinician's diagnosis (ASSESSMENT) first.
+        text = "S: tired O: BP 90/60 A: anemia P: PRBC"
+        sections = parse_soap_sections(text)
+        assert sections["SUBJECTIVE"] == "tired"
+        assert sections["OBJECTIVE"] == "BP 90/60"
+        assert sections["ASSESSMENT"] == "anemia"
+        assert sections["PLAN"] == "PRBC"
+
+    def test_pre_first_header_text_falls_into_objective_preamble(self) -> None:
+        # Chart metadata before the first SOAP header (e.g. timestamp,
+        # author signature) is implicitly OBJECTIVE per the column-name
+        # default — never silently dropped.
+        text = "  preamble note S: tired"
+        sections = parse_soap_sections(text)
+        assert sections["OBJECTIVE"] == "preamble note"
+        assert sections["SUBJECTIVE"] == "tired"
+
+    def test_BP_does_not_match_P_header(self) -> None:
+        # "BP 90/60" must not produce a PLAN match — "P" is not preceded
+        # by a whitespace boundary.
+        sections = parse_soap_sections("BP 90/60 PR 80")
+        assert sections["PLAN"] == ""
+        assert sections["OBJECTIVE"] == "BP 90/60 PR 80"
+
 
 class TestSectionEmissionOrderInBundle:
     """When an IPDADMPROGRESS item lands in the bundle, its sections appear
@@ -865,6 +893,53 @@ class TestVitalsRecordRejectsNonFiniteBt:
     def test_finite_bt_still_constructs(self) -> None:
         v = VitalsRecord(timestamp=ANCHOR_DT, source="IPDADMPROGRESS", bt=37.0)
         assert v.bt == 37.0
+
+
+class TestEmptyProgressItemsPrunedAfterTruncation:
+    """When section truncation drops every section of a progress item, the
+    item itself must drop too. Otherwise the bundle ships an E_N citation
+    pointing at a sections=[] payload — the LLM sees an evidence ID with
+    no quoteable content and quote_grounder treats it as a dead reference."""
+
+    def test_progress_item_pruned_when_all_sections_dropped(self) -> None:
+        # Build a payload where each section is huge enough that even
+        # ASSESSMENT alone (~5K chars) exceeds the small cap. The
+        # truncator should drop S, O, P, then A — leaving sections=[]
+        # — then prune the empty item entirely.
+        big = lambda label: f"{label}: " + ("ก" * 5000)  # noqa: E731
+        text = "\n".join(big(c) for c in ("S", "O", "A", "P"))
+        # Add a small Hb so we can confirm OTHER sources still appear
+        # after the empty progress is pruned.
+        inputs = EvidenceInputs(
+            anchor=_anchor(),
+            progress_notes=(_progress(offset_hours=-1, text=text),),
+            hb_history=(_hb(offset_hours=-1, value=7.5),),
+        )
+        bundle = build_evidence_bundle(inputs=inputs, char_cap=2500)
+        assert len(bundle.canonical_json) <= 2500
+        # The empty progress item must NOT be in the bundle.
+        for item in bundle.items:
+            if item.source == "IPDADMPROGRESS":
+                assert item.payload.get("sections"), (
+                    "IPDADMPROGRESS item with no sections leaks an empty "
+                    "evidence ID into the bundle"
+                )
+
+    def test_lab_survives_when_progress_is_pruned(self) -> None:
+        # Same setup as above; Lab has higher source-order index but
+        # carries actionable Hb data. After pruning the empty progress,
+        # the Lab item must survive (not get dropped by the whole-item
+        # tail-truncation that would otherwise prefer to drop it last).
+        big = lambda label: f"{label}: " + ("ก" * 5000)  # noqa: E731
+        text = "\n".join(big(c) for c in ("S", "O", "A", "P"))
+        inputs = EvidenceInputs(
+            anchor=_anchor(),
+            progress_notes=(_progress(offset_hours=-1, text=text),),
+            hb_history=(_hb(offset_hours=-1, value=7.5),),
+        )
+        bundle = build_evidence_bundle(inputs=inputs, char_cap=2500)
+        lab_items = _items_by_source(bundle, "Lab")
+        assert len(lab_items) == 1
 
 
 class TestImpossibleCharCapRaises:

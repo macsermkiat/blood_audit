@@ -45,15 +45,33 @@ chart. ASSESSMENT is last to drop because it is the clinician's diagnosis-time
 interpretation; losing it would change what the LLM is auditing."""
 
 
-# Header patterns: (section, regex). Order matches SECTION_PRIORITY's reverse
-# so that "S:" is checked before "A:" if both are valid prefixes — they are
-# disjoint here, but the order is documentation. ``\s*:`` admits "S :" too.
-_HEADER_PATTERNS: tuple[tuple[SOAPSection, re.Pattern[str]], ...] = (
-    ("SUBJECTIVE", re.compile(r"^\s*(?:S|Subjective|CC|HPI)\s*:\s*", re.IGNORECASE)),
-    ("OBJECTIVE", re.compile(r"^\s*(?:O|Objective)\s*:\s*", re.IGNORECASE)),
-    ("ASSESSMENT", re.compile(r"^\s*(?:A|Assessment|Impression)\s*:\s*", re.IGNORECASE)),
-    ("PLAN", re.compile(r"^\s*(?:P|Plan)\s*:\s*", re.IGNORECASE)),
+# Inline-header regex: matches SOAP headers anywhere in the text, not just at
+# line starts. The leading ``(?:^|\s)`` requires a boundary so "BP" doesn't
+# match (B is not preceded by whitespace before P). Real charts often pack
+# multiple sections into a single line ("S: tired O: BP 90/60 A: anemia
+# P: PRBC"); the line-anchored variant misclassified those entirely as
+# SUBJECTIVE and let truncation drop ASSESSMENT first — exactly inverted from
+# the AC's priority order.
+_INLINE_HEADER_PATTERN = re.compile(
+    r"(?:^|\s)\s*"
+    r"(?P<header>S|Subjective|CC|HPI|O|Objective|A|Assessment|Impression|P|Plan)"
+    r"\s*:\s*",
+    re.IGNORECASE,
 )
+
+_HEADER_TO_SECTION: dict[str, SOAPSection] = {
+    "s": "SUBJECTIVE",
+    "subjective": "SUBJECTIVE",
+    "cc": "SUBJECTIVE",
+    "hpi": "SUBJECTIVE",
+    "o": "OBJECTIVE",
+    "objective": "OBJECTIVE",
+    "a": "ASSESSMENT",
+    "assessment": "ASSESSMENT",
+    "impression": "ASSESSMENT",
+    "p": "PLAN",
+    "plan": "PLAN",
+}
 
 
 def parse_soap_sections(text: str) -> Mapping[SOAPSection, str]:
@@ -63,8 +81,8 @@ def parse_soap_sections(text: str) -> Mapping[SOAPSection, str]:
     sections map to ``""`` rather than being absent — callers can rely on the
     full key set without an existence check.
 
-    Recognized header forms (case-insensitive, anchored at line start, optional
-    whitespace around the colon):
+    Recognized header forms (case-insensitive, with an inline boundary so
+    headers may appear mid-line as well as at line starts):
 
     * Subjective: ``S:``, ``Subjective:``, ``CC:``, ``HPI:``
     * Objective:  ``O:``, ``Objective:``
@@ -74,22 +92,31 @@ def parse_soap_sections(text: str) -> Mapping[SOAPSection, str]:
     Notes without any recognized header are treated as a single OBJECTIVE
     section — the IPDADMPROGRESS column is itself named ``OBJECTIVE`` in the
     HOSxP schema, so the no-header default is the most truthful fallback.
-    """
+
+    Text appearing before the first header is treated as OBJECTIVE preamble
+    (same default), preventing pre-header chart metadata from being silently
+    captured under the wrong section."""
     sections: dict[SOAPSection, list[str]] = {k: [] for k in SECTION_PRIORITY}
-    current: SOAPSection = "OBJECTIVE"  # no-header default
-    for line in text.splitlines():
-        matched = False
-        for section, pattern in _HEADER_PATTERNS:
-            m = pattern.match(line)
-            if m:
-                current = section
-                rest = line[m.end():]
-                if rest:
-                    sections[current].append(rest)
-                matched = True
-                break
-        if not matched:
-            sections[current].append(line)
+
+    matches = list(_INLINE_HEADER_PATTERN.finditer(text))
+
+    if not matches:
+        if text.strip():
+            sections["OBJECTIVE"].append(text.strip())
+        return {k: "\n".join(lines).strip() for k, lines in sections.items()}
+
+    # Pre-first-header text → OBJECTIVE preamble.
+    leading = text[: matches[0].start()].strip()
+    if leading:
+        sections["OBJECTIVE"].append(leading)
+
+    for i, m in enumerate(matches):
+        next_start = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        section = _HEADER_TO_SECTION[m.group("header").lower()]
+        content = text[m.end() : next_start].strip()
+        if content:
+            sections[section].append(content)
+
     return {k: "\n".join(lines).strip() for k, lines in sections.items()}
 
 
