@@ -190,11 +190,12 @@ def _resolve_with_opus(
 ) -> tuple[Classification, bool, str | None]:
     """Pick the final classification when Opus parsed successfully.
 
-    Opus is the recorded classification. If Sonnet and Opus disagree,
-    the row routes to NEEDS_REVIEW (the disagreement reason is
-    persisted) but the Opus answer is still recorded as
-    ``final_classification`` so the audit row carries the deeper
-    model's verdict.
+    On agreement (or no Sonnet response to compare against), Opus's
+    classification is recorded as the final answer. On disagreement
+    the row routes to ``NEEDS_REVIEW`` with the ``disagreement``
+    reason — the verbatim Opus and Sonnet labels remain on
+    :class:`DisagreementVerdict` so reviewers can see both verdicts
+    without re-reading the raw responses.
     """
     if disagreement.routed_to_needs_review:
         return "NEEDS_REVIEW", True, "disagreement"

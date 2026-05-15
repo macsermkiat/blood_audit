@@ -26,6 +26,7 @@ from bba.llm_client.models import (
     BatchSubmissionResult,
     EscalationLog,
     LlmClientConfig,
+    ParseFailureReason,
     ParseOutcome,
 )
 from bba.llm_client.parser import parse_structured_response
@@ -69,8 +70,6 @@ def run_with_escalation(
     parallel parse-outcome tuple — Sonnet attempts only (Opus's
     parse outcome is on :attr:`EscalationLog.opus_parse_failure`).
     """
-    from bba.llm_client.models import ParseFailureReason
-
     sonnet_results: list[BatchSubmissionResult] = []
     sonnet_outcomes: list[ParseOutcome] = []
     sonnet_failures: list[ParseFailureReason] = []
