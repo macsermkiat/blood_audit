@@ -1825,6 +1825,45 @@ class TestHbEmissionAndTruncationPriority:
         # Newest first: -24, -48, -72, -96 (oldest last).
         assert offsets == [-24.0, -48.0, -72.0, -96.0]
 
+    def test_med_truncation_drops_oldest_first_within_med(self) -> None:
+        # MED emission is NEWEST-first, so under cap pressure the
+        # OLDEST (farthest from anchor) drops first. Without this, a
+        # stale -72h medication would survive while a -1h medication
+        # (immediate decision context that shaped the transfusion
+        # request) would be evicted — exactly inverted from clinical
+        # relevance.
+        near = _med(offset_hours=-1, drug="ImmediateMed-" + "x" * 200)
+        stale = _med(offset_hours=-72, drug="StaleMed-" + "y" * 200)
+        anchor = OrderAnchor(
+            order_datetime=ANCHOR_DT,
+            hn_hash="x" * 200,
+            an_hash="y" * 200,
+            products=("LPRC",),
+        )
+        bundle = build_evidence_bundle(
+            inputs=EvidenceInputs(anchor=anchor, meds=(near, stale)),
+            char_cap=1100,
+        )
+        med_items = _items_by_source(bundle, "MED")
+        assert len(med_items) == 1, (
+            "Expected exactly one MED to survive under cap pressure"
+        )
+        assert med_items[0].payload["drug"].startswith("ImmediateMed"), (
+            "Stale MED (-72h) survived while immediate MED (-1h) dropped; "
+            "MED emission order is not newest-first"
+        )
+
+    def test_med_emits_newest_first_in_normal_bundle(self) -> None:
+        # Normal-cap bundle should also lead with the newest MED so the
+        # LLM reads the most-relevant decision context first.
+        near = _med(offset_hours=-1, drug="A")
+        far = _med(offset_hours=-72, drug="B")
+        bundle = _build_minimal(meds=(far, near))
+        med_items = _items_by_source(bundle, "MED")
+        assert len(med_items) == 2
+        assert med_items[0].payload["drug"] == "A"  # newest first
+        assert med_items[1].payload["drug"] == "B"
+
     def test_med_dropped_before_hb_under_tight_cap(self) -> None:
         # A dense MED list must NOT silently evict the decision-time Hb.
         # Without the source-aware drop priority, the global tail-drop

@@ -583,7 +583,16 @@ def _assign_ids(
             )
         )
 
-    for m in sorted(meds, key=lambda x: (x.timestamp, x.drug)):
+    # MED: emit NEWEST-first (descending timestamp). Same rationale as Hb:
+    # the most-recent pre-order medication is the most decision-relevant
+    # context (a drug given hours before the transfusion request shapes
+    # the decision; a drug from -72h is shaped by older history). Under
+    # cap pressure, the whole-item tail-drop in _enforce_char_cap removes
+    # the LAST emitted item — newest-first inverts that to drop OLDEST
+    # MED first, so the immediate decision-context med survives longest.
+    # The composite reverse=True orders by timestamp DESC then drug DESC
+    # for tied timestamps; total order across input shuffles preserved.
+    for m in sorted(meds, key=lambda x: (x.timestamp, x.drug), reverse=True):
         items.append(
             EvidenceItem(
                 id=_next_id(),
