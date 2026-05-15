@@ -37,3 +37,12 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+
+[[tool.mypy.overrides]]
+# reportlab does not ship PEP 561 type stubs and has no maintained
+# types-reportlab package on PyPI. The report_generator's reportlab usage
+# is confined to pdf_writer.py and is covered by an integration test
+# (magic-bytes + size); silencing the imports here keeps mypy --strict
+# green for the rest of the package.
+module = ["reportlab.*"]
+ignore_missing_imports = true

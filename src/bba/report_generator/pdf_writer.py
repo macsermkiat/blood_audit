@@ -36,7 +36,6 @@ from bba.report_generator.models import (
     ReportFooter,
     ReportSection,
     SectionName,
-    SectionRow,
 )
 
 
@@ -148,7 +147,7 @@ def render_report_pdf(
     )
     styles = getSampleStyleSheet()
     story: list[object] = [
-        Paragraph(f"KCMH RBC Transfusion Audit", styles["Title"]),
+        Paragraph("KCMH RBC Transfusion Audit", styles["Title"]),
         Paragraph(f"Monthly report — {month_label}", styles["Heading2"]),
         Spacer(1, 0.2 * inch),
         _footer_paragraph(footer),
