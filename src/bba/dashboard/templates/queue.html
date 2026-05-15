@@ -20,33 +20,6 @@
     </label>
     <button type="submit" class="rounded bg-indigo-600 text-white px-3 py-1">Apply</button>
   </form>
-  <table id="queue-table" class="min-w-full bg-white border border-slate-200 text-sm">
-    <thead class="bg-slate-100">
-      <tr>
-        <th class="px-3 py-2 text-left">audit_id</th>
-        <th class="px-3 py-2 text-left">order datetime</th>
-        <th class="px-3 py-2 text-right">Hb</th>
-        <th class="px-3 py-2 text-right">confidence</th>
-        <th class="px-3 py-2 text-left">classification</th>
-        <th class="px-3 py-2 text-left">ward</th>
-        <th class="px-3 py-2 text-left">reason</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for item in items %}
-      <tr class="border-t border-slate-100 hover:bg-slate-50">
-        <td class="px-3 py-2"><a href="/case/{{ item.audit_id }}" class="text-indigo-600 hover:underline">{{ item.audit_id }}</a></td>
-        <td class="px-3 py-2">{{ item.order_datetime.isoformat() }}</td>
-        <td class="px-3 py-2 text-right">{{ "%.1f"|format(item.hb_value) }}</td>
-        <td class="px-3 py-2 text-right">{{ "%.2f"|format(item.confidence) }}</td>
-        <td class="px-3 py-2">{{ item.final_classification }}</td>
-        <td class="px-3 py-2">{{ item.ward_id }}</td>
-        <td class="px-3 py-2">{{ item.review_reason or "" }}</td>
-      </tr>
-      {% else %}
-      <tr><td colspan="7" class="px-3 py-4 text-center text-slate-500">no NEEDS_REVIEW items in today's snapshot</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  {% include "_queue_table.html" %}
 </section>
 {% endblock %}

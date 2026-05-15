@@ -543,14 +543,21 @@ def create_app(config: DashboardConfig) -> FastAPI:
         items = list_queue(
             config, context, sort_key=sort_key, sort_direction=sort_direction
         )
+        context_dict = {
+            "items": items,
+            "sort_key": sort_key,
+            "sort_direction": sort_direction,
+        }
+        # HTMX requests carry the ``HX-Request: true`` header. Render
+        # only the table fragment so the swap target (#queue-table)
+        # receives table-shaped HTML, not a full document. Plain
+        # browser navigations get the full page.
+        if request.headers.get("HX-Request") == "true":
+            return templates.TemplateResponse(
+                request, "_queue_table.html", context_dict
+            )
         return templates.TemplateResponse(
-            request,
-            "queue.html",
-            {
-                "items": items,
-                "sort_key": sort_key,
-                "sort_direction": sort_direction,
-            },
+            request, "queue.html", context_dict
         )
 
     @app.get("/case/{audit_id}", response_class=HTMLResponse)

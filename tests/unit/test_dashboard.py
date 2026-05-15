@@ -1092,6 +1092,31 @@ class TestRouteSmoke:
         assert "tailwindcss" in response.text
         assert "htmx.org" in response.text
 
+    def test_get_queue_htmx_request_returns_table_fragment(
+        self, client: Any
+    ) -> None:
+        """HTMX swap target is ``#queue-table`` with ``outerHTML``. An
+        HX-Request must therefore receive a TABLE fragment, not a full
+        HTML document — otherwise HTMX swaps a ``<html>...</html>`` blob
+        into a table-shaped slot (Codex round 2 finding)."""
+        response = client.get("/queue", headers={"HX-Request": "true"})
+        assert response.status_code == 200
+        # Fragment: starts with the table element, no <html>/<head>.
+        assert response.text.lstrip().startswith("<table")
+        assert "<html" not in response.text
+        assert "<head" not in response.text
+
+    def test_get_queue_plain_browser_returns_full_document(
+        self, client: Any
+    ) -> None:
+        """Plain browser navigation (no HX-Request header) gets the full
+        page with nav chrome, Tailwind, and HTMX script tag."""
+        response = client.get("/queue")
+        assert response.status_code == 200
+        assert "<html" in response.text
+        assert "tailwindcss" in response.text
+        assert "htmx.org" in response.text
+
     def test_get_queue_accepts_sort_query_params(
         self, client: Any, audit_store: AuditStore
     ) -> None:
