@@ -93,11 +93,16 @@ def build_prompt(request: PromptBuildRequest) -> PromptBuildResult:
         ],
         task_mode=request.task_mode,
         cohort_threshold=request.cohort_threshold,
-        injection_match_categories=[
-            m.category.value for m in injection_matches.matches
-        ],
-        injection_match_pattern_ids=[
-            m.pattern_id for m in injection_matches.matches
+        injection_matches=[
+            {
+                "category": m.category.value,
+                "pattern_id": m.pattern_id,
+                "evidence_id": m.evidence_id,
+                "span_text": m.span_text,
+                "start": m.start,
+                "end": m.end,
+            }
+            for m in injection_matches.matches
         ],
         route_to_needs_review=route,
         needs_review_reasons=[r.value for r in reasons],

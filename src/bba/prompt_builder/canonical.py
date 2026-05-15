@@ -83,24 +83,29 @@ def build_envelope(
     blocks: Sequence[Mapping[str, Any]],
     task_mode: str,
     cohort_threshold: float,
-    injection_match_categories: Sequence[str],
-    injection_match_pattern_ids: Sequence[str],
+    injection_matches: Sequence[Mapping[str, Any]],
     route_to_needs_review: bool,
     needs_review_reasons: Sequence[str],
 ) -> Mapping[str, Any]:
     """Assemble the canonical envelope hashed for prompt-hash stability.
 
-    Fields are listed alphabetically by key in :func:`canonical_serialize`'s
-    output (``sort_keys=True``); the explicit argument order here is for
-    readability only. Every field that participates in audit-chain replay
-    appears in the envelope — adding a field to :class:`PromptBuildResult`
-    without adding it here would silently weaken the hash."""
+    ``injection_matches`` is a sequence of full match records, one dict
+    per :class:`InjectionMatch` with keys ``category``, ``pattern_id``,
+    ``evidence_id``, ``span_text``, ``start``, ``end``. The full record
+    participates in the hash so a downstream caller cannot swap a match's
+    ``evidence_id`` / ``span_text`` / offsets and retain a self-consistent
+    ``prompt_hash`` (codex review #21 round 3 P2 — reviewer-visible
+    injection evidence must be byte-stable through the audit chain).
+
+    Every field that participates in audit-chain replay appears in the
+    envelope; adding a field to :class:`PromptBuildResult` without adding
+    it here would silently weaken the hash.
+    """
     return {
         "blocks": [dict(b) for b in blocks],
         "task_mode": str(task_mode),
         "cohort_threshold": float(cohort_threshold),
-        "injection_match_categories": list(injection_match_categories),
-        "injection_match_pattern_ids": list(injection_match_pattern_ids),
+        "injection_matches": [dict(m) for m in injection_matches],
         "route_to_needs_review": bool(route_to_needs_review),
         "needs_review_reasons": list(needs_review_reasons),
     }

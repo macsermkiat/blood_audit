@@ -386,11 +386,16 @@ class PromptBuildResult(BaseModel):
             ],
             task_mode=self.task_mode,
             cohort_threshold=self.cohort_threshold,
-            injection_match_categories=[
-                m.category.value for m in self.injection_verdict.matches
-            ],
-            injection_match_pattern_ids=[
-                m.pattern_id for m in self.injection_verdict.matches
+            injection_matches=[
+                {
+                    "category": m.category.value,
+                    "pattern_id": m.pattern_id,
+                    "evidence_id": m.evidence_id,
+                    "span_text": m.span_text,
+                    "start": m.start,
+                    "end": m.end,
+                }
+                for m in self.injection_verdict.matches
             ],
             route_to_needs_review=self.route_to_needs_review,
             needs_review_reasons=[r.value for r in self.needs_review_reasons],
