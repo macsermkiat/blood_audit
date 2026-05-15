@@ -181,6 +181,55 @@ def classify_role_by_cues(context: str) -> RoleToken | None:
     return None
 
 
+def _classify_by_proximity(*, before: str, after: str) -> RoleToken | None:
+    """Pick the role whose cue match is closest to the span boundary.
+
+    The span boundary is the end of ``before`` (equivalently, the start
+    of ``after``). For each role, scan both halves with the role's
+    regex and find the smallest distance to the boundary:
+
+    * a match in ``before`` sits at distance ``len(before) - match.end()``
+    * a match in ``after`` sits at distance ``match.start()``
+
+    Across roles, the smallest distance wins; ties resolve by global
+    priority (``_ROLE_PRIORITY`` iteration order, ATTENDING first).
+    Returns ``None`` when no role has any match.
+
+    Proximity rather than global priority is required because clinical
+    prose routinely names multiple actors in a single sentence
+    (``"Dr. Smith saw patient John Doe"``). A pure-priority scan would
+    label the patient span as ATTENDING because ``dr.`` outranks
+    ``patient`` regardless of distance; proximity correctly attaches
+    the role of the nearest cue to the redacted name.
+    """
+    before_n = unicodedata.normalize("NFC", before)
+    after_n = unicodedata.normalize("NFC", after)
+    before_len = len(before_n)
+
+    best_role: RoleToken | None = None
+    best_distance = -1  # placeholder; replaced on first match
+
+    for role, pattern in _ROLE_PATTERNS:
+        role_distance = -1
+        for m in pattern.finditer(before_n):
+            d = before_len - m.end()
+            if role_distance == -1 or d < role_distance:
+                role_distance = d
+        for m in pattern.finditer(after_n):
+            d = m.start()
+            if role_distance == -1 or d < role_distance:
+                role_distance = d
+        if role_distance == -1:
+            continue
+        # Strict ``<`` so equal-distance ties fall to the higher-priority
+        # role (which iterates first); flips of priority order would
+        # silently re-label every classification on a deploy.
+        if best_role is None or role_distance < best_distance:
+            best_role = role
+            best_distance = role_distance
+    return best_role
+
+
 def default_role_classifier(
     *,
     original_text: str,
@@ -189,16 +238,36 @@ def default_role_classifier(
 ) -> RoleToken | None:
     """The wrapper's built-in :class:`RoleClassifier` implementation.
 
-    Checks the span's own ``original_text`` first (many honorifics —
-    ``"Dr."``, ``"นพ."`` — are inside the redacted name span itself,
-    not in the surrounding context). Falls back to the caller-supplied
-    ``context``.
+    Resolution order:
+
+    1. The span's own ``original_text`` — many honorifics (``"Dr."``,
+       ``"นพ."``) live inside the redacted name span itself, not in the
+       surrounding context. A cue here is unambiguous.
+    2. The original-text window around the span, classified with
+       :func:`_classify_by_proximity` — the role whose cue is nearest
+       to the span wins. Prevents misclassifying spans in multi-actor
+       sentences (``"Dr. Smith saw patient John Doe"`` — Codex GitHub
+       review on PR #40).
+    3. The caller-supplied ``context`` as a final fallback, using
+       priority-only classification. Used when the caller passes a
+       custom context window that the span-derived slice cannot
+       reproduce.
     """
     span_text = span.original_text or original_text[span.start : span.end]
     if span_text:
         derived = classify_role_by_cues(span_text)
         if derived is not None:
             return derived
+
+    if original_text and 0 <= span.start <= span.end <= len(original_text):
+        pre_start = max(0, span.start - ROLE_CONTEXT_WINDOW)
+        post_end = min(len(original_text), span.end + ROLE_CONTEXT_WINDOW)
+        before = original_text[pre_start : span.start]
+        after = original_text[span.end : post_end]
+        proximity = _classify_by_proximity(before=before, after=after)
+        if proximity is not None:
+            return proximity
+
     if context:
         return classify_role_by_cues(context)
     return None

@@ -484,6 +484,55 @@ class TestDefaultRoleClassifier:
         )
         assert result is None
 
+    def test_default_classifier_prefers_closest_cue_not_highest_priority(self) -> None:
+        # Codex GitHub review (PR #40): "Dr. Smith saw patient John Doe".
+        # For the John-Doe span, both "dr." (priority ATTENDING) and
+        # "patient" (priority PATIENT) appear in the ±40-char window.
+        # The classifier MUST pick the cue NEAREST the span — patient is
+        # adjacent; Dr. is far. Returning ATTENDING here would mislabel
+        # the patient as a physician.
+        text = "Dr. Smith saw patient John Doe"
+        result = default_role_classifier(
+            original_text=text,
+            context=text,
+            span=RedactionSpan(
+                start=22, end=30, entity_type="PERSON", original_text="John Doe"
+            ),
+        )
+        assert result is RoleToken.PATIENT
+
+    def test_default_classifier_prefers_nurse_when_nurse_is_closer(self) -> None:
+        # Symmetric case: doctor mentioned earlier, nurse closer. The
+        # nurse span must classify as NURSE even though ATTENDING is
+        # higher in the global priority list.
+        text = "Dr. Smith asked nurse Jane to recheck"
+        result = default_role_classifier(
+            original_text=text,
+            context=text,
+            span=RedactionSpan(
+                start=22, end=26, entity_type="PERSON", original_text="Jane"
+            ),
+        )
+        assert result is RoleToken.NURSE
+
+    def test_default_classifier_priority_breaks_tie_at_equal_distance(self) -> None:
+        # When two cues sit at the same distance from the span (one in
+        # the before-window, one in the after-window, mirror-symmetric),
+        # the global priority order is the deterministic tie-breaker so
+        # the classifier remains reproducible (bundle-hash stability).
+        # Here PATIENT (distance 1 from span end) and FAMILY ("family"
+        # at distance 1 from span start) are equidistant; PATIENT wins
+        # by priority.
+        text = "patient ___ family"
+        result = default_role_classifier(
+            original_text=text,
+            context=text,
+            span=RedactionSpan(
+                start=8, end=11, entity_type="PERSON", original_text="___"
+            ),
+        )
+        assert result is RoleToken.PATIENT
+
 
 # =============================================================================
 # Token upgrade — PERSON placeholders → role tokens in document order
