@@ -316,26 +316,51 @@ def _drop_one_by_priority(
     """Drop ONE item, choosing the lowest-priority source first.
 
     Walks :data:`DROP_PRIORITY` in order; for the first source group that
-    has at least one item in ``items``, removes the LAST occurrence of
-    that source. Last-occurrence within a source group means:
-    * For ``Lab`` (emitted newest-first), the dropped item is the OLDEST
-      Hb — the most-recent pre-order Hb survives longest.
-    * For other sources (emitted oldest-first), the dropped item is the
-      LATEST entry of that source — older context survives longer because
-      it tends to be the most-prior decision-shaping signal.
+    has items, removes the LAST occurrence of that source. Lab is
+    special-cased to honor PRD §3's HEMATOLOGY > POCT preference even
+    when POCT happens to be more recent: POCT items drop before any
+    HEMATOLOGY item, regardless of timestamp. This matches the
+    deterministic :mod:`bba.hb_lookup` contract — the LLM never sees a
+    POCT-only Hb when a HEMATOLOGY value exists in the lookback.
 
-    Returns the input unchanged if no source in ``DROP_PRIORITY`` has any
-    items. The caller treats that as a terminal state and either accepts
-    the over-cap bundle or raises :class:`EvidenceBundleTooLargeError`."""
+    Returns the input unchanged if no source in :data:`DROP_PRIORITY`
+    has any items. The caller treats that as a terminal state and either
+    accepts the over-cap bundle or raises :class:`EvidenceBundleTooLargeError`."""
     items_list = list(items)
     for source_to_drop in DROP_PRIORITY:
-        last_idx = -1
-        for i, it in enumerate(items_list):
-            if it.source == source_to_drop:
-                last_idx = i
-        if last_idx >= 0:
-            return tuple(items_list[:last_idx] + items_list[last_idx + 1 :])
+        if source_to_drop == "Lab":
+            # PRD §3: drop POCT before HEMATOLOGY regardless of recency.
+            idx = _find_last_poct_lab(items_list)
+            if idx >= 0:
+                return tuple(items_list[:idx] + items_list[idx + 1 :])
+            idx = _find_last_of_source(items_list, "Lab")
+            if idx >= 0:
+                return tuple(items_list[:idx] + items_list[idx + 1 :])
+        else:
+            idx = _find_last_of_source(items_list, source_to_drop)
+            if idx >= 0:
+                return tuple(items_list[:idx] + items_list[idx + 1 :])
     return tuple(items_list)
+
+
+def _find_last_of_source(
+    items: Sequence[EvidenceItem], source: EvidenceSource
+) -> int:
+    """Return last index where ``items[i].source == source``, or -1."""
+    last = -1
+    for i, it in enumerate(items):
+        if it.source == source:
+            last = i
+    return last
+
+
+def _find_last_poct_lab(items: Sequence[EvidenceItem]) -> int:
+    """Return last index of a Lab item whose ``lab_source == "POCT"``."""
+    last = -1
+    for i, it in enumerate(items):
+        if it.source == "Lab" and it.payload.get("lab_source") == "POCT":
+            last = i
+    return last
 
 
 def _drop_empty_progress_items(items: Sequence[EvidenceItem]) -> tuple[EvidenceItem, ...]:

@@ -1622,6 +1622,40 @@ class TestHbEmissionAndTruncationPriority:
             "DROP_PRIORITY is not applied"
         )
 
+    def test_hematology_kept_over_NEWER_poct_under_tight_cap(self) -> None:
+        # PRD §3 / bba.hb_lookup: HEMATOLOGY (LABEXM 290095) is preferred
+        # over POCT (LABEXM 500001) when ANY HEMATOLOGY result exists in
+        # the 7-day lookback — INDEPENDENT of recency. The bundle must
+        # honor this even under tight cap pressure where only one Hb
+        # fits, so the LLM never sees a POCT-only Hb history when a
+        # HEMATOLOGY value existed.
+        hb_hema = HbRecord(
+            timestamp=ANCHOR_DT - timedelta(hours=6),
+            value_g_dl=7.5,
+            source="HEMATOLOGY",
+        )
+        hb_poct = HbRecord(
+            timestamp=ANCHOR_DT - timedelta(hours=2),
+            value_g_dl=8.0,
+            source="POCT",
+        )
+        anchor = OrderAnchor(
+            order_datetime=ANCHOR_DT,
+            hn_hash="x" * 200,
+            an_hash="y" * 200,
+            products=("LPRC",),
+        )
+        bundle = build_evidence_bundle(
+            inputs=EvidenceInputs(anchor=anchor, hb_history=(hb_hema, hb_poct)),
+            char_cap=850,
+        )
+        lab_items = _items_by_source(bundle, "Lab")
+        assert len(lab_items) == 1, "Expected exactly one Hb to survive"
+        assert lab_items[0].payload["lab_source"] == "HEMATOLOGY", (
+            "POCT (newer) survived over HEMATOLOGY (older); bundle does "
+            "not honor PRD §3 source preference under cap pressure"
+        )
+
     def test_hematology_kept_before_poct_under_tight_cap(self) -> None:
         # PRD §3 / bba.hb_lookup contract: HEMATOLOGY (LABEXM 290095)
         # is preferred over POCT (LABEXM 500001). For tied
