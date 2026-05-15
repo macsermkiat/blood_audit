@@ -3,9 +3,9 @@
 PRD §8: "Date-shift to relative offsets (Δ-days-from-admission)". The
 wrapper applies this AFTER ``thai-medical-deid`` has redacted explicit
 date PHI to ``[DATE]`` tokens. Any remaining literal date strings inside
-the note text — typically inside running prose ("admitted on 2026-05-10")
-that the backend missed, or pre-redaction-resistant formats like "5/10/26"
-— are converted to anchored offsets like ``Day 0``, ``Day +3``, ``Day -2``.
+the note text — typically dates the backend missed inside running prose
+("admitted on 2026-05-10") — are converted to anchored offsets like
+``Day 0``, ``Day +3``, ``Day -2``.
 
 Determinism contract: same input text + same ``admission_date`` →
 byte-identical output. The bundle-hash stability AC depends on this —
@@ -18,14 +18,13 @@ Supported literal-date formats (regexes in :data:`DATE_PATTERNS`):
 * ``DD/MM/YYYY`` — Thai/EU convention
 * ``DD-MM-YYYY`` — Thai/EU variant
 
-All four formats require a four-digit year and zero-padded day/month so
-ambiguous strings like ``"5/10/26"`` (two-digit year, unpadded) are
-NOT matched — those land in the upstream ingest layer's
-``parse_warning`` channel rather than risk a wrong-century shift here.
-Unrecognized formats (Buddhist-year prefix, decimal hour fragments, etc.)
-are likewise left untouched — the strict ingest-time parser
+All four formats require a four-digit year AND zero-padded two-digit
+day + month. Ambiguous strings (two-digit year ``"5/10/26"``, unpadded
+``"2026-5-10"``, Buddhist-year prefix, decimal hour fragments, etc.)
+are NOT matched — the upstream ingest parser
 (:mod:`bba.ingest.time_parser`) has already routed those records to a
-``parse_warning`` column upstream.
+``parse_warning`` channel and the wrapper avoids re-introducing a
+wrong-century / wrong-month shift here.
 
 Backend-tagged date spans (``entity_type == "DATE"``) carrying a
 ``YYYY-MM-DD`` ``original_text`` are converted by

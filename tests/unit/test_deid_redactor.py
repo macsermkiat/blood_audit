@@ -785,7 +785,12 @@ class TestCanonical:
 class TestRedactionResultValidation:
     """The result model's hash-match invariant (mirrors EvidenceBundle)."""
 
-    def _valid_result_kwargs(self) -> dict[str, object]:
+    def _build_valid_result(self, *, override_hash: str | None = None) -> RedactionResult:
+        """Construct a :class:`RedactionResult` whose hash matches its envelope.
+
+        ``override_hash`` lets tests verify the validator rejects a
+        misshapen hash without re-deriving the rest of the envelope.
+        """
         # Version metadata MUST be identical on both halves of the
         # construction (the envelope and the RedactionResult), otherwise
         # the model validator's hash-recompute would correctly reject.
@@ -804,27 +809,29 @@ class TestRedactionResultValidation:
             route_to_needs_review=False,
             needs_review_reasons=[],
         )
-        return {
-            "notes": (),
-            "redactor_version": version,
-            "redacted_age": 65,
-            "age_capped": False,
-            "k_anonymity_size": 10,
-            "k_anonymity_passed": True,
-            "route_to_needs_review": False,
-            "needs_review_reasons": (),
-            "redaction_hash": compute_redaction_hash(envelope),
-        }
+        return RedactionResult(
+            notes=(),
+            redactor_version=version,
+            redacted_age=65,
+            age_capped=False,
+            k_anonymity_size=10,
+            k_anonymity_passed=True,
+            route_to_needs_review=False,
+            needs_review_reasons=(),
+            redaction_hash=(
+                override_hash
+                if override_hash is not None
+                else compute_redaction_hash(envelope)
+            ),
+        )
 
     def test_valid_result_constructs(self) -> None:
-        r = RedactionResult(**self._valid_result_kwargs())
+        r = self._build_valid_result()
         assert r.redactor_version.version == "0.1.0"
 
     def test_wrong_length_hash_rejected(self) -> None:
-        kwargs = self._valid_result_kwargs()
-        kwargs["redaction_hash"] = "abc123"
         with pytest.raises(ValidationError):
-            RedactionResult(**kwargs)
+            self._build_valid_result(override_hash="abc123")
 
 
 # =============================================================================
@@ -1024,6 +1031,120 @@ class TestRedactBundleEndToEnd:
             req, backend=backend, k_gate=lambda qi: 10
         )
         assert "[DATE]" in result.notes[0].redacted_text
+
+    def test_backend_date_span_zero_offset(self) -> None:
+        # Day 0 boundary on the backend-tagged-DATE path. The literal-
+        # regex path covers Day 0 separately; this case ensures the
+        # backend-span path also renders the unsigned zero form.
+        backend = _stub_backend()
+        backend.register(
+            "Admitted 2026-05-10",
+            redacted="Admitted [DATE]",
+            spans=(
+                RedactionSpan(
+                    start=9,
+                    end=19,
+                    entity_type="DATE",
+                    original_text="2026-05-10",
+                ),
+            ),
+        )
+        req = _request(
+            notes=(NoteInput(note_id="E1", text="Admitted 2026-05-10"),),
+            admission_date=date(2026, 5, 10),
+        )
+        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
+        assert "Day 0" in result.notes[0].redacted_text
+
+    def test_backend_multiple_date_spans_shifted_in_order(self) -> None:
+        # Two DATE spans, two [DATE] placeholders — must map in document
+        # order so the earlier admission_date offset lands at the
+        # earlier placeholder.
+        backend = _stub_backend()
+        backend.register(
+            "Seen 2026-05-10 then 2026-05-15",
+            redacted="Seen [DATE] then [DATE]",
+            spans=(
+                RedactionSpan(
+                    start=5,
+                    end=15,
+                    entity_type="DATE",
+                    original_text="2026-05-10",
+                ),
+                RedactionSpan(
+                    start=21,
+                    end=31,
+                    entity_type="DATE",
+                    original_text="2026-05-15",
+                ),
+            ),
+        )
+        req = _request(
+            notes=(
+                NoteInput(note_id="E1", text="Seen 2026-05-10 then 2026-05-15"),
+            ),
+            admission_date=date(2026, 5, 10),
+        )
+        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
+        # Order matters: Day 0 must appear BEFORE Day +5 in the output.
+        rendered = result.notes[0].redacted_text
+        assert "[DATE]" not in rendered
+        assert rendered.index("Day 0") < rendered.index("Day +5")
+
+    def test_backend_date_span_empty_original_text_keeps_placeholder(self) -> None:
+        # Backend tagged a date PHI but did not surface original_text
+        # (some backends omit it). The wrapper falls open: [DATE] stays
+        # as the generic placeholder rather than fabricating an offset.
+        backend = _stub_backend()
+        backend.register(
+            "Seen on [DATE]",
+            redacted="Seen on [DATE]",
+            spans=(
+                RedactionSpan(
+                    start=8,
+                    end=14,
+                    entity_type="DATE",
+                    original_text="",
+                ),
+            ),
+        )
+        req = _request(
+            notes=(NoteInput(note_id="E1", text="Seen on [DATE]"),),
+            admission_date=date(2026, 5, 10),
+        )
+        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
+        assert "[DATE]" in result.notes[0].redacted_text
+
+    def test_backend_date_span_more_spans_than_placeholders_raises(self) -> None:
+        # Inverse direction of the count-mismatch invariant: more DATE
+        # spans than [DATE] placeholders also signals a backend contract
+        # violation and must raise BackendRedactionError.
+        backend = _stub_backend()
+        backend.register(
+            "Seen 2026-05-10 and 2026-05-11",
+            redacted="Seen [DATE] and the second date redacted inline",
+            spans=(
+                RedactionSpan(
+                    start=5,
+                    end=15,
+                    entity_type="DATE",
+                    original_text="2026-05-10",
+                ),
+                RedactionSpan(
+                    start=20,
+                    end=30,
+                    entity_type="DATE",
+                    original_text="2026-05-11",
+                ),
+            ),
+        )
+        req = _request(
+            notes=(
+                NoteInput(note_id="E1", text="Seen 2026-05-10 and 2026-05-11"),
+            ),
+        )
+        with pytest.raises(BackendRedactionError):
+            redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
 
     def test_backend_date_span_count_mismatch_raises(self) -> None:
         # Contract: count of [DATE] placeholders in redacted text must
