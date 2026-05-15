@@ -7,8 +7,8 @@ code) when a concept changes shape.
 
 Scope: Phase 1 of the KCMH RBC transfusion audit pipeline. PRD: [issue #1].
 Sections are added per ticket as each module merges to `main`. Currently
-covered: `#3 ingest`, `#5 hb_lookup`, `#6 vitals_extractor`, `#18 quote_grounder`,
-`#19 audit_store`.
+covered: `#3 ingest`, `#4 audit_orders`, `#5 hb_lookup`, `#6 vitals_extractor`,
+`#18 quote_grounder`, `#19 audit_store`.
 
 ## Ingest concepts (#3)
 
@@ -336,12 +336,97 @@ Enum of canonical audit labels: `APPROPRIATE`, `INAPPROPRIATE`,
 `bba.audit_store.models.Classification`. Single source of truth across the
 pipeline; downstream modules import from here, never re-define.
 
+## Audit-orders concepts (#4)
+
+### Blood-order input
+
+One pre-joined `(HN, REQNO)` row carrying everything the filter needs:
+BDVST identity + status fields, both anchor candidates (`REQ` and `BDVST`
+date/time), the joined BDTYPE products, AN-scoped Diagnosis ICD-10 codes,
+and the joined patient birthdate/sex from `UnUSE_Patient_Background`.
+`bba.audit_orders.models.BloodOrderInput`. Joining lives upstream so the
+filter is pure-Python and unit-testable without DuckDB.
+
+### Audit order
+
+One canonical row in the `audit_orders` table — the output of the filter
+for an included input. `bba.audit_orders.models.AuditOrder`. Carries the
+PRD §"Output schema" identity + anchor fields: `audit_id`, `hn`, `an`,
+`reqno`, `order_datetime` (tz-aware UTC), `anchor_imputed`,
+`products_ordered`, `age_years`, `sex`, `diagnosis_codes`. Consumed by
+#5 (hb_lookup), #6 (vitals_extractor), #7 (cohort_detector), #8
+(deterministic_classifier).
+
+### Exclusion reason
+
+Typed `Literal` enum of the gate that rejected a record:
+`not_rbc_product`, `status_not_eligible`, `cancelled`, `no_an`,
+`inter_hospital`, `hemoglobinopathy`, `aiha`, `tma`, `obstetric`,
+`pediatric`. `ExcludedRecord.detail` carries the specific evidence (e.g.,
+the ICD-10 code that triggered hemoglobinopathy) so reviewers can audit
+the rule firing without re-joining source CSVs.
+
+### Hard-exclusion ICD-10 set
+
+Codes that block an order from the audit set regardless of other factors:
+hemoglobinopathy `D55` / `D56` / `D57` / `D58`, AIHA `D59.x`, TMA `M31.1`,
+obstetric `O`-chapter. Round 1 B1 (hemoglobinopathy hard-exclude); the
+issue #4 AC is the authoritative list. `bba.audit_orders.rules` constants
+(`HEMOGLOBINOPATHY_PREFIXES`, `AIHA_PREFIX`, `TMA_PREFIXES`,
+`OBSTETRIC_PREFIX`).
+
+### Boundary-aware ICD prefix match
+
+`bba.audit_orders.rules._code_matches_prefix`. A raw `startswith` would
+collapse the ICD-10 chapter boundary (e.g., `D550` would match `D55`).
+The matcher requires either exact-length match or a `"."` continuation —
+except for single-letter chapter prefixes (`"O"`), which accept digit
+continuation to form the 3-char category (`O80`, `O09.9`). Case-sensitive;
+ICD-10 is uppercase by convention and tolerating lowercase would also
+tolerate other formatting drift.
+
+### Anchor resolution
+
+`bba.audit_orders.anchor.resolve_anchor` picks the best
+`order_datetime` for a record. Primary: `REQDATE + REQTIME`. Fallback:
+`BDVSTDATE + BDVSTTIME`, with `AnchorResolution.imputed = True` so the
+emitted row carries `anchor_imputed = True`. A partial pair (date xor
+time) is **not** a fallback — per PRD §1 the strict parser already
+refused to invent a time, and the audit_orders filter must not re-introduce
+that drift.
+
+### Unrecoverable anchor
+
+Neither REQ nor BDVST pair is usable. `bba.audit_orders.exceptions.UnrecoverableAnchorError`
+is raised rather than silently dropping the record or emitting a row with
+a null anchor — downstream stages (`hb_lookup`'s −7 d window,
+`vitals_extractor`'s ±6 h window) cannot tolerate a missing anchor.
+
+### Audit ID
+
+Stable identity of a single audited order. `bba.audit_orders.identity.build_audit_id`
+returns `sha256("<hn>:<reqno>")[:32]`. Same `(hn, reqno)` → same id
+forever; filesystem-safe (lowercase hex only). Generated here, persisted
+downstream as `AuditRow.audit_id`. The truncation is safe because
+`(HN, REQNO)` is already unique by construction (PRD §2); the hash is
+for stable filesystem-safe naming, not adversarial collision resistance.
+
+### Filter result
+
+Outcome of `bba.audit_orders.build_audit_orders` — a frozen pydantic
+model partitioning every input into either `included: tuple[AuditOrder,
+...]` or `excluded: tuple[ExcludedRecord, ...]`. The partition is total
+(no silent drops) and disjoint (no double-counting), input ordering is
+preserved within each bucket, and identity is deterministic across runs.
+The two pipeline-level Hypothesis property tests assert these invariants
+on generated input matrices.
+
 ## Vocabulary not in this file
 
 Domain terms used in the broader project but defined elsewhere (PRD issue
 body, or future Phase-1 modules):
 
-* `audit_id`, `cohort_threshold`, `MTP`, `T1.MTP`,
+* `cohort_threshold`, `MTP`, `T1.MTP`,
   `hallucination_suspect`, etc. — see the PRD (issue #1) for definitions.
 
 Add a concept here when a module exposes it as part of its interface. Update
