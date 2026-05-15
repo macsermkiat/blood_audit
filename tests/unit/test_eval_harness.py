@@ -660,9 +660,12 @@ class TestPABAK:
 
     def test_binary_formula(self) -> None:
         # Binary: PABAK = 2 * p_o - 1.
-        # 10 items, 7 agreements → PABAK = 0.4.
-        a = ["Y"] * 5 + ["N"] * 5
-        b = ["Y"] * 4 + ["N"] + ["N"] * 4 + ["Y"]  # 7 agreements
+        # 10 items, 7 agreements → PABAK = 0.4. Built by-hand below:
+        # a: Y Y Y Y Y N N N N N
+        # b: Y Y N N Y N N Y N N  (agreements at indices 0,1,4,5,6,8,9 = 7)
+        a = ["Y", "Y", "Y", "Y", "Y", "N", "N", "N", "N", "N"]
+        b = ["Y", "Y", "N", "N", "Y", "N", "N", "Y", "N", "N"]
+        assert sum(1 for x, y in zip(a, b, strict=True) if x == y) == 7
         assert pabak(a, b) == pytest.approx(2 * 0.7 - 1, abs=1e-9)
 
     def test_three_category(self) -> None:
