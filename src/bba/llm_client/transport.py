@@ -52,6 +52,15 @@ _TOOL_DESCRIPTION: Final[str] = (
     "the supplied evidence. Mandatory tool; no free-form text answers."
 )
 
+MAX_OUTPUT_TOKENS: Final[int] = 4096
+"""Max tokens reserved for the LLM's tool-call output.
+
+Sized for the structured-output envelope (classification + up to ~5
+indications with verbatim quotes + reasoning summaries in EN + TH).
+The audit pipeline never emits free-form responses; the tool-use shape
+caps verbosity structurally regardless of this limit, but Anthropic
+requires an explicit ``max_tokens`` on every request."""
+
 
 def build_anthropic_request(
     request: BatchSubmissionRequest,
@@ -87,7 +96,7 @@ def build_anthropic_request(
 
     return {
         "model": model,
-        "max_tokens": 4096,
+        "max_tokens": MAX_OUTPUT_TOKENS,
         "system": system_blocks,
         "messages": [
             {"role": "user", "content": user_message_blocks},

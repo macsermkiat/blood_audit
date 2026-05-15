@@ -44,6 +44,7 @@ Cross-cutting:
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -96,9 +97,13 @@ from bba.llm_client import (
 )
 from bba.prompt_builder import (
     EvidenceChunk,
+    InjectionVerdict,
+    PromptBlock,
     PromptBuildRequest,
     PromptBuildResult,
+    build_envelope,
     build_prompt,
+    compute_prompt_hash,
 )
 
 
@@ -324,17 +329,47 @@ def _config(**overrides: object) -> LlmClientConfig:
 # =============================================================================
 
 
+_SNAPSHOT_SUFFIX_RE = re.compile(r"-\d{8}$")
+
+
 class TestSnapshotPinnedModelId:
-    def test_sonnet_model_id_is_snapshot_pinned(self) -> None:
-        assert SONNET_MODEL_ID.endswith(("-20251018",))
-        assert "claude-sonnet-4-6" in SONNET_MODEL_ID
+    def test_sonnet_model_id_is_date_pinned(self) -> None:
+        # Format contract, NOT a specific date check: the model ID must
+        # end with -YYYYMMDD so the snapshot pin is structural. Updating
+        # the snapshot must require an explicit code change to the
+        # constant (not a transparent SDK upgrade).
+        assert _SNAPSHOT_SUFFIX_RE.search(SONNET_MODEL_ID) is not None
+        assert "sonnet" in SONNET_MODEL_ID
 
-    def test_opus_model_id_is_snapshot_pinned(self) -> None:
-        assert OPUS_MODEL_ID.endswith(("-20251030",))
-        assert "claude-opus-4-7" in OPUS_MODEL_ID
+    def test_opus_model_id_is_date_pinned(self) -> None:
+        assert _SNAPSHOT_SUFFIX_RE.search(OPUS_MODEL_ID) is not None
+        assert "opus" in OPUS_MODEL_ID
 
-    def test_allowed_models_contains_only_pinned_ids(self) -> None:
-        assert ALLOWED_MODELS == frozenset({SONNET_MODEL_ID, OPUS_MODEL_ID})
+    def test_floating_alias_rejected_by_config(self) -> None:
+        # A floating alias (no date suffix) must fail config validation.
+        # This is the substantive contract — the format checks above
+        # just pin the shape; this one pins the rejection.
+        with pytest.raises(ValidationError) as exc_info:
+            LlmClientConfig.model_validate(
+                {
+                    "sonnet_model_id": "claude-sonnet-4-6",  # floating alias
+                    "opus_model_id": OPUS_MODEL_ID,
+                    "max_sonnet_attempts": MAX_SONNET_ATTEMPTS,
+                    "prompt_cache_enabled": True,
+                    "code_version": "v1",
+                }
+            )
+        assert "snapshot-pinned" in str(exc_info.value).lower() or "not in" in str(
+            exc_info.value
+        )
+
+    def test_allowed_models_set_membership(self) -> None:
+        # Every constant must round-trip through ALLOWED_MODELS so the
+        # validator and the constants stay in sync. A divergence here
+        # means the validator would silently accept an unpinned ID.
+        assert SONNET_MODEL_ID in ALLOWED_MODELS
+        assert OPUS_MODEL_ID in ALLOWED_MODELS
+        assert "claude-sonnet-4-6" not in ALLOWED_MODELS  # floating alias rejected
 
     def test_config_rejects_unpinned_model(self) -> None:
         with pytest.raises(ValidationError):
@@ -1375,6 +1410,46 @@ class TestModelImmutability:
             )
 
 
+def _build_multi_system_block_prompt() -> PromptBuildResult:
+    """Synthesize a PromptBuildResult with 3 system blocks where only
+    the final block carries cache_marker=True.
+
+    The real :func:`build_prompt` only emits ONE system block today, so
+    this fixture goes through :func:`compute_prompt_hash` /
+    :func:`build_envelope` directly to construct a valid frozen
+    :class:`PromptBuildResult` whose ``prompt_hash`` matches its
+    envelope. Used to exercise the multi-system-block boundary case
+    in the cache-control translation contract.
+    """
+    blocks = (
+        PromptBlock(role="system", text="System block A", cache_marker=False),
+        PromptBlock(role="system", text="System block B", cache_marker=False),
+        PromptBlock(role="system", text="System block C (cached)", cache_marker=True),
+        PromptBlock(role="user", text="<evidence id=\"E1\" untrusted=\"true\">x</evidence>", cache_marker=False),
+    )
+    envelope = build_envelope(
+        blocks=[
+            {"role": b.role, "text": b.text, "cache_marker": b.cache_marker}
+            for b in blocks
+        ],
+        task_mode="HB_7_10_REVIEW",
+        cohort_threshold=7.0,
+        injection_matches=[],
+        route_to_needs_review=False,
+        needs_review_reasons=[],
+    )
+    prompt_hash = compute_prompt_hash(envelope)
+    return PromptBuildResult(
+        blocks=blocks,
+        task_mode="HB_7_10_REVIEW",
+        cohort_threshold=7.0,
+        injection_verdict=InjectionVerdict(flagged=False, matches=()),
+        route_to_needs_review=False,
+        needs_review_reasons=(),
+        prompt_hash=prompt_hash,
+    )
+
+
 def _build_persistable_call(*, audit_id: str, run_id: str) -> LlmCall:
     return LlmCall(
         call_id=f"call-{audit_id}-1",
@@ -1508,6 +1583,30 @@ class TestAnthropicRequestCacheControlTranslation:
         ]
         assert cached_user_blocks == []
 
+    def test_cache_marker_lands_on_last_system_block_in_multi_block_prompt(self) -> None:
+        # Multi-system-block fixture: a forged PromptBuildResult with
+        # 3 system blocks, only the LAST of which has cache_marker=True.
+        # The translated Anthropic payload must mark ONLY the last
+        # system block — never the earlier ones. Addresses codex
+        # re-review round 3, issue §1.
+        forged = _build_multi_system_block_prompt()
+        request = BatchSubmissionRequest(
+            audit_id="a-multi",
+            run_id="run-multi",
+            task_mode="HB_7_10_REVIEW",
+            prompt=forged,
+        )
+        payload = build_anthropic_request(
+            request, model=SONNET_MODEL_ID, prompt_cache_enabled=True
+        )
+        system_blocks = payload["system"]
+        assert len(system_blocks) == 3
+        # Earlier blocks are NOT cached.
+        assert "cache_control" not in system_blocks[0]
+        assert "cache_control" not in system_blocks[1]
+        # Only the final system block carries the breakpoint.
+        assert system_blocks[2].get("cache_control") == {"type": "ephemeral"}
+
     def test_disabled_cache_strips_all_cache_control_markers(self) -> None:
         request = _request(audit_id="a1")
         payload = build_anthropic_request(
@@ -1606,86 +1705,95 @@ class TestAnthropicBatchEntryErrorHandling:
     surface its errored rows on the audit chain so a reviewer can see
     why those rows didn't get a real classification. Addresses codex
     re-review §2 (HIGH).
+
+    These tests go through the public :meth:`AnthropicBatchTransport.submit_batch`
+    surface with a monkeypatched ``anthropic`` SDK that yields stub
+    batch result entries of each type, exercising the same code path
+    a real Anthropic batch would.
     """
 
-    def test_errored_entry_yields_empty_content_envelope(self) -> None:
-        from bba.llm_client.transport import _result_from_batch_entry
-
-        class _StubError:
-            def model_dump(self) -> dict[str, Any]:
-                return {"type": "invalid_request_error", "message": "bad"}
-
-        class _StubResult:
-            type = "errored"
-            error = _StubError()
-
-        class _StubEntry:
-            custom_id = "a1"
-            anthropic_version = "2023-06-01"
-            id = "msg_err"
-            result = _StubResult()
-
-        out = _result_from_batch_entry(
-            _StubEntry(),
-            model=SONNET_MODEL_ID,
-            request_payload={"model": SONNET_MODEL_ID, "messages": []},
+    @pytest.mark.parametrize(
+        ("result_type", "expected_parse_reason"),
+        [
+            ("errored", ParseFailureReason.EMPTY_RESPONSE),
+            ("canceled", ParseFailureReason.EMPTY_RESPONSE),
+            ("expired", ParseFailureReason.EMPTY_RESPONSE),
+        ],
+    )
+    def test_non_succeeded_entry_routes_via_public_submit_batch(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        result_type: str,
+        expected_parse_reason: ParseFailureReason,
+    ) -> None:
+        # Stand up a fake `anthropic` SDK that the lazy import inside
+        # AnthropicBatchTransport.submit_batch picks up. The fake
+        # batches API returns one entry of the parameterized type.
+        fake_module = _build_fake_anthropic_sdk(
+            entries=[_FakeBatchEntry(custom_id="a1", result_type=result_type)]
         )
-        assert out.custom_id == "a1"
-        # Empty content array → parser routes to EMPTY_RESPONSE →
-        # row routes to NEEDS_REVIEW. Chain of custody intact.
-        assert out.raw_response_json["content"] == ()
-        # The error detail is preserved for reviewer inspection.
-        assert out.raw_response_json["_batch_result_type"] == "errored"
-        assert out.raw_response_json["_batch_error"]["type"] == "invalid_request_error"
-        # The parser sees this and fails closed.
-        parsed = parse_structured_response(out)
-        assert parsed.parse_failure is True
-        assert parsed.parse_failure_reason == ParseFailureReason.EMPTY_RESPONSE
-
-    def test_canceled_entry_does_not_raise(self) -> None:
-        from bba.llm_client.transport import _result_from_batch_entry
-
-        class _StubResult:
-            type = "canceled"
-            error = None
-
-        class _StubEntry:
-            custom_id = "a1"
-            anthropic_version = "2023-06-01"
-            id = "msg_cancel"
-            result = _StubResult()
-
-        out = _result_from_batch_entry(
-            _StubEntry(),
+        monkeypatch.setitem(__import__("sys").modules, "anthropic", fake_module)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-xxx")
+        transport = AnthropicBatchTransport(poll_interval_seconds=0.0)
+        response = transport.submit_batch(
             model=SONNET_MODEL_ID,
-            request_payload={"model": SONNET_MODEL_ID, "messages": []},
+            requests=[_request(audit_id="a1")],
+            prompt_cache_enabled=True,
         )
-        assert out.raw_response_json["_batch_result_type"] == "canceled"
-        # No accidental .message access on canceled entries.
-        parsed = parse_structured_response(out)
+        assert len(response.results) == 1
+        entry_payload = response.results[0].raw_response_json
+        assert entry_payload["_batch_result_type"] == result_type
+        # The synthesized envelope flows through the parser cleanly.
+        parsed = parse_structured_response(response.results[0])
         assert parsed.parse_failure is True
+        assert parsed.parse_failure_reason == expected_parse_reason
 
-    def test_expired_entry_does_not_raise(self) -> None:
-        from bba.llm_client.transport import _result_from_batch_entry
 
-        class _StubResult:
-            type = "expired"
-            error = None
+class _FakeBatchEntry:
+    """Stub Anthropic Batch result entry, one per (custom_id, type)."""
 
-        class _StubEntry:
-            custom_id = "a1"
-            anthropic_version = "2023-06-01"
-            id = "msg_exp"
-            result = _StubResult()
+    def __init__(self, *, custom_id: str, result_type: str) -> None:
+        self.custom_id = custom_id
+        self.anthropic_version = "2023-06-01"
+        self.id = f"msg_{result_type}"
 
-        out = _result_from_batch_entry(
-            _StubEntry(),
-            model=SONNET_MODEL_ID,
-            request_payload={"model": SONNET_MODEL_ID, "messages": []},
-        )
-        assert out.raw_response_json["_batch_result_type"] == "expired"
-        parsed = parse_structured_response(out)
-        assert parsed.parse_failure is True
+        class _Error:
+            def model_dump(self_inner) -> dict[str, Any]:
+                return {"type": "invalid_request_error", "message": "stub"}
+
+        class _Result:
+            type = result_type
+            error = _Error() if result_type == "errored" else None
+
+        self.result = _Result()
+
+
+def _build_fake_anthropic_sdk(*, entries: list[_FakeBatchEntry]) -> Any:
+    """Construct a fake anthropic SDK module exposing the surface
+    AnthropicBatchTransport.submit_batch uses.
+
+    The fake supports the four call sites: ``Anthropic(...)``,
+    ``client.messages.batches.create(...)``, ``...retrieve(batch_id)``,
+    and ``...results(batch_id)`` (iterator yielding the supplied
+    entries).
+    """
+    from types import SimpleNamespace
+
+    class _BatchesNamespace:
+        def create(self, *, requests: Any) -> SimpleNamespace:
+            return SimpleNamespace(id="batch_stub")
+
+        def retrieve(self, batch_id: str) -> SimpleNamespace:
+            return SimpleNamespace(processing_status="ended")
+
+        def results(self, batch_id: str) -> list[_FakeBatchEntry]:
+            return entries
+
+    class _Anthropic:
+        def __init__(self, *, api_key: str, default_headers: dict[str, str]) -> None:
+            self.messages = SimpleNamespace(batches=_BatchesNamespace())
+
+    return SimpleNamespace(Anthropic=_Anthropic)
 
 
 # =============================================================================

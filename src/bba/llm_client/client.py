@@ -16,7 +16,6 @@ from bba.llm_client.custom_id import assert_custom_ids_match
 from bba.llm_client.disagreement import detect_disagreement
 from bba.llm_client.escalation import run_with_escalation
 from bba.llm_client.exceptions import BatchSubmissionError
-from bba.llm_client.parser import parse_structured_response
 from bba.llm_client.models import (
     AnthropicTransport,
     BatchSubmissionRequest,
@@ -30,6 +29,14 @@ from bba.llm_client.models import (
     ParseOutcome,
     RawBatchResponse,
 )
+from bba.llm_client.parser import parse_structured_response
+
+
+_BBA_HEADERS_KEY: str = "__bba_response_headers__"
+"""Namespaced key under which response_headers are folded into the
+persisted response_json. The double-underscore prefix is unlikely to
+collide with any Anthropic field; the writer raises
+:class:`BatchSubmissionError` if it ever does."""
 
 
 def submit_batch(
@@ -310,13 +317,14 @@ def _call_from_result(
 
     ``response_headers`` lands inside :attr:`LlmCall.response_json`
     under the ``__bba_response_headers__`` key (double-underscore
-    namespaced so a future Anthropic response field named
-    ``_response_headers`` cannot collide). The audit_store schema does
-    not have a dedicated headers column, but the PRD reproducibility
-    requirement ("Persist the full Anthropic Batch API request and
-    response per audit_id, including ``anthropic-version`` header")
-    is satisfied by folding the headers into the envelope before
-    persistence.
+    namespaced so a future Anthropic response field is unlikely to
+    collide; if Anthropic ever does ship that exact key, we raise
+    :class:`BatchSubmissionError` rather than silently overwrite it).
+    The audit_store schema does not have a dedicated headers column,
+    but the PRD reproducibility requirement ("Persist the full
+    Anthropic Batch API request and response per audit_id, including
+    ``anthropic-version`` header") is satisfied by folding the headers
+    into the envelope before persistence.
     """
     canonical_request = json.dumps(
         result.request_json, sort_keys=True, ensure_ascii=False, default=str
@@ -331,9 +339,17 @@ def _call_from_result(
     # works on regular `dict` semantics. The LlmCall field validator
     # deep-freezes the nested structure again on construction. The
     # double-underscore-namespaced key avoids any future collision
-    # with an Anthropic-supplied top-level field.
+    # with an Anthropic-supplied top-level field; the explicit
+    # collision check raises loudly if Anthropic ever does ship that
+    # key so we don't silently overwrite real response data.
     response_envelope: dict[str, Any] = dict(result.raw_response_json)
-    response_envelope["__bba_response_headers__"] = dict(result.response_headers)
+    if _BBA_HEADERS_KEY in response_envelope:
+        raise BatchSubmissionError(
+            f"Anthropic response contains reserved key "
+            f"{_BBA_HEADERS_KEY!r}; this is a contract drift — refusing "
+            "to overwrite the vendor field with response_headers"
+        )
+    response_envelope[_BBA_HEADERS_KEY] = dict(result.response_headers)
     return LlmCall(
         call_id=call_id,
         audit_id=result.custom_id,
