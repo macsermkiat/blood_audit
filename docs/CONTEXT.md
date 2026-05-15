@@ -9,7 +9,8 @@ Scope: Phase 1 of the KCMH RBC transfusion audit pipeline. PRD: [issue #1].
 Sections are added per ticket as each module merges to `main`. Currently
 covered: `#3 ingest`, `#4 audit_orders`, `#5 hb_lookup`, `#6 vitals_extractor`,
 `#16 evidence_bundle_builder`, `#17 deid_redactor`, `#18 quote_grounder`,
-`#19 audit_store`, `#25 review_actions`, `#28 report_generator`.
+`#19 audit_store`, `#21 prompt_builder`, `#25 review_actions`,
+`#28 report_generator`.
 
 ## Ingest concepts (#3)
 
@@ -1191,13 +1192,207 @@ deliberate non-goal:
   needs_human_review-flag interactions. Acceptable for a "thin"
   module per the original Codex round-1 INFO note.
 
+## Prompt-builder concepts (#21)
+
+### Task mode
+
+The two LLM-eligible audit branches the prompt builder dispatches on:
+`HB_7_10_REVIEW` (gray-zone Hb 7-10 g/dL — the LLM searches the ±24-h
+note window for Tier-1 indications and Tier-2 supportive context) and
+`HB_GT_10_OVERRIDE` (Hb > 10 g/dL pre-classified `POTENTIALLY_INAPPROPRIATE`
+by the deterministic engine — the LLM looks for Tier-1 override
+conditions that would justify the order). `bba.prompt_builder.TaskMode`
+(Literal) and `TASK_MODES` (runtime frozenset). Adding a third branch
+is a Phase-2 contract change. Each mode has its own system-prompt
+template; the templates differ in their mode-discriminating phrasing
+so a downstream test can distinguish the two without parsing.
+
+### Cohort threshold
+
+The hemoglobin threshold (in g/dL) the deterministic engine assigns
+to a cohort, passed to the LLM as a **hard numeric input** — never
+re-derived (PRD §"Cohort detection is deterministic, not LLM-judged").
+Exactly three values: `7.0` (default), `7.5` (cardiac surgery), `8.0`
+(ortho+cardiac comorbidity / ESRD on EPO). `ALLOWED_COHORT_THRESHOLDS`
+is the frozen set; `CohortThreshold` is the Pydantic-validated type;
+the system prompt renders the value as a single-decimal numeric literal
+(`"7.0"` / `"7.5"` / `"8.0"`) so the LLM sees the same string for the
+same cohort across audit rows.
+
+### Evidence chunk
+
+The prompt builder's input unit: `EvidenceChunk(evidence_id, source,
+text)`, where `evidence_id` is the stable bundle ID (`E1`, `E2`, ...)
+preserved through `bba.evidence_bundle_builder` and
+`bba.deid_redactor`, and `text` is the **post-redaction** content
+treated as opaque (the prompt builder never re-redacts). Empty /
+whitespace-only `text` is rejected at the model boundary so a blank
+chunk cannot smuggle past the `EMPTY_EVIDENCE` routing into the LLM.
+
+### Evidence envelope
+
+Every redacted evidence chunk wraps in `<evidence id="E1"
+untrusted="true">...</evidence>` (PRD §38). The `untrusted="true"`
+attribute is a fixed signal — every chunk has crossed the deid
+boundary and must be treated as adversarial regardless of source.
+Wrapping is **byte-identity preserving**: NFC-normalize only, no XML
+escape. Clinical text routinely contains `<`, `>`, `&` in comparisons
+(`Hb < 8`, `SBP > 90`, `K&Na panel`); escaping them would make the
+LLM see a different byte sequence than the redacted source text that
+`bba.quote_grounder` verifies citations against, silently failing
+all grounding for affected chunks. `bba.prompt_builder.wrap_evidence`
++ `wrap_evidence_chunks`.
+
+### Envelope-escape attack
+
+A chunk whose content embeds literal `</evidence>` or `<evidence ...>`
+tokens, intended to break out of the wrapper's boundary and start a
+nested envelope the LLM might trust. Defense lives in the injection
+scanner (`ENVELOPE_ESCAPE` category, two patterns:
+`envelope_close_tag_v1`, `envelope_open_tag_v1`), not the wrapper —
+the wrapper preserves byte identity for legitimate citations and
+relies on the scanner to route adversarial content to `NEEDS_REVIEW`
+before assembly.
+
+### Injection scanner
+
+Pre-LLM regex-based detector for adversarial content in evidence
+chunks. NFC-normalized, case-insensitive for ASCII. The shipped
+catalog is `INJECTION_PATTERNS`, 24 patterns across 8 categories:
+`IMPERATIVE_VERB_EN` (5), `FAKE_GUIDELINE` (5),
+`SYSTEM_PROMPT_EXFIL` (3), `ROLE_PRETEND` (3), `IMPERATIVE_VERB_TH`
+(3), `JAILBREAK_TH` (2), `JAILBREAK_EN` (1), `ENVELOPE_ESCAPE` (2).
+`MIN_REQUIRED_INJECTION_PATTERNS = 20` is the contract floor (issue
+#21 AC). `scan_injection` runs on one chunk's text; `scan_chunks`
+aggregates over a chunk sequence into an `InjectionVerdict`.
+
+### Injection match
+
+One detected hit: `InjectionMatch(category, pattern_id, evidence_id,
+span_text, start, end)`. The full record participates in the
+`prompt_hash` envelope — swapping `evidence_id` / `span_text` /
+offsets between two otherwise-identical results yields different
+hashes, preserving the audit-chain replay invariant for
+reviewer-visible injection evidence.
+
+### Injection verdict
+
+The aggregate verdict over all chunks: `InjectionVerdict(flagged,
+matches)`. `flagged` is `True` iff `matches` is non-empty — the two
+fields exist together so callers can short-circuit on the boolean
+without unpacking, and a model validator rejects any desync.
+`PromptBuildResult` additionally enforces that
+`injection_verdict.flagged` agrees with `INJECTION_DETECTED`
+membership in `needs_review_reasons`; reconstructing the result with
+the two desynced is rejected even when the hash is recomputed.
+
+### Fabricated-version criteria
+
+The fake-guideline patterns flag only **fabricated** version
+references — minor versions with >=2 trailing nines (e.g. `99.99`,
+`17.999`), a leading 200+ digit (`200..`), or 3+ minor digits.
+Applies to both English (`fake_pr_guideline_v1`) and Thai
+(`fake_thai_pr_v1`) patterns. The real KCMH `PR 17.2` and AABB
+`PR 17.2`-style legitimate references stay below the threshold and
+do not false-flag in either language.
+
+### Few-shot example + few-shot block
+
+A committee-approved exemplar: `FewShotExample(name, user_payload,
+assistant_output)`. The block is the LAST cacheable region of the
+prompt — Anthropic prompt-cache marker boundary — so its byte
+stability across audit rows underwrites cache-hit rate. Input order
+is preserved (the committee ranks examples). NFC-normalized, no
+trailing newline, `"\n\n"` between-example separator.
+`bba.prompt_builder.build_few_shot_block`.
+
+### Prompt block + cache marker
+
+The unit of the assembled prompt: `PromptBlock(role, text,
+cache_marker)`. Roles are `"system"` or `"user"`; the builder never
+emits assistant blocks (few-shot examples land inside the leading
+user block). `cache_marker=True` is the Anthropic cache-breakpoint
+signal at the END of that block. The builder emits TWO cache markers
+when few-shot is present (system end + few-shot end — partial-prefix
+hits for system-alone vs system+few-shot) and ONE when no few-shot
+examples are supplied. The trailing per-row user-payload block is
+NEVER cacheable (changes per audit row).
+
+### Prompt build request
+
+`PromptBuildRequest(task_mode, cohort_threshold, evidence_chunks,
+few_shot_examples)`. Frozen Pydantic; rejects duplicate
+`evidence_id` values across `evidence_chunks` at the model boundary —
+downstream `bba.quote_grounder` treats non-unique `cited_id` as
+`CITED_ID_NOT_FOUND`, so duplicates would silently fail every
+legitimate citation against that ID.
+
+### Prompt build result
+
+`PromptBuildResult(blocks, task_mode, cohort_threshold,
+injection_verdict, route_to_needs_review, needs_review_reasons,
+prompt_hash)`. Frozen; the model validator recomputes
+`compute_prompt_hash(envelope)` at construction and rejects any
+mismatch, mirroring the `EvidenceBundle.bundle_hash` and
+`RedactionResult.redaction_hash` audit-chain invariants. Two
+internal-consistency validators also fire: `route_to_needs_review`
+must be the OR of `needs_review_reasons`, and
+`injection_verdict.flagged` must agree with `INJECTION_DETECTED`
+membership in `needs_review_reasons`.
+
+### Needs-review reason
+
+`NeedsReviewReason` enum carrying the routing tag the audit pipeline
+(#24) reads into the row-level `review_reason` field:
+`INJECTION_DETECTED` (one or more scanner hits across the chunks),
+`EMPTY_EVIDENCE` (zero chunks supplied). OR-of-reasons routing —
+multiple reasons may co-fire and all are persisted on
+`PromptBuildResult.needs_review_reasons`.
+
+### Prompt hash
+
+`sha256(canonical_serialize(envelope).encode("utf-8")).hexdigest()` —
+the byte-stable hash for an assembled prompt, mirroring
+`EvidenceBundle.bundle_hash` and `RedactionResult.redaction_hash`.
+The canonical envelope locks 6 fields (`blocks`, `task_mode`,
+`cohort_threshold`, `injection_matches` with FULL match records,
+`route_to_needs_review`, `needs_review_reasons`); any change to any
+field — including a single match's `evidence_id` / `span_text` /
+offsets — changes the hash.
+`bba.prompt_builder.canonical.compute_prompt_hash`.
+
+### Deferred review (post-merge)
+
+Codex review went through 4 in-session rounds plus a GitHub Codex
+bot review on PR #43; every finding addressed before merge. Items
+intentionally **not** in scope and documented here so a future
+reader does not re-litigate:
+
+* **Medical-NLI gate on prompt content** — the prompt builder does
+  not invoke the optional medical-NLI entailment gate that
+  `bba.quote_grounder` Layer 7 supports; the gate is a verifier
+  concern, not an assembly concern. The prompt builder hands a
+  byte-identical envelope to the LLM and downstream verification
+  runs the NLI gate when configured.
+* **Adversarial pattern catalog growth** — the shipped 25-pattern
+  catalog clears the AC floor of 20 across all required categories;
+  expansion against a future hand-labeled adversarial corpus is a
+  follow-up ticket. The catalog structure (`InjectionPattern`
+  records keyed by stable `pattern_id`) was designed so additions
+  do not perturb the existing pattern_id namespace.
+* **Anthropic Messages-API translation** — the prompt builder emits
+  abstract `PromptBlock(role, text, cache_marker)` segments; the LLM
+  client (#22) translates these into the Anthropic Messages API
+  shape at its boundary. Keeping the translation in `bba.llm_client`
+  isolates the prompt builder from SDK-version drift.
+
 ## Vocabulary not in this file
 
 Domain terms used in the broader project but defined elsewhere (PRD issue
 body, or future Phase-1 modules):
 
-* `cohort_threshold`, `MTP`, `T1.MTP`,
-  `hallucination_suspect`, etc. — see the PRD (issue #1) for definitions.
+* `MTP`, `T1.MTP`, `hallucination_suspect`, etc. — see the PRD
+  (issue #1) for definitions.
 
 Add a concept here when a module exposes it as part of its interface. Update
 when a concept's shape changes; remove when it leaves the codebase.
