@@ -9,7 +9,7 @@ Scope: Phase 1 of the KCMH RBC transfusion audit pipeline. PRD: [issue #1].
 Sections are added per ticket as each module merges to `main`. Currently
 covered: `#3 ingest`, `#4 audit_orders`, `#5 hb_lookup`, `#6 vitals_extractor`,
 `#16 evidence_bundle_builder`, `#18 quote_grounder`, `#19 audit_store`,
-`#25 review_actions`.
+`#25 review_actions`, `#28 report_generator`.
 
 ## Ingest concepts (#3)
 
@@ -674,6 +674,166 @@ rejection emits a `WARNING`-level record with an `extra` dict carrying
 (`current_user`, `owner`, `missing`, `broken`, `current`, `head`).
 Operators subscribe to alert on repeated bypass attempts; the event tag
 is the stable identifier to grep / route on, never the free-form message.
+
+## Report-generator concepts (#28)
+
+### Monthly report row
+
+The input contract for the report generator, named `MonthlyReportRow`. It
+is **decoupled** from `bba.audit_store.AuditRow`: the audit store persists
+the technical row (hashes, model_id, evidence-bundle hash, ...) while the
+report generator consumes a report-shaped row that adds the ingest-side
+metadata the audit-store schema does not carry (`ward_id`,
+`physician_id`). The upstream layer — the monthly CLI or a dashboard
+query — joins the two and produces a tuple of `MonthlyReportRow`. Keeping
+the input shape report-specific isolates the generator from
+audit-store schema drift; the join is the documented seam.
+
+### Reproducibility footer
+
+Six identifiers stamped on every CSV data row and every PDF page:
+`policy_version`, `model_id`, `redactor_version`, `redactor_model_sha`,
+`prompt_hash`, `evidence_bundle_hash`. The first three are named
+explicitly in the ticket scope; the other three come from the broader
+PRD §"Output schema" so a six-month-later auditor can reconstruct any
+report line from the source `AuditRow`s. Stamping **per row** (not only
+as a trailing line) keeps the chain intact under `grep` / `awk` / partial
+extracts; the PDF mirrors the same six fields across two lines per page
+(single-line layout overflows the printable LETTER width for realistic
+SHA values).
+
+### Per-physician artifact separation
+
+The "own-data only" property of `physician_own_view` (PRD user story #10
+— a physician sees their own ordering vs peer-anonymous benchmarks
+without other physicians being publicly identified) is enforced at the
+**artifact level**, not by trusting downstream distribution to filter
+rows. `ReportArtifacts` carries two distinct mappings: `csv_paths` keyed
+by the five committee-wide `SectionName`s
+(`hospital_trend`, `ward_scorecard`, `indication_distribution`,
+`cohort_exception`, `pipeline_health`) and `physician_own_view_csv_paths`
+keyed by `physician_id`. Each per-physician file holds exactly one data
+row; distributing the file to that physician therefore cannot leak
+another physician's rate. The committee PDF still renders an internal
+physician-own-view table for committee review.
+
+### Month bucket
+
+The monthly report bucket is the hospital business month
+(**Asia/Bangkok**, no DST), not the UTC month. PRD §"Tz-aware
+throughout" stores datetimes UTC and renders Asia/Bangkok; user
+story #19 spells out "so that month-boundary orders bucket correctly".
+`filter_rows_for_month` converts `[month, next_month)` interpreted in
+`zoneinfo("Asia/Bangkok")` to UTC for the comparison, so an order
+placed at 23:00 Bangkok on the 31st (which is 16:00 UTC, in the
+local-month and the prior UTC-month) lands in the correct report. The
+year-rollover branch in `_next_month_first_of` is pinned by a
+December→January regression test.
+
+### Section
+
+One of six report views, declared by the `SectionName` Literal:
+`hospital_trend`, `ward_scorecard`, `physician_own_view`,
+`indication_distribution`, `cohort_exception`, `pipeline_health`. The
+PDF iterates all six; the CSV writer emits five of them as
+committee-wide files and the sixth as per-physician files (see
+"per-physician artifact separation" above). Each section has a fixed
+column order locked in
+`bba.report_generator.csv_writer._data_columns` and asserted by a
+byte-identical golden-snapshot test.
+
+### Empty-section sentinel row
+
+When a section's aggregation yields zero rows for the month, the CSV
+writer still emits one synthetic data row instead of leaving only the
+header. The data columns are **type-appropriate** placeholders — `"0"`
+for int columns, `"0.0"` for float columns, `""` for string / date
+columns, declared in `_EMPTY_SECTION_DEFAULTS` — and the footer columns
+hold the real reproducibility identifiers. Blank cells in
+`total_orders` / `*_rate` would NaN-poison a pandas read; the typed
+zero placeholders parse cleanly and semantically mean "zero orders in
+this empty section". Without the row at all, a downstream consumer
+could not tell which policy / model / redactor versions produced the
+empty result vs. a stale file in the same directory.
+
+### Pipeline-health bucket exclusivity
+
+`PipelineHealthRow` carries three counters that **overlap by design**:
+`classified_orders` (rows whose `final_classification` is `APPROPRIATE`
+or `INAPPROPRIATE`), `needs_review_count`, and
+`insufficient_evidence_count`. The overlap arises because a row whose
+terminal label is `APPROPRIATE`/`INAPPROPRIATE` and whose
+`needs_human_review` flag is set contributes to both
+`classified_orders` and `needs_review_count`. The flag is **scoped to
+APPROPRIATE/INAPPROPRIATE rows only** — an `INSUFFICIENT_EVIDENCE` row
+with the flag set is counted exclusively in
+`insufficient_evidence_count`, so a documentation-absence spike (PRD
+§"Documentation absence ≠ INAPPROPRIATE") cannot masquerade as an
+LLM-review spike. The schema therefore does **not** assert
+`classified + needs_review + insufficient_evidence == total`.
+
+### Indication-code dedup
+
+`aggregate_indication_distribution` counts each *distinct* indication
+code at most once per order. A row whose `indication_codes` tuple
+contains the same code twice (e.g., from an upstream join error)
+contributes 1, not 2, so `total_orders` for any code never exceeds
+`len(rows)` and `share` never exceeds 1.0. A multi-indication order
+with two *different* codes still contributes 1 to each (and `share`
+across codes can exceed 1.0; this is documented behavior, not a bug).
+
+### Golden snapshot
+
+A per-section byte-identical CSV test. Each of the six sections has a
+class in `tests/unit/test_report_generator.py` that builds a fixed
+input, runs the aggregation + writer, and asserts the resulting bytes
+match a hand-written expected literal (header + data rows + footer
+cells). The expected literal locks every detail that would otherwise
+drift silently: column order, row ordering, float formatting
+(`0.5`/`0.0` never `0`), line endings (`\n`), encoding (UTF-8 no BOM),
+the six-field footer. A refactor that touches any of those produces a
+mismatch and forces a deliberate update.
+
+### Filesystem-safe ID
+
+`MonthlyReportRow.audit_id`, `.ward_id`, `.physician_id` and
+`PhysicianOwnViewRow.physician_id` are annotated `SafeFsId` —
+`Annotated[str, AfterValidator(_validate_safe_fs_id)]`. The validator
+requires `[A-Za-z0-9._-]+`, rejects empty, and rejects exactly `.` or
+`..`. The defense exists because `physician_id` flows directly into
+`physician_own_view_<physician_id>.csv` and a hostile or buggy upstream
+value containing `/` or `../` would otherwise let the per-physician
+write escape `output_dir`. Mirrors `bba.audit_store.models.SafeId`.
+`physician_own_view_filename` re-validates the id as defense in depth
+for callers that bypass the model boundary.
+
+### Deferred review (post-merge)
+
+Codex review went through 4 in-session rounds and 2 GitHub PR rounds;
+every finding was either fixed before merge or is documented below as a
+deliberate non-goal:
+
+* **PDF byte-identical contract** — reportlab embeds a non-deterministic
+  generation timestamp in the trailer; the PDF test asserts magic-bytes
+  + non-trivial size only. Locking byte-identity would require either
+  patching reportlab's timestamp or switching to a hand-rolled minimal
+  PDF; both are out of scope for a "thin" module.
+* **Empty-section row validation** — the sentinel row in
+  `indication_distribution.csv` carries `total_orders="0"`, but
+  `IndicationDistributionRow.total_orders` has `ge=1` in the Pydantic
+  model. The CSV writer bypasses the model when emitting the sentinel
+  (it writes raw text via `csv.writer`), so the constraint is honored
+  in-memory but the persisted empty-section file is technically
+  inconsistent with the schema. The pragmatic choice over either
+  weakening the model constraint or dropping the sentinel — pin if a
+  downstream consumer ever round-trips an empty `indication_distribution.csv`
+  through the model.
+* **Hypothesis property test breadth** — the existing property test
+  only varies classification labels with `min_size=1`. A future
+  expansion could cover adversarial dates (year-rollover, DST-adjacent
+  zones if scope grows beyond Asia/Bangkok), empty inputs, and
+  needs_human_review-flag interactions. Acceptable for a "thin"
+  module per the original Codex round-1 INFO note.
 
 ## Vocabulary not in this file
 
