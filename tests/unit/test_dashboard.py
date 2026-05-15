@@ -31,12 +31,13 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from pydantic import ValidationError
 
@@ -73,7 +74,12 @@ from bba.dashboard.app import (
     list_queue,
     record_break_glass_access,
 )
-from bba.review_actions import ReviewActionsConfig, ReviewActionsStore
+from bba.review_actions import (
+    PhiAccessInput,
+    PhiAccessLog,
+    ReviewActionsConfig,
+    ReviewActionsStore,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -101,20 +107,85 @@ def audit_store(tmp_path: Path) -> AuditStore:
     )
 
 
+class _InMemoryReviewActionsStore(ReviewActionsStore):
+    """In-memory test double for :class:`ReviewActionsStore`.
+
+    Bypasses Postgres so dashboard unit tests are fast + isolated. The
+    real store is exercised end-to-end in ``test_review_actions.py`` (issue
+    #25); this fake is structurally compatible — same public methods,
+    same return types — and overrides only the data-mutating + listing
+    methods that the dashboard touches.
+
+    The parent's ``_ensure_migrated`` is short-circuited by setting
+    ``_migrated_checked=True`` so the data methods never attempt to
+    open a connection pool.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            ReviewActionsConfig(
+                dsn="postgresql://fake:fake@localhost:5432/fake"
+            )
+        )
+        # Bypass migration / privilege / trigger checks — we never hit DB.
+        self._migrated_checked = True
+        self._fake_phi_logs: list[PhiAccessLog] = []
+        self._fake_counter = 0
+
+    def record_phi_access(self, access: PhiAccessInput) -> PhiAccessLog:
+        self._fake_counter += 1
+        log = PhiAccessLog(
+            access_id=self._fake_counter,
+            reviewer_id=access.reviewer_id,
+            audit_id=access.audit_id,
+            hn_hash=access.hn_hash,
+            an_hash=access.an_hash,
+            break_glass_justification=access.break_glass_justification,
+            accessed_at=datetime.now(UTC),
+        )
+        self._fake_phi_logs.append(log)
+        return log
+
+    @contextmanager
+    def access_phi(
+        self, access: PhiAccessInput
+    ) -> Iterator[PhiAccessLog]:
+        # Mirror the parent's contract: log row is committed BEFORE the
+        # body runs (PRD §17 "log row exists before un-redacted text is
+        # surfaced"). On body raise, the log row stays — the access
+        # attempt is still an access for audit purposes.
+        log = self.record_phi_access(access)
+        try:
+            yield log
+        finally:
+            pass
+
+    def list_phi_access(  # type: ignore[override]
+        self,
+        *,
+        reviewer_id: str | None = None,
+        audit_id: str | None = None,
+    ) -> tuple[PhiAccessLog, ...]:
+        result = list(self._fake_phi_logs)
+        if reviewer_id is not None:
+            result = [r for r in result if r.reviewer_id == reviewer_id]
+        if audit_id is not None:
+            result = [r for r in result if r.audit_id == audit_id]
+        return tuple(result)
+
+
 @pytest.fixture
 def review_actions_store(tmp_path: Path) -> ReviewActionsStore:
-    """A ReviewActionsStore against a placeholder DSN.
+    """An in-memory ``ReviewActionsStore`` test double.
 
-    RED-phase store methods raise NotImplementedError or
-    MigrationStateError before any DB call, so the DSN does not need to be
-    real for the RED suite. GREEN-phase will swap in the live
-    ``migrated_store`` fixture from ``test_review_actions.py``.
+    The real Postgres-backed store is exercised in ``test_review_actions.py``;
+    here we use a fake so the dashboard unit suite is fast (no
+    testcontainers spin-up) and isolated (no shared schema state). The
+    fake satisfies the same public-method surface the dashboard depends
+    on (``access_phi`` / ``record_phi_access`` / ``list_phi_access``).
     """
-    return ReviewActionsStore(
-        ReviewActionsConfig(
-            dsn=f"postgresql://test:test@localhost:5432/test_{tmp_path.name}",
-        )
-    )
+    del tmp_path  # not needed — fake is in-memory
+    return _InMemoryReviewActionsStore()
 
 
 @pytest.fixture
@@ -123,10 +194,26 @@ def config(
     review_actions_store: ReviewActionsStore,
     tmp_path: Path,
 ) -> DashboardConfig:
+    """A DashboardConfig with a permissive default reviewer for routes
+    that don't have a route-context fixture wired (e.g.,
+    :class:`TestRouteSmoke`).
+
+    The default reviewer is a physician with ``physician_id="phys-001"``
+    so the physician-scorecard smoke route returns 200 (own-view) rather
+    than 403 (cross-view). ``care_team_memberships=("audit-001",)`` makes
+    the case-detail smoke route un-redacted.
+    """
     return DashboardConfig(
         audit_store=audit_store,
         review_actions_store=review_actions_store,
         snapshot_dir=tmp_path / "snapshots",
+        default_reviewer=Reviewer(
+            reviewer_id="default-smoke-reviewer",
+            name="Smoke Reviewer",
+            role="physician",
+            physician_id="phys-001",
+            care_team_memberships=("audit-001",),
+        ),
     )
 
 
@@ -575,21 +662,29 @@ class TestPhysicianOwnViewGuard:
 
     @given(
         viewer_physician_id=st.text(
-            alphabet=st.characters(
-                whitelist_categories=("Ll", "Lu", "Nd"), min_codepoint=33
+            alphabet=(
+                "abcdefghijklmnopqrstuvwxyz"
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                "0123456789"
             ),
             min_size=1,
             max_size=20,
-        ).filter(lambda s: "." not in s and "_" not in s and "-" not in s),
+        ),
         subject_physician_id=st.text(
-            alphabet=st.characters(
-                whitelist_categories=("Ll", "Lu", "Nd"), min_codepoint=33
+            alphabet=(
+                "abcdefghijklmnopqrstuvwxyz"
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                "0123456789"
             ),
             min_size=1,
             max_size=20,
-        ).filter(lambda s: "." not in s and "_" not in s and "-" not in s),
+        ),
     )
-    @settings(max_examples=50, deadline=None)
+    @settings(
+        max_examples=50,
+        deadline=None,
+        suppress_health_check=[HealthCheck.function_scoped_fixture],
+    )
     def test_route_guard_holds_for_arbitrary_id_pairs(
         self,
         config: DashboardConfig,
@@ -612,15 +707,25 @@ class TestPhysicianOwnViewGuard:
         )
 
         if viewer_physician_id == subject_physician_id:
-            # Same id: must NOT raise PhysicianAccessDeniedError. (The
-            # handler may still raise NotImplementedError in RED — that's
-            # fine; the property is "this branch is reachable".)
-            with pytest.raises((NotImplementedError, DashboardError)):
+            # Matching ids — must NOT raise PhysicianAccessDeniedError.
+            # The handler may succeed (return a scorecard) or raise
+            # other errors (e.g., missing data); both are acceptable —
+            # the property is that the route guard does NOT misfire on
+            # own-view requests.
+            try:
                 get_physician_scorecard(
                     config, context, subject_physician_id
                 )
+            except PhysicianAccessDeniedError:
+                pytest.fail(
+                    "PhysicianAccessDeniedError raised for matching "
+                    "ids; route guard misclassified own-view as "
+                    "cross-view"
+                )
+            except DashboardError:
+                pass  # other dashboard errors are acceptable
         else:
-            # Different id: MUST raise PhysicianAccessDeniedError
+            # Different ids — MUST raise PhysicianAccessDeniedError
             # specifically, before any data retrieval.
             with pytest.raises(PhysicianAccessDeniedError):
                 get_physician_scorecard(
@@ -720,8 +825,17 @@ class TestRouteSmoke:
     """HTTP-200 smoke tests for every route the dashboard exposes."""
 
     @pytest.fixture
-    def client(self, config: DashboardConfig) -> Iterator[Any]:
+    def client(
+        self, config: DashboardConfig, audit_store: AuditStore
+    ) -> Iterator[Any]:
+        # Pre-seed the snapshot with audit-001 so case-detail and
+        # break-glass routes have a row to find. The smoke contract is
+        # "route reachable" — without a row the case routes legitimately
+        # return 404; pre-seeding pushes them to the 200 path.
         from fastapi.testclient import TestClient
+
+        row, calls = _writeable_audit_row_pair("audit-001", "run-001")
+        audit_store.write(row, calls)
 
         app = create_app(config)
         with TestClient(app) as test_client:

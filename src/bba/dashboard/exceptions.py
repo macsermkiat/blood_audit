@@ -44,6 +44,16 @@ class CareTeamAccessDeniedError(DashboardError):
     """
 
 
+class AuditNotFoundError(DashboardError):
+    """Raised when an ``audit_id`` does not exist in the snapshot.
+
+    The dashboard reads via :class:`bba.audit_store.SnapshotView`; an
+    ``audit_id`` that is absent from the materialized snapshot may exist
+    in the live store but not yet in the daily view, or may simply be
+    unknown. The route layer translates this into HTTP 404.
+    """
+
+
 class SnapshotInconsistencyError(DashboardError):
     """Raised when the DuckDB snapshot read observes mid-batch-write rows.
 

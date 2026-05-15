@@ -293,6 +293,12 @@ class DashboardConfig(BaseModel):
     is informational — the actual snapshot rotation is performed inside
     :class:`bba.audit_store.SnapshotView`.
 
+    ``default_reviewer`` is the fallback reviewer identity for requests
+    that have not been resolved by an upstream auth dependency. Production
+    deployments wire a real auth dependency via FastAPI's
+    ``app.dependency_overrides`` mechanism; for dev / unit tests the
+    default keeps routes reachable without a session.
+
     ``arbitrary_types_allowed`` is required because :class:`AuditStore` and
     :class:`ReviewActionsStore` are not pydantic models themselves; they're
     composed as runtime handles.
@@ -304,6 +310,7 @@ class DashboardConfig(BaseModel):
     review_actions_store: ReviewActionsStore
     snapshot_dir: Path
     template_dir: Path | None = None
+    default_reviewer: Reviewer | None = None
 
 
 __all__: Sequence[str] = (

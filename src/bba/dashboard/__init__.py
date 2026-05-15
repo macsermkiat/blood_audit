@@ -15,6 +15,7 @@ This module is the human-facing surface for the audit pipeline.
 
 from bba.dashboard.app import create_app
 from bba.dashboard.exceptions import (
+    AuditNotFoundError,
     CareTeamAccessDeniedError,
     DashboardError,
     MissingJustificationError,
@@ -37,6 +38,7 @@ from bba.dashboard.models import (
 
 
 __all__ = [
+    "AuditNotFoundError",
     "BreakGlassRequest",
     "CareTeamAccessDeniedError",
     "CaseDetail",

@@ -7,6 +7,9 @@ requires-python = ">=3.13"
 dependencies = [
     "alembic>=1.14",
     "duckdb>=1.5.2",
+    "fastapi>=0.136.1",
+    "httpx>=0.28.1",
+    "jinja2>=3.1.6",
     "pandera[pandas]>=0.31.1",
     "psycopg-pool>=3.2",
     "psycopg[binary]>=3.2",
