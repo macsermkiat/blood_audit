@@ -8,8 +8,8 @@ code) when a concept changes shape.
 Scope: Phase 1 of the KCMH RBC transfusion audit pipeline. PRD: [issue #1].
 Sections are added per ticket as each module merges to `main`. Currently
 covered: `#3 ingest`, `#4 audit_orders`, `#5 hb_lookup`, `#6 vitals_extractor`,
-`#16 evidence_bundle_builder`, `#18 quote_grounder`, `#19 audit_store`,
-`#25 review_actions`, `#28 report_generator`.
+`#16 evidence_bundle_builder`, `#17 deid_redactor`, `#18 quote_grounder`,
+`#19 audit_store`, `#25 review_actions`, `#28 report_generator`.
 
 ## Ingest concepts (#3)
 
@@ -301,6 +301,214 @@ Quality annotations on a `VitalsResult`: `vitals_post_order`,
 Downstream consumers (#8 deterministic_classifier; #16
 evidence_bundle_builder) read these to gate rule branches and to prioritize
 human review.
+
+## Deid-redactor concepts (#17)
+
+### Role token
+
+The vocabulary of post-processed PHI tokens emitted by the wrapper:
+`[ATTENDING]`, `[NURSE]`, `[PATIENT]`, `[FAMILY]` (the four role-bearing
+upgrades), plus `[PERSON]` (generic, when no role cue is detected) and
+the pass-through type-matching tokens `[DATE]`, `[LOCATION]`,
+`[HOSPITAL]`, `[ID]`, `[PHONE]`. `bba.deid_redactor.models.RoleToken`.
+Role-bearing tokens preserve the speaker/subject signal for downstream
+LLM reasoning without leaking the underlying name (PRD §8: "post-
+processing wrapper, not a fork of the redactor").
+
+### PERSON-class tokens
+
+The five role-bearing tokens (`[PERSON]`, `[ATTENDING]`, `[NURSE]`,
+`[PATIENT]`, `[FAMILY]`) counted by the semantic-degradation detector.
+`bba.deid_redactor.models.PERSON_CLASS_TOKENS`. Other token families
+(`[DATE]`, `[LOCATION]`, ...) are excluded — their redaction does not
+erode semantic content, so date-dense notes do not falsely fire the
+flag.
+
+### Redactor backend
+
+`bba.deid_redactor.models.RedactorBackend` — the Protocol the wrapper
+consumes for the underlying redactor. Production wires it to the
+vendored `thai-medical-deid` package (PRD §"Stack": `TRANSFORMERS_OFFLINE=1`,
+`HF_HUB_OFFLINE=1`, `HF_HOME=/opt/models`); tests use deterministic
+stubs. The wrapper NEVER imports the HF model directly — keeps the
+post-processing logic pure-function and zero-deps on the Anthropic SDK
+or transformers, mirroring the `bba.quote_grounder` Protocol pattern.
+
+### Backend redaction result
+
+`BackendRedactionResult(text, spans)` — what the backend hands back per
+input note. `text` is the redacted text already carrying placeholder
+tokens; `spans` is a tuple of `RedactionSpan(start, end, entity_type,
+original_text)` in document order, one per placeholder. The wrapper
+walks `spans` in order to upgrade `[PERSON]` → role and `[DATE]` →
+`Day N`; a count mismatch (more placeholders than spans, or vice
+versa) raises `BackendRedactionError`.
+
+### Quasi-identifiers
+
+The five fields defining a k-anonymity equivalence class: `ward`,
+`icd_3char`, `age_band`, `sex`, `admission_month`.
+`bba.deid_redactor.models.QuasiIdentifiers` (Pydantic frozen,
+hashable). Each field is format-validated at construction so
+equivalent-but-formatted-differently inputs cannot silently split a
+group: `admission_month` enforces `YYYY-MM`, `age_band` enforces
+`LO-HI` with `lo ≤ hi`, `icd_3char` enforces exactly three characters,
+and `sex` is the `SexCode` literal set `{M, F, U}` (`U` covers HOSxP
+exports where sex is missing). Free-form strings here would silently
+halve k by fragmenting the population — the validators are a
+correctness contract, not a UX nicety.
+
+### k-anonymity gate
+
+PRD §8: bundles whose QI combo has fewer than 5 records in the
+population (`k < K_ANONYMITY_MIN`) are routed to `NEEDS_REVIEW`, not
+silently dropped. Two-step API: `compute_k_groups(records)` returns a
+read-only mapping `QuasiIdentifiers → group size` over the full
+population (one month of orders); the caller adapts it to the
+`KAnonymityGate` Protocol (`lambda qi: groups.get(qi, 0)`) and passes
+it to `redact_bundle`. The wrapper calls the gate once per request and
+records `(k_anonymity_size, k_anonymity_passed)` on the result.
+`bba.deid_redactor.k_anonymity`.
+
+### Age cap
+
+PRD §8: ages above 89 are collapsed to exactly 89 (HIPAA-derived
+re-identification guard on the elderly tail). `apply_age_cap(age)`
+returns `(capped, was_capped)`; the boundary is inclusive (age 89 is
+NOT capped). The flag lands on `RedactionResult.age_capped` so the
+audit row records whether the cap fired.
+`bba.deid_redactor.age.apply_age_cap`.
+
+### Date shift
+
+PRD §8: dates inside redacted notes are remapped to Δ-days-from-
+admission. Two paths run in sequence:
+
+* **Backend-tagged spans first** — `shift_date_spans_in_text` walks
+  `RedactionSpan(entity_type="DATE")` entries in document order and
+  rewrites each `[DATE]` placeholder using the span's `original_text`
+  parsed against the four canonical formats (`YYYY-MM-DD`,
+  `YYYY/MM/DD`, `DD/MM/YYYY`, `DD-MM-YYYY` — all four-digit-year and
+  zero-padded). Unparseable `original_text` keeps the placeholder
+  (fail-open — the PHI itself is still redacted, only the Δ-day
+  annotation is omitted).
+* **Literal-date regex pass** — `shift_dates_in_text` then catches any
+  backend-missed prose dates (e.g., when a date wasn't tagged as PHI).
+  ISO formats win when overlap-resolved against day-first variants.
+
+Output form is `Day N`: `Day 0` (admission), `Day +3` (positive
+offset), `Day -2` (negative). The explicit `+` on positive offsets
+distinguishes Δ-days from absolute hospital-day-of-admission counts.
+Ambiguous source formats (two-digit year, Buddhist-year prefix,
+decimal hour fragments) are NOT matched — the upstream ingest parser
+(#3) has already routed those records to `parse_warning`.
+`bba.deid_redactor.date_shift`.
+
+### Semantic-degradation flag
+
+PRD §8: a redacted note with strictly more than four PERSON-class
+token starts within any 50-character sliding window flags as
+semantically degraded → routes to `NEEDS_REVIEW`. The threshold uses
+strict `>` (exactly four does NOT fire) and the unit is NFC characters
+in the redacted text (post-role-mapping). Two-pointer sliding-window
+implementation counts token-START positions; non-PERSON tokens
+(`[DATE]`, `[LOCATION]`, ...) do not contribute. Fires when the LLM
+would lose too much referential content to reason about the clinical
+event safely. `bba.deid_redactor.semantic.detect_semantic_degradation`.
+
+### Honorifics-only lexicon
+
+`bba.deid_redactor.roles._HONORIFICS` — a narrower vocabulary used
+ONLY for the span-internal cue pass in `classify_honorific_in_span`:
+unambiguous titles and abbreviations (`Dr.`, `MD`, `RN`, `Pt.`,
+`physician`, `attending`, `นพ.`, `พญ.`, `อาจารย์หมอ`,
+`อาจารย์แพทย์`). Family terms (`son`, `mother`, `wife`) and the bare
+`patient` / `nurse` words are excluded because they double as common
+KCMH given/surnames; matching them in-span would mislabel a patient
+named "Son" as `[FAMILY]` (codex GitHub review on PR #40 round 2).
+The full role lexicon (`_ROLE_PATTERNS`) is still in use for the
+proximity scan over the surrounding context.
+
+### Proximity-aware role classification
+
+`_classify_by_proximity(before, after)` — picks the role whose cue
+match is closest to the span boundary. Each role's regex is scanned
+over the before-window (distance = `len(before) - match.end()`) and
+the after-window (distance = `match.start()`); smallest distance wins.
+Equal-distance ties resolve by the global priority order (ATTENDING >
+NURSE > PATIENT > FAMILY) so the classifier remains deterministic for
+bundle-hash stability. Required because multi-actor sentences like
+`"Dr. Smith saw patient John Doe"` would otherwise misclassify the
+John-Doe span as `[ATTENDING]` on global priority alone (codex GitHub
+review on PR #40 round 1).
+
+### Default role classifier
+
+`default_role_classifier(*, original_text, context, span)` — the
+wrapper's built-in `RoleClassifier`. Three-step resolution: (1)
+`classify_honorific_in_span` on the span's own `original_text` —
+in-span titles ("Dr. Smith" as one span) are unambiguous; (2)
+`_classify_by_proximity` on the ±40-char (`ROLE_CONTEXT_WINDOW`)
+original-text window around the span; (3) priority-only
+`classify_role_by_cues` on the caller-supplied `context` as a final
+fallback. Returns `None` when no signal is present — the wrapper then
+keeps the generic `[PERSON]` token rather than fabricating a role.
+`bba.deid_redactor.roles`.
+
+### Redactor version
+
+`RedactorVersion(version, model_sha, gazetteer_version)` — the three-
+field metadata stamped on every `RedactionResult` and persisted on
+`AuditRow.redactor_version` + `redactor_model_sha`. PRD §"Output
+schema" requires both fields so a future redactor upgrade does not
+silently change the bundle hash on an old audit row's replay. The
+gazetteer version covers the pinned PyThaiNLP vocabulary. Different
+versions of these metadata fields produce different bundle hashes —
+participate in the canonical envelope.
+`bba.deid_redactor.models.RedactorVersion`.
+
+### Redaction hash
+
+`sha256(canonical_serialize(envelope).encode("utf-8")).hexdigest()` —
+the byte-stable bundle hash for the redacted output, mirroring
+`bba.evidence_bundle_builder.EvidenceBundle.bundle_hash`. The envelope
+locks 8 fields (`notes`, `redactor_version`, `redacted_age`,
+`age_capped`, `k_anonymity_size`, `k_anonymity_passed`,
+`route_to_needs_review`, `needs_review_reasons`); any change in any
+field changes the hash. The `RedactionResult` model validator
+recomputes the hash at construction and rejects mismatches —
+guarantees a downstream caller cannot forge a result whose hash
+disagrees with its content.
+`bba.deid_redactor.canonical.compute_redaction_hash`.
+
+### NEEDS_REVIEW reason
+
+`NeedsReviewReason` enum: `K_ANONYMITY_FAIL`,
+`SEMANTIC_DEGRADATION`. Routing decision is OR-of-reasons —
+multiple reasons may co-fire and all are persisted on
+`RedactionResult.needs_review_reasons`. The downstream audit pipeline
+(#24) reads this list into the row-level `review_reason` field so
+reviewers see WHY a redacted bundle landed in their queue.
+`bba.deid_redactor.models.NeedsReviewReason`.
+
+### Deferred (post-merge)
+
+Two items intentionally not landed in #17; defer to follow-up tickets:
+
+* **`thai-medical-deid==X.Y.Z` pin in `pyproject.toml`** — the
+  Protocol-based wrapper does not need the dep installed for unit
+  tests; runtime metadata (`RedactorVersion`) carries audit-chain
+  replay information today. The actual pin (alongside the vendored HF
+  model SHA + PyThaiNLP gazetteer version) belongs with the audit-
+  pipeline integration ticket (#24) where the backend is wired in for
+  production. Codex acknowledged the deferral in both review rounds.
+* **Honorifics-lexicon extension** — the current `_HONORIFICS` set
+  intentionally errs on the side of caution (FAMILY has no honorifics
+  because every family term doubles as a real name in KCMH
+  demographics). If a future hand-labeled corpus surfaces clinically
+  meaningful titles for FAMILY (e.g., religious / hierarchical
+  Thai-context honorifics), they would land here with adversarial
+  fixtures that demonstrate no name/cue collision.
 
 ## Quote-grounder concepts (#18)
 
