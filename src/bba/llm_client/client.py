@@ -6,14 +6,17 @@ PRD §13 + issue #22 acceptance criteria.
 from __future__ import annotations
 
 import hashlib
+import json
 from collections import Counter
 from collections.abc import Sequence
+from typing import Any
 
 from bba.audit_store.models import LlmCall
 from bba.llm_client.custom_id import assert_custom_ids_match
 from bba.llm_client.disagreement import detect_disagreement
 from bba.llm_client.escalation import run_with_escalation
 from bba.llm_client.exceptions import BatchSubmissionError
+from bba.llm_client.parser import parse_structured_response
 from bba.llm_client.models import (
     AnthropicTransport,
     BatchSubmissionRequest,
@@ -84,7 +87,7 @@ def _process_one(
     escalation, raw_calls, parse_outcomes = run_with_escalation(
         request, transport, config
     )
-    persisted_calls = tuple(
+    persisted_calls = list(
         _call_from_result(call, attempt_index=i, run_id=request.run_id)
         for i, call in enumerate(raw_calls)
     )
@@ -92,8 +95,37 @@ def _process_one(
     sonnet_response = _last_sonnet_response(parse_outcomes, escalation)
     opus_response = _opus_response(parse_outcomes, escalation)
 
+    # Optional cross-check: when configured, ALWAYS run Opus once
+    # Sonnet has produced a parseable classification — even if no
+    # escalation was triggered. Disagreement then routes to NEEDS_REVIEW
+    # without losing the Opus call's record. PRD §13 keeps this
+    # explicit and opt-in because shadow-Opus on every row is a ~5x
+    # cost regression.
+    cross_check_disagreement: DisagreementVerdict | None = None
+    if (
+        config.cross_check_with_opus
+        and not escalation.escalated_to_opus
+        and sonnet_response is not None
+    ):
+        opus_call = _run_opus_cross_check(request, transport, config)
+        opus_outcome = parse_structured_response(opus_call)
+        persisted_calls.append(
+            _call_from_result(
+                opus_call,
+                attempt_index=len(persisted_calls),
+                run_id=request.run_id,
+            )
+        )
+        if not opus_outcome.parse_failure:
+            opus_response = opus_outcome.parsed
+            cross_check_disagreement = detect_disagreement(
+                sonnet_response, opus_response
+            )
+
+    persisted_tuple = tuple(persisted_calls)
+
     if escalation.escalated_to_opus and opus_response is not None:
-        # Opus parsed successfully → its answer is recorded.
+        # Escalation path: Opus parsed successfully → its answer is recorded.
         disagreement = detect_disagreement(sonnet_response, opus_response)
         final, needs_review, review_reason = _resolve_with_opus(
             opus_response, disagreement
@@ -108,7 +140,7 @@ def _process_one(
             review_reason=review_reason,
             escalation=escalation,
             disagreement=disagreement,
-            persisted_calls=persisted_calls,
+            persisted_calls=persisted_tuple,
         )
 
     if escalation.escalated_to_opus and opus_response is None:
@@ -123,11 +155,24 @@ def _process_one(
             review_reason="parse_failure",
             escalation=escalation,
             disagreement=None,
-            persisted_calls=persisted_calls,
+            persisted_calls=persisted_tuple,
         )
 
-    # No Opus call: Sonnet eventually succeeded.
+    # Sonnet eventually succeeded (with or without cross-check).
     if sonnet_response is not None:
+        if cross_check_disagreement is not None and cross_check_disagreement.routed_to_needs_review:
+            return LlmClientResult(
+                audit_id=request.audit_id,
+                run_id=request.run_id,
+                final_classification="NEEDS_REVIEW",
+                response=sonnet_response,
+                parse_failure=False,
+                needs_review=True,
+                review_reason="disagreement",
+                escalation=escalation,
+                disagreement=cross_check_disagreement,
+                persisted_calls=persisted_tuple,
+            )
         return LlmClientResult(
             audit_id=request.audit_id,
             run_id=request.run_id,
@@ -137,8 +182,8 @@ def _process_one(
             needs_review=False,
             review_reason=None,
             escalation=escalation,
-            disagreement=None,
-            persisted_calls=persisted_calls,
+            disagreement=cross_check_disagreement,
+            persisted_calls=persisted_tuple,
         )
 
     # Defensive: should be unreachable because escalation runs Opus when
@@ -153,8 +198,30 @@ def _process_one(
         review_reason="parse_failure",
         escalation=escalation,
         disagreement=None,
-        persisted_calls=persisted_calls,
+        persisted_calls=persisted_tuple,
     )
+
+
+def _run_opus_cross_check(
+    request: BatchSubmissionRequest,
+    transport: AnthropicTransport,
+    config: LlmClientConfig,
+) -> BatchSubmissionResult:
+    """Single Opus call for cross-check (config.cross_check_with_opus=True).
+
+    Mirrors :func:`bba.llm_client.escalation.escalate_to_opus` but is
+    invoked from the success path rather than the failure path. The
+    custom_id assertion still holds; the result is folded into the
+    persisted calls so the audit row carries the full reproducibility
+    chain.
+    """
+    response = transport.submit_batch(
+        model=config.opus_model_id,
+        requests=[request],
+        prompt_cache_enabled=config.prompt_cache_enabled,
+    )
+    mapping = assert_custom_ids_match([request], list(response.results))
+    return mapping[request.audit_id]
 
 
 def _last_sonnet_response(
@@ -211,17 +278,36 @@ def _call_from_result(
     """Translate one :class:`BatchSubmissionResult` into a persistable
     :class:`LlmCall`.
 
-    The ``call_id`` is derived deterministically from
-    ``(custom_id, model_id, attempt_index, request_timestamp)`` so a
-    re-run with the same inputs produces the same ID — required by
-    the audit_store's append-only contract (a filename collision would
-    overwrite the prior call).
+    The ``call_id`` is derived deterministically from STABLE inputs only
+    — ``(run_id, audit_id, model_id, attempt_index, canonical
+    request_json hash)``. Including ``request_timestamp`` would make a
+    re-run with the same inputs produce a different ``call_id`` each
+    time, breaking the audit_store's append-only idempotency contract
+    (re-running with the same ``(audit_id, run_id, code_version)``
+    must be a no-op, not append a duplicate row).
+
+    ``response_headers`` lands inside :attr:`LlmCall.response_json`
+    under the ``_response_headers`` key. The audit_store schema does
+    not have a dedicated headers column, but the PRD reproducibility
+    requirement ("Persist the full Anthropic Batch API request and
+    response per audit_id, including ``anthropic-version`` header")
+    is satisfied by folding the headers into the envelope before
+    persistence.
     """
+    canonical_request = json.dumps(
+        result.request_json, sort_keys=True, ensure_ascii=False, default=str
+    )
+    request_hash = hashlib.sha256(canonical_request.encode("utf-8")).hexdigest()[:16]
     fingerprint = hashlib.sha256(
-        f"{result.custom_id}|{result.model_id}|{attempt_index}|"
-        f"{result.request_timestamp.isoformat()}".encode("utf-8")
+        f"{run_id}|{result.custom_id}|{result.model_id}|{attempt_index}|"
+        f"{request_hash}".encode("utf-8")
     ).hexdigest()[:16]
     call_id = f"call-{result.custom_id}-{attempt_index}-{fingerprint}"
+    # Shallow-copy the top-level frozen mapping so the dict spread below
+    # works on regular `dict` semantics. The LlmCall field validator
+    # deep-freezes the nested structure again on construction.
+    response_envelope: dict[str, Any] = dict(result.raw_response_json)
+    response_envelope["_response_headers"] = dict(result.response_headers)
     return LlmCall(
         call_id=call_id,
         audit_id=result.custom_id,
@@ -230,7 +316,7 @@ def _call_from_result(
         anthropic_version=result.anthropic_version,
         prompt_cache_id=result.prompt_cache_id,
         request_json=result.request_json,
-        response_json=result.raw_response_json,
+        response_json=response_envelope,
         request_timestamp=result.request_timestamp,
         latency_ms=result.latency_ms,
         extended_thinking_blocks=result.extended_thinking_blocks,

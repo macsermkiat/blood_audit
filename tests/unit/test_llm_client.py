@@ -59,6 +59,7 @@ from bba.llm_client import (
     ALLOWED_MODELS,
     ANTHROPIC_BETA_HEADER,
     AnthropicAPIError,
+    AnthropicBatchTransport,
     AnthropicTransport,
     BatchSubmissionError,
     BatchSubmissionRequest,
@@ -83,6 +84,7 @@ from bba.llm_client import (
     SONNET_MODEL_ID,
     StructuredToolInput,
     assert_custom_ids_match,
+    build_anthropic_request,
     detect_disagreement,
     escalate_to_opus,
     load_cassette,
@@ -839,6 +841,82 @@ class TestDisagreementDetection:
         assert out[0].disagreement is None
         assert out[0].final_classification == "APPROPRIATE"
 
+    def test_cross_check_with_opus_routes_disagreement_to_review(self) -> None:
+        # When cross_check_with_opus=True, Opus runs alongside a
+        # successful Sonnet call. A mismatch routes to NEEDS_REVIEW
+        # via the cross_check_disagreement path; this exercises the
+        # exact code path raised by codex review §4.
+        reqs = [_request(audit_id="a1")]
+        sequence = [
+            # Sonnet succeeds with APPROPRIATE.
+            RawBatchResponse(
+                batch_id="b_sonnet",
+                results=(
+                    _result(
+                        custom_id="a1",
+                        content=_tool_use_content(classification="APPROPRIATE"),
+                    ),
+                ),
+            ),
+            # Opus cross-check returns INAPPROPRIATE.
+            RawBatchResponse(
+                batch_id="b_opus",
+                results=(
+                    _result(
+                        custom_id="a1",
+                        model_id=OPUS_MODEL_ID,
+                        content=_tool_use_content(classification="INAPPROPRIATE"),
+                    ),
+                ),
+            ),
+        ]
+        transport = _SequenceTransport(sequence)
+        out = process_batch(
+            reqs, transport, _config(cross_check_with_opus=True)
+        )
+        assert out[0].final_classification == "NEEDS_REVIEW"
+        assert out[0].needs_review is True
+        assert out[0].review_reason == "disagreement"
+        assert out[0].disagreement is not None
+        assert out[0].disagreement.sonnet_classification == "APPROPRIATE"
+        assert out[0].disagreement.opus_classification == "INAPPROPRIATE"
+        # The Opus cross-check call is persisted alongside Sonnet's.
+        assert len(out[0].persisted_calls) == 2
+        assert out[0].persisted_calls[1].model_id == OPUS_MODEL_ID
+
+    def test_cross_check_agreement_keeps_sonnet_answer(self) -> None:
+        # Cross-check enabled but both models agree → no NEEDS_REVIEW.
+        reqs = [_request(audit_id="a1")]
+        sequence = [
+            RawBatchResponse(
+                batch_id="b_sonnet",
+                results=(
+                    _result(
+                        custom_id="a1",
+                        content=_tool_use_content(classification="APPROPRIATE"),
+                    ),
+                ),
+            ),
+            RawBatchResponse(
+                batch_id="b_opus",
+                results=(
+                    _result(
+                        custom_id="a1",
+                        model_id=OPUS_MODEL_ID,
+                        content=_tool_use_content(classification="APPROPRIATE"),
+                    ),
+                ),
+            ),
+        ]
+        transport = _SequenceTransport(sequence)
+        out = process_batch(
+            reqs, transport, _config(cross_check_with_opus=True)
+        )
+        assert out[0].final_classification == "APPROPRIATE"
+        assert out[0].needs_review is False
+        assert out[0].disagreement is not None
+        assert out[0].disagreement.agreed is True
+
 
 # =============================================================================
 # AC ⑦ — Full response persistence to llm_calls via audit_store
@@ -1323,3 +1401,203 @@ class TestSubmitBatchPreflight:
         out = submit_batch(reqs, transport, _config())
         assert out.batch_id == "b1"
         assert out.results[0].custom_id == "a1"
+
+
+# =============================================================================
+# Cross-cutting: real Anthropic cache_control marker translation
+#
+# WHY: PRD §13 "prompt caching engaged". The boolean flag check is not
+# sufficient — a regression that flips ``cache_marker`` translation
+# without changing the flag (rename, reorder, type-cast bug) would
+# pass that check. This class inspects the actual Anthropic request
+# payload produced by build_anthropic_request and asserts the
+# ``cache_control`` marker lands on the system + few-shot block ends.
+# =============================================================================
+
+
+class TestAnthropicRequestCacheControlTranslation:
+    def test_cache_marker_translates_to_ephemeral_cache_control(self) -> None:
+        # One evidence chunk → one system block (with cache_marker) +
+        # one user payload block (no cache_marker). The translated
+        # request must carry cache_control on the system block only.
+        request = _request(audit_id="a1")
+        payload = build_anthropic_request(
+            request, model=SONNET_MODEL_ID, prompt_cache_enabled=True
+        )
+        system_blocks = payload["system"]
+        assert len(system_blocks) >= 1
+        cached_system_blocks = [
+            b for b in system_blocks if b.get("cache_control") == {"type": "ephemeral"}
+        ]
+        assert len(cached_system_blocks) >= 1
+        # The trailing user payload (evidence) is never cacheable.
+        user_blocks = payload["messages"][0]["content"]
+        cached_user_blocks = [
+            b for b in user_blocks if "cache_control" in b
+        ]
+        assert cached_user_blocks == []
+
+    def test_disabled_cache_strips_all_cache_control_markers(self) -> None:
+        request = _request(audit_id="a1")
+        payload = build_anthropic_request(
+            request, model=SONNET_MODEL_ID, prompt_cache_enabled=False
+        )
+        # No block on either side carries cache_control when caching is off.
+        for block in payload["system"]:
+            assert "cache_control" not in block
+        for block in payload["messages"][0]["content"]:
+            assert "cache_control" not in block
+
+    def test_tool_choice_forces_classifier_tool(self) -> None:
+        # Tool-use mode is mandatory (PRD §13 fail-closed parsing requires
+        # the LLM to emit a structured tool call, not free text). The
+        # request must force tool_choice on the classify_transfusion_order
+        # tool — otherwise the model could revert to free text under load.
+        request = _request(audit_id="a1")
+        payload = build_anthropic_request(
+            request, model=SONNET_MODEL_ID, prompt_cache_enabled=True
+        )
+        assert payload["tool_choice"]["type"] == "tool"
+        assert payload["tool_choice"]["name"] == "classify_transfusion_order"
+        tool_names = [t["name"] for t in payload["tools"]]
+        assert "classify_transfusion_order" in tool_names
+
+    def test_tool_input_schema_constrains_classification_to_four_labels(self) -> None:
+        # The tool's input_schema must restrict classification to the
+        # four-label set so a hallucinated label cannot pass schema
+        # validation at the Anthropic side (defence in depth alongside
+        # the post-hoc parser check).
+        request = _request(audit_id="a1")
+        payload = build_anthropic_request(
+            request, model=SONNET_MODEL_ID, prompt_cache_enabled=True
+        )
+        schema = payload["tools"][0]["input_schema"]
+        enum = schema["properties"]["classification"]["enum"]
+        assert set(enum) == {
+            "APPROPRIATE",
+            "INAPPROPRIATE",
+            "NEEDS_REVIEW",
+            "INSUFFICIENT_EVIDENCE",
+        }
+
+
+# =============================================================================
+# Production AnthropicBatchTransport — surface-level sanity checks
+#
+# WHY: PRD §13 "Anthropic Batch API integration" requires a concrete
+# production transport (not just a Protocol). These tests pin the
+# constructor contract; full SDK-backed roundtrip is exercised by the
+# audit_pipeline integration test in issue #24 (out of scope here).
+# =============================================================================
+
+
+class TestAnthropicBatchTransportSurface:
+    def test_missing_api_key_raises_config_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        with pytest.raises(LlmClientConfigError) as exc_info:
+            AnthropicBatchTransport()
+        assert "ANTHROPIC_API_KEY" in str(exc_info.value)
+
+    def test_explicit_api_key_overrides_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        transport = AnthropicBatchTransport(api_key="sk-test-xxx")
+        assert isinstance(transport, AnthropicTransport)
+
+    def test_env_var_satisfies_construction(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-from-env")
+        transport = AnthropicBatchTransport()
+        assert isinstance(transport, AnthropicTransport)
+
+
+# =============================================================================
+# Expanded fail-closed property test (codex review §8)
+#
+# WHY: The original property test only varied the ``input`` string of
+# an otherwise valid tool_use block. The real fail-closed invariant
+# applies to ARBITRARY raw_response_json shapes — missing keys, non-list
+# content, multi-block content, valid-JSON-but-not-dict, deeply nested
+# garbage. This expanded test generates every shape variation and
+# asserts the parser never raises.
+# =============================================================================
+
+
+class TestParserPropertyBasedExpanded:
+    @given(
+        shape=st.one_of(
+            st.fixed_dictionaries({}),
+            st.fixed_dictionaries({"content": st.none()}),
+            st.fixed_dictionaries({"content": st.text(max_size=20)}),
+            st.fixed_dictionaries({"content": st.integers()}),
+            st.fixed_dictionaries(
+                {
+                    "content": st.lists(
+                        st.dictionaries(
+                            st.text(min_size=1, max_size=10),
+                            st.one_of(st.text(), st.integers(), st.none()),
+                            max_size=4,
+                        ),
+                        max_size=5,
+                    )
+                }
+            ),
+            st.fixed_dictionaries(
+                {
+                    "content": st.lists(
+                        st.fixed_dictionaries(
+                            {
+                                "type": st.sampled_from(
+                                    ["text", "tool_use", "thinking"]
+                                ),
+                                "input": st.one_of(
+                                    st.text(max_size=20),
+                                    st.dictionaries(
+                                        st.text(min_size=1, max_size=8),
+                                        st.text(max_size=20),
+                                        max_size=4,
+                                    ),
+                                    st.none(),
+                                ),
+                            }
+                        ),
+                        min_size=0,
+                        max_size=3,
+                    )
+                }
+            ),
+        )
+    )
+    @settings(max_examples=75, deadline=None)
+    def test_parser_never_raises_on_arbitrary_envelope_shape(
+        self, shape: dict[str, Any]
+    ) -> None:
+        # The hypothesis shape must validate as FrozenJsonDict input.
+        # Construct via the model so we exercise the same path the
+        # production pipeline uses; if construction itself raises, that
+        # is information about the model boundary, not the parser.
+        try:
+            result = BatchSubmissionResult(
+                custom_id="a1",
+                model_id=SONNET_MODEL_ID,  # type: ignore[arg-type]
+                raw_response_json=shape,
+                request_json={"model": SONNET_MODEL_ID},
+                response_headers={"anthropic-version": "2023-06-01"},
+                request_timestamp=datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC),
+                latency_ms=100,
+                anthropic_version="2023-06-01",
+            )
+        except ValidationError:
+            # The model rejected the shape; the parser never sees it.
+            # That is also acceptable fail-closed behaviour.
+            return
+        outcome = parse_structured_response(result)
+        if outcome.parse_failure:
+            assert outcome.parsed is None
+            assert outcome.parse_failure_reason is not None
+        else:
+            assert outcome.parsed is not None

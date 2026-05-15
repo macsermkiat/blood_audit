@@ -69,11 +69,16 @@ from bba.llm_client.models import (
     StructuredToolInput,
 )
 from bba.llm_client.parser import parse_structured_response
+from bba.llm_client.transport import (
+    AnthropicBatchTransport,
+    build_anthropic_request,
+)
 
 __all__ = [
     "ALLOWED_MODELS",
     "ANTHROPIC_BETA_HEADER",
     "AnthropicAPIError",
+    "AnthropicBatchTransport",
     "AnthropicTransport",
     "BatchSubmissionError",
     "BatchSubmissionRequest",
@@ -99,6 +104,7 @@ __all__ = [
     "SONNET_MODEL_ID",
     "StructuredToolInput",
     "assert_custom_ids_match",
+    "build_anthropic_request",
     "detect_disagreement",
     "escalate_to_opus",
     "load_cassette",

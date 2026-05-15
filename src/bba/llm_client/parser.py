@@ -14,6 +14,7 @@ with the structured reason persisted on the audit row.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from pydantic import ValidationError
@@ -92,34 +93,43 @@ class _ParseGuard(Exception):
         self.reason = reason
 
 
-def _extract_content(raw: Any) -> list[Any]:
-    if not isinstance(raw, dict):
+def _extract_content(raw: Any) -> Sequence[Any]:
+    """Pull the ``content`` array out of an Anthropic response envelope.
+
+    The envelope may arrive as a plain ``dict`` (live API) or as a
+    deeply-frozen :class:`MappingProxyType` (after construction via
+    :class:`FrozenJsonDict`); both are :class:`Mapping`. The content
+    array similarly arrives as ``list`` or ``tuple``; both are
+    :class:`Sequence` (but ``str``/``bytes`` are explicitly excluded —
+    those are scalar payloads, not arrays).
+    """
+    if not isinstance(raw, Mapping):
         raise _ParseGuard(ParseFailureReason.EMPTY_RESPONSE)
     content = raw.get("content")
     if content is None:
         raise _ParseGuard(ParseFailureReason.EMPTY_RESPONSE)
-    if not isinstance(content, list):
+    if isinstance(content, str | bytes) or not isinstance(content, Sequence):
         raise _ParseGuard(ParseFailureReason.SCHEMA_MISMATCH)
     if len(content) == 0:
         raise _ParseGuard(ParseFailureReason.EMPTY_RESPONSE)
     return content
 
 
-def _find_tool_use(content: list[Any]) -> dict[str, Any] | None:
+def _find_tool_use(content: Sequence[Any]) -> Mapping[str, Any] | None:
     for block in content:
-        if isinstance(block, dict) and block.get("type") == "tool_use":
+        if isinstance(block, Mapping) and block.get("type") == "tool_use":
             return block
     return None
 
 
-def _coerce_to_dict(value: Any) -> tuple[dict[str, Any] | None, bool]:
+def _coerce_to_dict(value: Any) -> tuple[Mapping[str, Any] | None, bool]:
     """Return (dict_or_none, malformed_json_flag).
 
     A string ``value`` is treated as a JSON-encoded payload (legacy SDK
-    shape passthrough). Anything else is either a dict or a schema
+    shape passthrough). Anything else is either a mapping or a schema
     mismatch.
     """
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return value, False
     if isinstance(value, str):
         try:
@@ -145,10 +155,26 @@ def _stringify(value: Any) -> str:
     if isinstance(value, str):
         return value
     try:
-        return json.dumps(value, ensure_ascii=False, default=str)
+        return json.dumps(value, ensure_ascii=False, default=_json_default)
     except (TypeError, ValueError):
         return repr(value)
 
 
-def _stringify_content(content: list[Any]) -> str:
+def _stringify_content(content: Sequence[Any]) -> str:
     return _stringify(content)
+
+
+def _json_default(value: Any) -> Any:
+    """Coerce frozen / non-JSON-serializable values to JSON for logging.
+
+    :class:`MappingProxyType` and ``tuple`` are JSON-serializable via
+    ``dict(...)`` and ``list(...)`` respectively. Everything else
+    falls back to ``str()``.
+    """
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, str | bytes):
+        return value
+    if isinstance(value, Sequence):
+        return list(value)
+    return str(value)

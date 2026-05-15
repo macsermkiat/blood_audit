@@ -20,7 +20,6 @@ from collections.abc import Sequence
 from enum import StrEnum
 from typing import (
     Annotated,
-    Any,
     Final,
     Literal,
     Protocol,
@@ -38,6 +37,8 @@ from pydantic import (
 )
 
 from bba.audit_store.models import (
+    FrozenJsonDict,
+    FrozenJsonList,
     LlmCall,
     SafeId,
     UTCDatetime,
@@ -275,20 +276,27 @@ class BatchSubmissionResult(BaseModel):
     this. ``raw_response_json`` is the full Anthropic response payload
     persisted to ``llm_calls`` for reproducibility (PRD §"Persist the
     full Anthropic Batch API request and response per audit_id").
+
+    The nested JSON payloads are deeply frozen via
+    :data:`bba.audit_store.models.FrozenJsonDict` /
+    :data:`bba.audit_store.models.FrozenJsonList`: a downstream caller
+    cannot patch ``raw_response_json["content"]`` after construction.
+    Mutability here would let a refactor silently rewrite the audit
+    chain between parse and persist.
     """
 
     model_config = ConfigDict(frozen=True)
 
     custom_id: SafeId
     model_id: PinnedModel
-    raw_response_json: dict[str, Any]
-    request_json: dict[str, Any]
-    response_headers: dict[str, str]
+    raw_response_json: FrozenJsonDict
+    request_json: FrozenJsonDict
+    response_headers: FrozenJsonDict
     request_timestamp: UTCDatetime
     latency_ms: int = Field(ge=0)
     anthropic_version: str = Field(min_length=1)
     prompt_cache_id: str | None = None
-    extended_thinking_blocks: tuple[dict[str, Any], ...] | None = None
+    extended_thinking_blocks: FrozenJsonList | None = None
 
 
 class RawBatchResponse(BaseModel):
@@ -474,9 +482,10 @@ class LlmClientConfig(BaseModel):
     sonnet_model_id: PinnedModel = SONNET_MODEL_ID
     opus_model_id: PinnedModel = OPUS_MODEL_ID
     max_sonnet_attempts: int = Field(
-        default=MAX_SONNET_ATTEMPTS, ge=1, le=MAX_SONNET_ATTEMPTS
+        default=MAX_SONNET_ATTEMPTS, ge=2, le=MAX_SONNET_ATTEMPTS
     )
     prompt_cache_enabled: bool = True
+    cross_check_with_opus: bool = False
     code_version: str = Field(min_length=1)
 
     @field_validator("sonnet_model_id")
