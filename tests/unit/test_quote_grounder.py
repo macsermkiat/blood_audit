@@ -222,10 +222,12 @@ class TestLayer4WithinDocUniqueness:
         assert within_doc_unique(_QUOTE_E1_VALID, _SOURCE_E1_TEXT) is True
 
     def test_repeated_quote_rejected(self) -> None:
-        # The 6-char phrase "no bleeding" appears twice in the same source.
+        # The phrase "no active bleeding" appears twice in the same source.
         # Within-doc uniqueness rejects it even though it is contiguous.
+        # Case-sensitive: NFC preserves case, so both occurrences must match
+        # the quote's casing exactly to count as a repeat.
         source = (
-            "No active bleeding on day 1. Repeat exam: no active bleeding on day 2."
+            "no active bleeding on day 1. Repeat exam: no active bleeding on day 2."
         )
         assert within_doc_unique("no active bleeding", source) is False
 

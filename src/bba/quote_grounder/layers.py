@@ -25,9 +25,58 @@ the layers themselves know nothing about each other.
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from collections.abc import Sequence
 
 from bba.quote_grounder.models import EvidenceSource, LabTuple
+
+
+_ANALYTE_ALIASES: dict[str, str] = {
+    "hb": "hb",
+    "hgb": "hb",
+    "hemoglobin": "hb",
+    "wbc": "wbc",
+    "platelets": "plt",
+    "plt": "plt",
+}
+"""Map every accepted phrasing of a lab analyte to a canonical key.
+
+Layer 6 collapses "Hgb" / "Hb" / "hemoglobin" to one key so paraphrase on
+the analyte name (PRD §9 fixture: "Hgb=8.3 vs Hb 8.3 g/dL") does not bypass
+tuple-equivalence. Keys are stored lowercase; the lookup also lowercases.
+"""
+
+
+_UNITS: tuple[str, ...] = (
+    "g/dL",
+    "g/dl",
+    "K/uL",
+    "k/ul",
+    "mmol/L",
+    "mmol/l",
+)
+"""Recognised lab unit literals — surface forms only.
+
+Canonical comparison is whitespace-stripped lowercase via
+:func:`_canonical_unit`, so ``"g/dL"`` and ``"g/dl"`` match the same source.
+The list is the regex alternation; surface forms here must stay in sync
+with the analyte family they accompany (Hb → g/dL/mmol/L; WBC → K/uL).
+"""
+
+
+_LAB_TRIPLE_RE = re.compile(
+    r"\b(?P<analyte>Hgb|Hb|hemoglobin|WBC|Platelets|Plt)\s*[:=]?\s*"
+    r"(?P<value>\d+(?:\.\d+)?)\s*"
+    r"(?P<unit>g/dL|g/dl|K/uL|k/ul|mmol/L|mmol/l)\b",
+    re.IGNORECASE,
+)
+"""Regex over a source text to capture every (analyte, value, unit) triple.
+
+The unit must follow the value with at most whitespace in between; this
+keeps "Hb 8.3 (admission)" from claiming a triple via a trailing token.
+``case insensitive`` so "HGB" and "hgb" extract the same way.
+"""
 
 
 MIN_QUOTE_LENGTH: int = 25
@@ -47,7 +96,7 @@ def nfc_normalize(text: str) -> str:
     KCMH note exports; without normalization a visually-identical quote
     would fail :func:`contiguous_match` (issue #18 adversarial fixture).
     """
-    raise NotImplementedError
+    return unicodedata.normalize("NFC", text)
 
 
 def contiguous_match(quote: str, source_text: str) -> bool:
@@ -56,8 +105,13 @@ def contiguous_match(quote: str, source_text: str) -> bool:
     Both arguments MUST be pre-normalized via :func:`nfc_normalize` by the
     caller; this layer does not re-normalize so the combined pipeline can
     keep normalization cost O(sources) instead of O(citations × sources).
+
+    An empty ``quote`` returns ``False`` even though ``"" in s`` is ``True``
+    in Python — defense in depth against the trivial-substring backdoor.
     """
-    raise NotImplementedError
+    if not quote:
+        return False
+    return quote in source_text
 
 
 def find_cited_source(
@@ -71,7 +125,10 @@ def find_cited_source(
     ambiguous-cited_id as the same failure as missing-cited_id so the
     reviewer dashboard sees a single failure mode.
     """
-    raise NotImplementedError
+    matches = [s for s in sources if s.source_id == cited_id]
+    if len(matches) != 1:
+        return None
+    return matches[0]
 
 
 def within_doc_unique(quote: str, source_text: str) -> bool:
@@ -83,7 +140,9 @@ def within_doc_unique(quote: str, source_text: str) -> bool:
     source is suspect (the LLM cannot disambiguate which occurrence it
     meant) and is rejected.
     """
-    raise NotImplementedError
+    if not quote:
+        return False
+    return source_text.count(quote) == 1
 
 
 def min_length_ok(quote: str, *, minimum: int = MIN_QUOTE_LENGTH) -> bool:
@@ -93,7 +152,7 @@ def min_length_ok(quote: str, *, minimum: int = MIN_QUOTE_LENGTH) -> bool:
     layer measures ``len(quote)`` directly. ``minimum`` is parameterized so
     the eval harness can sweep the threshold during calibration.
     """
-    raise NotImplementedError
+    return len(quote) >= minimum
 
 
 def lab_tuple_match(lab_tuple: LabTuple, source_text: str) -> bool:
@@ -105,4 +164,48 @@ def lab_tuple_match(lab_tuple: LabTuple, source_text: str) -> bool:
     value comparison is exact-equal on the parsed float — paraphrase is on
     the surrounding tokens, not the number itself.
     """
-    raise NotImplementedError
+    cited_analyte = _canonical_analyte(lab_tuple.analyte)
+    if cited_analyte is None:
+        return False
+    cited_unit = _canonical_unit(lab_tuple.unit)
+    target = (cited_analyte, lab_tuple.value, cited_unit)
+    return target in _extract_lab_triples(source_text)
+
+
+def _canonical_analyte(name: str) -> str | None:
+    """Return the canonical analyte key for ``name`` (None if unknown).
+
+    Layer 6's analyte aliasing: "Hgb" and "Hb" collapse to the same key so
+    a paraphrased LLM emission matches a source phrasing. An unknown
+    analyte returns None — the citation cannot be tuple-grounded.
+    """
+    return _ANALYTE_ALIASES.get(name.lower().strip())
+
+
+def _canonical_unit(unit: str) -> str:
+    """Normalize a unit literal for tuple comparison.
+
+    Lowercases and strips internal whitespace. ``"g/dL"`` and ``"g/dl"`` and
+    ``"g / dL"`` all collapse to ``"g/dl"``. Cross-family units ("g/dl" vs
+    "mmol/l") stay distinct — the regulator's "different unit, different
+    semantics" contract still holds at the canonical-form layer.
+    """
+    return "".join(unit.split()).lower()
+
+
+def _extract_lab_triples(source: str) -> list[tuple[str, float, str]]:
+    """Return every (canonical_analyte, value, canonical_unit) triple in ``source``.
+
+    Uses :data:`_LAB_TRIPLE_RE` to find analyte-value-unit runs. The list is
+    the source's grounded-triple inventory; Layer 6 checks tuple-equivalence
+    against this set.
+    """
+    triples: list[tuple[str, float, str]] = []
+    for m in _LAB_TRIPLE_RE.finditer(source):
+        canonical = _canonical_analyte(m.group("analyte"))
+        if canonical is None:
+            continue
+        triples.append(
+            (canonical, float(m.group("value")), _canonical_unit(m.group("unit")))
+        )
+    return triples
