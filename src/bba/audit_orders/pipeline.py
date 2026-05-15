@@ -28,13 +28,56 @@ not change which records land in which bucket.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
+from bba.audit_orders.anchor import resolve_anchor
+from bba.audit_orders.exceptions import UnrecoverableAnchorError
+from bba.audit_orders.identity import build_audit_id
 from bba.audit_orders.models import (
+    AuditOrder,
     AuditOrdersConfig,
     BloodOrderInput,
+    ExcludedRecord,
     FilterResult,
 )
+from bba.audit_orders.rules import (
+    check_age,
+    check_aiha,
+    check_an_scoped,
+    check_cancelled,
+    check_hemoglobinopathy,
+    check_obstetric,
+    check_rbc_product,
+    check_request_type,
+    check_status,
+    check_tma,
+    rbc_products_in,
+    years_between,
+)
+
+# Pre-anchor rules run in this fixed order. Age is intentionally NOT here:
+# it depends on the resolved anchor's local date and runs after anchor
+# resolution.
+_PRE_ANCHOR_RULES: tuple[Callable[[BloodOrderInput], ExcludedRecord | None], ...] = (
+    check_rbc_product,
+    check_status,
+    check_cancelled,
+    check_an_scoped,
+    check_request_type,
+    check_hemoglobinopathy,
+    check_aiha,
+    check_tma,
+    check_obstetric,
+)
+
+
+def _first_exclusion(record: BloodOrderInput) -> ExcludedRecord | None:
+    """Apply pre-anchor rules in fixed order; return the first exclusion or None."""
+    for rule in _PRE_ANCHOR_RULES:
+        excluded = rule(record)
+        if excluded is not None:
+            return excluded
+    return None
 
 
 def build_audit_orders(
@@ -57,7 +100,50 @@ def build_audit_orders(
       usable. Per PRD §"Output schema", a row without an anchor is a bug
       to surface, not a silent omission.
     """
-    raise NotImplementedError
+    included: list[AuditOrder] = []
+    excluded: list[ExcludedRecord] = []
+
+    for record in records:
+        pre_anchor = _first_exclusion(record)
+        if pre_anchor is not None:
+            excluded.append(pre_anchor)
+            continue
+
+        resolved = resolve_anchor(record, config.tz_source)
+        if resolved.anchor is None or resolved.local_date is None:
+            raise UnrecoverableAnchorError(
+                f"record (hn={record.hn!r}, reqno={record.reqno!r}) has neither "
+                f"REQ nor BDVST anchor pair; cannot derive order_datetime"
+            )
+
+        # Age depends on the resolved local date (Bangkok wall-clock day
+        # of the order, not UTC date — they can disagree near midnight).
+        age_exclusion = check_age(record, resolved.local_date)
+        if age_exclusion is not None:
+            excluded.append(age_exclusion)
+            continue
+
+        # All gates passed — construct the canonical row.
+        # an + birthdate are non-None at this point (check_an_scoped +
+        # check_age passed); assert to narrow for mypy.
+        assert record.an is not None  # noqa: S101 — type narrowing
+        assert record.birthdate is not None  # noqa: S101 — type narrowing
+        included.append(
+            AuditOrder(
+                audit_id=build_audit_id(record.hn, record.reqno),
+                hn=record.hn,
+                an=record.an,
+                reqno=record.reqno,
+                order_datetime=resolved.anchor.utc,
+                anchor_imputed=resolved.imputed,
+                products_ordered=rbc_products_in(record.products),
+                age_years=years_between(record.birthdate, resolved.local_date),
+                sex=record.sex,
+                diagnosis_codes=record.diagnosis_codes,
+            )
+        )
+
+    return FilterResult(included=tuple(included), excluded=tuple(excluded))
 
 
 __all__ = ("build_audit_orders",)

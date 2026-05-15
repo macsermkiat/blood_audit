@@ -19,6 +19,12 @@ only).
 
 from __future__ import annotations
 
+import hashlib
+
+# Length of the hex digest taken from sha256. 32 chars = 128 bits, well above
+# the threshold for collision-safety on the ~2k-orders/month Phase-1 dataset.
+_AUDIT_ID_LENGTH: int = 32
+
 
 def build_audit_id(hn: str, reqno: str) -> str:
     """Return the stable audit_id for ``(hn, reqno)``.
@@ -28,7 +34,8 @@ def build_audit_id(hn: str, reqno: str) -> str:
     source of truth for the canonical identity formula; tests assert
     determinism and pairwise disjointness, not the exact algorithm.
     """
-    raise NotImplementedError
+    payload = f"{hn}:{reqno}".encode()
+    return hashlib.sha256(payload).hexdigest()[:_AUDIT_ID_LENGTH]
 
 
 __all__ = ("build_audit_id",)

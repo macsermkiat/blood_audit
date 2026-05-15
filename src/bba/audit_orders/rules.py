@@ -16,6 +16,7 @@ while letting tests target the exact rule the issue calls out.
 from __future__ import annotations
 
 from datetime import date
+from typing import cast
 
 from bba.audit_orders.models import (
     BloodOrderInput,
@@ -44,8 +45,8 @@ HEMOGLOBINOPATHY_PREFIXES: frozenset[str] = frozenset({"D55", "D56", "D57", "D58
 AIHA_PREFIX: str = "D59"
 
 # ICD-10 prefixes for thrombotic microangiopathy (TMA) cohorts. M31.1 is
-# thrombotic thrombocytopenic purpura (TTP); broader M31 is the
-# polyarteritis/related-conditions block that includes TTP-HUS.
+# thrombotic thrombocytopenic purpura (TTP). M31.0 is hypersensitivity
+# angiitis and is intentionally NOT in the set.
 TMA_PREFIXES: frozenset[str] = frozenset({"M31.1"})
 
 # ICD-10 letter for obstetric conditions (O00–O9A). One-letter prefix
@@ -58,6 +59,21 @@ OBSTETRIC_PREFIX: str = "O"
 MIN_AGE_YEARS: int = 15
 
 
+def is_rbc_product(product: str) -> bool:
+    """True iff ``product`` is one of the allow-listed RBC products."""
+    return product in RBC_PRODUCTS
+
+
+def rbc_products_in(products: tuple[str, ...]) -> tuple[RBCProduct, ...]:
+    """Return the subset of ``products`` that are allow-listed RBC products,
+    preserving input order.
+    """
+    # cast is safe because the membership check restricts to the RBCProduct
+    # literal members; mypy cannot narrow `str` to `Literal["LPRC", ...]`
+    # from a runtime set check.
+    return tuple(cast("RBCProduct", p) for p in products if p in RBC_PRODUCTS)
+
+
 def check_rbc_product(record: BloodOrderInput) -> ExcludedRecord | None:
     """Reject records whose products are entirely outside :data:`RBC_PRODUCTS`.
 
@@ -65,7 +81,14 @@ def check_rbc_product(record: BloodOrderInput) -> ExcludedRecord | None:
     (one RBC + one non-RBC) are passed at this gate; downstream stages
     care about which RBC product was actually issued.
     """
-    raise NotImplementedError
+    if any(is_rbc_product(p) for p in record.products):
+        return None
+    return ExcludedRecord(
+        hn=record.hn,
+        reqno=record.reqno,
+        reason="not_rbc_product",
+        detail=",".join(record.products) if record.products else None,
+    )
 
 
 def check_status(record: BloodOrderInput) -> ExcludedRecord | None:
@@ -74,7 +97,14 @@ def check_status(record: BloodOrderInput) -> ExcludedRecord | None:
     Status 6 (refused) and every other sentinel are out of scope per the
     issue's excluded-subgroup list (``refused (BDVSTST=6)``).
     """
-    raise NotImplementedError
+    if record.bdvstst in ELIGIBLE_STATUS:
+        return None
+    return ExcludedRecord(
+        hn=record.hn,
+        reqno=record.reqno,
+        reason="status_not_eligible",
+        detail=record.bdvstst,
+    )
 
 
 def check_cancelled(record: BloodOrderInput) -> ExcludedRecord | None:
@@ -82,24 +112,60 @@ def check_cancelled(record: BloodOrderInput) -> ExcludedRecord | None:
 
     Per the issue: ``cancelled (CANCELDATE not null)`` is hard-excluded.
     """
-    raise NotImplementedError
+    if record.canceldate is None:
+        return None
+    return ExcludedRecord(
+        hn=record.hn,
+        reqno=record.reqno,
+        reason="cancelled",
+        detail=record.canceldate,
+    )
 
 
 def check_an_scoped(record: BloodOrderInput) -> ExcludedRecord | None:
     """Reject records without an ``AN`` (admission number) — i.e., OPD.
 
-    Outpatient transfusions are out of scope: ``OPD (AN=null)``.
+    Outpatient transfusions are out of scope: ``OPD (AN=null)``. An empty
+    or whitespace-only AN is also treated as missing — an empty string in
+    a CSV column is the missing-value sentinel, not a real admission.
     """
-    raise NotImplementedError
+    if record.an is not None and record.an.strip() != "":
+        return None
+    return ExcludedRecord(
+        hn=record.hn,
+        reqno=record.reqno,
+        reason="no_an",
+        detail=None,
+    )
 
 
 def check_request_type(record: BloodOrderInput) -> ExcludedRecord | None:
     """Reject records whose ``reqtype`` is not ``'P'`` (in-house request).
 
     ``REQTYPE='H'`` is an inter-hospital referral: clinical context lives
-    outside KCMH and is out of scope.
+    outside KCMH and is out of scope. Any other non-``P`` value is also
+    excluded under the same reason — Phase-1 conservative.
     """
-    raise NotImplementedError
+    if record.reqtype == "P":
+        return None
+    return ExcludedRecord(
+        hn=record.hn,
+        reqno=record.reqno,
+        reason="inter_hospital",
+        detail=record.reqtype,
+    )
+
+
+def years_between(start: date, end: date) -> int:
+    """Whole years from ``start`` to ``end`` (i.e., age in years).
+
+    The boundary is open: a birthday on ``end`` counts as the new age; a
+    birthday after ``end`` (same calendar year) counts as the previous age.
+    """
+    years = end.year - start.year
+    if (end.month, end.day) < (start.month, start.day):
+        years -= 1
+    return years
 
 
 def check_age(record: BloodOrderInput, anchor_date: date) -> ExcludedRecord | None:
@@ -108,9 +174,42 @@ def check_age(record: BloodOrderInput, anchor_date: date) -> ExcludedRecord | No
     ``anchor_date`` is the date component of the resolved anchor datetime —
     age is computed relative to the order, not to today. A null birthdate
     is treated as missing-eligibility; per Phase-1 conservatism it counts
-    as a pediatric exclusion (the dashboard surfaces these for review).
+    as a pediatric exclusion.
     """
-    raise NotImplementedError
+    if record.birthdate is None:
+        return ExcludedRecord(
+            hn=record.hn,
+            reqno=record.reqno,
+            reason="pediatric",
+            detail=None,
+        )
+    age = years_between(record.birthdate, anchor_date)
+    if age < MIN_AGE_YEARS:
+        return ExcludedRecord(
+            hn=record.hn,
+            reqno=record.reqno,
+            reason="pediatric",
+            detail=str(age),
+        )
+    return None
+
+
+def _first_matching_code(
+    codes: tuple[str, ...], prefixes: frozenset[str]
+) -> str | None:
+    """Return the first ICD-10 code in ``codes`` that starts with any of
+    ``prefixes``, or ``None`` if no match.
+
+    Case-sensitive ``str.startswith``: ICD-10 is uppercase by convention,
+    and tolerating lowercase would also tolerate other formatting drift
+    (e.g., trailing whitespace, half-width digits) that we have not
+    explicitly opted in to.
+    """
+    for code in codes:
+        for prefix in prefixes:
+            if code.startswith(prefix):
+                return code
+    return None
 
 
 def check_hemoglobinopathy(record: BloodOrderInput) -> ExcludedRecord | None:
@@ -120,7 +219,15 @@ def check_hemoglobinopathy(record: BloodOrderInput) -> ExcludedRecord | None:
     suite can distinguish D55 vs D56 vs D57 vs D58 fixtures (the issue
     AC requires one fixture per code).
     """
-    raise NotImplementedError
+    match = _first_matching_code(record.diagnosis_codes, HEMOGLOBINOPATHY_PREFIXES)
+    if match is None:
+        return None
+    return ExcludedRecord(
+        hn=record.hn,
+        reqno=record.reqno,
+        reason="hemoglobinopathy",
+        detail=match,
+    )
 
 
 def check_aiha(record: BloodOrderInput) -> ExcludedRecord | None:
@@ -128,7 +235,15 @@ def check_aiha(record: BloodOrderInput) -> ExcludedRecord | None:
 
     The matched code is carried in ``ExcludedRecord.detail``.
     """
-    raise NotImplementedError
+    match = _first_matching_code(record.diagnosis_codes, frozenset({AIHA_PREFIX}))
+    if match is None:
+        return None
+    return ExcludedRecord(
+        hn=record.hn,
+        reqno=record.reqno,
+        reason="aiha",
+        detail=match,
+    )
 
 
 def check_tma(record: BloodOrderInput) -> ExcludedRecord | None:
@@ -136,7 +251,15 @@ def check_tma(record: BloodOrderInput) -> ExcludedRecord | None:
 
     The matched code is carried in ``ExcludedRecord.detail``.
     """
-    raise NotImplementedError
+    match = _first_matching_code(record.diagnosis_codes, TMA_PREFIXES)
+    if match is None:
+        return None
+    return ExcludedRecord(
+        hn=record.hn,
+        reqno=record.reqno,
+        reason="tma",
+        detail=match,
+    )
 
 
 def check_obstetric(record: BloodOrderInput) -> ExcludedRecord | None:
@@ -145,19 +268,15 @@ def check_obstetric(record: BloodOrderInput) -> ExcludedRecord | None:
     The whole ICD-10 O-chapter is out of scope per PRD §"Out of scope".
     The matched code is carried in ``ExcludedRecord.detail``.
     """
-    raise NotImplementedError
-
-
-def is_rbc_product(product: str) -> bool:
-    """True iff ``product`` is one of the allow-listed RBC products."""
-    raise NotImplementedError
-
-
-def rbc_products_in(products: tuple[str, ...]) -> tuple[RBCProduct, ...]:
-    """Return the subset of ``products`` that are allow-listed RBC products,
-    preserving input order.
-    """
-    raise NotImplementedError
+    match = _first_matching_code(record.diagnosis_codes, frozenset({OBSTETRIC_PREFIX}))
+    if match is None:
+        return None
+    return ExcludedRecord(
+        hn=record.hn,
+        reqno=record.reqno,
+        reason="obstetric",
+        detail=match,
+    )
 
 
 __all__ = (
@@ -180,4 +299,5 @@ __all__ = (
     "check_tma",
     "is_rbc_product",
     "rbc_products_in",
+    "years_between",
 )
