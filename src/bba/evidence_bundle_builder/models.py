@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from types import MappingProxyType
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 from pydantic import (
     AfterValidator,
@@ -113,7 +113,10 @@ def _deep_thaw(value: Any) -> Any:
 
 
 def _freeze_dict(value: Mapping[str, Any]) -> Mapping[str, Any]:
-    return _deep_freeze(value)
+    # _deep_freeze returns Any (its recursion fans out across many branches);
+    # the cast asserts what the function name guarantees: the top-level call
+    # on a Mapping always returns a Mapping.
+    return cast("Mapping[str, Any]", _deep_freeze(value))
 
 
 FrozenJsonDict = Annotated[dict[str, Any], AfterValidator(_freeze_dict)]
@@ -314,7 +317,10 @@ class EvidenceItem(BaseModel):
 
     @field_serializer("payload")
     def _serialize_payload(self, value: Mapping[str, Any]) -> dict[str, Any]:
-        return _deep_thaw(value)
+        # _deep_thaw returns Any (recursive across mapping/sequence/scalar);
+        # the cast asserts what the call shape guarantees: a Mapping in →
+        # a dict out.
+        return cast("dict[str, Any]", _deep_thaw(value))
 
 
 class EvidenceBundle(BaseModel):
