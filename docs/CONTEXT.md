@@ -1,16 +1,15 @@
-# CONTEXT.md — Ingest-Domain Glossary
+# CONTEXT.md — Phase 1 Module Glossary
 
-This file names the load-bearing concepts used by `src/bba/ingest/`. Future
-architecture reviews and AI agents joining the project should speak these terms
-verbatim; update entries here (instead of forking new vocabulary in code) when a
-concept changes shape.
+This file names the load-bearing concepts exposed by the `src/bba/` modules.
+Future architecture reviews and AI agents joining the project should speak
+these terms verbatim; update entries here (instead of forking new vocabulary in
+code) when a concept changes shape.
 
 Scope: Phase 1 of the KCMH RBC transfusion audit pipeline. PRD: [issue #1].
-Ingest is the foundation for tickets [#4–#7] (audit_orders, hb_lookup,
-vitals_extractor, cohort_detector). The PRD's "Implementation Decisions §1"
-defines the contract.
+Sections are added per ticket as each module merges to `main`. Currently
+covered: `#3 ingest`, `#5 hb_lookup`, `#6 vitals_extractor`, `#19 audit_store`.
 
-## Concepts
+## Ingest concepts (#3)
 
 ### HOSxP table
 
@@ -107,13 +106,165 @@ ingest module's persisted output, and a structural test
 (`TestNaiveDatetimeBan`) plus a planned ruff rule keep `datetime.now()` /
 `datetime.utcnow()` out of the source files.
 
+## Hb-lookup concepts (#5)
+
+### Hb observation
+
+A validated single Hb result from the `Lab` table: numeric in `[2, 25] g/dL`,
+test code in `{LABEXM 290095 HEMATOLOGY, LABEXM 500001 POCT}`, with a tz-aware
+collection timestamp. `bba.hb_lookup.models.HbObservation`.
+
+### Hb source
+
+Enum naming the lab assay: `HEMATOLOGY` (preferred when both available) vs
+`POCT` (fallback). Source preference is a deterministic invariant, not a
+clinical judgment. `bba.hb_lookup.models.HbSource`.
+
+### Freshness tier
+
+The age of the chosen Hb at order anchor: `fresh` (<24 h), `stale_24_72h`,
+`stale_3_7d`, `missing` (>7 d or none). `bba.hb_lookup.models.HbFreshness`.
+The tier annotates every audit row so the reviewer dashboard can reason about
+"the doctor decided with day-old data."
+
+### Delta-Hb window
+
+A `(window_hours, threshold_g_per_dL)` pair: `(6, 1.5)`, `(12, 2.0)`,
+`(24, 2.5)`. Each is checked independently; any window tripping fires the
+**delta-Hb bypass** flag. `bba.hb_lookup.models.DeltaHbWindow`.
+
+### Delta-Hb bypass
+
+A Boolean emitted in `HbLookupResult` when at least one delta-Hb window's drop
+threshold is met. Downstream `bba.deterministic_classifier` (#8) treats this
+as a hard short-circuit to `APPROPRIATE` (acute-blood-loss catch — Hb may not
+yet reflect a fast bleed).
+
+### Most-recent-before tie-break
+
+When two Hb observations share `(lvstdate, lvsttime)`, the row with the
+highest `ITEMNO` wins (later database entry, presumed corrected). Implemented
+in `bba.hb_lookup.lookup.lookup_hb`; the function never returns the
+lowest-in-window — hindsight bias is a deliberate non-feature.
+
+### Hb lookup result
+
+The unit of output: chosen `HbObservation`, its `freshness`, `source`, and the
+list of `DeltaHbWindow` evaluations. `bba.hb_lookup.models.HbLookupResult`.
+
+## Vitals-extractor concepts (#6)
+
+### Vitals note
+
+A single source row carrying `(table, tz-aware timestamp, free text)`.
+`bba.vitals_extractor.models.VitalsNote`. Built from `IPDADMPROGRESS.OBJECTIVE`
+or `IPDNRFOCUSDT` `FOCUS/ACTION/RESPONSE` columns by the ingest layer; never
+constructed from raw CSV by the extractor.
+
+### Source provenance
+
+Enum naming where the chosen vitals came from: `IPDADMPROGRESS` (preferred,
+SOAP-clean), `IPDNRFOCUSDT` (fresher, noisier), `LLM_extracted` (regex
+failed), or `none_in_window`. `bba.vitals_extractor.models.SourceProvenance`.
+Surfaced on every result so reviewers can weigh the trustworthiness of the
+reading.
+
+### Vital signs
+
+The structured tuple: `(sbp, dbp, hr, rr, bt)` in mmHg / bpm / breaths-min /
+°C. `bba.vitals_extractor.models.VitalSigns`. Any field may be `None` when
+absent from the source note.
+
+### Sanity bounds
+
+Fixed numeric ranges enforced before a value enters a `VitalSigns`:
+SBP 60–220, DBP 30–150, HR 30–200, RR 5–50, BT 30–43. Values outside the
+range are dropped and the `VitalsResult` is flagged `vitals_data_error`.
+`bba.vitals_extractor.bounds`.
+
+### ±6 h window
+
+Selection window from order anchor. Most-recent-before-anchor wins; if none
+exists in the lookback half, falls forward to the most-recent-within-+6 h and
+flags `vitals_post_order`. The `VitalsResult` carries the lag in minutes.
+
+### LLM fallback
+
+Invoked only when regex finds neither SBP nor HR in any candidate note within
+the ±6 h window. Boundary is sharp on purpose — the LLM never refines a
+regex-extracted value. `bba.vitals_extractor.models.LLMFallback`.
+
+### Vitals flag
+
+Quality annotations on a `VitalsResult`: `vitals_post_order`,
+`vitals_data_error`, and others. `bba.vitals_extractor.models.VitalsFlag`.
+Downstream consumers (#8 deterministic_classifier; #16
+evidence_bundle_builder) read these to gate rule branches and to prioritize
+human review.
+
+## Audit-store concepts (#19)
+
+### Audit row
+
+One immutable record per audited RBC order. Persisted append-only to
+`audit_results.parquet`. `bba.audit_store.models.AuditRow`. Fields enumerated
+in PRD §"Output schema"; once committed, mutations are forbidden — corrections
+are new rows tied to the same `audit_id`.
+
+### LLM call
+
+One Anthropic-API invocation against an `audit_id`. Multiple calls per
+`audit_id` are normal (retry, Sonnet→Opus escalation, sentinel re-run).
+Always written to `llm_calls.parquet` **before** the matching `AuditRow`
+lands. `bba.audit_store.models.LlmCall`.
+
+### Transactional ordering
+
+The invariant: every committed `AuditRow` has at least one matching `LlmCall`
+already on disk; the `AuditRow` write is the **commit marker** for the whole
+operation. Violations raise `TransactionalOrderingError`; reconciliation finds
+orphaned `LlmCall`s with no matching `AuditRow`.
+
+### Reconciliation
+
+Output of `AuditStore.reconcile(run_id)` — a `ReconciliationReport` listing
+orphan `LlmCall`s plus `orphan_audit_ids`. Run on startup so a process killed
+mid-batch doesn't silently lose work.
+`bba.audit_store.models.ReconciliationReport`.
+
+### Snapshot view
+
+A read-only, daily-rotated DuckDB view over `audit_results.parquet` consumed
+by the reviewer dashboard (#26). Prevents an in-flight batch write from
+producing inconsistent reads mid-query. `bba.audit_store.snapshot.SnapshotView`.
+
+### Cold storage
+
+Migration of Opus extended-thinking blocks from hot Parquet to cheaper object
+storage after 90 days. `bba.audit_store.cold_storage.migrate_cold_storage`
+returns a `ColdStorageReport`. The hot path keeps the final output and usage;
+auditability is preserved end-to-end via the cold blob's content hash.
+
+### Run-level idempotency
+
+Re-writing the same `(audit_id, run_id)` is a no-op (deterministic
+winning-attempt rule = last verifier-passed wins). `WriteResult` reports
+`wrote`, `noop`, or `escalated` so the orchestration layer (#24) can drive
+batch progress correctly.
+
+### Classification
+
+Enum of canonical audit labels: `APPROPRIATE`, `INAPPROPRIATE`,
+`NEEDS_REVIEW`, `INSUFFICIENT_EVIDENCE`, `POTENTIALLY_INAPPROPRIATE`.
+`bba.audit_store.models.Classification`. Single source of truth across the
+pipeline; downstream modules import from here, never re-define.
+
 ## Vocabulary not in this file
 
 Domain terms used in the broader project but defined elsewhere (PRD issue
 body, or future Phase-1 modules):
 
-* `audit_id`, `INAPPROPRIATE`, `NEEDS_REVIEW`, `INSUFFICIENT_EVIDENCE`,
-  `cohort_threshold`, `delta-Hb bypass`, `MTP`, `T1.MTP`, `quote_grounder`,
+* `audit_id`, `cohort_threshold`, `MTP`, `T1.MTP`, `quote_grounder`,
   `hallucination_suspect`, etc. — see the PRD (issue #1) for definitions.
 
 Add a concept here when a module exposes it as part of its interface. Update
