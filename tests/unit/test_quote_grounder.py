@@ -20,6 +20,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from pydantic import ValidationError
 
+from bba.quote_grounder.verifier import _lab_grounded
 from bba.quote_grounder import (
     MIN_QUOTE_LENGTH,
     Citation,
@@ -632,22 +633,26 @@ class TestAdversarialNumericParaphrase:
         assert verdict.passed is False
         assert verdict.reason == VerdictReason.LAB_TUPLE_MISMATCH
 
-    def test_quote_lab_number_must_also_be_in_source(self) -> None:
-        # The "extract from both sides" defense: if the verbatim quote
-        # itself contains a (analyte, value, unit) triple, that triple
-        # MUST also appear in the source. Layer 2 ordinarily auto-satisfies
-        # this (the quote is a substring of the source), but the explicit
-        # check is the defense-in-depth gate against a future change that
-        # loosens contiguous-substring enforcement. Here we provoke the
-        # check directly via a source with no extractable triples — the
-        # quote-side triple would have no source match if Layer 2 ever
-        # broke; today the test exercises the parser symmetry.
-        source = "Patient stable, all labs within normal limits."
-        # The quote is contiguous + unique in source; carries no triple.
-        quote = "Patient stable, all labs within normal limits"
-        assert len(quote) >= MIN_QUOTE_LENGTH
-        verdict = verify_citation(_cit(quote, "E1"), (_src("E1", source),))
-        assert verdict.passed is True
+    def test_quote_triple_subset_defense_in_depth(self) -> None:
+        # The "extract from both sides" defense lives at verifier._lab_grounded:
+        # every triple parseable from the QUOTE must also be parseable from
+        # the source. Layer 2 ordinarily auto-satisfies this (the quote is a
+        # substring of the source), making the branch structurally
+        # unreachable from the public verifier API. Asserting on the helper
+        # directly is the only way to exercise the gate; without this test,
+        # a regression that drops the subset check would not fail any
+        # existing assertion.
+        agreed = "Patient noted Hb 8.3 g/dL on admission today"
+        assert _lab_grounded(None, agreed, agreed) is True
+        # Asymmetric case: a hypothetical Layer-2-bypassing caller passes a
+        # quote with (hb, 7.0, g/dl) and a source with (hb, 8.3, g/dl). The
+        # helper must reject because the quote's triple is not in the
+        # source's triples.
+        quote_with_unmatched = "Patient noted Hb 7.0 g/dL on admission today"
+        source_with_different = "Patient noted Hb 8.3 g/dL on admission today"
+        assert (
+            _lab_grounded(None, quote_with_unmatched, source_with_different) is False
+        )
 
 
 class TestAdversarialCrossSourceAttribution:
@@ -794,6 +799,14 @@ class TestVerifierAsClassifierOverLabeledSet:
                 "Cardiology: stable angina, no acute coronary syndrome. "
                 "Hb 10.2 g/dL on day 1, repeat 8.7 g/dL on day 3.",
             ),
+            _src(
+                "E3",
+                # Repeats a 50-char phrase verbatim → NOT_UNIQUE failure mode.
+                "The patient remained hemodynamically stable overnight. "
+                "Repeat assessment 6 hours later: "
+                "The patient remained hemodynamically stable overnight. "
+                "Discharge planning in progress.",
+            ),
         )
 
     def _labeled_cases(
@@ -884,6 +897,13 @@ class TestVerifierAsClassifierOverLabeledSet:
             ),  # unknown analyte
             (_cit("hematuria with hemodynamic stability today", "E1"), False),  # absent
             (_cit("PRBC", "E1"), False),  # too short trivial
+            (
+                _cit(
+                    "The patient remained hemodynamically stable overnight",
+                    "E3",
+                ),
+                False,
+            ),  # NOT_UNIQUE — phrase repeats in E3
         ]
 
     def test_confusion_matrix_matches_expected_counts(self) -> None:
@@ -902,21 +922,31 @@ class TestVerifierAsClassifierOverLabeledSet:
         assert cm.false_negative == 0
 
     def test_labeled_set_covers_every_failure_reason(self) -> None:
-        # The set must exercise EVERY non-PASS VerdictReason so the
-        # downstream eval harness sees the full label distribution.
+        # The mini-set exercises every VerdictReason that the verifier can
+        # produce WITHOUT an NLI gate. Layer 7 (NLI_NOT_ENTAILED) is opt-in
+        # per PRD §9 ("if unavailable, omit and accept the false-positive
+        # risk"), so the eval harness's primary classifier evaluation is
+        # graded without it; a separate gate-on test elsewhere covers
+        # Layer 7. The other six rejection reasons must all be represented
+        # here so the downstream label distribution is complete.
         sources = self._bundle()
         cases = self._labeled_cases(sources)
-        reasons = {
-            verify_citation(c, sources).reason for c, _ in cases
+        reasons = {verify_citation(c, sources).reason for c, _ in cases}
+        expected_when_no_nli = {
+            VerdictReason.PASS,
+            VerdictReason.EMPTY_QUOTE,
+            VerdictReason.CITED_ID_NOT_FOUND,
+            VerdictReason.TOO_SHORT,
+            VerdictReason.NO_CONTIGUOUS_MATCH,
+            VerdictReason.NOT_UNIQUE,
+            VerdictReason.LAB_TUPLE_MISMATCH,
         }
-        # PASS plus the five distinct rejection modes the mini-set covers
-        # (Layer 7 NLI is opt-in and not invoked here).
-        assert VerdictReason.PASS in reasons
-        assert VerdictReason.EMPTY_QUOTE in reasons
-        assert VerdictReason.CITED_ID_NOT_FOUND in reasons
-        assert VerdictReason.TOO_SHORT in reasons
-        assert VerdictReason.NO_CONTIGUOUS_MATCH in reasons
-        assert VerdictReason.LAB_TUPLE_MISMATCH in reasons
+        assert expected_when_no_nli <= reasons
+        # NLI_NOT_ENTAILED is intentionally absent — it requires a gate
+        # callable that this labeled-set test does not supply (Layer 7 is
+        # opt-in). The TestLayer7NLIEntailmentGate suite covers the gate
+        # contract independently.
+        assert VerdictReason.NLI_NOT_ENTAILED not in reasons
 
 
 # =============================================================================

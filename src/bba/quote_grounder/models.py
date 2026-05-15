@@ -68,11 +68,13 @@ class LabTuple(BaseModel):
 class Citation(BaseModel):
     """One LLM-output citation: a quote attributed to a source by id.
 
-    ``lab_tuple`` is populated for lab-value citations only. When present,
-    Layer 6 runs; when absent, the citation is treated as a pure textual
-    grounding claim and Layer 6 is skipped. The verifier never silently
-    falls back to Layer 6 from a free-text quote — the LLM must opt in by
-    emitting the structured tuple.
+    ``lab_tuple`` is the structured paraphrase the LLM emits for lab-value
+    citations. The verifier ALWAYS evaluates Layer 6: it extracts triples
+    from the quote text and requires every quote-triple to be present in
+    the cited source. When ``lab_tuple`` is supplied, it must additionally
+    match a triple parsed from the QUOTE itself (after analyte aliasing +
+    unit canonicalization) — guarding against the hallucination "quote one
+    Hb value but emit a different Hb value in the structured tuple".
     """
 
     model_config = ConfigDict(frozen=True)
