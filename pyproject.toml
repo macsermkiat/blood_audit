@@ -5,10 +5,14 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "alembic>=1.14",
     "duckdb>=1.5.2",
     "pandera[pandas]>=0.31.1",
+    "psycopg-pool>=3.2",
+    "psycopg[binary]>=3.2",
     "pyarrow>=24.0.0",
     "pydantic>=2.13.4",
+    "sqlalchemy>=2.0",
 ]
 
 [project.scripts]
@@ -31,6 +35,7 @@ dev = [
     "pytest>=9.0.3",
     "pytest-cov>=7.1.0",
     "ruff>=0.15.13",
+    "testcontainers[postgres]>=4",
 ]
 
 [tool.pytest.ini_options]

@@ -34,6 +34,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
+import psycopg
 import pytest
 from pydantic import ValidationError
 
@@ -100,20 +101,45 @@ def _postgres_container() -> Iterator[object]:
         yield pg
 
 
+def _reset_database(config: ReviewActionsConfig) -> None:
+    """Drop and recreate the ``public`` schema so each test starts clean.
+
+    The session-scoped Postgres container is shared; without a reset, prior
+    tests' rows / migration head leak into the next test and corrupt
+    ordering / freshness assertions. ``DROP SCHEMA ... CASCADE`` removes
+    the migration's tables, sequences, triggers, and the alembic_version
+    table in one shot. The application role survives across the drop and
+    the migration's idempotent DO-block handles the re-run.
+    """
+    with psycopg.connect(config.dsn, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("DROP SCHEMA IF EXISTS public CASCADE")
+            cur.execute("CREATE SCHEMA public")
+            cur.execute("GRANT ALL ON SCHEMA public TO PUBLIC")
+
+
 @pytest.fixture
 def postgres_config(_postgres_container: object) -> ReviewActionsConfig:
-    """A ReviewActionsConfig pointing at the live testcontainers Postgres."""
+    """A ReviewActionsConfig pointing at a freshly-reset testcontainers
+    Postgres database.
+
+    The reset runs per-test so each test sees a clean schema (no rows from
+    prior tests, no alembic_version row, no tables). The reset is fast
+    (sub-100ms) vs spinning up a new container per test (several seconds).
+    """
     dsn = _postgres_container.get_connection_url()  # type: ignore[attr-defined]
-    return ReviewActionsConfig(dsn=dsn)
+    config = ReviewActionsConfig(dsn=dsn)
+    _reset_database(config)
+    return config
 
 
 @pytest.fixture
 def migrated_store(postgres_config: ReviewActionsConfig) -> Iterator[ReviewActionsStore]:
     """A live store against a fully-migrated Postgres database.
 
-    Applies all alembic migrations against the container before yielding the
-    store. Used by tests that exercise the live append-only invariant /
-    concurrent writes.
+    Applies all alembic migrations against the freshly-reset container
+    before yielding the store. Used by tests that exercise the live
+    append-only invariant / concurrent writes / read path.
     """
     apply_migrations(postgres_config)
     with ReviewActionsStore(postgres_config) as store:
@@ -454,33 +480,73 @@ class TestAppendOnlyInvariantDBLevel:
             _raw_truncate_table(migrated_store, "review_actions")
 
 
-# Test helpers — the raw-SQL implementations land in GREEN as part of the
-# store. Each raises NotImplementedError in RED so the test fails for the
-# right reason (no impl) rather than failing at import-time.
+# Test helpers — raw-SQL bypass of the store's safe API to verify the
+# trigger guards actually fire. Each opens a fresh psycopg connection
+# (bypassing the store's pool) so it can issue UPDATE/DELETE/TRUNCATE
+# directly. The store's translation layer catches Postgres P0001 from the
+# trigger and re-raises :class:`AppendOnlyViolationError`; here we
+# replicate that translation at the call site so the tests can be
+# written in terms of the typed exception.
+
+
+def _execute_raw(
+    store: ReviewActionsStore, statement: str, params: object = None
+) -> None:
+    """Open a fresh connection (bypassing the store's pool) and execute
+    ``statement``. Translates the trigger's SQLSTATE P0001 raise into
+    :class:`AppendOnlyViolationError`.
+    """
+    try:
+        with psycopg.connect(store.config.dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(statement, params or ())
+    except psycopg.errors.RaiseException as exc:
+        message = str(exc.diag.message_primary) if exc.diag else str(exc)
+        if exc.sqlstate == "P0001" and "append_only_violation" in message:
+            raise AppendOnlyViolationError(message) from exc
+        raise
 
 
 def _raw_update_action(
     store: ReviewActionsStore, action_id: int, new_action: str
 ) -> None:
-    raise NotImplementedError
+    _execute_raw(
+        store,
+        "UPDATE review_actions SET action = %s WHERE action_id = %s",
+        (new_action, action_id),
+    )
 
 
 def _raw_delete_action(store: ReviewActionsStore, action_id: int) -> None:
-    raise NotImplementedError
+    _execute_raw(
+        store,
+        "DELETE FROM review_actions WHERE action_id = %s",
+        (action_id,),
+    )
 
 
 def _raw_update_phi_access(
     store: ReviewActionsStore, access_id: int, new_hn_hash: str
 ) -> None:
-    raise NotImplementedError
+    _execute_raw(
+        store,
+        "UPDATE phi_access_log SET hn_hash = %s WHERE access_id = %s",
+        (new_hn_hash, access_id),
+    )
 
 
 def _raw_delete_phi_access(store: ReviewActionsStore, access_id: int) -> None:
-    raise NotImplementedError
+    _execute_raw(
+        store,
+        "DELETE FROM phi_access_log WHERE access_id = %s",
+        (access_id,),
+    )
 
 
 def _raw_truncate_table(store: ReviewActionsStore, table_name: str) -> None:
-    raise NotImplementedError
+    # Table name is from the test code, never from user input.
+    assert table_name in {"review_actions", "phi_access_log"}
+    _execute_raw(store, f"TRUNCATE TABLE {table_name}")
 
 
 # =============================================================================

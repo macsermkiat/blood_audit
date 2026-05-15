@@ -224,27 +224,66 @@ class PhiAccessLog(BaseModel):
     accessed_at: UTCDatetime
 
 
+def _normalize_dsn(dsn: str) -> str:
+    """Normalize a Postgres DSN to libpq form (``postgresql://...``).
+
+    Accepts both libpq URIs (``postgresql://...``, ``postgres://...``) and
+    SQLAlchemy dialect-prefixed forms (``postgresql+psycopg2://...``,
+    ``postgresql+psycopg://...``). The dialect prefix is stripped because
+    psycopg's connection pool wants a libpq URI; the migrator re-adds
+    ``+psycopg`` when handing off to SQLAlchemy / alembic.
+
+    Why this matters: ``testcontainers.postgres.PostgresContainer`` returns
+    a SQLAlchemy URL by default. Centralizing the normalization here means
+    callers (the test fixture, env-var resolution, dashboard bootstrap) all
+    pass through one canonical form.
+    """
+    if dsn.startswith(("postgresql+psycopg2://", "postgresql+psycopg://")):
+        return "postgresql://" + dsn.split("://", 1)[1]
+    if dsn.startswith(("postgresql://", "postgres://")):
+        return dsn
+    raise ValueError(
+        f"unsupported DSN scheme: {dsn!r}; expected postgresql:// or "
+        f"postgresql+psycopg://"
+    )
+
+
+LibpqDsn = Annotated[str, AfterValidator(_normalize_dsn)]
+"""A Postgres DSN normalized to libpq form."""
+
+
 class ReviewActionsConfig(BaseModel):
     """Postgres connection configuration.
 
-    ``dsn`` is a libpq-style URI: ``postgresql://user:pass@host:port/db``.
-    Secrets MUST NOT be hardcoded; the caller resolves credentials from env
-    vars / secret manager and constructs the config object.
+    ``dsn`` is stored in libpq form (``postgresql://user:pass@host:port/db``)
+    regardless of the input shape — see :func:`_normalize_dsn`. Secrets
+    MUST NOT be hardcoded; the caller resolves credentials from env vars or
+    a secret manager and constructs the config object.
 
     ``app_name`` is reported back via Postgres ``application_name`` so the
-    DBA can correlate connections to the audit pipeline. Defaults to the
-    canonical module name.
+    DBA can correlate connections to the audit pipeline.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    dsn: str
+    dsn: LibpqDsn
     app_name: str = "bba.review_actions"
+
+    @property
+    def sqlalchemy_dsn(self) -> str:
+        """The DSN as a SQLAlchemy URL using the psycopg 3 driver.
+
+        Alembic's env.py uses ``engine_from_config(prefix='sqlalchemy.')``
+        which expects a dialect-prefixed URL. The store consumes the plain
+        libpq form (``self.dsn``); the migrator consumes this property.
+        """
+        return self.dsn.replace("postgresql://", "postgresql+psycopg://", 1)
 
 
 __all__: Sequence[str] = (
     "ACTION_KINDS",
     "ActionKind",
+    "LibpqDsn",
     "NonEmptyStr",
     "PhiAccessInput",
     "PhiAccessLog",
