@@ -817,14 +817,50 @@ class TestRedactionResultValidation:
         }
 
     def test_valid_result_constructs(self) -> None:
-        r = RedactionResult(**self._valid_result_kwargs())  # type: ignore[arg-type]
+        r = RedactionResult(**self._valid_result_kwargs())
         assert r.redactor_version.version == "0.1.0"
 
     def test_wrong_length_hash_rejected(self) -> None:
         kwargs = self._valid_result_kwargs()
         kwargs["redaction_hash"] = "abc123"
         with pytest.raises(ValidationError):
-            RedactionResult(**kwargs)  # type: ignore[arg-type]
+            RedactionResult(**kwargs)
+
+
+# =============================================================================
+# QuasiIdentifiers sex-code validation (codex review round 1, AC#4)
+# =============================================================================
+
+
+class TestQuasiIdentifiersSexValidation:
+    """Sex codes outside the canonical set must be rejected at construction.
+
+    Otherwise k-anonymity grouping would silently fragment when the same
+    population's sex values arrive in different free-form spellings
+    (``"Male"`` vs ``"M"`` vs ``"male"``).
+    """
+
+    def test_sex_M_accepted(self) -> None:
+        assert _qi(sex="M").sex == "M"
+
+    def test_sex_F_accepted(self) -> None:
+        assert _qi(sex="F").sex == "F"
+
+    def test_sex_U_accepted(self) -> None:
+        # ``U`` (unknown) covers HOSxP exports where sex is missing.
+        assert _qi(sex="U").sex == "U"
+
+    def test_sex_lowercase_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            _qi(sex="m")
+
+    def test_sex_full_word_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            _qi(sex="Male")
+
+    def test_sex_empty_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            _qi(sex="")
 
 
 # =============================================================================
@@ -929,6 +965,92 @@ class TestRedactBundleEndToEnd:
         assert "2026-05-10" not in result.notes[0].redacted_text
         assert "Day 0" in result.notes[0].redacted_text
 
+    def test_backend_date_span_shifted_to_offset(self) -> None:
+        # The backend tagged a date PHI as a span and replaced it with
+        # the generic [DATE] placeholder; the wrapper rewrites the
+        # placeholder to a Δ-day offset using the span's original_text.
+        # This is the canonical backend-redacted-date path (the regex
+        # path is the fallback for backend misses).
+        backend = _stub_backend()
+        backend.register(
+            "Admitted 2026-05-13 for low Hb",
+            redacted="Admitted [DATE] for low Hb",
+            spans=(
+                RedactionSpan(
+                    start=9,
+                    end=19,
+                    entity_type="DATE",
+                    original_text="2026-05-13",
+                ),
+            ),
+        )
+        req = _request(
+            notes=(
+                NoteInput(note_id="E1", text="Admitted 2026-05-13 for low Hb"),
+            ),
+            admission_date=date(2026, 5, 10),
+        )
+        result = redact_bundle(
+            req, backend=backend, k_gate=lambda qi: 10
+        )
+        # Backend-tagged [DATE] becomes Day +3 (May 13 vs admission May 10).
+        assert "[DATE]" not in result.notes[0].redacted_text
+        assert "Day +3" in result.notes[0].redacted_text
+
+    def test_backend_date_span_unparseable_keeps_placeholder(self) -> None:
+        # If the backend tagged a date span whose original_text is not
+        # in a wrapper-recognized format (e.g. "May 13, 2026"), the
+        # placeholder stays as [DATE] — fail-open so the PHI redaction
+        # itself isn't compromised by the wrapper's lack of a Δ-day
+        # annotation.
+        backend = _stub_backend()
+        backend.register(
+            "Seen on May 13, 2026",
+            redacted="Seen on [DATE]",
+            spans=(
+                RedactionSpan(
+                    start=8,
+                    end=20,
+                    entity_type="DATE",
+                    original_text="May 13, 2026",
+                ),
+            ),
+        )
+        req = _request(
+            notes=(NoteInput(note_id="E1", text="Seen on May 13, 2026"),),
+            admission_date=date(2026, 5, 10),
+        )
+        result = redact_bundle(
+            req, backend=backend, k_gate=lambda qi: 10
+        )
+        assert "[DATE]" in result.notes[0].redacted_text
+
+    def test_backend_date_span_count_mismatch_raises(self) -> None:
+        # Contract: count of [DATE] placeholders in redacted text must
+        # equal the count of DATE-typed spans. A mismatch is a backend
+        # contract violation; raise BackendRedactionError so the audit
+        # pipeline fails loud.
+        backend = _stub_backend()
+        backend.register(
+            "Seen 2026-05-10 and 2026-05-11",
+            redacted="Seen [DATE] and [DATE]",
+            spans=(
+                RedactionSpan(
+                    start=5,
+                    end=15,
+                    entity_type="DATE",
+                    original_text="2026-05-10",
+                ),
+            ),
+        )
+        req = _request(
+            notes=(
+                NoteInput(note_id="E1", text="Seen 2026-05-10 and 2026-05-11"),
+            ),
+        )
+        with pytest.raises(BackendRedactionError):
+            redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
+
     def test_person_role_upgraded_in_redacted_text(self) -> None:
         backend = _stub_backend()
         backend.register(
@@ -963,7 +1085,7 @@ class TestRedactBundleEndToEnd:
         with pytest.raises(BackendRedactionError):
             redact_bundle(
                 req,
-                backend=_BoomBackend(),  # type: ignore[arg-type]
+                backend=_BoomBackend(),
                 k_gate=lambda qi: 10,
             )
 
@@ -1114,6 +1236,105 @@ def test_classifier_matches_hand_labels(
     result = classify_role_by_cues(note_text)
     assert result is gold_role, (
         f"corpus entry {note_text!r} classified as {result!r}, expected {gold_role!r}"
+    )
+
+
+def _build_corpus_backend_response(
+    note_text: str,
+) -> tuple[str, tuple[RedactionSpan, ...]]:
+    """Stub backend behavior for the corpus end-to-end test.
+
+    Every corpus entry contains a single name-like token (the second
+    whitespace-delimited word for ATTENDING/NURSE/PATIENT/FAMILY cases,
+    and no name at all for the no-cue cases). Build the stub backend's
+    redacted-text + spans by replacing that token with the generic
+    ``[PERSON]`` placeholder so the wrapper's role-upgrade path is
+    exercised end-to-end on the corpus.
+
+    For no-cue entries (no name to redact), the original text is
+    returned unchanged with no spans.
+    """
+    tokens = note_text.split()
+    person_idx = _find_person_token_index(note_text, tokens)
+    if person_idx is None:
+        return note_text, ()
+
+    name_token = tokens[person_idx]
+    start = note_text.index(name_token)
+    end = start + len(name_token)
+    redacted = note_text[:start] + RoleToken.PERSON.value + note_text[end:]
+    span = RedactionSpan(
+        start=start, end=end, entity_type="PERSON", original_text=name_token
+    )
+    return redacted, (span,)
+
+
+def _find_person_token_index(
+    note_text: str, tokens: list[str]
+) -> int | None:
+    """Locate the proper-name token in a corpus entry, or None.
+
+    Heuristic: the first capitalized ASCII-alpha token whose lowercase
+    form is NOT one of the cue lexicons. Returns ``None`` when no such
+    token exists (no-cue entries, or all-Thai entries where the name
+    follows a Thai cue but isn't ASCII-capitalized — those are handled
+    by the same approach, picking the first ASCII-capitalized word).
+    """
+    cue_words = {
+        c.rstrip(".").lower()
+        for cues in (ATTENDING_CUES, NURSE_CUES, PATIENT_CUES, FAMILY_CUES)
+        for c in cues
+    }
+    cue_words.update({"member"})  # 'Family member ___' guard
+    for i, t in enumerate(tokens):
+        stripped = t.rstrip(".,")
+        if not stripped or not stripped[0].isascii():
+            continue
+        if not stripped[0].isupper():
+            continue
+        if stripped.lower() in cue_words:
+            continue
+        return i
+    return None
+
+
+@pytest.mark.parametrize("note_text,gold_role", _HAND_LABELED_CORPUS)
+def test_redact_bundle_emits_correct_role_token_on_corpus(
+    note_text: str, gold_role: RoleToken | None
+) -> None:
+    """End-to-end corpus test: redact_bundle places the gold role token.
+
+    Pairs with :func:`test_classifier_matches_hand_labels` (which tests
+    the classifier in isolation). This test wires the corpus through
+    the full wrapper — backend stub redacts the name, the wrapper
+    upgrades the ``[PERSON]`` token via the default classifier, and the
+    resulting ``RedactedNote.redacted_text`` is asserted to contain the
+    gold role token.
+
+    Corpus entries with no name (no-cue cases) skip the assertion since
+    no upgrade path is exercised — the classifier-isolation test already
+    covers them.
+    """
+    redacted, spans = _build_corpus_backend_response(note_text)
+    if not spans:
+        # No name to redact → wrapper has nothing to upgrade. The
+        # classifier-isolation test already covers this branch.
+        return
+
+    backend = _stub_backend()
+    backend.register(note_text, redacted=redacted, spans=spans)
+    req = _request(
+        notes=(NoteInput(note_id="E1", text=note_text),),
+    )
+    result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
+    rendered = result.notes[0].redacted_text
+
+    expected_token = (
+        gold_role.value if gold_role is not None else RoleToken.PERSON.value
+    )
+    assert expected_token in rendered, (
+        f"corpus entry {note_text!r}: expected token {expected_token!r} in "
+        f"rendered text {rendered!r}"
     )
 
 

@@ -183,10 +183,27 @@ class KAnonymityGate(Protocol):
 # =============================================================================
 
 
-_SEX_LITERAL = {"M", "F", "U"}
+_SEX_LITERAL: frozenset[str] = frozenset({"M", "F", "U"})
 """Allowed sex codes. ``U`` (unknown) is required because HOSxP exports
 include records where sex is missing or unspecified — rejecting them at
 the redactor boundary would silently drop audit-eligible orders."""
+
+
+def _ensure_sex_literal(value: str) -> str:
+    """Reject sex codes outside :data:`_SEX_LITERAL`.
+
+    Free-form would silently fragment k-anonymity: ``"Male"`` and ``"M"``
+    would map to two distinct groups, halving k for the same population.
+    """
+    if value not in _SEX_LITERAL:
+        raise ValueError(
+            f"sex must be one of {sorted(_SEX_LITERAL)} (got {value!r}); "
+            "deviation breaks k-anonymity group equality"
+        )
+    return value
+
+
+SexCode = Annotated[str, AfterValidator(_ensure_sex_literal)]
 
 
 def _ensure_admission_month(value: str) -> str:
@@ -257,7 +274,7 @@ class QuasiIdentifiers(BaseModel):
     ward: str = Field(min_length=1)
     icd_3char: str = Field(min_length=3, max_length=3)
     age_band: AgeBand
-    sex: str
+    sex: SexCode
     admission_month: AdmissionMonth
 
     def __hash__(self) -> int:
@@ -500,5 +517,6 @@ __all__: Sequence[str] = (
     "RoleToken",
     "SEMANTIC_PERSON_THRESHOLD",
     "SEMANTIC_WINDOW_CHARS",
+    "SexCode",
     "UTCDatetime",
 )

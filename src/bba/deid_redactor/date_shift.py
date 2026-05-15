@@ -11,17 +11,26 @@ Determinism contract: same input text + same ``admission_date`` →
 byte-identical output. The bundle-hash stability AC depends on this —
 two runs over the same source must produce the same redacted bytes.
 
-Supported date formats (regexes in :data:`DATE_PATTERNS`):
+Supported literal-date formats (regexes in :data:`DATE_PATTERNS`):
 
 * ``YYYY-MM-DD`` — ISO 8601 calendar date
 * ``YYYY/MM/DD`` — common ISO variant
 * ``DD/MM/YYYY`` — Thai/EU convention
 * ``DD-MM-YYYY`` — Thai/EU variant
 
+All four formats require a four-digit year and zero-padded day/month so
+ambiguous strings like ``"5/10/26"`` (two-digit year, unpadded) are
+NOT matched — those land in the upstream ingest layer's
+``parse_warning`` channel rather than risk a wrong-century shift here.
 Unrecognized formats (Buddhist-year prefix, decimal hour fragments, etc.)
-are left untouched — the strict ingest-time parser
+are likewise left untouched — the strict ingest-time parser
 (:mod:`bba.ingest.time_parser`) has already routed those records to a
 ``parse_warning`` column upstream.
+
+Backend-tagged date spans (``entity_type == "DATE"``) carrying a
+``YYYY-MM-DD`` ``original_text`` are converted by
+:func:`shift_date_spans_in_text` — the in-text-regex path only catches
+literal dates the backend missed.
 """
 
 from __future__ import annotations
@@ -29,6 +38,9 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from datetime import date
+
+from bba.deid_redactor.exceptions import BackendRedactionError
+from bba.deid_redactor.models import RedactionSpan, RoleToken
 
 
 DATE_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -131,3 +143,77 @@ def shift_dates_in_text(text: str, *, admission_date: date) -> str:
         cursor = m.end
     parts.append(text[cursor:])
     return "".join(parts)
+
+
+_DATE_PLACEHOLDER: str = RoleToken.DATE.value
+
+
+def shift_date_spans_in_text(
+    redacted_text: str,
+    *,
+    spans: Sequence[RedactionSpan],
+    admission_date: date,
+) -> str:
+    """Replace ``[DATE]`` placeholders with their per-span ``Day N`` offsets.
+
+    Iterates the spans whose ``entity_type == "DATE"`` in document order
+    and substitutes the next ``[DATE]`` placeholder in ``redacted_text``
+    with the offset form derived from the span's ``original_text``.
+
+    Per-span behavior:
+
+    * If ``span.original_text`` parses as one of the recognized formats
+      (:data:`DATE_PATTERNS`), the placeholder becomes
+      :func:`format_offset` of the day delta from ``admission_date``.
+    * If ``span.original_text`` is empty or unparseable, the placeholder
+      is left as ``[DATE]`` (the backend tagged a date PHI but did not
+      surface a parseable form — typically because the backend's own
+      regex used a format the wrapper does not recognize). This is the
+      safe fail-open behavior: a non-rewritten ``[DATE]`` is still
+      redacted PHI, just without the Δ-day annotation.
+
+    Invariant: the count of ``[DATE]`` placeholders in ``redacted_text``
+    must equal the count of DATE-typed entries in ``spans``. A mismatch
+    raises :class:`BackendRedactionError` (mirrors the contract on
+    :func:`bba.deid_redactor.roles.upgrade_person_tokens`).
+    """
+    date_spans = tuple(s for s in spans if s.entity_type == "DATE")
+    placeholder_count = redacted_text.count(_DATE_PLACEHOLDER)
+    if placeholder_count != len(date_spans):
+        raise BackendRedactionError(
+            "DATE placeholder count mismatch: redacted_text has "
+            f"{placeholder_count} '[DATE]' tokens but spans has "
+            f"{len(date_spans)} DATE entries"
+        )
+    if not date_spans:
+        return redacted_text
+
+    parts: list[str] = []
+    cursor = 0
+    placeholder_len = len(_DATE_PLACEHOLDER)
+
+    for span in date_spans:
+        idx = redacted_text.find(_DATE_PLACEHOLDER, cursor)
+        if idx == -1:  # pragma: no cover - guarded by placeholder count check
+            break
+        parts.append(redacted_text[cursor:idx])
+        parts.append(_format_date_span(span, admission_date=admission_date))
+        cursor = idx + placeholder_len
+
+    parts.append(redacted_text[cursor:])
+    return "".join(parts)
+
+
+def _format_date_span(span: RedactionSpan, *, admission_date: date) -> str:
+    """Render one DATE span as ``Day N`` or fall back to the placeholder.
+
+    Unparseable spans (empty ``original_text`` or non-canonical format)
+    keep the generic ``[DATE]`` placeholder so the audit chain still
+    carries a redacted token rather than leaking the raw original.
+    """
+    if not span.original_text:
+        return _DATE_PLACEHOLDER
+    matches = parse_dates(span.original_text)
+    if not matches:
+        return _DATE_PLACEHOLDER
+    return format_offset(days=(matches[0].parsed - admission_date).days)

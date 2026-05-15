@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from bba.deid_redactor.age import apply_age_cap
 from bba.deid_redactor.canonical import build_envelope, compute_redaction_hash
-from bba.deid_redactor.date_shift import shift_dates_in_text
+from bba.deid_redactor.date_shift import shift_date_spans_in_text, shift_dates_in_text
 from bba.deid_redactor.exceptions import BackendRedactionError
 from bba.deid_redactor.k_anonymity import k_anonymity_passed
 from bba.deid_redactor.models import (
@@ -156,9 +156,18 @@ def _redact_one_note(
 
     # admission_date arrives as ``date`` (Pydantic ``date`` field), but
     # the function signature uses ``object`` to dodge a circular import
-    # at type-check time. The shift_dates_in_text contract requires
-    # ``date``; the model validator already guarantees it.
+    # at type-check time. The shift contracts require ``date``; the model
+    # validator already guarantees it.
     from datetime import date as _date
 
     assert isinstance(admission_date, _date)  # nosec - boundary contract
-    return shift_dates_in_text(role_upgraded, admission_date=admission_date)
+
+    # Order: convert backend-tagged DATE placeholders first (one per
+    # DATE span, in document order), then catch any remaining literal
+    # dates the backend missed via regex over the final text.
+    date_span_shifted = shift_date_spans_in_text(
+        role_upgraded,
+        spans=backend_result.spans,
+        admission_date=admission_date,
+    )
+    return shift_dates_in_text(date_span_shifted, admission_date=admission_date)

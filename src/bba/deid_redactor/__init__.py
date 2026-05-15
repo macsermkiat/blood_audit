@@ -27,6 +27,7 @@ from bba.deid_redactor.date_shift import (
     DateMatch,
     format_offset,
     parse_dates,
+    shift_date_spans_in_text,
     shift_dates_in_text,
 )
 from bba.deid_redactor.exceptions import (
@@ -116,6 +117,7 @@ __all__ = [
     "k_anonymity_passed",
     "parse_dates",
     "redact_bundle",
+    "shift_date_spans_in_text",
     "shift_dates_in_text",
     "upgrade_person_tokens",
 ]
