@@ -15,28 +15,58 @@ duplicate logic and risk drift between the two modules.
 
 from __future__ import annotations
 
-from bba.eval_harness.models import ClassifierMetrics
+from bba.eval_harness.intervals import wilson_ci
+from bba.eval_harness.models import ClassifierMetrics, WilsonInterval
 from bba.quote_grounder.models import ConfusionMatrix
+
+
+def _safe_wilson(successes: int, trials: int, *, confidence: float) -> WilsonInterval:
+    """Wilson CI that collapses to a [0, 0] degenerate when trials == 0.
+
+    The all-zero confusion matrix and the no-positive matrix produce
+    rates with no denominator. Rather than raising, the harness returns a
+    degenerate interval so a fresh-pipeline run against an empty labeled
+    set still produces a valid (if uninformative) report row.
+    """
+    if trials == 0:
+        return WilsonInterval(
+            point=0.0, lower=0.0, upper=0.0, confidence=confidence
+        )
+    return wilson_ci(successes, trials, confidence=confidence)
 
 
 def evaluate_confusion_matrix(
     cm: ConfusionMatrix, *, confidence: float = 0.95
 ) -> ClassifierMetrics:
-    """Convert a 2x2 ConfusionMatrix into classifier metrics with Wilson CIs.
+    """Convert a 2x2 ConfusionMatrix into classifier metrics with Wilson CIs."""
+    tp = cm.true_positive
+    tn = cm.true_negative
+    fp = cm.false_positive
+    fn = cm.false_negative
 
-    Edge cases the contract pins:
+    pos = tp + fn  # actual positives
+    neg = tn + fp  # actual negatives
+    pred_pos = tp + fp  # predicted positives
+    pred_neg = tn + fn  # predicted negatives
+    total = pos + neg
 
-    * ``cm.true_positive + cm.false_negative == 0`` (no positive examples):
-      ``sensitivity`` and ``f1`` are reported as point ``0.0`` with a
-      Wilson CI degenerated at ``[0, 0]``. No ZeroDivisionError.
-    * Similarly ``cm.true_negative + cm.false_positive == 0`` collapses
-      specificity to ``[0, 0]``; ``cm.true_positive + cm.false_positive == 0``
-      collapses PPV; ``cm.true_negative + cm.false_negative == 0`` collapses
-      NPV.
-    * All-zero matrix: every rate is ``[0, 0]``, ``f1 = 0.0``. No exception.
+    sensitivity = _safe_wilson(tp, pos, confidence=confidence)
+    specificity = _safe_wilson(tn, neg, confidence=confidence)
+    ppv = _safe_wilson(tp, pred_pos, confidence=confidence)
+    npv = _safe_wilson(tn, pred_neg, confidence=confidence)
+    accuracy = _safe_wilson(tp + tn, total, confidence=confidence)
 
-    Loud failure is reserved for *structural* problems (e.g., a negative
-    count). The graceful zero-rate handling makes a fresh-pipeline run
-    against an empty labeled set produce a valid (if uninformative) report.
-    """
-    raise NotImplementedError("eval_harness.classifier: RED phase, see issue #20")
+    sens_p = sensitivity.point
+    ppv_p = ppv.point
+    f1 = (
+        (2.0 * ppv_p * sens_p) / (ppv_p + sens_p) if (ppv_p + sens_p) > 0 else 0.0
+    )
+
+    return ClassifierMetrics(
+        accuracy=accuracy,
+        sensitivity=sensitivity,
+        specificity=specificity,
+        ppv=ppv,
+        npv=npv,
+        f1=f1,
+    )

@@ -57,7 +57,6 @@ def _draw_stratum(
         # weight degenerates to 1.0 (or treated as the trivial case by the
         # reweighter).
         drawn_positives = population_positives
-        drawn_negatives = population_negatives
         chosen = list(positives) + list(negatives)
         rng.shuffle(chosen)
         pos_pi = 1.0 if population_positives > 0 else 0.0
