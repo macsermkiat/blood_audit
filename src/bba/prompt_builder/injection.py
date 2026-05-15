@@ -43,12 +43,17 @@ class InjectionPattern(NamedTuple):
 
 INJECTION_PATTERNS: tuple[InjectionPattern, ...] = (
     # ---- IMPERATIVE_VERB_EN ------------------------------------------------
+    # Target noun list includes ``prompt`` / ``system`` so direct system-
+    # prompt-bypass attacks ("ignore the system prompt", "forget your
+    # system instructions") trip the scanner. Codex review #21 round 1
+    # caught the original noun list missing ``prompt``.
     InjectionPattern(
         pattern_id="imp_ignore_v1",
         category=InjectionCategory.IMPERATIVE_VERB_EN,
         regex=(
             r"\bignore\b.{0,40}?\b"
-            r"(?:instructions?|rules?|directives?|guidelines?|policy|policies)\b"
+            r"(?:instructions?|rules?|directives?|guidelines?|policy|"
+            r"policies|prompt|system)\b"
         ),
         language="en",
     ),
@@ -57,7 +62,8 @@ INJECTION_PATTERNS: tuple[InjectionPattern, ...] = (
         category=InjectionCategory.IMPERATIVE_VERB_EN,
         regex=(
             r"\bdisregard\b.{0,40}?\b"
-            r"(?:instructions?|rules?|directives?|guidelines?|policy|policies)\b"
+            r"(?:instructions?|rules?|directives?|guidelines?|policy|"
+            r"policies|prompt|system)\b"
         ),
         language="en",
     ),
@@ -66,7 +72,8 @@ INJECTION_PATTERNS: tuple[InjectionPattern, ...] = (
         category=InjectionCategory.IMPERATIVE_VERB_EN,
         regex=(
             r"\bforget\b.{0,40}?\b"
-            r"(?:instructions?|rules?|directives?|guidelines?|policy|policies)\b"
+            r"(?:instructions?|rules?|directives?|guidelines?|policy|"
+            r"policies|prompt|system)\b"
         ),
         language="en",
     ),
@@ -113,10 +120,15 @@ INJECTION_PATTERNS: tuple[InjectionPattern, ...] = (
         regex=r"\bwho\s+(?:[a-z]+\s+){0,3}guideline\s+\d+\.\d+\b",
         language="en",
     ),
+    # Same fabricated-version criteria as the English ``fake_pr_guideline_v1``:
+    # only flag minor versions of (a) 2+ trailing nines, (b) 200+ leading
+    # century-style digit, or (c) 3+ total digits. The real KCMH guideline
+    # is ``PR 17.2`` and must not flag in Thai prose either (codex review
+    # #21 round 1 — original pattern matched any decimal version).
     InjectionPattern(
         pattern_id="fake_thai_pr_v1",
         category=InjectionCategory.FAKE_GUIDELINE,
-        regex=r"แนวทาง\s*(?:KCMH\s+)?PR\s+\d+\.\d+",
+        regex=r"แนวทาง\s*(?:KCMH\s+)?PR\s+\d+\.(?:9{2,}|[2-9]\d{2,}|\d{3,})",
         language="th",
     ),
     # ---- SYSTEM_PROMPT_EXFIL ----------------------------------------------
