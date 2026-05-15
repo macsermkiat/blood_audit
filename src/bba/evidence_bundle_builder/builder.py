@@ -240,7 +240,15 @@ def _med_payload(m: MedRecord) -> dict[str, Any]:
 
 
 def _hb_payload(h: HbRecord) -> dict[str, Any]:
-    return {"value_g_dl": h.value_g_dl, "lab_source": h.source}
+    # ``item_no`` lands in the bundle so the LLM (and any downstream
+    # quote_grounder lookup) can resolve a citation back to the exact
+    # Lab row, not just the (timestamp, value) pair which can collide
+    # for corrected results.
+    return {
+        "value_g_dl": h.value_g_dl,
+        "lab_source": h.source,
+        "item_no": h.item_no,
+    }
 
 
 def _vitals_payload(v: VitalsRecord) -> dict[str, Any]:
@@ -256,22 +264,30 @@ def _to_utc(ts: datetime) -> datetime:
     return ts.astimezone(UTC)
 
 
-def _hb_sort_key(h: HbRecord) -> tuple[int, datetime, float]:
-    """Total sort key for Hb records that preserves the HEMATOLOGY > POCT
-    contract from PRD §3 / :mod:`bba.hb_lookup` even at the bundle layer.
+def _hb_sort_key(h: HbRecord) -> tuple[int, datetime, int, float]:
+    """Total sort key for Hb records that mirrors :mod:`bba.hb_lookup`
+    classifier semantics so the bundle never disagrees with the
+    deterministic Hb selection.
 
-    Source rank is the PRIMARY key: 1 for HEMATOLOGY (preferred LABEXM
-    290095), 0 for POCT (LABEXM 500001). With ``reverse=True``, all
-    HEMATOLOGY items emit before any POCT item — regardless of
-    recency. That matches the deterministic classifier, which picks
-    HEMATOLOGY whenever any HEMATOLOGY record is in the 7-day lookback;
-    putting HEMATOLOGY first means the LLM reads the same primary Hb
-    signal the classifier used.
+    Composite key, primary to last:
 
-    Within each source group, ``timestamp`` then ``value_g_dl`` give
-    newest-first ordering (and value tiebreak), preserving total order
-    across input shuffles."""
-    return (1 if h.source == "HEMATOLOGY" else 0, h.timestamp, h.value_g_dl)
+    * ``source rank`` (1 for HEMATOLOGY, 0 for POCT) — PRD §3 source
+      preference; HEMATOLOGY emits before POCT regardless of recency.
+    * ``timestamp`` — newest-first within source.
+    * ``item_no`` — Lab row identifier; higher = later insert /
+      correction. Mirrors :func:`bba.hb_lookup._select_current` which
+      breaks same-timestamp ties by max ``item_no``. Without this,
+      a same-time corrected row could be discarded under cap pressure
+      while the stale earlier row survived, putting bundle Hb out of
+      sync with classifier Hb.
+    * ``value_g_dl`` — final tiebreak so the order is genuinely TOTAL
+      across input shuffles."""
+    return (
+        1 if h.source == "HEMATOLOGY" else 0,
+        h.timestamp,
+        h.item_no,
+        h.value_g_dl,
+    )
 
 
 def _vitals_sort_key(v: VitalsRecord) -> tuple[datetime, str, str, str, str, str, str]:

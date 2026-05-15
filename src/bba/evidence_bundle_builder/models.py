@@ -252,6 +252,13 @@ class HbRecord(BaseModel):
     timestamp: AwareDatetime
     value_g_dl: float = Field(ge=2.0, le=25.0)
     source: HbSource
+    # ``item_no`` mirrors :class:`bba.hb_lookup.HbObservation.item_no`: the
+    # Lab table's row identifier. Higher values are later inserts /
+    # corrections. The deterministic classifier breaks same-(source,
+    # timestamp) ties by max ``item_no`` (the corrected result); the
+    # bundle uses the same key in ``_hb_sort_key`` so what the LLM sees
+    # matches what the classifier used.
+    item_no: int
 
 
 class VitalsRecord(BaseModel):

@@ -125,11 +125,18 @@ def _med(*, offset_hours: float, drug: str = "Furosemide 20mg IV") -> MedRecord:
     )
 
 
-def _hb(*, offset_hours: float, value: float = 7.5, source: str = "HEMATOLOGY") -> HbRecord:
+def _hb(
+    *,
+    offset_hours: float,
+    value: float = 7.5,
+    source: str = "HEMATOLOGY",
+    item_no: int = 1,
+) -> HbRecord:
     return HbRecord(
         timestamp=ANCHOR_DT + timedelta(hours=offset_hours),
         value_g_dl=value,
         source=source,  # type: ignore[arg-type]
+        item_no=item_no,
     )
 
 
@@ -293,14 +300,25 @@ class TestModelImmutability:
                 timestamp=datetime(2026, 5, 15, 12, 0, 0),  # type: ignore[arg-type]
                 value_g_dl=7.5,
                 source="HEMATOLOGY",
+                item_no=1,
             )
 
     def test_hb_rejects_out_of_range_value(self) -> None:
         # Mirrors HbObservation: < 2.0 or > 25.0 is a transcription error.
         with pytest.raises(ValidationError):
-            HbRecord(timestamp=ANCHOR_DT, value_g_dl=1.9, source="HEMATOLOGY")
+            HbRecord(
+                timestamp=ANCHOR_DT,
+                value_g_dl=1.9,
+                source="HEMATOLOGY",
+                item_no=1,
+            )
         with pytest.raises(ValidationError):
-            HbRecord(timestamp=ANCHOR_DT, value_g_dl=25.1, source="HEMATOLOGY")
+            HbRecord(
+                timestamp=ANCHOR_DT,
+                value_g_dl=25.1,
+                source="HEMATOLOGY",
+                item_no=1,
+            )
 
     def test_vitals_rejects_naive_timestamp(self) -> None:
         with pytest.raises(ValidationError):
@@ -1847,11 +1865,13 @@ class TestHbEmissionAndTruncationPriority:
             timestamp=ANCHOR_DT - timedelta(hours=6),
             value_g_dl=7.5,
             source="HEMATOLOGY",
+            item_no=1,
         )
         hb_poct = HbRecord(
             timestamp=ANCHOR_DT - timedelta(hours=2),
             value_g_dl=8.0,
             source="POCT",
+            item_no=1,
         )
         bundle = build_evidence_bundle(
             inputs=EvidenceInputs(
@@ -1867,6 +1887,47 @@ class TestHbEmissionAndTruncationPriority:
         )
         assert lab_items[1].payload["lab_source"] == "POCT"
 
+    def test_corrected_hb_row_kept_over_stale_under_tight_cap(self) -> None:
+        # bba.hb_lookup._select_current resolves same-(source,timestamp)
+        # ties by max item_no — later Lab rows are corrected/amended
+        # results. The bundle must mirror that semantics under cap
+        # pressure: when only one of two same-time HEMATOLOGY rows fits,
+        # the higher item_no (corrected) survives. Otherwise the LLM
+        # would see a stale value that the deterministic classifier
+        # already overrode.
+        stale_hb = HbRecord(
+            timestamp=ANCHOR_DT - timedelta(hours=2),
+            value_g_dl=8.0,  # stale higher value
+            source="HEMATOLOGY",
+            item_no=1,
+        )
+        corrected_hb = HbRecord(
+            timestamp=ANCHOR_DT - timedelta(hours=2),
+            value_g_dl=7.0,  # corrected lower value
+            source="HEMATOLOGY",
+            item_no=2,  # higher item_no = later insert / correction
+        )
+        anchor = OrderAnchor(
+            order_datetime=ANCHOR_DT,
+            hn_hash="x" * 200,
+            an_hash="y" * 200,
+            products=("LPRC",),
+        )
+        bundle = build_evidence_bundle(
+            inputs=EvidenceInputs(
+                anchor=anchor, hb_history=(stale_hb, corrected_hb)
+            ),
+            char_cap=900,
+        )
+        lab_items = _items_by_source(bundle, "Lab")
+        assert len(lab_items) == 1, "Expected exactly one Hb to survive"
+        assert lab_items[0].payload["item_no"] == 2, (
+            "Stale Hb (item_no=1) survived over corrected (item_no=2); "
+            "bundle does not mirror hb_lookup._select_current's "
+            "max-item_no tiebreak"
+        )
+        assert lab_items[0].payload["value_g_dl"] == 7.0
+
     def test_hematology_kept_over_NEWER_poct_under_tight_cap(self) -> None:
         # PRD §3 / bba.hb_lookup: HEMATOLOGY (LABEXM 290095) is preferred
         # over POCT (LABEXM 500001) when ANY HEMATOLOGY result exists in
@@ -1878,11 +1939,13 @@ class TestHbEmissionAndTruncationPriority:
             timestamp=ANCHOR_DT - timedelta(hours=6),
             value_g_dl=7.5,
             source="HEMATOLOGY",
+            item_no=1,
         )
         hb_poct = HbRecord(
             timestamp=ANCHOR_DT - timedelta(hours=2),
             value_g_dl=8.0,
             source="POCT",
+            item_no=1,
         )
         anchor = OrderAnchor(
             order_datetime=ANCHOR_DT,
@@ -1909,10 +1972,10 @@ class TestHbEmissionAndTruncationPriority:
         # POCT would survive (alphabetic 'POCT' > 'HEMATOLOGY' under
         # reverse=True), inverting the source preference.
         hb_hema = HbRecord(
-            timestamp=ANCHOR_DT, value_g_dl=7.5, source="HEMATOLOGY"
+            timestamp=ANCHOR_DT, value_g_dl=7.5, source="HEMATOLOGY", item_no=1
         )
         hb_poct = HbRecord(
-            timestamp=ANCHOR_DT, value_g_dl=7.5, source="POCT"
+            timestamp=ANCHOR_DT, value_g_dl=7.5, source="POCT", item_no=1
         )
         # Pad anchor to push the bundle near the cap so one Hb must drop.
         anchor = OrderAnchor(
