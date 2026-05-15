@@ -8,7 +8,7 @@ shot."), which would inflate the per-stratum sensitivity claims that the
 publication report cites.
 
 This module implements the CR0 cluster-robust sandwich variance estimator
-for a binomial proportion. ``cluster_id`` is the concatenation of
+for a binomial proportion. ``cluster_id`` is typically a concatenation of
 ``physician_id`` and ``ward`` — the harness treats their cross as the
 effective cluster (the same physician on two wards is not the same cluster).
 
@@ -17,8 +17,12 @@ Reference (manual): Liang & Zeger (1986); Cameron & Miller (2015) survey.
 
 from __future__ import annotations
 
+import math
+from collections import defaultdict
 from collections.abc import Sequence
 
+from bba.eval_harness.exceptions import EmptyInputError, ShapeMismatchError
+from bba.eval_harness.intervals import normal_quantile
 from bba.eval_harness.models import ClusterRobustEstimate
 
 
@@ -28,31 +32,49 @@ def cluster_robust_proportion_ci(
     *,
     confidence: float = 0.95,
 ) -> ClusterRobustEstimate:
-    """Cluster-robust Wald CI for a proportion.
+    """Cluster-robust Wald CI for a proportion."""
+    if len(indicators) != len(cluster_ids):
+        raise ShapeMismatchError(
+            f"cluster_robust_proportion_ci: indicators ({len(indicators)}) and "
+            f"cluster_ids ({len(cluster_ids)}) disagree"
+        )
+    if not indicators:
+        raise EmptyInputError(
+            "cluster_robust_proportion_ci: indicators must be non-empty"
+        )
+    if not 0.0 < confidence < 1.0:
+        raise ValueError(
+            f"cluster_robust_proportion_ci: confidence must be in (0,1), got {confidence!r}"
+        )
 
-    Parameters
-    ----------
-    indicators
-        Per-observation indicator (``True`` ↦ "event"). The estimated
-        proportion is the simple mean of these.
-    cluster_ids
-        Per-observation cluster label. Observations sharing a label are
-        treated as one cluster for the sandwich variance.
-    confidence
-        Two-sided Wald coverage (default 0.95).
+    n = len(indicators)
+    successes = sum(1 for x in indicators if x)
+    p_hat = successes / n
 
-    Returns
-    -------
-    ClusterRobustEstimate
-        ``cluster_robust_se`` is the CR0 sandwich SE; ``naive_se`` is the
-        binomial SE under the i.i.d. assumption (provided for comparison —
-        the report cites the ratio as the "design effect").
+    # CR0 sandwich for the mean of a binary indicator: Var(p̂) =
+    # (1/n²) * sum_g (sum_{i in g} (y_i - p̂))². For singletons, the cluster
+    # sum collapses to (y_i - p̂); summing across i collapses to n*p̂(1-p̂),
+    # which gives the naive binomial variance — the property the tests
+    # assert structurally.
+    cluster_sums: dict[str, float] = defaultdict(float)
+    for ind, cid in zip(indicators, cluster_ids, strict=True):
+        cluster_sums[cid] += (1.0 if ind else 0.0) - p_hat
+    cr_variance = sum(u * u for u in cluster_sums.values()) / (n * n)
+    cr_se = math.sqrt(cr_variance)
+    naive_se = math.sqrt(p_hat * (1.0 - p_hat) / n)
 
-    Raises
-    ------
-    ShapeMismatchError
-        ``indicators`` and ``cluster_ids`` disagree in length.
-    EmptyInputError
-        Either input is empty.
-    """
-    raise NotImplementedError("eval_harness.cluster: RED phase, see issue #20")
+    z = normal_quantile(0.5 + confidence / 2.0)
+    margin = z * cr_se
+    lower = max(0.0, p_hat - margin)
+    upper = min(1.0, p_hat + margin)
+
+    return ClusterRobustEstimate(
+        point=p_hat,
+        cluster_robust_se=cr_se,
+        naive_se=naive_se,
+        n_clusters=len(cluster_sums),
+        n_obs=n,
+        lower=lower,
+        upper=upper,
+        confidence=confidence,
+    )
