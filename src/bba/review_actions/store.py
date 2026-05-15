@@ -119,12 +119,20 @@ _PROTECTED_TABLES: tuple[str, ...] = ("review_actions", "phi_access_log")
 
 _APPEND_ONLY_SQLSTATE = "P0001"
 """The SQLSTATE the trigger guards raise via ``RAISE EXCEPTION ... USING
-ERRCODE = 'P0001'``. The trigger message also starts with
-``append_only_violation:`` — both are checked so a future migration that
-re-uses SQLSTATE P0001 for a different reason doesn't get mis-translated."""
+ERRCODE = 'P0001'``. The trigger message is the bare token
+``append_only_violation`` — both are checked so a future migration that
+re-uses SQLSTATE P0001 for a different reason doesn't get mis-translated.
+
+The colon-suffixed form (``append_only_violation:``) was used before
+round 2 of codex review, when the trigger message also included the
+operation name and table; that form was dropped for info-disclosure
+reasons and the matcher was updated accordingly. The migration's
+message lives at
+``migrations/versions/cfb3b5460004_*.py`` (``RAISE EXCEPTION
+'append_only_violation'``)."""
 
 
-_APPEND_ONLY_MESSAGE_PREFIX = "append_only_violation:"
+_APPEND_ONLY_MESSAGE_TOKEN = "append_only_violation"
 
 
 class ReviewActionsStore:
@@ -678,7 +686,7 @@ class ReviewActionsStore:
         message = str(exc.diag.message_primary) if exc.diag else str(exc)
         if (
             sqlstate == _APPEND_ONLY_SQLSTATE
-            and _APPEND_ONLY_MESSAGE_PREFIX in message
+            and _APPEND_ONLY_MESSAGE_TOKEN in message
         ):
             return AppendOnlyViolationError(message)
         return exc

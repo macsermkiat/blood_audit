@@ -1498,6 +1498,50 @@ class TestTriggerShapeDriftDetection:
                 store.record_action(_action_input())
 
 
+class TestAppendOnlyTranslationContract:
+    """The store translates a trigger's ``RAISE EXCEPTION
+    'append_only_violation'`` into :class:`AppendOnlyViolationError`
+    when it fires during a store INSERT.
+
+    In production today the store only INSERTs and the migration's
+    triggers fire only on UPDATE/DELETE/TRUNCATE, so this translation
+    is dead in normal flow. The contract still has to hold: a future
+    migration may add a defense-in-depth BEFORE INSERT guard, or an
+    operator may attach an external trigger that uses the same
+    SQLSTATE + message. Either case must surface the typed exception
+    so callers don't have to know about psycopg internals.
+
+    PR #37 codex P2 — the matcher token had drifted out of sync with
+    the trigger message after the round-2 info-disclosure fix; this
+    test regression-guards that synchronization.
+    """
+
+    def test_insert_blocked_by_trigger_raises_append_only_error(
+        self,
+        app_config: ReviewActionsConfig,
+        postgres_config: ReviewActionsConfig,
+    ) -> None:
+        """Install a temporary BEFORE INSERT trigger reusing the
+        production ``review_actions_block_mutation`` function. A store
+        INSERT now hits the trigger; the resulting psycopg
+        ``RaiseException`` (SQLSTATE P0001 + 'append_only_violation')
+        must be translated to :class:`AppendOnlyViolationError`."""
+        with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "CREATE TRIGGER test_block_insert_for_translation "
+                    "BEFORE INSERT ON review_actions "
+                    "FOR EACH ROW EXECUTE FUNCTION "
+                    "review_actions_block_mutation()"
+                )
+
+        with ReviewActionsStore(
+            app_config, migrations_root=REPO_ROOT / "migrations"
+        ) as store:
+            with pytest.raises(AppendOnlyViolationError):
+                store.record_action(_action_input())
+
+
 class TestSecurityLogging:
     """Security-critical integrity failures emit structured log records
     so operators can alert on repeated bypass attempts."""
