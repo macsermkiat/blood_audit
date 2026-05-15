@@ -355,6 +355,30 @@ class TestModelImmutability:
                 bundle_hash="A" * 64,  # uppercase = non-canonical hex
             )
 
+    def test_bundle_rejects_mismatched_hash_vs_canonical_json(self) -> None:
+        # Audit-chain invariant: if a downstream caller pairs a real
+        # canonical_json with a forged or stale hash, the bundle would
+        # silently lie about its identity. The model recomputes
+        # sha256(canonical_json) and rejects on mismatch.
+        canonical_json = "[]"
+        wrong_hash = "0" * 64  # well-formed but wrong
+        with pytest.raises(ValidationError, match="does not match"):
+            EvidenceBundle(
+                items=(),
+                canonical_json=canonical_json,
+                bundle_hash=wrong_hash,
+            )
+
+    def test_bundle_accepts_correctly_computed_hash(self) -> None:
+        # Sanity: when the hash is genuinely the sha256 of canonical_json,
+        # construction succeeds.
+        canonical_json = "[]"
+        right_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+        bundle = EvidenceBundle(
+            items=(), canonical_json=canonical_json, bundle_hash=right_hash
+        )
+        assert bundle.bundle_hash == right_hash
+
 
 # =============================================================================
 # AC ② — per-source window enforcement

@@ -17,10 +17,11 @@ The public surface intentionally mirrors the existing module conventions:
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from types import MappingProxyType
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Any, Literal, Self, cast
 
 from pydantic import (
     AfterValidator,
@@ -30,6 +31,7 @@ from pydantic import (
     Field,
     field_serializer,
     field_validator,
+    model_validator,
 )
 
 
@@ -369,6 +371,26 @@ class EvidenceBundle(BaseModel):
                 f"bundle_hash must be lowercase hex (got {v!r})"
             )
         return v
+
+    @model_validator(mode="after")
+    def _hash_must_match_canonical_json(self) -> Self:
+        # Audit-chain invariant: the persisted bundle_hash MUST be the
+        # SHA-256 of the persisted canonical_json. Without this check, a
+        # downstream caller (e.g., a redactor that rebuilds the model)
+        # could pair a real canonical_json with a stale or forged hash and
+        # the bundle would silently lie about its identity — defeating
+        # mid-pipeline mutation detection (deid_redactor) and replay
+        # comparability (audit_store.AuditRow.evidence_bundle_hash). Recompute
+        # at construction so any inconsistency surfaces here, not in a
+        # six-months-later reproducibility audit.
+        expected = hashlib.sha256(self.canonical_json.encode("utf-8")).hexdigest()
+        if self.bundle_hash != expected:
+            raise ValueError(
+                f"bundle_hash ({self.bundle_hash}) does not match "
+                f"sha256(canonical_json) ({expected}); construct via "
+                "build_evidence_bundle() to maintain the audit-chain invariant"
+            )
+        return self
 
 
 __all__: Sequence[str] = (
