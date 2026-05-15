@@ -512,33 +512,35 @@ class TestWilsonCI:
     """wilson_ci matches scipy's proportion_ci method='wilson' at 95%."""
 
     def test_balanced_midpoint(self) -> None:
-        # scipy: binomtest(50, 100).proportion_ci(method='wilson',
-        #        confidence_level=0.95) → (0.4038203233, 0.5961796767)
+        # Wilson CI for (50, 100, 0.95) derived from the canonical formula
+        # with z = Phi^{-1}(0.975) at full precision. Matches scipy's
+        # binomtest(50, 100).proportion_ci(method='wilson') to ~1e-7.
         ci = wilson_ci(50, 100, confidence=0.95)
         assert ci.point == pytest.approx(0.5, abs=1e-12)
-        assert ci.lower == pytest.approx(0.40382032, abs=1e-6)
-        assert ci.upper == pytest.approx(0.59617968, abs=1e-6)
+        assert ci.lower == pytest.approx(0.40383153, abs=1e-6)
+        assert ci.upper == pytest.approx(0.59616847, abs=1e-6)
         assert ci.confidence == 0.95
 
     def test_zero_successes(self) -> None:
-        # scipy: binomtest(0, 100).proportion_ci(method='wilson') →
-        #        (0.0, 0.0369765098)
+        # Wilson CI for (0, 100, 0.95). Lower bound stays at 0 (boundary
+        # behavior — the regulator-visible failure mode for the normal-
+        # approximation interval is exactly this case).
         ci = wilson_ci(0, 100, confidence=0.95)
         assert ci.lower == pytest.approx(0.0, abs=1e-12)
-        assert ci.upper == pytest.approx(0.03697651, abs=1e-6)
+        assert ci.upper == pytest.approx(0.03699350, abs=1e-6)
 
     def test_all_successes(self) -> None:
-        # By symmetry: (0.9630234902, 1.0)
+        # Symmetric boundary case: (100, 100, 0.95) → upper saturates at 1.
         ci = wilson_ci(100, 100, confidence=0.95)
-        assert ci.lower == pytest.approx(0.96302349, abs=1e-6)
+        assert ci.lower == pytest.approx(0.96300650, abs=1e-6)
         assert ci.upper == pytest.approx(1.0, abs=1e-12)
 
     def test_small_sample(self) -> None:
-        # scipy: binomtest(2, 10).proportion_ci(method='wilson') →
-        #        (0.05665481, 0.50979474)
+        # Wilson CI for (2, 10, 0.95) — small-sample shape where Wilson and
+        # the normal approximation diverge most noticeably.
         ci = wilson_ci(2, 10, confidence=0.95)
-        assert ci.lower == pytest.approx(0.05665481, abs=1e-6)
-        assert ci.upper == pytest.approx(0.50979474, abs=1e-6)
+        assert ci.lower == pytest.approx(0.05668215, abs=1e-6)
+        assert ci.upper == pytest.approx(0.50983753, abs=1e-6)
 
     def test_99pct_confidence_wider_than_95pct(self) -> None:
         # The confidence argument must be honored. 99% must be wider than 95%.
