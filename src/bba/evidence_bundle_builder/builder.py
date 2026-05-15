@@ -134,6 +134,21 @@ def _filter_vitals(vitals: Sequence[VitalsRecord], anchor: datetime) -> tuple[Vi
 # =============================================================================
 
 
+def _has_quoteable_content(note: ProgressNote) -> bool:
+    """True iff parsing the note text yields at least one non-empty SOAP section.
+
+    Used as a pre-cap filter: blank-text or header-only IPDADMPROGRESS rows
+    (e.g. ``"S:\\nO:\\nA:\\nP:"``) carry no quoteable content for the LLM.
+    Without this filter, eight closer-to-anchor header-only notes would
+    consume :data:`CAP_PROGRESS` slots, evict a valid farther note, then
+    all be skipped at item-construction time — leaving the bundle with
+    zero progress evidence. The check parses each note (an O(n) cost
+    roughly equal to what _assign_ids was going to pay anyway), so the
+    pre-cap filter is essentially free."""
+    sections = parse_soap_sections(note.text)
+    return any(sections[k] for k in SECTION_PRIORITY)
+
+
 def _cap_progress_closest(
     notes: Sequence[ProgressNote], anchor: datetime
 ) -> tuple[ProgressNote, ...]:
@@ -524,6 +539,11 @@ def build_evidence_bundle(
     anchor_dt = _to_utc(inputs.anchor.order_datetime)
 
     progress = _filter_progress(inputs.progress_notes, anchor_dt)
+    # Drop blank / header-only notes BEFORE the cap. Otherwise eight closer
+    # empty SOAP shells would consume CAP_PROGRESS slots, exclude a
+    # legitimate ninth note, then all be skipped at item construction —
+    # leaving the bundle with zero progress evidence.
+    progress = tuple(p for p in progress if _has_quoteable_content(p))
     progress = _cap_progress_closest(progress, anchor_dt)
 
     focus_in_window = _filter_focus(inputs.focus_notes, anchor_dt)

@@ -931,6 +931,36 @@ class TestEmptyProgressItemsNeverConstructed:
         )
         assert _items_by_source(bundle, "IPDADMPROGRESS") == ()
 
+    def test_blank_progress_does_not_consume_cap_slots(self) -> None:
+        # Realistic pathology: 8 closer-to-anchor header-only progress
+        # entries (which a busy nurse leaves as SOAP shells before
+        # writing real content) plus one farther but content-bearing
+        # note. Without a pre-cap content filter, the 8 blanks would
+        # consume CAP_PROGRESS=8, exclude the valid 9th note, and then
+        # all be skipped at item construction — silent evidence loss.
+        # The pre-cap filter ensures the valid note survives.
+        blanks = tuple(
+            _progress(offset_hours=-h, text="S:\nO:\nA:\nP:")
+            for h in (0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0)
+        )
+        valid = _progress(
+            offset_hours=-12.0,
+            text="A: anemia clear, plan PRBC 1U",
+        )
+        bundle = build_evidence_bundle(
+            inputs=EvidenceInputs(
+                anchor=_anchor(),
+                progress_notes=blanks + (valid,),
+            )
+        )
+        progress_items = _items_by_source(bundle, "IPDADMPROGRESS")
+        assert len(progress_items) == 1, (
+            "blank notes consumed cap slots; the valid farther note was "
+            "evicted and the bundle has zero progress evidence"
+        )
+        labels = {s["label"] for s in progress_items[0].payload["sections"]}
+        assert "ASSESSMENT" in labels
+
     def test_partially_blank_progress_note_emits_only_non_empty_sections(self) -> None:
         # ASSESSMENT has content, others are blank — item ships with just
         # the non-empty section; no dead headers in the payload.
