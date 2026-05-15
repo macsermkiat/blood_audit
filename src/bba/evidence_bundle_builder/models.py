@@ -18,6 +18,7 @@ The public surface intentionally mirrors the existing module conventions:
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from types import MappingProxyType
@@ -374,22 +375,71 @@ class EvidenceBundle(BaseModel):
 
     @model_validator(mode="after")
     def _hash_must_match_canonical_json(self) -> Self:
-        # Audit-chain invariant: the persisted bundle_hash MUST be the
-        # SHA-256 of the persisted canonical_json. Without this check, a
-        # downstream caller (e.g., a redactor that rebuilds the model)
-        # could pair a real canonical_json with a stale or forged hash and
-        # the bundle would silently lie about its identity — defeating
-        # mid-pipeline mutation detection (deid_redactor) and replay
-        # comparability (audit_store.AuditRow.evidence_bundle_hash). Recompute
-        # at construction so any inconsistency surfaces here, not in a
-        # six-months-later reproducibility audit.
-        expected = hashlib.sha256(self.canonical_json.encode("utf-8")).hexdigest()
-        if self.bundle_hash != expected:
+        # Audit-chain invariant: bundle_hash, canonical_json, and items
+        # must all describe the same bundle. Round 9 closed the
+        # hash-vs-canonical_json gap; round 10 extends the check to
+        # canonical_json structure and items consistency, since a
+        # downstream rebuilder could otherwise pair a self-consistent
+        # hash with bytes that are not a valid evidence bundle envelope.
+        # Layered checks (cheapest first):
+        #   1. hash matches canonical_json bytes
+        #   2. canonical_json parses as JSON
+        #   3. canonical_json IS canonical (re-emit equals input)
+        #   4. parsed envelope shape has the expected "items" array
+        #   5. parsed item IDs match self.items IDs (in order)
+        expected_hash = hashlib.sha256(
+            self.canonical_json.encode("utf-8")
+        ).hexdigest()
+        if self.bundle_hash != expected_hash:
             raise ValueError(
                 f"bundle_hash ({self.bundle_hash}) does not match "
-                f"sha256(canonical_json) ({expected}); construct via "
+                f"sha256(canonical_json) ({expected_hash}); construct via "
                 "build_evidence_bundle() to maintain the audit-chain invariant"
             )
+
+        try:
+            parsed = json.loads(self.canonical_json)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"canonical_json is not valid JSON: {exc.msg}"
+            ) from exc
+
+        # Lazy import to avoid any future cycle if canonical.py grows a
+        # models import; keeps the validator self-contained.
+        from bba.evidence_bundle_builder.canonical import canonical_serialize
+
+        if canonical_serialize(parsed) != self.canonical_json:
+            raise ValueError(
+                "canonical_json is not in canonical form (sorted keys / "
+                "NFC strings / 2-space indent / no trailing newline); "
+                "construct via build_evidence_bundle()"
+            )
+
+        if not isinstance(parsed, dict) or "items" not in parsed:
+            raise ValueError(
+                "canonical_json must be a JSON object with an 'items' key"
+            )
+        parsed_items = parsed["items"]
+        if not isinstance(parsed_items, list):
+            raise ValueError("canonical_json 'items' must be an array")
+
+        if len(parsed_items) != len(self.items):
+            raise ValueError(
+                f"canonical_json items count ({len(parsed_items)}) does not "
+                f"match EvidenceBundle.items count ({len(self.items)})"
+            )
+
+        parsed_ids = [
+            item.get("id") if isinstance(item, dict) else None
+            for item in parsed_items
+        ]
+        expected_ids = [it.id for it in self.items]
+        if parsed_ids != expected_ids:
+            raise ValueError(
+                f"canonical_json item IDs {parsed_ids} do not match "
+                f"EvidenceBundle.items IDs {expected_ids}"
+            )
+
         return self
 
 

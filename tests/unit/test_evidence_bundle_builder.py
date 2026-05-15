@@ -360,7 +360,7 @@ class TestModelImmutability:
         # canonical_json with a forged or stale hash, the bundle would
         # silently lie about its identity. The model recomputes
         # sha256(canonical_json) and rejects on mismatch.
-        canonical_json = "[]"
+        canonical_json = canonical_serialize({"anchor": {}, "items": []})
         wrong_hash = "0" * 64  # well-formed but wrong
         with pytest.raises(ValidationError, match="does not match"):
             EvidenceBundle(
@@ -370,14 +370,91 @@ class TestModelImmutability:
             )
 
     def test_bundle_accepts_correctly_computed_hash(self) -> None:
-        # Sanity: when the hash is genuinely the sha256 of canonical_json,
-        # construction succeeds.
-        canonical_json = "[]"
+        # Sanity: when the hash is genuinely the sha256 of canonical_json
+        # AND canonical_json is a proper envelope, construction succeeds.
+        canonical_json = canonical_serialize({"anchor": {}, "items": []})
         right_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
         bundle = EvidenceBundle(
             items=(), canonical_json=canonical_json, bundle_hash=right_hash
         )
         assert bundle.bundle_hash == right_hash
+
+    def test_bundle_rejects_invalid_json_in_canonical_json(self) -> None:
+        # canonical_json must parse — bytes that pass the hash check but
+        # are not JSON shouldn't fool the audit chain.
+        bad = "not json at all"
+        bad_hash = hashlib.sha256(bad.encode("utf-8")).hexdigest()
+        with pytest.raises(ValidationError, match="not valid JSON"):
+            EvidenceBundle(items=(), canonical_json=bad, bundle_hash=bad_hash)
+
+    def test_bundle_rejects_non_canonical_form(self) -> None:
+        # canonical_json must equal canonical_serialize(json.loads(...)).
+        # A JSON-valid but non-canonical formatting (no indent, unsorted
+        # keys, missing NFC) is rejected so downstream tooling can't
+        # carry a self-consistent hash for non-canonical bytes.
+        non_canonical = '{"items": [], "anchor": {}}'  # unsorted keys, no indent
+        non_canonical_hash = hashlib.sha256(
+            non_canonical.encode("utf-8")
+        ).hexdigest()
+        with pytest.raises(ValidationError, match="canonical form"):
+            EvidenceBundle(
+                items=(),
+                canonical_json=non_canonical,
+                bundle_hash=non_canonical_hash,
+            )
+
+    def test_bundle_rejects_items_count_mismatch(self) -> None:
+        # canonical_json says 1 item but EvidenceBundle.items is empty.
+        # Without this check, a forged bundle could carry items in the
+        # bytes (and thus the hash) that don't match the model's items.
+        envelope = {
+            "anchor": {},
+            "items": [
+                {
+                    "id": "E1",
+                    "source": "Diagnosis",
+                    "timestamp_utc": None,
+                    "payload": {"icd10": "D50.9"},
+                }
+            ],
+        }
+        canonical_json = canonical_serialize(envelope)
+        right_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+        with pytest.raises(ValidationError, match="items count"):
+            EvidenceBundle(
+                items=(),  # empty model items vs 1 in canonical_json
+                canonical_json=canonical_json,
+                bundle_hash=right_hash,
+            )
+
+    def test_bundle_rejects_items_id_mismatch(self) -> None:
+        # canonical_json's item ID disagrees with EvidenceBundle.items[0].id.
+        item = EvidenceItem(
+            id="E1",
+            source="Diagnosis",
+            timestamp_utc=None,
+            payload={"icd10": "D50.9"},
+        )
+        # Build canonical_json with a DIFFERENT id at the same position.
+        envelope = {
+            "anchor": {},
+            "items": [
+                {
+                    "id": "E2",  # mismatched id
+                    "source": "Diagnosis",
+                    "timestamp_utc": None,
+                    "payload": {"icd10": "D50.9"},
+                }
+            ],
+        }
+        canonical_json = canonical_serialize(envelope)
+        right_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+        with pytest.raises(ValidationError, match="item IDs"):
+            EvidenceBundle(
+                items=(item,),
+                canonical_json=canonical_json,
+                bundle_hash=right_hash,
+            )
 
 
 # =============================================================================
@@ -1400,6 +1477,50 @@ class TestProgressNoteCap8:
 # =============================================================================
 # Edge cases
 # =============================================================================
+
+
+class TestHbEmissionAndTruncationPriority:
+    """Hb emission is newest-first, so the whole-item tail-drop in
+    _enforce_char_cap discards stale Hb before recent Hb. The most-recent
+    pre-order Hb is the decision-time anemia signal — losing it changes
+    what the LLM is auditing."""
+
+    def test_hb_newest_first_in_emission_order(self) -> None:
+        # 4 Hb records spread over the lookback window.
+        hbs = tuple(_hb(offset_hours=-h, value=10.0 + i * 0.1) for i, h in enumerate((24, 48, 72, 96)))
+        bundle = build_evidence_bundle(
+            inputs=EvidenceInputs(anchor=_anchor(), hb_history=hbs)
+        )
+        lab_items = _items_by_source(bundle, "Lab")
+        offsets = [
+            round((it.timestamp_utc - ANCHOR_DT).total_seconds() / 3600.0, 1)  # type: ignore[operator]
+            for it in lab_items
+        ]
+        # Newest first: -24, -48, -72, -96 (oldest last).
+        assert offsets == [-24.0, -48.0, -72.0, -96.0]
+
+    def test_hb_truncation_preserves_most_recent_hb(self) -> None:
+        # Force whole-item tail-drop by padding the anchor near the cap.
+        # With NEWEST-FIRST emission, the most recent Hb (-1 h) survives;
+        # older labs drop first.
+        hbs = tuple(_hb(offset_hours=-h, value=8.0) for h in (1, 24, 48, 72))
+        anchor = OrderAnchor(
+            order_datetime=ANCHOR_DT,
+            hn_hash="x" * 200,
+            an_hash="y" * 200,
+            products=("LPRC",),
+        )
+        bundle = build_evidence_bundle(
+            inputs=EvidenceInputs(anchor=anchor, hb_history=hbs),
+            char_cap=950,
+        )
+        lab_items = _items_by_source(bundle, "Lab")
+        assert len(lab_items) >= 1, "at least one Hb must survive truncation"
+        # The first surviving Lab item is the most recent (offset -1 h).
+        first_offset = round(
+            (lab_items[0].timestamp_utc - ANCHOR_DT).total_seconds() / 3600.0, 1  # type: ignore[operator]
+        )
+        assert first_offset == -1.0
 
 
 class TestEmptyInputs:

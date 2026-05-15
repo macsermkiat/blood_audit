@@ -466,7 +466,23 @@ def _assign_ids(
             )
         )
 
-    for h in sorted(hbs, key=lambda x: (x.timestamp, x.value_g_dl, x.source)):
+    # Hb history: emit NEWEST-first (descending timestamp). Two reasons:
+    #   1. Clinical: the most-recent pre-order Hb is the decision-time
+    #      anemia signal; putting it at the head of the Lab section means
+    #      the LLM reads it before historical context.
+    #   2. Truncation safety: the whole-item tail-drop in
+    #      _enforce_char_cap removes the LAST emitted item first. With
+    #      ascending order, that drop would discard the most-recent Hb
+    #      and retain stale labs — exactly inverted from clinical
+    #      relevance. Newest-first inverts the drop priority correctly.
+    # The composite reverse=True still sorts by value and source for
+    # tie-breaking on equal timestamps; total-order is preserved across
+    # input shuffles.
+    for h in sorted(
+        hbs,
+        key=lambda x: (x.timestamp, x.value_g_dl, x.source),
+        reverse=True,
+    ):
         items.append(
             EvidenceItem(
                 id=_next_id(),
