@@ -1853,6 +1853,59 @@ class TestHbEmissionAndTruncationPriority:
             "MED emission order is not newest-first"
         )
 
+    def test_med_post_order_drops_before_pre_order_under_cap(self) -> None:
+        # Round-19 added newest-first MED emission, but didn't split
+        # pre-anchor (decision context) from post-anchor (treatment
+        # AFTER the order). Without the split, +2h administration
+        # could outlive a -1h decision-context med under cap pressure.
+        # Audit-wise that's exactly inverted: the bundle would show
+        # the LLM what was given AFTER the order while losing what
+        # shaped the order.
+        pre_immediate = _med(
+            offset_hours=-1, drug="ImmediatePre-" + "x" * 200
+        )
+        pre_stale = _med(offset_hours=-72, drug="StalePre-" + "y" * 200)
+        post = _med(offset_hours=2, drug="PostOrder-" + "z" * 200)
+        anchor = OrderAnchor(
+            order_datetime=ANCHOR_DT,
+            hn_hash="x" * 200,
+            an_hash="y" * 200,
+            products=("LPRC",),
+        )
+        bundle = build_evidence_bundle(
+            inputs=EvidenceInputs(
+                anchor=anchor, meds=(post, pre_immediate, pre_stale)
+            ),
+            char_cap=1300,
+        )
+        med_items = _items_by_source(bundle, "MED")
+        # Under cap pressure, expect the post-order MED to drop first
+        # (lower priority); pre-order meds survive longer. The
+        # immediate pre (-1h) survives until last.
+        survivor_drugs = [it.payload["drug"] for it in med_items]
+        # The post-order item must NOT survive on its own when pre meds
+        # drop. When at least one MED survives, it must be a pre-order one.
+        if med_items:
+            assert any(d.startswith("ImmediatePre") for d in survivor_drugs), (
+                f"Pre-order immediate MED was dropped before post-order; "
+                f"survivors: {survivor_drugs}"
+            )
+            # If only one MED survives, it should be the immediate pre.
+            if len(med_items) == 1:
+                assert med_items[0].payload["drug"].startswith("ImmediatePre")
+
+    def test_med_emits_pre_order_before_post_order(self) -> None:
+        # Normal-cap bundle: pre-order meds emit BEFORE post-order so
+        # the LLM reads decision context first, treatment-after-order
+        # second.
+        pre = _med(offset_hours=-1, drug="Pre")
+        post = _med(offset_hours=2, drug="Post")
+        bundle = _build_minimal(meds=(post, pre))
+        med_items = _items_by_source(bundle, "MED")
+        assert len(med_items) == 2
+        assert med_items[0].payload["drug"] == "Pre"
+        assert med_items[1].payload["drug"] == "Post"
+
     def test_med_emits_newest_first_in_normal_bundle(self) -> None:
         # Normal-cap bundle should also lead with the newest MED so the
         # LLM reads the most-relevant decision context first.
