@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from pathlib import Path
 
 from bba.report_generator.exceptions import FooterStampError
@@ -240,6 +241,9 @@ def write_section_csv(
     return out_path
 
 
+_SAFE_PHYSICIAN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
 def physician_own_view_filename(physician_id: str) -> str:
     """Return the canonical per-physician own-view CSV filename.
 
@@ -247,11 +251,22 @@ def physician_own_view_filename(physician_id: str) -> str:
     download handler, the email-distribution job) agree on the filename
     without re-encoding the convention in two places.
 
-    ``physician_id`` is the upstream-hashed identifier from
-    :class:`MonthlyReportRow`; it is already a safe filename component
-    because the upstream contract requires a non-empty string and the
-    hashing layer produces a fixed-alphabet output. The filename pattern
-    embeds the section name so a per-physician artifact remains
-    visually distinct from a committee section CSV.
+    The ``physician_id`` is already constrained to a filesystem-safe
+    shape by :data:`bba.report_generator.models.SafeFsId` on
+    :class:`MonthlyReportRow.physician_id`, but we re-validate here as
+    defense in depth: a caller composing a filename outside the normal
+    aggregation flow (e.g., a future dashboard endpoint regenerating a
+    single physician's artifact) does not get to bypass the path-
+    traversal check by skipping the model boundary.
     """
+    if not physician_id or not _SAFE_PHYSICIAN_ID_PATTERN.match(physician_id):
+        raise ValueError(
+            f"physician_id must match [A-Za-z0-9._-]+ to be safe to "
+            f"interpolate into a filename (got {physician_id!r})"
+        )
+    if physician_id in {".", ".."}:
+        raise ValueError(
+            f"physician_id must not be a path-traversal segment "
+            f"(got {physician_id!r})"
+        )
     return f"physician_own_view_{physician_id}.csv"

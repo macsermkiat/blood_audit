@@ -97,14 +97,28 @@ def _section_table(section: ReportSection) -> Table:
     return table
 
 
+_FOOTER_PDF_FIELDS: tuple[str, ...] = (
+    "policy_version",
+    "model_id",
+    "redactor_version",
+    "redactor_model_sha",
+    "prompt_hash",
+    "evidence_bundle_hash",
+)
+"""Footer fields rendered on every PDF page. Matches the CSV writer's
+``_FOOTER_COLUMNS`` order so the printed page and the persisted CSV
+carry the same reproducibility identifiers in the same order.
+"""
+
+
+def _footer_text(footer: ReportFooter, sep: str) -> str:
+    """Return all six footer identifiers joined by ``sep``."""
+    return sep.join(f"{field}: {getattr(footer, field)}" for field in _FOOTER_PDF_FIELDS)
+
+
 def _footer_paragraph(footer: ReportFooter) -> Paragraph:
     styles = getSampleStyleSheet()
-    text = (
-        f"policy_version: {footer.policy_version} &nbsp; | &nbsp; "
-        f"model_id: {footer.model_id} &nbsp; | &nbsp; "
-        f"redactor_version: {footer.redactor_version}"
-    )
-    return Paragraph(text, styles["Italic"])
+    return Paragraph(_footer_text(footer, " &nbsp; | &nbsp; "), styles["Italic"])
 
 
 def render_report_pdf(
@@ -116,24 +130,19 @@ def render_report_pdf(
     """Render ``sections`` to a PDF at ``output_path`` and return the path.
 
     ``month_label`` is a human-readable string ("May 2026") used on the
-    cover page. The footer (policy_version / model_id / redactor_version)
+    cover page. The full six-field reproducibility footer
+    (``policy_version`` / ``model_id`` / ``redactor_version`` /
+    ``redactor_model_sha`` / ``prompt_hash`` / ``evidence_bundle_hash``)
     appears on every page so a printed-then-detached page still carries
-    the reproducibility chain.
+    the complete reproducibility chain.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    page_footer = _footer_text(footer, " | ")
 
     def _on_page(canvas, doc) -> None:  # type: ignore[no-untyped-def]
         canvas.saveState()
-        canvas.setFont("Helvetica", 8)
-        canvas.drawString(
-            0.5 * inch,
-            0.4 * inch,
-            (
-                f"policy_version: {footer.policy_version} | "
-                f"model_id: {footer.model_id} | "
-                f"redactor_version: {footer.redactor_version}"
-            ),
-        )
+        canvas.setFont("Helvetica", 7)
+        canvas.drawString(0.5 * inch, 0.4 * inch, page_footer)
         canvas.restoreState()
 
     doc = SimpleDocTemplate(

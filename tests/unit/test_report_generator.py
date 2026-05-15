@@ -268,6 +268,52 @@ class TestModelImmutability:
                 inappropriate_rate=1.5,
             )
 
+    @pytest.mark.parametrize(
+        "bad_id",
+        [
+            "../etc/passwd",
+            "..",
+            ".",
+            "phys/with/slashes",
+            "phys with spaces",
+            "phys\x00null",
+            "",
+        ],
+    )
+    def test_monthly_report_row_rejects_unsafe_physician_id(
+        self, bad_id: str
+    ) -> None:
+        # physician_id flows into a per-physician CSV filename; an
+        # upstream value containing path separators or null bytes would
+        # let the writer escape the output directory. The model boundary
+        # is where this defense lives.
+        with pytest.raises(ValidationError):
+            MonthlyReportRow(
+                audit_id="audit-001",
+                an_hash="an-001",
+                hn_hash="hn-001",
+                order_datetime=MID_MONTH,
+                ward_id="WARD-A",
+                physician_id=bad_id,
+                final_classification="APPROPRIATE",
+                cohort_applied="default",
+                indication_codes=(),
+                needs_human_review=False,
+            )
+
+    def test_physician_own_view_filename_rejects_path_traversal(self) -> None:
+        # Defense in depth: a caller that bypassed the MonthlyReportRow
+        # model boundary still cannot make the filename helper produce
+        # an escape path.
+        with pytest.raises(ValueError):
+            physician_own_view_filename("../escape")
+        with pytest.raises(ValueError):
+            physician_own_view_filename("/abs/path")
+        with pytest.raises(ValueError):
+            physician_own_view_filename(".")
+        with pytest.raises(ValueError):
+            physician_own_view_filename("")
+
 
 # =============================================================================
 # Hospital-wide trend section
@@ -985,6 +1031,28 @@ class TestMonthBoundaryFiltering:
         )
         result = filter_rows_for_month((row,), MONTH)
         assert result == (row,)
+
+    def test_year_rollover_december_to_january(self) -> None:
+        # Bangkok 00:00:00 Jan 1 2027 == UTC 17:00:00 Dec 31 2026. The
+        # December 2026 report must exclude this row, and the January
+        # 2027 report must include it. Pins the year-rollover branch in
+        # _next_month_first_of's day-28+10 trick.
+        rollover_row = _row(
+            audit_id="jan-1-bkk",
+            order_datetime=datetime(2026, 12, 31, 17, 0, 0, tzinfo=UTC),
+        )
+        late_december = _row(
+            audit_id="dec-31-bkk-23",
+            order_datetime=datetime(2026, 12, 31, 16, 59, 59, tzinfo=UTC),
+        )
+        december_2026 = date(2026, 12, 1)
+        january_2027 = date(2027, 1, 1)
+        assert filter_rows_for_month(
+            (rollover_row, late_december), december_2026
+        ) == (late_december,)
+        assert filter_rows_for_month(
+            (rollover_row, late_december), january_2027
+        ) == (rollover_row,)
 
 
 # =============================================================================

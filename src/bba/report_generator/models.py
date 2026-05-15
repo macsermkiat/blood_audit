@@ -15,6 +15,7 @@ auditor can reconstruct any line from the same inputs + the same code
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -107,6 +108,47 @@ FirstOfMonth = Annotated[date, AfterValidator(_ensure_first_of_month)]
 """A ``date`` constrained to the first day of a calendar month."""
 
 
+_SAFE_FS_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _validate_safe_fs_id(value: str) -> str:
+    """Reject identifiers that would be unsafe to interpolate into a
+    filesystem path component.
+
+    ``physician_id`` is concatenated into ``physician_own_view_<id>.csv``
+    by :func:`bba.report_generator.csv_writer.physician_own_view_filename`.
+    An upstream string containing ``/``, ``\\``, or a path-traversal
+    segment would let the per-physician write escape ``output_dir``.
+    Defending at the model boundary means the writer can compose paths
+    with raw interpolation safely; mirrors the
+    :class:`bba.audit_store.models.SafeId` defense.
+
+    Allow-list: non-empty, ``[A-Za-z0-9._-]+``, not exactly ``.`` or ``..``.
+    """
+    if not value:
+        raise ValueError("identifier must not be empty")
+    if not _SAFE_FS_PATTERN.match(value):
+        raise ValueError(
+            f"identifier must match [A-Za-z0-9._-]+ to be a safe "
+            f"filesystem path component (got {value!r})"
+        )
+    if value in {".", ".."}:
+        raise ValueError(
+            f"identifier must not be a path-traversal segment (got {value!r})"
+        )
+    return value
+
+
+SafeFsId = Annotated[str, AfterValidator(_validate_safe_fs_id)]
+"""A ``str`` constrained to a filesystem-safe identifier shape.
+
+Use on every input field that may flow into an output filename:
+``physician_id`` (drives per-physician CSV names), ``ward_id`` and
+``audit_id`` (defense in depth — neither names a file today, but the
+constraint costs nothing and pins the input contract).
+"""
+
+
 # =============================================================================
 # Footer (stamped on every section)
 # =============================================================================
@@ -170,12 +212,12 @@ class MonthlyReportRow(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    audit_id: str = Field(min_length=1)
+    audit_id: SafeFsId
     an_hash: str = Field(min_length=1)
     hn_hash: str = Field(min_length=1)
     order_datetime: UTCDatetime
-    ward_id: str = Field(min_length=1)
-    physician_id: str = Field(min_length=1)
+    ward_id: SafeFsId
+    physician_id: SafeFsId
     final_classification: Classification
     cohort_applied: str = Field(min_length=1)
     indication_codes: tuple[str, ...]
@@ -234,7 +276,7 @@ class PhysicianOwnViewRow(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    physician_id: str = Field(min_length=1)
+    physician_id: SafeFsId
     own_total: int = Field(ge=0)
     own_inappropriate_rate: float = Field(ge=0.0, le=1.0)
     peer_median_inappropriate_rate: float = Field(ge=0.0, le=1.0)
@@ -272,29 +314,29 @@ class CohortExceptionRow(BaseModel):
 class PipelineHealthRow(BaseModel):
     """One row in the pipeline-health summary section.
 
-    Tracks the operational health of the monthly run by splitting orders
-    into three mutually exclusive operational buckets:
+    Tracks the operational health of the monthly run via three
+    operational counters. They are **not** mutually exclusive: a row
+    whose ``final_classification`` is ``APPROPRIATE`` or
+    ``INAPPROPRIATE`` and whose ``needs_human_review`` flag is set
+    contributes to *both* ``classified_orders`` and
+    ``needs_review_count``. Therefore the schema does **not** assert
+    ``classified + needs_review + insufficient_evidence == total``.
+
+    Counter definitions:
 
     * ``classified_orders`` — pipeline reached a confident terminal
       label (``final_classification`` is ``APPROPRIATE`` or
       ``INAPPROPRIATE``).
     * ``needs_review_count`` — ``final_classification == NEEDS_REVIEW``
-      *or* the deterministic classifier set the ``needs_human_review``
-      flag on an otherwise-confident row (the committee's
-      spot-check policy adds this second contribution).
+      **or** the deterministic classifier set the ``needs_human_review``
+      flag on an otherwise-confident row (the committee's spot-check
+      policy adds this second contribution; this is the source of the
+      overlap with ``classified_orders``).
     * ``insufficient_evidence_count`` — ``final_classification ==
       INSUFFICIENT_EVIDENCE``. PRD §"Documentation absence ≠
-      INAPPROPRIATE": this is its own bucket, not a review bucket; a
-      spike here signals a *documentation* regression upstream rather
-      than an LLM regression.
-
-    The three buckets are mutually exclusive on the
-    ``final_classification`` axis but ``needs_review_count`` can also
-    count rows whose terminal label is APPROPRIATE/INAPPROPRIATE — those
-    rows contribute to both ``classified_orders`` and
-    ``needs_review_count``. The schema does not assert
-    ``classified + needs_review + insufficient_evidence == total``
-    because of that overlap.
+      INAPPROPRIATE": its own bucket, not a review bucket; a spike here
+      signals a *documentation* regression upstream rather than an LLM
+      regression.
     """
 
     model_config = ConfigDict(frozen=True)
