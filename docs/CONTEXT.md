@@ -9,7 +9,7 @@ Scope: Phase 1 of the KCMH RBC transfusion audit pipeline. PRD: [issue #1].
 Sections are added per ticket as each module merges to `main`. Currently
 covered: `#3 ingest`, `#4 audit_orders`, `#5 hb_lookup`, `#6 vitals_extractor`,
 `#16 evidence_bundle_builder`, `#17 deid_redactor`, `#18 quote_grounder`,
-`#19 audit_store`, `#21 prompt_builder`, `#25 review_actions`,
+`#19 audit_store`, `#21 prompt_builder`, `#22 llm_client`, `#25 review_actions`,
 `#28 report_generator`.
 
 ## Ingest concepts (#3)
@@ -1385,6 +1385,242 @@ reader does not re-litigate:
   client (#22) translates these into the Anthropic Messages API
   shape at its boundary. Keeping the translation in `bba.llm_client`
   isolates the prompt builder from SDK-version drift.
+
+## LLM-client concepts (#22)
+
+### Snapshot-pinned model ID
+
+The exact Anthropic model string with its `-YYYYMMDD` snapshot suffix
+(e.g. `claude-sonnet-4-6-20251018`, `claude-opus-4-7-20251030`). The two
+allowed values live behind `SONNET_MODEL_ID` and `OPUS_MODEL_ID` in
+`bba.llm_client.models`; the runtime allowlist is
+`ALLOWED_MODELS = frozenset({SONNET_MODEL_ID, OPUS_MODEL_ID})`. A
+floating alias (`claude-sonnet-4-6` without the date) is rejected at
+`LlmClientConfig` construction. PRD §"Anthropic silent point release":
+the snapshot suffix forces a code change for every model upgrade so
+the quarterly golden-set drift probe has a stable anchor.
+
+### Custom-ID assertion
+
+The Anthropic Batch API returns one result per submitted `custom_id`,
+not in submission order. `bba.llm_client.custom_id.assert_custom_ids_match`
+is the only place the contract `custom_id == audit_id` is checked.
+Mismatches (missing, extra, duplicate) raise `CustomIdMismatchError`
+naming the offending IDs and abort the batch before any per-row work.
+The function returns a `{audit_id: BatchSubmissionResult}` mapping so
+downstream code never positional-zips — a positional zip would silently
+swap audit rows under partial failure.
+
+### Fail-closed parser
+
+`bba.llm_client.parser.parse_structured_response` accepts any
+`BatchSubmissionResult` and returns a `ParseOutcome`. It NEVER raises.
+Every failure mode lands as `parse_failure=True` with a structured
+`ParseFailureReason`:
+
+* `MALFORMED_JSON` — tool-use `input` arrived as a string that fails
+  `json.loads`.
+* `SCHEMA_MISMATCH` — JSON parses but is missing required keys or has
+  wrong types per `LlmClassificationResponse`.
+* `CLASSIFICATION_OUT_OF_SET` — the four-label set is the only
+  permitted classification; anything else is a fail-closed exit.
+* `EMPTY_RESPONSE` — no `content` array, or empty array. Includes the
+  Anthropic Batch API's `errored`/`canceled`/`expired` row types, which
+  the transport synthesizes into a content-empty envelope.
+* `TOOL_USE_MISSING` — content exists but contains no `tool_use` block.
+
+A raise inside the parser would lose the audit chain — the caller's
+persistence layer would never see the failure, the row would be
+quarantined without a record, and the PRD §"reproducibility = we
+have the original answer" invariant would break.
+
+### Parse outcome
+
+Frozen result of one parser invocation. The fail-closed contract is
+enforced by a model validator: `parsed is None` iff `parse_failure is
+True` iff `parse_failure_reason is not None`. The complementary state
+(parsed set + no failure reason) is also enforced. Callers cannot
+forge an inconsistent `ParseOutcome`.
+
+### Retry → escalation policy
+
+`bba.llm_client.escalation.run_with_escalation` runs one audit row
+through up to `MAX_SONNET_ATTEMPTS = 2` Sonnet calls, then escalates
+to Opus 4.7 iff every Sonnet attempt produced `parse_failure=True`.
+PRD §13 cap of two Sonnet retries is structural: `LlmClientConfig`'s
+`max_sonnet_attempts` field is bounded `ge=2, le=MAX_SONNET_ATTEMPTS`.
+The policy is pure-control-flow over `ParseOutcome`; the HTTP
+boundary is the injected `AnthropicTransport`. `should_escalate(outcomes,
+config)` is the introspectable predicate — used by tests and the
+orchestrator alike.
+
+### Escalation log
+
+`EscalationLog` is the per-row record persisted on
+`LlmClientResult.escalation`. Fields: `sonnet_attempts` (0–2),
+`sonnet_parse_failures` (tuple of reasons, one per attempt),
+`escalated_to_opus` (bool), `opus_parse_failure` (reason or None).
+A model validator rejects inconsistent state: `escalated_to_opus=True`
+requires the full Sonnet budget exhausted; `opus_parse_failure` is
+None unless Opus actually ran.
+
+### Disagreement verdict
+
+`DisagreementVerdict` records the outcome of comparing a Sonnet and
+an Opus classification. Surfaces only when both sides produced a
+parseable response. Fields: `sonnet_classification`,
+`opus_classification`, `agreed`, `routed_to_needs_review`. A model
+validator rejects routing/agreement state desync — `agreed=True
+xor routed_to_needs_review=True` whenever both sides exist. When one
+side is None (the typical escalation case: Sonnet failed parse twice,
+Opus succeeded) the verdict carries `agreed=False, routed_to_needs_review=False`
+and the orchestrator records the Opus answer without a NEEDS_REVIEW
+gate.
+
+### Cross-check Opus
+
+Opt-in flag `LlmClientConfig.cross_check_with_opus = False` (default
+off). When True, every successful Sonnet attempt is shadow-followed
+by an Opus call; the two classifications are compared via
+`detect_disagreement`. Off by default because routine Opus shadow is
+a ~5x cost regression; PRD §13 reserves Opus for failure-driven
+escalation. Tests `TestDisagreementDetection::test_cross_check_*`
+pin both the agreement (record Sonnet, persist both calls) and
+disagreement (NEEDS_REVIEW with `review_reason="disagreement"`) paths.
+
+### Opus cross-check parse failure
+
+When `cross_check_with_opus=True` is enabled and Opus's shadow call
+returns malformed output, the quality gate has degraded — the row
+cannot be cross-checked. Distinct review reason:
+`review_reason="opus_cross_check_parse_failure"`. Both calls (Sonnet
++ Opus) are still persisted; the row routes to NEEDS_REVIEW so a
+human reviewer knows this is NOT a model disagreement but a degraded
+gate.
+
+### Anthropic transport (Protocol)
+
+`AnthropicTransport` is a `typing.Protocol` exposing one method:
+`submit_batch(model, requests, prompt_cache_enabled) -> RawBatchResponse`.
+The whole pipeline speaks to the Protocol, never to a concrete client.
+Two implementations: `AnthropicBatchTransport` (production, lazy-
+imports the `anthropic` SDK) and `CassetteTransport` (test-time,
+loads a recorded JSON cassette). The Protocol is the seam that lets
+unit tests run offline.
+
+### Cassette transport
+
+`bba.llm_client.cassette.CassetteTransport` is a Betamax/VCR-style
+recorder/replayer over a JSON file. The cassette format is a single
+`{"interactions": [...]}` array; each interaction is keyed on
+`(model, sorted_tuple(custom_ids))`. A cassette miss raises `KeyError`
+loudly — silently substituting a default response would let a
+regression in submission shape slip past CI. `load_cassette(path)`
+returns `tuple[CassetteInteraction, ...]`.
+
+### Production Anthropic batch transport
+
+`bba.llm_client.transport.AnthropicBatchTransport` is the SDK-backed
+production implementation. Lazy-imports `anthropic` from inside
+`submit_batch` so importing `bba.llm_client` in offline / CI contexts
+does not require the SDK extra. Constructor validates
+`ANTHROPIC_API_KEY` at instantiation (empty string treated as
+missing) so a misconfigured deployment fails loud at startup, not
+deep inside the SDK on first call. `MAX_OUTPUT_TOKENS = 4096`
+constant sizes the structured-output budget.
+
+### Anthropic request builder
+
+`bba.llm_client.transport.build_anthropic_request(request, *, model,
+prompt_cache_enabled)` translates one abstract `BatchSubmissionRequest`
+into the Anthropic Messages-API payload. The translation:
+
+* Splits `PromptBlock`s by `role` into the `system` array and the
+  user `messages[0].content` array.
+* On every `PromptBlock` with `cache_marker=True`, sets
+  `cache_control={"type": "ephemeral"}` on the corresponding payload
+  element — the Anthropic prompt-cache breakpoint marker.
+* Forces `tool_choice` on the `classify_transfusion_order` tool with
+  an `input_schema` that restricts `classification` to the four-label
+  enum (defense in depth alongside the post-hoc parser check).
+
+### Batch result type discriminator
+
+Anthropic Batch result entries carry a `type` discriminator —
+`succeeded`, `errored`, `canceled`, or `expired`. Only `succeeded`
+entries expose `result.message`; the other three expose `result.error`
+(or nothing). `_result_from_batch_entry` branches on the type and
+synthesizes a content-empty envelope (`raw_response_json["content"]
+= []`, `stop_reason = "batch_error"`) for non-succeeded entries with
+the error detail preserved under `_batch_error`. The parser then
+routes the row to `EMPTY_RESPONSE` → NEEDS_REVIEW. PRD §"Anthropic
+API outage mid-batch": chain of custody must hold; an `AttributeError`
+on `entry.result.message` would silently lose the row.
+
+### Deterministic call_id
+
+`LlmCall.call_id` is derived from STABLE inputs only:
+`call-<audit_id>-<attempt_index>-<sha256(run_id|audit_id|model_id|attempt_index|sha256(canonical_request_json))[:16]>`.
+Notably excludes `request_timestamp`. A re-run with identical inputs
+produces an identical `call_id` so the `audit_store` append-only
+contract holds — re-running with the same `(audit_id, run_id,
+code_version)` is a no-op, not a duplicate append.
+
+### Response-headers persistence
+
+`bba.audit_store.LlmCall` has no dedicated `response_headers` column,
+but PRD §"reproducibility" requires the `anthropic-version` header to
+survive persistence. `client._call_from_result` folds the headers
+into `LlmCall.response_json` under the key `__bba_response_headers__`
+(double-underscore namespaced). The writer raises
+`BatchSubmissionError` if Anthropic ever ships that exact top-level
+key, so a future SDK change cannot silently overwrite headers with
+vendor data.
+
+### Frozen JSON payloads (cross-module)
+
+`BatchSubmissionResult.raw_response_json`, `request_json`,
+`response_headers`, and `extended_thinking_blocks` use the
+`FrozenJsonDict` / `FrozenJsonList` types re-exported from
+`bba.audit_store.models`. Every nested dict/list is wrapped in
+`MappingProxyType` / `tuple` so a downstream caller cannot patch the
+response between parse and persist. Mutation raises `TypeError` at
+the boundary.
+
+### LLM client result
+
+`LlmClientResult` is the top-level per-row output of `process_batch`.
+Model-validator invariants:
+
+* `parse_failure=True` forces `response is None`,
+  `final_classification == "NEEDS_REVIEW"`, and `needs_review=True`.
+* `needs_review=True` requires a non-None `review_reason`.
+* Every `LlmCall` in `persisted_calls` must share the result's
+  `(audit_id, run_id)` — same constraint the `audit_store.write`
+  contract enforces, surfaced earlier so the bug is loud.
+
+### Deferred review (post-merge)
+
+Codex review ran for 4 in-session rounds before PASS. Items
+intentionally **not** in scope so a future reader does not
+re-litigate:
+
+* **Transport-level retries on rate-limit / 5xx** — the v1 cut covers
+  parse-failure retries via the Sonnet→Opus escalation policy, not
+  network transients. `AnthropicBatchTransport.submit_batch` raises
+  `AnthropicAPIError` on any non-recoverable failure; rate-limit
+  backoff is a follow-up ticket.
+* **Full SDK-backed integration test** — the unit suite uses
+  `CassetteTransport` and a monkeypatched fake `anthropic` module
+  (`_FakeBatchEntry`, `_build_fake_anthropic_sdk`). The live SDK
+  round-trip lands in `bba.audit_pipeline` (#24) per PRD §"Testing
+  Decisions" ("`bba.llm_client` — smoke tests + golden-path E2E").
+* **Prompt-cache marker recording in cassettes** — cassettes are
+  keyed on `(model, sorted(custom_ids))` only, not on
+  `prompt_cache_enabled`. The cache flag is validated at the
+  `build_anthropic_request` boundary
+  (`TestAnthropicRequestCacheControlTranslation`), not at the
+  cassette replay layer.
 
 ## Vocabulary not in this file
 
