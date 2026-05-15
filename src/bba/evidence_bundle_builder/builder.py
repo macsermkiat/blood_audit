@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from bba.evidence_bundle_builder.canonical import bundle_hash, canonical_serialize
+from bba.evidence_bundle_builder.exceptions import EvidenceBundleTooLargeError
 from bba.evidence_bundle_builder.models import (
     DiagnosisRecord,
     EvidenceBundle,
@@ -296,6 +297,18 @@ def _enforce_char_cap(
 
     while current and _bundle_size(anchor, current) > char_cap:
         current = current[:-1]
+
+    # Final safety check: if even the anchor envelope alone exceeds char_cap,
+    # the cap is structurally unsatisfiable — fail loud rather than ship an
+    # over-budget bundle that violates the AC. The caller can catch this
+    # and route to a longer-context tier or split the anchor.
+    final_size = _bundle_size(anchor, current)
+    if final_size > char_cap:
+        raise EvidenceBundleTooLargeError(
+            f"anchor envelope alone is {final_size} chars; cannot satisfy "
+            f"char_cap={char_cap}. Reduce anchor field sizes (hn_hash, "
+            "an_hash, products) or raise char_cap."
+        )
     return current
 
 
@@ -343,7 +356,12 @@ def _assign_ids(
             )
         )
 
-    for f in sorted(focus, key=lambda n: (n.timestamp, n.text)):
+    # IPDNRFOCUSDT preserves the closest-first-per-side order from
+    # split_focus_notes_5_5 — the LLM reads earlier IDs first and the
+    # ticket explicitly demands proximity ranking, not chronological order.
+    # The helper's output is already deterministic across input shuffles
+    # (sorted internally), so the stable-IDs invariant survives.
+    for f in focus:
         items.append(
             EvidenceItem(
                 id=_next_id(),

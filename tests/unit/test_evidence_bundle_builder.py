@@ -58,6 +58,7 @@ from bba.evidence_bundle_builder import (
     SECTION_PRIORITY,
     DiagnosisRecord,
     EvidenceBundle,
+    EvidenceBundleTooLargeError,
     EvidenceInputs,
     EvidenceItem,
     FocusNote,
@@ -634,6 +635,87 @@ class TestFocusNoteCapTotal10InBundle:
         inputs = EvidenceInputs(anchor=_anchor(), focus_notes=notes)
         bundle = build_evidence_bundle(inputs=inputs)
         assert len(_items_by_source(bundle, "IPDNRFOCUSDT")) == 10
+
+
+class TestFocusEmissionOrderInBundle:
+    """Bundle-level: focus items emit in closest-first per side, before|after.
+
+    The 5+5 split helper ranks by proximity to the anchor — this test locks
+    in that the BUILDER preserves that order rather than re-sorting. The
+    AC ("closest to order time first") is about evidence-ID assignment in
+    the final bundle, not just helper output, because the LLM cites items
+    by their bundle ID and reads them in emission order."""
+
+    def test_focus_emission_order_is_closest_first_per_side(self) -> None:
+        # Inputs deliberately shuffled to confirm the order is derived from
+        # proximity, not input position.
+        notes = tuple(_focus(offset_hours=h) for h in (-3, 2, -1, 3, -2, 1))
+        inputs = EvidenceInputs(anchor=_anchor(), focus_notes=notes)
+        bundle = build_evidence_bundle(inputs=inputs)
+        focus_items = _items_by_source(bundle, "IPDNRFOCUSDT")
+        offsets = [
+            round((it.timestamp_utc - ANCHOR_DT).total_seconds() / 3600.0, 1)  # type: ignore[operator]
+            for it in focus_items
+        ]
+        # Before-side closest-first (-1, -2, -3), then after-side closest-first
+        # (+1, +2, +3). Chronological-ascending order would be (-3, -2, -1,
+        # +1, +2, +3) — the WRONG answer the codex review flagged.
+        assert offsets == [-1.0, -2.0, -3.0, 1.0, 2.0, 3.0]
+
+    def test_focus_emission_at_5_5_cap_emits_closest_first(self) -> None:
+        # Saturate both sides; the 5 nearest pre-anchor and 5 nearest
+        # post-anchor must come back in closest-first sequence.
+        before = tuple(_focus(offset_hours=-h) for h in (1, 2, 3, 4, 5, 6, 7))
+        after = tuple(_focus(offset_hours=h) for h in (1, 2, 3, 4, 5, 6, 7))
+        inputs = EvidenceInputs(
+            anchor=_anchor(),
+            focus_notes=before + after,
+        )
+        bundle = build_evidence_bundle(inputs=inputs)
+        focus_items = _items_by_source(bundle, "IPDNRFOCUSDT")
+        offsets = [
+            round((it.timestamp_utc - ANCHOR_DT).total_seconds() / 3600.0, 1)  # type: ignore[operator]
+            for it in focus_items
+        ]
+        assert offsets == [-1.0, -2.0, -3.0, -4.0, -5.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+
+
+class TestImpossibleCharCapRaises:
+    """Cap enforcement fails loud when even the anchor envelope exceeds cap.
+
+    Returning silently with an over-budget bundle would violate the AC
+    ("bundles never exceed token-budget proxy") and let the prompt_builder
+    pass an oversized prompt to the LLM with no signal to route to a
+    longer-context tier. Per the project's "fail loud" principle, the
+    pipeline raises EvidenceBundleTooLargeError so the caller can react."""
+
+    def test_tiny_cap_raises_on_anchor_only_inputs(self) -> None:
+        inputs = EvidenceInputs(anchor=_anchor())
+        with pytest.raises(EvidenceBundleTooLargeError):
+            build_evidence_bundle(inputs=inputs, char_cap=10)
+
+    def test_huge_anchor_field_raises_under_default_cap(self) -> None:
+        # 5K + 5K = 10K of hash chars alone, well over the 8K default cap.
+        inputs = EvidenceInputs(
+            anchor=OrderAnchor(
+                order_datetime=ANCHOR_DT,
+                hn_hash="x" * 5000,
+                an_hash="y" * 5000,
+                products=("LPRC",),
+            )
+        )
+        with pytest.raises(EvidenceBundleTooLargeError):
+            build_evidence_bundle(inputs=inputs)
+
+    def test_error_message_names_the_anchor_size_and_cap(self) -> None:
+        # Operator-friendly message: the value the cap could have been to fit,
+        # plus which fields are likely candidates to trim.
+        inputs = EvidenceInputs(anchor=_anchor())
+        with pytest.raises(EvidenceBundleTooLargeError) as exc_info:
+            build_evidence_bundle(inputs=inputs, char_cap=5)
+        msg = str(exc_info.value)
+        assert "char_cap=5" in msg
+        assert "anchor" in msg.lower()
 
 
 # =============================================================================

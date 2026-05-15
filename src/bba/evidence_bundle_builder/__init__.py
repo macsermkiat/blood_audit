@@ -27,6 +27,7 @@ from bba.evidence_bundle_builder.builder import (
     build_evidence_bundle,
 )
 from bba.evidence_bundle_builder.canonical import bundle_hash, canonical_serialize
+from bba.evidence_bundle_builder.exceptions import EvidenceBundleTooLargeError
 from bba.evidence_bundle_builder.models import (
     DiagnosisRecord,
     EvidenceBundle,
@@ -57,6 +58,7 @@ __all__ = [
     "DEFAULT_CHAR_CAP",
     "DiagnosisRecord",
     "EvidenceBundle",
+    "EvidenceBundleTooLargeError",
     "EvidenceInputs",
     "EvidenceItem",
     "EvidenceSource",
