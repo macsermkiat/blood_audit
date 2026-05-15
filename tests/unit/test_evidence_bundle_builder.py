@@ -1327,6 +1327,32 @@ class TestEmptyProgressItemsNeverConstructed:
         )
         assert _items_by_source(bundle, "IPDADMPROGRESS") == ()
 
+    def test_all_null_vitals_does_not_emit_item(self) -> None:
+        # An in-window VitalsRecord with every measurement None has
+        # nothing for the LLM to cite — only note_source provenance
+        # metadata. Emitting it would burn a bundle E_N slot on a
+        # dead reference (same dead-citation shape we close for
+        # blank progress notes).
+        v = VitalsRecord(
+            timestamp=ANCHOR_DT,
+            source="IPDADMPROGRESS",
+            sbp=None,
+            dbp=None,
+            hr=None,
+            rr=None,
+            bt=None,
+        )
+        bundle = _build_minimal(vitals=(v,))
+        assert _items_by_source(bundle, "Vitals") == ()
+
+    def test_partial_vitals_still_emits_item(self) -> None:
+        # At least one measurement populated → real evidence; emit it.
+        v = VitalsRecord(timestamp=ANCHOR_DT, source="IPDADMPROGRESS", sbp=110)
+        bundle = _build_minimal(vitals=(v,))
+        vitals_items = _items_by_source(bundle, "Vitals")
+        assert len(vitals_items) == 1
+        assert vitals_items[0].payload["sbp"] == 110
+
     def test_blank_focus_does_not_consume_cap_slots(self) -> None:
         # Mirrors the round-7 progress fix for IPDNRFOCUSDT: 5 closer-
         # to-anchor blank focus notes on each side could otherwise

@@ -154,6 +154,19 @@ def _filter_vitals(vitals: Sequence[VitalsRecord], anchor: datetime) -> tuple[Vi
 # =============================================================================
 
 
+def _has_any_vital_value(v: VitalsRecord) -> bool:
+    """True iff at least one of sbp/dbp/hr/rr/bt is populated.
+
+    A VitalsRecord with every measurement None has nothing for the LLM
+    to quote; emitting it would consume bundle budget for an E_N
+    citation that points at provenance metadata only — same dead-
+    reference shape the round-7 progress-note filter closes."""
+    return any(
+        getattr(v, field) is not None
+        for field in ("sbp", "dbp", "hr", "rr", "bt")
+    )
+
+
 def _has_quoteable_content(note: ProgressNote) -> bool:
     """True iff parsing the note text yields at least one non-empty SOAP section.
 
@@ -672,7 +685,10 @@ def build_evidence_bundle(
 
     meds = _filter_meds(inputs.meds, anchor_dt)
     hbs = _filter_hb(inputs.hb_history, anchor_dt)
-    vitals = _filter_vitals(inputs.vitals, anchor_dt)
+    # Drop all-null vitals (only note_source populated): no measurement to
+    # cite, so the LLM would get a dead E_N reference into the bundle.
+    vitals_in_window = _filter_vitals(inputs.vitals, anchor_dt)
+    vitals = tuple(v for v in vitals_in_window if _has_any_vital_value(v))
 
     items = _assign_ids(
         diagnoses=inputs.diagnoses,
