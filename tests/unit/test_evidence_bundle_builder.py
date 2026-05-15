@@ -304,6 +304,19 @@ class TestModelImmutability:
         with pytest.raises(ValidationError):
             inputs.diagnoses = (DiagnosisRecord(icd10="D50.9"),)  # type: ignore[misc]
 
+    def test_evidence_item_rejects_naive_timestamp_utc(self) -> None:
+        # The UTC contract is the project-wide invariant (CONTEXT.md
+        # 'tz-aware UTC'); the field name promises UTC and the canonical
+        # serializer would otherwise emit a no-offset string for a naive
+        # value, breaking replay across time zones. Reject at construction.
+        with pytest.raises(ValidationError):
+            EvidenceItem(
+                id="E1",
+                source="IPDADMPROGRESS",
+                timestamp_utc=datetime(2026, 5, 15, 12, 0, 0),  # naive
+                payload={"sections": []},
+            )
+
     def test_evidence_item_id_must_start_with_E(self) -> None:
         # Stable-IDs AC: quote_grounder pattern-matches on E-prefix; an
         # arbitrary id would silently fail downstream rather than at
@@ -930,6 +943,31 @@ class TestEmptyProgressItemsNeverConstructed:
             progress_notes=(_progress(offset_hours=-1, text="S:\nO:\nA:\nP:"),)
         )
         assert _items_by_source(bundle, "IPDADMPROGRESS") == ()
+
+    def test_blank_focus_does_not_consume_cap_slots(self) -> None:
+        # Mirrors the round-7 progress fix for IPDNRFOCUSDT: 5 closer-
+        # to-anchor blank focus notes on each side could otherwise
+        # consume CAP_FOCUS_BEFORE + CAP_FOCUS_AFTER and evict valid
+        # farther notes. The pre-cap content filter ensures the valid
+        # notes survive.
+        blanks_before = tuple(
+            _focus(offset_hours=-h, text="") for h in (0.5, 1.0, 1.5, 2.0, 2.5)
+        )
+        blanks_after = tuple(
+            _focus(offset_hours=h, text="   ") for h in (0.5, 1.0, 1.5, 2.0, 2.5)
+        )
+        valid_before = _focus(offset_hours=-12.0, text="pain managed")
+        valid_after = _focus(offset_hours=12.0, text="post-transfusion stable")
+        bundle = build_evidence_bundle(
+            inputs=EvidenceInputs(
+                anchor=_anchor(),
+                focus_notes=blanks_before + blanks_after + (valid_before, valid_after),
+            )
+        )
+        focus_items = _items_by_source(bundle, "IPDNRFOCUSDT")
+        assert len(focus_items) == 2
+        texts = {it.payload["text"] for it in focus_items}
+        assert texts == {"pain managed", "post-transfusion stable"}
 
     def test_blank_progress_does_not_consume_cap_slots(self) -> None:
         # Realistic pathology: 8 closer-to-anchor header-only progress

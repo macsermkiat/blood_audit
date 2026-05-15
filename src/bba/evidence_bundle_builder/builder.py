@@ -547,6 +547,10 @@ def build_evidence_bundle(
     progress = _cap_progress_closest(progress, anchor_dt)
 
     focus_in_window = _filter_focus(inputs.focus_notes, anchor_dt)
+    # Same pre-cap filter as progress: drop notes with no quoteable content
+    # so blank/whitespace-only entries cannot consume CAP_FOCUS_BEFORE +
+    # CAP_FOCUS_AFTER slots and silently evict valid farther entries.
+    focus_in_window = tuple(f for f in focus_in_window if f.text.strip())
     focus = split_focus_notes_5_5(
         notes=focus_in_window,
         anchor=anchor_dt,

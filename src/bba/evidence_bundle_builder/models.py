@@ -301,7 +301,13 @@ class EvidenceItem(BaseModel):
 
     id: str
     source: EvidenceSource
-    timestamp_utc: datetime | None
+    # UTCDatetime | None — the field name promises UTC and the bundle's
+    # canonical-JSON contract requires every persisted timestamp to be
+    # tz-aware. Without the validator, a public caller could construct an
+    # item with ``datetime(2026, 5, 15, 12, 0)`` and the canonical
+    # serializer would emit it without an offset, breaking replay
+    # comparability across time zones (CONTEXT.md "tz-aware UTC").
+    timestamp_utc: UTCDatetime | None
     payload: FrozenJsonDict
 
     @field_validator("id")
