@@ -243,17 +243,22 @@ def _to_utc(ts: datetime) -> datetime:
     return ts.astimezone(UTC)
 
 
-def _hb_sort_key(h: HbRecord) -> tuple[datetime, float, int]:
+def _hb_sort_key(h: HbRecord) -> tuple[int, datetime, float]:
     """Total sort key for Hb records that preserves the HEMATOLOGY > POCT
     contract from PRD §3 / :mod:`bba.hb_lookup` even at the bundle layer.
 
-    Source rank is 1 for HEMATOLOGY (preferred LABEXM 290095) and 0 for
-    POCT (LABEXM 500001). Sorted with ``reverse=True``, that puts
-    HEMATOLOGY before POCT for ties on ``(timestamp, value_g_dl)`` —
-    so the whole-item tail-drop in :func:`_enforce_char_cap` removes
-    POCT first, never quietly elevating a POCT result over a HEMATOLOGY
-    one of the same magnitude."""
-    return (h.timestamp, h.value_g_dl, 1 if h.source == "HEMATOLOGY" else 0)
+    Source rank is the PRIMARY key: 1 for HEMATOLOGY (preferred LABEXM
+    290095), 0 for POCT (LABEXM 500001). With ``reverse=True``, all
+    HEMATOLOGY items emit before any POCT item — regardless of
+    recency. That matches the deterministic classifier, which picks
+    HEMATOLOGY whenever any HEMATOLOGY record is in the 7-day lookback;
+    putting HEMATOLOGY first means the LLM reads the same primary Hb
+    signal the classifier used.
+
+    Within each source group, ``timestamp`` then ``value_g_dl`` give
+    newest-first ordering (and value tiebreak), preserving total order
+    across input shuffles."""
+    return (1 if h.source == "HEMATOLOGY" else 0, h.timestamp, h.value_g_dl)
 
 
 def _vitals_sort_key(v: VitalsRecord) -> tuple[datetime, str, str, str, str, str, str]:

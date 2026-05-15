@@ -437,6 +437,36 @@ class EvidenceBundle(BaseModel):
             raise ValueError(
                 "canonical_json 'anchor' must be a JSON object"
             )
+        # Anchor shape lock: builder always emits exactly these four
+        # fields. An empty {} or extra-key anchor is silent loss of
+        # decision context (an_hash, hn_hash for replay; order_datetime
+        # for re-windowing; products for re-classification).
+        anchor_obj = parsed["anchor"]
+        anchor_keys = set(anchor_obj.keys())
+        expected_anchor_keys = {
+            "order_datetime",
+            "hn_hash",
+            "an_hash",
+            "products",
+        }
+        if anchor_keys != expected_anchor_keys:
+            extras = anchor_keys - expected_anchor_keys
+            missing = expected_anchor_keys - anchor_keys
+            raise ValueError(
+                f"canonical_json 'anchor' must have exactly keys "
+                f"{sorted(expected_anchor_keys)} "
+                f"(extras={sorted(extras)}, missing={sorted(missing)})"
+            )
+        if not isinstance(anchor_obj["order_datetime"], str):
+            raise ValueError("'anchor.order_datetime' must be a string")
+        if not isinstance(anchor_obj["hn_hash"], str):
+            raise ValueError("'anchor.hn_hash' must be a string")
+        if not isinstance(anchor_obj["an_hash"], str):
+            raise ValueError("'anchor.an_hash' must be a string")
+        if not isinstance(anchor_obj["products"], list) or not all(
+            isinstance(p, str) for p in anchor_obj["products"]
+        ):
+            raise ValueError("'anchor.products' must be an array of strings")
         parsed_items = parsed["items"]
         if not isinstance(parsed_items, list):
             raise ValueError("canonical_json 'items' must be an array")

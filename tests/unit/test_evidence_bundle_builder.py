@@ -148,6 +148,21 @@ def _vitals(
     )
 
 
+def _valid_anchor_envelope() -> dict[str, object]:
+    """Return a minimal valid anchor envelope dict for canonical-JSON tests.
+
+    The model_validator on EvidenceBundle requires the anchor to have
+    exactly {order_datetime, hn_hash, an_hash, products} with the right
+    types. Tests that construct EvidenceBundle directly need this shape;
+    builder-emitted bundles already produce it via _bundle_envelope."""
+    return {
+        "an_hash": "an-test",
+        "hn_hash": "hn-test",
+        "order_datetime": "2026-05-15T12:00:00+00:00",
+        "products": ["LPRC"],
+    }
+
+
 def _build_minimal(**overrides: object) -> EvidenceBundle:
     """Build a bundle from a minimal default :class:`EvidenceInputs`.
 
@@ -360,7 +375,7 @@ class TestModelImmutability:
         # canonical_json with a forged or stale hash, the bundle would
         # silently lie about its identity. The model recomputes
         # sha256(canonical_json) and rejects on mismatch.
-        canonical_json = canonical_serialize({"anchor": {}, "items": []})
+        canonical_json = canonical_serialize({"anchor": _valid_anchor_envelope(), "items": []})
         wrong_hash = "0" * 64  # well-formed but wrong
         with pytest.raises(ValidationError, match="does not match"):
             EvidenceBundle(
@@ -372,7 +387,7 @@ class TestModelImmutability:
     def test_bundle_accepts_correctly_computed_hash(self) -> None:
         # Sanity: when the hash is genuinely the sha256 of canonical_json
         # AND canonical_json is a proper envelope, construction succeeds.
-        canonical_json = canonical_serialize({"anchor": {}, "items": []})
+        canonical_json = canonical_serialize({"anchor": _valid_anchor_envelope(), "items": []})
         right_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
         bundle = EvidenceBundle(
             items=(), canonical_json=canonical_json, bundle_hash=right_hash
@@ -408,7 +423,7 @@ class TestModelImmutability:
         # Without this check, a forged bundle could carry items in the
         # bytes (and thus the hash) that don't match the model's items.
         envelope = {
-            "anchor": {},
+            "anchor": _valid_anchor_envelope(),
             "items": [
                 {
                     "id": "E1",
@@ -437,7 +452,7 @@ class TestModelImmutability:
         )
         # Build canonical_json with a DIFFERENT id at the same position.
         envelope = {
-            "anchor": {},
+            "anchor": _valid_anchor_envelope(),
             "items": [
                 {
                     "id": "E2",  # mismatched id
@@ -465,7 +480,7 @@ class TestModelImmutability:
             payload={"icd10": "D50.9"},
         )
         envelope = {
-            "anchor": {},
+            "anchor": _valid_anchor_envelope(),
             "items": [
                 {
                     "id": "E1",
@@ -501,10 +516,64 @@ class TestModelImmutability:
     def test_bundle_rejects_envelope_with_extra_top_level_key(self) -> None:
         # Builder emits exactly {anchor, items}. Extras are upstream
         # drift; reject so the audit chain has a single canonical shape.
-        envelope = {"anchor": {}, "items": [], "extra": "leak"}
+        envelope = {"anchor": _valid_anchor_envelope(), "items": [], "extra": "leak"}
         canonical_json = canonical_serialize(envelope)
         right_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
         with pytest.raises(ValidationError, match="envelope"):
+            EvidenceBundle(
+                items=(),
+                canonical_json=canonical_json,
+                bundle_hash=right_hash,
+            )
+
+    def test_bundle_rejects_empty_anchor(self) -> None:
+        # Round-12 only required anchor to be a dict; an empty {} would
+        # silently lose all decision context (an_hash, hn_hash,
+        # order_datetime, products) while keeping a self-consistent
+        # bundle_hash. Round-14 locks the anchor key set.
+        envelope = {"anchor": {}, "items": []}
+        canonical_json = canonical_serialize(envelope)
+        right_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+        with pytest.raises(ValidationError, match="anchor"):
+            EvidenceBundle(
+                items=(),
+                canonical_json=canonical_json,
+                bundle_hash=right_hash,
+            )
+
+    def test_bundle_rejects_anchor_with_extra_key(self) -> None:
+        anchor = _valid_anchor_envelope()
+        anchor["extra_chart_field"] = "leak"
+        envelope = {"anchor": anchor, "items": []}
+        canonical_json = canonical_serialize(envelope)
+        right_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+        with pytest.raises(ValidationError, match="anchor"):
+            EvidenceBundle(
+                items=(),
+                canonical_json=canonical_json,
+                bundle_hash=right_hash,
+            )
+
+    def test_bundle_rejects_anchor_with_non_string_hn_hash(self) -> None:
+        anchor = _valid_anchor_envelope()
+        anchor["hn_hash"] = 12345  # type: ignore[assignment]
+        envelope = {"anchor": anchor, "items": []}
+        canonical_json = canonical_serialize(envelope)
+        right_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+        with pytest.raises(ValidationError, match="hn_hash"):
+            EvidenceBundle(
+                items=(),
+                canonical_json=canonical_json,
+                bundle_hash=right_hash,
+            )
+
+    def test_bundle_rejects_anchor_with_non_string_products_element(self) -> None:
+        anchor = _valid_anchor_envelope()
+        anchor["products"] = ["LPRC", 42]  # type: ignore[list-item]
+        envelope = {"anchor": anchor, "items": []}
+        canonical_json = canonical_serialize(envelope)
+        right_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+        with pytest.raises(ValidationError, match="products"):
             EvidenceBundle(
                 items=(),
                 canonical_json=canonical_json,
@@ -531,7 +600,7 @@ class TestModelImmutability:
             payload={"icd10": "D50.9"},
         )
         envelope = {
-            "anchor": {},
+            "anchor": _valid_anchor_envelope(),
             "items": [
                 {
                     "id": "E1",
@@ -1621,6 +1690,37 @@ class TestHbEmissionAndTruncationPriority:
             "MEDs should drop FIRST under tight cap; if all 8 survive, "
             "DROP_PRIORITY is not applied"
         )
+
+    def test_hematology_emits_before_newer_poct_in_normal_bundle(self) -> None:
+        # PRD §3 / bba.hb_lookup contract: HEMATOLOGY > POCT regardless
+        # of recency. The NORMAL bundle (no cap pressure) must already
+        # show HEMATOLOGY first so the LLM reads the same primary Hb
+        # signal the deterministic classifier picked. Round-13 only
+        # protected the cap-pressure case; this test locks the normal
+        # emission order too.
+        hb_hema = HbRecord(
+            timestamp=ANCHOR_DT - timedelta(hours=6),
+            value_g_dl=7.5,
+            source="HEMATOLOGY",
+        )
+        hb_poct = HbRecord(
+            timestamp=ANCHOR_DT - timedelta(hours=2),
+            value_g_dl=8.0,
+            source="POCT",
+        )
+        bundle = build_evidence_bundle(
+            inputs=EvidenceInputs(
+                anchor=_anchor(), hb_history=(hb_hema, hb_poct)
+            )
+        )
+        lab_items = _items_by_source(bundle, "Lab")
+        assert len(lab_items) == 2
+        assert lab_items[0].payload["lab_source"] == "HEMATOLOGY", (
+            "POCT (newer) emitted before HEMATOLOGY (older); the LLM "
+            "would read a different primary Hb signal than the "
+            "deterministic classifier"
+        )
+        assert lab_items[1].payload["lab_source"] == "POCT"
 
     def test_hematology_kept_over_NEWER_poct_under_tight_cap(self) -> None:
         # PRD §3 / bba.hb_lookup: HEMATOLOGY (LABEXM 290095) is preferred
