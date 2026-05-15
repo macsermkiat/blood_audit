@@ -221,6 +221,28 @@ INJECTION_PATTERNS: tuple[InjectionPattern, ...] = (
         ),
         language="en",
     ),
+    # ---- ENVELOPE_ESCAPE --------------------------------------------------
+    # Defends the ``<evidence id="E1" untrusted="true">...</evidence>``
+    # boundary the prompt builder wraps each redacted chunk in. A chunk
+    # whose content contains the literal closing tag ``</evidence>`` or
+    # an opening ``<evidence `` could fool an LLM into parsing a nested
+    # envelope and trusting the inner content. The envelope wrapper does
+    # NOT XML-escape these tokens because escaping breaks citation byte-
+    # identity for benign ``Hb < 8`` style text — so the defense lives
+    # here as a pre-LLM injection routing decision (codex GitHub bot
+    # review on PR #43).
+    InjectionPattern(
+        pattern_id="envelope_close_tag_v1",
+        category=InjectionCategory.ENVELOPE_ESCAPE,
+        regex=r"</\s*evidence\s*>",
+        language="any",
+    ),
+    InjectionPattern(
+        pattern_id="envelope_open_tag_v1",
+        category=InjectionCategory.ENVELOPE_ESCAPE,
+        regex=r"<\s*evidence(?:\s+[a-z_-]+\s*=\s*\"[^\"]*\")*\s*>",
+        language="any",
+    ),
 )
 
 

@@ -109,6 +109,7 @@ class InjectionCategory(StrEnum):
     JAILBREAK_TH = "jailbreak_th"
     SYSTEM_PROMPT_EXFIL = "system_prompt_exfil"
     ROLE_PRETEND = "role_pretend"
+    ENVELOPE_ESCAPE = "envelope_escape"
 
 
 class InjectionMatch(BaseModel):

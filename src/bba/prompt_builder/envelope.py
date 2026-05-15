@@ -6,15 +6,24 @@ attribute is a fixed signal to the LLM — every redacted bundle item has
 crossed the deid boundary and must be treated as adversarial regardless
 of source.
 
-The wrapper additionally XML-escapes the content (``&``, ``<``, ``>``) so
-a chunk text containing literal ``<evidence>`` substrings cannot break
-the envelope shape the LLM parses.
+**Byte-identity contract:** chunk text is NFC-normalized and inserted
+verbatim into the envelope — no XML escaping of ``<``, ``>``, or ``&``.
+Clinical text routinely contains these characters (``Hb < 8``, ``SBP >
+90``, ``K&Na panel``); escaping them would make the LLM see a different
+byte sequence than the redacted source text that
+:mod:`bba.quote_grounder` verifies citations against, silently failing
+all grounding for affected chunks (codex GitHub bot review #43).
+
+**Envelope-escape attacks are handled upstream by the injection scanner**
+(:mod:`bba.prompt_builder.injection` — ``ENVELOPE_ESCAPE`` category):
+chunks containing literal ``</evidence>`` or ``<evidence `` boundary
+tokens flag the row to ``NEEDS_REVIEW`` before the prompt is assembled,
+so adversarial envelope escapes never reach this wrapper.
 """
 
 from __future__ import annotations
 
 import unicodedata
-from xml.sax.saxutils import escape
 
 from bba.prompt_builder.models import (
     EVIDENCE_TAG_CLOSE,
@@ -24,17 +33,15 @@ from bba.prompt_builder.models import (
 
 
 def wrap_evidence(chunk: EvidenceChunk) -> str:
-    """Return the ``<evidence>``-wrapped form of ``chunk``.
+    """Return the ``<evidence>``-wrapped form of ``chunk`` with byte-identical content.
 
-    Output shape: ``<evidence id="{evidence_id}" untrusted="true">{escaped_text}</evidence>``.
-    The text is NFC-normalized and XML-escaped (``&`` -> ``&amp;``,
-    ``<`` -> ``&lt;``, ``>`` -> ``&gt;``).
+    The text is NFC-normalized; no other transformation is applied. See
+    module docstring for why escaping is intentionally absent.
     """
     nfc_text = unicodedata.normalize("NFC", chunk.text)
-    escaped = escape(nfc_text)
     return (
         f"{EVIDENCE_TAG_OPEN_TEMPLATE.format(evidence_id=chunk.evidence_id)}"
-        f"{escaped}{EVIDENCE_TAG_CLOSE}"
+        f"{nfc_text}{EVIDENCE_TAG_CLOSE}"
     )
 
 
