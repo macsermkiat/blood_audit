@@ -290,15 +290,20 @@ def _hb_sort_key(h: HbRecord) -> tuple[int, datetime, int, float]:
     )
 
 
-def _vitals_sort_key(v: VitalsRecord) -> tuple[datetime, str, str, str, str, str, str]:
-    """Total sort key over every :class:`VitalsRecord` field.
+def _vitals_emission_key(
+    v: VitalsRecord, anchor_dt: datetime
+) -> tuple[float, datetime, str, str, str, str, str, str]:
+    """Closest-to-anchor first emission key for Vitals.
 
-    Two snapshots from the same source at the exact same moment with
-    different vital values would otherwise tie on ``(timestamp, source)``
-    and let input order leak into the bundle. Using ``str(...)`` for the
-    optional numeric fields sidesteps the ``None``-vs-``int`` comparison
-    error that a raw ``(x.sbp, ...)`` tuple would raise."""
+    Tail-drop in :func:`_enforce_char_cap` removes the LAST emitted item;
+    closest-first means the FARTHEST vitals snapshot drops first under
+    cap pressure, so the bedside state nearest to the order moment
+    (decision-time vitals) survives longest.
+
+    Composite tiebreak ``(timestamp, source, str(sbp..bt))`` keeps the
+    order TOTAL across input shuffles (Round-2 codex determinism gate)."""
     return (
+        abs((v.timestamp - anchor_dt).total_seconds()),
         v.timestamp,
         v.source,
         str(v.sbp),
@@ -306,6 +311,23 @@ def _vitals_sort_key(v: VitalsRecord) -> tuple[datetime, str, str, str, str, str
         str(v.hr),
         str(v.rr),
         str(v.bt),
+    )
+
+
+def _progress_emission_key(
+    p: ProgressNote, anchor_dt: datetime
+) -> tuple[float, datetime, str]:
+    """Closest-to-anchor first emission key for IPDADMPROGRESS notes.
+
+    Mirrors :func:`_vitals_emission_key`: closest-first emission so
+    tail-drop discards the farthest progress note first under cap
+    pressure. The cap-selection in :func:`_cap_progress_closest`
+    already kept the 8 closest notes; this preserves "closest" through
+    the truncation pass too."""
+    return (
+        abs((p.timestamp - anchor_dt).total_seconds()),
+        p.timestamp,
+        p.text,
     )
 
 
@@ -551,7 +573,7 @@ def _assign_ids(
             )
         )
 
-    for p in sorted(progress, key=lambda n: (n.timestamp, n.text)):
+    for p in sorted(progress, key=lambda n: _progress_emission_key(n, anchor_dt)):
         payload = _progress_payload(p.text)
         # Skip blank notes (text="") and header-only notes (e.g. "S:\nO:"
         # with no content) at construction. Without this, an empty E_N
@@ -634,7 +656,7 @@ def _assign_ids(
             )
         )
 
-    for v in sorted(vitals, key=_vitals_sort_key):
+    for v in sorted(vitals, key=lambda x: _vitals_emission_key(x, anchor_dt)):
         items.append(
             EvidenceItem(
                 id=_next_id(),

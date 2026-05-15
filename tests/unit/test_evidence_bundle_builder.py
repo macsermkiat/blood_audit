@@ -1568,11 +1568,14 @@ class TestStableEvidenceIDs:
         ids = [item.id for item in bundle.items]
         assert len(ids) == len(set(ids))
 
-    def test_canonical_emission_is_by_source_then_timestamp(self) -> None:
+    def test_canonical_emission_is_by_source(self) -> None:
         # Per the issue body's "stable evidence IDs assigned deterministically",
-        # the emission order is canonical: the literal source order in
-        # :data:`EvidenceSource` (Diagnosis, IPDADMPROGRESS, IPDNRFOCUSDT,
-        # MED, Lab, Vitals), then by timestamp ascending within each source.
+        # outer order is the literal source order in :data:`EvidenceSource`
+        # (Diagnosis, IPDADMPROGRESS, IPDNRFOCUSDT, MED, Lab, Vitals).
+        # Inner ordering is source-specific and tuned for truncation
+        # safety (closest-to-anchor first for IPDADMPROGRESS / Vitals so
+        # tail-drop discards farthest first; newest-first for Lab and
+        # pre-anchor MED so tail-drop discards stale first).
         bundle = _build_minimal(
             progress_notes=(_progress(offset_hours=-2), _progress(offset_hours=-1)),
             meds=(_med(offset_hours=-1, drug="A"),),
@@ -1580,9 +1583,24 @@ class TestStableEvidenceIDs:
         sources = [item.source for item in bundle.items]
         assert sources.index("Diagnosis") < sources.index("IPDADMPROGRESS")
         assert sources.index("IPDADMPROGRESS") < sources.index("MED")
+
+    def test_progress_emission_is_closest_to_anchor_first(self) -> None:
+        # Round-21: IPDADMPROGRESS now emits closest-to-anchor first so
+        # tail-drop in _enforce_char_cap discards farthest progress first
+        # under cap pressure. Two notes at -2h and -1h: -1h is closer
+        # to the anchor and emits first.
+        bundle = _build_minimal(
+            progress_notes=(
+                _progress(offset_hours=-2),
+                _progress(offset_hours=-1),
+            ),
+        )
         progress_items = _items_by_source(bundle, "IPDADMPROGRESS")
-        progress_timestamps = [it.timestamp_utc for it in progress_items]
-        assert progress_timestamps == sorted(progress_timestamps)  # type: ignore[type-var]
+        offsets = [
+            round((it.timestamp_utc - ANCHOR_DT).total_seconds() / 3600.0, 1)  # type: ignore[operator]
+            for it in progress_items
+        ]
+        assert offsets == [-1.0, -2.0]
 
 
 # =============================================================================
@@ -1852,6 +1870,66 @@ class TestHbEmissionAndTruncationPriority:
             "Stale MED (-72h) survived while immediate MED (-1h) dropped; "
             "MED emission order is not newest-first"
         )
+
+    def test_vitals_truncation_preserves_closest_to_anchor(self) -> None:
+        # Round-21: Vitals emits closest-first so tail-drop drops the
+        # farthest vitals snapshot first. Without this, dense vitals
+        # near the order would be silently evicted while a stale
+        # -6h snapshot survived.
+        v_close = VitalsRecord(
+            timestamp=ANCHOR_DT - timedelta(minutes=30),
+            source="IPDADMPROGRESS",
+            sbp=110,
+            hr=88,
+        )
+        v_far = VitalsRecord(
+            timestamp=ANCHOR_DT - timedelta(hours=5, minutes=30),
+            source="IPDADMPROGRESS",
+            sbp=120,
+            hr=80,
+        )
+        anchor = OrderAnchor(
+            order_datetime=ANCHOR_DT,
+            hn_hash="x" * 200,
+            an_hash="y" * 200,
+            products=("LPRC",),
+        )
+        bundle = build_evidence_bundle(
+            inputs=EvidenceInputs(anchor=anchor, vitals=(v_far, v_close)),
+            char_cap=900,
+        )
+        vitals_items = _items_by_source(bundle, "Vitals")
+        assert len(vitals_items) == 1, (
+            "Expected exactly one Vitals snapshot to survive cap pressure"
+        )
+        kept_offset = round(
+            (vitals_items[0].timestamp_utc - ANCHOR_DT).total_seconds() / 60.0, 0  # type: ignore[operator]
+        )
+        assert kept_offset == -30.0, (
+            "Stale -5.5h vitals survived over closer -30min vitals; "
+            "Vitals emission order is not closest-first"
+        )
+
+    def test_progress_emission_is_closest_to_anchor_first_in_dense_bundle(self) -> None:
+        # Round-21: even with multiple notes, IPDADMPROGRESS items emit
+        # closest-to-anchor first so the LLM reads decision-time
+        # context first AND tail-drop in _enforce_char_cap removes the
+        # farthest progress first under cap pressure. The truncation-
+        # survival path also depends on the section-drop pass which is
+        # tested separately; this test locks the EMISSION-ORDER contract.
+        notes = (
+            _progress(offset_hours=-12, text="O: stable"),
+            _progress(offset_hours=-1, text="O: HR 80"),
+            _progress(offset_hours=-3, text="O: BP 110/70"),
+        )
+        bundle = _build_minimal(progress_notes=notes)
+        progress_items = _items_by_source(bundle, "IPDADMPROGRESS")
+        offsets = [
+            round((it.timestamp_utc - ANCHOR_DT).total_seconds() / 3600.0, 1)  # type: ignore[operator]
+            for it in progress_items
+        ]
+        # Closest first: -1, -3, -12 (by absolute distance from anchor)
+        assert offsets == [-1.0, -3.0, -12.0]
 
     def test_med_post_order_drops_before_pre_order_under_cap(self) -> None:
         # Round-19 added newest-first MED emission, but didn't split
