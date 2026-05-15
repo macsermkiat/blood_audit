@@ -884,6 +884,50 @@ class TestDisagreementDetection:
         assert len(out[0].persisted_calls) == 2
         assert out[0].persisted_calls[1].model_id == OPUS_MODEL_ID
 
+    def test_cross_check_opus_parse_failure_routes_to_review(self) -> None:
+        # Sonnet succeeds, but Opus cross-check returns malformed JSON.
+        # The cross-check quality gate has degraded — route to
+        # NEEDS_REVIEW with a distinct reason so the reviewer knows
+        # this is NOT a Sonnet/Opus disagreement but a cross-check
+        # parse failure. Addresses codex re-review §1.
+        reqs = [_request(audit_id="a1")]
+        sequence = [
+            RawBatchResponse(
+                batch_id="b_sonnet",
+                results=(
+                    _result(
+                        custom_id="a1",
+                        content=_tool_use_content(classification="APPROPRIATE"),
+                    ),
+                ),
+            ),
+            RawBatchResponse(
+                batch_id="b_opus",
+                results=(
+                    _result(
+                        custom_id="a1",
+                        model_id=OPUS_MODEL_ID,
+                        content=[
+                            {
+                                "type": "tool_use",
+                                "name": "classify_transfusion_order",
+                                "input": "{garbage",
+                            }
+                        ],
+                    ),
+                ),
+            ),
+        ]
+        transport = _SequenceTransport(sequence)
+        out = process_batch(
+            reqs, transport, _config(cross_check_with_opus=True)
+        )
+        assert out[0].final_classification == "NEEDS_REVIEW"
+        assert out[0].needs_review is True
+        assert out[0].review_reason == "opus_cross_check_parse_failure"
+        # Both calls are still persisted — chain of custody intact.
+        assert len(out[0].persisted_calls) == 2
+
     def test_cross_check_agreement_keeps_sonnet_answer(self) -> None:
         # Cross-check enabled but both models agree → no NEEDS_REVIEW.
         reqs = [_request(audit_id="a1")]
@@ -977,6 +1021,32 @@ class TestFullResponsePersistence:
         readback = store.read_llm_calls(run_id="run-aaa")
         assert len(readback) == 1
         assert readback[0].request_json["model"] == SONNET_MODEL_ID
+        # Response headers survived persistence under the namespaced
+        # key (PRD §"Persist the full Anthropic Batch API request and
+        # response per audit_id, including anthropic-version header").
+        assert "__bba_response_headers__" in readback[0].response_json
+        headers = readback[0].response_json["__bba_response_headers__"]
+        assert headers["anthropic-version"] == "2023-06-01"
+
+    def test_call_id_deterministic_across_runs(self) -> None:
+        # Two process_batch invocations with identical inputs must
+        # produce identical call_ids — otherwise the audit_store's
+        # append-only contract would let a re-run silently append a
+        # duplicate row instead of being a no-op. The fix in codex
+        # review §2 dropped request_timestamp from the call_id hash;
+        # this test pins that property.
+        reqs = [_request(audit_id="a1")]
+        good_a = RawBatchResponse(
+            batch_id="batch_01",
+            results=(_result(custom_id="a1"),),
+        )
+        good_b = RawBatchResponse(
+            batch_id="batch_02",  # different batch_id; same per-row inputs
+            results=(_result(custom_id="a1"),),
+        )
+        out_a = process_batch(reqs, _SequenceTransport([good_a]), _config())
+        out_b = process_batch(reqs, _SequenceTransport([good_b]), _config())
+        assert out_a[0].persisted_calls[0].call_id == out_b[0].persisted_calls[0].call_id
 
     def test_escalation_persists_all_three_calls(self) -> None:
         reqs = [_request(audit_id="a1")]
@@ -1419,17 +1489,18 @@ class TestAnthropicRequestCacheControlTranslation:
     def test_cache_marker_translates_to_ephemeral_cache_control(self) -> None:
         # One evidence chunk → one system block (with cache_marker) +
         # one user payload block (no cache_marker). The translated
-        # request must carry cache_control on the system block only.
+        # request must carry cache_control on the LAST system block
+        # (Anthropic's contract treats the marker as the cache
+        # breakpoint at the END of the marked region — placing it
+        # anywhere else either wastes breakpoints or fails to cache).
         request = _request(audit_id="a1")
         payload = build_anthropic_request(
             request, model=SONNET_MODEL_ID, prompt_cache_enabled=True
         )
         system_blocks = payload["system"]
         assert len(system_blocks) >= 1
-        cached_system_blocks = [
-            b for b in system_blocks if b.get("cache_control") == {"type": "ephemeral"}
-        ]
-        assert len(cached_system_blocks) >= 1
+        # Specifically the LAST system block carries the marker.
+        assert system_blocks[-1].get("cache_control") == {"type": "ephemeral"}
         # The trailing user payload (evidence) is never cacheable.
         user_blocks = payload["messages"][0]["content"]
         cached_user_blocks = [
@@ -1513,6 +1584,108 @@ class TestAnthropicBatchTransportSurface:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-from-env")
         transport = AnthropicBatchTransport()
         assert isinstance(transport, AnthropicTransport)
+
+    def test_empty_string_api_key_treated_as_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # An env var that is set but empty must NOT pass as a key.
+        # Otherwise a misconfigured deployment would route every call
+        # through an empty header and surface a confusing Anthropic
+        # 401 deep inside SDK retry logic.
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+        with pytest.raises(LlmClientConfigError):
+            AnthropicBatchTransport()
+
+
+class TestAnthropicBatchEntryErrorHandling:
+    """The production transport must handle non-``succeeded`` batch
+    entry types (``errored``, ``canceled``, ``expired``).
+
+    PRD §"Anthropic API outage mid-batch" rules out raising
+    AttributeError on these entries: a partial-failure batch must still
+    surface its errored rows on the audit chain so a reviewer can see
+    why those rows didn't get a real classification. Addresses codex
+    re-review §2 (HIGH).
+    """
+
+    def test_errored_entry_yields_empty_content_envelope(self) -> None:
+        from bba.llm_client.transport import _result_from_batch_entry
+
+        class _StubError:
+            def model_dump(self) -> dict[str, Any]:
+                return {"type": "invalid_request_error", "message": "bad"}
+
+        class _StubResult:
+            type = "errored"
+            error = _StubError()
+
+        class _StubEntry:
+            custom_id = "a1"
+            anthropic_version = "2023-06-01"
+            id = "msg_err"
+            result = _StubResult()
+
+        out = _result_from_batch_entry(
+            _StubEntry(),
+            model=SONNET_MODEL_ID,
+            request_payload={"model": SONNET_MODEL_ID, "messages": []},
+        )
+        assert out.custom_id == "a1"
+        # Empty content array → parser routes to EMPTY_RESPONSE →
+        # row routes to NEEDS_REVIEW. Chain of custody intact.
+        assert out.raw_response_json["content"] == ()
+        # The error detail is preserved for reviewer inspection.
+        assert out.raw_response_json["_batch_result_type"] == "errored"
+        assert out.raw_response_json["_batch_error"]["type"] == "invalid_request_error"
+        # The parser sees this and fails closed.
+        parsed = parse_structured_response(out)
+        assert parsed.parse_failure is True
+        assert parsed.parse_failure_reason == ParseFailureReason.EMPTY_RESPONSE
+
+    def test_canceled_entry_does_not_raise(self) -> None:
+        from bba.llm_client.transport import _result_from_batch_entry
+
+        class _StubResult:
+            type = "canceled"
+            error = None
+
+        class _StubEntry:
+            custom_id = "a1"
+            anthropic_version = "2023-06-01"
+            id = "msg_cancel"
+            result = _StubResult()
+
+        out = _result_from_batch_entry(
+            _StubEntry(),
+            model=SONNET_MODEL_ID,
+            request_payload={"model": SONNET_MODEL_ID, "messages": []},
+        )
+        assert out.raw_response_json["_batch_result_type"] == "canceled"
+        # No accidental .message access on canceled entries.
+        parsed = parse_structured_response(out)
+        assert parsed.parse_failure is True
+
+    def test_expired_entry_does_not_raise(self) -> None:
+        from bba.llm_client.transport import _result_from_batch_entry
+
+        class _StubResult:
+            type = "expired"
+            error = None
+
+        class _StubEntry:
+            custom_id = "a1"
+            anthropic_version = "2023-06-01"
+            id = "msg_exp"
+            result = _StubResult()
+
+        out = _result_from_batch_entry(
+            _StubEntry(),
+            model=SONNET_MODEL_ID,
+            request_payload={"model": SONNET_MODEL_ID, "messages": []},
+        )
+        assert out.raw_response_json["_batch_result_type"] == "expired"
+        parsed = parse_structured_response(out)
+        assert parsed.parse_failure is True
 
 
 # =============================================================================

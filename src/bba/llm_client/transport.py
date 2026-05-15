@@ -264,22 +264,64 @@ class AnthropicBatchTransport:
         return RawBatchResponse(batch_id=batch_id, results=tuple(results))
 
 
+_SUCCEEDED_RESULT_TYPE: Final[str] = "succeeded"
+
+
 def _result_from_batch_entry(
     entry: Any,
     *,
     model: str,
     request_payload: dict[str, Any],
 ) -> BatchSubmissionResult:
-    """Translate one SDK batch-result entry into our frozen model."""
-    message = entry.result.message
-    response_dict = message.model_dump() if hasattr(message, "model_dump") else dict(message)
+    """Translate one SDK batch-result entry into our frozen model.
+
+    Anthropic Batch API result entries carry a ``type`` discriminator:
+    ``succeeded``, ``errored``, ``canceled``, or ``expired``. Only
+    ``succeeded`` entries expose ``result.message``; the other three
+    surface ``result.error`` and would raise ``AttributeError`` if we
+    blindly read ``message``. For every non-succeeded type we return a
+    structured error envelope (raw_response_json carries the error
+    detail) so the row still reaches the audit chain and routes to
+    NEEDS_REVIEW via the parser's ``EMPTY_RESPONSE``/``TOOL_USE_MISSING``
+    paths — never silently dropped.
+    """
+    result_type = getattr(entry.result, "type", None)
     headers = {
         "anthropic-version": getattr(entry, "anthropic_version", "2023-06-01"),
     }
-    prompt_cache_id = None
-    usage = response_dict.get("usage", {}) if isinstance(response_dict, dict) else {}
-    if isinstance(usage, dict):
-        prompt_cache_id = usage.get("cache_read_input_tokens") and "cache-hit" or None
+    response_dict: dict[str, Any]
+    prompt_cache_id: str | None = None
+
+    if result_type == _SUCCEEDED_RESULT_TYPE:
+        message = entry.result.message
+        response_dict = (
+            message.model_dump() if hasattr(message, "model_dump") else dict(message)
+        )
+        usage = response_dict.get("usage", {}) if isinstance(response_dict, dict) else {}
+        if isinstance(usage, dict) and usage.get("cache_read_input_tokens"):
+            prompt_cache_id = "cache-hit"
+    else:
+        error_detail = getattr(entry.result, "error", None)
+        error_dict: dict[str, Any]
+        if error_detail is None:
+            error_dict = {"message": "no error detail returned by Anthropic"}
+        elif hasattr(error_detail, "model_dump"):
+            error_dict = error_detail.model_dump()
+        else:
+            error_dict = dict(error_detail) if isinstance(error_detail, dict) else {"detail": str(error_detail)}
+        # Synthesize a response envelope that parses as EMPTY_RESPONSE
+        # (no content key) — the audit row routes to NEEDS_REVIEW with
+        # the structured error preserved for the reviewer to inspect.
+        response_dict = {
+            "_batch_result_type": result_type or "unknown",
+            "_batch_error": error_dict,
+            "id": getattr(entry, "id", ""),
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "stop_reason": "batch_error",
+        }
+
     return BatchSubmissionResult(
         custom_id=entry.custom_id,
         model_id=model,

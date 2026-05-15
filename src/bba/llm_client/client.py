@@ -102,6 +102,7 @@ def _process_one(
     # explicit and opt-in because shadow-Opus on every row is a ~5x
     # cost regression.
     cross_check_disagreement: DisagreementVerdict | None = None
+    cross_check_opus_parse_failure = False
     if (
         config.cross_check_with_opus
         and not escalation.escalated_to_opus
@@ -121,6 +122,14 @@ def _process_one(
             cross_check_disagreement = detect_disagreement(
                 sonnet_response, opus_response
             )
+        else:
+            # Opus cross-check failed to parse: the quality gate
+            # degraded but the row's chain of custody is intact. Route
+            # to NEEDS_REVIEW with a distinct review reason so the
+            # reviewer knows WHY they're seeing this row (not a model
+            # disagreement, but a cross-check parse failure that
+            # invalidated the comparison).
+            cross_check_opus_parse_failure = True
 
     persisted_tuple = tuple(persisted_calls)
 
@@ -171,6 +180,19 @@ def _process_one(
                 review_reason="disagreement",
                 escalation=escalation,
                 disagreement=cross_check_disagreement,
+                persisted_calls=persisted_tuple,
+            )
+        if cross_check_opus_parse_failure:
+            return LlmClientResult(
+                audit_id=request.audit_id,
+                run_id=request.run_id,
+                final_classification="NEEDS_REVIEW",
+                response=sonnet_response,
+                parse_failure=False,
+                needs_review=True,
+                review_reason="opus_cross_check_parse_failure",
+                escalation=escalation,
+                disagreement=None,
                 persisted_calls=persisted_tuple,
             )
         return LlmClientResult(
@@ -287,7 +309,9 @@ def _call_from_result(
     must be a no-op, not append a duplicate row).
 
     ``response_headers`` lands inside :attr:`LlmCall.response_json`
-    under the ``_response_headers`` key. The audit_store schema does
+    under the ``__bba_response_headers__`` key (double-underscore
+    namespaced so a future Anthropic response field named
+    ``_response_headers`` cannot collide). The audit_store schema does
     not have a dedicated headers column, but the PRD reproducibility
     requirement ("Persist the full Anthropic Batch API request and
     response per audit_id, including ``anthropic-version`` header")
@@ -305,9 +329,11 @@ def _call_from_result(
     call_id = f"call-{result.custom_id}-{attempt_index}-{fingerprint}"
     # Shallow-copy the top-level frozen mapping so the dict spread below
     # works on regular `dict` semantics. The LlmCall field validator
-    # deep-freezes the nested structure again on construction.
+    # deep-freezes the nested structure again on construction. The
+    # double-underscore-namespaced key avoids any future collision
+    # with an Anthropic-supplied top-level field.
     response_envelope: dict[str, Any] = dict(result.raw_response_json)
-    response_envelope["_response_headers"] = dict(result.response_headers)
+    response_envelope["__bba_response_headers__"] = dict(result.response_headers)
     return LlmCall(
         call_id=call_id,
         audit_id=result.custom_id,
