@@ -100,6 +100,15 @@ def blocked_temporal_split(
     """Blocked temporal cross-validation splits."""
     if not cases:
         raise EmptyInputError("blocked_temporal_split: cases must be non-empty")
+    if len(cases) < 2:
+        # A single-case dataset has no non-degenerate CV split: holding the
+        # only case yields an empty training set, which corrupts downstream
+        # per-fold metrics (codex P2 round 4). Refuse loud rather than
+        # emit a structurally broken split.
+        raise ValueError(
+            "blocked_temporal_split: at least 2 cases required for CV; "
+            f"got {len(cases)}"
+        )
     if n_blocks < 1:
         raise ValueError(f"blocked_temporal_split: n_blocks must be >= 1, got {n_blocks}")
     ordered = sorted(

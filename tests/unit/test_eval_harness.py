@@ -992,6 +992,19 @@ class TestBlockedTemporalSplit:
                 seen.add(aid)
         assert seen == {c.audit_id for c in cases}
 
+    def test_single_case_raises(self) -> None:
+        # Codex P2 round 4: a single-case input would emit a single fold
+        # holding that one case → empty training set. CV is undefined on
+        # n=1, so refuse loud.
+        cases = [
+            _case(
+                audit_id="solo",
+                when=datetime(2026, 1, 15, 12, 0, 0, tzinfo=UTC),
+            )
+        ]
+        with pytest.raises(ValueError):
+            blocked_temporal_split(cases)
+
     def test_n_blocks_capped_at_case_count(self) -> None:
         # Codex P1 round 2: when n_blocks > len(cases) the divmod would
         # emit empty-holdout folds and corrupt downstream per-fold metrics.
