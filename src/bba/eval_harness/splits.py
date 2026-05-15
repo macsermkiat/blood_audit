@@ -94,6 +94,11 @@ def blocked_temporal_split(
         cases, key=lambda c: (c.order_datetime, c.audit_id)
     )
     n = len(ordered)
+    # When fewer cases than requested blocks (e.g., sparse-span dataset that
+    # auto-routed to blocked but only contains a handful of orders), cap
+    # n_blocks at the case count — otherwise later splits emit empty
+    # holdouts which corrupt downstream per-fold metrics (codex P1 round 2).
+    n_blocks = min(n_blocks, n)
     # Roughly equal contiguous blocks; remainder distributed to early blocks.
     base_size, remainder = divmod(n, n_blocks)
     splits: list[TemporalSplit] = []

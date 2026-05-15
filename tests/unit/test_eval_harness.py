@@ -983,6 +983,18 @@ class TestBlockedTemporalSplit:
                 seen.add(aid)
         assert seen == {c.audit_id for c in cases}
 
+    def test_n_blocks_capped_at_case_count(self) -> None:
+        # Codex P1 round 2: a sparse-span dataset can auto-route to blocked
+        # but contain fewer rows than the default n_blocks (4). Capping
+        # n_blocks at the case count prevents emitting empty-holdout folds.
+        cases = _monthly_population([(2026, 1), (2026, 12)])[
+            :2
+        ]  # 2 cases, far apart in time
+        splits = blocked_temporal_split(cases, n_blocks=4)
+        assert len(splits) == 2
+        for split in splits:
+            assert len(split.holdout_audit_ids) >= 1
+
     def test_blocks_are_chronological(self) -> None:
         # Block i's holdout dates must be ≤ block i+1's holdout dates.
         cases = _monthly_population([(2026, m) for m in range(1, 13)])
