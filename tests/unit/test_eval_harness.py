@@ -958,6 +958,15 @@ class TestLOMOCV:
         }
         assert held_out == {c.audit_id for c in cases}
 
+    def test_single_month_raises(self) -> None:
+        # Codex P2 round 3: leaving-one-month-out a single-month dataset
+        # yields an empty training set — regulator-visible nonsense. The
+        # raw lomo_cv_splits must refuse; auto-dispatch handles the
+        # fallback (test_temporal_cv_splits below).
+        cases = _monthly_population([(2026, 1)])
+        with pytest.raises(ValueError):
+            lomo_cv_splits(cases)
+
     def test_holdout_label_is_month_tag(self) -> None:
         # Use a fixed format that the report writer can render directly.
         cases = _monthly_population([(2026, 1), (2026, 2)])
@@ -984,12 +993,20 @@ class TestBlockedTemporalSplit:
         assert seen == {c.audit_id for c in cases}
 
     def test_n_blocks_capped_at_case_count(self) -> None:
-        # Codex P1 round 2: a sparse-span dataset can auto-route to blocked
-        # but contain fewer rows than the default n_blocks (4). Capping
-        # n_blocks at the case count prevents emitting empty-holdout folds.
-        cases = _monthly_population([(2026, 1), (2026, 12)])[
-            :2
-        ]  # 2 cases, far apart in time
+        # Codex P1 round 2: when n_blocks > len(cases) the divmod would
+        # emit empty-holdout folds and corrupt downstream per-fold metrics.
+        # Cap n_blocks at the case count and verify every split holds a
+        # case. Fixture: 2 cases — fewer than the default n_blocks=4.
+        cases = [
+            _case(
+                audit_id="c0",
+                when=datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC),
+            ),
+            _case(
+                audit_id="c1",
+                when=datetime(2026, 1, 20, 12, 0, 0, tzinfo=UTC),
+            ),
+        ]
         splits = blocked_temporal_split(cases, n_blocks=4)
         assert len(splits) == 2
         for split in splits:
@@ -1053,6 +1070,20 @@ class TestTemporalCVSplits:
         cases = _monthly_population([(2026, m) for m in range(1, 13)])
         auto = temporal_cv_splits(cases)
         assert len(auto) == 4  # default n_blocks
+
+    def test_single_month_falls_back_to_blocked(self) -> None:
+        # Codex P2 round 3: single-month data would route to LOMO (span=1,
+        # < 12), but LOMO with one month yields an empty training set. The
+        # auto-dispatcher falls back to blocked so a tight-time-window
+        # report still gets non-empty folds.
+        cases = _monthly_population([(2026, 1)])
+        auto = temporal_cv_splits(cases)
+        # Blocked path: 4 folds by default, but we only have 5 cases in
+        # this month → 4 folds is fine; each non-empty.
+        assert len(auto) >= 2
+        for split in auto:
+            assert len(split.holdout_audit_ids) >= 1
+            assert len(split.train_audit_ids) >= 1
 
 
 class TestDatasetMonthSpan:

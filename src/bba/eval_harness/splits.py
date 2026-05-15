@@ -60,12 +60,24 @@ def select_split_strategy(cases: Sequence[AuditCase]) -> SplitStrategy:
 
 
 def lomo_cv_splits(cases: Sequence[AuditCase]) -> tuple[TemporalSplit, ...]:
-    """Leave-one-month-out cross-validation splits."""
+    """Leave-one-month-out cross-validation splits.
+
+    Raises ``ValueError`` when fewer than 2 distinct months are present —
+    leaving one month out of a single-month dataset produces an empty
+    training set, which is regulator-visible nonsense (codex P2 round 3).
+    The auto-dispatch :func:`temporal_cv_splits` falls back to
+    :func:`blocked_temporal_split` in that case.
+    """
     if not cases:
         raise EmptyInputError("lomo_cv_splits: cases must be non-empty")
     by_month: dict[str, list[str]] = defaultdict(list)
     for case in cases:
         by_month[_month_tag(case)].append(case.audit_id)
+    if len(by_month) < 2:
+        raise ValueError(
+            "lomo_cv_splits: at least 2 distinct months are required; "
+            f"got {len(by_month)} ({sorted(by_month.keys())!r})"
+        )
     splits: list[TemporalSplit] = []
     sorted_months = sorted(by_month.keys())
     all_ids = [c.audit_id for c in cases]
@@ -121,8 +133,17 @@ def blocked_temporal_split(
 
 
 def temporal_cv_splits(cases: Sequence[AuditCase]) -> tuple[TemporalSplit, ...]:
-    """Auto-pick LOMO or blocked, then return the corresponding split set."""
+    """Auto-pick LOMO or blocked, then return the corresponding split set.
+
+    When LOMO is selected but only one distinct month is present (degenerate
+    short-window case), falls back to :func:`blocked_temporal_split` so a
+    pipeline run on a tight time window still produces non-empty folds for
+    the report.
+    """
     strategy = select_split_strategy(cases)
     if strategy == "lomo":
+        distinct_months = {_month_tag(c) for c in cases}
+        if len(distinct_months) < 2:
+            return blocked_temporal_split(cases)
         return lomo_cv_splits(cases)
     return blocked_temporal_split(cases)
