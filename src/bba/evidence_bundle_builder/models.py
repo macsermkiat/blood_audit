@@ -20,7 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
 from typing import Annotated, Any, Literal, Self, cast
 
@@ -459,6 +459,28 @@ class EvidenceBundle(BaseModel):
             )
         if not isinstance(anchor_obj["order_datetime"], str):
             raise ValueError("'anchor.order_datetime' must be a string")
+        # Semantic check: order_datetime must be a real, parseable, tz-aware
+        # UTC ISO-8601 string. Otherwise the anchor carries an
+        # unreconstructable decision time and the audit-chain replay
+        # invariant collapses (re-windowing per-source needs the original
+        # anchor moment). Mirrors the project's tz-aware-throughout contract
+        # (CONTEXT.md "tz-aware UTC").
+        try:
+            parsed_dt = datetime.fromisoformat(anchor_obj["order_datetime"])
+        except ValueError as exc:
+            raise ValueError(
+                f"'anchor.order_datetime' must be ISO 8601: {exc}"
+            ) from exc
+        if parsed_dt.tzinfo is None:
+            raise ValueError(
+                "'anchor.order_datetime' must be tz-aware "
+                "(naive datetimes forbidden by project tz contract)"
+            )
+        if parsed_dt.utcoffset() != timedelta(0):
+            raise ValueError(
+                "'anchor.order_datetime' must be UTC "
+                f"(got offset {parsed_dt.utcoffset()})"
+            )
         if not isinstance(anchor_obj["hn_hash"], str):
             raise ValueError("'anchor.hn_hash' must be a string")
         if not isinstance(anchor_obj["an_hash"], str):

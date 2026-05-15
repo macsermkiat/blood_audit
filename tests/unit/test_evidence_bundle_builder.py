@@ -567,6 +567,54 @@ class TestModelImmutability:
                 bundle_hash=right_hash,
             )
 
+    def test_bundle_rejects_unparseable_order_datetime(self) -> None:
+        # The anchor moment must be reconstructable for replay; a non-
+        # ISO-8601 string would silently carry an unreconstructable
+        # decision time alongside a self-consistent hash.
+        anchor = _valid_anchor_envelope()
+        anchor["order_datetime"] = "not a date"
+        envelope = {"anchor": anchor, "items": []}
+        canonical_json = canonical_serialize(envelope)
+        right_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+        with pytest.raises(ValidationError, match="ISO 8601"):
+            EvidenceBundle(
+                items=(),
+                canonical_json=canonical_json,
+                bundle_hash=right_hash,
+            )
+
+    def test_bundle_rejects_naive_order_datetime(self) -> None:
+        # Project tz contract: every persisted timestamp is tz-aware.
+        # A naive ISO string would lose the time-zone reference and
+        # break re-windowing across regions.
+        anchor = _valid_anchor_envelope()
+        anchor["order_datetime"] = "2026-05-15T12:00:00"  # no offset
+        envelope = {"anchor": anchor, "items": []}
+        canonical_json = canonical_serialize(envelope)
+        right_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+        with pytest.raises(ValidationError, match="tz-aware"):
+            EvidenceBundle(
+                items=(),
+                canonical_json=canonical_json,
+                bundle_hash=right_hash,
+            )
+
+    def test_bundle_rejects_non_utc_order_datetime(self) -> None:
+        # Builder always normalizes to UTC; an Asia/Bangkok-offset
+        # string is upstream drift — reject so persisted bundles are
+        # all comparable on a single clock.
+        anchor = _valid_anchor_envelope()
+        anchor["order_datetime"] = "2026-05-15T19:00:00+07:00"
+        envelope = {"anchor": anchor, "items": []}
+        canonical_json = canonical_serialize(envelope)
+        right_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+        with pytest.raises(ValidationError, match="UTC"):
+            EvidenceBundle(
+                items=(),
+                canonical_json=canonical_json,
+                bundle_hash=right_hash,
+            )
+
     def test_bundle_rejects_anchor_with_non_string_products_element(self) -> None:
         anchor = _valid_anchor_envelope()
         anchor["products"] = ["LPRC", 42]  # type: ignore[list-item]
