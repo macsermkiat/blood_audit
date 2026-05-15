@@ -151,7 +151,8 @@ def _freeze_dict_items(
 
 def _freeze_single_dict(item: Mapping[str, Any]) -> Mapping[str, Any]:
     """Return a deeply-frozen view of ``item``."""
-    return _deep_freeze(item)
+    frozen: Mapping[str, Any] = _deep_freeze(item)
+    return frozen
 
 
 FrozenJsonList = Annotated[
