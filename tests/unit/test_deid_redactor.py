@@ -515,6 +515,39 @@ class TestDefaultRoleClassifier:
         )
         assert result is RoleToken.NURSE
 
+    def test_default_classifier_ignores_name_that_equals_family_cue(self) -> None:
+        # Codex GitHub review (PR #40 round 2): a patient named "Son"
+        # must classify as PATIENT (the cue nearest the span), not
+        # FAMILY (the span text itself happens to equal a FAMILY cue
+        # word). Span-internal matching must be restricted to
+        # unambiguous titles/honorifics so name/cue collisions don't
+        # short-circuit the proximity logic.
+        text = "patient Son was admitted with low Hb"
+        result = default_role_classifier(
+            original_text=text,
+            context=text,
+            span=RedactionSpan(
+                start=8, end=11, entity_type="PERSON", original_text="Son"
+            ),
+        )
+        assert result is RoleToken.PATIENT
+
+    def test_default_classifier_in_span_honorific_still_wins(self) -> None:
+        # Symmetric to the above: when the backend includes the title
+        # INSIDE the redacted span (e.g. "Dr. Smith" as one span), the
+        # honorifics-only span-internal check must still upgrade to
+        # ATTENDING. Honorifics dominate proximity because they are
+        # unambiguous title markers.
+        text = "Dr. Smith ordered transfusion"
+        result = default_role_classifier(
+            original_text=text,
+            context=text,
+            span=RedactionSpan(
+                start=0, end=9, entity_type="PERSON", original_text="Dr. Smith"
+            ),
+        )
+        assert result is RoleToken.ATTENDING
+
     def test_default_classifier_priority_breaks_tie_at_equal_distance(self) -> None:
         # When two cues sit at the same distance from the span (one in
         # the before-window, one in the after-window, mirror-symmetric),

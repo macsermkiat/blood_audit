@@ -145,6 +145,82 @@ _ROLE_PATTERNS: tuple[tuple[RoleToken, re.Pattern[str]], ...] = (
 )
 
 
+_HONORIFICS: tuple[tuple[RoleToken, tuple[str, ...]], ...] = (
+    (
+        RoleToken.ATTENDING,
+        (
+            "dr.",
+            "dr",
+            "md",
+            "physician",
+            "attending",
+            "นพ.",
+            "พญ.",
+            "อาจารย์หมอ",
+            "อาจารย์แพทย์",
+        ),
+    ),
+    (RoleToken.NURSE, ("rn", "rn.")),
+    (RoleToken.PATIENT, ("pt", "pt.")),
+    # FAMILY intentionally has no honorifics — every family cue ("son",
+    # "mother", "wife", "ลูก", etc.) doubles as a common given/surname
+    # in real KCMH demographics, so a span whose original_text equals
+    # one of these terms cannot be unambiguously classified by the
+    # in-span pass. The proximity layer handles FAMILY based on the
+    # surrounding cue placement instead.
+)
+"""Narrow lexicon used for span-internal cue lookup.
+
+The full :data:`_ROLE_PRIORITY` lexicon is too permissive for span-text
+matching: many family/patient cue words are also common names
+("son", "mother", "patient", "ผู้ป่วย" → all real surnames in the KCMH
+population). Restricting the in-span pass to titles + unambiguous
+abbreviations (codex GitHub review on PR #40 round 2) ensures a
+name/cue collision falls through to the proximity layer rather than
+short-circuiting on the wrong role.
+"""
+
+
+def _compile_honorific_patterns() -> tuple[tuple[RoleToken, re.Pattern[str]], ...]:
+    """Compile :data:`_HONORIFICS` with the same boundary rules as roles."""
+    compiled: list[tuple[RoleToken, re.Pattern[str]]] = []
+    for role, cues in _HONORIFICS:
+        alternatives: list[str] = []
+        for cue in cues:
+            if _is_ascii(cue):
+                escaped = re.escape(cue)
+                if cue.endswith("."):
+                    alternatives.append(rf"\b{escaped}")
+                else:
+                    alternatives.append(rf"\b{escaped}\b")
+            else:
+                alternatives.append(re.escape(cue))
+        compiled.append(
+            (role, re.compile("|".join(alternatives), re.IGNORECASE))
+        )
+    return tuple(compiled)
+
+
+_HONORIFIC_PATTERNS: tuple[tuple[RoleToken, re.Pattern[str]], ...] = (
+    _compile_honorific_patterns()
+)
+
+
+def classify_honorific_in_span(span_text: str) -> RoleToken | None:
+    """Return the role of the first matching honorific in ``span_text``.
+
+    Used by :func:`default_role_classifier` for the in-span pass. The
+    narrower :data:`_HONORIFICS` lexicon is searched here (not the full
+    role lexicon) so a name that happens to equal a family/patient cue
+    word (``"Son"``, ``"Mother"``) does not bypass the proximity layer.
+    """
+    haystack = unicodedata.normalize("NFC", span_text)
+    for role, pattern in _HONORIFIC_PATTERNS:
+        if pattern.search(haystack):
+            return role
+    return None
+
+
 def extract_context(
     *,
     original_text: str,
@@ -240,14 +316,20 @@ def default_role_classifier(
 
     Resolution order:
 
-    1. The span's own ``original_text`` — many honorifics (``"Dr."``,
-       ``"นพ."``) live inside the redacted name span itself, not in the
-       surrounding context. A cue here is unambiguous.
+    1. The span's own ``original_text``, matched against the
+       :data:`_HONORIFICS` narrow lexicon via
+       :func:`classify_honorific_in_span`. Honorifics ("Dr.", "MD",
+       "นพ.") often live inside the redacted name span itself; matching
+       them in-span is unambiguous. The narrow lexicon excludes family
+       and patient cue words ("son", "mother", "patient") that double
+       as common names — a name/cue collision must fall through to
+       proximity, not short-circuit on the wrong role (codex GitHub
+       review on PR #40 round 2).
     2. The original-text window around the span, classified with
        :func:`_classify_by_proximity` — the role whose cue is nearest
        to the span wins. Prevents misclassifying spans in multi-actor
-       sentences (``"Dr. Smith saw patient John Doe"`` — Codex GitHub
-       review on PR #40).
+       sentences (``"Dr. Smith saw patient John Doe"`` — codex GitHub
+       review on PR #40 round 1).
     3. The caller-supplied ``context`` as a final fallback, using
        priority-only classification. Used when the caller passes a
        custom context window that the span-derived slice cannot
@@ -255,7 +337,7 @@ def default_role_classifier(
     """
     span_text = span.original_text or original_text[span.start : span.end]
     if span_text:
-        derived = classify_role_by_cues(span_text)
+        derived = classify_honorific_in_span(span_text)
         if derived is not None:
             return derived
 
