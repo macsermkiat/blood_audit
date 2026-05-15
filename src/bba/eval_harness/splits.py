@@ -14,67 +14,97 @@ downstream caller can re-key into its own data structure.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Sequence
 
+from bba.eval_harness.exceptions import EmptyInputError
 from bba.eval_harness.models import (
+    LOMO_DATASET_THRESHOLD_MONTHS,
     AuditCase,
     SplitStrategy,
     TemporalSplit,
 )
 
 
-def dataset_month_span(cases: Sequence[AuditCase]) -> int:
-    """Number of distinct calendar months present in ``cases``.
+def _month_tag(case: AuditCase) -> str:
+    return f"{case.order_datetime.year:04d}-{case.order_datetime.month:02d}"
 
-    A dataset spanning Jan 2026 - Mar 2026 has span 3 (Jan, Feb, Mar), not
-    the integer number of weeks. Raises
-    :class:`bba.eval_harness.exceptions.EmptyInputError` for an empty input.
-    """
-    raise NotImplementedError("eval_harness.splits: RED phase, see issue #20")
+
+def dataset_month_span(cases: Sequence[AuditCase]) -> int:
+    """Number of distinct calendar months present in ``cases``."""
+    if not cases:
+        raise EmptyInputError("dataset_month_span: cases must be non-empty")
+    return len({_month_tag(c) for c in cases})
 
 
 def select_split_strategy(cases: Sequence[AuditCase]) -> SplitStrategy:
-    """Auto-pick LOMO-CV vs blocked temporal split (PRD §11 threshold).
-
-    Returns ``"lomo"`` when the dataset spans strictly fewer than
-    :data:`bba.eval_harness.models.LOMO_DATASET_THRESHOLD_MONTHS` months;
-    ``"blocked"`` otherwise. The boundary is at the threshold itself
-    (12 months → ``"blocked"``) so the design choice is one-sided and not
-    susceptible to off-by-one drift between report runs.
-    """
-    raise NotImplementedError("eval_harness.splits: RED phase, see issue #20")
+    """Auto-pick LOMO-CV vs blocked temporal split (PRD §11 threshold)."""
+    return (
+        "lomo"
+        if dataset_month_span(cases) < LOMO_DATASET_THRESHOLD_MONTHS
+        else "blocked"
+    )
 
 
 def lomo_cv_splits(cases: Sequence[AuditCase]) -> tuple[TemporalSplit, ...]:
-    """Leave-one-month-out cross-validation splits.
-
-    Returns one :class:`TemporalSplit` per distinct calendar month present
-    in the data; the holdout is exactly that month's audit_ids and the train
-    set is every other audit_id. Splits are ordered chronologically by
-    holdout month (oldest first) so report tables read left-to-right in time.
-    """
-    raise NotImplementedError("eval_harness.splits: RED phase, see issue #20")
+    """Leave-one-month-out cross-validation splits."""
+    if not cases:
+        raise EmptyInputError("lomo_cv_splits: cases must be non-empty")
+    by_month: dict[str, list[str]] = defaultdict(list)
+    for case in cases:
+        by_month[_month_tag(case)].append(case.audit_id)
+    splits: list[TemporalSplit] = []
+    sorted_months = sorted(by_month.keys())
+    all_ids = [c.audit_id for c in cases]
+    for month in sorted_months:
+        holdout_set = set(by_month[month])
+        train_ids = tuple(aid for aid in all_ids if aid not in holdout_set)
+        splits.append(
+            TemporalSplit(
+                train_audit_ids=train_ids,
+                holdout_audit_ids=tuple(by_month[month]),
+                holdout_label=month,
+            )
+        )
+    return tuple(splits)
 
 
 def blocked_temporal_split(
     cases: Sequence[AuditCase], *, n_blocks: int = 4
 ) -> tuple[TemporalSplit, ...]:
-    """Blocked temporal cross-validation splits.
-
-    Sorts cases by ``order_datetime`` and partitions into ``n_blocks``
-    contiguous blocks of (roughly) equal size; the holdout for split ``i``
-    is block ``i`` and the train set is the remaining blocks. ``n_blocks``
-    defaults to 4 (one seasonal quarter per block).
-    """
-    raise NotImplementedError("eval_harness.splits: RED phase, see issue #20")
+    """Blocked temporal cross-validation splits."""
+    if not cases:
+        raise EmptyInputError("blocked_temporal_split: cases must be non-empty")
+    if n_blocks < 1:
+        raise ValueError(f"blocked_temporal_split: n_blocks must be >= 1, got {n_blocks}")
+    ordered = sorted(
+        cases, key=lambda c: (c.order_datetime, c.audit_id)
+    )
+    n = len(ordered)
+    # Roughly equal contiguous blocks; remainder distributed to early blocks.
+    base_size, remainder = divmod(n, n_blocks)
+    splits: list[TemporalSplit] = []
+    cursor = 0
+    all_ids = [c.audit_id for c in ordered]
+    for i in range(n_blocks):
+        block_size = base_size + (1 if i < remainder else 0)
+        block_ids = all_ids[cursor : cursor + block_size]
+        cursor += block_size
+        holdout_set = set(block_ids)
+        train_ids = tuple(aid for aid in all_ids if aid not in holdout_set)
+        splits.append(
+            TemporalSplit(
+                train_audit_ids=train_ids,
+                holdout_audit_ids=tuple(block_ids),
+                holdout_label=f"block-{i + 1}",
+            )
+        )
+    return tuple(splits)
 
 
 def temporal_cv_splits(cases: Sequence[AuditCase]) -> tuple[TemporalSplit, ...]:
-    """Auto-pick LOMO or blocked, then return the corresponding split set.
-
-    Convenience wrapper for the typical caller path: it dispatches via
-    :func:`select_split_strategy` and returns the corresponding splits. The
-    standalone strategy functions remain public so a caller can override
-    the auto-pick when running a sensitivity analysis.
-    """
-    raise NotImplementedError("eval_harness.splits: RED phase, see issue #20")
+    """Auto-pick LOMO or blocked, then return the corresponding split set."""
+    strategy = select_split_strategy(cases)
+    if strategy == "lomo":
+        return lomo_cv_splits(cases)
+    return blocked_temporal_split(cases)
