@@ -10,6 +10,7 @@ with extra logging.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Mapping, Sequence
 
 from bba.llm_client.exceptions import CustomIdMismatchError
@@ -21,17 +22,34 @@ def assert_custom_ids_match(
     results: Sequence[BatchSubmissionResult],
 ) -> Mapping[str, BatchSubmissionResult]:
     """Return a ``{audit_id: result}`` mapping if every submitted
-    ``audit_id`` has a matching ``custom_id`` in ``results`` (and vice
-    versa).
+    ``audit_id`` has exactly one matching ``custom_id`` in ``results``
+    (and vice versa).
 
     Raises :class:`CustomIdMismatchError` with the offending IDs listed
-    when:
-
-    * a submitted ``audit_id`` has no matching ``custom_id`` in the
-      response (missing result);
-    * a response carries a ``custom_id`` that was never submitted
-      (extra / mis-attributed result);
-    * any duplicate ``custom_id`` appears in the response (Anthropic's
-      Batch API does not promise dedup, so the client enforces it).
+    when the request/result custom_id sets diverge, or when the
+    response contains duplicates.
     """
-    raise NotImplementedError("RED-phase scaffold; see issue #22")
+    submitted_ids = [r.audit_id for r in requests]
+    result_ids = [r.custom_id for r in results]
+
+    duplicate_results = sorted(
+        cid for cid, n in Counter(result_ids).items() if n > 1
+    )
+    if duplicate_results:
+        raise CustomIdMismatchError(
+            f"duplicate custom_id(s) in results: {duplicate_results}"
+        )
+
+    submitted_set = set(submitted_ids)
+    result_set = set(result_ids)
+    missing = sorted(submitted_set - result_set)
+    extra = sorted(result_set - submitted_set)
+    if missing or extra:
+        parts: list[str] = []
+        if missing:
+            parts.append(f"missing custom_id(s) in results: {missing}")
+        if extra:
+            parts.append(f"unexpected custom_id(s) in results: {extra}")
+        raise CustomIdMismatchError("; ".join(parts))
+
+    return {res.custom_id: res for res in results}

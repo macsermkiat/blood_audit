@@ -94,14 +94,9 @@ from bba.llm_client import (
 )
 from bba.prompt_builder import (
     EvidenceChunk,
-    InjectionVerdict,
-    NeedsReviewReason,
-    PromptBlock,
     PromptBuildRequest,
     PromptBuildResult,
-    build_envelope,
     build_prompt,
-    compute_prompt_hash,
 )
 
 
@@ -123,6 +118,21 @@ _PUBLIC_SURFACE_PINS = (
     BatchSubmissionError,
     ANTHROPIC_BETA_HEADER,
     StructuredToolInput,
+    Classification,
+    escalate_to_opus,
+    run_with_escalation,
+    parse_structured_response,
+    detect_disagreement,
+    assert_custom_ids_match,
+    load_cassette,
+    should_escalate,
+    submit_batch,
+    AuditRow,
+    AuditStore,
+    AuditStoreConfig,
+    LlmCall,
+    AnthropicTransport,
+    ALLOWED_MODELS,
 )
 
 
