@@ -8,7 +8,7 @@ code) when a concept changes shape.
 Scope: Phase 1 of the KCMH RBC transfusion audit pipeline. PRD: [issue #1].
 Sections are added per ticket as each module merges to `main`. Currently
 covered: `#3 ingest`, `#4 audit_orders`, `#5 hb_lookup`, `#6 vitals_extractor`,
-`#18 quote_grounder`, `#19 audit_store`.
+`#16 evidence_bundle_builder`, `#18 quote_grounder`, `#19 audit_store`.
 
 ## Ingest concepts (#3)
 
@@ -106,6 +106,104 @@ timestamp is `RowTimestamp.from_parts`; there is no naive datetime in the
 ingest module's persisted output, and a structural test
 (`TestNaiveDatetimeBan`) plus a planned ruff rule keep `datetime.now()` /
 `datetime.utcnow()` out of the source files.
+
+## Evidence-bundle-builder concepts (#16)
+
+### Per-source window
+
+Each source family has its own time window relative to the order anchor —
+all enforced by `bba.evidence_bundle_builder.builder`:
+
+* `Diagnosis` — **AN-scoped** (no time window; full ICD-10 list for the encounter)
+* `IPDADMPROGRESS` — `±24h`, cap 8 closest entries (closest-by-abs-offset)
+* `IPDNRFOCUSDT` — `±24h`, cap 10 entries via 5-before / 5-after closest-first
+* `MED` — `[-72h, +24h]` (asymmetric: drug history + post-order administration)
+* `Lab` (Hb history) — `[-7d, anchor]` strict at lower bound (matches
+  `bba.hb_lookup`'s `< _LOOKBACK` so a 7-d-old Hb is invisible to the bundle
+  iff it is invisible to the deterministic classifier)
+* `Vitals` — `±6h`
+
+### Stable evidence ID
+
+Every item in the bundle gets a sequential ID `E1, E2, ..., EN` assigned in
+canonical emission order. The IDs are byte-stable across re-runs of the
+same input — what `bba.quote_grounder` (#18) cites in LLM output, and what
+`bba.audit_store.AuditRow.evidence_bundle_hash` is computed against.
+
+### Canonical emission order
+
+Outer order = the literal source order in
+`bba.evidence_bundle_builder.models.EvidenceSource`:
+`Diagnosis, IPDADMPROGRESS, IPDNRFOCUSDT, MED, Lab, Vitals`. Inner order
+within each source is tuned for **truncation safety** so cap-pressure tail-drop
+discards the least-relevant item first:
+
+* `IPDADMPROGRESS` / `Vitals` / `IPDNRFOCUSDT` — closest-to-anchor first
+* `Lab` (Hb) — HEMATOLOGY before POCT (PRD §3 source preference, regardless
+  of recency); within source: newest-first; corrected (max `item_no`) before
+  stale for same-(source, timestamp) ties
+* `MED` — pre-anchor (decision context) before post-anchor (treatment after);
+  within pre: newest-first; within post: closest-to-anchor first
+* `Vitals` — pre-anchor before post-anchor (matches `bba.vitals_extractor`
+  contract that pre wins regardless of distance)
+* `Diagnosis` — by `(icd10, description is not None, description)`
+
+### Canonical JSON
+
+Sorted keys + 2-space indent + UTF-8 NFC-normalized strings (both keys AND
+values) + no trailing newline. The contract is **byte-stable**: same input →
+byte-identical output → same `bundle_hash`. NFC normalization is applied
+recursively at every nesting level; non-finite floats (NaN, ±Inf) are rejected
+because they are not valid JSON per RFC 7159.
+
+### Bundle hash
+
+`sha256(canonical_json.encode("utf-8")).hexdigest()`. The `EvidenceBundle`
+model validator recomputes it at construction and rejects mismatches —
+prevents a downstream rebuilder from pairing real canonical bytes with a
+forged or stale hash. The model also locks the envelope shape (exactly
+`{anchor, items}`, anchor must have `{order_datetime, hn_hash, an_hash,
+products}` with tz-aware UTC `order_datetime`).
+
+### Char-cap drop priority
+
+Whole-item drop order under cap pressure (lowest clinical relevance first):
+`IPDADMPROGRESS → IPDNRFOCUSDT → MED → Vitals → Lab → Diagnosis`. Within Lab,
+POCT drops before HEMATOLOGY (PRD §3 source preference). When even an
+anchor-only envelope exceeds the cap, the builder raises
+`EvidenceBundleTooLargeError` rather than emitting an over-budget bundle —
+the AC explicitly forbids silent over-cap.
+
+### SOAP section priority
+
+`IPDADMPROGRESS` notes are parsed into Subjective / Objective / Assessment /
+Plan sections via inline-header regex (matches headers anywhere in the text,
+not just line starts). Section emission order is `(ASSESSMENT, PLAN,
+OBJECTIVE, SUBJECTIVE)` — most-important-first so the LLM reads the
+clinician's diagnosis-time interpretation before supporting data. Truncation
+walks the priority tuple in **reverse** (drop SUBJECTIVE first, ASSESSMENT
+last). Empty progress items (after truncation OR construction) are pruned so
+no `E_N` citation points at zero quoteable content.
+
+### Deferred review (post-merge)
+
+Codex adversarial review found 22 rounds of substantive issues, all closed.
+Two operationally-relevant items intentionally not pursued in #16; defer to
+a follow-up ticket if production usage surfaces them:
+
+* **Section-truncation collapse for tied-section items** — when two
+  `IPDADMPROGRESS` notes share the same single SOAP section and the
+  section-drop pass empties both at once, both items get pruned together
+  by `_drop_empty_progress_items` BEFORE the priority-aware whole-item
+  drop runs. In practice this only matters when char_cap is small enough
+  to force section-level truncation AND every progress note has the same
+  one-section structure. The closest-first emission key + the broader cap
+  budget make this rare; covered indirectly by Vitals truncation tests.
+* **Hypothesis property test on the canonical-emission contract** — the
+  current property tests cover hash invariance under input shuffles. A
+  future hypothesis test could generate adversarial mixed-source bundles
+  and assert the DROP_PRIORITY contract holds for any cap value above the
+  anchor envelope size.
 
 ## Hb-lookup concepts (#5)
 
