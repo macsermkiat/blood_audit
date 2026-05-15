@@ -108,6 +108,7 @@ _TEST_ROLES_TO_DROP: tuple[str, ...] = (
     "owner_role",
     "table_owner",
     "shady_member",
+    "noinherit_member",
 )
 """Roles tests create that must be dropped between runs.
 
@@ -1340,20 +1341,19 @@ class TestTriggerActuallyFires:
 
 
 class TestOwnerMembershipBypassRejected:
-    """A role with USAGE membership in the table owner can SET ROLE owner
-    and DISABLE TRIGGER. The store's privilege check probes membership via
-    ``pg_has_role``, not just direct ``current_user == owner``."""
+    """A role with MEMBER access to the table owner can SET ROLE owner
+    and DISABLE TRIGGER. The store's privilege check uses
+    ``pg_has_role(..., 'MEMBER')`` (not ``'USAGE'``) so both inheriting
+    AND non-inheriting members are rejected."""
 
-    def test_member_of_owner_role_is_rejected(
+    def test_inheriting_member_of_owner_role_is_rejected(
         self,
         postgres_config: ReviewActionsConfig,
     ) -> None:
-        """Create a non-owner role that is a MEMBER of the owner role.
-        The startup privilege check must catch this path."""
+        """Standard (inheriting) member of the owner role → rejected."""
         apply_migrations(postgres_config)
         with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
-                # Create an owner role and transfer table ownership.
                 cur.execute("CREATE ROLE table_owner")
                 cur.execute(
                     "ALTER TABLE review_actions OWNER TO table_owner"
@@ -1361,11 +1361,9 @@ class TestOwnerMembershipBypassRejected:
                 cur.execute(
                     "ALTER TABLE phi_access_log OWNER TO table_owner"
                 )
-                # Owner needs the standard grants to stay functional.
                 cur.execute(
                     "GRANT SELECT ON alembic_version TO table_owner"
                 )
-                # Create a member role and grant membership.
                 cur.execute(
                     "CREATE ROLE shady_member WITH LOGIN PASSWORD 'pw'"
                 )
@@ -1381,9 +1379,186 @@ class TestOwnerMembershipBypassRejected:
             migrations_root=REPO_ROOT / "migrations",
         ) as store:
             with pytest.raises(
-                MigrationStateError, match="USAGE membership"
+                MigrationStateError, match="MEMBER access"
             ):
                 store.record_action(_action_input())
+
+    def test_noinherit_member_of_owner_role_is_rejected(
+        self,
+        postgres_config: ReviewActionsConfig,
+    ) -> None:
+        """``NOINHERIT`` member can still ``SET ROLE`` to the owner; the
+        old ``USAGE``-mode check would have missed this path."""
+        apply_migrations(postgres_config)
+        with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("CREATE ROLE table_owner")
+                cur.execute(
+                    "ALTER TABLE review_actions OWNER TO table_owner"
+                )
+                cur.execute(
+                    "ALTER TABLE phi_access_log OWNER TO table_owner"
+                )
+                cur.execute(
+                    "GRANT SELECT ON alembic_version TO table_owner"
+                )
+                cur.execute(
+                    "CREATE ROLE noinherit_member WITH LOGIN NOINHERIT "
+                    "PASSWORD 'pw'"
+                )
+                cur.execute(
+                    "GRANT table_owner TO noinherit_member"
+                )
+                cur.execute(
+                    "GRANT SELECT ON alembic_version TO noinherit_member"
+                )
+        member_dsn = _swap_dsn_credentials(
+            postgres_config.dsn,
+            user="noinherit_member",
+            password="pw",
+        )
+        with ReviewActionsStore(
+            ReviewActionsConfig(dsn=member_dsn),
+            migrations_root=REPO_ROOT / "migrations",
+        ) as store:
+            with pytest.raises(
+                MigrationStateError, match="MEMBER access"
+            ):
+                store.record_action(_action_input())
+
+
+class TestTriggerShapeDriftDetection:
+    """Beyond name + table, the integrity check verifies the trigger event,
+    timing, schema, and the function's schema."""
+
+    def test_wrong_event_trigger_is_rejected(
+        self,
+        app_config: ReviewActionsConfig,
+        postgres_config: ReviewActionsConfig,
+    ) -> None:
+        """Drop the BEFORE UPDATE trigger and recreate it as BEFORE
+        INSERT — same name, same function, but wrong event. The integrity
+        check must catch the ``tgtype`` drift."""
+        with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DROP TRIGGER review_actions_block_update "
+                    "ON review_actions"
+                )
+                cur.execute(
+                    "CREATE TRIGGER review_actions_block_update "
+                    "BEFORE INSERT ON review_actions "
+                    "FOR EACH ROW EXECUTE FUNCTION "
+                    "review_actions_block_mutation()"
+                )
+        with ReviewActionsStore(
+            app_config, migrations_root=REPO_ROOT / "migrations"
+        ) as store:
+            with pytest.raises(MigrationStateError, match="tgtype"):
+                store.record_action(_action_input())
+
+    def test_trigger_in_wrong_schema_is_rejected(
+        self,
+        app_config: ReviewActionsConfig,
+        postgres_config: ReviewActionsConfig,
+    ) -> None:
+        """An attacker moves the protected table (and its trigger) to a
+        non-public schema, then re-grants on a same-named decoy table in
+        public. The integrity check filters by ``relnamespace = 'public'``,
+        so the public-schema table now has zero matching triggers and
+        fails the check."""
+        with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("CREATE SCHEMA shadow_schema")
+                cur.execute(
+                    "ALTER TABLE review_actions "
+                    "SET SCHEMA shadow_schema"
+                )
+                cur.execute(
+                    "CREATE TABLE review_actions ("
+                    "  action_id BIGSERIAL PRIMARY KEY, "
+                    "  audit_id TEXT, reviewer_id TEXT, action TEXT, "
+                    "  override_reason TEXT, note TEXT, "
+                    "  created_at TIMESTAMPTZ"
+                    ")"
+                )
+                cur.execute(
+                    "GRANT INSERT, SELECT ON review_actions "
+                    "TO review_actions_app"
+                )
+                cur.execute(
+                    "GRANT USAGE, SELECT ON SEQUENCE "
+                    "review_actions_action_id_seq "
+                    "TO review_actions_app"
+                )
+        with ReviewActionsStore(
+            app_config, migrations_root=REPO_ROOT / "migrations"
+        ) as store:
+            with pytest.raises(MigrationStateError):
+                store.record_action(_action_input())
+
+
+class TestSecurityLogging:
+    """Security-critical integrity failures emit structured log records
+    so operators can alert on repeated bypass attempts."""
+
+    def test_superuser_rejection_logs_security_event(
+        self,
+        postgres_config: ReviewActionsConfig,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The ``superuser_role_rejected`` event lands on the
+        ``bba.review_actions.security`` logger with structured fields."""
+        apply_migrations(postgres_config)
+        caplog.set_level("WARNING", logger="bba.review_actions.security")
+        with ReviewActionsStore(
+            postgres_config, migrations_root=REPO_ROOT / "migrations"
+        ) as store:
+            with pytest.raises(MigrationStateError):
+                store.record_action(_action_input())
+
+        security_records = [
+            r for r in caplog.records
+            if r.name == "bba.review_actions.security"
+        ]
+        assert len(security_records) == 1
+        record = security_records[0]
+        assert (
+            getattr(record, "review_actions_security_event", None)
+            == "superuser_role_rejected"
+        )
+        # The current_user field is on the record's extra dict.
+        assert hasattr(record, "current_user")
+
+    def test_trigger_drift_logs_security_event(
+        self,
+        app_config: ReviewActionsConfig,
+        postgres_config: ReviewActionsConfig,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DROP TRIGGER review_actions_block_update "
+                    "ON review_actions"
+                )
+
+        caplog.set_level("WARNING", logger="bba.review_actions.security")
+        with ReviewActionsStore(
+            app_config, migrations_root=REPO_ROOT / "migrations"
+        ) as store:
+            with pytest.raises(MigrationStateError):
+                store.record_action(_action_input())
+
+        security_records = [
+            r for r in caplog.records
+            if r.name == "bba.review_actions.security"
+        ]
+        assert any(
+            getattr(r, "review_actions_security_event", None)
+            == "required_triggers_missing"
+            for r in security_records
+        )
 
 
 class TestStoreLifecycle:

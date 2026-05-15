@@ -15,10 +15,12 @@ raises :class:`MigrationStateError` against an unmigrated DB.
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import NoReturn
 
 from psycopg import sql
 from psycopg.errors import RaiseException
@@ -43,25 +45,73 @@ from bba.review_actions.models import (
 )
 
 
-_REQUIRED_TRIGGER_BINDINGS: tuple[tuple[str, str], ...] = (
-    ("review_actions_block_update", "review_actions"),
-    ("review_actions_block_delete", "review_actions"),
-    ("review_actions_block_truncate", "review_actions"),
-    ("phi_access_log_block_update", "phi_access_log"),
-    ("phi_access_log_block_delete", "phi_access_log"),
-    ("phi_access_log_block_truncate", "phi_access_log"),
-)
-"""``(trigger_name, table_name)`` pairs installed by the initial migration.
+_security_log = logging.getLogger("bba.review_actions.security")
+"""Structured logger for security-critical integrity-check failures.
 
-The integrity check verifies each pair (a) exists, (b) is bound to the
-named table, (c) is bound to ``review_actions_block_mutation`` (not some
-no-op function), and (d) is in the ``enabled`` state (``tgenabled = 'O'``).
-A drifted schema where the trigger was DISABLEd but not dropped, or where
-the trigger function was swapped, slips past a name-only check."""
+Operators can subscribe to this logger to alert on repeated bypass
+attempts (e.g., a deploy that misconfigures the role, an attacker probing
+the schema). Each :class:`MigrationStateError` raised by the startup
+integrity check emits a ``WARNING``-level record with structured ``extra``
+fields naming the failure mode."""
+
+
+# Postgres ``pg_trigger.tgtype`` bitmask layout:
+#   bit 0 (1)  — FOR EACH ROW (else FOR EACH STATEMENT)
+#   bit 1 (2)  — BEFORE (else AFTER)
+#   bit 2 (4)  — INSERT
+#   bit 3 (8)  — DELETE
+#   bit 4 (16) — UPDATE
+#   bit 5 (32) — TRUNCATE
+# Event bits (4/8/16/32) are independent; the migration declares each
+# trigger for a single event, so each expected tgtype value has exactly
+# one event bit set.
+
+_TGTYPE_BEFORE_UPDATE_ROW = 1 | 2 | 16  # = 19
+_TGTYPE_BEFORE_DELETE_ROW = 1 | 2 | 8  # = 11
+_TGTYPE_BEFORE_TRUNCATE_STMT = 2 | 32  # = 34 (STATEMENT, no ROW bit)
+
+
+_REQUIRED_TRIGGER_BINDINGS: tuple[tuple[str, str, int], ...] = (
+    ("review_actions_block_update", "review_actions", _TGTYPE_BEFORE_UPDATE_ROW),
+    ("review_actions_block_delete", "review_actions", _TGTYPE_BEFORE_DELETE_ROW),
+    (
+        "review_actions_block_truncate",
+        "review_actions",
+        _TGTYPE_BEFORE_TRUNCATE_STMT,
+    ),
+    ("phi_access_log_block_update", "phi_access_log", _TGTYPE_BEFORE_UPDATE_ROW),
+    ("phi_access_log_block_delete", "phi_access_log", _TGTYPE_BEFORE_DELETE_ROW),
+    (
+        "phi_access_log_block_truncate",
+        "phi_access_log",
+        _TGTYPE_BEFORE_TRUNCATE_STMT,
+    ),
+)
+"""``(trigger_name, table_name, expected_tgtype)`` triples for each
+required trigger.
+
+The integrity check verifies each triple (a) exists in the ``public``
+schema, (b) is bound to the named table, (c) is bound to the canonical
+:data:`_REQUIRED_TRIGGER_FUNCTION` in the ``public`` schema (not some
+no-op or same-named function in another schema), (d) is in the
+``enabled`` state (``tgenabled = 'O'``), and (e) fires on the right
+event + timing (matching ``tgtype``).
+
+A name-and-relname-only check passes when an attacker creates a
+same-named trigger in a different schema, swaps the function for one in
+a different schema, or changes the event from UPDATE to INSERT — all of
+which leave the actual UPDATE/DELETE/TRUNCATE path unguarded."""
 
 
 _REQUIRED_TRIGGER_FUNCTION = "review_actions_block_mutation"
 """Canonical name of the function bound to every required trigger."""
+
+
+_PROTECTED_SCHEMA = "public"
+"""Schema the migration installs the tables, triggers, and function in.
+
+If the project ever moves to a non-public schema, this constant moves
+together with the migration."""
 
 
 _PROTECTED_TABLES: tuple[str, ...] = ("review_actions", "phi_access_log")
@@ -402,15 +452,19 @@ class ReviewActionsStore:
                 f"alembic state error: {exc}"
             ) from exc
         if current is None:
-            raise MigrationStateError(
+            self._raise_security(
+                "no_alembic_revisions",
                 "no alembic revisions applied — run "
-                "bba.review_actions.apply_migrations() before writing"
+                "bba.review_actions.apply_migrations() before writing",
             )
         if current != head:
-            raise MigrationStateError(
+            self._raise_security(
+                "alembic_revision_drift",
                 f"alembic revision drift: live DB at {current!r}, "
                 f"on-disk head at {head!r}; run apply_migrations() "
-                f"or roll the deployment back"
+                f"or roll the deployment back",
+                current=current,
+                head=head,
             )
 
         self._check_triggers_intact()
@@ -420,16 +474,16 @@ class ReviewActionsStore:
     def _check_role_privileges(self) -> None:
         """Reject DSNs whose role can bypass the trigger guard.
 
-        Three bypass surfaces:
+        Two bypass surfaces:
 
         1. **Superuser** — ``rolsuper`` can ``ALTER TABLE ... DISABLE
            TRIGGER`` or ``SET session_replication_role = 'replica'``.
-        2. **Direct ownership** — the table's ``tableowner`` can
-           ``DISABLE TRIGGER`` on the table.
-        3. **Owner-role membership** — a role for which ``pg_has_role(
-           current_user, owner, 'USAGE')`` is true can ``SET ROLE owner``
-           and then exercise (2). The membership probe catches this; a
-           direct ``current_user == tableowner`` test does not.
+        2. **Membership in the owner role** — any role for which
+           ``pg_has_role(current_user, owner, 'MEMBER')`` is true can
+           ``SET ROLE owner`` and then ``DISABLE TRIGGER``. ``MEMBER``
+           catches both inheriting and non-inheriting members (a
+           ``NOINHERIT`` role still has SET-ROLE access via membership);
+           ``USAGE`` would miss the non-inheriting case.
         """
         with self._ensure_pool().connection() as conn:
             with conn.cursor() as cur:
@@ -440,46 +494,55 @@ class ReviewActionsStore:
                 )
                 row = cur.fetchone()
                 if row is None:
-                    raise MigrationStateError(
-                        "could not introspect current role"
+                    self._raise_security(
+                        "current_role_introspection_failed",
+                        "could not introspect current role",
                     )
                 current_user, is_superuser = row
 
                 if is_superuser:
-                    raise MigrationStateError(
+                    self._raise_security(
+                        "superuser_role_rejected",
                         f"connecting role {current_user!r} is a superuser; "
                         f"superusers can bypass the trigger guard via "
                         f"DISABLE TRIGGER or session_replication_role. "
                         f"Use an unprivileged role (e.g., "
                         f"review_actions_app) or pass "
-                        f"require_unprivileged_role=False explicitly"
+                        f"require_unprivileged_role=False explicitly",
+                        current_user=current_user,
                     )
 
                 cur.execute(
                     "SELECT DISTINCT tableowner FROM pg_tables "
-                    "WHERE tablename = ANY(%s)",
-                    (list(_PROTECTED_TABLES),),
+                    "WHERE tablename = ANY(%s) AND schemaname = %s",
+                    (list(_PROTECTED_TABLES), _PROTECTED_SCHEMA),
                 )
                 owners = [r[0] for r in cur.fetchall()]
                 for owner in owners:
+                    # 'MEMBER' catches non-inheriting members (NOINHERIT
+                    # role can still SET ROLE owner). 'USAGE' alone would
+                    # miss those — Codex round 3.
                     cur.execute(
-                        "SELECT pg_has_role(%s, %s, 'USAGE')",
+                        "SELECT pg_has_role(%s, %s, 'MEMBER')",
                         (current_user, owner),
                     )
                     has_role = cur.fetchone()
                     if has_role is not None and has_role[0]:
-                        raise MigrationStateError(
-                            f"connecting role {current_user!r} has USAGE "
-                            f"membership in {owner!r}, which owns the "
+                        self._raise_security(
+                            "owner_role_membership_rejected",
+                            f"connecting role {current_user!r} has MEMBER "
+                            f"access to {owner!r}, which owns the "
                             f"review_actions / phi_access_log tables; "
-                            f"membership enables SET ROLE + DISABLE TRIGGER "
-                            f"bypass. Use a role outside the owner's "
-                            f"membership chain (e.g., review_actions_app)"
+                            f"MEMBER access enables SET ROLE + DISABLE "
+                            f"TRIGGER bypass (inherited or not). Use a "
+                            f"role outside the owner's membership chain "
+                            f"(e.g., review_actions_app)",
+                            current_user=current_user,
+                            owner=owner,
                         )
 
     def _check_triggers_intact(self) -> None:
-        """Verify every required trigger exists, is bound to the right
-        table + the right function, and is currently enabled.
+        """Verify every required trigger exists with the right shape.
 
         Postgres' ``tgenabled`` values:
           ``'O'`` — origin / enabled (the only acceptable state)
@@ -489,49 +552,119 @@ class ReviewActionsStore:
 
         ``'A'`` would also fire on origin, but the migration installs
         ``'O'``, so anything else signals drift.
+
+        Each required trigger is identified by ``(tgname, relname,
+        relnamespace, proname, pronamespace, tgenabled, tgtype)`` — a
+        same-named trigger in another schema, or one that fires on the
+        wrong event, would slip past a name-only check.
         """
-        expected_pairs = set(_REQUIRED_TRIGGER_BINDINGS)
+        expected_lookup = {
+            (name, table): tgtype
+            for name, table, tgtype in _REQUIRED_TRIGGER_BINDINGS
+        }
         with self._ensure_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT t.tgname, c.relname, p.proname, t.tgenabled "
+                    "SELECT t.tgname, "
+                    "       c.relname, "
+                    "       cn.nspname AS relnsp, "
+                    "       p.proname, "
+                    "       pn.nspname AS pronsp, "
+                    "       t.tgenabled, "
+                    "       t.tgtype "
                     "FROM pg_trigger t "
                     "JOIN pg_class c ON t.tgrelid = c.oid "
+                    "JOIN pg_namespace cn ON c.relnamespace = cn.oid "
                     "JOIN pg_proc p ON t.tgfoid = p.oid "
+                    "JOIN pg_namespace pn ON p.pronamespace = pn.oid "
                     "WHERE NOT t.tgisinternal "
-                    "AND t.tgname = ANY(%s)",
+                    "AND t.tgname = ANY(%s) "
+                    "AND cn.nspname = %s",
                     (
-                        [name for name, _ in _REQUIRED_TRIGGER_BINDINGS],
+                        [name for name, _, _ in _REQUIRED_TRIGGER_BINDINGS],
+                        _PROTECTED_SCHEMA,
                     ),
                 )
                 rows = cur.fetchall()
 
         observed_pairs: set[tuple[str, str]] = set()
         broken: list[str] = []
-        for tgname, relname, proname, tgenabled in rows:
+        for (
+            tgname,
+            relname,
+            relnsp,
+            proname,
+            pronsp,
+            tgenabled,
+            tgtype,
+        ) in rows:
+            # relnsp is already filtered to _PROTECTED_SCHEMA by the query.
             observed_pairs.add((tgname, relname))
+            if pronsp != _PROTECTED_SCHEMA:
+                broken.append(
+                    f"trigger {tgname!r} on {relnsp}.{relname!r} is bound "
+                    f"to function {pronsp}.{proname!r}, expected "
+                    f"function in schema {_PROTECTED_SCHEMA!r}"
+                )
+                continue
             if proname != _REQUIRED_TRIGGER_FUNCTION:
                 broken.append(
                     f"trigger {tgname!r} on {relname!r} is bound to "
                     f"function {proname!r}, expected "
                     f"{_REQUIRED_TRIGGER_FUNCTION!r}"
                 )
+                continue
             if tgenabled != "O":
                 broken.append(
                     f"trigger {tgname!r} on {relname!r} is not enabled "
                     f"(tgenabled={tgenabled!r}); the guard does not fire"
                 )
+                continue
+            expected_tgtype = expected_lookup.get((tgname, relname))
+            if expected_tgtype is not None and tgtype != expected_tgtype:
+                broken.append(
+                    f"trigger {tgname!r} on {relname!r} has tgtype="
+                    f"{tgtype} (expected {expected_tgtype}); event or "
+                    f"timing has drifted from the migration"
+                )
 
-        missing = sorted(expected_pairs - observed_pairs)
+        missing = sorted(set(expected_lookup.keys()) - observed_pairs)
         if missing:
-            raise MigrationStateError(
+            self._raise_security(
+                "required_triggers_missing",
                 f"required trigger guards missing or bound to the wrong "
-                f"table: {missing!r}; schema is unsafe to write to"
+                f"table/schema: {missing!r}; schema is unsafe to write to",
+                missing=missing,
             )
         if broken:
-            raise MigrationStateError(
-                f"trigger guards are corrupted: {broken}"
+            self._raise_security(
+                "trigger_guards_corrupted",
+                f"trigger guards are corrupted: {broken}",
+                broken=broken,
             )
+
+    def _raise_security(
+        self, event: str, message: str, **fields: object
+    ) -> NoReturn:
+        """Log a structured security-event record, then raise
+        :class:`MigrationStateError`.
+
+        ``event`` is a short stable identifier (``superuser_role_rejected``,
+        ``alembic_revision_drift``, etc.) operators can grep / alert on
+        without parsing free-form messages. ``fields`` lands in the log
+        record's ``extra`` dict for structured-log consumers.
+        """
+        _security_log.warning(
+            "review_actions.security.%s: %s",
+            event,
+            message,
+            extra={
+                "review_actions_security_event": event,
+                "app_name": self._config.app_name,
+                **fields,
+            },
+        )
+        raise MigrationStateError(message)
 
     @staticmethod
     def _translate_raise(exc: RaiseException) -> Exception:
