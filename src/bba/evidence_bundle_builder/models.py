@@ -415,9 +415,27 @@ class EvidenceBundle(BaseModel):
                 "construct via build_evidence_bundle()"
             )
 
-        if not isinstance(parsed, dict) or "items" not in parsed:
+        if not isinstance(parsed, dict):
             raise ValueError(
-                "canonical_json must be a JSON object with an 'items' key"
+                "canonical_json must be a JSON object (envelope shape)"
+            )
+        # Envelope shape lock: builder always emits exactly {anchor, items}.
+        # Anything more or less is an upstream bug — extras would be silent
+        # data leakage; missing keys would mean the bundle is missing its
+        # decision-context anchor and the audit chain becomes ambiguous.
+        envelope_keys = set(parsed.keys())
+        expected_keys = {"anchor", "items"}
+        if envelope_keys != expected_keys:
+            extras = envelope_keys - expected_keys
+            missing = expected_keys - envelope_keys
+            raise ValueError(
+                f"canonical_json envelope must have exactly keys "
+                f"{sorted(expected_keys)} (extras={sorted(extras)}, "
+                f"missing={sorted(missing)})"
+            )
+        if not isinstance(parsed["anchor"], dict):
+            raise ValueError(
+                "canonical_json 'anchor' must be a JSON object"
             )
         parsed_items = parsed["items"]
         if not isinstance(parsed_items, list):

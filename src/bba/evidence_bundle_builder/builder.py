@@ -243,6 +243,19 @@ def _to_utc(ts: datetime) -> datetime:
     return ts.astimezone(UTC)
 
 
+def _hb_sort_key(h: HbRecord) -> tuple[datetime, float, int]:
+    """Total sort key for Hb records that preserves the HEMATOLOGY > POCT
+    contract from PRD §3 / :mod:`bba.hb_lookup` even at the bundle layer.
+
+    Source rank is 1 for HEMATOLOGY (preferred LABEXM 290095) and 0 for
+    POCT (LABEXM 500001). Sorted with ``reverse=True``, that puts
+    HEMATOLOGY before POCT for ties on ``(timestamp, value_g_dl)`` —
+    so the whole-item tail-drop in :func:`_enforce_char_cap` removes
+    POCT first, never quietly elevating a POCT result over a HEMATOLOGY
+    one of the same magnitude."""
+    return (h.timestamp, h.value_g_dl, 1 if h.source == "HEMATOLOGY" else 0)
+
+
 def _vitals_sort_key(v: VitalsRecord) -> tuple[datetime, str, str, str, str, str, str]:
     """Total sort key over every :class:`VitalsRecord` field.
 
@@ -530,14 +543,12 @@ def _assign_ids(
     #      ascending order, that drop would discard the most-recent Hb
     #      and retain stale labs — exactly inverted from clinical
     #      relevance. Newest-first inverts the drop priority correctly.
-    # The composite reverse=True still sorts by value and source for
-    # tie-breaking on equal timestamps; total-order is preserved across
-    # input shuffles.
-    for h in sorted(
-        hbs,
-        key=lambda x: (x.timestamp, x.value_g_dl, x.source),
-        reverse=True,
-    ):
+    # The source-rank tiebreak (1 for HEMATOLOGY, 0 for POCT) preserves
+    # PRD §3's HEMATOLOGY > POCT preference at the bundle layer too:
+    # under reverse=True, higher source-rank emits first; tail-drop in
+    # _enforce_char_cap therefore evicts POCT before HEMATOLOGY when the
+    # cap forces a same-timestamp/same-value tie to break.
+    for h in sorted(hbs, key=_hb_sort_key, reverse=True):
         items.append(
             EvidenceItem(
                 id=_next_id(),

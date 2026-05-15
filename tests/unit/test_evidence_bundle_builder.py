@@ -484,6 +484,44 @@ class TestModelImmutability:
                 bundle_hash=right_hash,
             )
 
+    def test_bundle_rejects_envelope_missing_anchor(self) -> None:
+        # Envelope must have exactly {anchor, items} — round-11 only
+        # checked items presence, but a missing anchor is silent loss
+        # of the decision-time context the audit chain depends on.
+        envelope = {"items": []}
+        canonical_json = canonical_serialize(envelope)
+        right_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+        with pytest.raises(ValidationError, match="envelope"):
+            EvidenceBundle(
+                items=(),
+                canonical_json=canonical_json,
+                bundle_hash=right_hash,
+            )
+
+    def test_bundle_rejects_envelope_with_extra_top_level_key(self) -> None:
+        # Builder emits exactly {anchor, items}. Extras are upstream
+        # drift; reject so the audit chain has a single canonical shape.
+        envelope = {"anchor": {}, "items": [], "extra": "leak"}
+        canonical_json = canonical_serialize(envelope)
+        right_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+        with pytest.raises(ValidationError, match="envelope"):
+            EvidenceBundle(
+                items=(),
+                canonical_json=canonical_json,
+                bundle_hash=right_hash,
+            )
+
+    def test_bundle_rejects_anchor_not_a_dict(self) -> None:
+        envelope = {"anchor": "not a dict", "items": []}
+        canonical_json = canonical_serialize(envelope)
+        right_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+        with pytest.raises(ValidationError, match="anchor"):
+            EvidenceBundle(
+                items=(),
+                canonical_json=canonical_json,
+                bundle_hash=right_hash,
+            )
+
     def test_bundle_rejects_items_source_mismatch(self) -> None:
         # Same id but different source classification.
         item = EvidenceItem(
@@ -1582,6 +1620,36 @@ class TestHbEmissionAndTruncationPriority:
         assert len(med_items) < 8, (
             "MEDs should drop FIRST under tight cap; if all 8 survive, "
             "DROP_PRIORITY is not applied"
+        )
+
+    def test_hematology_kept_before_poct_under_tight_cap(self) -> None:
+        # PRD §3 / bba.hb_lookup contract: HEMATOLOGY (LABEXM 290095)
+        # is preferred over POCT (LABEXM 500001). For tied
+        # timestamp/value Hb pairs, the bundle must keep HEMATOLOGY
+        # under tight cap pressure — without the source-rank tiebreak,
+        # POCT would survive (alphabetic 'POCT' > 'HEMATOLOGY' under
+        # reverse=True), inverting the source preference.
+        hb_hema = HbRecord(
+            timestamp=ANCHOR_DT, value_g_dl=7.5, source="HEMATOLOGY"
+        )
+        hb_poct = HbRecord(
+            timestamp=ANCHOR_DT, value_g_dl=7.5, source="POCT"
+        )
+        # Pad anchor to push the bundle near the cap so one Hb must drop.
+        anchor = OrderAnchor(
+            order_datetime=ANCHOR_DT,
+            hn_hash="x" * 200,
+            an_hash="y" * 200,
+            products=("LPRC",),
+        )
+        bundle = build_evidence_bundle(
+            inputs=EvidenceInputs(anchor=anchor, hb_history=(hb_hema, hb_poct)),
+            char_cap=850,
+        )
+        lab_items = _items_by_source(bundle, "Lab")
+        assert len(lab_items) == 1, "Expected exactly one Hb to survive"
+        assert lab_items[0].payload["lab_source"] == "HEMATOLOGY", (
+            "POCT survived over HEMATOLOGY; source-rank tiebreak missing"
         )
 
     def test_diagnosis_survives_longest_under_extreme_cap(self) -> None:
