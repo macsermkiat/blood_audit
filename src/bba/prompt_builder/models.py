@@ -232,6 +232,28 @@ class PromptBuildRequest(BaseModel):
     evidence_chunks: tuple[EvidenceChunk, ...]
     few_shot_examples: tuple[FewShotExample, ...] = ()
 
+    @model_validator(mode="after")
+    def _evidence_ids_unique(self) -> Self:
+        # Downstream grounding (:mod:`bba.quote_grounder`) treats a
+        # non-unique ``cited_id`` as ``CITED_ID_NOT_FOUND`` — duplicate
+        # evidence IDs in a single prompt would silently fail all
+        # citations against that ID, even legitimate ones. The builder
+        # emits one ``<evidence id="...">`` envelope per chunk, so the
+        # contract must be enforced at request boundary (codex review
+        # #21 round 2 P2-b).
+        ids = [c.evidence_id for c in self.evidence_chunks]
+        if len(ids) != len(set(ids)):
+            from collections import Counter
+
+            duplicates = sorted(
+                eid for eid, n in Counter(ids).items() if n > 1
+            )
+            raise ValueError(
+                f"evidence_chunks must have unique evidence_id values; "
+                f"duplicates: {duplicates}"
+            )
+        return self
+
 
 # =============================================================================
 # Output
@@ -338,6 +360,23 @@ class PromptBuildResult(BaseModel):
                 f"route_to_needs_review ({self.route_to_needs_review}) must be "
                 f"True iff needs_review_reasons is non-empty "
                 f"(n_reasons={len(self.needs_review_reasons)})"
+            )
+
+        # The scanner verdict is the mandatory short-circuit (PRD §38):
+        # ``flagged`` is the routing signal, ``INJECTION_DETECTED`` is the
+        # persisted reason. Allowing one without the other would let a
+        # caller reconstruct an inconsistent result whose hash is
+        # self-consistent but whose routing diverges from what the audit
+        # pipeline reads (codex review #21 round 2 P2-a).
+        injection_in_reasons = (
+            NeedsReviewReason.INJECTION_DETECTED in self.needs_review_reasons
+        )
+        if self.injection_verdict.flagged != injection_in_reasons:
+            raise ValueError(
+                "injection_verdict.flagged must agree with "
+                "INJECTION_DETECTED membership in needs_review_reasons "
+                f"(flagged={self.injection_verdict.flagged}, "
+                f"in_reasons={injection_in_reasons})"
             )
 
         envelope = build_envelope(

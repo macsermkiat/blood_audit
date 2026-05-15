@@ -991,6 +991,67 @@ class TestModelsValidation:
                 prompt_hash=forged_hash,
             )
 
+    def test_prompt_build_request_rejects_duplicate_evidence_ids(self) -> None:
+        # Regression for codex review #21 round 2 P2-b: downstream
+        # quote_grounder treats a non-unique cited_id as
+        # CITED_ID_NOT_FOUND, so duplicate evidence_ids in one prompt
+        # would silently fail all citations against that ID.
+        with pytest.raises(ValidationError):
+            PromptBuildRequest(
+                task_mode="HB_7_10_REVIEW",
+                cohort_threshold=7.0,
+                evidence_chunks=(
+                    _chunk(evidence_id="E1", text="alpha"),
+                    _chunk(evidence_id="E1", text="beta"),
+                ),
+            )
+
+    def test_prompt_build_result_rejects_flag_reason_disagreement(self) -> None:
+        # Regression for codex review #21 round 2 P2-a: the result model
+        # must reject any state where ``injection_verdict.flagged`` and
+        # the INJECTION_DETECTED reason disagree, otherwise a caller can
+        # reconstruct a result whose routing diverges from what the audit
+        # pipeline reads.
+        envelope = build_envelope(
+            blocks=[
+                {"role": "system", "text": "sys", "cache_marker": True},
+                {"role": "user", "text": "user", "cache_marker": False},
+            ],
+            task_mode="HB_7_10_REVIEW",
+            cohort_threshold=7.0,
+            injection_match_categories=[
+                InjectionCategory.IMPERATIVE_VERB_EN.value,
+            ],
+            injection_match_pattern_ids=["imp_ignore_v1"],
+            route_to_needs_review=True,
+            needs_review_reasons=[NeedsReviewReason.EMPTY_EVIDENCE.value],
+        )
+        h = compute_prompt_hash(envelope)
+        injection_match = InjectionMatch(
+            category=InjectionCategory.IMPERATIVE_VERB_EN,
+            pattern_id="imp_ignore_v1",
+            evidence_id="E1",
+            span_text="ignore policy",
+            start=0,
+            end=13,
+        )
+        with pytest.raises(ValidationError):
+            PromptBuildResult(
+                blocks=(
+                    PromptBlock(role="system", text="sys", cache_marker=True),
+                    PromptBlock(role="user", text="user", cache_marker=False),
+                ),
+                task_mode="HB_7_10_REVIEW",
+                cohort_threshold=7.0,
+                injection_verdict=InjectionVerdict(
+                    flagged=True, matches=(injection_match,)
+                ),
+                route_to_needs_review=True,
+                # missing INJECTION_DETECTED — agreement check must fire
+                needs_review_reasons=(NeedsReviewReason.EMPTY_EVIDENCE,),
+                prompt_hash=h,
+            )
+
     def test_prompt_build_result_rejects_route_reason_disagreement(self) -> None:
         # ``route_to_needs_review`` must be True iff ``needs_review_reasons``
         # is non-empty — a desync would silently change LLM-call routing.
