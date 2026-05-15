@@ -67,7 +67,23 @@ def _to_jsonable(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
     if isinstance(value, Mapping):
-        return {str(k): _to_jsonable(v) for k, v in value.items()}
+        # NFC-normalize keys (mirrors the value-side rule). Without this,
+        # a payload with NFC and NFD spellings of the same key would
+        # serialize to two different keys and produce different bundle
+        # bytes / hash. A collision after normalization is an upstream bug
+        # (two same-content keys with different encodings) — fail loud
+        # rather than silently overwrite the earlier value.
+        out: dict[str, Any] = {}
+        for k, v in value.items():
+            norm_k = unicodedata.normalize("NFC", str(k))
+            if norm_k in out:
+                raise ValueError(
+                    f"canonical_serialize: duplicate key {norm_k!r} after "
+                    "NFC normalization (two source keys collided); the "
+                    "upstream payload has a key-encoding bug"
+                )
+            out[norm_k] = _to_jsonable(v)
+        return out
     if isinstance(value, Sequence) and not isinstance(value, str | bytes):
         return [_to_jsonable(item) for item in value]
     raise TypeError(

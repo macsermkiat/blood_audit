@@ -112,9 +112,14 @@ def _filter_meds(meds: Sequence[MedRecord], anchor: datetime) -> tuple[MedRecord
 
 def _filter_hb(hbs: Sequence[HbRecord], anchor: datetime) -> tuple[HbRecord, ...]:
     # Hb history is pre-order only — post-order labs belong to the response
-    # analysis, not the decision evidence (mirrors :mod:`bba.hb_lookup`).
+    # analysis, not the decision evidence. The lower bound is STRICT
+    # (``anchor - h.timestamp < WINDOW_HB_BEFORE``) to match
+    # :mod:`bba.hb_lookup`'s ``anchor_utc - o.datetime_utc < _LOOKBACK`` —
+    # an Hb at exactly 7 d old is invisible to the deterministic classifier,
+    # and admitting it to the bundle would let the LLM cite evidence the
+    # classifier never saw.
     return tuple(
-        h for h in hbs if anchor - WINDOW_HB_BEFORE <= h.timestamp <= anchor
+        h for h in hbs if anchor - h.timestamp < WINDOW_HB_BEFORE and h.timestamp <= anchor
     )
 
 

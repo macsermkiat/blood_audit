@@ -433,6 +433,22 @@ class TestHbHistoryWindow:
         bundle = _build_minimal(hb_history=(_hb(offset_hours=1.0),))
         assert _items_by_source(bundle, "Lab") == ()
 
+    def test_exact_7d_boundary_dropped_matching_hb_lookup(self) -> None:
+        # bba.hb_lookup uses STRICT inequality (anchor - timestamp <
+        # _LOOKBACK), so an Hb at exactly 7 d old is invisible to the
+        # deterministic classifier. The bundle MUST drop it too — otherwise
+        # the LLM sees evidence the classifier never considered, breaking
+        # the audit's input consistency.
+        bundle = _build_minimal(hb_history=(_hb(offset_hours=-168.0),))  # exactly 7d
+        assert _items_by_source(bundle, "Lab") == ()
+
+    def test_just_inside_7d_boundary_kept(self) -> None:
+        # 7 d minus 1 second is still inside (matches hb_lookup).
+        bundle = _build_minimal(
+            hb_history=(_hb(offset_hours=-168.0 + (1.0 / 3600.0)),)
+        )
+        assert len(_items_by_source(bundle, "Lab")) == 1
+
 
 class TestVitalsWindow:
     """Vitals: ``[anchor - 6 h, anchor + 6 h]`` (mirrors :mod:`bba.vitals_extractor`)."""
@@ -753,6 +769,44 @@ class TestTimestampTieDeterminism:
         a = _build_minimal(vitals=(v1, v2))
         b = _build_minimal(vitals=(v2, v1))
         assert a.bundle_hash == b.bundle_hash
+
+
+class TestCanonicalJSONNFCNormalizesKeys:
+    """Mapping keys must be NFC-normalized too, not just values.
+
+    The canonical-JSON contract is a property of THE WHOLE PAYLOAD: every
+    string in the bundle is NFC. If only values are normalized,
+    ``{"café": 1}`` (NFC key) and ``{"cafe\\u0301": 1}`` (NFD key)
+    produce different bytes and different bundle hashes despite carrying
+    the same data — direct AC violation. Failing loud on collisions
+    (two source keys that normalize to the same string) prevents
+    silent overwrite, which would otherwise hide a real upstream bug."""
+
+    def test_nfd_and_nfc_keys_produce_identical_canonical_output(self) -> None:
+        nfc_key = unicodedata.normalize("NFC", "café")
+        nfd_key = unicodedata.normalize("NFD", "café")
+        assert nfc_key != nfd_key, "fixture is malformed if NFD == NFC"
+        a = canonical_serialize({nfc_key: 1})
+        b = canonical_serialize({nfd_key: 1})
+        assert a == b
+
+    def test_collision_after_normalization_raises(self) -> None:
+        nfc_key = unicodedata.normalize("NFC", "café")
+        nfd_key = unicodedata.normalize("NFD", "café")
+        # Both spellings in the same dict → after NFC normalization they
+        # collide. Silently overwriting would hide the upstream encoding
+        # bug; raise instead.
+        with pytest.raises(ValueError, match="duplicate key"):
+            canonical_serialize({nfc_key: 1, nfd_key: 2})
+
+    def test_nested_dict_keys_also_normalized(self) -> None:
+        # Defense in depth: the recursion must apply key normalization at
+        # every nesting level, not just the top-level dict.
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        a = canonical_serialize({"outer": {nfc: 1}})
+        b = canonical_serialize({"outer": {nfd: 1}})
+        assert a == b
 
 
 class TestCanonicalJSONRejectsNonFiniteFloats:
