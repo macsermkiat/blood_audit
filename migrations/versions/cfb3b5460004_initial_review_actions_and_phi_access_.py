@@ -196,6 +196,15 @@ def upgrade() -> None:
         "REVOKE UPDATE, DELETE, TRUNCATE ON phi_access_log FROM PUBLIC;"
     )
 
+    # ----- Grant SELECT on alembic_version --------------------------------
+    # The store's startup integrity check reads alembic_version to compare
+    # the live DB's revision against the on-disk head. Without this grant,
+    # the app role gets a permission-denied. SELECT-only — only the migrator
+    # (running as a privileged role) updates the version row.
+    op.execute(
+        "GRANT SELECT ON alembic_version TO review_actions_app;"
+    )
+
 
 def downgrade() -> None:
     """Reverse :func:`upgrade` for development; production never downgrades.

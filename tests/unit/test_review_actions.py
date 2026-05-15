@@ -33,6 +33,7 @@ import threading
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 import psycopg
 import pytest
@@ -108,24 +109,47 @@ def _reset_database(config: ReviewActionsConfig) -> None:
     tests' rows / migration head leak into the next test and corrupt
     ordering / freshness assertions. ``DROP SCHEMA ... CASCADE`` removes
     the migration's tables, sequences, triggers, and the alembic_version
-    table in one shot. The application role survives across the drop and
-    the migration's idempotent DO-block handles the re-run.
+    table in one shot. The application role is also dropped so the next
+    test's migration creates it fresh (and resets its password).
     """
     with psycopg.connect(config.dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute("DROP SCHEMA IF EXISTS public CASCADE")
             cur.execute("CREATE SCHEMA public")
             cur.execute("GRANT ALL ON SCHEMA public TO PUBLIC")
+            cur.execute(
+                "DO $$ BEGIN IF EXISTS ("
+                "SELECT 1 FROM pg_roles WHERE rolname = 'review_actions_app'"
+                ") THEN DROP ROLE review_actions_app; END IF; END $$;"
+            )
+
+
+def _swap_dsn_credentials(
+    dsn: str, *, user: str, password: str
+) -> str:
+    """Return a copy of ``dsn`` with the ``user:password`` portion replaced.
+
+    Used to derive an unprivileged-role DSN from the superuser DSN that
+    testcontainers emits.
+    """
+    parsed = urlparse(dsn)
+    host = parsed.hostname or "localhost"
+    port_part = f":{parsed.port}" if parsed.port else ""
+    new_netloc = f"{user}:{password}@{host}{port_part}"
+    return urlunparse(parsed._replace(netloc=new_netloc))
 
 
 @pytest.fixture
 def postgres_config(_postgres_container: object) -> ReviewActionsConfig:
-    """A ReviewActionsConfig pointing at a freshly-reset testcontainers
-    Postgres database.
+    """Superuser-role ReviewActionsConfig pointing at a freshly-reset DB.
 
     The reset runs per-test so each test sees a clean schema (no rows from
     prior tests, no alembic_version row, no tables). The reset is fast
     (sub-100ms) vs spinning up a new container per test (several seconds).
+
+    This config connects as the container's default user, which is a
+    superuser. Most data-mutating tests use :func:`app_config` instead,
+    which exercises the production privilege model.
     """
     dsn = _postgres_container.get_connection_url()  # type: ignore[attr-defined]
     config = ReviewActionsConfig(dsn=dsn)
@@ -134,15 +158,41 @@ def postgres_config(_postgres_container: object) -> ReviewActionsConfig:
 
 
 @pytest.fixture
-def migrated_store(postgres_config: ReviewActionsConfig) -> Iterator[ReviewActionsStore]:
-    """A live store against a fully-migrated Postgres database.
+def app_config(
+    postgres_config: ReviewActionsConfig,
+) -> ReviewActionsConfig:
+    """Unprivileged-role ReviewActionsConfig against a migrated DB.
 
-    Applies all alembic migrations against the freshly-reset container
-    before yielding the store. Used by tests that exercise the live
-    append-only invariant / concurrent writes / read path.
+    Migrates the freshly-reset DB using the superuser config, sets a
+    password on the ``review_actions_app`` role, and returns a config that
+    connects as that role. This mirrors the production deployment model:
+    migrations run as a privileged operator role, the app process connects
+    as a least-privilege INSERT/SELECT-only role.
     """
     apply_migrations(postgres_config)
-    with ReviewActionsStore(postgres_config) as store:
+    with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "ALTER ROLE review_actions_app WITH LOGIN "
+                "PASSWORD 'app_test_pw'"
+            )
+    app_dsn = _swap_dsn_credentials(
+        postgres_config.dsn, user="review_actions_app", password="app_test_pw"
+    )
+    return ReviewActionsConfig(dsn=app_dsn)
+
+
+@pytest.fixture
+def migrated_store(app_config: ReviewActionsConfig) -> Iterator[ReviewActionsStore]:
+    """A live store against a fully-migrated Postgres database, connecting
+    as the unprivileged ``review_actions_app`` role.
+
+    Used by tests that exercise the live append-only invariant / concurrent
+    writes / read path / context-manager API.
+    """
+    with ReviewActionsStore(
+        app_config, migrations_root=REPO_ROOT / "migrations"
+    ) as store:
         yield store
 
 
@@ -493,13 +543,18 @@ def _execute_raw(
     store: ReviewActionsStore, statement: str, params: object = None
 ) -> None:
     """Open a fresh connection (bypassing the store's pool) and execute
-    ``statement``. Translates the trigger's SQLSTATE P0001 raise into
-    :class:`AppendOnlyViolationError`.
+    ``statement``. Translates both the REVOKE-style block
+    (``InsufficientPrivilege`` / SQLSTATE 42501) and the trigger-style block
+    (``RaiseException`` / SQLSTATE P0001 + ``append_only_violation``
+    message) into :class:`AppendOnlyViolationError` so tests can express the
+    invariant in domain terms regardless of which defense actually fired.
     """
     try:
         with psycopg.connect(store.config.dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(statement, params or ())
+    except psycopg.errors.InsufficientPrivilege as exc:
+        raise AppendOnlyViolationError(str(exc)) from exc
     except psycopg.errors.RaiseException as exc:
         message = str(exc.diag.message_primary) if exc.diag else str(exc)
         if exc.sqlstate == "P0001" and "append_only_violation" in message:
@@ -880,8 +935,18 @@ class TestStoreRequiresMigrations:
         self, postgres_config: ReviewActionsConfig
     ) -> None:
         """Skipping ``apply_migrations`` → write raises MigrationStateError
-        instead of "relation does not exist" (more actionable for ops)."""
-        with ReviewActionsStore(postgres_config) as store:
+        instead of "relation does not exist" (more actionable for ops).
+
+        Uses ``require_unprivileged_role=False`` because the unprivileged
+        role is created BY the migration; on an unmigrated DB the only
+        available role is the superuser, and we want the alembic head check
+        to fire (not the privilege check).
+        """
+        with ReviewActionsStore(
+            postgres_config,
+            migrations_root=REPO_ROOT / "migrations",
+            require_unprivileged_role=False,
+        ) as store:
             with pytest.raises(MigrationStateError):
                 store.record_action(_action_input())
 
@@ -938,22 +1003,188 @@ class TestListActions:
         assert rows[1].action_id == second.action_id
 
 
+class TestAccessPhiContextManager:
+    """``access_phi`` writes the log row BEFORE the body runs (AC §③).
+
+    The wrapper exists because the AC says "every dashboard access of
+    un-redacted text writes a row" — a plain ``record_phi_access`` puts the
+    discipline on the dashboard. The context manager makes the structural
+    pattern "wrap the un-redacted-text retrieval" the obvious one.
+    """
+
+    def test_access_phi_writes_log_at_enter(
+        self, migrated_store: ReviewActionsStore
+    ) -> None:
+        """Entering the context writes the row; the log row is visible to
+        ``verify_phi_access_completeness`` before the body executes."""
+
+        observed_completeness: list[bool] = []
+        with migrated_store.access_phi(
+            _phi_access_input(reviewer_id="alice", audit_id="audit-1")
+        ):
+            observed_completeness.append(
+                migrated_store.verify_phi_access_completeness(
+                    reviewer_id="alice", audit_id="audit-1"
+                )
+            )
+        assert observed_completeness == [True]
+
+    def test_access_phi_yields_persisted_log(
+        self, migrated_store: ReviewActionsStore
+    ) -> None:
+        with migrated_store.access_phi(_phi_access_input()) as log:
+            assert isinstance(log, PhiAccessLog)
+            assert log.access_id > 0
+
+    def test_access_phi_log_survives_body_exception(
+        self, migrated_store: ReviewActionsStore
+    ) -> None:
+        """An access attempt that crashed mid-render is still an access for
+        audit purposes; the row stays committed."""
+        with pytest.raises(RuntimeError, match="render crashed"):
+            with migrated_store.access_phi(
+                _phi_access_input(reviewer_id="alice", audit_id="audit-1")
+            ):
+                raise RuntimeError("render crashed")
+
+        # Open a new store handle (the previous one may have been damaged
+        # by the raise) and verify the row is there.
+        rows = migrated_store.list_phi_access(reviewer_id="alice")
+        assert len(rows) == 1
+
+
+class TestStorePrivilegeCheck:
+    """The store refuses to operate as a role that can bypass triggers."""
+
+    def test_superuser_role_is_rejected(
+        self, postgres_config: ReviewActionsConfig
+    ) -> None:
+        """Connecting as the container's superuser → MigrationStateError.
+
+        Superusers can ``ALTER TABLE ... DISABLE TRIGGER`` or
+        ``SET session_replication_role = 'replica'`` to bypass the trigger
+        guard. The startup check refuses this configuration.
+        """
+        apply_migrations(postgres_config)
+        with ReviewActionsStore(
+            postgres_config, migrations_root=REPO_ROOT / "migrations"
+        ) as store:
+            with pytest.raises(MigrationStateError, match="superuser"):
+                store.record_action(_action_input())
+
+    def test_owner_role_is_rejected(
+        self, postgres_config: ReviewActionsConfig
+    ) -> None:
+        """The owner of a protected table can DISABLE TRIGGER on it. Reject
+        any DSN that connects as the table owner.
+
+        The testcontainers default user is both superuser AND owner; the
+        superuser branch fires first, so this test creates a non-superuser
+        owner explicitly.
+        """
+        apply_migrations(postgres_config)
+        # Create a non-superuser role and transfer table ownership to it.
+        with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "CREATE ROLE owner_role WITH LOGIN PASSWORD 'owner_pw'"
+                )
+                cur.execute(
+                    "ALTER TABLE review_actions OWNER TO owner_role"
+                )
+                cur.execute(
+                    "ALTER TABLE phi_access_log OWNER TO owner_role"
+                )
+        owner_dsn = _swap_dsn_credentials(
+            postgres_config.dsn, user="owner_role", password="owner_pw"
+        )
+        with ReviewActionsStore(
+            ReviewActionsConfig(dsn=owner_dsn),
+            migrations_root=REPO_ROOT / "migrations",
+        ) as store:
+            with pytest.raises(MigrationStateError, match="owns"):
+                store.record_action(_action_input())
+
+    def test_privilege_check_can_be_explicitly_disabled(
+        self, postgres_config: ReviewActionsConfig
+    ) -> None:
+        """``require_unprivileged_role=False`` allows the superuser DSN —
+        used in tests that exercise the trigger-side defense directly."""
+        apply_migrations(postgres_config)
+        with ReviewActionsStore(
+            postgres_config,
+            migrations_root=REPO_ROOT / "migrations",
+            require_unprivileged_role=False,
+        ) as store:
+            written = store.record_action(_action_input())
+            assert written.action_id > 0
+
+
+class TestSchemaDriftDetection:
+    """The store rejects a drifted schema (missing trigger / outdated head)."""
+
+    def test_missing_trigger_is_rejected(
+        self, app_config: ReviewActionsConfig,
+        postgres_config: ReviewActionsConfig,
+    ) -> None:
+        """Drop one of the required triggers; the store refuses to operate.
+
+        The drop runs as superuser (since the app role cannot ALTER TABLE);
+        this simulates an operator who manually removed a guard between
+        migrations.
+        """
+        with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DROP TRIGGER review_actions_block_update "
+                    "ON review_actions"
+                )
+        with ReviewActionsStore(
+            app_config, migrations_root=REPO_ROOT / "migrations"
+        ) as store:
+            with pytest.raises(
+                MigrationStateError, match="trigger guards missing"
+            ):
+                store.record_action(_action_input())
+
+    def test_alembic_revision_drift_is_rejected(
+        self, app_config: ReviewActionsConfig,
+        postgres_config: ReviewActionsConfig,
+    ) -> None:
+        """If the live DB's alembic version doesn't match the on-disk head,
+        the store refuses. Forge the drift by writing a bogus revision id."""
+        with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE alembic_version SET version_num = 'forged_drift'"
+                )
+        with ReviewActionsStore(
+            app_config, migrations_root=REPO_ROOT / "migrations"
+        ) as store:
+            with pytest.raises(MigrationStateError, match="revision drift"):
+                store.record_action(_action_input())
+
+
 class TestStoreLifecycle:
     """Store can be used as a context manager."""
 
     def test_context_manager_closes_on_exit(
-        self, postgres_config: ReviewActionsConfig
+        self, app_config: ReviewActionsConfig
     ) -> None:
-        with ReviewActionsStore(postgres_config) as store:
+        with ReviewActionsStore(
+            app_config, migrations_root=REPO_ROOT / "migrations"
+        ) as store:
             assert isinstance(store, ReviewActionsStore)
         # The post-exit state is implementation-private; the contract is
         # that ``close()`` was called. Re-entering the context after close
         # is not part of the contract.
 
     def test_close_is_idempotent(
-        self, postgres_config: ReviewActionsConfig
+        self, app_config: ReviewActionsConfig
     ) -> None:
-        store = ReviewActionsStore(postgres_config)
+        store = ReviewActionsStore(
+            app_config, migrations_root=REPO_ROOT / "migrations"
+        )
         store.close()
         store.close()  # must not raise
 
