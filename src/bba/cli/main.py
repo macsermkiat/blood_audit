@@ -22,7 +22,6 @@ defaults for the per-store integrations is owned by each module."""
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
 
@@ -50,7 +49,7 @@ from bba.cli.models import (
     ServeDashboardInput,
 )
 from bba.cli.store_protocol import AuditRunStore
-from bba.ingest import IngestConfig, ingest, schema_fingerprint
+from bba.ingest import IngestConfig, IngestResult, ingest, schema_fingerprint
 
 
 _log = get_logger()
@@ -359,52 +358,39 @@ def _run_audit_pipeline(
         output_dir=output_dir,
         code_version=code_version(),
     )
-    ingest(config)
-    # Record one marker per ingested HOSxP table so run_count is
+    result: IngestResult = ingest(config)
+    # ``IngestResult.tables_written`` is the authoritative list of
+    # validated HOSxP tables for this run; trusting the function's
+    # typed return value is more robust than re-globbing the output
+    # directory (which would be tied to whichever ingest revision is
+    # currently shipping parquet writes vs marker-only writes).
+    if not result.tables_written:
+        # Defensive guard: a successful ingest invariably returns at
+        # least one validated table (and otherwise raises
+        # ``IncompleteInputError``). Reaching here means ingest's
+        # contract changed silently — refuse to mark the run complete
+        # rather than persist a ``run_<id>.complete`` marker for a run
+        # with zero row markers (PRD §20 "CLI fails loud").
+        raise CliError(
+            f"audit pipeline for run_id={run_id} produced zero ingested "
+            "tables; refusing to mark the run complete (a successful "
+            "Phase 1 audit must yield at least one validated HOSxP table)"
+        )
+    # Record one marker per validated HOSxP table so run_count is
     # consistent with the completed marker that bba_audit writes next.
     # The audit_id namespace ``phase1_ingest_<table>`` is reserved for
     # the ingest-leg-only Phase 1; the full LLM-driven leg will write
     # ``audit_<hn_hash>_<requested_at>`` rows under the same run_id.
-    ingested_tables = sorted(_iter_ingested_tables(output_dir))
-    if not ingested_tables:
-        # A successful ingest must produce ≥ 1 parquet file. Reaching
-        # here means ingest silently produced no output — refusing to
-        # mark the run complete is the loud-failure contract from PRD
-        # §20 ("CLI fails loud"). Without this guard ``bba_audit``
-        # would write a ``run_<id>.complete`` marker for a run with
-        # zero row markers, leaving an inconsistent on-disk state for
-        # the next idempotency check.
-        raise CliError(
-            f"audit pipeline for run_id={run_id} produced zero ingested "
-            f"tables under {output_dir}; refusing to mark the run "
-            "complete (a successful Phase 1 audit must yield at least "
-            "one HOSxP table parquet file)"
-        )
-    for table_name in ingested_tables:
+    for table_name in result.tables_written:
         store.record_row(run_id, f"phase1_ingest_{table_name}")
     _log.info(
         "audit.pipeline_ingest_complete",
         run_id=run_id,
         output_dir=str(output_dir),
         leg="phase1_ingest_only",
-        table_count=len(ingested_tables),
+        table_count=len(result.tables_written),
+        ingest_skipped_idempotent=result.skipped_idempotent,
     )
-
-
-def _iter_ingested_tables(output_dir: Path) -> Iterator[str]:
-    """Yield the bare names of every parquet file under ``output_dir``.
-
-    Used by :func:`_run_audit_pipeline` to convert per-table ingest
-    outputs into per-row markers in the audit_run_store. Returns an
-    empty iterator if the directory is missing (e.g. the ingest step
-    was mocked in a test); the calling function logs the empty case
-    explicitly so observers can distinguish "nothing ingested" from
-    "table list still loading"."""
-    if not output_dir.is_dir():
-        return
-    for child in output_dir.iterdir():
-        if child.suffix == ".parquet":
-            yield child.stem
 
 
 def _resolve_run_id(inputs: AuditCommandInput) -> str:

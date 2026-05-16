@@ -1540,19 +1540,19 @@ class TestRunAuditPipelineIngestLeg:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         import bba.cli.main as main_module
+        from bba.ingest import IngestResult
 
         monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
         run_id = "abc123def4567890"
-
-        def _fake_ingest(config: object) -> None:
-            # Real ingest would write per-table parquet under output_dir;
-            # mimic the side-effect minimally so the zero-table guard
-            # in _run_audit_pipeline does not fire.
-            out_dir = config.output_dir  # type: ignore[attr-defined]
-            out_dir.mkdir(parents=True, exist_ok=True)
-            (out_dir / "BDVST.parquet").write_bytes(b"")
-
-        with patch("bba.cli.main.ingest", side_effect=_fake_ingest) as mock_ingest:
+        fake_result = IngestResult(
+            run_id=run_id,
+            rows_written=0,
+            tables_written=("BDVST",),
+            skipped_idempotent=False,
+        )
+        with patch(
+            "bba.cli.main.ingest", return_value=fake_result
+        ) as mock_ingest:
             main_module._run_audit_pipeline(
                 run_id=run_id, input_csv=fake_csv, store=stub_store
             )
@@ -1585,19 +1585,21 @@ class TestRunAuditPipelineIngestLeg:
         stub_store: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """After ingest writes per-table parquet files, the pipeline
-        calls ``store.record_row(run_id, audit_id)`` once per file so
-        ``run_count`` reflects the work that was actually done."""
+        """The pipeline trusts :attr:`IngestResult.tables_written` —
+        the typed return value from :func:`bba.ingest.ingest` — and
+        records one ``store.record_row`` per validated table."""
         import bba.cli.main as main_module
+        from bba.ingest import IngestResult
 
         monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
         run_id = "abc123def4567890"
-        # Simulate ingest's per-table parquet output.
-        output_dir = tmp_path / "audit" / run_id
-        output_dir.mkdir(parents=True)
-        for table in ("BDVST", "BDTYPE", "Diagnosis"):
-            (output_dir / f"{table}.parquet").write_bytes(b"")
-        with patch("bba.cli.main.ingest"):
+        fake_result = IngestResult(
+            run_id=run_id,
+            rows_written=0,
+            tables_written=("BDVST", "BDTYPE", "Diagnosis"),
+            skipped_idempotent=False,
+        )
+        with patch("bba.cli.main.ingest", return_value=fake_result):
             main_module._run_audit_pipeline(
                 run_id=run_id, input_csv=fake_csv, store=stub_store
             )
@@ -1610,22 +1612,27 @@ class TestRunAuditPipelineIngestLeg:
             "phase1_ingest_Diagnosis",
         }
 
-    def test_zero_ingested_tables_raises_cli_error(
+    def test_zero_tables_written_raises_cli_error(
         self,
         tmp_path: Path,
         fake_csv: Path,
         stub_store: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """If ingest silently produces no parquet files the pipeline
-        must fail loud rather than letting ``bba_audit`` write a
-        ``run_<id>.complete`` marker for a run with zero row markers."""
+        """Defensive guard: if ingest's contract changes and it returns
+        an empty ``tables_written`` tuple, the pipeline must fail loud
+        rather than let bba_audit mark the run complete with zero rows."""
         import bba.cli.main as main_module
+        from bba.ingest import IngestResult
 
         monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
-        # Patched ingest does NOT create the output directory, so the
-        # glob yields zero tables — the empty-ingest failure mode.
-        with patch("bba.cli.main.ingest"):
+        empty_result = IngestResult(
+            run_id="abc123def4567890",
+            rows_written=0,
+            tables_written=(),
+            skipped_idempotent=False,
+        )
+        with patch("bba.cli.main.ingest", return_value=empty_result):
             with pytest.raises(CliError, match="zero ingested tables"):
                 main_module._run_audit_pipeline(
                     run_id="abc123def4567890",
@@ -1641,30 +1648,29 @@ class TestRunAuditPipelineIngestLeg:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Integration: against the real :class:`FileBackedAuditRunStore`,
-        ``run_count`` after a successful audit equals the number of
-        ingested HOSxP tables and ``run_complete`` is True. This proves
-        the round-2 inconsistency (complete=True with count=0) is
-        impossible: the pipeline writes the markers BEFORE bba_audit
-        writes the completion marker."""
+        """End-to-end integration against the real
+        :class:`FileBackedAuditRunStore`: after a successful audit,
+        ``run_complete`` is True and ``run_count`` equals the number of
+        validated HOSxP tables returned by ingest. This proves the
+        round-2 inconsistency (complete=True with count=0) is
+        impossible — the pipeline writes the markers BEFORE bba_audit
+        writes the completion marker, and the count source is the
+        ingest function's typed return value (so a future ingest that
+        adds parquet writes does not break this contract)."""
         from bba.cli.audit_run_store import FileBackedAuditRunStore
+        from bba.ingest import IngestResult
 
         monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
-
-        # Stub the underlying ingest call to create per-table parquet
-        # files in the per-run output directory — mirrors the real
-        # ingest side-effect without paying its cost.
-        def _fake_ingest(config: object) -> None:
-            out_dir = config.output_dir  # type: ignore[attr-defined]
-            out_dir.mkdir(parents=True, exist_ok=True)
-            for table in ("BDVST", "Diagnosis", "Lab"):
-                (out_dir / f"{table}.parquet").write_bytes(b"")
-
-        with patch("bba.cli.main.ingest", side_effect=_fake_ingest):
+        fake_result = IngestResult(
+            run_id="placeholder",  # overwritten by CLI; real value is computed
+            rows_written=0,
+            tables_written=("BDVST", "Diagnosis", "Lab"),
+            skipped_idempotent=False,
+        )
+        with patch("bba.cli.main.ingest", return_value=fake_result):
             result = runner.invoke(cli, ["audit", "--input", str(fake_csv)])
         assert result.exit_code == 0, result.output
 
-        # Recover the run_id from the marker file then assert consistency.
         markers = list((tmp_path / "audit_runs").glob("run_*.complete"))
         assert len(markers) == 1, markers
         run_id = markers[0].stem.removeprefix("run_").removesuffix(".complete")
