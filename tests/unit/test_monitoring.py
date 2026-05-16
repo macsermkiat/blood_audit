@@ -85,6 +85,7 @@ from bba.monitoring import (
     SENTINEL_SET_SIZE,
     SPRT_DEFAULT_ALPHA,
     SPRT_DEFAULT_BETA,
+    SPRT_DEFAULT_MIN_N,
     SPRT_TARGET_ARL0,
     WEEKLY_REVIEWER_SAMPLE_MAX,
     WEEKLY_REVIEWER_SAMPLE_MIN,
@@ -97,7 +98,6 @@ from bba.monitoring import (
     MonitoringError,
     MonitoringStore,
     SentinelManifest,
-    SentinelStaleError,
     SprtConfig,
     SprtState,
     WaldSprtMonitor,
@@ -201,8 +201,17 @@ class TestModulePublicSurface:
         """All typed exceptions inherit from MonitoringError so a broad
         ``except`` catches the family."""
         assert issubclass(InsufficientHistoryError, MonitoringError)
-        assert issubclass(SentinelStaleError, MonitoringError)
         assert issubclass(GoldenSetMismatchError, MonitoringError)
+
+    def test_sprt_min_n_default_matches_constant(self) -> None:
+        """``SprtConfig.min_n`` defaults to ``SPRT_DEFAULT_MIN_N`` — the
+        constant is the single source of truth, not a magic number on
+        the model."""
+        assert SPRT_DEFAULT_MIN_N >= 1
+        cfg = SprtConfig(
+            signal="needs_review_rate", p_null=0.05, p_alt=0.10
+        )
+        assert cfg.min_n == SPRT_DEFAULT_MIN_N
 
 
 class TestModelImmutability:
@@ -481,32 +490,43 @@ class TestSprtNoAlarmOnNullData:
 
 
 class TestSprtArl0Empirical:
-    """Empirical ARL₀ check: over ``n_replications`` independent null
-    streams, the average run length to a false alarm is ≥ SPRT_TARGET_ARL0.
+    """Empirical ARL₀ check: over many independent null streams, the
+    ratio of total observations processed to the count of false alarms
+    is ≥ SPRT_TARGET_ARL0.
 
-    Slow-ish test — marked but kept in the suite as the headline ARL₀
-    contract. GREEN will tune ``alpha`` to satisfy this."""
+    The formula is ``total_observations / max(n_false_alarms, 1)`` —
+    not the average alarm-time across alarming streams. The naive
+    average-only formula passes vacuously when zero alarms occur
+    (``inf >= 500``); the ratio form pins the false-alarm rate to a
+    long-run frequency over real exposure, which is what ARL₀ actually
+    measures."""
 
     def test_empirical_arl0_meets_target(self, sprt_config: SprtConfig) -> None:
-        # Pseudocode for the GREEN-phase assertion:
-        # run 50 independent null streams; count false alarms;
-        # ARL₀ ≈ total_observations / max(1, n_alarms)
-        arls: list[int] = []
-        for seed in range(50):
+        total_observations = 0
+        n_false_alarms = 0
+        n_replications = 50
+        per_stream_n = 2000
+        for seed in range(n_replications):
             stream = synthetic_drift_stream(
                 null_rate=sprt_config.p_null,
                 drift_rate=sprt_config.p_null,
                 drift_offset=0,
-                total_n=2000,
+                total_n=per_stream_n,
                 seed=seed,
             )
             state = run_sprt_on_window(stream, sprt_config)
+            total_observations += state.n_observations
             if state.verdict == "reject_null":
-                arls.append(state.n_observations)
-        empirical_arl0 = (
-            sum(arls) / len(arls) if arls else float("inf")
+                n_false_alarms += 1
+        # Long-run frequency form: how many observations did we burn per
+        # false alarm? With α=β=0.05, p_null=0.05, p_alt=0.10 the
+        # theoretical ARL₀ comfortably exceeds 500.
+        empirical_arl0 = total_observations / max(n_false_alarms, 1)
+        assert empirical_arl0 >= SPRT_TARGET_ARL0, (
+            f"ARL₀ regression: {empirical_arl0:.0f} observations per "
+            f"false alarm over {n_replications} null streams of "
+            f"{per_stream_n} obs each ({n_false_alarms} alarms total)"
         )
-        assert empirical_arl0 >= SPRT_TARGET_ARL0
 
 
 class TestSprtResetClearsState:
@@ -525,6 +545,13 @@ class TestSprtResetClearsState:
         # one increment, far from either bound.
         assert state.n_observations == 1
         assert state.verdict == "continue"
+
+    def test_monitor_exposes_config(self, sprt_config: SprtConfig) -> None:
+        """``monitor.config`` is the read-only handle the dashboard /
+        operator log uses to print which signal+thresholds an alarm
+        came from."""
+        monitor = WaldSprtMonitor(sprt_config)
+        assert monitor.config == sprt_config
 
 
 # =============================================================================
@@ -1035,3 +1062,552 @@ class TestPackageImportSmoke:
         assert hasattr(mod, "draw_weekly_reviewer_sample")
         assert hasattr(mod, "MonitoringStore")
         assert hasattr(mod, "emit_alarm")
+
+
+# =============================================================================
+# Codex review follow-ups — P1 coverage gaps + invariant guards
+# =============================================================================
+
+
+class TestSprtConfigValidation:
+    """:class:`SprtConfig` must reject nonsense parameters at construction
+    time so ``math.log(p_alt / p_null)`` inside the SPRT loop never
+    encounters a boundary value (division by zero or log of zero).
+
+    The validators on the model — not on each consumer — are the right
+    boundary for this check: every caller that builds a SprtConfig gets
+    the same enforcement without having to remember to re-validate.
+    """
+
+    @pytest.mark.parametrize("bad_p", [-0.1, 0.0, 1.0, 1.5])
+    def test_p_null_out_of_open_unit_rejected(self, bad_p: float) -> None:
+        with pytest.raises(ValidationError):
+            SprtConfig(
+                signal="needs_review_rate",
+                p_null=bad_p,
+                p_alt=0.5,
+            )
+
+    @pytest.mark.parametrize("bad_p", [-0.1, 0.0, 1.0, 1.5])
+    def test_p_alt_out_of_open_unit_rejected(self, bad_p: float) -> None:
+        with pytest.raises(ValidationError):
+            SprtConfig(
+                signal="needs_review_rate",
+                p_null=0.05,
+                p_alt=bad_p,
+            )
+
+    def test_p_alt_must_exceed_p_null(self) -> None:
+        """``p_null >= p_alt`` would invert the per-step log-LR sign and
+        send the SPRT in the wrong direction; rejected at config time."""
+        with pytest.raises(ValidationError):
+            SprtConfig(
+                signal="needs_review_rate",
+                p_null=0.10,
+                p_alt=0.10,  # equal
+            )
+        with pytest.raises(ValidationError):
+            SprtConfig(
+                signal="needs_review_rate",
+                p_null=0.10,
+                p_alt=0.05,  # inverted
+            )
+
+    @pytest.mark.parametrize("bad", [-0.1, 0.0, 1.0, 1.5])
+    def test_alpha_out_of_open_unit_rejected(self, bad: float) -> None:
+        with pytest.raises(ValidationError):
+            SprtConfig(
+                signal="needs_review_rate",
+                p_null=0.05,
+                p_alt=0.10,
+                alpha=bad,
+            )
+
+    @pytest.mark.parametrize("bad", [-0.1, 0.0, 1.0, 1.5])
+    def test_beta_out_of_open_unit_rejected(self, bad: float) -> None:
+        with pytest.raises(ValidationError):
+            SprtConfig(
+                signal="needs_review_rate",
+                p_null=0.05,
+                p_alt=0.10,
+                beta=bad,
+            )
+
+    @pytest.mark.parametrize("bad_min_n", [0, -1, -100])
+    def test_min_n_must_be_positive(self, bad_min_n: int) -> None:
+        with pytest.raises(ValidationError):
+            SprtConfig(
+                signal="needs_review_rate",
+                p_null=0.05,
+                p_alt=0.10,
+                min_n=bad_min_n,
+            )
+
+
+class TestWaldBoundsValidation:
+    """The :func:`wald_bounds` helper is also called from the monitor's
+    constructor — both surfaces share the same input-validation contract,
+    so tests pin it directly here too."""
+
+    @pytest.mark.parametrize("bad", [0.0, 1.0, -0.5, 1.5])
+    def test_alpha_out_of_open_unit_rejected(self, bad: float) -> None:
+        with pytest.raises(ValueError):
+            wald_bounds(alpha=bad, beta=0.05)
+
+    @pytest.mark.parametrize("bad", [0.0, 1.0, -0.5, 1.5])
+    def test_beta_out_of_open_unit_rejected(self, bad: float) -> None:
+        with pytest.raises(ValueError):
+            wald_bounds(alpha=0.05, beta=bad)
+
+
+class TestSyntheticDriftStreamValidation:
+    """:func:`synthetic_drift_stream` is the fixture every SPRT validation
+    test depends on; its own input guards must be exercised so a malformed
+    fixture doesn't silently produce garbage data."""
+
+    def test_negative_drift_offset_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            synthetic_drift_stream(
+                null_rate=0.05,
+                drift_rate=0.10,
+                drift_offset=-1,
+                total_n=100,
+                seed=0,
+            )
+
+    def test_negative_total_n_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            synthetic_drift_stream(
+                null_rate=0.05,
+                drift_rate=0.10,
+                drift_offset=0,
+                total_n=-1,
+                seed=0,
+            )
+
+    def test_drift_offset_exceeds_total_n_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            synthetic_drift_stream(
+                null_rate=0.05,
+                drift_rate=0.10,
+                drift_offset=200,
+                total_n=100,
+                seed=0,
+            )
+
+
+class TestSprtAcceptNullCycleReset:
+    """User constraint (PRD §18): under H0 the SPRT must NOT silently
+    stop after a single accept-null crossing — it must reset and keep
+    monitoring. The terminal state after a long all-failure stream
+    should reflect total observations processed across cycles, not the
+    count in the final cycle alone."""
+
+    def test_all_failure_stream_resets_and_processes_all(
+        self, sprt_config: SprtConfig
+    ) -> None:
+        """An all-False stream drives log_lr below the lower bound
+        quickly; the SPRT must accept_null, reset, and continue. After
+        the full window we should see ``n_observations == len(stream)``
+        and ``verdict != "reject_null"``."""
+        observations = [False] * 500
+        state = run_sprt_on_window(observations, sprt_config)
+        assert state.n_observations == 500
+        assert state.verdict != "reject_null"
+
+
+class TestSprtEmptyWindow:
+    """:func:`run_sprt_on_window` on an empty iterable returns the
+    initial state — not an exception. This is the boundary the property
+    test couldn't reach because hypothesis ``min_size=1`` excludes it."""
+
+    def test_empty_window_returns_continue_at_origin(
+        self, sprt_config: SprtConfig
+    ) -> None:
+        state = run_sprt_on_window([], sprt_config)
+        assert state.verdict == "continue"
+        assert state.n_observations == 0
+        assert state.n_successes == 0
+        assert state.log_lr == 0.0
+
+
+class TestSprtMonotonicallyAccumulatesLogLR:
+    """Property: under an all-success stream the log-LR is monotonically
+    non-decreasing; under an all-failure stream it is monotonically
+    non-increasing. This pins the per-step sign convention regardless
+    of the parameter values hypothesis generates."""
+
+    @given(
+        n_obs=st.integers(min_value=1, max_value=100),
+        p_null=st.floats(min_value=0.01, max_value=0.40),
+    )
+    @settings(
+        deadline=None,
+        max_examples=20,
+        suppress_health_check=[HealthCheck.too_slow],
+    )
+    def test_all_success_log_lr_non_decreasing(
+        self, n_obs: int, p_null: float
+    ) -> None:
+        # Construct a valid config: p_alt strictly > p_null.
+        p_alt = min(p_null + 0.05, 0.95)
+        config = SprtConfig(
+            signal="needs_review_rate",
+            p_null=p_null,
+            p_alt=p_alt,
+            min_n=1,
+        )
+        monitor = WaldSprtMonitor(config)
+        previous_lr = 0.0
+        for _ in range(n_obs):
+            state = monitor.step(True)
+            assert state.log_lr >= previous_lr - 1e-12
+            previous_lr = state.log_lr
+
+    @given(
+        n_obs=st.integers(min_value=1, max_value=100),
+        p_null=st.floats(min_value=0.01, max_value=0.40),
+    )
+    @settings(
+        deadline=None,
+        max_examples=20,
+        suppress_health_check=[HealthCheck.too_slow],
+    )
+    def test_all_failure_log_lr_non_increasing(
+        self, n_obs: int, p_null: float
+    ) -> None:
+        p_alt = min(p_null + 0.05, 0.95)
+        config = SprtConfig(
+            signal="needs_review_rate",
+            p_null=p_null,
+            p_alt=p_alt,
+            min_n=1,
+        )
+        monitor = WaldSprtMonitor(config)
+        previous_lr = 0.0
+        for _ in range(n_obs):
+            state = monitor.step(False)
+            assert state.log_lr <= previous_lr + 1e-12
+            previous_lr = state.log_lr
+
+
+class TestSafeIdBoundaryValues:
+    """SafeId allow-list rejects empty strings and path-traversal
+    segments. Tests exercise the validator at the model boundary; the
+    same rules are documented on the audit_store's SafeId and we keep
+    them symmetric so identifiers cross module boundaries safely."""
+
+    def test_empty_audit_id_rejected(self, utc_now: datetime) -> None:
+        with pytest.raises(ValidationError):
+            WeeklyReviewerSample(
+                week_iso="2026-W20",
+                sample_size=50,
+                seed=1,
+                audit_ids=("",),
+                drawn_at=utc_now,
+            )
+
+    @pytest.mark.parametrize("bad", [".", ".."])
+    def test_path_traversal_audit_id_rejected(
+        self, utc_now: datetime, bad: str
+    ) -> None:
+        with pytest.raises(ValidationError):
+            WeeklyReviewerSample(
+                week_iso="2026-W20",
+                sample_size=50,
+                seed=1,
+                audit_ids=(bad,),
+                drawn_at=utc_now,
+            )
+
+
+class TestWeeklyReviewerSamplePopulationBounds:
+    """``sample_size`` must not exceed the available population. The
+    function raises ValueError loudly rather than silently truncating
+    or returning a partial sample."""
+
+    def test_sample_size_exceeds_population_rejected(self) -> None:
+        # 10 rows of population, ask for 50 (which is at the legal
+        # sample_size lower bound). Must raise ValueError.
+        population = [_fake_audit_id(i) for i in range(10)]
+        with pytest.raises(ValueError):
+            draw_weekly_reviewer_sample(
+                population,  # type: ignore[arg-type]
+                week_iso="2026-W20",
+                sample_size=50,
+                seed=42,
+            )
+
+
+class TestSentinelSizeBounds:
+    """Sentinel construction rejects zero/negative sizes and sizes that
+    exceed the available population."""
+
+    @pytest.mark.parametrize("bad_size", [0, -1, -100])
+    def test_zero_or_negative_size_rejected(self, bad_size: int) -> None:
+        population = [_fake_audit_id(i) for i in range(50)]
+        with pytest.raises(ValueError):
+            build_sentinel_manifest(
+                population,  # type: ignore[arg-type]
+                size=bad_size,
+                seed=SENTINEL_SET_SEED,
+            )
+
+    def test_size_exceeds_population_rejected(self) -> None:
+        population = [_fake_audit_id(i) for i in range(10)]
+        with pytest.raises(ValueError):
+            build_sentinel_manifest(
+                population,  # type: ignore[arg-type]
+                size=200,
+                seed=SENTINEL_SET_SEED,
+            )
+
+
+class TestSentinelDisjointHistory:
+    """If the previous + current run share NO audit_ids with the manifest,
+    the comparison cannot proceed — :class:`InsufficientHistoryError`."""
+
+    def test_disjoint_previous_and_current_raises(
+        self, utc_now: datetime
+    ) -> None:
+        manifest = SentinelManifest(
+            size=3,
+            seed=SENTINEL_SET_SEED,
+            audit_ids=("audit-0001", "audit-0002", "audit-0003"),
+            built_at=utc_now,
+        )
+        # Previous and current both non-empty, but neither has any
+        # audit_id from the manifest.
+        previous: dict[str, str] = {"audit-9999": "APPROPRIATE"}
+        current: dict[str, str] = {"audit-9998": "APPROPRIATE"}
+        with pytest.raises(InsufficientHistoryError):
+            evaluate_sentinel_run(
+                manifest=manifest,
+                previous=previous,  # type: ignore[arg-type]
+                current=current,  # type: ignore[arg-type]
+            )
+
+
+class TestGoldenSetMissingInBaseline:
+    """Mismatch detection covers both directions: an extra row in
+    ``current`` that has no baseline counterpart also raises."""
+
+    def test_extra_id_in_current_raises(self) -> None:
+        baseline = [_golden_entry(_fake_audit_id(i)) for i in range(3)]
+        current = [_golden_entry(_fake_audit_id(i)) for i in range(5)]
+        with pytest.raises(GoldenSetMismatchError):
+            evaluate_golden_set_drift(baseline=baseline, current=current)
+
+
+class TestMonitoringStoreSinceFilter:
+    """``list_alarms(since=...)`` filters by ``raised_at >= since`` and
+    rejects naive datetimes loudly via :func:`ensure_utc` instead of
+    silently TypeError-ing at the ``>=`` comparison."""
+
+    def test_since_filter_returns_only_after(
+        self,
+        monitoring_config: MonitoringConfig,
+        utc_now: datetime,
+    ) -> None:
+        store = MonitoringStore(monitoring_config)
+        earlier = datetime(2026, 5, 16, 8, 0, 0, tzinfo=UTC)
+        later = datetime(2026, 5, 16, 18, 0, 0, tzinfo=UTC)
+        store.record_alarm(
+            MonitoringAlarmInput(
+                kind="drift_sprt",
+                signal="needs_review_rate",
+                raised_at=earlier,
+                detail={"log_lr": 1.0},
+            )
+        )
+        store.record_alarm(
+            MonitoringAlarmInput(
+                kind="drift_sprt",
+                signal="needs_review_rate",
+                raised_at=later,
+                detail={"log_lr": 2.0},
+            )
+        )
+        result = store.list_alarms(since=utc_now)
+        assert len(result) == 1
+        assert result[0].raised_at == later
+
+    def test_naive_since_rejected(
+        self, monitoring_config: MonitoringConfig
+    ) -> None:
+        store = MonitoringStore(monitoring_config)
+        with pytest.raises(ValueError):
+            store.list_alarms(since=datetime(2026, 5, 16, 12, 0, 0))
+
+
+class TestMonitoringStoreLifecycle:
+    """Close + context-manager lifecycle. After ``close()`` (explicit or
+    via ``__exit__``), subsequent operations raise ``RuntimeError`` so
+    use-after-close failures are loud."""
+
+    def test_context_manager_closes_on_exit(
+        self, monitoring_config: MonitoringConfig, utc_now: datetime
+    ) -> None:
+        with MonitoringStore(monitoring_config) as store:
+            store.record_alarm(
+                MonitoringAlarmInput(
+                    kind="drift_sprt",
+                    signal="needs_review_rate",
+                    raised_at=utc_now,
+                    detail={"log_lr": 1.0},
+                )
+            )
+        # After context exit, store is closed; further ops raise.
+        with pytest.raises(RuntimeError):
+            store.record_alarm(
+                MonitoringAlarmInput(
+                    kind="drift_sprt",
+                    signal="needs_review_rate",
+                    raised_at=utc_now,
+                    detail={"log_lr": 1.0},
+                )
+            )
+
+    def test_close_is_idempotent(
+        self, monitoring_config: MonitoringConfig
+    ) -> None:
+        store = MonitoringStore(monitoring_config)
+        store.close()
+        store.close()  # second call must not raise
+
+    def test_close_clears_state(
+        self, monitoring_config: MonitoringConfig, utc_now: datetime
+    ) -> None:
+        store = MonitoringStore(monitoring_config)
+        store.record_alarm(
+            MonitoringAlarmInput(
+                kind="drift_sprt",
+                signal="needs_review_rate",
+                raised_at=utc_now,
+                detail={"log_lr": 1.0},
+            )
+        )
+        store.close()
+        # After close, list_alarms raises (the store is unusable, NOT
+        # an empty-result silent state).
+        with pytest.raises(RuntimeError):
+            store.list_alarms()
+
+    def test_store_exposes_config(
+        self, monitoring_config: MonitoringConfig
+    ) -> None:
+        """``store.config`` is the read-only handle the dashboard / report
+        consumer uses to print which DSN the alarms came from."""
+        store = MonitoringStore(monitoring_config)
+        assert store.config == monitoring_config
+
+
+class TestMonitoringStoreConcurrentWrites:
+    """The store's lock guards multi-threaded writes from a future
+    cron-driven monitor (#29) that may invoke multiple cadences in
+    parallel. Eight threads writing 50 alarms each must produce 400
+    rows with unique ``alarm_id`` values and no losses."""
+
+    def test_concurrent_record_alarm_no_lost_writes(
+        self, monitoring_config: MonitoringConfig, utc_now: datetime
+    ) -> None:
+        import concurrent.futures
+
+        store = MonitoringStore(monitoring_config)
+        n_workers = 8
+        writes_per_worker = 50
+        total_writes = n_workers * writes_per_worker
+
+        def writer(worker_id: int) -> None:
+            for i in range(writes_per_worker):
+                store.record_alarm(
+                    MonitoringAlarmInput(
+                        kind="drift_sprt",
+                        signal="needs_review_rate",
+                        raised_at=utc_now,
+                        detail={"worker": worker_id, "i": i},
+                    )
+                )
+
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=n_workers
+        ) as pool:
+            list(pool.map(writer, range(n_workers)))
+
+        alarms = store.list_alarms()
+        assert len(alarms) == total_writes
+        ids = [a.alarm_id for a in alarms]
+        assert len(set(ids)) == total_writes  # all unique
+        # IDs are 1..total_writes (monotonic, no gaps).
+        assert min(ids) == 1
+        assert max(ids) == total_writes
+
+
+class TestPropertyReplayStoreIdempotent:
+    """User constraint: 'replaying the same period's data twice produces
+    zero duplicate alarms'. At the SPRT level the property test pins
+    determinism of state; at the store level we pin that re-persisting
+    the same manifest is a no-op (idempotent on the key triple)."""
+
+    @given(
+        seed=st.integers(min_value=0, max_value=1000),
+        size=st.integers(
+            min_value=WEEKLY_REVIEWER_SAMPLE_MIN,
+            max_value=WEEKLY_REVIEWER_SAMPLE_MAX,
+        ),
+    )
+    @settings(
+        deadline=None,
+        max_examples=15,
+        suppress_health_check=[HealthCheck.too_slow],
+    )
+    def test_replay_persist_yields_single_row(
+        self, seed: int, size: int
+    ) -> None:
+        config = MonitoringConfig(
+            dsn="postgresql://test:test@localhost:5432/test_idempotent"
+        )
+        store = MonitoringStore(config)
+        sample = WeeklyReviewerSample(
+            week_iso="2026-W20",
+            sample_size=size,
+            seed=seed,
+            audit_ids=tuple(_fake_audit_id(i) for i in range(size)),
+            drawn_at=datetime(2026, 5, 16, 12, 0, 0, tzinfo=UTC),
+        )
+        # Persist the same manifest 5 times — same week, same size,
+        # same seed → exactly one stored row.
+        for _ in range(5):
+            store.persist_sample_manifest(sample)
+        manifests = store.list_sample_manifests(week_iso="2026-W20")
+        assert len(manifests) == 1
+        store.close()
+
+
+class TestEnsureUtcRejectsAmbiguousTzinfo:
+    """User constraint follow-up: the datetime validator must also reject
+    a ``tzinfo`` whose ``utcoffset()`` returns ``None``. Python admits
+    that shape but it's operationally naive — comparisons against a true
+    UTC-aware datetime would still raise ``TypeError`` at runtime."""
+
+    def test_tzinfo_with_none_utcoffset_rejected(self) -> None:
+        from datetime import tzinfo
+
+        class AmbiguousTz(tzinfo):
+            def utcoffset(self, dt: datetime | None) -> None:  # type: ignore[override]
+                return None
+
+            def dst(self, dt: datetime | None) -> None:  # type: ignore[override]
+                return None
+
+            def tzname(self, dt: datetime | None) -> str | None:  # type: ignore[override]
+                return "AMB"
+
+        ambiguous = datetime(2026, 5, 16, 12, 0, 0, tzinfo=AmbiguousTz())
+        with pytest.raises(ValidationError):
+            MonitoringAlarmInput(
+                kind="drift_sprt",
+                signal="needs_review_rate",
+                raised_at=ambiguous,
+                detail={},
+            )

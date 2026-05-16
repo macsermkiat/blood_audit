@@ -2,11 +2,20 @@
 
 Two channels in Phase 1, both passive:
 
-1. **Structured log event** via the stdlib ``logging`` module (logger name
-   ``bba.monitoring.alarms``). Operators tail / aggregate this logger.
-2. **Postgres ``monitoring_alarms`` row** via
-   :class:`bba.monitoring.MonitoringStore`. The dashboard (#26) renders
-   the table; the report generator (#28) can cite it.
+1. **Structured log event** via stdlib ``logging`` (logger name
+   ``bba.monitoring.alarms``, WARNING level). The structured payload
+   travels as ``extra={"monitoring_alarm_kind": ..., "monitoring_alarm_signal":
+   ..., "monitoring_alarm_detail": ...}`` — log-aggregation tools
+   (Datadog, Elastic, Loki) consume the structured fields directly,
+   plain-text greps still locate the event via the formatted message.
+   Stdlib logging is the deliberate Phase 1 choice: it covers the AC's
+   "log + structured output" requirement without adding a new runtime
+   dependency. A Phase 1.5 follow-up may migrate to structlog if a
+   richer processor pipeline is needed.
+2. **Alarm row** via :class:`bba.monitoring.MonitoringStore`. The store
+   is in-memory in Phase 1; a Postgres-backed implementation mirroring
+   :class:`bba.review_actions.ReviewActionsStore`'s append-only contract
+   is the documented Phase 1.5 follow-up.
 
 Explicitly OUT OF SCOPE for Phase 1 (tracked as Phase 1.5 follow-ups):
 

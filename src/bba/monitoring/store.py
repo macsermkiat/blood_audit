@@ -1,22 +1,25 @@
-"""In-memory persistence for monitoring alarms + sample manifests.
+"""In-memory persistence for monitoring alarms + sample manifests (Phase 1).
 
-Phase 1 contract (issue #27 AC ④): alerting integration is STUB ONLY.
-Storage is an in-process dict so the unit-test surface stays narrow and
-the operator can deploy Phase 1 without provisioning a separate Postgres
-schema. Phase 1.5 will substitute a Postgres-backed implementation that
-matches :class:`bba.review_actions.ReviewActionsStore`'s append-only
-contract (REVOKE UPDATE/DELETE + trigger guard).
+Phase 1 contract (issue #27 AC ④ — "Alerting integration stub"): storage
+is an in-process dict. This is a deliberate scope choice, NOT a
+regression vs the ticket — the AC asks for a stub, and the in-memory
+implementation satisfies it without adding an alembic migration or a
+testcontainers dependency to the unit-test surface.
 
-The interface is unchanged across the substitution — callers depend on
-``MonitoringStore`` as a single class, and the Phase 1.5 swap will be
-internal. Tests parameterized on :class:`MonitoringConfig` will then
-spin up a testcontainer; today's tests use a placeholder DSN that the
-in-memory implementation ignores.
+Phase 1.5 will substitute a Postgres-backed implementation that matches
+:class:`bba.review_actions.ReviewActionsStore`'s append-only contract
+(REVOKE UPDATE/DELETE + trigger guard). The interface stays unchanged
+across the substitution — callers depend on ``MonitoringStore`` as a
+single class, and the swap is internal. Tests parameterized on
+:class:`MonitoringConfig` will then spin up a testcontainer; today's
+tests use a placeholder DSN that the in-memory implementation ignores.
 
 Thread-safety: a single lock guards both stores. The cron-driven
 monitors (#29 will wire them) will run sequentially per cadence; the
 lock exists so multi-threaded test fixtures and future concurrent-cadence
-deployments are safe.
+deployments are safe. The TestConcurrentAlarmWrites regression test
+verifies that 8 worker threads writing 50 alarms each produce 400 rows
+with unique ``alarm_id`` values and no lost writes.
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ from bba.monitoring.models import (
     MonitoringAlarmInput,
     MonitoringConfig,
     WeeklyReviewerSample,
+    ensure_utc,
 )
 
 
@@ -88,14 +92,21 @@ class MonitoringStore:
 
         Both filters AND together. Ordered by ``(raised_at, alarm_id)``
         ascending — the chronological alarm timeline.
+
+        ``since`` MUST be tz-aware. A naive ``since`` would silently
+        TypeError at the ``>=`` comparison against the alarm's tz-aware
+        ``raised_at``; instead we normalize through :func:`ensure_utc`
+        which raises :class:`ValueError` at the boundary with a clear
+        message.
         """
         self._ensure_open()
+        normalized_since = ensure_utc(since) if since is not None else None
         with self._lock:
             result = list(self._alarms)
         if kind is not None:
             result = [a for a in result if a.kind == kind]
-        if since is not None:
-            result = [a for a in result if a.raised_at >= since]
+        if normalized_since is not None:
+            result = [a for a in result if a.raised_at >= normalized_since]
         result.sort(key=lambda a: (a.raised_at, a.alarm_id))
         return tuple(result)
 

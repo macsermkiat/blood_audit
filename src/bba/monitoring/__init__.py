@@ -15,9 +15,11 @@ PRD §18 Implementation Decisions defines three monitor cadences:
   against the same Anthropic snapshot ID. Alarms on >5% classification
   drift or >10% indication drift. See :func:`evaluate_golden_set_drift`.
 
-Alerting in Phase 1 is structured-log + Postgres ``monitoring_alarms``
-only. Slack / email / paging integration is a Phase 1.5 follow-up,
-deliberately out of scope for #27. See :mod:`bba.monitoring.alerting`.
+Alerting in Phase 1 is structured-log + an in-memory
+``monitoring_alarms`` store (stub per issue #27 AC ④). Slack / email /
+paging integration AND a Postgres-backed store are Phase 1.5 follow-ups,
+deliberately out of scope for #27. See :mod:`bba.monitoring.alerting`
+and :mod:`bba.monitoring.store`.
 
 Cadence scheduling is NOT wired here. Every monitor exposes a callable
 function or class; issue #29 (``bba.cli``) wires them to a scheduler
@@ -41,7 +43,6 @@ from bba.monitoring.exceptions import (
     GoldenSetMismatchError,
     InsufficientHistoryError,
     MonitoringError,
-    SentinelStaleError,
 )
 from bba.monitoring.golden_set import evaluate_golden_set_drift
 from bba.monitoring.models import (
@@ -53,6 +54,7 @@ from bba.monitoring.models import (
     SENTINEL_SET_SIZE,
     SPRT_DEFAULT_ALPHA,
     SPRT_DEFAULT_BETA,
+    SPRT_DEFAULT_MIN_N,
     SPRT_TARGET_ARL0,
     WEEKLY_REVIEWER_SAMPLE_MAX,
     WEEKLY_REVIEWER_SAMPLE_MIN,
@@ -73,6 +75,7 @@ from bba.monitoring.models import (
     UTCDatetime,
     WeekIso,
     WeeklyReviewerSample,
+    ensure_utc,
 )
 from bba.monitoring.sampling import draw_weekly_reviewer_sample
 from bba.monitoring.sentinel import build_sentinel_manifest, evaluate_sentinel_run
@@ -88,6 +91,7 @@ __all__ = [
     "SENTINEL_SET_SIZE",
     "SPRT_DEFAULT_ALPHA",
     "SPRT_DEFAULT_BETA",
+    "SPRT_DEFAULT_MIN_N",
     "SPRT_TARGET_ARL0",
     "WEEKLY_REVIEWER_SAMPLE_MAX",
     "WEEKLY_REVIEWER_SAMPLE_MIN",
@@ -106,7 +110,6 @@ __all__ = [
     "SafeId",
     "SentinelComparison",
     "SentinelManifest",
-    "SentinelStaleError",
     "SprtConfig",
     "SprtState",
     "SprtVerdict",
@@ -117,6 +120,7 @@ __all__ = [
     "build_sentinel_manifest",
     "draw_weekly_reviewer_sample",
     "emit_alarm",
+    "ensure_utc",
     "evaluate_golden_set_drift",
     "evaluate_sentinel_run",
     "run_sprt_on_window",

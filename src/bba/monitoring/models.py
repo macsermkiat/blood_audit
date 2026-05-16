@@ -23,8 +23,13 @@ Three monitor cadences (PRD §18 Implementation Decisions / issue #27):
   against the same Anthropic snapshot ID. Alarms when >5% of rows change
   classification or >10% change cited indications.
 
-Alerting in Phase 1 is structured-log + Postgres ``monitoring_alarms``
-table only. Slack / email / paging integration is a Phase 1.5 follow-up.
+Alerting in Phase 1 is structured-log only (stdlib ``logging`` with
+structured ``extra`` fields, surfaced via the ``bba.monitoring.alarms``
+logger). The alarm record is also captured in :class:`MonitoringStore`
+— an in-memory store in Phase 1; a Postgres-backed implementation that
+matches :mod:`bba.review_actions`'s append-only contract is the
+documented Phase 1.5 follow-up. Slack / email / paging integration is
+also Phase 1.5.
 """
 
 from __future__ import annotations
@@ -34,7 +39,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict
+from pydantic import AfterValidator, BaseModel, ConfigDict, model_validator
 
 from bba.audit_store import Classification
 
@@ -86,6 +91,16 @@ SPRT_DEFAULT_BETA: float = 0.05
 
 SPRT_TARGET_ARL0: int = 500
 """Target average run length under the null (≈1 false alarm/year)."""
+
+
+SPRT_DEFAULT_MIN_N: int = 30
+"""Minimum observations before the SPRT can return a non-``continue`` verdict.
+
+The min-N gate prevents single-observation alarms when the random walk
+happens to start with a long success run. PRD §18 does not fix a specific
+value; 30 is the deployment default and is exported as a constant so
+operators tune it explicitly rather than via a magic number in
+:class:`SprtConfig`."""
 
 
 # =============================================================================
@@ -164,13 +179,26 @@ def _ensure_utc(dt: datetime) -> datetime:
     Mirrors the audit_store / review_actions invariant. An alarm
     ``raised_at`` that is naive would compare incorrectly against the
     audit row's tz-aware ``order_datetime`` in dashboard queries.
+
+    Also rejects datetimes carrying a ``tzinfo`` whose ``utcoffset()``
+    returns ``None`` — Python admits this shape (e.g., a custom
+    ``tzinfo`` subclass) but it is operationally naive: comparisons with
+    a true UTC-aware datetime still raise ``TypeError`` at runtime.
     """
-    if dt.tzinfo is None:
+    if dt.tzinfo is None or dt.utcoffset() is None:
         raise ValueError(
-            "datetime must be tz-aware; naive datetimes are forbidden in "
-            "monitoring (see CONTEXT.md 'tz-aware UTC')"
+            "datetime must be tz-aware (with a concrete utcoffset); "
+            "naive datetimes are forbidden in monitoring "
+            "(see CONTEXT.md 'tz-aware UTC')"
         )
     return dt.astimezone(UTC)
+
+
+def ensure_utc(dt: datetime) -> datetime:
+    """Public re-export of :func:`_ensure_utc` for callers that need to
+    normalize a caller-supplied datetime (e.g., :meth:`MonitoringStore.list_alarms`
+    on its ``since`` filter)."""
+    return _ensure_utc(dt)
 
 
 UTCDatetime = Annotated[datetime, AfterValidator(_ensure_utc)]
@@ -248,7 +276,56 @@ class SprtConfig(BaseModel):
     p_alt: float
     alpha: float = SPRT_DEFAULT_ALPHA
     beta: float = SPRT_DEFAULT_BETA
-    min_n: int = 30
+    min_n: int = SPRT_DEFAULT_MIN_N
+
+    @model_validator(mode="after")
+    def _validate_sprt_parameters(self) -> SprtConfig:
+        """Reject nonsense rates / error bounds at construction time.
+
+        The hot path computes ``math.log(p_alt / p_null)`` and
+        ``math.log((1 - p_alt) / (1 - p_null))`` — both blow up for
+        boundary values. Field-level validation here makes the failure
+        mode loud at config time instead of silent inside the SPRT loop.
+
+        Invariants:
+
+        * ``0 < p_null < 1`` and ``0 < p_alt < 1`` — both rates are
+          proper Bernoulli probabilities.
+        * ``p_null < p_alt`` — the alternative must be larger than the
+          null (otherwise the per-step log-LR would have the wrong sign
+          and the SPRT would point in the opposite direction).
+        * ``0 < alpha < 1`` and ``0 < beta < 1`` — Wald bounds require
+          both error rates strictly inside the open unit interval; the
+          boundary values would push the bounds to ±∞.
+        * ``min_n >= 1`` — the min-N gate is a positive integer count.
+        """
+        if not 0.0 < self.p_null < 1.0:
+            raise ValueError(
+                f"p_null must be in (0, 1), got {self.p_null!r}"
+            )
+        if not 0.0 < self.p_alt < 1.0:
+            raise ValueError(
+                f"p_alt must be in (0, 1), got {self.p_alt!r}"
+            )
+        if self.p_null >= self.p_alt:
+            raise ValueError(
+                f"p_null ({self.p_null}) must be strictly less than "
+                f"p_alt ({self.p_alt}); same/inverted rates produce a "
+                f"log-LR with the wrong sign"
+            )
+        if not 0.0 < self.alpha < 1.0:
+            raise ValueError(
+                f"alpha must be in (0, 1), got {self.alpha!r}"
+            )
+        if not 0.0 < self.beta < 1.0:
+            raise ValueError(
+                f"beta must be in (0, 1), got {self.beta!r}"
+            )
+        if self.min_n < 1:
+            raise ValueError(
+                f"min_n must be >= 1, got {self.min_n!r}"
+            )
+        return self
 
 
 class SprtState(BaseModel):
@@ -391,9 +468,11 @@ class MonitoringAlarmInput(BaseModel):
 class MonitoringAlarm(BaseModel):
     """A persisted alarm record. Append-only.
 
-    ``alarm_id`` is the DB-assigned bigserial PK; ``raised_at`` is
-    server-assigned ``now()`` at INSERT so the row's clock is always the
-    Postgres server's.
+    ``alarm_id`` is a monotonically-increasing assigned integer (in-process
+    counter in Phase 1; Phase 1.5 will substitute a Postgres bigserial).
+    ``raised_at`` is captured by the caller at the moment the alarm is
+    raised — the store does not overwrite it (so an out-of-order replay
+    keeps its original timestamp).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -406,13 +485,17 @@ class MonitoringAlarm(BaseModel):
 
 
 class MonitoringConfig(BaseModel):
-    """Postgres connection configuration for :class:`MonitoringStore`.
+    """Connection configuration for :class:`MonitoringStore`.
 
-    Mirrors :class:`bba.review_actions.ReviewActionsConfig` field shape —
-    secrets MUST NOT be hardcoded; the caller resolves credentials from
+    The shape mirrors :class:`bba.review_actions.ReviewActionsConfig` so a
+    Phase 1.5 Postgres-backed swap doesn't break callers: ``dsn`` and
+    ``app_name`` are the two fields a libpq-style backend would consume.
+    Phase 1's in-memory store ignores both fields; they're carried on the
+    config so the transition is a substitution rather than a re-typing
+    exercise.
+
+    Secrets MUST NOT be hardcoded; the caller resolves credentials from
     env vars or a secret manager and constructs the config object.
-    ``app_name`` is reported back via Postgres ``application_name`` so the
-    DBA can correlate connections to the monitoring layer.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -430,6 +513,7 @@ __all__: Sequence[str] = (
     "SENTINEL_SET_SIZE",
     "SPRT_DEFAULT_ALPHA",
     "SPRT_DEFAULT_BETA",
+    "SPRT_DEFAULT_MIN_N",
     "SPRT_TARGET_ARL0",
     "WEEKLY_REVIEWER_SAMPLE_MAX",
     "WEEKLY_REVIEWER_SAMPLE_MIN",
@@ -450,4 +534,5 @@ __all__: Sequence[str] = (
     "UTCDatetime",
     "WeekIso",
     "WeeklyReviewerSample",
+    "ensure_utc",
 )
