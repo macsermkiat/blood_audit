@@ -14,10 +14,11 @@ concurrency:
 env:
   # Pin uv to match the version that produced uv.lock locally (uv --version).
   UV_VERSION: "0.9.24"
-  # Reproducible installs only: refuse to update uv.lock during CI.
-  UV_LOCKED: "1"
   # uv writes its cache here; cached across runs via actions/cache.
   UV_CACHE_DIR: /tmp/.uv-cache
+  # Note: each `uv sync` call below uses `--frozen`, which already
+  # forbids lockfile modification. UV_LOCKED is mutually exclusive
+  # with --frozen in uv >= 0.9, so we don't set it.
 
 jobs:
   lint:
