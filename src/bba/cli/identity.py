@@ -17,8 +17,12 @@ component changes the run_id and forces a fresh audit, satisfying the
 
 from __future__ import annotations
 
+import hashlib
+from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from typing import NewType
+
+from bba.ingest.hashing import content_hash
 
 
 InputCsvHash = NewType("InputCsvHash", str)
@@ -45,16 +49,20 @@ to every persisted audit row's identity, so it lives as a module-level
 constant a reviewer is unlikely to miss."""
 
 
+_PACKAGE_NAME: str = "blood-audit"
+"""Distribution name on PyPI / in pyproject.toml. The bba submodule is
+shipped inside this distribution (see ``[tool.uv.build-backend]``
+``module-name = ["bba", "blood_audit"]``)."""
+
+
 def code_version() -> CodeVersion:
     """Return the running ``blood-audit`` package version.
 
     Single-sourced via :func:`importlib.metadata.version` so the version
     string can never drift between the wheel metadata and a hand-edited
     constant.
-
-    GREEN-phase implementation: read ``importlib.metadata.version("blood-audit")``.
     """
-    raise NotImplementedError("code_version() — GREEN phase wires importlib.metadata")
+    return CodeVersion(_pkg_version(_PACKAGE_NAME))
 
 
 def compute_run_id(
@@ -65,21 +73,12 @@ def compute_run_id(
 ) -> RunId:
     """Compute the CLI ``run_id`` for the (input, schema, code) triple.
 
-    The recipe is::
+    Recipe::
 
         sha256(content_hash(input_csv) + schema_fingerprint + code_version)
         .hexdigest()[:RUN_ID_LENGTH]
-
-    ``content_hash`` is :func:`bba.ingest.hashing.content_hash`, a
-    chunked sha256 over the file bytes — *not* over the file's modified
-    time or path. Two identical-byte inputs at different paths therefore
-    produce the same ``run_id``.
-
-    GREEN-phase implementation will:
-    1. ``content_hash(input_csv)`` → 64-char hex
-    2. concat with ``schema_fingerprint`` and ``code_version_str``
-    3. sha256 + hexdigest()[:RUN_ID_LENGTH]
     """
-    raise NotImplementedError(
-        "compute_run_id — GREEN phase wires the sha256-over-concat recipe"
-    )
+    input_hash = content_hash(input_csv)
+    payload = (input_hash + schema_fingerprint + code_version_str).encode("utf-8")
+    digest = hashlib.sha256(payload).hexdigest()
+    return RunId(digest[:RUN_ID_LENGTH])
