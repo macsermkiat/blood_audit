@@ -15,8 +15,8 @@ transport is detected. Tests opt in by invoking the guard before
 
 from __future__ import annotations
 
-from bba.audit_pipeline.exceptions import LiveAnthropicApiError  # noqa: F401  used by GREEN
-from bba.llm_client import AnthropicBatchTransport, AnthropicTransport  # noqa: F401  used by GREEN
+from bba.audit_pipeline.exceptions import LiveAnthropicApiError
+from bba.llm_client import AnthropicBatchTransport, AnthropicTransport
 
 
 def assert_test_safe_transport(transport: AnthropicTransport) -> None:
@@ -27,11 +27,14 @@ def assert_test_safe_transport(transport: AnthropicTransport) -> None:
     inherits from :class:`bba.llm_client.AnthropicBatchTransport` is
     still considered live. The cassette transport
     (:class:`bba.llm_client.CassetteTransport`) passes through silently.
-
-    The implementation lives in GREEN (issue #24).
     """
-    _ = transport
-    raise NotImplementedError("RED-phase scaffold; see issue #24")
+    if isinstance(transport, AnthropicBatchTransport):
+        raise LiveAnthropicApiError(
+            f"live Anthropic transport {type(transport).__name__!r} detected "
+            "in a test context; tests MUST inject CassetteTransport. "
+            "If you see this in test output, the cassette setup from "
+            "issue #22 is being bypassed — fix the cassette, not the guard."
+        )
 
 
 __all__ = ["assert_test_safe_transport"]
