@@ -165,6 +165,21 @@ CARDIAC_SURGERY_LOOKBACK: timedelta = timedelta(days=30)
 operative event still counts as "recent". Boundary semantics tested in
 :class:`TestCardiacSurgeryLookback`."""
 
+CHEMO_LOOKBACK: timedelta = timedelta(days=30)
+"""Backward window for "recent chemo meds" per the issue body. A chemo
+agent administered more than 30 days before the audit anchor does NOT
+count as active and must not contribute to the heme-malignancy cohort
+(otherwise a long-since-completed regimen would over-trigger T2-supportive
+classification)."""
+
+DIALYSIS_LOOKBACK: timedelta = timedelta(days=14)
+"""Backward window for "active dialysis meds". Two weeks matches the
+typical refill cadence for the seed drugs (sevelamer / cinacalcet) and
+is conservative enough that intermittent inpatient HD heparin still
+counts. ESRD-EPO additionally gates on the ICD-10 N18.5/.6 diagnosis
+(Round 2 N1), so a non-ESRD patient on heparin for DVT prophylaxis
+is not at risk of misclassification."""
+
 # =============================================================================
 # Predicates — each returns the matching evidence (or None)
 # =============================================================================
@@ -345,22 +360,52 @@ def find_esrd_diagnosis(diagnosis_codes: Sequence[str]) -> str | None:
     return _first_match(diagnosis_codes, sorted(ESRD_ICD10_CODES))
 
 
-def find_dialysis_med(meds: Sequence[MedEvent]) -> MedEvent | None:
-    """Return the first :class:`MedEvent` whose ``drug`` matches
-    :func:`is_dialysis_med`, or None."""
-    for med in meds:
-        if is_dialysis_med(med.drug):
-            return med
-    return None
+def find_dialysis_med(
+    meds: Sequence[MedEvent], anchor: datetime
+) -> MedEvent | None:
+    """Return the most-recent :class:`MedEvent` matching
+    :func:`is_dialysis_med` whose timestamp is within
+    :data:`DIALYSIS_LOOKBACK` of ``anchor``, or None.
+
+    Stale medication history (e.g., a single sevelamer dose from a
+    year-ago admission) does NOT count as "active dialysis"; passing
+    the anchor here keeps that scoping inside the rule rather than
+    forcing every caller to pre-filter (and risk silent inconsistency).
+    """
+    cutoff = anchor - DIALYSIS_LOOKBACK
+    candidates = [
+        med
+        for med in meds
+        if is_dialysis_med(med.drug)
+        and cutoff <= med.timestamp <= anchor
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda m: m.timestamp)
 
 
-def find_chemo_med(meds: Sequence[MedEvent]) -> MedEvent | None:
-    """Return the first :class:`MedEvent` whose ``drug`` matches
-    :func:`is_chemo_med`, or None."""
-    for med in meds:
-        if is_chemo_med(med.drug):
-            return med
-    return None
+def find_chemo_med(
+    meds: Sequence[MedEvent], anchor: datetime
+) -> MedEvent | None:
+    """Return the most-recent :class:`MedEvent` matching
+    :func:`is_chemo_med` whose timestamp is within :data:`CHEMO_LOOKBACK`
+    of ``anchor``, or None.
+
+    The issue body says "recent chemo meds" — the recency check lives
+    here so that a long-completed regimen does not falsely trigger
+    HEME_MALIGNANCY_ACTIVE for a patient whose disease is now in
+    remission.
+    """
+    cutoff = anchor - CHEMO_LOOKBACK
+    candidates = [
+        med
+        for med in meds
+        if is_chemo_med(med.drug)
+        and cutoff <= med.timestamp <= anchor
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda m: m.timestamp)
 
 
 def find_heme_malignancy_diagnosis(
@@ -378,12 +423,19 @@ def detect_mtp_pattern(
 
     Two arms, either of which fires the rule:
 
-    * Cluster: total ``rbc_units`` across orders within
+    * Cluster: total ``rbc_units`` across all orders within
       ``[anchor - MTP_TIME_WINDOW, anchor]`` sums to >=
-      :data:`MTP_RBC_UNIT_THRESHOLD`. The triggering order is the
-      latest order in the window.
-    * Co-order: any single order in the window has both
-      ``co_ordered_with_ffp`` and ``co_ordered_with_platelets`` True.
+      :data:`MTP_RBC_UNIT_THRESHOLD`.
+    * Co-order: the orders within the window collectively show both
+      FFP and platelets co-ordered alongside RBC. Either both flags
+      on a single order or split across separate orders within the
+      same window counts — the underlying pattern is "MTP activation
+      in a 1-h window", not "single multi-component order".
+
+    The triggering order returned is the latest order in the window
+    (deterministic tiebreak; the caller uses it for the
+    ``CohortAssignment.evidence_*`` fields, none of which depend on
+    which specific order fired the rule).
 
     The window is closed-closed: an order at exactly ``anchor - 1h`` is
     included; one strictly outside is not. Orders after the anchor are
@@ -397,13 +449,10 @@ def detect_mtp_pattern(
     ]
     if not in_window:
         return None
-    co_ordered = [
-        order
-        for order in in_window
-        if order.co_ordered_with_ffp and order.co_ordered_with_platelets
-    ]
-    if co_ordered:
-        return max(co_ordered, key=lambda o: o.timestamp)
+    has_ffp = any(order.co_ordered_with_ffp for order in in_window)
+    has_plt = any(order.co_ordered_with_platelets for order in in_window)
+    if has_ffp and has_plt:
+        return max(in_window, key=lambda o: o.timestamp)
     total_units = sum(order.rbc_units for order in in_window)
     if total_units >= MTP_RBC_UNIT_THRESHOLD:
         return max(in_window, key=lambda o: o.timestamp)

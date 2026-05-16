@@ -109,7 +109,7 @@ def assign_cohort(inputs: CohortInputs) -> CohortAssignment:
         )
 
     esrd_dx = find_esrd_diagnosis(inputs.diagnosis_codes)
-    dialysis_med = find_dialysis_med(inputs.med_events)
+    dialysis_med = find_dialysis_med(inputs.med_events, inputs.order_datetime)
     if esrd_dx is not None and dialysis_med is not None:
         return _make(
             CohortLabel.ESRD_EPO,
@@ -118,7 +118,7 @@ def assign_cohort(inputs: CohortInputs) -> CohortAssignment:
         )
 
     heme_dx = find_heme_malignancy_diagnosis(inputs.diagnosis_codes)
-    chemo_med = find_chemo_med(inputs.med_events)
+    chemo_med = find_chemo_med(inputs.med_events, inputs.order_datetime)
     if (
         heme_dx is not None
         and chemo_med is not None

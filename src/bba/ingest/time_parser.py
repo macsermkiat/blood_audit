@@ -30,26 +30,26 @@ window from being anchored on a wrong-but-plausible time (PRD §1, Round 2 fix E
 from __future__ import annotations
 
 import re
+from datetime import date
 
 from bba.ingest.models import ParsedTimeOfDay, ParseResult
 
 
-_MONTH_NAMES: frozenset[str] = frozenset(
-    {
-        "January",
-        "February",
-        "March",
-        "April",
-        "May",
-        "June",
-        "July",
-        "August",
-        "September",
-        "October",
-        "November",
-        "December",
-    }
+_MONTH_NAMES: tuple[str, ...] = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
 )
+_MONTH_NUMBER: dict[str, int] = {name: idx + 1 for idx, name in enumerate(_MONTH_NAMES)}
 
 # "Month Day, Year, H:MM AM/PM" — the export shape used by IPTSUMOPRT.
 # Anchored ^…$ so trailing junk does not pass; non-greedy matching is
@@ -124,15 +124,29 @@ def parse_hosxp_time(raw: str | None) -> ParseResult:
     long_form = _LONG_FORM_RE.match(raw)
     if long_form is not None:
         month = long_form.group("month")
-        if month not in _MONTH_NAMES:
+        if month not in _MONTH_NUMBER:
             return ParseResult(
                 value=None,
                 parse_warning=f"long-form: unknown month name {month!r}",
                 raw=raw,
             )
+        day = int(long_form.group("day"))
+        year = int(long_form.group("year"))
         h12 = int(long_form.group("hour"))
         minute = int(long_form.group("minute"))
         ampm = long_form.group("ampm")
+        # Calendar validation: reject "June 31, 2025" et al. The date
+        # constructor enforces day-in-month and leap-year rules; without
+        # this, the parser would silently accept impossible dates and
+        # the orchestrator would re-parse them via a separate path.
+        try:
+            date(year, _MONTH_NUMBER[month], day)
+        except ValueError as exc:
+            return ParseResult(
+                value=None,
+                parse_warning=f"long-form: invalid calendar date ({exc})",
+                raw=raw,
+            )
         if not (1 <= h12 <= 12):
             return ParseResult(
                 value=None,

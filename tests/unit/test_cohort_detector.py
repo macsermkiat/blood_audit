@@ -82,9 +82,11 @@ from bba.cohort_detector import (
     CARDIAC_SURGERY_EXCLUDED_CODES,
     CARDIAC_SURGERY_LOOKBACK,
     CARDIAC_SURGERY_THRESHOLD,
+    CHEMO_LOOKBACK,
     CHEMO_MED_KEYWORDS,
     COHORT_THRESHOLDS,
     DEFAULT_THRESHOLD,
+    DIALYSIS_LOOKBACK,
     DIALYSIS_MED_KEYWORDS,
     ESRD_EPO_THRESHOLD,
     ESRD_ICD10_CODES,
@@ -400,6 +402,38 @@ class TestCardiacRequiresOrFlag:
         assert is_cardiac_surgery_code("3601", or_flag=True) is True
 
 
+class TestIcd10StrictCaseContract:
+    """Codex review HIGH-3: ICD-10 matching is intentionally
+    case-sensitive and whitespace-strict.
+
+    The deliberate contract — mirroring :mod:`bba.audit_orders` — is
+    that the ingest layer delivers clean codes; tolerating lowercase
+    or padding in the matcher would also tolerate other formatting
+    drift (half-width digits, encoding quirks) we have not opted into.
+    Drift in real HIS data is a data-quality problem to fix at ingest,
+    not a problem to paper over downstream and silently broaden the
+    cohort allow-lists.
+
+    These tests pin the contract so a future contributor cannot loosen
+    it without an explicit, reviewed change.
+    """
+
+    def test_lowercase_icd10_does_not_match(self) -> None:
+        # "i25.10" (lowercase) MUST NOT match "I25" prefix.
+        assert find_cardiac_history_diagnosis(("i25.10",)) is None
+
+    def test_lowercase_esrd_does_not_match(self) -> None:
+        assert find_esrd_diagnosis(("n18.5",)) is None
+
+    def test_whitespace_padded_icd10_does_not_match(self) -> None:
+        # Stray padding is rejected — the ingest layer must trim CSV
+        # cells before passing them in.
+        assert find_cardiac_history_diagnosis((" I25.10 ",)) is None
+
+    def test_lowercase_heme_does_not_match(self) -> None:
+        assert find_heme_malignancy_diagnosis(("c83.30",)) is None
+
+
 class TestAdversarialCardiacExclusions:
     """894 (cardiac stress test) and 3796 (pacemaker pulse generator)
     MUST NOT trigger cardiac_surgery, even with ``or_flag=True``.
@@ -550,6 +584,50 @@ class TestCohortMtp:
         # is the routine multi-component order, not MTP.
         orders = (
             _order(rbc_units=2, minutes_before_anchor=10, co_ffp=True, co_plt=False),
+        )
+        result = assign_cohort(_inputs(blood_orders=orders))
+        assert result.label != CohortLabel.MTP
+
+    def test_co_order_split_across_separate_orders_in_window_triggers(self) -> None:
+        # Codex review: real-world MTP activations frequently arrive as
+        # separate parallel orders (RBC+FFP on one slip, RBC+Platelets
+        # on another) rather than a single multi-component order. The
+        # rule is "RBC + FFP + platelets in same WINDOW", so the FFP
+        # and platelet flags can be split across orders inside the 1-h
+        # window and still fire.
+        orders = (
+            _order(
+                rbc_units=2,
+                minutes_before_anchor=30,
+                co_ffp=True,
+                co_plt=False,
+            ),
+            _order(
+                rbc_units=1,
+                minutes_before_anchor=10,
+                co_ffp=False,
+                co_plt=True,
+            ),
+        )
+        result = assign_cohort(_inputs(blood_orders=orders))
+        assert result.label == CohortLabel.MTP
+
+    def test_co_order_split_outside_window_does_not_trigger(self) -> None:
+        # Same split, but the FFP order is OUTSIDE the 1-h window so the
+        # collective evidence is incomplete inside the window.
+        orders = (
+            _order(
+                rbc_units=1,
+                minutes_before_anchor=120,
+                co_ffp=True,
+                co_plt=False,
+            ),
+            _order(
+                rbc_units=1,
+                minutes_before_anchor=10,
+                co_ffp=False,
+                co_plt=True,
+            ),
         )
         result = assign_cohort(_inputs(blood_orders=orders))
         assert result.label != CohortLabel.MTP
@@ -872,14 +950,56 @@ class TestPredicateHelpers:
 
     def test_find_dialysis_med_returns_event(self) -> None:
         meds = (_med("paracetamol"), _med("sevelamer"))
-        match = find_dialysis_med(meds)
+        match = find_dialysis_med(meds, ANCHOR)
         assert match is not None
         assert "sevelamer" in match.drug.lower()
 
     def test_find_chemo_med_returns_event(self) -> None:
         meds = (_med("doxorubicin"),)
-        match = find_chemo_med(meds)
+        match = find_chemo_med(meds, ANCHOR)
         assert match is not None
+
+    def test_find_dialysis_med_outside_window_excluded(self) -> None:
+        # A sevelamer dose 100 days before the anchor is far outside the
+        # 14-day active window — must NOT count as active dialysis.
+        old = MedEvent(
+            drug="sevelamer",
+            timestamp=ANCHOR - timedelta(days=100),
+        )
+        assert find_dialysis_med((old,), ANCHOR) is None
+
+    def test_find_dialysis_med_returns_most_recent_in_window(self) -> None:
+        meds = (
+            MedEvent(drug="sevelamer", timestamp=ANCHOR - timedelta(days=10)),
+            MedEvent(drug="sevelamer", timestamp=ANCHOR - timedelta(days=2)),
+        )
+        match = find_dialysis_med(meds, ANCHOR)
+        assert match is not None
+        assert match.timestamp == ANCHOR - timedelta(days=2)
+
+    def test_find_chemo_med_outside_window_excluded(self) -> None:
+        # A doxorubicin dose 90 days before the anchor is far outside the
+        # 30-day "recent chemo" window — must NOT trigger heme cohort.
+        old = MedEvent(
+            drug="doxorubicin",
+            timestamp=ANCHOR - timedelta(days=90),
+        )
+        assert find_chemo_med((old,), ANCHOR) is None
+
+    def test_find_chemo_med_at_30_day_boundary_included(self) -> None:
+        # Exactly 30 days before anchor is the inclusive edge.
+        boundary = MedEvent(
+            drug="doxorubicin",
+            timestamp=ANCHOR - timedelta(days=30),
+        )
+        assert find_chemo_med((boundary,), ANCHOR) is not None
+
+    def test_find_chemo_med_31_days_excluded(self) -> None:
+        boundary = MedEvent(
+            drug="doxorubicin",
+            timestamp=ANCHOR - timedelta(days=31),
+        )
+        assert find_chemo_med((boundary,), ANCHOR) is None
 
     def test_find_heme_malignancy_diagnosis_c83(self) -> None:
         assert find_heme_malignancy_diagnosis(("C83.30",)) == "C83.30"
@@ -927,23 +1047,41 @@ class TestCohortDeterminism:
         assert a == b
 
 
+_BLOOD_ORDER_STRATEGY = st.builds(
+    _order,
+    rbc_units=st.integers(min_value=0, max_value=6),
+    minutes_before_anchor=st.integers(min_value=0, max_value=180),
+    co_ffp=st.booleans(),
+    co_plt=st.booleans(),
+)
+"""Hypothesis strategy generating one BloodOrderEvent with anchored
+timestamp anywhere from 0–180 minutes before the audit anchor (so the
+strategy covers both inside-window and outside-window orders) plus
+arbitrary co-order flags."""
+
+
 class TestMtpBoundaryProperty:
-    @given(
-        units=st.integers(min_value=MTP_RBC_UNIT_THRESHOLD, max_value=20),
-        minutes=st.integers(min_value=0, max_value=60),
-    )
-    @settings(max_examples=100)
-    def test_units_at_or_above_threshold_inside_window_triggers(
-        self, units: int, minutes: int
+    """Property-based MTP invariants — generates arbitrary order sets
+    spanning inside / outside the window, mixed FFP-only / platelet-only
+    arms, and the boundary itself. 100% line coverage hides the case
+    that exercises both sides of every branch; this property does not."""
+
+    @given(orders=st.lists(_BLOOD_ORDER_STRATEGY, min_size=0, max_size=8))
+    @settings(max_examples=200)
+    def test_mtp_invariant_matches_spec(
+        self, orders: list[BloodOrderEvent]
     ) -> None:
-        result = assign_cohort(
-            _inputs(
-                blood_orders=(
-                    _order(rbc_units=units, minutes_before_anchor=minutes),
-                ),
-            )
-        )
-        assert result.label == CohortLabel.MTP
+        # Recompute the MTP truth using a brute-force read of the spec
+        # (independent of the implementation). The detector must agree
+        # with this independent calculation for every generated input.
+        cutoff = ANCHOR - MTP_TIME_WINDOW
+        in_window = [o for o in orders if cutoff <= o.timestamp <= ANCHOR]
+        ffp = any(o.co_ordered_with_ffp for o in in_window)
+        plt = any(o.co_ordered_with_platelets for o in in_window)
+        cluster = sum(o.rbc_units for o in in_window) >= MTP_RBC_UNIT_THRESHOLD
+        expected_mtp = bool(in_window) and ((ffp and plt) or cluster)
+        result = assign_cohort(_inputs(blood_orders=tuple(orders)))
+        assert (result.label == CohortLabel.MTP) == expected_mtp
 
     @given(units=st.integers(min_value=0, max_value=MTP_RBC_UNIT_THRESHOLD - 1))
     @settings(max_examples=50)
@@ -1029,6 +1167,17 @@ class TestAllowListSeeds:
 
     def test_cardiac_surgery_lookback_is_30_days(self) -> None:
         assert CARDIAC_SURGERY_LOOKBACK == timedelta(days=30)
+
+    def test_chemo_lookback_is_30_days(self) -> None:
+        # "recent chemo meds" per the issue body — 30-day window matches
+        # typical cycle cadence and prevents long-completed regimens
+        # from over-triggering the heme cohort.
+        assert CHEMO_LOOKBACK == timedelta(days=30)
+
+    def test_dialysis_lookback_is_14_days(self) -> None:
+        # Two-week active window matches refill cadence for the seed
+        # dialysis-context drugs.
+        assert DIALYSIS_LOOKBACK == timedelta(days=14)
 
     def test_cohort_threshold_constants(self) -> None:
         assert DEFAULT_THRESHOLD == 7.0
@@ -1130,6 +1279,10 @@ class TestBundledTimeParserAmPm:
             "13:00 June 7, 2025",  # transposed
             "June 7, 2025, 25:00 PM",  # invalid hour
             "June 7, 2025, 8 AM",  # no minutes
+            "June 31, 2025, 8:00 AM",  # invalid calendar date
+            "February 30, 2025, 8:00 AM",  # invalid calendar date
+            "April 31, 2025, 8:00 AM",  # April has 30 days
+            "February 29, 2025, 8:00 AM",  # 2025 is not a leap year
         ],
     )
     def test_long_form_near_misses_rejected(self, raw: str) -> None:
@@ -1140,6 +1293,15 @@ class TestBundledTimeParserAmPm:
         r = parse_hosxp_time(raw)
         assert r.value is None, f"strict parser silently accepted {raw!r}"
         assert r.parse_warning is not None
+
+    def test_long_form_leap_year_accepted(self) -> None:
+        # 2024 is a leap year — Feb 29 IS a valid calendar date.
+        from bba.ingest.time_parser import parse_hosxp_time
+
+        r = parse_hosxp_time("February 29, 2024, 12:00 PM")
+        assert r.parse_warning is None
+        assert r.value is not None
+        assert (r.value.hour, r.value.minute) == (12, 0)
 
     @given(
         month=st.sampled_from(
