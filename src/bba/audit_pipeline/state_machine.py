@@ -16,7 +16,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from types import MappingProxyType
 
-from bba.audit_pipeline.exceptions import BatchStateTransitionError  # noqa: F401  used by GREEN
+from bba.audit_pipeline.exceptions import BatchStateTransitionError
 from bba.audit_pipeline.models import BatchRun, BatchRunState
 
 
@@ -61,11 +61,45 @@ def transition(
     transition; the resulting :class:`BatchRun` carries it through the
     PARTIAL / COMPLETE states unchanged. ``error_message`` must be
     supplied on any transition to ``FAILED``.
-
-    The implementation lives in GREEN (issue #24).
     """
-    _ = (run, to_state, anthropic_batch_id, error_message, now)
-    raise NotImplementedError("RED-phase scaffold; see issue #24")
+    if to_state not in VALID_TRANSITIONS[run.state]:
+        raise BatchStateTransitionError(
+            f"illegal transition {run.state.value!r} -> {to_state.value!r}; "
+            f"legal targets: {sorted(s.value for s in VALID_TRANSITIONS[run.state])}"
+        )
+
+    updated_at = now if now is not None else _now_utc()
+
+    if to_state is BatchRunState.SUBMITTED:
+        if anthropic_batch_id is None:
+            raise BatchStateTransitionError(
+                "PENDING -> SUBMITTED requires anthropic_batch_id; "
+                "without it the resume reconciler has no batch to poll"
+            )
+        return run.model_copy(
+            update={
+                "state": to_state,
+                "anthropic_batch_id": anthropic_batch_id,
+                "submitted_at": updated_at,
+                "updated_at": updated_at,
+            }
+        )
+
+    if to_state is BatchRunState.FAILED:
+        if error_message is None:
+            raise BatchStateTransitionError(
+                "transition to FAILED requires error_message so operators "
+                "see the failure reason without re-deriving from logs"
+            )
+        return run.model_copy(
+            update={
+                "state": to_state,
+                "error_message": error_message,
+                "updated_at": updated_at,
+            }
+        )
+
+    return run.model_copy(update={"state": to_state, "updated_at": updated_at})
 
 
 def is_terminal(state: BatchRunState) -> bool:
