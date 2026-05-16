@@ -185,36 +185,21 @@ class AnthropicBatchTransport:
         self._poll_interval = poll_interval_seconds
         self._max_wait = max_wait_seconds
 
-    def submit_batch(
+    def submit_batch_only(
         self,
         *,
         model: str,
         requests: Sequence[BatchSubmissionRequest],
         prompt_cache_enabled: bool,
-    ) -> RawBatchResponse:
-        """Submit + poll one Message Batch.
+    ) -> str:
+        """Create the remote batch and return its ``batch_id`` immediately.
 
-        Raises :class:`AnthropicAPIError` for any non-recoverable
-        failure (auth, malformed payload, batch timeout). Recoverable
-        failures (rate limits, transient 5xx) are not yet handled here
-        — the upstream retry policy in
-        :func:`bba.llm_client.escalation.run_with_escalation` catches
-        parse failures, but transport-level retries are an
-        intentional gap for the v1 cut.
+        Does NOT poll. Callers that need to persist the ``batch_id``
+        before waiting for results (the audit pipeline's row-level
+        checkpoint) call this first, persist, then invoke
+        :meth:`fetch_batch_results`.
         """
-        try:
-            import anthropic  # type: ignore[import-not-found]
-        except ImportError as exc:
-            raise LlmClientConfigError(
-                "anthropic SDK not installed; "
-                "`uv add anthropic` to use AnthropicBatchTransport"
-            ) from exc
-
-        client = anthropic.Anthropic(
-            api_key=self._api_key,
-            default_headers={"anthropic-beta": ANTHROPIC_BETA_HEADER},
-        )
-
+        client = self._client()
         per_row_requests = [
             {
                 "custom_id": req.audit_id,
@@ -226,20 +211,33 @@ class AnthropicBatchTransport:
             }
             for req in requests
         ]
-
         try:
-            batch = client.messages.batches.create( 
-                requests=per_row_requests,
-            )
+            batch = client.messages.batches.create(requests=per_row_requests)
         except Exception as exc:  # SDK error surface intentionally broad
             raise AnthropicAPIError(
                 f"Message Batches create failed: {exc!r}"
             ) from exc
-
         batch_id: str = batch.id
+        return batch_id
+
+    def fetch_batch_results(
+        self,
+        batch_id: str,
+        *,
+        model: str,
+        requests: Sequence[BatchSubmissionRequest],
+        prompt_cache_enabled: bool,
+    ) -> RawBatchResponse:
+        """Poll ``batch_id`` until completion and return the results.
+
+        Raises :class:`AnthropicAPIError` on timeout or
+        ``custom_id`` drift. ``requests`` is the original submission
+        set; each result's ``request_json`` is rebuilt from the
+        matching :class:`BatchSubmissionRequest`."""
+        client = self._client()
         deadline = time.monotonic() + self._max_wait
         while True:
-            status = client.messages.batches.retrieve(batch_id) 
+            status = client.messages.batches.retrieve(batch_id)
             if status.processing_status == "ended":
                 break
             if time.monotonic() > deadline:
@@ -251,7 +249,7 @@ class AnthropicBatchTransport:
 
         results: list[BatchSubmissionResult] = []
         request_by_id = {req.audit_id: req for req in requests}
-        for entry in client.messages.batches.results(batch_id): 
+        for entry in client.messages.batches.results(batch_id):
             custom_id = entry.custom_id
             outer_request = request_by_id.get(custom_id)
             if outer_request is None:
@@ -269,8 +267,49 @@ class AnthropicBatchTransport:
                     ),
                 )
             )
-
         return RawBatchResponse(batch_id=batch_id, results=tuple(results))
+
+    def submit_batch(
+        self,
+        *,
+        model: str,
+        requests: Sequence[BatchSubmissionRequest],
+        prompt_cache_enabled: bool,
+    ) -> RawBatchResponse:
+        """Convenience wrapper: submit + poll.
+
+        Preserved for backward compatibility with callers that do not
+        need split-phase checkpointing. The audit_pipeline orchestrator
+        calls :meth:`submit_batch_only` and :meth:`fetch_batch_results`
+        directly so it can persist the batch_id between create and
+        poll (PRD §15 row-level checkpoint).
+        """
+        batch_id = self.submit_batch_only(
+            model=model,
+            requests=requests,
+            prompt_cache_enabled=prompt_cache_enabled,
+        )
+        return self.fetch_batch_results(
+            batch_id,
+            model=model,
+            requests=requests,
+            prompt_cache_enabled=prompt_cache_enabled,
+        )
+
+    def _client(self) -> Any:
+        """Construct the SDK client. Lazy-imported so the SDK isn't a
+        hard install dependency."""
+        try:
+            import anthropic  # type: ignore[import-not-found]
+        except ImportError as exc:
+            raise LlmClientConfigError(
+                "anthropic SDK not installed; "
+                "`uv add anthropic` to use AnthropicBatchTransport"
+            ) from exc
+        return anthropic.Anthropic(
+            api_key=self._api_key,
+            default_headers={"anthropic-beta": ANTHROPIC_BETA_HEADER},
+        )
 
 
 _SUCCEEDED_RESULT_TYPE: Final[str] = "succeeded"

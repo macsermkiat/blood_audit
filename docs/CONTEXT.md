@@ -2173,6 +2173,192 @@ not re-litigate:
   is a follow-up ticket if the empirical reliability diagram
   shows over-fitting.
 
+## Audit-pipeline concepts (#24)
+
+### Pipeline row context
+
+`bba.audit_pipeline.PipelineRowContext` — frozen pydantic model bundling
+the upstream-derived inputs the orchestrator needs to audit one RBC order:
+:class:`AuditOrder`, :class:`HbLookupResult`, :class:`VitalsResult`,
+:class:`CohortAssignment`, procedure proximity, crystalloid totals,
+de-identified `hn_hash` / `an_hash`, prior-RBC counts, redacted evidence
+chunks, and reproducibility metadata (`redactor_version`,
+`redactor_model_sha`, `policy_version`, `prompt_hash`,
+`evidence_bundle_hash`). The pipeline NEVER fabricates any of these —
+the caller assembles a context from upstream module outputs and the
+orchestrator composes deterministic_classifier / prompt_builder /
+llm_client / audit_store on top.
+
+### Batch run
+
+`bba.audit_pipeline.BatchRun` — one row in the Postgres `batch_runs`
+table. Identifies one Anthropic Batch API submission (multiple
+`audit_id`s per row) and the five-state machine the pipeline transitions
+it through. `batch_id` is locally generated and stable across re-runs;
+`anthropic_batch_id` is set only at the `SUBMITTED` transition so a
+crash between local-create and Anthropic-submit is recoverable.
+
+### Batch run state
+
+`bba.audit_pipeline.BatchRunState` — the five-state machine: `PENDING →
+SUBMITTED → PARTIAL → COMPLETE` with `FAILED` as a sink. `COMPLETE` and
+`FAILED` are terminal. Transitions go through
+`bba.audit_pipeline.state_machine.transition`, which validates against
+`VALID_TRANSITIONS` and rejects illegal moves with
+`BatchStateTransitionError`. `PENDING → SUBMITTED` requires the caller
+to supply `anthropic_batch_id`; any transition to `FAILED` requires
+`error_message`.
+
+### Split-phase submission
+
+The Anthropic transport boundary exposes `submit_batch_only(...)` (creates
+the remote batch, returns the `batch_id` immediately) and
+`fetch_batch_results(batch_id, ...)` (polls until completion) as separate
+methods so the orchestrator can persist `SUBMITTED + anthropic_batch_id`
+to `batch_runs` BEFORE waiting for results. A SIGTERM during the polling
+window now leaves a recoverable `SUBMITTED` row whose `batch_id` the
+resume reconciler can pick up — without the split, an atomic
+submit-then-poll call could orphan a created-but-never-recorded
+Anthropic batch. `submit_batch(...)` remains as a backward-compatible
+convenience wrapper.
+
+### Row-level checkpoint
+
+The contract that every audit pipeline crash leaves the system in a
+state the resume reconciler can interpret. `bba.audit_pipeline.run_pipeline`
+writes the `batch_runs` row at four distinct moments: `PENDING` (before
+Anthropic submit), `SUBMITTED` (immediately after `submit_batch_only`
+returns), then `COMPLETE` or `FAILED` once the response is persisted /
+the row exhausts retries. PRD §15 calls this out explicitly so the
+operator never has to manually re-derive batch state from logs.
+
+### Resume reconciler
+
+`bba.audit_pipeline.resume_on_startup` — the load-bearing primitive for
+SIGTERM safety. On boot it walks every non-terminal `batch_runs` row
+and handles three failure-window classes:
+
+1. **PENDING with no `anthropic_batch_id`** — local-create succeeded,
+   Anthropic was never asked. Transitioned to `FAILED` with an
+   operator-visible `error_message`.
+2. **SUBMITTED / PARTIAL with cached llm_calls** — orphan-call case
+   (phase 1 of `audit_store.write` landed, phase 2 didn't). Each orphan
+   is re-emitted through `apply_batch_results` using the cached
+   `LlmCall.response_json` payload (PRD §10 makes that byte-exact).
+3. **SUBMITTED / PARTIAL with NO cached llm_calls** — Anthropic-polling
+   crash. When `transport` + `llm_config` are supplied, the reconciler
+   calls `fetch_batch_results(anthropic_batch_id, ...)` to retrieve the
+   in-flight response, applies it via `apply_batch_results`, and
+   transitions the row to `COMPLETE`.
+
+The reconciler is itself idempotent — a second pass produces zero new
+writes (audit_store's `WriteResult.skipped_idempotent` rejects the
+duplicate).
+
+### Winning attempt rule
+
+`bba.audit_pipeline.select_winning_attempt` — given a sequence of
+verified attempts for one `audit_id`, returns the one with the latest
+`attempt_id` whose `verifier_pass=True`. Returns `None` when no attempt
+passes verifier; the caller then routes the row to `NEEDS_REVIEW` with
+`review_reason="hallucination_suspect"`. Wired through
+`apply_batch_results` so the rule applies to retry / Sonnet→Opus
+escalation chains without the orchestrator re-implementing it.
+
+### Verifier callable
+
+`bba.audit_pipeline.replay.Verifier` — the `(BatchSubmissionResult,
+PipelineRowContext) -> bool` callable the orchestrator passes to
+`apply_batch_results` to decide whether each attempt grounds. Phase-1
+default (`default_verifier`) returns `True`; production wires
+`bba.quote_grounder.verify_citations` once that integration lands. Tests
+inject stubs that always reject to exercise the hallucination-suspect
+branch.
+
+### Apply batch results
+
+`bba.audit_pipeline.apply_batch_results` — translates a
+`RawBatchResponse` into committed `AuditRow` + `LlmCall` pairs via
+`audit_store.write`. Idempotent on `(audit_id, run_id, code_version)`;
+applying the same response twice writes zero new rows. Required kwargs
+include a `Mapping[audit_id, PipelineRowContext]` so every persisted
+row's clinical and reproducibility fields come from caller-supplied
+data — no fabrication. Missing context for any `custom_id` raises
+`KeyError` rather than silently filling defaults.
+
+### Parse failure reason
+
+A typed slug persisted on `AuditRow.review_reason` when the LLM's
+structured-output payload drifts from the schema:
+`empty_response` (no content), `tool_use_missing` (first block isn't
+`tool_use`), `schema_mismatch` (input isn't a mapping or
+classification isn't a string), `classification_out_of_set` (value
+outside the Classification Literal). Operators can distinguish
+clinical `NEEDS_REVIEW` from API drift without re-reading the raw
+Anthropic payload.
+
+### Cost guard
+
+`bba.audit_pipeline.assert_test_safe_transport` — refuses the live
+`AnthropicBatchTransport` when called from a test context, raising
+`LiveAnthropicApiError`. The class-identity check is on
+`isinstance(transport, AnthropicBatchTransport)`, so a wrapper that
+inherits from the live class is still considered live. Tests inject
+`CassetteTransport`; production callers skip the guard.
+
+### In-memory batch-run store
+
+`bba.audit_pipeline.InMemoryBatchRunStore` — dict-backed test
+implementation of the `BatchRunStore` Protocol. Single-process, not
+thread-safe. Used by every unit test and the property test.
+
+### Postgres batch-run store
+
+`bba.audit_pipeline.PostgresBatchRunStore` — production
+`BatchRunStore` backed by psycopg v3 + a connection pool. Lazy-opens
+so tests can construct against an unmigrated DB and verify the
+migration / connection failure modes. Schema installed by alembic
+migration `a1c2e3f4b5d6_audit_pipeline_batch_runs.py`; DB-level CHECK
+constraints mirror the pydantic invariants so a raw-SQL caller that
+bypasses the model layer still cannot persist a contradictory row.
+A partial UNIQUE index on `(run_id, anthropic_batch_id) WHERE NOT NULL`
+prevents two batches from sharing an Anthropic batch_id within one run.
+
+### Deterministic-final routing
+
+Contexts whose `bba.deterministic_classifier.classify` result is
+`APPROPRIATE`, `INSUFFICIENT_EVIDENCE`, or `INAPPROPRIATE` skip the LLM
+entirely — the orchestrator writes the audit row directly with a
+`model_id="deterministic"` marker LLM call (the audit_store's
+transactional-ordering invariant rejects rows without a paired
+`LlmCall`). `POTENTIALLY_INAPPROPRIATE` / `NEEDS_REVIEW` route through
+the LLM stage where the cassette / production transport supplies the
+response.
+
+### Deferred review (post-merge)
+
+Two-round Codex review on PR #54 (NEEDS-CHANGES → fixes → PASS), with
+items intentionally **not** in scope so a future reader doesn't
+re-litigate:
+
+* **Live Anthropic polling in the reconciler beyond cached responses**
+  — Phase-1 reconciler polls `fetch_batch_results` once per
+  SUBMITTED/PARTIAL row that has no cached llm_calls. Cross-batch
+  catch-up (multiple in-flight batches, exponential-backoff polling,
+  webhook delivery) is a follow-up ticket (`bba.monitoring` #29 or a
+  dedicated `bba.batch_poller`).
+* **Concurrent pipeline workers** — `PostgresBatchRunStore` is
+  thread-safe via the connection pool, but the orchestrator runs
+  single-threaded in v1. Multi-worker batching is out of scope until
+  the DuckDB single-writer constraint (PRD §10) is lifted.
+* **Resume polling failure backoff** — transient Anthropic errors
+  leave the `batch_runs` row in its current state for the next resume
+  to retry. Explicit retry-budget tracking + dead-letter routing is a
+  follow-up.
+* **Full integration with `bba.quote_grounder`** — the verifier
+  callable is a Protocol; the Phase-1 default returns `True`. Wiring
+  `verify_citations` into the verifier hook is the next ticket's job.
+
 ## Vocabulary not in this file
 
 Domain terms used in the broader project but defined elsewhere (PRD issue
