@@ -356,9 +356,13 @@ class SentinelManifest(BaseModel):
     """The 200-case sentinel set.
 
     Constructed ONCE with a deterministic seed (default 42). Re-running
-    construction with the same population + seed MUST yield the same
-    audit_ids; if it doesn't, the manifest is stale (the population
-    changed) and :class:`SentinelStaleError` is raised by the constructor.
+    construction with the same population + seed yields the same
+    audit_ids; if the underlying population has changed between calls,
+    the manifest's audit_ids may no longer all exist in the new
+    population. Staleness detection is a Phase 1.5 follow-up (the
+    operator currently re-runs :func:`build_sentinel_manifest` once per
+    deployment and persists the manifest via
+    :class:`MonitoringStore.persist_sample_manifest` for re-use).
     """
 
     model_config = ConfigDict(frozen=True)

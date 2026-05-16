@@ -491,15 +491,15 @@ class TestSprtNoAlarmOnNullData:
 
 class TestSprtArl0Empirical:
     """Empirical ARL₀ check: over many independent null streams, the
-    ratio of total observations processed to the count of false alarms
-    is ≥ SPRT_TARGET_ARL0.
+    false-alarm rate must be low enough that the average run length to
+    a false alarm is ≥ SPRT_TARGET_ARL0.
 
-    The formula is ``total_observations / max(n_false_alarms, 1)`` —
-    not the average alarm-time across alarming streams. The naive
-    average-only formula passes vacuously when zero alarms occur
-    (``inf >= 500``); the ratio form pins the false-alarm rate to a
-    long-run frequency over real exposure, which is what ARL₀ actually
-    measures."""
+    Handles the censored case explicitly: zero alarms in N observations
+    means ARL₀ is right-censored at N (we know ARL₀ > N but not by how
+    much), so the assertion becomes "exposure ≥ TARGET" rather than
+    silently dividing by 1 and reporting ``total_observations`` as a
+    concrete ARL₀ estimate. The non-zero-alarms branch computes the
+    long-run-frequency form ``total_observations / n_false_alarms``."""
 
     def test_empirical_arl0_meets_target(self, sprt_config: SprtConfig) -> None:
         total_observations = 0
@@ -518,10 +518,23 @@ class TestSprtArl0Empirical:
             total_observations += state.n_observations
             if state.verdict == "reject_null":
                 n_false_alarms += 1
-        # Long-run frequency form: how many observations did we burn per
-        # false alarm? With α=β=0.05, p_null=0.05, p_alt=0.10 the
-        # theoretical ARL₀ comfortably exceeds 500.
-        empirical_arl0 = total_observations / max(n_false_alarms, 1)
+
+        if n_false_alarms == 0:
+            # Censored case: ARL₀ is at least ``total_observations``.
+            # Require exposure to exceed the target so the censored
+            # lower bound is itself a useful regression guard. If this
+            # ever fails, EITHER the SPRT alarmed early (no — we just
+            # checked it didn't) OR the per-stream length was reduced
+            # below the target; bump per_stream_n if so.
+            assert total_observations >= SPRT_TARGET_ARL0, (
+                f"ARL₀ exposure {total_observations} below target "
+                f"{SPRT_TARGET_ARL0}; increase per_stream_n or "
+                f"n_replications to make the censored lower bound "
+                f"informative"
+            )
+            return
+
+        empirical_arl0 = total_observations / n_false_alarms
         assert empirical_arl0 >= SPRT_TARGET_ARL0, (
             f"ARL₀ regression: {empirical_arl0:.0f} observations per "
             f"false alarm over {n_replications} null streams of "
@@ -1506,19 +1519,33 @@ class TestMonitoringStoreConcurrentWrites:
     """The store's lock guards multi-threaded writes from a future
     cron-driven monitor (#29) that may invoke multiple cadences in
     parallel. Eight threads writing 50 alarms each must produce 400
-    rows with unique ``alarm_id`` values and no losses."""
+    rows with unique ``alarm_id`` values and no losses.
+
+    A :class:`threading.Barrier` forces all workers to begin writing in
+    the same scheduling instant, maximising contention on the shared
+    counter. Without the barrier, threads tend to start sequentially
+    (pool spin-up + GIL hand-off) and the test would pass even with the
+    lock removed because the writes serialise naturally. With the
+    barrier, the ``_next_alarm_id += 1`` / append pair must execute
+    atomically — drop the lock from MonitoringStore and the test
+    surfaces duplicate IDs."""
 
     def test_concurrent_record_alarm_no_lost_writes(
         self, monitoring_config: MonitoringConfig, utc_now: datetime
     ) -> None:
         import concurrent.futures
+        import threading
 
         store = MonitoringStore(monitoring_config)
         n_workers = 8
         writes_per_worker = 50
         total_writes = n_workers * writes_per_worker
+        start_gate = threading.Barrier(n_workers)
 
         def writer(worker_id: int) -> None:
+            # Block until every worker is on this line, then fire
+            # together — maximises lock contention.
+            start_gate.wait(timeout=5.0)
             for i in range(writes_per_worker):
                 store.record_alarm(
                     MonitoringAlarmInput(
@@ -1532,7 +1559,9 @@ class TestMonitoringStoreConcurrentWrites:
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=n_workers
         ) as pool:
-            list(pool.map(writer, range(n_workers)))
+            futures = [pool.submit(writer, i) for i in range(n_workers)]
+            for fut in concurrent.futures.as_completed(futures):
+                fut.result()  # re-raise any worker exception
 
         alarms = store.list_alarms()
         assert len(alarms) == total_writes
