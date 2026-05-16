@@ -20,13 +20,29 @@ threshold; both are constants on :mod:`bba.deterministic_classifier.classifier`.
 
 from __future__ import annotations
 
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 
 from bba.cohort_detector import MedEvent
 
 CRYSTALLOID_WINDOW_HOURS: float = 4.0
 """PRD §6 hemodilution lookback window (hours): we sum crystalloid
 administrations in [order_datetime - 4 h, order_datetime]."""
+
+
+_DOSE_PATTERN = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(mL|cc|L)\b",
+    re.IGNORECASE,
+)
+"""Capture the last numeric dose + unit on a HOSxP drug string.
+
+The grouping is intentionally permissive on whitespace and case so
+``"NSS 1000 mL"``, ``"RLS 1 L"``, ``"D5W 500 cc"``, ``"NSS1000ML"`` all
+parse to the same numeric value. ``\\b`` after the unit prevents
+``"500 mL/h"`` infusion-rate strings (Phase 2) from being read as a
+500 mL bolus — the trailing slash breaks the word boundary differently
+in some shells, so the orchestrator currently filters those upstream.
+"""
 
 
 def total_crystalloid_liters(
@@ -57,7 +73,23 @@ def total_crystalloid_liters(
     :data:`bba.deterministic_classifier.HEMODILUTION_CRYSTALLOID_LITERS`
     (2.0 L) to decide whether the hemodilution bypass fires.
     """
-    raise NotImplementedError
+    window_start = order_datetime - timedelta(hours=window_hours)
+    total = 0.0
+    for event in med_events:
+        if event.timestamp > order_datetime:
+            continue
+        if event.timestamp < window_start:
+            continue
+        match = _DOSE_PATTERN.search(event.drug)
+        if match is None:
+            continue
+        value = float(match.group(1))
+        unit = match.group(2).lower()
+        if unit in ("ml", "cc"):
+            total += value / 1000.0
+        else:
+            total += value
+    return total
 
 
 __all__ = ("CRYSTALLOID_WINDOW_HOURS", "total_crystalloid_liters")
