@@ -12,12 +12,18 @@ Row-level checkpointing (issue #24 AC ②):
 
 * :func:`run_pipeline` creates a :class:`BatchRun` in ``PENDING`` state
   BEFORE submitting to Anthropic, transitions to ``SUBMITTED`` once
-  Anthropic returns a ``batch_id``, then advances to ``COMPLETE`` as
-  results land. A crash at any point leaves the ``batch_runs`` row in
-  a recoverable state for the resume reconciler.
+  Anthropic returns a ``batch_id``, then advances through ``PARTIAL``
+  / ``COMPLETE`` as results land. A crash at any point leaves the
+  ``batch_runs`` row in a recoverable state for the resume reconciler.
 * :func:`process_audit_order` is the per-row entry point used both by
   :func:`run_pipeline` and by the resume reconciler when re-emitting
   orphan llm_calls (user constraint #5).
+
+The pipeline takes a sequence of :class:`PipelineRowContext`,
+NOT raw :class:`AuditOrder` rows. The caller is responsible for
+assembling the context from upstream modules — that boundary prevents
+the orchestrator from silently fabricating clinical data (Codex review
+HIGH #5).
 """
 
 from __future__ import annotations
@@ -31,13 +37,17 @@ from bba.audit_pipeline.models import (
     AuditPipelineConfig,
     BatchRun,
     BatchRunState,
+    PipelineRowContext,
     PipelineRunResult,
 )
-from bba.audit_pipeline.replay import apply_batch_results
+from bba.audit_pipeline.replay import (
+    Verifier,
+    apply_batch_results,
+    default_verifier,
+)
 from bba.audit_pipeline.state_machine import transition
 from bba.audit_pipeline.store import BatchRunStore
-from bba.audit_orders import AuditOrder
-from bba.audit_store import AuditStore
+from bba.audit_store import AuditRow, AuditStore, LlmCall
 from bba.llm_client.models import (
     AnthropicTransport,
     BatchSubmissionRequest,
@@ -45,8 +55,17 @@ from bba.llm_client.models import (
 )
 
 
+# Deterministic classifier results that produce a final answer without
+# the LLM stage. POTENTIALLY_INAPPROPRIATE and NEEDS_REVIEW route to the
+# LLM for a positive-evidence call (PRD §6); APPROPRIATE and
+# INSUFFICIENT_EVIDENCE are final at the deterministic layer.
+_DETERMINISTIC_FINAL_CLASSIFICATIONS = frozenset(
+    {"APPROPRIATE", "INSUFFICIENT_EVIDENCE", "INAPPROPRIATE"}
+)
+
+
 def run_pipeline(
-    orders: Sequence[AuditOrder],
+    contexts: Sequence[PipelineRowContext],
     *,
     transport: AnthropicTransport,
     audit_store: AuditStore,
@@ -54,8 +73,9 @@ def run_pipeline(
     llm_config: LlmClientConfig,
     pipeline_config: AuditPipelineConfig,
     run_id: str,
+    verifier: Verifier = default_verifier,
 ) -> PipelineRunResult:
-    """Run the full pipeline over ``orders``, checkpointing through
+    """Run the full pipeline over ``contexts``, checkpointing through
     ``batch_run_store``.
 
     Steps per batch:
@@ -63,19 +83,23 @@ def run_pipeline(
     1. Cost-guard: refuse a live Anthropic transport (user constraint
        #10). Tests inject a CassetteTransport; production injects
        AnthropicBatchTransport via a wrapping non-test caller.
-    2. Create a :class:`BatchRun` row in ``PENDING``.
-    3. Submit one batch per chunk of size
-       ``pipeline_config.max_batch_size`` via ``transport.submit_batch``.
-       Transition the batch_runs row to ``SUBMITTED``.
-    4. Translate the response → AuditRow + LlmCall pairs through
-       :func:`bba.audit_pipeline.replay.apply_batch_results` (which
-       composes the audit_store idempotency contract).
-    5. Transition the batch_runs row to ``COMPLETE``.
+    2. Partition contexts into deterministic-final vs LLM-required
+       buckets via :attr:`PipelineRowContext.classifier_result`.
+    3. For deterministic-final rows: build the AuditRow directly from
+       the classifier result + context, write via audit_store. No
+       Anthropic call.
+    4. For LLM-required rows: create a :class:`BatchRun` row in
+       ``PENDING``, submit one batch per chunk via
+       ``transport.submit_batch``, transition to ``SUBMITTED``.
+    5. Translate the response → AuditRow + LlmCall pairs through
+       :func:`apply_batch_results` (verifier + winning-attempt rule
+       + audit_store idempotency).
+    6. Transition the batch_runs row to ``COMPLETE``.
 
     Returns a :class:`PipelineRunResult` listing every persisted
     ``audit_id`` and every batch_id whose state changed.
     """
-    if not orders:
+    if not contexts:
         return PipelineRunResult(
             run_id=run_id,
             audit_ids_persisted=(),
@@ -88,7 +112,23 @@ def run_pipeline(
     persisted: list[str] = []
     touched: list[str] = []
 
-    for chunk in _chunked(orders, pipeline_config.max_batch_size):
+    deterministic_final: list[PipelineRowContext] = []
+    llm_required: list[PipelineRowContext] = []
+    for ctx in contexts:
+        if ctx.classifier_result.classification in _DETERMINISTIC_FINAL_CLASSIFICATIONS:
+            deterministic_final.append(ctx)
+        else:
+            llm_required.append(ctx)
+
+    for ctx in deterministic_final:
+        if _persist_deterministic_row(
+            ctx,
+            audit_store=audit_store,
+            run_id=run_id,
+        ):
+            persisted.append(ctx.order.audit_id)
+
+    for chunk in _chunked(llm_required, pipeline_config.max_batch_size):
         batch_id = _batch_id_for(run_id, chunk)
         now = _now_utc()
         pending = BatchRun(
@@ -96,7 +136,7 @@ def run_pipeline(
             state=BatchRunState.PENDING,
             run_id=run_id,
             code_version=pipeline_config.code_version,
-            audit_ids=tuple(o.audit_id for o in chunk),
+            audit_ids=tuple(c.order.audit_id for c in chunk),
             updated_at=now,
         )
         batch_run_store.create(pending)
@@ -117,8 +157,13 @@ def run_pipeline(
         )
         batch_run_store.update(submitted)
 
+        context_map = {ctx.order.audit_id: ctx for ctx in chunk}
         write_summary = apply_batch_results(
-            response, audit_store=audit_store, run_id=run_id
+            response,
+            audit_store=audit_store,
+            run_id=run_id,
+            contexts=context_map,
+            verifier=verifier,
         )
         persisted.extend(write_summary.audit_ids_persisted)
 
@@ -130,7 +175,7 @@ def run_pipeline(
         batch_run_store.update(completed)
 
     orphans = _detect_orphans(
-        expected_audit_ids=tuple(o.audit_id for o in orders),
+        expected_audit_ids=tuple(c.order.audit_id for c in contexts),
         persisted=tuple(persisted),
     )
 
@@ -143,7 +188,7 @@ def run_pipeline(
 
 
 def process_audit_order(
-    order: AuditOrder,
+    context: PipelineRowContext,
     *,
     transport: AnthropicTransport,
     audit_store: AuditStore,
@@ -151,57 +196,232 @@ def process_audit_order(
     llm_config: LlmClientConfig,
     pipeline_config: AuditPipelineConfig,
     run_id: str,
+    verifier: Verifier = default_verifier,
 ) -> PipelineRunResult:
-    """Run the pipeline for a single :class:`AuditOrder`.
+    """Run the pipeline for a single :class:`PipelineRowContext`.
 
     Convenience wrapper around :func:`run_pipeline` with a length-1
     sequence; used by the resume reconciler when re-emitting an
     orphan ``llm_calls`` row through the verifier.
     """
     return run_pipeline(
-        [order],
+        [context],
         transport=transport,
         audit_store=audit_store,
         batch_run_store=batch_run_store,
         llm_config=llm_config,
         pipeline_config=pipeline_config,
         run_id=run_id,
+        verifier=verifier,
+    )
+
+
+def _persist_deterministic_row(
+    context: PipelineRowContext,
+    *,
+    audit_store: AuditStore,
+    run_id: str,
+) -> bool:
+    """Write the deterministic-final row directly without an LLM call.
+
+    Returns True iff a new row was committed (False on idempotent
+    skip — same ``(audit_id, run_id, code_version)`` already on disk).
+    """
+    from bba.audit_pipeline.replay import _audit_row_for_needs_review
+    from bba.audit_store import AuditRow
+
+    row: AuditRow
+    classifier = context.classifier_result
+    if classifier.classification == "NEEDS_REVIEW":
+        # POTENTIALLY_INAPPROPRIATE and friends that route through the
+        # LLM never land here — only legitimate deterministic-final
+        # NEEDS_REVIEW (rare; today only the hemodilution-flagged path).
+        row = _audit_row_for_needs_review(
+            run_id=run_id,
+            context=context,
+            rule_classification=classifier.classification,
+            review_reason=classifier.bypass_reason.value
+            if classifier.bypass_reason
+            else "deterministic_review",
+            verifier_pass=True,
+            verifier_retries=0,
+            model_id="deterministic",
+            reasoning_en=f"deterministic: {classifier.rationale}",
+            reasoning_th="",
+            indications=(),
+            negative_evidence=(),
+            confidence=1.0,
+            escalated=False,
+        )
+    else:
+        row = _deterministic_audit_row(
+            context=context,
+            run_id=run_id,
+        )
+
+    # Deterministic-final rows have no Anthropic call; we still need
+    # at least one llm_call to satisfy the audit_store transactional
+    # invariant. Build a "deterministic" marker call that records the
+    # rule rationale instead of an Anthropic payload.
+    marker_call = _deterministic_marker_call(context=context, run_id=run_id)
+    write_result = audit_store.write(row, [marker_call])
+    return not write_result.skipped_idempotent
+
+
+def _deterministic_audit_row(
+    *, context: PipelineRowContext, run_id: str
+) -> AuditRow:
+    """AuditRow for the deterministic-final path.
+
+    Mirrors the LLM path's AuditRow construction but uses
+    ``rule_classification`` as the final answer and a placeholder
+    LLM payload (no Anthropic call was made).
+    """
+    from bba.audit_store import AuditRow
+
+    # INSUFFICIENT_EVIDENCE legitimately has a missing Hb; the
+    # audit_store schema requires non-null floats so we use 0.0 with
+    # ``freshness == "missing"`` as the explicit "no Hb" signal (per
+    # PRD §"Output schema"). All non-INSUFFICIENT classifications must
+    # supply real Hb data — fail loud otherwise.
+    classifier = context.classifier_result
+    if (
+        classifier.classification != "INSUFFICIENT_EVIDENCE"
+        and context.hb_result.value_g_dl is None
+    ):
+        raise ValueError(
+            f"audit_id={context.order.audit_id!r}: classifier "
+            f"emitted {classifier.classification!r} but hb_result.value_g_dl "
+            "is None; the pipeline must not fabricate a numeric Hb"
+        )
+    return AuditRow(
+        audit_id=context.order.audit_id,
+        run_id=run_id,
+        run_timestamp=context.order.order_datetime,
+        hn_hash=context.hn_hash,
+        an_hash=context.an_hash,
+        reqno=context.order.reqno,
+        order_datetime=context.order.order_datetime,
+        products_ordered=tuple(context.order.products_ordered),
+        hb_value=context.hb_result.value_g_dl
+        if context.hb_result.value_g_dl is not None
+        else 0.0,
+        hb_datetime=context.hb_result.datetime_utc
+        if context.hb_result.datetime_utc is not None
+        else context.order.order_datetime,
+        hb_freshness=context.hb_result.freshness,
+        hb_source=str(context.hb_result.source) if context.hb_result.source else "missing",
+        vitals_sbp=context.vitals_result.vitals.sbp,
+        vitals_hr=context.vitals_result.vitals.hr,
+        vitals_timestamp=context.vitals_result.note_timestamp,
+        vitals_source=context.vitals_result.source.value,
+        prior_rbc_units_24h=context.prior_rbc_units_24h,
+        prior_rbc_units_7d=context.prior_rbc_units_7d,
+        cohort_threshold=context.cohort_assignment.threshold
+        if context.cohort_assignment.threshold is not None
+        else classifier.cohort_threshold or 0.0,
+        delta_hb_window_results=tuple(
+            {
+                "window_hours": w.window_hours,
+                "threshold_g_dl": w.threshold_g_dl,
+                "triggered": w.triggered,
+                "drop_g_dl": w.drop_g_dl,
+            }
+            for w in context.hb_result.delta_hb_windows
+        ),
+        rule_classification=classifier.classification,
+        final_classification=classifier.classification,
+        cohort_applied=context.cohort_assignment.label.value,
+        indications_json=(),
+        negative_evidence_json=(),
+        confidence=1.0,
+        reasoning_summary_thai="",
+        reasoning_summary_en=f"deterministic: {classifier.rationale}",
+        needs_human_review=False,
+        review_reason=None,
+        model_id="deterministic",
+        prompt_hash=context.prompt_hash,
+        evidence_bundle_hash=context.evidence_bundle_hash,
+        redactor_version=context.redactor_version,
+        redactor_model_sha=context.redactor_model_sha,
+        policy_version=context.policy_version,
+        verifier_pass=True,
+        verifier_retries=0,
+        escalated_to_opus=False,
+    )
+
+
+def _deterministic_marker_call(
+    *, context: PipelineRowContext, run_id: str
+) -> LlmCall:
+    """A placeholder :class:`LlmCall` for deterministic-final rows.
+
+    The audit_store's transactional-ordering invariant rejects an
+    ``audit_results`` row without a paired ``llm_calls`` row. For the
+    deterministic-final path there is no Anthropic call, so we emit
+    a stamped marker that records the rule rationale instead.
+    """
+    from bba.audit_store import LlmCall
+
+    classifier = context.classifier_result
+    fingerprint = hashlib.sha256(
+        f"{run_id}|{context.order.audit_id}|deterministic".encode("utf-8")
+    ).hexdigest()[:16]
+    return LlmCall(
+        call_id=f"call-{context.order.audit_id}-det-{fingerprint}",
+        audit_id=context.order.audit_id,
+        run_id=run_id,
+        model_id="deterministic",
+        anthropic_version="n/a",
+        prompt_cache_id=None,
+        request_json={
+            "rationale": classifier.rationale,
+            "bypass_reason": classifier.bypass_reason.value
+            if classifier.bypass_reason
+            else "none",
+        },
+        response_json={
+            "classification": classifier.classification,
+            "rationale": classifier.rationale,
+        },
+        request_timestamp=context.order.order_datetime,
+        latency_ms=0,
+        extended_thinking_blocks=None,
+        cold_storage_uri=None,
     )
 
 
 def _chunked(
-    orders: Sequence[AuditOrder], size: int
-) -> list[tuple[AuditOrder, ...]]:
-    return [tuple(orders[i : i + size]) for i in range(0, len(orders), size)]
+    contexts: Sequence[PipelineRowContext], size: int
+) -> list[tuple[PipelineRowContext, ...]]:
+    return [tuple(contexts[i : i + size]) for i in range(0, len(contexts), size)]
 
 
-def _batch_id_for(run_id: str, chunk: Sequence[AuditOrder]) -> str:
+def _batch_id_for(run_id: str, chunk: Sequence[PipelineRowContext]) -> str:
     """Stable batch_id derived from run_id + chunk identity.
 
-    A re-run with the same orders produces the same batch_id, which is
-    safe because :meth:`BatchRunStore.create` rejects duplicates — the
-    test for SIGTERM-then-restart relies on this so a second invocation
-    surfaces the recoverable state in the store rather than orphaning
-    a new pending row alongside the old one.
+    A re-run with the same contexts produces the same batch_id, which
+    is safe because :meth:`BatchRunStore.create` rejects duplicates —
+    the test for SIGTERM-then-restart relies on this so a second
+    invocation surfaces the recoverable state in the store rather
+    than orphaning a new pending row alongside the old one.
     """
     digest = hashlib.sha256(
-        ("|".join([run_id, *(o.audit_id for o in chunk)])).encode("utf-8")
+        ("|".join([run_id, *(c.order.audit_id for c in chunk)])).encode("utf-8")
     ).hexdigest()[:16]
     return f"batch-{digest}"
 
 
 def _build_submission_requests(
-    chunk: Sequence[AuditOrder], *, run_id: str
+    chunk: Sequence[PipelineRowContext], *, run_id: str
 ) -> list[BatchSubmissionRequest]:
     """Build :class:`BatchSubmissionRequest` objects for ``chunk``.
 
-    The full prompt assembly lives in :mod:`bba.prompt_builder` —
-    this wiring delegates to :func:`bba.prompt_builder.build_prompt`
-    so the prompt_hash + canonical envelope are computed via the
-    canonical primitive (PRD §"audit-chain reproducibility"). One
-    synthetic evidence chunk per audit_id keeps the cassette key
-    deterministic without coupling the pipeline orchestrator to the
-    upstream redaction / bundle stages.
+    Each context already carries the redacted evidence chunks
+    assembled by the caller (via :mod:`bba.evidence_bundle_builder` +
+    :mod:`bba.deid_redactor`). The prompt builder is invoked here to
+    produce the canonical-envelope :class:`PromptBuildResult`; the
+    caller never re-implements that stage.
     """
     from bba.prompt_builder import (
         EvidenceChunk,
@@ -210,23 +430,29 @@ def _build_submission_requests(
     )
 
     out: list[BatchSubmissionRequest] = []
-    for order in chunk:
-        evidence_chunk = EvidenceChunk(
-            evidence_id="E1",
-            source="IPDNRFOCUSDT",
-            text=f"synthetic evidence for {order.audit_id}",
-        )
+    for context in chunk:
+        chunks = context.evidence_chunks
+        if not chunks:
+            chunks = (
+                EvidenceChunk(
+                    evidence_id="E1",
+                    source="IPDNRFOCUSDT",
+                    text=f"no redacted evidence supplied for {context.order.audit_id}",
+                ),
+            )
         prompt = build_prompt(
             PromptBuildRequest(
                 task_mode="HB_7_10_REVIEW",
-                cohort_threshold=7.0,
-                evidence_chunks=(evidence_chunk,),
+                cohort_threshold=context.cohort_assignment.threshold
+                if context.cohort_assignment.threshold is not None
+                else 7.0,
+                evidence_chunks=chunks,
                 few_shot_examples=(),
             )
         )
         out.append(
             BatchSubmissionRequest(
-                audit_id=order.audit_id,
+                audit_id=context.order.audit_id,
                 run_id=run_id,
                 task_mode="HB_7_10_REVIEW",
                 prompt=prompt,

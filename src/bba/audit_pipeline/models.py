@@ -37,7 +37,13 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from bba.audit_orders import AuditOrder
 from bba.audit_store.models import SafeId, UTCDatetime
+from bba.cohort_detector import CohortAssignment
+from bba.deterministic_classifier import ClassifierResult
+from bba.hb_lookup import HbLookupResult
+from bba.prompt_builder import EvidenceChunk
+from bba.vitals_extractor import VitalsResult
 
 
 class BatchRunState(StrEnum):
@@ -122,6 +128,59 @@ class BatchRun(BaseModel):
         return self
 
 
+class PipelineRowContext(BaseModel):
+    """All upstream-derived inputs the orchestrator needs for one audit row.
+
+    The pipeline never re-implements upstream modules (user constraint
+    #1). Instead, the caller assembles this context from the joined
+    HOSxP tables + upstream module outputs:
+
+    * :class:`bba.audit_orders.AuditOrder` — the per-(HN, REQNO) row.
+    * :class:`bba.hb_lookup.HbLookupResult` — most-recent Hb +
+      freshness + delta-Hb bypass.
+    * :class:`bba.vitals_extractor.VitalsResult` — ±6 h vitals window.
+    * :class:`bba.cohort_detector.CohortAssignment` — cohort label +
+      numeric threshold.
+    * Procedure proximity + crystalloid totals — derived from
+      IPTSUMOPRT / MED joins, feed the bypass rules.
+    * Hashed identity (``hn_hash`` / ``an_hash``) — the de-identified
+      surface that persists on :class:`bba.audit_store.AuditRow`.
+    * Redactor / policy reproducibility metadata — pinned per run so
+      audit_results rows are replayable.
+    * ``evidence_chunks`` — redacted evidence ready for the LLM path
+      (empty when the deterministic stage produces a final answer).
+    * Prior-RBC counts — joined upstream, persisted verbatim.
+
+    A frozen model so a concurrent reader cannot observe partial
+    state mid-construction. Missing fields are a contract violation;
+    the orchestrator never fabricates clinical data (Codex review
+    HIGH #5).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    order: AuditOrder
+    hb_result: HbLookupResult
+    vitals_result: VitalsResult
+    cohort_assignment: CohortAssignment
+    procedure_proximity_hours: float | None
+    crystalloid_liters_prior_4h: float = Field(ge=0.0)
+    classifier_result: ClassifierResult
+
+    hn_hash: str = Field(min_length=1)
+    an_hash: str = Field(min_length=1)
+    prior_rbc_units_24h: int = Field(ge=0)
+    prior_rbc_units_7d: int = Field(ge=0)
+
+    redactor_version: str = Field(min_length=1)
+    redactor_model_sha: str = Field(min_length=1)
+    policy_version: str = Field(min_length=1)
+    prompt_hash: str = Field(min_length=1)
+    evidence_bundle_hash: str = Field(min_length=1)
+
+    evidence_chunks: tuple[EvidenceChunk, ...] = ()
+
+
 class AuditPipelineConfig(BaseModel):
     """Operator-supplied configuration for the pipeline orchestrator.
 
@@ -186,6 +245,7 @@ __all__: Sequence[str] = (
     "AuditPipelineConfig",
     "BatchRun",
     "BatchRunState",
+    "PipelineRowContext",
     "PipelineRunResult",
     "ResumeReport",
 )

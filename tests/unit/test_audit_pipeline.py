@@ -57,6 +57,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from bba.audit_orders import AuditOrder
+from bba.audit_store.models import Classification
 from bba.audit_pipeline import (
     VALID_TRANSITIONS,
     AuditPipelineConfig,
@@ -67,6 +68,7 @@ from bba.audit_pipeline import (
     BatchStateTransitionError,
     InMemoryBatchRunStore,
     LiveAnthropicApiError,
+    PipelineRowContext,
     PipelineRunResult,
     ResumeReconciliationError,
     ResumeReport,
@@ -79,6 +81,11 @@ from bba.audit_pipeline import (
     select_winning_attempt,
     transition,
 )
+from bba.cohort_detector import CohortAssignment, CohortLabel
+from bba.deterministic_classifier import BypassReason, ClassifierResult
+from bba.hb_lookup import DeltaHbWindow, HbLookupResult
+from bba.prompt_builder import EvidenceChunk
+from bba.vitals_extractor import SourceProvenance, VitalSigns, VitalsResult
 from bba.llm_client import (
     AnthropicBatchTransport,
     AnthropicTransport,
@@ -176,8 +183,8 @@ def _cassette_transport() -> CassetteTransport:
     return CassetteTransport(interactions=())
 
 
-def _cassette_for_orders(
-    orders: Sequence[AuditOrder],
+def _cassette_for_contexts(
+    contexts: Sequence[PipelineRowContext],
     *,
     classification: str = "APPROPRIATE",
     review_reason: str | None = None,
@@ -202,9 +209,21 @@ def _cassette_for_orders(
         RawBatchResponse,
     )
 
+    # Only include LLM-required contexts: deterministic-final
+    # classifications (APPROPRIATE / INSUFFICIENT_EVIDENCE / INAPPROPRIATE)
+    # never hit Anthropic, so they don't belong in the cassette key.
+    llm_contexts = tuple(
+        ctx
+        for ctx in contexts
+        if ctx.classifier_result.classification
+        not in {"APPROPRIATE", "INSUFFICIENT_EVIDENCE", "INAPPROPRIATE"}
+    )
+    if not llm_contexts:
+        return CassetteTransport(interactions=())
+
     results = tuple(
         BatchSubmissionResult(
-            custom_id=order.audit_id,
+            custom_id=ctx.order.audit_id,
             model_id=SONNET_MODEL_ID,
             raw_response_json={
                 "id": f"msg_smoke_{i:03d}",
@@ -237,14 +256,110 @@ def _cassette_for_orders(
             prompt_cache_id=None,
             extended_thinking_blocks=None,
         )
-        for i, order in enumerate(orders)
+        for i, ctx in enumerate(llm_contexts)
     )
     interaction = CassetteInteraction(
         model=SONNET_MODEL_ID,
-        custom_ids=tuple(order.audit_id for order in orders),
+        custom_ids=tuple(ctx.order.audit_id for ctx in llm_contexts),
         response=RawBatchResponse(batch_id="msgbatch_smoke", results=results),
     )
     return CassetteTransport(interactions=(interaction,))
+
+
+def _row_context(
+    *,
+    audit_id: str,
+    classification: Classification = "POTENTIALLY_INAPPROPRIATE",
+    bypass_reason: BypassReason = BypassReason.NONE,
+    hb_value: float = 7.5,
+    hb_source: str = "HEMATOLOGY",
+    hb_freshness: str = "fresh",
+    vitals_source: SourceProvenance = SourceProvenance.IPDADMPROGRESS,
+    cohort_label: CohortLabel = CohortLabel.DEFAULT,
+    cohort_threshold: float | None = 7.0,
+    evidence_text: str = "Hb 7.5 with symptomatic chest pain",
+) -> PipelineRowContext:
+    """Build a PipelineRowContext for tests.
+
+    Defaults produce a row that routes through the LLM stage
+    (POTENTIALLY_INAPPROPRIATE classifier result). Override
+    ``classification`` to APPROPRIATE / INSUFFICIENT_EVIDENCE to
+    exercise the deterministic-final path.
+    """
+    order = AuditOrder(
+        audit_id=audit_id,
+        hn=f"HN-{audit_id}",
+        an=f"AN-{audit_id}",
+        reqno=f"REQ-{audit_id}",
+        order_datetime=_RUN_TS,
+        anchor_imputed=False,
+        products_ordered=("LPRC",),
+        age_years=55,
+        sex="M",
+        diagnosis_codes=("D62",),
+    )
+    hb_result = HbLookupResult(
+        value_g_dl=hb_value,
+        datetime_utc=_RUN_TS,
+        source=hb_source,
+        freshness=hb_freshness,
+        delta_hb_bypass=False,
+        delta_hb_windows=(
+            DeltaHbWindow(
+                window_hours=6,
+                threshold_g_dl=2.0,
+                prior_value_g_dl=None,
+                prior_datetime_utc=None,
+                drop_g_dl=None,
+                triggered=False,
+            ),
+        ),
+        needs_review_single_low_hb=False,
+    )
+    vitals = VitalsResult(
+        vitals=VitalSigns(sbp=110.0, hr=85.0, dbp=70.0, bt=37.0, rr=16.0),
+        source=vitals_source,
+        flags=frozenset(),
+        note_timestamp=_RUN_TS,
+    )
+    cohort = CohortAssignment(
+        label=cohort_label,
+        threshold=cohort_threshold,
+        evidence_code=None,
+        evidence_name=None,
+    )
+    classifier = ClassifierResult(
+        classification=classification,
+        bypass_reason=bypass_reason,
+        cohort_threshold=cohort_threshold,
+        rationale="hb_7_to_10" if classification == "POTENTIALLY_INAPPROPRIATE" else "hb_ge_10",
+    )
+    evidence_chunks = (
+        EvidenceChunk(
+            evidence_id="E1",
+            source="IPDNRFOCUSDT",
+            text=evidence_text,
+        ),
+    )
+    return PipelineRowContext(
+        order=order,
+        hb_result=hb_result,
+        vitals_result=vitals,
+        cohort_assignment=cohort,
+        procedure_proximity_hours=None,
+        crystalloid_liters_prior_4h=0.0,
+        classifier_result=classifier,
+        hn_hash=f"hn_hash_{audit_id}",
+        an_hash=f"an_hash_{audit_id}",
+        prior_rbc_units_24h=0,
+        prior_rbc_units_7d=0,
+        redactor_version="0.4.1+test",
+        redactor_model_sha=f"redactor_sha_{audit_id}",
+        policy_version="kcmh-pr17.2-2024",
+        prompt_hash=f"prompt_hash_{audit_id}",
+        evidence_bundle_hash=f"bundle_hash_{audit_id}",
+        evidence_chunks=evidence_chunks,
+    )
 
 
 # =============================================================================
@@ -566,10 +681,10 @@ class TestSigtermMidBatchResume:
             )
         )
 
-        audited_orders = _build_synthetic_audit_orders(n=2)
+        audited_contexts = _build_synthetic_contexts(n=2)
         run_pipeline(
-            audited_orders,
-            transport=_cassette_for_orders(audited_orders),
+            audited_contexts,
+            transport=_cassette_for_contexts(audited_contexts),
             audit_store=audit_store,
             batch_run_store=InMemoryBatchRunStore(),
             llm_config=_llm_config(),
@@ -584,8 +699,8 @@ class TestSigtermMidBatchResume:
             run_id="run-recon",
             code_version="v0.1.0+test",
             audit_ids=(
-                audited_orders[0].audit_id,
-                audited_orders[1].audit_id,
+                audited_contexts[0].order.audit_id,
+                audited_contexts[1].order.audit_id,
                 "audit-unaudited",
             ),
             anthropic_batch_id="msgbatch_recon",
@@ -602,8 +717,8 @@ class TestSigtermMidBatchResume:
         )
 
         assert submitted_batch.batch_id in report.polled_batch_ids
-        assert audited_orders[0].audit_id in report.completed_audit_ids
-        assert audited_orders[1].audit_id in report.completed_audit_ids
+        assert audited_contexts[0].order.audit_id in report.completed_audit_ids
+        assert audited_contexts[1].order.audit_id in report.completed_audit_ids
         assert "audit-unaudited" in report.failed_audit_ids
 
     def test_resume_advances_batch_run_to_complete_when_all_audited(
@@ -651,21 +766,38 @@ _AUDIT_ID = st.text(
 ).map(lambda s: f"audit-{s}")
 
 
+_CLASSIFICATIONS_STRAT = st.sampled_from(
+    [
+        "APPROPRIATE",
+        "INAPPROPRIATE",
+        "NEEDS_REVIEW",
+        "INSUFFICIENT_EVIDENCE",
+        "POTENTIALLY_INAPPROPRIATE",
+    ]
+)
+
+
 class TestReplayIdempotencyProperty:
     @given(
         n_results=st.integers(min_value=1, max_value=10),
         seed=st.integers(min_value=0, max_value=10_000),
+        classification=_CLASSIFICATIONS_STRAT,
     )
     @settings(max_examples=15, deadline=None)
     def test_applying_same_batch_response_twice_writes_no_new_rows(
-        self, n_results: int, seed: int, tmp_path_factory: pytest.TempPathFactory
+        self,
+        n_results: int,
+        seed: int,
+        classification: str,
+        tmp_path_factory: pytest.TempPathFactory,
     ) -> None:
-        """For any synthetic RawBatchResponse of N results, applying it
-        twice produces zero new audit_results rows on the second pass.
+        """For any synthetic RawBatchResponse of N results varying over
+        every valid Classification, applying it twice produces zero
+        new audit_results rows on the second pass.
 
-        Implementation lands in GREEN; here we pin the contract via
-        :func:`apply_batch_results`'s typed return — which must report
-        zero ``audit_ids_persisted`` on the second call."""
+        Codex LOW #11: classification varies across the Literal set so
+        the property covers more than the happy-path APPROPRIATE
+        responses."""
         from pathlib import Path
 
         from bba.audit_store import AuditStore, AuditStoreConfig
@@ -677,17 +809,28 @@ class TestReplayIdempotencyProperty:
             )
         )
         synthetic_response = _build_synthetic_raw_batch_response(
-            n_results=n_results, seed=seed
+            n_results=n_results, seed=seed, classification=classification
         )
+        # apply_batch_results requires a context per custom_id (no
+        # silent fabrication of clinical data — Codex HIGH #5).
+        contexts = {
+            result.custom_id: _row_context(
+                audit_id=result.custom_id,
+                classification="POTENTIALLY_INAPPROPRIATE",
+            )
+            for result in synthetic_response.results
+        }
         first = apply_batch_results(
             synthetic_response,
             audit_store=audit_store,
             run_id="run-replay",
+            contexts=contexts,
         )
         second = apply_batch_results(
             synthetic_response,
             audit_store=audit_store,
             run_id="run-replay",
+            contexts=contexts,
         )
         assert first.audit_ids_persisted  # at least one row written first pass
         assert (
@@ -696,7 +839,7 @@ class TestReplayIdempotencyProperty:
 
 
 def _build_synthetic_raw_batch_response(
-    *, n_results: int, seed: int
+    *, n_results: int, seed: int, classification: str = "APPROPRIATE"
 ) -> RawBatchResponse:
     """Build a synthetic RawBatchResponse for property testing.
 
@@ -720,7 +863,7 @@ def _build_synthetic_raw_batch_response(
                         "type": "tool_use",
                         "name": "classify_audit",
                         "input": {
-                            "classification": "APPROPRIATE",
+                            "classification": classification,
                             "indications": [],
                             "negative_evidence": [],
                             "reasoning_summary_en": f"synthetic-{seed}-{i}",
@@ -769,10 +912,10 @@ class TestEndToEndSmoke:
                 root_dir=tmp_path / "store", code_version="v0.1.0+test"
             )
         )
-        synthetic_orders = _build_synthetic_audit_orders(n=5)
+        synthetic_contexts = _build_synthetic_contexts(n=5)
         result = run_pipeline(
-            synthetic_orders,
-            transport=_cassette_for_orders(synthetic_orders),
+            synthetic_contexts,
+            transport=_cassette_for_contexts(synthetic_contexts),
             audit_store=audit_store,
             batch_run_store=InMemoryBatchRunStore(),
             llm_config=_llm_config(),
@@ -781,6 +924,30 @@ class TestEndToEndSmoke:
         )
         assert isinstance(result, PipelineRunResult)
         assert len(result.audit_ids_persisted) == 5
+
+        # AC ⑤ + Codex MEDIUM #9: assert classifications + provenance
+        # per branch — every row, not just the count.
+        rows = {
+            row.audit_id: row
+            for row in audit_store.read_audit_results(run_id="run-smoke")
+        }
+        for ctx in synthetic_contexts:
+            persisted = rows[ctx.order.audit_id]
+            if ctx.classifier_result.classification in {
+                "APPROPRIATE",
+                "INSUFFICIENT_EVIDENCE",
+                "INAPPROPRIATE",
+            }:
+                # deterministic-final path: final == rule
+                assert persisted.final_classification == ctx.classifier_result.classification
+                assert persisted.model_id == "deterministic"
+            else:
+                # LLM path: final classification comes from the cassette
+                # response (APPROPRIATE) but rule_classification echoes
+                # the deterministic input (POTENTIALLY_INAPPROPRIATE).
+                assert persisted.rule_classification == ctx.classifier_result.classification
+                assert persisted.final_classification == "APPROPRIATE"
+                assert "sonnet" in persisted.model_id
 
     def test_smoke_emits_no_orphan_llm_calls(self, tmp_path: object) -> None:
         from pathlib import Path
@@ -793,10 +960,10 @@ class TestEndToEndSmoke:
                 root_dir=tmp_path / "store", code_version="v0.1.0+test"
             )
         )
-        synthetic_orders = _build_synthetic_audit_orders(n=5)
+        synthetic_contexts = _build_synthetic_contexts(n=5)
         result = run_pipeline(
-            synthetic_orders,
-            transport=_cassette_for_orders(synthetic_orders),
+            synthetic_contexts,
+            transport=_cassette_for_contexts(synthetic_contexts),
             audit_store=audit_store,
             batch_run_store=InMemoryBatchRunStore(),
             llm_config=_llm_config(),
@@ -804,29 +971,33 @@ class TestEndToEndSmoke:
             run_id="run-smoke",
         )
         assert result.orphan_audit_ids == ()
+        # No orphan llm_calls in the audit_store reconcile path either.
+        reconcile_report = audit_store.reconcile(run_id="run-smoke")
+        assert reconcile_report.orphan_call_ids == ()
 
 
-def _build_synthetic_audit_orders(*, n: int) -> Sequence[AuditOrder]:
-    """Build n synthetic AuditOrders.
+def _build_synthetic_contexts(*, n: int) -> Sequence[PipelineRowContext]:
+    """Build n synthetic :class:`PipelineRowContext` rows covering the
+    five distinct Hb-tier outcomes (cycled).
 
-    Each order has a distinct ``audit_id`` so the cassette key
-    (``model``, ``sorted(custom_ids)``) is well-formed. The fixture
-    covers PRD §"4 Hb-tier branches + INSUFFICIENT_EVIDENCE" via the
-    accompanying cassette response shape — at the AuditOrder level
-    every row is structurally identical because the Hb-tier
-    classification is produced downstream."""
+    The pipeline routes contexts whose ``classifier_result.classification``
+    is APPROPRIATE / INSUFFICIENT_EVIDENCE / INAPPROPRIATE directly to
+    persistence (no LLM call). Contexts classified as POTENTIALLY_INAPPROPRIATE
+    or NEEDS_REVIEW route through the LLM stage, where the cassette
+    transport supplies the response.
+    """
+    classifications: tuple[Classification, ...] = (
+        "POTENTIALLY_INAPPROPRIATE",  # routes via LLM
+        "APPROPRIATE",                # deterministic-final
+        "INSUFFICIENT_EVIDENCE",      # deterministic-final (missing Hb)
+        "POTENTIALLY_INAPPROPRIATE",  # routes via LLM
+        "POTENTIALLY_INAPPROPRIATE",  # routes via LLM
+    )
     return tuple(
-        AuditOrder(
+        _row_context(
             audit_id=f"audit-smoke-{i:03d}",
-            hn=f"HN{i:06d}",
-            an=f"AN{i:06d}",
-            reqno=f"REQ-{i:05d}",
-            order_datetime=_RUN_TS,
-            anchor_imputed=False,
-            products_ordered=("LPRC",),
-            age_years=55,
-            sex="M",
-            diagnosis_codes=("D62",),
+            classification=classifications[i % len(classifications)],
+            hb_value=7.5 if i % 2 == 0 else 9.0,
         )
         for i in range(n)
     )
@@ -929,27 +1100,30 @@ class TestAdversarialQuoteGrounderRoutesToNeedsReview:
                 root_dir=tmp_path / "store", code_version="v0.1.0+test"
             )
         )
-        # Adversarial cassette: the LLM returns plausible-looking
-        # citations whose verbatim quotes are NOT present in the
-        # redacted bundle. quote_grounder rejects them all; the
-        # winning-attempt rule then surfaces NEEDS_REVIEW.
-        orders = _build_adversarial_quote_grounder_orders()
+        # Adversarial verifier: every Tier-1 citation rejected. The
+        # winning-attempt rule then surfaces NEEDS_REVIEW with
+        # ``hallucination_suspect`` (user constraint #6).
+        contexts = _build_adversarial_quote_grounder_contexts()
+
+        def reject_all(result: object, ctx: object) -> bool:
+            _ = (result, ctx)
+            return False
+
         run_pipeline(
-            orders,
-            transport=_cassette_for_orders(
-                orders,
-                classification="NEEDS_REVIEW",
-                review_reason="quote_grounder_all_rejected",
-            ),
+            contexts,
+            transport=_cassette_for_contexts(contexts),
             audit_store=audit_store,
             batch_run_store=InMemoryBatchRunStore(),
             llm_config=_llm_config(),
             pipeline_config=_pipeline_config(),
             run_id="run-adv-grounder",
+            verifier=reject_all,
         )
         rows = audit_store.read_audit_results(run_id="run-adv-grounder")
+        assert len(rows) == len(contexts)
         assert all(row.final_classification == "NEEDS_REVIEW" for row in rows)
-        assert all(row.review_reason is not None for row in rows)
+        assert all(row.review_reason == "hallucination_suspect" for row in rows)
+        assert all(row.verifier_pass is False for row in rows)
 
 
 class TestAdversarialVitalsExtractorPropagates:
@@ -970,10 +1144,10 @@ class TestAdversarialVitalsExtractorPropagates:
                 root_dir=tmp_path / "store", code_version="v0.1.0+test"
             )
         )
-        orders = _build_adversarial_vitals_orders()
+        contexts = _build_adversarial_vitals_contexts()
         run_pipeline(
-            orders,
-            transport=_cassette_for_orders(orders),
+            contexts,
+            transport=_cassette_for_contexts(contexts),
             audit_store=audit_store,
             batch_run_store=InMemoryBatchRunStore(),
             llm_config=_llm_config(),
@@ -983,52 +1157,43 @@ class TestAdversarialVitalsExtractorPropagates:
         rows = audit_store.read_audit_results(run_id="run-adv-vitals")
         # vitals_source must reflect the LLM-fallback provenance, not
         # default to "regex" (which would mask the quality signal).
-        assert all(row.vitals_source != "regex" for row in rows if row.vitals_source)
+        # Codex MEDIUM #8: every row asserted (not filtered out).
+        assert len(rows) == len(contexts)
+        assert all(row.vitals_source is not None for row in rows)
+        assert all(
+            row.vitals_source == SourceProvenance.LLM_EXTRACTED.value for row in rows
+        )
 
 
-def _build_adversarial_quote_grounder_orders() -> Sequence[AuditOrder]:
-    """Build orders for the adversarial-quote-grounder scenario.
+def _build_adversarial_quote_grounder_contexts() -> Sequence[PipelineRowContext]:
+    """Build contexts for the adversarial-quote-grounder scenario.
 
-    The paired cassette response (built by :func:`_cassette_for_orders`
-    with classification=NEEDS_REVIEW) simulates the case where every
-    Tier-1 citation is rejected by :mod:`bba.quote_grounder` — the
-    winning-attempt rule then routes the row to NEEDS_REVIEW with
-    ``hallucination_suspect``."""
+    Every context routes via the LLM (POTENTIALLY_INAPPROPRIATE), and
+    the paired verifier (injected into run_pipeline) rejects every
+    attempt — the winning-attempt rule then surfaces NEEDS_REVIEW
+    with ``hallucination_suspect`` (user constraint #6)."""
     return tuple(
-        AuditOrder(
+        _row_context(
             audit_id=f"audit-adv-grounder-{i:03d}",
-            hn=f"HN_ADV{i:04d}",
-            an=f"AN_ADV{i:04d}",
-            reqno=f"REQ-ADV-{i:04d}",
-            order_datetime=_RUN_TS,
-            anchor_imputed=False,
-            products_ordered=("LPRC",),
-            age_years=60,
-            sex="F",
-            diagnosis_codes=("D62",),
+            classification="POTENTIALLY_INAPPROPRIATE",
+            hb_value=8.0,
         )
         for i in range(3)
     )
 
 
-def _build_adversarial_vitals_orders() -> Sequence[AuditOrder]:
-    """Build orders for the adversarial-vitals-extractor scenario.
+def _build_adversarial_vitals_contexts() -> Sequence[PipelineRowContext]:
+    """Build contexts for the adversarial-vitals-extractor scenario.
 
-    The paired cassette response carries an LLM-fallback provenance
-    flag so the audit row's ``vitals_source`` reflects the data
-    quality signal — never the silent default."""
+    The vitals source on every context is :attr:`SourceProvenance.LLM_EXTRACTED`
+    so the persisted audit row carries the fallback provenance — the
+    pipeline must propagate it verbatim, not default to the regex
+    provenance."""
     return tuple(
-        AuditOrder(
+        _row_context(
             audit_id=f"audit-adv-vitals-{i:03d}",
-            hn=f"HN_VIT{i:04d}",
-            an=f"AN_VIT{i:04d}",
-            reqno=f"REQ-VIT-{i:04d}",
-            order_datetime=_RUN_TS,
-            anchor_imputed=False,
-            products_ordered=("LPRC",),
-            age_years=70,
-            sex="M",
-            diagnosis_codes=("D62",),
+            classification="POTENTIALLY_INAPPROPRIATE",
+            vitals_source=SourceProvenance.LLM_EXTRACTED,
         )
         for i in range(2)
     )

@@ -42,6 +42,7 @@ from bba.audit_pipeline.models import (
     AuditPipelineConfig,
     BatchRun,
     BatchRunState,
+    PipelineRowContext,
     PipelineRunResult,
     ResumeReport,
 )
@@ -66,6 +67,7 @@ __all__ = [
     "BatchStateTransitionError",
     "InMemoryBatchRunStore",
     "LiveAnthropicApiError",
+    "PipelineRowContext",
     "PipelineRunResult",
     "ResumeReconciliationError",
     "ResumeReport",
