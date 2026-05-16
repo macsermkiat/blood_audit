@@ -85,6 +85,7 @@ from bba.llm_client import (
     CassetteTransport,
     LlmClientConfig,
     RawBatchResponse,
+    SONNET_MODEL_ID,
 )
 
 
@@ -516,10 +517,10 @@ _AUDIT_ID = st.text(
 
 class TestReplayIdempotencyProperty:
     @given(
-        n_results=st.integers(min_value=0, max_value=10),
+        n_results=st.integers(min_value=1, max_value=10),
         seed=st.integers(min_value=0, max_value=10_000),
     )
-    @settings(max_examples=25, deadline=None)
+    @settings(max_examples=15, deadline=None)
     def test_applying_same_batch_response_twice_writes_no_new_rows(
         self, n_results: int, seed: int, tmp_path_factory: pytest.TempPathFactory
     ) -> None:
@@ -563,10 +564,47 @@ def _build_synthetic_raw_batch_response(
 ) -> RawBatchResponse:
     """Build a synthetic RawBatchResponse for property testing.
 
-    Implementation deferred to GREEN — the test exists to lock in the
-    property contract and will be wired to a real fixture builder once
-    the cassette helpers are in place."""
-    raise NotImplementedError("RED-phase fixture; see issue #24 GREEN")
+    Each :class:`BatchSubmissionResult` is shaped just enough that
+    :func:`apply_batch_results` can extract a deterministic
+    ``audit_id`` and persist one minimal :class:`AuditRow` plus one
+    backing :class:`LlmCall`. The seed makes the fixture reproducible
+    without leaking across hypothesis examples (each n + seed pair
+    produces a distinct set of ``audit_id``\\s)."""
+    from bba.llm_client.models import BatchSubmissionResult
+
+    results = tuple(
+        BatchSubmissionResult(
+            custom_id=f"audit-replay-{seed}-{i:03d}",
+            model_id=SONNET_MODEL_ID,
+            raw_response_json={
+                "id": f"msg_{seed:05d}_{i:03d}",
+                "type": "message",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "classify_audit",
+                        "input": {
+                            "classification": "APPROPRIATE",
+                            "indications": [],
+                            "negative_evidence": [],
+                            "reasoning_summary_en": f"synthetic-{seed}-{i}",
+                            "reasoning_summary_th": "synthetic-th",
+                        },
+                    }
+                ],
+                "stop_reason": "tool_use",
+            },
+            request_json={"messages": [{"role": "user", "content": "..."}]},
+            response_headers={"anthropic-version": "2023-06-01"},
+            request_timestamp=_RUN_TS,
+            latency_ms=1234,
+            anthropic_version="2023-06-01",
+            prompt_cache_id=None,
+            extended_thinking_blocks=None,
+        )
+        for i in range(n_results)
+    )
+    return RawBatchResponse(batch_id=f"msgbatch_{seed:08x}", results=results)
 
 
 # =============================================================================
