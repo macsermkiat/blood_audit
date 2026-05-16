@@ -17,7 +17,7 @@ not concern themselves with cohort precedence.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from bba.cohort_detector.models import (
     BloodOrderEvent,
@@ -176,7 +176,7 @@ def normalize_icd9(code: str) -> str:
     The ICD-9-CM Vol 3 prefix matchers operate on dot-stripped form
     (``"36.01"`` and ``"3601"`` both normalize to ``"3601"``).
     """
-    raise NotImplementedError("RED-phase scaffold — implementation pending")
+    return code.strip().replace(".", "")
 
 
 def is_cardiac_surgery_code(code: str, or_flag: bool) -> bool:
@@ -192,7 +192,12 @@ def is_cardiac_surgery_code(code: str, or_flag: bool) -> bool:
 
     All three conditions must hold; missing any one returns False.
     """
-    raise NotImplementedError("RED-phase scaffold — implementation pending")
+    if not or_flag:
+        return False
+    normalized = normalize_icd9(code)
+    if normalized in CARDIAC_SURGERY_EXCLUDED_CODES:
+        return False
+    return normalized.startswith(CARDIAC_SURGERY_CODE_PREFIXES)
 
 
 def is_ortho_surgery_code(code: str, or_flag: bool) -> bool:
@@ -202,30 +207,83 @@ def is_ortho_surgery_code(code: str, or_flag: bool) -> bool:
     :data:`ORTHO_SURGERY_CODE_PREFIXES` and no separate exclusion set —
     the orthopedic seed is conservative enough at Phase 1.
     """
-    raise NotImplementedError("RED-phase scaffold — implementation pending")
+    if not or_flag:
+        return False
+    normalized = normalize_icd9(code)
+    return normalized.startswith(ORTHO_SURGERY_CODE_PREFIXES)
+
+
+def _drug_matches_keywords(drug: str, keywords: Sequence[str]) -> bool:
+    """Case-insensitive substring match against a keyword list."""
+    haystack = drug.lower()
+    return any(keyword.lower() in haystack for keyword in keywords)
 
 
 def is_dialysis_med(drug: str) -> bool:
     """True iff ``drug`` (case-insensitive) contains any keyword in
     :data:`DIALYSIS_MED_KEYWORDS`."""
-    raise NotImplementedError("RED-phase scaffold — implementation pending")
+    return _drug_matches_keywords(drug, DIALYSIS_MED_KEYWORDS)
 
 
 def is_chemo_med(drug: str) -> bool:
     """True iff ``drug`` (case-insensitive) contains any keyword in
     :data:`CHEMO_MED_KEYWORDS`."""
-    raise NotImplementedError("RED-phase scaffold — implementation pending")
+    return _drug_matches_keywords(drug, CHEMO_MED_KEYWORDS)
 
 
 def is_neutropenic(anc: int | None) -> bool:
     """True iff ``anc`` is non-None AND strictly less than
     :data:`ANC_NEUTROPENIA_THRESHOLD`. Missing ANC (``None``) is NOT
     neutropenic — Round 2 N3 requires positive evidence, not absence."""
-    raise NotImplementedError("RED-phase scaffold — implementation pending")
+    if anc is None:
+        return False
+    return anc < ANC_NEUTROPENIA_THRESHOLD
+
+
+def _icd10_code_matches_prefix(code: str, prefix: str) -> bool:
+    """ICD-10 boundary-safe prefix match.
+
+    Mirrors :func:`bba.audit_orders.rules._code_matches_prefix`. The
+    rule is structured around the 3-char category boundary:
+
+    * 1- or 2-char partial-chapter prefixes (``"O"``, ``"C8"``) match
+      the prefix followed by digits (``"C8"`` matches ``"C81"`` and
+      ``"C83.30"``).
+    * 3-char category prefixes (``"D55"``, ``"I50"``, ``"N18"``) match
+      the bare code or the code followed by ``"."`` and a subcategory.
+      Digit continuation past the 3-char boundary is forbidden:
+      ``"D550"`` is NOT ``"D55"`` — it's a different category.
+    * Explicit subcategory prefixes (``"N18.5"``) match the bare code
+      or further subdivisions following a digit (``"N18.50"``). The
+      "3-char boundary" rule does not apply once the prefix has crossed
+      the dot.
+    """
+    if not code.startswith(prefix):
+        return False
+    if len(code) == len(prefix):
+        return True
+    next_char = code[len(prefix)]
+    if next_char == ".":
+        return True
+    if not next_char.isdigit():
+        return False
+    # Digit continuation: forbidden only when crossing the 3-char
+    # category boundary (no dot yet AND prefix length already >= 3).
+    if "." not in prefix and len(prefix) >= 3:
+        return False
+    return True
+
+
+def _first_match(codes: Sequence[str], prefixes: Sequence[str]) -> str | None:
+    for code in codes:
+        for prefix in prefixes:
+            if _icd10_code_matches_prefix(code, prefix):
+                return code
+    return None
 
 
 def find_recent_cardiac_surgery(
-    events: Sequence[OperativeEvent], anchor: object
+    events: Sequence[OperativeEvent], anchor: datetime
 ) -> OperativeEvent | None:
     """Return the most-recent cardiac-surgery event within
     :data:`CARDIAC_SURGERY_LOOKBACK` of ``anchor``, or None.
@@ -234,18 +292,36 @@ def find_recent_cardiac_surgery(
     after the anchor are ignored — surgery cannot be retroactively
     pre-anchor.
     """
-    raise NotImplementedError("RED-phase scaffold — implementation pending")
+    cutoff = anchor - CARDIAC_SURGERY_LOOKBACK
+    candidates = [
+        ev
+        for ev in events
+        if is_cardiac_surgery_code(ev.icd9, ev.or_flag)
+        and cutoff <= ev.operative_datetime <= anchor
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda ev: ev.operative_datetime)
 
 
 def find_recent_ortho_surgery(
-    events: Sequence[OperativeEvent], anchor: object
+    events: Sequence[OperativeEvent], anchor: datetime
 ) -> OperativeEvent | None:
     """Mirror of :func:`find_recent_cardiac_surgery` for orthopedic codes.
 
     Uses the same lookback window. (PRD §5 does not separately tighten
     the ortho window; surgical recovery timelines are similar.)
     """
-    raise NotImplementedError("RED-phase scaffold — implementation pending")
+    cutoff = anchor - CARDIAC_SURGERY_LOOKBACK
+    candidates = [
+        ev
+        for ev in events
+        if is_ortho_surgery_code(ev.icd9, ev.or_flag)
+        and cutoff <= ev.operative_datetime <= anchor
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda ev: ev.operative_datetime)
 
 
 def find_cardiac_history_diagnosis(
@@ -255,7 +331,7 @@ def find_cardiac_history_diagnosis(
     :data:`CARDIAC_HISTORY_ICD10_PREFIXES` under the boundary rules of
     :func:`bba.audit_orders.rules._code_matches_prefix`, or None.
     """
-    raise NotImplementedError("RED-phase scaffold — implementation pending")
+    return _first_match(diagnosis_codes, sorted(CARDIAC_HISTORY_ICD10_PREFIXES))
 
 
 def find_esrd_diagnosis(diagnosis_codes: Sequence[str]) -> str | None:
@@ -266,19 +342,25 @@ def find_esrd_diagnosis(diagnosis_codes: Sequence[str]) -> str | None:
     audit_orders.tma): ``"N18.5"`` matches the bare code or ``"N18.5"``
     + further subdivisions.
     """
-    raise NotImplementedError("RED-phase scaffold — implementation pending")
+    return _first_match(diagnosis_codes, sorted(ESRD_ICD10_CODES))
 
 
 def find_dialysis_med(meds: Sequence[MedEvent]) -> MedEvent | None:
     """Return the first :class:`MedEvent` whose ``drug`` matches
     :func:`is_dialysis_med`, or None."""
-    raise NotImplementedError("RED-phase scaffold — implementation pending")
+    for med in meds:
+        if is_dialysis_med(med.drug):
+            return med
+    return None
 
 
 def find_chemo_med(meds: Sequence[MedEvent]) -> MedEvent | None:
     """Return the first :class:`MedEvent` whose ``drug`` matches
     :func:`is_chemo_med`, or None."""
-    raise NotImplementedError("RED-phase scaffold — implementation pending")
+    for med in meds:
+        if is_chemo_med(med.drug):
+            return med
+    return None
 
 
 def find_heme_malignancy_diagnosis(
@@ -286,27 +368,46 @@ def find_heme_malignancy_diagnosis(
 ) -> str | None:
     """Return the first ICD-10 code in ``diagnosis_codes`` matching
     :data:`HEME_MALIGNANCY_ICD10_PREFIXES`, or None."""
-    raise NotImplementedError("RED-phase scaffold — implementation pending")
+    return _first_match(diagnosis_codes, HEME_MALIGNANCY_ICD10_PREFIXES)
 
 
 def detect_mtp_pattern(
-    orders: Sequence[BloodOrderEvent], anchor: object
+    orders: Sequence[BloodOrderEvent], anchor: datetime
 ) -> BloodOrderEvent | None:
     """Return the order that triggered MTP detection, or None.
 
     Two arms, either of which fires the rule:
 
-    * Cluster: total ``rbc_units`` across orders within a
-      :data:`MTP_TIME_WINDOW` window centered on (or ending at) the
-      anchor sums to >= :data:`MTP_RBC_UNIT_THRESHOLD`. The triggering
-      order is the latest order in the window.
+    * Cluster: total ``rbc_units`` across orders within
+      ``[anchor - MTP_TIME_WINDOW, anchor]`` sums to >=
+      :data:`MTP_RBC_UNIT_THRESHOLD`. The triggering order is the
+      latest order in the window.
     * Co-order: any single order in the window has both
       ``co_ordered_with_ffp`` and ``co_ordered_with_platelets`` True.
 
-    The window is half-open ``[anchor - 1h, anchor]`` so an order at
-    exactly ``anchor - 1h`` is included; one strictly outside is not.
+    The window is closed-closed: an order at exactly ``anchor - 1h`` is
+    included; one strictly outside is not. Orders after the anchor are
+    ignored.
     """
-    raise NotImplementedError("RED-phase scaffold — implementation pending")
+    cutoff = anchor - MTP_TIME_WINDOW
+    in_window = [
+        order
+        for order in orders
+        if cutoff <= order.timestamp <= anchor
+    ]
+    if not in_window:
+        return None
+    co_ordered = [
+        order
+        for order in in_window
+        if order.co_ordered_with_ffp and order.co_ordered_with_platelets
+    ]
+    if co_ordered:
+        return max(co_ordered, key=lambda o: o.timestamp)
+    total_units = sum(order.rbc_units for order in in_window)
+    if total_units >= MTP_RBC_UNIT_THRESHOLD:
+        return max(in_window, key=lambda o: o.timestamp)
+    return None
 
 
 __all__: Sequence[str] = (

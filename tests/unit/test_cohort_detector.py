@@ -842,6 +842,34 @@ class TestPredicateHelpers:
         # CKD stage 4 is NOT ESRD.
         assert find_esrd_diagnosis(("N18.4",)) is None
 
+    def test_find_esrd_diagnosis_n18_50_subdivision_matches(self) -> None:
+        # Some ICD-10 jurisdictions split N18.5 further (e.g., N18.50).
+        # The matcher must accept further subdivisions after the dot.
+        assert find_esrd_diagnosis(("N18.50",)) == "N18.50"
+
+    def test_find_esrd_diagnosis_n186_subdivision_matches(self) -> None:
+        assert find_esrd_diagnosis(("N18.69",)) == "N18.69"
+
+    def test_find_cardiac_history_d550_does_not_match_d55(self) -> None:
+        # Defense-in-depth: "D550" (no dot) is a different ICD-10 category
+        # from "D55" — the matcher must not collapse the boundary even
+        # though the prefix list here is I-codes, not D-codes. Use a
+        # cardiac-history call as a proxy for the same matcher logic:
+        # an "I250" without dot is NOT "I25".
+        assert find_cardiac_history_diagnosis(("I250",)) is None
+
+    def test_find_cardiac_history_i25_dotted_subcategories_match(self) -> None:
+        assert find_cardiac_history_diagnosis(("I25.10",)) == "I25.10"
+        assert find_cardiac_history_diagnosis(("I25.110",)) == "I25.110"
+
+    def test_find_heme_letter_continuation_does_not_match(self) -> None:
+        # Defense-in-depth: garbled code "C8X" (letter where a digit
+        # belongs) must NOT match the C8 chapter prefix. Real ICD-10
+        # 7th-character extensions are letters but are positioned after
+        # subcategory digits + dot — they never directly follow a 2-char
+        # chapter prefix.
+        assert find_heme_malignancy_diagnosis(("C8X",)) is None
+
     def test_find_dialysis_med_returns_event(self) -> None:
         meds = (_med("paracetamol"), _med("sevelamer"))
         match = find_dialysis_med(meds)
