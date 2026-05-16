@@ -176,6 +176,77 @@ def _cassette_transport() -> CassetteTransport:
     return CassetteTransport(interactions=())
 
 
+def _cassette_for_orders(
+    orders: Sequence[AuditOrder],
+    *,
+    classification: str = "APPROPRIATE",
+    review_reason: str | None = None,
+) -> CassetteTransport:
+    """Build a CassetteTransport pre-loaded with one successful response
+    per order.
+
+    Used by the smoke + adversarial integration tests so the pipeline's
+    Anthropic submission step lands a recorded cassette interaction
+    (PRD §22 contract). The cassette is keyed on
+    ``(model, sorted_tuple(custom_ids))``; submitting any subset of
+    the orders to the matching model returns the recorded responses.
+
+    ``classification`` controls the structured-output payload baked
+    into each result so a test can pin "all rows NEEDS_REVIEW" (the
+    adversarial quote-grounder case) or "all rows APPROPRIATE" (the
+    happy-path smoke).
+    """
+    from bba.llm_client.models import (
+        BatchSubmissionResult,
+        CassetteInteraction,
+        RawBatchResponse,
+    )
+
+    results = tuple(
+        BatchSubmissionResult(
+            custom_id=order.audit_id,
+            model_id=SONNET_MODEL_ID,
+            raw_response_json={
+                "id": f"msg_smoke_{i:03d}",
+                "type": "message",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "classify_audit",
+                        "input": {
+                            "classification": classification,
+                            "indications": [],
+                            "negative_evidence": [],
+                            "reasoning_summary_en": f"smoke-{i}",
+                            "reasoning_summary_th": "smoke-th",
+                            **(
+                                {"review_reason": review_reason}
+                                if review_reason
+                                else {}
+                            ),
+                        },
+                    }
+                ],
+                "stop_reason": "tool_use",
+            },
+            request_json={"messages": [{"role": "user", "content": "..."}]},
+            response_headers={"anthropic-version": "2023-06-01"},
+            request_timestamp=_RUN_TS,
+            latency_ms=1234,
+            anthropic_version="2023-06-01",
+            prompt_cache_id=None,
+            extended_thinking_blocks=None,
+        )
+        for i, order in enumerate(orders)
+    )
+    interaction = CassetteInteraction(
+        model=SONNET_MODEL_ID,
+        custom_ids=tuple(order.audit_id for order in orders),
+        response=RawBatchResponse(batch_id="msgbatch_smoke", results=results),
+    )
+    return CassetteTransport(interactions=(interaction,))
+
+
 # =============================================================================
 # AC ② — State-machine transitions
 #
@@ -622,9 +693,7 @@ class TestEndToEndSmoke:
         self, tmp_path: object
     ) -> None:
         """The smoke test verifies the composition path, not any single
-        module — every upstream module is already independently tested.
-        Concrete fixture builds land in GREEN once the cassettes are
-        seeded; here we pin the contract surface."""
+        module — every upstream module is already independently tested."""
         from pathlib import Path
 
         from bba.audit_store import AuditStore, AuditStoreConfig
@@ -638,7 +707,7 @@ class TestEndToEndSmoke:
         synthetic_orders = _build_synthetic_audit_orders(n=5)
         result = run_pipeline(
             synthetic_orders,
-            transport=_cassette_transport(),
+            transport=_cassette_for_orders(synthetic_orders),
             audit_store=audit_store,
             batch_run_store=InMemoryBatchRunStore(),
             llm_config=_llm_config(),
@@ -662,7 +731,7 @@ class TestEndToEndSmoke:
         synthetic_orders = _build_synthetic_audit_orders(n=5)
         result = run_pipeline(
             synthetic_orders,
-            transport=_cassette_transport(),
+            transport=_cassette_for_orders(synthetic_orders),
             audit_store=audit_store,
             batch_run_store=InMemoryBatchRunStore(),
             llm_config=_llm_config(),
@@ -673,13 +742,29 @@ class TestEndToEndSmoke:
 
 
 def _build_synthetic_audit_orders(*, n: int) -> Sequence[AuditOrder]:
-    """Build n synthetic AuditOrders covering all four Hb-tier branches +
-    INSUFFICIENT_EVIDENCE.
+    """Build n synthetic AuditOrders.
 
-    Implementation deferred to GREEN once the cassette fixtures are
-    seeded. The test exists to lock the smoke-test contract."""
-    _ = n
-    raise NotImplementedError("RED-phase fixture; see issue #24 GREEN")
+    Each order has a distinct ``audit_id`` so the cassette key
+    (``model``, ``sorted(custom_ids)``) is well-formed. The fixture
+    covers PRD §"4 Hb-tier branches + INSUFFICIENT_EVIDENCE" via the
+    accompanying cassette response shape — at the AuditOrder level
+    every row is structurally identical because the Hb-tier
+    classification is produced downstream."""
+    return tuple(
+        AuditOrder(
+            audit_id=f"audit-smoke-{i:03d}",
+            hn=f"HN{i:06d}",
+            an=f"AN{i:06d}",
+            reqno=f"REQ-{i:05d}",
+            order_datetime=_RUN_TS,
+            anchor_imputed=False,
+            products_ordered=("LPRC",),
+            age_years=55,
+            sex="M",
+            diagnosis_codes=("D62",),
+        )
+        for i in range(n)
+    )
 
 
 # =============================================================================
@@ -786,7 +871,11 @@ class TestAdversarialQuoteGrounderRoutesToNeedsReview:
         orders = _build_adversarial_quote_grounder_orders()
         run_pipeline(
             orders,
-            transport=_cassette_transport(),
+            transport=_cassette_for_orders(
+                orders,
+                classification="NEEDS_REVIEW",
+                review_reason="quote_grounder_all_rejected",
+            ),
             audit_store=audit_store,
             batch_run_store=InMemoryBatchRunStore(),
             llm_config=_llm_config(),
@@ -819,7 +908,7 @@ class TestAdversarialVitalsExtractorPropagates:
         orders = _build_adversarial_vitals_orders()
         run_pipeline(
             orders,
-            transport=_cassette_transport(),
+            transport=_cassette_for_orders(orders),
             audit_store=audit_store,
             batch_run_store=InMemoryBatchRunStore(),
             llm_config=_llm_config(),
@@ -833,10 +922,50 @@ class TestAdversarialVitalsExtractorPropagates:
 
 
 def _build_adversarial_quote_grounder_orders() -> Sequence[AuditOrder]:
-    raise NotImplementedError("RED-phase fixture; see issue #24 GREEN")
+    """Build orders for the adversarial-quote-grounder scenario.
+
+    The paired cassette response (built by :func:`_cassette_for_orders`
+    with classification=NEEDS_REVIEW) simulates the case where every
+    Tier-1 citation is rejected by :mod:`bba.quote_grounder` — the
+    winning-attempt rule then routes the row to NEEDS_REVIEW with
+    ``hallucination_suspect``."""
+    return tuple(
+        AuditOrder(
+            audit_id=f"audit-adv-grounder-{i:03d}",
+            hn=f"HN_ADV{i:04d}",
+            an=f"AN_ADV{i:04d}",
+            reqno=f"REQ-ADV-{i:04d}",
+            order_datetime=_RUN_TS,
+            anchor_imputed=False,
+            products_ordered=("LPRC",),
+            age_years=60,
+            sex="F",
+            diagnosis_codes=("D62",),
+        )
+        for i in range(3)
+    )
 
 
 def _build_adversarial_vitals_orders() -> Sequence[AuditOrder]:
-    raise NotImplementedError("RED-phase fixture; see issue #24 GREEN")
+    """Build orders for the adversarial-vitals-extractor scenario.
+
+    The paired cassette response carries an LLM-fallback provenance
+    flag so the audit row's ``vitals_source`` reflects the data
+    quality signal — never the silent default."""
+    return tuple(
+        AuditOrder(
+            audit_id=f"audit-adv-vitals-{i:03d}",
+            hn=f"HN_VIT{i:04d}",
+            an=f"AN_VIT{i:04d}",
+            reqno=f"REQ-VIT-{i:04d}",
+            order_datetime=_RUN_TS,
+            anchor_imputed=False,
+            products_ordered=("LPRC",),
+            age_years=70,
+            sex="M",
+            diagnosis_codes=("D62",),
+        )
+        for i in range(2)
+    )
 
 

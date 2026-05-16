@@ -22,6 +22,7 @@ from collections.abc import Mapping, Sequence
 
 from bba.audit_pipeline.models import PipelineRunResult
 from bba.audit_store import AuditStore, AuditRow, LlmCall
+from bba.audit_store.models import Classification
 from bba.llm_client.models import BatchSubmissionResult, RawBatchResponse
 
 
@@ -204,7 +205,18 @@ def _build_llm_call(result: BatchSubmissionResult, *, run_id: str) -> LlmCall:
     )
 
 
-def _classification_from_result(result: BatchSubmissionResult) -> str:
+_VALID_CLASSIFICATIONS: frozenset[Classification] = frozenset(
+    {
+        "APPROPRIATE",
+        "INAPPROPRIATE",
+        "NEEDS_REVIEW",
+        "INSUFFICIENT_EVIDENCE",
+        "POTENTIALLY_INAPPROPRIATE",
+    }
+)
+
+
+def _classification_from_result(result: BatchSubmissionResult) -> Classification:
     """Extract the classification from the structured-output payload.
 
     The payload mirrors :class:`bba.llm_client.LlmClassificationResponse`
@@ -220,13 +232,9 @@ def _classification_from_result(result: BatchSubmissionResult) -> str:
         input_payload = first.get("input", {})
         if isinstance(input_payload, Mapping):
             value = input_payload.get("classification")
-            if isinstance(value, str) and value in {
-                "APPROPRIATE",
-                "INAPPROPRIATE",
-                "NEEDS_REVIEW",
-                "INSUFFICIENT_EVIDENCE",
-                "POTENTIALLY_INAPPROPRIATE",
-            }:
+            if isinstance(value, str) and value in _VALID_CLASSIFICATIONS:
+                # _VALID_CLASSIFICATIONS is the runtime mirror of the
+                # Classification Literal; membership narrows it.
                 return value
     return "NEEDS_REVIEW"
 
