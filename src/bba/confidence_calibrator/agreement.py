@@ -16,6 +16,7 @@ deterministic verdict on adversarial 3-way ties (PRD §14
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Sequence
 
 from bba.confidence_calibrator.exceptions import InvalidCalibrationDataError
@@ -33,14 +34,26 @@ def shuffle_seeds(
 
     Same ``base_seed`` + ``n_runs`` -> same returned tuple, so a re-run
     of the monthly audit reproduces the exact 3 classifications. Seeds
-    are derived from ``base_seed`` via a stable mixing function (not
-    ``base_seed + i``) so a small change in ``base_seed`` does not
-    produce three near-correlated shufflings.
+    are derived from ``sha256(f"{base_seed}:{i}")`` (not ``base_seed +
+    i``) so a small change in ``base_seed`` does not produce three
+    near-correlated shufflings.
 
     ``n_runs < 1`` or negative ``base_seed`` raises
     :class:`InvalidCalibrationDataError`.
     """
-    raise NotImplementedError("RED-phase scaffold; see issue #23")
+    if base_seed < 0:
+        raise InvalidCalibrationDataError(
+            f"base_seed must be non-negative; got {base_seed}",
+        )
+    if n_runs < 1:
+        raise InvalidCalibrationDataError(
+            f"n_runs must be >= 1; got {n_runs}",
+        )
+    seeds: list[int] = []
+    for i in range(n_runs):
+        digest = hashlib.sha256(f"{base_seed}:{i}".encode("ascii")).digest()
+        seeds.append(int.from_bytes(digest[:4], "big"))
+    return tuple(seeds)
 
 
 def agreement_confidence(
@@ -53,4 +66,24 @@ def agreement_confidence(
     :class:`InvalidCalibrationDataError`. Three-way ties resolve to the
     first-seen classification.
     """
-    raise NotImplementedError("RED-phase scaffold; see issue #23")
+    if not classifications:
+        raise InvalidCalibrationDataError(
+            "classifications must be non-empty; agreement-based confidence "
+            "requires at least one run",
+        )
+    cls_tuple = tuple(classifications)
+    counts: dict[str, int] = {}
+    for c in cls_tuple:
+        counts[c] = counts.get(c, 0) + 1
+    max_count = max(counts.values())
+    # First-seen tie-break: iterate in original order, pick the first
+    # classification that hits the max count. dict insertion order is
+    # preserved in Python 3.7+, but we walk the input tuple directly
+    # so the contract is independent of dict implementation.
+    majority = next(c for c in cls_tuple if counts[c] == max_count)
+    return AgreementResult(
+        classifications=cls_tuple,
+        majority=majority,
+        agreement_count=max_count,
+        confidence=max_count / len(cls_tuple),
+    )
