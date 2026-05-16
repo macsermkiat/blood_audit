@@ -11,7 +11,7 @@ covered: `#3 ingest`, `#4 audit_orders`, `#5 hb_lookup`, `#6 vitals_extractor`,
 `#16 evidence_bundle_builder`, `#17 deid_redactor`, `#18 quote_grounder`,
 `#19 audit_store`, `#21 prompt_builder`, `#22 llm_client`,
 `#23 confidence_calibrator`, `#24 audit_pipeline`, `#25 review_actions`,
-`#27 monitoring`, `#28 report_generator`.
+`#27 monitoring`, `#28 report_generator`, `#29 cli`.
 
 ## Ingest concepts (#3)
 
@@ -2507,6 +2507,185 @@ gates (`TestNoClinicalImports`, `TestNoSchedulerImports`,
 `TestNoLiveAnthropicInDriftProbe`) prevent accidental coupling. Cron
 scheduling itself is `#29 cli`'s job; the monitoring module exposes
 callables only.
+
+## CLI concepts (#29)
+
+### bba root group
+
+The `click.Group` named `bba`, declared at `bba.cli.main.cli`. Six
+subcommands attach to it: `ingest`, `audit`, `evaluate`, `report`,
+`serve-dashboard`, `sentinel`. The group callback installs the
+PHI-scrubbing `sys.excepthook` before any subcommand body runs, so a
+crash anywhere downstream produces a redacted traceback instead of
+leaking PHI to the operator log.
+
+### Thin-glue rule
+
+Every subcommand body is a ≤ 20-statement wrapper over an
+already-tested module entrypoint. If a subcommand grows business
+logic, the right move is to push the logic down to the module and
+re-export. The body-statement budget is enforced by
+`TestMainModuleIsThin` against the AST of each callback (decorators
+and docstrings excluded).
+
+### CLI run_id
+
+The 16-char hex prefix of `bba.ingest.RunIdentity`'s 64-char digest,
+computed over **every HOSxP-named CSV in `input_csv.parent`** plus the
+schema fingerprint plus `code_version()` (the package version from
+`importlib.metadata`). Living at `bba.cli.identity.compute_run_id`.
+
+Bundle-aware by construction: hashing only the operator's `--input`
+file would make `bba audit` blind to sibling-table edits — a freshly-
+exported `Diagnosis.csv` next to an unchanged `BDVST.csv` would
+otherwise yield the same run_id as the prior audit and the idempotency
+guard would no-op against stale results. The CLI's run_id and the
+ingest module's `RunIdentity.run_id` therefore share the same
+construction (the CLI just truncates to 16 chars for grep-friendly
+logs); they cannot drift.
+
+### Audit run store
+
+A narrow Protocol at `bba.cli.store_protocol.AuditRunStore` (six
+operations: `run_complete`, `run_count`, `record_row`,
+`mark_run_complete`, `record_idempotency_override`,
+`audit_log_entries`, `acquire_run_lock`). Phase 1 ships the
+file-backed implementation `bba.cli.audit_run_store.FileBackedAuditRunStore`
+rooted at `$BBA_DATA_DIR/audit_runs/`. A future Postgres-backed
+adapter (covered by `bba.audit_store`'s extension ticket) can
+implement the same Protocol and swap in via
+`bba.cli.main._get_audit_run_store` without touching the CLI surface.
+
+### Run lock
+
+An exclusive `fcntl.flock(LOCK_EX)` on
+`$BBA_DATA_DIR/audit_runs/run_<run_id>.lock`, exposed by
+`AuditRunStore.acquire_run_lock(run_id)` as a context manager.
+`bba_audit` wraps the check-then-act sequence
+(`run_complete` → run pipeline → `mark_run_complete`) in this lock so
+two concurrent CLI invocations on the same input cannot both pass the
+guard and double-execute. The lock is per-`run_id`; concurrent audits
+of *different* inputs run in parallel. Crash safety is OS-provided:
+a crashed process releases its kernel-held flock automatically, so a
+retry after a crash does not stall.
+
+### Idempotency override
+
+A `--force` flag on `bba audit` that causes the subcommand to skip the
+`run_complete` no-op branch and re-execute the pipeline. Each
+invocation under `--force` writes one row to the file-backed audit log
+naming the run_id, the override reason, and the wall-clock timestamp.
+The override is a compliance surface — durability is enforced by
+writing through `os.write(fd, line)` on an `O_APPEND`-opened file
+descriptor (POSIX-atomic up to `PIPE_BUF`) followed by `os.fsync(fd)`.
+
+### audit_log.jsonl
+
+The on-disk JSONL stream of idempotency-override events under
+`$BBA_DATA_DIR/audit_runs/audit_log.jsonl`. One JSON object per
+override invocation with the schema `{run_id, idempotency_override:
+true, reason, ts}`. Append-only by construction; blank lines are
+skipped on read so an editor's trailing newline never trips JSON
+parsing.
+
+### PHI scrubber
+
+The `bba.cli.phi_scrubber.scrub_traceback` function plus the
+`install_excepthook` installer. Walks the traceback frame chain and,
+for each frame: replaces PHI-named locals (whose name matches the
+prefix regex `bundle|patient|note|hn|an|encounter`, case-insensitive)
+with `<REDACTED:type=<typename> len=<N>>`, then regex-sweeps every
+remaining string value against `PHI_REGEXES` and replaces each match
+with `<REDACTED:phi>`. The scrubbed traceback is emitted through the
+structlog-to-stdlib bridge in `bba.cli._logging` so `caplog`, file
+handlers, and any SIEM forwarder all see the same redacted JSON
+event.
+
+### PHI_REGEXES
+
+The single-source-of-truth tuple of PHI patterns at
+`bba.deid_redactor.PHI_REGEXES`. Three patterns: HN/AN-shaped digit
+runs (7–10 digits), Western honorific + capitalised name tokens
+(`Mr Smith`), and Thai honorific + the trailing Thai- or Latin-script
+name span. The third matches the **full** name span — not just the
+honorific — because `pattern.sub("<REDACTED:phi>", text)` would
+otherwise leave the patient's given+family name in the operator log.
+
+`bba.cli.phi_scrubber.PHI_REGEXES` re-exports this tuple unchanged so
+the redactor and the traceback scrubber cannot drift.
+
+### Phase 1 ingest leg
+
+The Phase 1 deliverable for `bba audit`: call
+`bba.ingest.ingest(IngestConfig(...))` against `input_csv.parent` and
+record one `phase1_ingest_<table>` row marker per validated HOSxP
+table from `IngestResult.tables_written`. The LLM-driven analysis leg
+(deterministic classifier → evidence bundle → de-id → prompt → batch
+submit → quote ground → calibrate → audit_store write) requires a
+context-builder composition over `audit_orders` /
+`deterministic_classifier` / `evidence_bundle_builder` /
+`deid_redactor` / `prompt_builder` that `bba.audit_pipeline`'s contract
+explicitly delegates to its caller. When that orchestration facade
+lands, the `_run_audit_pipeline` seam delegates to it.
+
+### Zero-table guard
+
+The defensive check in `_run_audit_pipeline` that raises `CliError` if
+`IngestResult.tables_written` is empty. Real ingest raises
+`IncompleteInputError` before returning an empty tuple, but the guard
+remains so a future ingest revision cannot silently mark a run
+complete with zero row markers — keeping `run_complete=True` and
+`run_count==0` an impossible state.
+
+### Integration-contract CliError
+
+The pattern used by the four subcommands (`evaluate`, `report`,
+`serve-dashboard`, `sentinel`) whose underlying module does not yet
+expose a single-call facade matching the CLI's flag surface. Each
+body validates inputs via Pydantic, emits a structured `<sub>.start`
+log, and raises `CliError` naming the integration seam (e.g.
+`bba.cli.main.bba_evaluate`) and the underlying module's currently
+exposed primitives. The error is not a TODO — it's the CLI's
+"fail loud at the integration boundary" contract from PRD §20, and is
+the regression guard that keeps the subcommands' bodies thin until
+the underlying facades land.
+
+### Excepthook + faulthandler sidecar
+
+`install_excepthook(faulthandler_sidecar=...)` installs both
+`sys.excepthook` (which scrubs Python-level exceptions via
+`scrub_traceback` and emits the result through structlog) and an
+optional `faulthandler` redirect to `$BBA_DATA_DIR/logs/faulthandler.sidecar`.
+The sidecar covers hard interpreter crashes (e.g. SIGSEGV in a C
+extension) that bypass `sys.excepthook`; the sidecar is scrubbed on
+read, not on write — the write path is too hot to traverse frames.
+
+### Env-var allow-list
+
+The CLI reads exactly three environment variables: `BBA_DATA_DIR` (the
+audit data root), `BBA_DB_URL` (Postgres DSN for the future
+audit_store adapter), and `ANTHROPIC_API_KEY` (the live transport's
+credential). `TestEnvVarSurfaceIsTight` is a static regression guard
+that scans `src/bba/cli/` for any other `os.environ[...]` /
+`os.getenv(...)` literal and fails CI if it grows.
+
+### Sentinel cadence flag
+
+A mutually-exclusive `--weekly | --quarterly` pair on `bba sentinel`
+implemented as two `is_flag=True` booleans plus an explicit XOR check.
+The click `flag_value` shortcut silently last-wins on conflict, so
+two booleans + a body-level guard are the only way to reject "both
+flags supplied" as a usage error.
+
+### Structlog stdlib bridge
+
+`bba.cli._logging.get_logger("bba.cli")` returns a
+`structlog.stdlib.BoundLogger` configured (once per process) with the
+JSON renderer chained through `structlog.stdlib.LoggerFactory`. Every
+CLI log event renders to a JSON line and is handed to
+`logging.getLogger("bba.cli")`, so `caplog` /
+`logging.handlers.RotatingFileHandler` / SIEM forwarders all consume
+the same stream without extra adapters.
 
 ## Vocabulary not in this file
 

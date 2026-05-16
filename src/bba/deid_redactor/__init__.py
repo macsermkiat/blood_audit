@@ -17,6 +17,7 @@ to the vendored ``thai-medical-deid`` package (``TRANSFORMERS_OFFLINE=1``
 """
 
 from bba.deid_redactor.age import apply_age_cap
+from bba.deid_redactor.phi_patterns import PHI_REGEXES
 from bba.deid_redactor.canonical import (
     build_envelope,
     canonical_serialize,
@@ -92,6 +93,7 @@ __all__ = [
     "NeedsReviewReason",
     "NoteInput",
     "PATIENT_CUES",
+    "PHI_REGEXES",
     "PERSON_CLASS_TOKENS",
     "QuasiIdentifiers",
     "ROLE_CONTEXT_WINDOW",
