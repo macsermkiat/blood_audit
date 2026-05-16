@@ -169,3 +169,17 @@ def _run_audit_pipeline(*, run_id: str, input_csv: Path) -> None:
     raise NotImplementedError(
         "_run_audit_pipeline — GREEN phase wires audit_pipeline.run_pipeline"
     )
+
+
+# ---------------------------------------------------------------------------
+# Subcommand wiring — attach the six functions above onto the root group.
+# Order matches the PRD §20 enumeration so `bba --help` listing is stable.
+# ---------------------------------------------------------------------------
+
+
+cli.add_command(bba_ingest)
+cli.add_command(bba_audit)
+cli.add_command(bba_evaluate)
+cli.add_command(bba_report)
+cli.add_command(bba_serve_dashboard)
+cli.add_command(bba_sentinel)
