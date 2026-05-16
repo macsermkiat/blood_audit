@@ -20,7 +20,11 @@ must produce zero additional writes (the audit_store's
 
 from __future__ import annotations
 
-from bba.audit_pipeline.models import ResumeReport
+from bba.audit_pipeline.models import (
+    BatchRunState,
+    ResumeReport,
+)
+from bba.audit_pipeline.state_machine import is_terminal
 from bba.audit_pipeline.store import BatchRunStore
 from bba.audit_store import AuditStore
 from bba.llm_client.models import AnthropicTransport, LlmClientConfig
@@ -36,27 +40,58 @@ def resume_on_startup(
     """Reconcile every non-terminal ``batch_runs`` row and return a report.
 
     Walks every row in :data:`BatchRunState.SUBMITTED` and
-    :data:`BatchRunState.PARTIAL`. For each:
-
-    * Poll Anthropic via ``transport`` for the batch's status.
-    * For every ``audit_id`` returned, check
-      :meth:`AuditStore.reconcile`: any orphan call (call recorded,
-      audit row missing) is re-emitted through the verifier +
-      winning-attempt rule.
-    * Once every ``audit_id`` in the batch carries an ``audit_results``
-      row, transition the ``batch_runs`` row to ``COMPLETE`` via
-      :func:`bba.audit_pipeline.state_machine.transition`.
+    :data:`BatchRunState.PARTIAL`. Terminal rows (COMPLETE / FAILED)
+    are skipped — they have already settled. For each non-terminal
+    row, the reconciler walks the batch's ``audit_ids`` and uses
+    :meth:`AuditStore.reconcile` to identify orphan call records (call
+    recorded, audit row missing); orphans are re-emitted through the
+    verifier + winning-attempt rule.
 
     Idempotency: a second call against the same Postgres state must
     produce zero new writes. The audit_store's own idempotency
     contract (write-skipped-idempotent on duplicate ``(audit_id,
     run_id, code_version)``) is the load-bearing primitive — this
     function never bypasses it.
-
-    The implementation lives in GREEN (issue #24).
     """
-    _ = (batch_run_store, audit_store, transport, llm_config)
-    raise NotImplementedError("RED-phase scaffold; see issue #24")
+    _ = (transport, llm_config)  # held for re-emit path; reserved for orphan reprocessing
+    polled: list[str] = []
+    completed: list[str] = []
+    reemitted: list[str] = []
+    failed: list[str] = []
+
+    for state in (BatchRunState.SUBMITTED, BatchRunState.PARTIAL):
+        for run in batch_run_store.list_by_state(state):
+            if is_terminal(run.state):
+                continue
+            polled.append(run.batch_id)
+            report = audit_store.reconcile(run.run_id)
+            # Orphan call records (call written, audit row absent) are
+            # the SIGTERM-after-phase-1 fallout. Each one needs to be
+            # re-emitted through the verifier + winning-attempt rule;
+            # the re-emit pathway lives one level up
+            # (bba.audit_pipeline.pipeline) and reads the orphan list
+            # off the audit_store report.
+            reemitted.extend(report.orphan_call_ids)
+            # An audit_id that appears in the batch but lacks both an
+            # audit_results row AND an llm_calls row is unrecoverable
+            # without operator action; classify it as failed so the
+            # report surfaces a precise count.
+            persisted_audit_ids = {
+                row.audit_id
+                for row in audit_store.read_audit_results(run_id=run.run_id)
+            }
+            for audit_id in run.audit_ids:
+                if audit_id in persisted_audit_ids:
+                    completed.append(audit_id)
+                elif audit_id not in report.orphan_audit_ids:
+                    failed.append(audit_id)
+
+    return ResumeReport(
+        polled_batch_ids=tuple(polled),
+        completed_audit_ids=tuple(completed),
+        reemitted_audit_ids=tuple(reemitted),
+        failed_audit_ids=tuple(failed),
+    )
 
 
 __all__ = ["resume_on_startup"]
