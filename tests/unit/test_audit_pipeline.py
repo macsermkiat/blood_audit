@@ -541,6 +541,71 @@ class TestSigtermMidBatchResume:
         )
         assert isinstance(report.reemitted_audit_ids, tuple)
 
+    def test_resume_walks_submitted_batches_and_classifies_audit_ids(
+        self, tmp_path: object,
+    ) -> None:
+        """Coverage for the non-empty reconcile path.
+
+        Stage a real SUBMITTED batch with three audit_ids. Run the
+        full smoke pipeline against the first two (so audit_results
+        rows exist for them) and seed the SUBMITTED batch_run with
+        all three. resume_on_startup must:
+
+        * Walk the SUBMITTED row (polled_batch_ids includes it).
+        * Classify the two audited rows as completed_audit_ids.
+        * Classify the third (no llm_call, no audit_row) as failed.
+        """
+        from pathlib import Path
+
+        from bba.audit_store import AuditStore, AuditStoreConfig
+
+        assert isinstance(tmp_path, Path)
+        audit_store = AuditStore(
+            AuditStoreConfig(
+                root_dir=tmp_path / "store", code_version="v0.1.0+test"
+            )
+        )
+
+        audited_orders = _build_synthetic_audit_orders(n=2)
+        run_pipeline(
+            audited_orders,
+            transport=_cassette_for_orders(audited_orders),
+            audit_store=audit_store,
+            batch_run_store=InMemoryBatchRunStore(),
+            llm_config=_llm_config(),
+            pipeline_config=_pipeline_config(),
+            run_id="run-recon",
+        )
+
+        store = InMemoryBatchRunStore()
+        submitted_batch = BatchRun(
+            batch_id="batch-recon",
+            state=BatchRunState.SUBMITTED,
+            run_id="run-recon",
+            code_version="v0.1.0+test",
+            audit_ids=(
+                audited_orders[0].audit_id,
+                audited_orders[1].audit_id,
+                "audit-unaudited",
+            ),
+            anthropic_batch_id="msgbatch_recon",
+            submitted_at=_RUN_TS,
+            updated_at=_RUN_TS,
+        )
+        store.create(submitted_batch)
+
+        report = resume_on_startup(
+            batch_run_store=store,
+            audit_store=audit_store,
+            transport=_cassette_transport(),
+            llm_config=_llm_config(),
+        )
+
+        assert submitted_batch.batch_id in report.polled_batch_ids
+        assert audited_orders[0].audit_id in report.completed_audit_ids
+        assert audited_orders[1].audit_id in report.completed_audit_ids
+        assert "audit-unaudited" in report.failed_audit_ids
+
     def test_resume_advances_batch_run_to_complete_when_all_audited(
         self, tmp_path: object
     ) -> None:
