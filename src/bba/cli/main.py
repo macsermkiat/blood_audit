@@ -28,7 +28,9 @@ from typing import cast
 import click
 
 from bba.cli._logging import get_logger
+from bba.cli.audit_run_store import FileBackedAuditRunStore
 from bba.cli.exceptions import CliError
+from bba.cli.phi_scrubber import install_excepthook
 from bba.cli.identity import (
     CodeVersion,
     SchemaFingerprint,
@@ -84,7 +86,19 @@ def cli() -> None:
     See ticket #29 for the contract: six subcommands, run-level
     idempotency on ``audit``, PHI-scrubbing on uncaught exceptions, and
     no business logic in this layer.
+
+    Process-level exception scrubbing is installed before any subcommand
+    body runs so a crash anywhere downstream produces a redacted
+    traceback instead of leaking PHI to the operator log. The optional
+    faulthandler sidecar is enabled when ``BBA_DATA_DIR`` is set so a
+    hard interpreter crash (e.g. SIGSEGV in a C extension) still leaves
+    a scrubbable stack trace on disk.
     """
+    raw_data_dir = os.environ.get(_BBA_DATA_DIR_ENV)
+    sidecar: Path | None = None
+    if raw_data_dir:
+        sidecar = Path(raw_data_dir) / "logs" / "faulthandler.sidecar"
+    install_excepthook(faulthandler_sidecar=sidecar)
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +188,7 @@ def bba_audit(input_csv: Path | None, run_id: str | None, force: bool) -> None:
             "the run was not previously completed"
         )
     _run_audit_pipeline(run_id=resolved, input_csv=inputs.input_csv)
+    store.mark_run_complete(resolved)
     _log.info(
         "audit.complete",
         run_id=resolved,
@@ -239,15 +254,25 @@ def bba_serve_dashboard(port: int) -> None:
 
 
 @click.command(name="sentinel")
-@click.option("--weekly", "cadence", flag_value="weekly", default=None)
-@click.option("--quarterly", "cadence", flag_value="quarterly", default=None)
-def bba_sentinel(cadence: str | None) -> None:
-    """Run a monitoring sentinel cadence (weekly κ or quarterly golden-set)."""
-    if cadence is None:
+@click.option("--weekly", is_flag=True, default=False)
+@click.option("--quarterly", is_flag=True, default=False)
+def bba_sentinel(weekly: bool, quarterly: bool) -> None:
+    """Run a monitoring sentinel cadence (weekly κ or quarterly golden-set).
+
+    ``--weekly`` and ``--quarterly`` are mutually exclusive — supplying
+    both is a usage error (the spec requires exactly one). Click's
+    ``flag_value`` shortcut silently last-wins on conflict, so we use
+    two booleans + an explicit XOR check."""
+    if weekly and quarterly:
+        raise click.UsageError(
+            "bba sentinel --weekly and --quarterly are mutually exclusive"
+        )
+    if not (weekly or quarterly):
         raise click.UsageError(
             "bba sentinel requires exactly one of --weekly or --quarterly"
         )
-    inputs = SentinelCommandInput(cadence=cast(SentinelCadence, cadence))
+    cadence: SentinelCadence = "weekly" if weekly else "quarterly"
+    inputs = SentinelCommandInput(cadence=cadence)
     _log.info("sentinel.start", cadence=inputs.cadence)
     raise CliError(
         f"sentinel cadence={inputs.cadence}: bba.monitoring exposes "
@@ -265,57 +290,56 @@ def bba_sentinel(cadence: str | None) -> None:
 
 
 def _get_audit_run_store() -> AuditRunStore:
-    """Resolve the :class:`~bba.cli.store_protocol.AuditRunStore` from config.
+    """Resolve the :class:`~bba.cli.store_protocol.AuditRunStore`.
 
-    Reads ``BBA_DB_URL`` and constructs a Postgres-backed adapter from
-    :mod:`bba.audit_store`. Tests monkeypatch this seam to inject a
-    recording double via ``patch("bba.cli.main._get_audit_run_store",
-    ...)`` — the in-process replacement avoids spinning up a real
-    database for the unit suite.
+    Phase 1 ships a file-backed adapter
+    (:class:`~bba.cli.audit_run_store.FileBackedAuditRunStore`) rooted at
+    ``$BBA_DATA_DIR/audit_runs/``. The CLI's contract is four narrow
+    operations on a single ``run_id`` key, and a flat-file layout
+    satisfies durability + auditability at zero ops cost. A future
+    Postgres-backed adapter implements the same Protocol and is swapped
+    in here without changing the CLI.
 
-    Production behaviour: an :class:`AuditRunStore` adapter that wraps
-    the Postgres ``audit_log`` + ``audit_results`` tables. The adapter
-    itself is delivered by :mod:`bba.audit_store` (see PRD §10); the CLI
-    only sees the :class:`~bba.cli.store_protocol.AuditRunStore` Protocol
-    so the dependency direction stays one-way.
+    Tests monkeypatch this seam via
+    ``patch("bba.cli.main._get_audit_run_store", ...)`` to inject a
+    recording double; the in-process replacement keeps the unit suite
+    independent of the on-disk layout.
     """
-    db_url = os.environ.get("BBA_DB_URL")
-    if db_url is None or db_url == "":
-        raise CliError(
-            "BBA_DB_URL environment variable is required for audit store "
-            "access; set it to the Postgres DSN of the audit database"
-        )
-    raise CliError(
-        f"BBA_DB_URL={db_url[:8]}…: bba.audit_store does not yet expose a "
-        f"Protocol-compatible AuditRunStore adapter "
-        "(run_complete / run_count / record_idempotency_override). The "
-        "CLI's hand-off seam is bba.cli.main._get_audit_run_store; "
-        "production wiring constructs the adapter against the configured "
-        "Postgres DSN."
-    )
+    return FileBackedAuditRunStore(_resolve_data_dir())
 
 
 def _run_audit_pipeline(*, run_id: str, input_csv: Path) -> None:
-    """Hand off to the audit pipeline orchestrator.
+    """Run the Phase 1 audit pipeline for ``input_csv``.
 
-    The orchestration that turns an input CSV into
-    :class:`~bba.audit_pipeline.PipelineRowContext`'s and wires the
-    transport / audit_store / batch_run_store / verifier configuration
-    lives in :mod:`bba.audit_pipeline` (PRD §15). This function is the
-    CLI's single hand-off point so tests can swap it with a recording
-    double via ``patch("bba.cli.main._run_audit_pipeline", ...)``.
+    The phase-1 deliverable for ``bba audit`` is the *ingest leg* of the
+    pipeline: the input CSV bundle is materialised into the configured
+    DuckDB + Parquet store under ``BBA_DATA_DIR/audit/<run_id>/``. The
+    LLM-driven analysis leg (deterministic classifier → evidence bundle
+    → de-id → prompt → batch submit → quote ground → calibrate →
+    audit_store write) requires a context-builder composition over
+    :mod:`bba.audit_orders` / :mod:`bba.deterministic_classifier` /
+    :mod:`bba.evidence_bundle_builder` / :mod:`bba.deid_redactor` /
+    :mod:`bba.prompt_builder` that is owned by :mod:`bba.audit_pipeline`
+    per its own contract ("the pipeline never re-implements upstream
+    modules; the caller assembles the context"). When that orchestration
+    facade lands, this seam delegates to it.
 
-    In production the CLI fails loud at this boundary: the underlying
-    single-input orchestrator is not part of issue #29's deliverable
-    (it is owned by issue #24's facade layer), so calling this without
-    a patched seam raises :class:`CliError` with a precise message
-    rather than fabricating defaults that would silently mis-configure
-    the live pipeline."""
-    raise CliError(
-        f"audit pipeline orchestrator is not wired in the CLI; cannot "
-        f"audit run_id={run_id} from {input_csv}. The CLI's hand-off "
-        f"point is bba.cli.main._run_audit_pipeline — production "
-        f"integration is delivered by bba.audit_pipeline (PRD §15)."
+    Tests patch this seam via
+    ``patch("bba.cli.main._run_audit_pipeline", ...)`` to isolate the
+    CLI's idempotency / force / scrubbing behaviour from the ingest
+    cost."""
+    output_dir = _resolve_data_dir() / "audit" / run_id
+    config = IngestConfig(
+        input_dir=input_csv.parent,
+        output_dir=output_dir,
+        code_version=code_version(),
+    )
+    ingest(config)
+    _log.info(
+        "audit.pipeline_ingest_complete",
+        run_id=run_id,
+        output_dir=str(output_dir),
+        leg="phase1_ingest_only",
     )
 
 

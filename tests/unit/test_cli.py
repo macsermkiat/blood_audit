@@ -60,6 +60,7 @@ import importlib
 import logging
 import re
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
@@ -119,6 +120,20 @@ CLI_PACKAGE_DIR = REPO_ROOT / "src" / "bba" / "cli"
 def runner() -> CliRunner:
     """A click CliRunner for invoking subcommands in tests."""
     return CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _restore_excepthook() -> Iterator[None]:
+    """Snapshot ``sys.excepthook`` before each test and restore on tear-down.
+
+    The CLI's root callback installs a PHI-scrubbing excepthook; without
+    a fixture-scoped restore, that hook leaks into subsequent tests
+    (and into pytest's own crash reporter) and pollutes diagnostics."""
+    original = sys.excepthook
+    try:
+        yield
+    finally:
+        sys.excepthook = original
 
 
 @pytest.fixture
@@ -1003,46 +1018,139 @@ class TestUnwiredSubcommandsFailLoud:
 
 
 class TestSentinelRequiresCadenceFlag:
-    """``bba sentinel`` must reject an invocation without either
-    ``--weekly`` or ``--quarterly`` — click delivers ``None`` for the
-    flag group when neither is set."""
+    """``bba sentinel`` must reject invocations without exactly one of
+    ``--weekly`` / ``--quarterly``. The spec says "exactly one"; click's
+    ``flag_value`` shortcut silently last-wins, so the implementation
+    uses two booleans + an explicit XOR check."""
 
     def test_no_cadence_is_a_usage_error(self, runner: CliRunner) -> None:
         result = runner.invoke(cli, ["sentinel"])
         assert result.exit_code != 0
-        # click.UsageError raises with exit_code 2; surfaces in output.
         assert (
             "weekly" in result.output.lower()
             or "quarterly" in result.output.lower()
             or "cadence" in result.output.lower()
         ), result.output
 
+    def test_both_weekly_and_quarterly_is_a_usage_error(
+        self, runner: CliRunner
+    ) -> None:
+        """The 'exactly one' contract rejects both being supplied —
+        otherwise click's last-wins behaviour would silently pick one."""
+        result = runner.invoke(
+            cli, ["sentinel", "--weekly", "--quarterly"]
+        )
+        assert result.exit_code != 0
+        assert "mutually exclusive" in result.output.lower(), result.output
+
 
 class TestGetAuditRunStoreEnvGate:
-    """The production resolver ``_get_audit_run_store`` reads
-    ``BBA_DB_URL`` from env and fails loud if it is missing."""
+    """The production resolver ``_get_audit_run_store`` returns a
+    :class:`FileBackedAuditRunStore` rooted at ``$BBA_DATA_DIR``."""
 
-    def test_missing_db_url_raises(
+    def test_missing_data_dir_raises(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import bba.cli.main as main_module
 
-        monkeypatch.delenv("BBA_DB_URL", raising=False)
-        with pytest.raises(CliError, match="BBA_DB_URL"):
+        monkeypatch.delenv("BBA_DATA_DIR", raising=False)
+        with pytest.raises(CliError, match="BBA_DATA_DIR"):
             main_module._get_audit_run_store()
 
-    def test_present_db_url_raises_contract_error(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_returns_file_backed_store(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
-        """The adapter is not yet wired: with a DSN set, the resolver
-        still fails loud but points at the CLI seam, not the env var."""
         import bba.cli.main as main_module
+        from bba.cli.audit_run_store import FileBackedAuditRunStore
 
-        monkeypatch.setenv("BBA_DB_URL", "postgresql://example/db")
-        with pytest.raises(
-            CliError, match="bba.cli.main._get_audit_run_store"
-        ):
-            main_module._get_audit_run_store()
+        monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
+        store = main_module._get_audit_run_store()
+        assert isinstance(store, FileBackedAuditRunStore)
+        # Newly-resolved store reports the run as not complete and count zero.
+        assert store.run_complete("nonexistent-run-id") is False
+        assert store.run_count("nonexistent-run-id") == 0
+
+
+class TestFileBackedAuditRunStore:
+    """End-to-end behaviour of the file-backed :class:`AuditRunStore`:
+    marker-creation, row-tracking, and the JSONL audit_log."""
+
+    def test_marker_lifecycle(self, tmp_path: Path) -> None:
+        from bba.cli.audit_run_store import FileBackedAuditRunStore
+
+        store = FileBackedAuditRunStore(tmp_path)
+        run_id = "abc123def4567890"
+        assert store.run_complete(run_id) is False
+        store.mark_run_complete(run_id)
+        assert store.run_complete(run_id) is True
+
+    def test_row_count_tracks_record_row_calls(self, tmp_path: Path) -> None:
+        from bba.cli.audit_run_store import FileBackedAuditRunStore
+
+        store = FileBackedAuditRunStore(tmp_path)
+        run_id = "abc123def4567890"
+        assert store.run_count(run_id) == 0
+        store.record_row(run_id, "audit-0001")
+        store.record_row(run_id, "audit-0002")
+        assert store.run_count(run_id) == 2
+
+    def test_idempotency_override_appends_jsonl_per_call(
+        self, tmp_path: Path
+    ) -> None:
+        from bba.cli.audit_run_store import FileBackedAuditRunStore
+
+        store = FileBackedAuditRunStore(tmp_path)
+        run_id = "abc123def4567890"
+        store.record_idempotency_override(run_id, reason="first --force")
+        store.record_idempotency_override(run_id, reason="second --force")
+
+        entries = store.audit_log_entries(run_id)
+        assert len(entries) == 2
+        for entry in entries:
+            assert entry["idempotency_override"] is True
+            assert entry["run_id"] == run_id
+            assert isinstance(entry["ts"], str)
+        assert entries[0]["reason"] == "first --force"
+        assert entries[1]["reason"] == "second --force"
+
+    def test_audit_log_filters_by_run_id(self, tmp_path: Path) -> None:
+        from bba.cli.audit_run_store import FileBackedAuditRunStore
+
+        store = FileBackedAuditRunStore(tmp_path)
+        store.record_idempotency_override("run-A", reason="a")
+        store.record_idempotency_override("run-B", reason="b")
+        store.record_idempotency_override("run-A", reason="a2")
+        assert tuple(e["reason"] for e in store.audit_log_entries("run-A")) == (
+            "a",
+            "a2",
+        )
+        assert tuple(e["reason"] for e in store.audit_log_entries("run-B")) == (
+            "b",
+        )
+
+    def test_empty_audit_log_returns_empty_tuple(self, tmp_path: Path) -> None:
+        from bba.cli.audit_run_store import FileBackedAuditRunStore
+
+        store = FileBackedAuditRunStore(tmp_path)
+        assert store.audit_log_entries("any-id") == ()
+
+    def test_audit_log_skips_blank_lines(self, tmp_path: Path) -> None:
+        """A blank or whitespace-only line in audit_log.jsonl (e.g. a
+        trailing newline after a manual edit) must be skipped without
+        raising ``json.JSONDecodeError``."""
+        from bba.cli.audit_run_store import FileBackedAuditRunStore
+
+        store = FileBackedAuditRunStore(tmp_path)
+        store.record_idempotency_override("run-A", reason="first")
+        log_path = tmp_path / "audit_runs" / "audit_log.jsonl"
+        # Append a blank line manually — mirrors the trailing-newline case.
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write("\n   \n")
+        store.record_idempotency_override("run-A", reason="second")
+        entries = store.audit_log_entries("run-A")
+        assert tuple(e["reason"] for e in entries) == ("first", "second")
 
 
 class TestAuditWithoutInputCannotReachPipeline:
@@ -1136,17 +1244,157 @@ class TestPhiScrubberEdgeCases:
         assert sidecar.parent.is_dir()
 
 
-class TestRunAuditPipelineFailsLoudInProduction:
-    """The ``_run_audit_pipeline`` seam raises :class:`CliError` when
-    called outside of a patched test context — the audit pipeline
-    orchestrator lives in :mod:`bba.audit_pipeline` and is not part of
-    issue #29's deliverable."""
+class TestRootCallbackInstallsExcepthook:
+    """``bba <subcommand>`` must install the PHI-scrubbing excepthook
+    before any subcommand body runs — otherwise the contract surface
+    exists but no production CLI invocation benefits from it.
 
-    def test_unpatched_seam_raises_cli_error(self, tmp_path: Path) -> None:
+    The group callback only fires when a subcommand is dispatched, so
+    these tests use ``bba ingest --help`` (which short-circuits inside
+    the subcommand *after* the group callback runs) to assert the wire
+    is in place."""
+
+    def test_excepthook_installed_with_sidecar_when_data_dir_set(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
+        with patch("bba.cli.main.install_excepthook") as mock_install:
+            result = runner.invoke(cli, ["ingest", "--help"])
+        assert result.exit_code == 0, result.output
+        mock_install.assert_called_once()
+        assert mock_install.call_args.kwargs["faulthandler_sidecar"] == (
+            tmp_path / "logs" / "faulthandler.sidecar"
+        )
+
+    def test_excepthook_installed_without_sidecar_when_data_dir_unset(
+        self,
+        runner: CliRunner,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Excepthook installation must not depend on BBA_DATA_DIR; only
+        the optional faulthandler sidecar does."""
+        monkeypatch.delenv("BBA_DATA_DIR", raising=False)
+        with patch("bba.cli.main.install_excepthook") as mock_install:
+            result = runner.invoke(cli, ["ingest", "--help"])
+        assert result.exit_code == 0, result.output
+        mock_install.assert_called_once()
+        assert mock_install.call_args.kwargs["faulthandler_sidecar"] is None
+
+
+class TestEndToEndAuditIdempotency:
+    """End-to-end integration: ``bba audit`` twice on the same input
+    with the *real* :class:`FileBackedAuditRunStore` no-ops the second
+    time. Only the audit-pipeline orchestrator (the LLM analysis leg)
+    is mocked; the store, the marker writes, and the audit_log JSONL
+    are exercised against the file system."""
+
+    def test_second_real_invocation_is_real_noop(
+        self,
+        runner: CliRunner,
+        fake_csv: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
+        with patch(
+            "bba.cli.main._run_audit_pipeline", return_value=None
+        ) as fake_pipeline:
+            r1 = runner.invoke(cli, ["audit", "--input", str(fake_csv)])
+            r2 = runner.invoke(cli, ["audit", "--input", str(fake_csv)])
+        assert r1.exit_code == 0, r1.output
+        assert r2.exit_code == 0, r2.output
+        assert fake_pipeline.call_count == 1, (
+            "second real invocation must skip the pipeline, but it was "
+            f"called {fake_pipeline.call_count} times"
+        )
+        # The marker must exist on disk for the third process to honor.
+        run_marker_dir = tmp_path / "audit_runs"
+        assert run_marker_dir.is_dir()
+        markers = list(run_marker_dir.glob("run_*.complete"))
+        assert len(markers) == 1, markers
+
+    def test_force_invocations_persist_audit_log_jsonl(
+        self,
+        runner: CliRunner,
+        fake_csv: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``--force`` twice writes two real JSONL lines to
+        ``audit_runs/audit_log.jsonl`` on disk — not just to a mock."""
+        from bba.cli.audit_run_store import FileBackedAuditRunStore
+
+        monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
+        with patch("bba.cli.main._run_audit_pipeline", return_value=None):
+            r0 = runner.invoke(cli, ["audit", "--input", str(fake_csv)])
+            r1 = runner.invoke(
+                cli, ["audit", "--input", str(fake_csv), "--force"]
+            )
+            r2 = runner.invoke(
+                cli, ["audit", "--input", str(fake_csv), "--force"]
+            )
+        assert r0.exit_code == 0, r0.output
+        assert r1.exit_code == 0, r1.output
+        assert r2.exit_code == 0, r2.output
+
+        log_path = tmp_path / "audit_runs" / "audit_log.jsonl"
+        assert log_path.is_file()
+        lines = log_path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 2, lines
+        # Re-open through the store to validate the schema invariants.
+        post_store = FileBackedAuditRunStore(tmp_path)
+        # We don't know the exact run_id; fetch via the audit_log file directly.
+        import json as _json
+
+        entries = [_json.loads(line) for line in lines]
+        for entry in entries:
+            assert entry["idempotency_override"] is True
+            assert "ts" in entry
+            assert "reason" in entry
+        # Sanity: both lines share one run_id (same input twice).
+        assert len({e["run_id"] for e in entries}) == 1
+        # And the store reports both entries for that run_id.
+        run_id = entries[0]["run_id"]
+        assert len(post_store.audit_log_entries(run_id)) == 2
+
+
+class TestRunAuditPipelineIngestLeg:
+    """The Phase 1 ``_run_audit_pipeline`` deliverable is the ingest leg
+    — calling :func:`bba.ingest.ingest` with a per-run output directory.
+    The LLM analysis leg lives in :mod:`bba.audit_pipeline` and is wired
+    via a follow-up facade."""
+
+    def test_calls_ingest_with_per_run_output_dir(
+        self,
+        tmp_path: Path,
+        fake_csv: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         import bba.cli.main as main_module
 
-        with pytest.raises(CliError, match="bba.cli.main._run_audit_pipeline"):
+        monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
+        with patch("bba.cli.main.ingest") as mock_ingest:
             main_module._run_audit_pipeline(
-                run_id="abc123def4567890",
-                input_csv=tmp_path / "fake.csv",
+                run_id="abc123def4567890", input_csv=fake_csv
+            )
+        mock_ingest.assert_called_once()
+        (config,) = mock_ingest.call_args.args
+        assert config.input_dir == fake_csv.parent
+        assert config.output_dir == tmp_path / "audit" / "abc123def4567890"
+
+    def test_missing_data_dir_raises_cli_error(
+        self,
+        tmp_path: Path,
+        fake_csv: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import bba.cli.main as main_module
+
+        monkeypatch.delenv("BBA_DATA_DIR", raising=False)
+        with pytest.raises(CliError, match="BBA_DATA_DIR"):
+            main_module._run_audit_pipeline(
+                run_id="abc123def4567890", input_csv=fake_csv
             )

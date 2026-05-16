@@ -25,10 +25,9 @@ from typing import Protocol, runtime_checkable
 class AuditRunStore(Protocol):
     """The CLI's view of the audit store.
 
-    Every method is keyword-only on its run identifier so a test double
-    cannot pass a positional surprise. The Protocol is
-    :func:`~typing.runtime_checkable` so tests can ``isinstance`` against
-    it for fast smoke checks.
+    The Protocol is :func:`~typing.runtime_checkable` so tests can
+    ``isinstance`` against it for fast smoke checks. Positional-only
+    ``run_id`` keeps the surface mock-friendly.
     """
 
     def run_complete(self, run_id: str, /) -> bool:
@@ -36,6 +35,15 @@ class AuditRunStore(Protocol):
 
     def run_count(self, run_id: str, /) -> int:
         """Return the number of committed audit rows for ``run_id``."""
+
+    def mark_run_complete(self, run_id: str, /) -> None:
+        """Persist that ``run_id`` finished successfully.
+
+        Called by ``bba audit`` after :func:`_run_audit_pipeline` returns
+        without raising; the next invocation with the same identity
+        triggers the no-op branch. Atomicity is the implementation's
+        responsibility (the file-backed adapter uses write-then-rename
+        so a crash mid-write cannot leave a half-formed marker)."""
 
     def record_idempotency_override(
         self,

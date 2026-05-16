@@ -37,6 +37,7 @@ from types import TracebackType
 from typing import Any, Final, Protocol, cast
 
 from bba.cli._logging import get_logger
+from bba.deid_redactor import PHI_REGEXES as _DEID_PHI_REGEXES
 
 
 # ---------------------------------------------------------------------------
@@ -54,28 +55,16 @@ PHI_LOCAL_NAME_REGEX: Final[re.Pattern[str]] = re.compile(
 
 Prefix match (``^...``) so ``hn_digits``, ``patient_age``,
 ``encounter_id`` are all caught. Case-insensitive so ``HN`` / ``Patient``
-/ ``BUNDLE`` are caught too."""
+/ ``BUNDLE`` are caught too. Lives here (not in
+:mod:`bba.deid_redactor`) because frame-local naming is a Python /
+traceback concern; the redactor's interest in PHI is purely textual."""
 
 
-_THAI_HONORIFICS: Final[str] = r"นาย|นาง|นางสาว|เด็กชาย|เด็กหญิง"
-"""Five Thai honorifics common in HOSxP free-text notes. Matching the
-honorific alone is enough to redact the surrounding string — we do not
-try to grab the trailing given name token, which would mis-fire on
-benign sentences."""
-
-
-PHI_REGEXES: Final[tuple[re.Pattern[str], ...]] = (
-    re.compile(r"\b\d{7,10}\b"),  # HN / AN digit runs
-    re.compile(
-        r"\b(?:Mr|Mrs|Ms|Dr)\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*",
-    ),  # Western honorific + 1–N capitalised name tokens
-    re.compile(_THAI_HONORIFICS),
-)
-"""Regexes that match PHI inside string values.
-
-Order matters: digit-run is tried first because the cost of evaluating
-a digit-run regex is lower than the alpha-token regexes.
-"""
+PHI_REGEXES: Final[tuple[re.Pattern[str], ...]] = _DEID_PHI_REGEXES
+"""Regexes that match PHI inside string values, re-exported from
+:data:`bba.deid_redactor.PHI_REGEXES` so the scrubber and the redactor
+share one source of truth. Any pattern added there is automatically
+applied by the traceback scrubber on the next run."""
 
 
 # ---------------------------------------------------------------------------
