@@ -24,8 +24,11 @@ On-disk layout::
 
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -63,17 +66,31 @@ class FileBackedAuditRunStore:
         *,
         reason: str,
     ) -> None:
-        """Append a JSON line to ``audit_log.jsonl`` documenting the override."""
+        """Append a JSON line to ``audit_log.jsonl`` documenting the override.
+
+        Atomic by construction: one ``os.write(2)`` on an
+        ``O_APPEND``-opened file descriptor. POSIX guarantees atomic
+        appends up to ``PIPE_BUF`` (≥ 4096 bytes); each entry is
+        ~150–250 bytes, well under the limit. Concurrent ``--force``
+        invocations therefore cannot interleave bytes inside a single
+        JSON line."""
         entry: dict[str, object] = {
             "run_id": run_id,
             "idempotency_override": True,
             "reason": reason,
             "ts": datetime.now(tz=UTC).isoformat(),
         }
+        line = (json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8")
         self._root.mkdir(parents=True, exist_ok=True)
-        with self._audit_log_path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(entry, ensure_ascii=False))
-            fh.write("\n")
+        fd = os.open(
+            self._audit_log_path,
+            os.O_WRONLY | os.O_APPEND | os.O_CREAT,
+            0o644,
+        )
+        try:
+            os.write(fd, line)
+        finally:
+            os.close(fd)
 
     def audit_log_entries(
         self, run_id: str, /
@@ -81,14 +98,36 @@ class FileBackedAuditRunStore:
         """Return all ``audit_log.jsonl`` rows matching ``run_id`` in order."""
         return tuple(self._iter_audit_log(run_id))
 
+    @contextmanager
+    def acquire_run_lock(self, run_id: str, /) -> Iterator[None]:
+        """Exclusive, blocking, ``fcntl.flock``-backed run-level lock.
+
+        Two concurrent ``bba audit`` invocations on the same ``run_id``
+        block here so only one passes the check-then-act sequence;
+        invocations on *different* ``run_id``'s never contend (the lock
+        path is per-run). Crash safety is OS-provided: a crashed
+        process releases its kernel-held flock automatically, so a
+        retry after a crash does not stall."""
+        self._root.mkdir(parents=True, exist_ok=True)
+        lock_path = self._lock_path(run_id)
+        fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
     # -- helpers -------------------------------------------------------------
 
     def mark_run_complete(self, run_id: str, /) -> None:
         """Touch the ``run_<run_id>.complete`` marker (write-then-rename).
 
-        Public-but-not-Protocol: the audit pipeline calls this after a
-        successful run; the CLI's idempotency contract depends on the
-        marker existing iff the run truly committed every row."""
+        The CLI's idempotency contract depends on the marker existing
+        iff the run truly committed every row; atomic write-then-rename
+        rules out a half-formed marker from a crashed write."""
         self._root.mkdir(parents=True, exist_ok=True)
         target = self._marker_path(run_id)
         tmp = target.with_suffix(target.suffix + ".tmp")
@@ -98,8 +137,9 @@ class FileBackedAuditRunStore:
     def record_row(self, run_id: str, audit_id: str, /) -> None:
         """Touch a per-row marker under ``rows_<run_id>/<audit_id>.row``.
 
-        Public-but-not-Protocol: lets the audit pipeline declare a row
-        committed so :meth:`run_count` reflects real progress."""
+        Called by the audit pipeline once per committed audit row so
+        :meth:`run_count` reflects real progress and stays consistent
+        with :meth:`run_complete`."""
         rows_dir = self._rows_dir(run_id)
         rows_dir.mkdir(parents=True, exist_ok=True)
         (rows_dir / f"{audit_id}.row").write_text("ok\n", encoding="utf-8")
@@ -109,6 +149,9 @@ class FileBackedAuditRunStore:
 
     def _rows_dir(self, run_id: str) -> Path:
         return self._root / f"rows_{run_id}"
+
+    def _lock_path(self, run_id: str) -> Path:
+        return self._root / f"run_{run_id}.lock"
 
     @property
     def _audit_log_path(self) -> Path:

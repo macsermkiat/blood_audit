@@ -1,9 +1,12 @@
 """Protocol surface for the run-level audit store used by the CLI.
 
-The CLI only needs four operations on the persistent audit store: ask
-whether a run is complete, count how many audit rows belong to a run,
-write a compliance row when ``--force`` overrides idempotency, and read
-back the audit-log entries for that run (for test/debug introspection).
+The CLI needs six operations on the persistent audit store: ask whether
+a run is complete, count how many audit rows belong to a run, record
+one row as committed, mark the whole run complete, write a compliance
+row when ``--force`` overrides idempotency, read back the audit-log
+entries, and acquire an exclusive lock around the check-then-act
+sequence so concurrent invocations on the same input cannot
+double-execute the pipeline.
 
 This Protocol exists so the CLI can be unit-tested with an in-memory
 double without bringing up a Postgres testcontainer — and so the *real*
@@ -18,6 +21,7 @@ A separate (issue-#19 follow-up) ticket will add a concrete
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import AbstractContextManager
 from typing import Protocol, runtime_checkable
 
 
@@ -35,6 +39,14 @@ class AuditRunStore(Protocol):
 
     def run_count(self, run_id: str, /) -> int:
         """Return the number of committed audit rows for ``run_id``."""
+
+    def record_row(self, run_id: str, audit_id: str, /) -> None:
+        """Mark one audit row as committed under ``run_id``.
+
+        Called by the audit pipeline for each row it persists. The
+        post-condition is that :meth:`run_count` strictly increases by
+        one — so a future :meth:`run_complete` that returns ``True``
+        agrees with the observed row count."""
 
     def mark_run_complete(self, run_id: str, /) -> None:
         """Persist that ``run_id`` finished successfully.
@@ -68,3 +80,17 @@ class AuditRunStore(Protocol):
         Order is insertion-time. Returns an empty tuple if there are no
         entries (e.g. on a fresh run).
         """
+
+    def acquire_run_lock(self, run_id: str, /) -> AbstractContextManager[None]:
+        """Return a context manager that holds an exclusive run-level lock.
+
+        ``bba audit`` wraps the check-then-act sequence
+        (``run_complete`` → run pipeline → ``mark_run_complete``) in
+        ``with store.acquire_run_lock(run_id):`` so two concurrent
+        invocations on the same input cannot both pass the
+        ``run_complete`` guard and double-execute the pipeline.
+
+        The lock is exclusive *per* ``run_id``; concurrent audits of
+        *different* inputs run in parallel. The implementation must
+        release the lock when the context manager exits, including on
+        an exception inside the body."""

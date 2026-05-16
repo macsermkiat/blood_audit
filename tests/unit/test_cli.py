@@ -1136,6 +1136,123 @@ class TestFileBackedAuditRunStore:
         store = FileBackedAuditRunStore(tmp_path)
         assert store.audit_log_entries("any-id") == ()
 
+    def test_concurrent_idempotency_overrides_do_not_corrupt_jsonl(
+        self, tmp_path: Path
+    ) -> None:
+        """Under thread-level concurrency, every appended line stays a
+        valid JSON object. The implementation uses
+        ``os.write(fd_with_O_APPEND, ...)`` which is POSIX-atomic up to
+        ``PIPE_BUF`` — each ~200-byte entry is well under that, so
+        concurrent ``--force`` invocations cannot interleave bytes."""
+        import json as _json
+        import threading
+
+        from bba.cli.audit_run_store import FileBackedAuditRunStore
+
+        store = FileBackedAuditRunStore(tmp_path)
+        run_id = "concurrent-run"
+        n_threads = 8
+        n_per_thread = 25
+
+        def worker(thread_idx: int) -> None:
+            for i in range(n_per_thread):
+                store.record_idempotency_override(
+                    run_id, reason=f"thread-{thread_idx}-call-{i}"
+                )
+
+        threads = [
+            threading.Thread(target=worker, args=(t,))
+            for t in range(n_threads)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Every line must parse as JSON; total line count must equal
+        # the total number of override calls.
+        log_path = tmp_path / "audit_runs" / "audit_log.jsonl"
+        lines = log_path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == n_threads * n_per_thread
+        for line in lines:
+            entry = _json.loads(line)
+            assert entry["idempotency_override"] is True
+            assert entry["run_id"] == run_id
+
+    def test_acquire_run_lock_creates_and_releases_lockfile(
+        self, tmp_path: Path
+    ) -> None:
+        """The context manager creates the lockfile on entry and
+        leaves it in place on exit (an empty lockfile is the normal
+        steady state once a run has been locked at least once)."""
+        from bba.cli.audit_run_store import FileBackedAuditRunStore
+
+        store = FileBackedAuditRunStore(tmp_path)
+        run_id = "lock-test"
+        lock_path = tmp_path / "audit_runs" / f"run_{run_id}.lock"
+        assert not lock_path.exists()
+        with store.acquire_run_lock(run_id):
+            assert lock_path.is_file()
+        # File persists post-exit; the flock is released, not the file.
+        assert lock_path.is_file()
+
+    def test_acquire_run_lock_blocks_across_processes(
+        self, tmp_path: Path
+    ) -> None:
+        """``fcntl.flock`` is advisory per-open-file-description; the
+        guarantee that matters in production is *cross-process*
+        exclusion. Spawn a subprocess that holds the lock, then assert
+        that a second non-blocking attempt from this process fails."""
+        import fcntl
+        import os
+        import subprocess
+        import sys
+        import textwrap
+
+        from bba.cli.audit_run_store import FileBackedAuditRunStore
+
+        # Make the lockfile via a first acquire in this process so the
+        # subprocess does not race to create it.
+        store = FileBackedAuditRunStore(tmp_path)
+        run_id = "x-proc-lock"
+        with store.acquire_run_lock(run_id):
+            pass
+        lock_path = tmp_path / "audit_runs" / f"run_{run_id}.lock"
+        assert lock_path.is_file()
+
+        # Subprocess that holds an exclusive flock for 2 s.
+        holder_script = textwrap.dedent(
+            f"""
+            import fcntl, os, time
+            fd = os.open({str(lock_path)!r}, os.O_WRONLY)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            print("locked", flush=True)
+            time.sleep(2.0)
+            """
+        )
+        proc = subprocess.Popen(
+            [sys.executable, "-c", holder_script],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            # Wait until the subprocess says it holds the lock.
+            assert proc.stdout is not None
+            line = proc.stdout.readline()
+            assert line.strip() == "locked", line
+
+            # Non-blocking acquire from THIS process must fail with
+            # BlockingIOError because the subprocess holds the lock.
+            fd = os.open(lock_path, os.O_WRONLY)
+            try:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                os.close(fd)
+        finally:
+            proc.terminate()
+            proc.wait(timeout=5)
+
     def test_audit_log_skips_blank_lines(self, tmp_path: Path) -> None:
         """A blank or whitespace-only line in audit_log.jsonl (e.g. a
         trailing newline after a manual edit) must be skipped without
@@ -1363,14 +1480,16 @@ class TestEndToEndAuditIdempotency:
 
 class TestRunAuditPipelineIngestLeg:
     """The Phase 1 ``_run_audit_pipeline`` deliverable is the ingest leg
-    — calling :func:`bba.ingest.ingest` with a per-run output directory.
-    The LLM analysis leg lives in :mod:`bba.audit_pipeline` and is wired
-    via a follow-up facade."""
+    — calling :func:`bba.ingest.ingest` with a per-run output directory,
+    then recording one row marker per ingested HOSxP table so
+    :meth:`AuditRunStore.run_count` stays consistent with
+    :meth:`AuditRunStore.run_complete`."""
 
     def test_calls_ingest_with_per_run_output_dir(
         self,
         tmp_path: Path,
         fake_csv: Path,
+        stub_store: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         import bba.cli.main as main_module
@@ -1378,7 +1497,9 @@ class TestRunAuditPipelineIngestLeg:
         monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
         with patch("bba.cli.main.ingest") as mock_ingest:
             main_module._run_audit_pipeline(
-                run_id="abc123def4567890", input_csv=fake_csv
+                run_id="abc123def4567890",
+                input_csv=fake_csv,
+                store=stub_store,
             )
         mock_ingest.assert_called_once()
         (config,) = mock_ingest.call_args.args
@@ -1389,6 +1510,7 @@ class TestRunAuditPipelineIngestLeg:
         self,
         tmp_path: Path,
         fake_csv: Path,
+        stub_store: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         import bba.cli.main as main_module
@@ -1396,5 +1518,39 @@ class TestRunAuditPipelineIngestLeg:
         monkeypatch.delenv("BBA_DATA_DIR", raising=False)
         with pytest.raises(CliError, match="BBA_DATA_DIR"):
             main_module._run_audit_pipeline(
-                run_id="abc123def4567890", input_csv=fake_csv
+                run_id="abc123def4567890",
+                input_csv=fake_csv,
+                store=stub_store,
             )
+
+    def test_records_one_row_marker_per_ingested_table(
+        self,
+        tmp_path: Path,
+        fake_csv: Path,
+        stub_store: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """After ingest writes per-table parquet files, the pipeline
+        calls ``store.record_row(run_id, audit_id)`` once per file so
+        ``run_count`` reflects the work that was actually done."""
+        import bba.cli.main as main_module
+
+        monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
+        run_id = "abc123def4567890"
+        # Simulate ingest's per-table parquet output.
+        output_dir = tmp_path / "audit" / run_id
+        output_dir.mkdir(parents=True)
+        for table in ("BDVST", "BDTYPE", "Diagnosis"):
+            (output_dir / f"{table}.parquet").write_bytes(b"")
+        with patch("bba.cli.main.ingest"):
+            main_module._run_audit_pipeline(
+                run_id=run_id, input_csv=fake_csv, store=stub_store
+            )
+        recorded_audit_ids = {
+            call.args[1] for call in stub_store.record_row.call_args_list
+        }
+        assert recorded_audit_ids == {
+            "phase1_ingest_BDVST",
+            "phase1_ingest_BDTYPE",
+            "phase1_ingest_Diagnosis",
+        }

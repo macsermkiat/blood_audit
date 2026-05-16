@@ -22,6 +22,7 @@ defaults for the per-store integrations is owned by each module."""
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
 
@@ -164,36 +165,48 @@ def bba_ingest(input_csv: Path, schema_version: str) -> None:
 )
 def bba_audit(input_csv: Path | None, run_id: str | None, force: bool) -> None:
     """Run the audit pipeline. Re-running on the same input is a no-op
-    unless ``--force`` is set."""
+    unless ``--force`` is set.
+
+    The check-then-act sequence (``run_complete`` → run pipeline →
+    ``mark_run_complete``) is wrapped in ``store.acquire_run_lock``,
+    which serialises invocations on the same ``run_id`` so two
+    concurrent CLI processes cannot both pass the guard and execute
+    the pipeline twice. Concurrent audits of *different* inputs run in
+    parallel."""
     inputs = AuditCommandInput(input_csv=input_csv, run_id=run_id, force=force)
     store = _get_audit_run_store()
     resolved = _resolve_run_id(inputs)
-    if store.run_complete(resolved):
-        if not inputs.force:
-            _log.info(
-                "audit.noop",
-                run_id=resolved,
-                row_count=store.run_count(resolved),
+    with store.acquire_run_lock(resolved):
+        if store.run_complete(resolved):
+            if not inputs.force:
+                _log.info(
+                    "audit.noop",
+                    run_id=resolved,
+                    row_count=store.run_count(resolved),
+                )
+                return
+            store.record_idempotency_override(
+                resolved, reason="cli --force flag"
             )
-            return
-        store.record_idempotency_override(resolved, reason="cli --force flag")
-        _log.warning(
-            "audit.force_override",
+            _log.warning(
+                "audit.force_override",
+                run_id=resolved,
+                idempotency_override=True,
+            )
+        if inputs.input_csv is None:
+            raise click.UsageError(
+                "bba audit --run-id without --input cannot reach the "
+                "pipeline; the run was not previously completed"
+            )
+        _run_audit_pipeline(
+            run_id=resolved, input_csv=inputs.input_csv, store=store
+        )
+        store.mark_run_complete(resolved)
+        _log.info(
+            "audit.complete",
             run_id=resolved,
-            idempotency_override=True,
+            row_count=store.run_count(resolved),
         )
-    if inputs.input_csv is None:
-        raise click.UsageError(
-            "bba audit --run-id without --input cannot reach the pipeline; "
-            "the run was not previously completed"
-        )
-    _run_audit_pipeline(run_id=resolved, input_csv=inputs.input_csv)
-    store.mark_run_complete(resolved)
-    _log.info(
-        "audit.complete",
-        run_id=resolved,
-        row_count=store.run_count(resolved),
-    )
 
 
 @click.command(name="evaluate")
@@ -308,21 +321,33 @@ def _get_audit_run_store() -> AuditRunStore:
     return FileBackedAuditRunStore(_resolve_data_dir())
 
 
-def _run_audit_pipeline(*, run_id: str, input_csv: Path) -> None:
+def _run_audit_pipeline(
+    *,
+    run_id: str,
+    input_csv: Path,
+    store: AuditRunStore,
+) -> None:
     """Run the Phase 1 audit pipeline for ``input_csv``.
 
-    The phase-1 deliverable for ``bba audit`` is the *ingest leg* of the
-    pipeline: the input CSV bundle is materialised into the configured
-    DuckDB + Parquet store under ``BBA_DATA_DIR/audit/<run_id>/``. The
-    LLM-driven analysis leg (deterministic classifier → evidence bundle
-    → de-id → prompt → batch submit → quote ground → calibrate →
-    audit_store write) requires a context-builder composition over
-    :mod:`bba.audit_orders` / :mod:`bba.deterministic_classifier` /
+    The Phase 1 deliverable for ``bba audit`` is the *ingest leg* of
+    the pipeline: the HOSxP CSV bundle is materialised into the
+    configured DuckDB + Parquet store under
+    ``BBA_DATA_DIR/audit/<run_id>/``. The LLM-driven analysis leg
+    (deterministic classifier → evidence bundle → de-id → prompt →
+    batch submit → quote ground → calibrate → audit_store write)
+    requires a context-builder composition over :mod:`bba.audit_orders`
+    / :mod:`bba.deterministic_classifier` /
     :mod:`bba.evidence_bundle_builder` / :mod:`bba.deid_redactor` /
-    :mod:`bba.prompt_builder` that is owned by :mod:`bba.audit_pipeline`
-    per its own contract ("the pipeline never re-implements upstream
-    modules; the caller assembles the context"). When that orchestration
-    facade lands, this seam delegates to it.
+    :mod:`bba.prompt_builder` that is owned by
+    :mod:`bba.audit_pipeline` per its own contract ("the pipeline never
+    re-implements upstream modules; the caller assembles the context").
+    When that orchestration facade lands, this seam delegates to it.
+
+    ``store.record_row`` is called once per ingested HOSxP table so
+    :meth:`AuditRunStore.run_count` is consistent with
+    :meth:`AuditRunStore.run_complete` after this function returns —
+    a downstream observer querying ``run_count > 0`` will see a real
+    count of committed units of work, not a stale zero.
 
     Tests patch this seam via
     ``patch("bba.cli.main._run_audit_pipeline", ...)`` to isolate the
@@ -335,12 +360,35 @@ def _run_audit_pipeline(*, run_id: str, input_csv: Path) -> None:
         code_version=code_version(),
     )
     ingest(config)
+    # Record one marker per ingested HOSxP table so run_count is
+    # consistent with the completed marker that bba_audit writes next.
+    # The audit_id namespace ``phase1_ingest_<table>`` is reserved for
+    # the ingest-leg-only Phase 1; the full LLM-driven leg will write
+    # ``audit_<hn_hash>_<requested_at>`` rows under the same run_id.
+    for table_name in sorted(_iter_ingested_tables(output_dir)):
+        store.record_row(run_id, f"phase1_ingest_{table_name}")
     _log.info(
         "audit.pipeline_ingest_complete",
         run_id=run_id,
         output_dir=str(output_dir),
         leg="phase1_ingest_only",
     )
+
+
+def _iter_ingested_tables(output_dir: Path) -> Iterator[str]:
+    """Yield the bare names of every parquet file under ``output_dir``.
+
+    Used by :func:`_run_audit_pipeline` to convert per-table ingest
+    outputs into per-row markers in the audit_run_store. Returns an
+    empty iterator if the directory is missing (e.g. the ingest step
+    was mocked in a test); the calling function logs the empty case
+    explicitly so observers can distinguish "nothing ingested" from
+    "table list still loading"."""
+    if not output_dir.is_dir():
+        return
+    for child in output_dir.iterdir():
+        if child.suffix == ".parquet":
+            yield child.stem
 
 
 def _resolve_run_id(inputs: AuditCommandInput) -> str:
