@@ -49,7 +49,6 @@ from bba.audit_store import (
 )
 from bba.dashboard import (
     BreakGlassRequest,
-    CareTeamAccessDeniedError,
     CaseDetail,
     DashboardConfig,
     DashboardError,

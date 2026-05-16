@@ -14,6 +14,7 @@ from __future__ import annotations
 import io
 import sys
 import unicodedata
+from collections.abc import Sequence
 
 import pytest
 from hypothesis import given, settings
@@ -27,7 +28,6 @@ from bba.quote_grounder import (
     ConfusionMatrix,
     EvidenceSource,
     LabTuple,
-    NLIEntailmentGate,
     Verdict,
     VerdictReason,
     VerdictSequence,

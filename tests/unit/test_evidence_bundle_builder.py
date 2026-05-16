@@ -42,7 +42,6 @@ from __future__ import annotations
 import hashlib
 import json
 import unicodedata
-from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -68,7 +67,6 @@ from bba.evidence_bundle_builder import (
     ProgressNote,
     VitalsRecord,
     build_evidence_bundle,
-    bundle_hash,
     canonical_serialize,
     parse_soap_sections,
     split_focus_notes_5_5,
