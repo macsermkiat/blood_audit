@@ -54,7 +54,11 @@ from bba.audit_pipeline.state_machine import (
     is_terminal,
     transition,
 )
-from bba.audit_pipeline.store import BatchRunStore, InMemoryBatchRunStore
+from bba.audit_pipeline.store import (
+    BatchRunStore,
+    InMemoryBatchRunStore,
+    PostgresBatchRunStore,
+)
 
 
 __all__ = [
@@ -69,6 +73,7 @@ __all__ = [
     "LiveAnthropicApiError",
     "PipelineRowContext",
     "PipelineRunResult",
+    "PostgresBatchRunStore",
     "ResumeReconciliationError",
     "ResumeReport",
     "apply_batch_results",
