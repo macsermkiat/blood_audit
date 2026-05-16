@@ -303,6 +303,136 @@ Downstream consumers (#8 deterministic_classifier; #16
 evidence_bundle_builder) read these to gate rule branches and to prioritize
 human review.
 
+## Cohort-detector concepts (#7)
+
+### Cohort label
+
+Seven-member `StrEnum` naming the deterministic cohort outcome:
+`CARDIAC_SURGERY`, `ORTHO_CARDIAC`, `ESRD_EPO`, `MTP`,
+`HEME_MALIGNANCY_ACTIVE`, `DEFAULT`, `UNKNOWN`.
+`bba.cohort_detector.models.CohortLabel`. Snake-case `value`s
+(`"cohort_unknown"`, `"esrd_epo"`, …) are the contract for downstream
+classifier dispatch and dashboard joins; the enum names are private.
+
+### Cohort assignment
+
+Pure-function output: `(label, threshold, evidence_code, evidence_name)`.
+`bba.cohort_detector.models.CohortAssignment`. Frozen Pydantic v2 model
+consumed directly by `bba.deterministic_classifier` (#8); never
+re-interpreted between assignment and decision.
+
+### Cohort threshold (numeric)
+
+The Hb decision threshold in g/dL, `float | None`. **Numeric, never
+enum** — the classifier compares it against the audit-time Hb without
+any string-to-number step in the hot path. `MTP`,
+`HEME_MALIGNANCY_ACTIVE`, and `UNKNOWN` carry `threshold=None` because
+they are not threshold-driven (auto-bypass, T2-supportive, NEEDS_REVIEW).
+The single source of truth is `bba.cohort_detector.rules.COHORT_THRESHOLDS`;
+adding a `CohortLabel` without a threshold-map entry is a test failure.
+
+### Cohort precedence
+
+Top wins: `UNKNOWN` → `MTP` → `ORTHO_CARDIAC` → `CARDIAC_SURGERY` →
+`ESRD_EPO` → `HEME_MALIGNANCY_ACTIVE` → `DEFAULT`. UNKNOWN runs first
+(before MTP) so a missing procedure join does not silently auto-bypass
+to APPROPRIATE: a human must verify the apparent MTP context.
+`bba.cohort_detector.detector.assign_cohort`.
+
+### Procedure data unavailable
+
+`CohortInputs.procedure_events` is `tuple | None`. **`None` means "the
+IPTSUMOPRT join was skipped / data unavailable"** and produces
+`UNKNOWN`. **`()` means "the patient had no operative events"** and
+falls through to other cohort signals (clean negative). The distinction
+is load-bearing — collapsing it would silently apply `DEFAULT 7.0` to
+patients whose surgical history is unknown (PRD §5 + Round 2 N1 + user
+constraint: NEVER silent 7.0).
+
+### Cardiac-surgery cohort
+
+Threshold 7.5 g/dL. Triggers when an operative event with `or_flag=True`
+and an ICD-9-CM Vol 3 code matching `CARDIAC_SURGERY_CODE_PREFIXES`
+(`36xx` PTCA / stents / CABG, `38xx` aortic resection, `39xx`
+aorta-iliac-femoral bypass) occurred within 30 days of the audit anchor.
+`CARDIAC_SURGERY_EXCLUDED_CODES = {"894", "3796"}` carves out cardiac
+stress test and pacemaker pulse generator as defense-in-depth — non-OR
+items must not trigger surgical recovery thresholds.
+
+### Ortho-cardiac cohort
+
+Threshold 8.0 g/dL. Requires both an orthopedic operative event
+(`or_flag=True` + `ORTHO_SURGERY_CODE_PREFIXES` `78xx`/`79xx`/`81xx`
+within 30 days) **AND** an ICD-10 cardiac-history diagnosis
+(`I20`–`I25`, `I50`). Checked before plain `CARDIAC_SURGERY` because
+its higher threshold dominates when both signals are present. Plain
+ortho without cardiac history falls through to `DEFAULT` — ortho
+alone is not its own cohort.
+
+### ESRD-EPO cohort
+
+Threshold 8.0 g/dL. Round 2 fix N1: requires **both** an ICD-10 ESRD
+code (`N18.5` / `N18.6`) **AND** a dialysis-context medication active
+within `DIALYSIS_LOOKBACK` (14 days). Either signal alone falls
+through to `DEFAULT`. Dialysis keywords (`heparin`, `sevelamer`,
+`cinacalcet`) are scoped by the co-required ESRD diagnosis, so a
+non-ESRD patient on heparin for DVT prophylaxis is not at risk of
+misclassification.
+
+### MTP auto-bypass
+
+`label=MTP`, `threshold=None`. Two arms over a closed-closed
+`[anchor − 1 h, anchor]` window:
+
+- **Cluster:** total `rbc_units` across all orders in the window
+  ≥ `MTP_RBC_UNIT_THRESHOLD` (4).
+- **Co-order:** FFP and platelets co-ordered evidence appears anywhere
+  in the window (`any(co_ordered_with_ffp)` AND
+  `any(co_ordered_with_platelets)`). Either flag pair on a single
+  order or split across separate orders inside the window counts.
+
+`bba.cohort_detector.rules.detect_mtp_pattern`. Auto-APPROPRIATE
+bypass routing is the downstream effect; the detector itself just
+labels the cohort.
+
+### Heme-malignancy active cohort
+
+`label=HEME_MALIGNANCY_ACTIVE`, `threshold=None` (T2-supportive, not
+hard-threshold). Round 2 fix N3: requires an ICD-10 heme-malignancy
+diagnosis (`C8x`/`C9x`), a chemo medication active within
+`CHEMO_LOOKBACK` (30 days), **and** a measured ANC strictly less than
+`ANC_NEUTROPENIA_THRESHOLD` (500 cells/µL). Missing ANC (`None`) is
+**not** neutropenic — positive evidence is required, not absence.
+
+### Allow-list seed (clinical sign-off pending)
+
+Every constant in `bba.cohort_detector.rules`
+(`CARDIAC_SURGERY_CODE_PREFIXES`, `ORTHO_SURGERY_CODE_PREFIXES`,
+`CARDIAC_HISTORY_ICD10_PREFIXES`, `ESRD_ICD10_CODES`,
+`HEME_MALIGNANCY_ICD10_PREFIXES`, `DIALYSIS_MED_KEYWORDS`,
+`CHEMO_MED_KEYWORDS`) is a Phase-1 SEED awaiting clinical sign-off
+before production. Tests in `TestAllowListSeeds` surface the seeds
+verbatim so the clinical-review PR can diff them line by line.
+
+### Medication recency window
+
+`DIALYSIS_LOOKBACK = 14d`, `CHEMO_LOOKBACK = 30d`. The window check
+lives inside `find_dialysis_med` and `find_chemo_med` so all callers
+are scoped consistently — pre-filtering by the orchestrator would
+risk silent inconsistency. A med outside the window does not count
+as active even if it matches a keyword (a long-completed chemo
+regimen does not perpetually flag heme-active).
+
+### ICD-10 strict-case contract
+
+The cohort matchers are **case-sensitive and whitespace-strict**,
+mirroring `bba.audit_orders`. Lowercase `"i25.10"`, padded
+`" I25.10 "`, and full-width digits do not match. Loosening the
+matcher would also loosen drift detection at ingest (codes that
+arrive in unexpected shapes are a data-quality problem to fix
+upstream, not paper over downstream and silently broaden the
+cohort allow-lists). `TestIcd10StrictCaseContract` pins the rule.
+
 ## Deid-redactor concepts (#17)
 
 ### Role token
