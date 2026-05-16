@@ -17,7 +17,7 @@ the second pass.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from bba.audit_pipeline.models import PipelineRunResult
 from bba.audit_store import AuditStore
@@ -66,12 +66,47 @@ def select_winning_attempt(
     when no attempt passed verifier — caller routes that to
     ``NEEDS_REVIEW`` with ``hallucination_suspect=True``.
 
-    Sequence is over an internal verified-call tuple shape (defined
-    GREEN). The signature is generic-object here because the full
-    shape requires the verifier output to be wired in.
+    Callers pass a sequence of mapping-shaped records (test fixtures
+    use plain ``dict`` with ``attempt_id`` + ``verifier_pass`` keys;
+    production wires the verified-call tuple emitted by
+    :mod:`bba.quote_grounder`). The lookup is duck-typed so both paths
+    share the same primitive.
     """
-    _ = calls
-    raise NotImplementedError("RED-phase scaffold; see issue #24")
+    passing = [c for c in calls if _verifier_passed(c)]
+    if not passing:
+        return None
+    return max(passing, key=_attempt_key)
+
+
+def _verifier_passed(call: object) -> bool:
+    """Return True iff ``call``'s ``verifier_pass`` field is truthy.
+
+    Supports both ``Mapping`` (test fixtures) and attribute-bearing
+    record types (production verified-call tuples) so the winning-
+    attempt rule has one implementation across both call sites.
+    """
+    if isinstance(call, Mapping):
+        return bool(call.get("verifier_pass"))
+    return bool(getattr(call, "verifier_pass", False))
+
+
+def _attempt_key(call: object) -> int:
+    """Extract ``attempt_id`` as the comparison key.
+
+    Same duck-typed lookup as :func:`_verifier_passed`. Raises
+    ``TypeError`` if neither shape provides the field — the caller is
+    handing us malformed data and should not silently fall back to 0.
+    """
+    if isinstance(call, Mapping):
+        attempt = call.get("attempt_id")
+    else:
+        attempt = getattr(call, "attempt_id", None)
+    if attempt is None:
+        raise TypeError(
+            f"call {call!r} is missing 'attempt_id'; "
+            "winning-attempt rule needs a deterministic ordering key"
+        )
+    return int(attempt)
 
 
 __all__ = ["apply_batch_results", "select_winning_attempt"]
