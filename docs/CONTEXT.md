@@ -433,6 +433,195 @@ arrive in unexpected shapes are a data-quality problem to fix
 upstream, not paper over downstream and silently broaden the
 cohort allow-lists). `TestIcd10StrictCaseContract` pins the rule.
 
+## Deterministic-classifier concepts (#8)
+
+### Classifier inputs
+
+Per-audit composition of upstream module outputs: `hb_result`
+(`HbLookupResult` from #5), `cohort_assignment` (`CohortAssignment`
+from #7), `order_datetime`, `procedure_proximity_hours` (hours from
+most-recent operative event to the order anchor, `None` if no event),
+and `crystalloid_liters_prior_4h` (4 h totaling from MED.csv).
+`bba.deterministic_classifier.models.ClassifierInputs`. Frozen
+Pydantic v2 — the classifier is pure, never mutates its input.
+
+### Classifier result
+
+Frozen output of `classify`: `(classification, bypass_reason,
+cohort_threshold, rationale)`.
+`bba.deterministic_classifier.models.ClassifierResult`.
+`classification` is the canonical `bba.audit_store.Classification`
+Literal (no module-local enum). `cohort_threshold` echoes the
+threshold actually applied so the audit row is reproducible without
+re-running the cohort detector. `rationale` is a short slug naming
+which rule fired (`"hb_lt_threshold"`, `"bypass_hemodilution"`,
+`"single_low_hb_no_trend"`, …); free-form prose belongs to the LLM
+stage, not here.
+
+### Bypass reason
+
+Five-member `StrEnum` identifying which deterministic bypass fired:
+`DELTA_HB`, `PERI_PROCEDURAL_6H`, `MTP`, `HEMODILUTION_FLAGGED`,
+`NONE`. `bba.deterministic_classifier.models.BypassReason`. Structured
+enum, not a free string — each path sets exactly one member; non-bypass
+classifications carry `NONE`. The audit row persists this verbatim so
+dashboards can group by reason without re-deriving from `rationale`.
+
+### Classification precedence
+
+Eight-step composition in `bba.deterministic_classifier.classify`
+(top wins): (1) Hb missing → `INSUFFICIENT_EVIDENCE`; (2) cohort
+`MTP` → `APPROPRIATE`/`MTP`; (3) cohort `UNKNOWN` → `NEEDS_REVIEW`;
+(4) procedure ≤ 6 h → `APPROPRIATE`/`PERI_PROCEDURAL_6H`;
+(5) delta-Hb fired → `APPROPRIATE`/`DELTA_HB`; (6) hemodilution
+(Hb < threshold ∧ ≥ 2 L crystalloid) → `NEEDS_REVIEW`/
+`HEMODILUTION_FLAGGED`; (7) single-low-Hb-no-trend (Hb < threshold ∧
+`needs_review_single_low_hb`) → `NEEDS_REVIEW`/`NONE`; (8) plain
+Hb-tier: `< threshold` → `APPROPRIATE`, `[threshold, 10)` →
+`NEEDS_REVIEW`, `≥ 10` → `POTENTIALLY_INAPPROPRIATE`.
+
+### INAPPROPRIATE never deterministic
+
+The engine **never** emits `INAPPROPRIATE` — that label requires
+positive-evidence reasoning only the LLM stage performs (Round 1 B2).
+Documentation absence cannot produce `INAPPROPRIATE` at this layer;
+the worst Hb-tier output is `POTENTIALLY_INAPPROPRIATE` and the LLM
+may downgrade later. Pinned by `TestB2InvariantProperty`, a hypothesis
+sweep over the full [2.0, 25.0] g/dL Hb range × every bypass-flag
+combination — a future refactor that quietly adds an INAPPROPRIATE
+path fails the property check.
+
+### POTENTIALLY_INAPPROPRIATE tier (canonical)
+
+`bba.audit_store.Classification` extended in #8 to include
+`POTENTIALLY_INAPPROPRIATE`, so the deterministic engine returns the
+Hb ≥ 10 tier directly without a string round-trip. Single canonical
+Literal across `audit_store`, `deterministic_classifier`,
+`prompt_builder`, and `llm_client`; no module-local variants
+(user constraint: one enum, one source of truth).
+
+### Cohort UNKNOWN routing
+
+`label=UNKNOWN`, `threshold=None` → `NEEDS_REVIEW`/`NONE`. Refuses
+to silently default to `DEFAULT_THRESHOLD=7.0` when procedure data
+was missing upstream (Round 2 fix N1 + user constraint: NEVER silent
+7.0). Hb missing still wins over UNKNOWN — no current Hb means no
+anchor for any interpretation. `TestCohortUnknownRoutesToNeedsReview`.
+
+### Non-threshold cohort fallthrough
+
+After the bypass chain, a `threshold=None` cohort surviving steps 1-5
+(in practice, only `HEME_MALIGNANCY_ACTIVE` — `MTP` and `UNKNOWN`
+exited earlier) routes to `NEEDS_REVIEW`/`NONE` with
+`rationale="cohort_non_threshold"`. The T2-supportive heme cohort
+is not Hb-tier-driven; the LLM stage handles its context
+interpretation. Surfacing as `NEEDS_REVIEW` rather than passing
+through plain Hb tiers avoids a meaningless `APPROPRIATE` for a
+patient whose anemia interpretation depends entirely on the
+clinical narrative.
+
+### Hemodilution carve-out
+
+Inside the sub-threshold branch (Hb < `cohort_threshold`), if
+`crystalloid_liters_prior_4h ≥ 2.0` (Round 1 B5), classification is
+`NEEDS_REVIEW` with `bypass_reason=HEMODILUTION_FLAGGED` instead of
+auto-APPROPRIATE. Scoped to the would-be auto-APPROPRIATE branch
+only — never promotes a gray-zone or high-Hb result. Threshold lives
+on the classifier module as `HEMODILUTION_CRYSTALLOID_LITERS = 2.0`.
+
+### Single-low-Hb-no-trend carve-out
+
+After the hemodilution check, if `hb_result.needs_review_single_low_hb`
+is set (upstream contract: isolated Hb < 8 g/dL with no prior 24 h
+observation), classification is `NEEDS_REVIEW`/`NONE` with
+`rationale="single_low_hb_no_trend"`. PR #52 Codex P1: a lone
+unconfirmed low value cannot be treated as confirmed anemia. The
+MTP / peri-procedural / delta-Hb bypasses still win above this check
+because each is itself a positive-evidence anchor that supersedes
+the "no trend" concern.
+
+### Peri-procedural bypass window
+
+`PERI_PROCEDURAL_WINDOW_HOURS = 6.0`. A procedure with
+`procedure_proximity_hours ≤ 6.0` auto-bypasses to `APPROPRIATE`
+with `bypass_reason=PERI_PROCEDURAL_6H`. Boundary is inclusive per
+PRD §6 ("within 6 h"). Proximity is the elapsed hours from the
+most-recent operative event to the order anchor — distinct from
+"no event" (`None`); future-dated events are filtered upstream by
+the orchestrator before reaching the classifier.
+
+### Delta-Hb bypass on missing Hb
+
+When `hb_result.value_g_dl is None`, the classifier returns
+`INSUFFICIENT_EVIDENCE` **before** checking
+`hb_result.delta_hb_bypass`. A stale upstream "bypass" flag set
+together with a missing Hb is a structural inconsistency; the
+classifier prefers the "no Hb" fact over honoring the orphan flag.
+`TestBypassPathways::test_delta_hb_bypass_does_not_fire_when_hb_missing`
+pins this.
+
+### Monotonicity in Hb
+
+For the same cohort + same evidence with no bypass active, increasing
+Hb never moves classification toward more-appropriate. Ordering:
+`APPROPRIATE` < `NEEDS_REVIEW` < `POTENTIALLY_INAPPROPRIATE`.
+Hypothesis property test (`TestMonotonicityProperty`) sweeps thresholds
+{7.0, 7.5, 8.0} and Hb pairs across tier boundaries. A regression
+that, say, downgraded high-Hb to `NEEDS_REVIEW` based on a normal-but-
+suspicious heuristic would fail the property check.
+
+### Crystalloid totaling helper
+
+`bba.deterministic_classifier.crystalloid.total_crystalloid_liters`.
+Thin sum-and-window utility: filter events to
+`(order_datetime − 4 h, order_datetime]`, parse the dose suffix
+(`mL`/`cc`/`L`, case-insensitive), sum in liters. Future-dated events
+and unparseable rows contribute 0.0. Drug-name → "is crystalloid?"
+classification lives upstream in the MED-table reader; this helper
+trusts that `med_events` are already crystalloid-only.
+
+### Infusion-rate exclusion
+
+The dose regex uses `\b(?!\s*/)` after the unit so
+`"NSS 500 mL/h"`, `"D5W 200 cc/hour"`, `"RLS 1 L/hr"`, and
+`"500 mL / h"` are all rejected. `\b` alone matched the L→/ boundary
+(`/` is non-alphanumeric), which counted a rate as a delivered bolus
+and could push a 4 h total over the 2 L hemodilution threshold —
+flipping a sub-threshold Hb from APPROPRIATE to NEEDS_REVIEW
+incorrectly. PR #52 Codex P2.
+
+### Pure function contract
+
+`classify(inputs) -> result` is pure: same input always yields the
+same result, no module-global state, no mutation of `inputs`, never
+raises on a well-formed `ClassifierInputs` (invalid types fail at
+the Pydantic boundary, not inside `classify`). This is load-bearing
+for the audit row's reproducibility metadata — re-running the
+classifier with persisted inputs must reproduce the persisted
+classification byte-for-byte.
+
+### Deferred review (post-merge)
+
+Items intentionally **not** in scope for #8, documented here so a
+future reader does not re-litigate:
+
+* **AN-join validation against real `IPTSUMOPRT.csv`** — the
+  classifier composes upstream module outputs by reference. Real
+  re-encrypted ANs arrive next week; smoke-testing the full join
+  against `data/encrypted/IPTSUMOPRT.csv` lives with the orchestrator
+  (#24, audit_pipeline), not here.
+* **Crystalloid drug-name classification** — `total_crystalloid_liters`
+  trusts that `med_events` are already filtered to crystalloid drugs
+  upstream. The MED-table reader (an orchestrator concern) owns the
+  drug-name allow-list; tightening it here would duplicate logic and
+  invite drift.
+* **`needs_review_single_low_hb` propagation to the LLM stage** —
+  the deterministic engine routes to `NEEDS_REVIEW` and stops. The
+  LLM stage receives the rationale slug `"single_low_hb_no_trend"`
+  and may decide whether the note narrative provides the missing
+  trend evidence. Wiring that branch into the prompt selector is a
+  separate ticket (#21 prompt_builder follow-up).
+
 ## Deid-redactor concepts (#17)
 
 ### Role token
