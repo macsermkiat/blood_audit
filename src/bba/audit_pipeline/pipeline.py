@@ -165,7 +165,13 @@ def run_pipeline(
         touched.append(batch_id)
 
         requests = _build_submission_requests(chunk_contexts, run_id=run_id)
-        response = transport.submit_batch(
+
+        # Split-phase submission (PR #54 codex P1 fix): create the
+        # remote batch and persist the anthropic_batch_id BEFORE
+        # polling. A SIGTERM during the polling window now leaves a
+        # SUBMITTED row whose batch_id the resume reconciler can
+        # poll, instead of a stranded PENDING row.
+        anthropic_batch_id = transport.submit_batch_only(
             model=llm_config.sonnet_model_id,
             requests=requests,
             prompt_cache_enabled=llm_config.prompt_cache_enabled,
@@ -174,10 +180,17 @@ def run_pipeline(
         submitted = transition(
             pending,
             to_state=BatchRunState.SUBMITTED,
-            anthropic_batch_id=response.batch_id,
+            anthropic_batch_id=anthropic_batch_id,
             now=_now_utc(),
         )
         batch_run_store.update(submitted)
+
+        response = transport.fetch_batch_results(
+            anthropic_batch_id,
+            model=llm_config.sonnet_model_id,
+            requests=requests,
+            prompt_cache_enabled=llm_config.prompt_cache_enabled,
+        )
 
         context_map = {ctx.order.audit_id: ctx for ctx in chunk_contexts}
         write_summary = apply_batch_results(

@@ -63,10 +63,20 @@ class CassetteTransport:
 
     Phase 1 runs the batch loop single-threaded (PRD §10 DuckDB
     single-writer rule), so the cassette is not promised thread-safe.
+
+    The transport implements the split-phase contract
+    (:meth:`submit_batch_only` + :meth:`fetch_batch_results`) so the
+    audit_pipeline's row-level checkpoint can exercise the same code
+    path the production transport uses. ``submit_batch_only`` records
+    the planned ``batch_id`` keyed on the interaction's
+    ``RawBatchResponse.batch_id``; ``fetch_batch_results`` retrieves
+    by either ``batch_id`` (the resume path) or the
+    ``(model, sorted_custom_ids)`` key (the submit-then-fetch path).
     """
 
     def __init__(self, interactions: Sequence[CassetteInteraction]) -> None:
         self._table: dict[tuple[str, tuple[str, ...]], RawBatchResponse] = {}
+        self._by_batch_id: dict[str, RawBatchResponse] = {}
         for interaction in interactions:
             key = (interaction.model, tuple(sorted(interaction.custom_ids)))
             if key in self._table:
@@ -74,6 +84,45 @@ class CassetteTransport:
                     f"duplicate cassette interaction for key {key!r}"
                 )
             self._table[key] = interaction.response
+            self._by_batch_id[interaction.response.batch_id] = interaction.response
+
+    def submit_batch_only(
+        self,
+        *,
+        model: str,
+        requests: Sequence[BatchSubmissionRequest],
+        prompt_cache_enabled: bool,
+    ) -> str:
+        """Return the recorded ``batch_id`` without polling.
+
+        Same lookup key as :meth:`submit_batch`; the cassette must
+        already carry an interaction for this submission. The recorded
+        :class:`RawBatchResponse.batch_id` is returned so the caller
+        can persist it before invoking :meth:`fetch_batch_results`.
+        """
+        _ = prompt_cache_enabled
+        response = self._lookup_by_request_key(model, requests)
+        return response.batch_id
+
+    def fetch_batch_results(
+        self,
+        batch_id: str,
+        *,
+        model: str,
+        requests: Sequence[BatchSubmissionRequest],
+        prompt_cache_enabled: bool,
+    ) -> RawBatchResponse:
+        """Return the recorded :class:`RawBatchResponse` for ``batch_id``.
+
+        Falls back to the ``(model, sorted_custom_ids)`` lookup when the
+        ``batch_id`` was not seen at construction time — this supports
+        the resume path that polls a batch_id read off the
+        ``batch_runs`` table without having to re-record the cassette
+        per resume run."""
+        _ = prompt_cache_enabled
+        if batch_id in self._by_batch_id:
+            return self._by_batch_id[batch_id]
+        return self._lookup_by_request_key(model, requests)
 
     def submit_batch(
         self,
@@ -82,8 +131,13 @@ class CassetteTransport:
         requests: Sequence[BatchSubmissionRequest],
         prompt_cache_enabled: bool,
     ) -> RawBatchResponse:
-        """Look up the cassette by ``(model, sorted_custom_ids)``."""
+        """Backward-compatible: submit + fetch in one call."""
         _ = prompt_cache_enabled  # cassettes do not key on cache mode
+        return self._lookup_by_request_key(model, requests)
+
+    def _lookup_by_request_key(
+        self, model: str, requests: Sequence[BatchSubmissionRequest]
+    ) -> RawBatchResponse:
         key = (model, tuple(sorted(r.audit_id for r in requests)))
         if key not in self._table:
             raise KeyError(

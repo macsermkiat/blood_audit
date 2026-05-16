@@ -1,41 +1,44 @@
 """Resume-on-startup reconciler (issue #24 AC ③, user constraint #5).
 
 Hard requirement: the pipeline must survive a SIGTERM mid-batch and
-restart without losing or duplicating work. The reconciler:
+restart without losing or duplicating work. The reconciler handles
+three distinct failure-window classes:
 
-1. Scans ``batch_runs`` for non-terminal rows (PENDING, SUBMITTED,
-   PARTIAL).
-2. For PENDING rows: the local-create succeeded but Anthropic was
-   never asked. With no anthropic_batch_id there is nothing to poll,
-   so the row is transitioned to FAILED with an operator-visible
-   error message. Re-submission is the operator's call (a re-run of
+1. **PENDING with no anthropic_batch_id** — local create landed but
+   submission never happened. Without a batch_id there is nothing to
+   poll; transition the row to FAILED with an operator-visible
+   error_message. Re-submission is the operator's call (a re-run of
    :func:`bba.audit_pipeline.run_pipeline` with the same ``run_id``
-   is idempotent via audit_store's commit-marker; a new ``run_id``
-   re-derives the rows fresh).
-2'. (Codex review HIGH #4: PENDING rows previously dropped silently.)
-3. For SUBMITTED / PARTIAL rows: walks every audit_id in the batch
-   and uses :meth:`AuditStore.reconcile` to identify orphan
-   ``llm_calls`` rows (call written, audit row missing). Each orphan
-   is re-emitted through :func:`bba.audit_pipeline.replay.apply_batch_results`
-   using the cached :class:`LlmCall.response_json` payload — the
-   audit_store's idempotency contract guarantees a second run is a
-   no-op.
-4. Once every audit_id carries an audit_results row, transitions the
-   batch_runs row to COMPLETE. Otherwise leaves it PARTIAL so the
-   next resume picks it up again.
+   is idempotent via audit_store's commit-marker).
 
-The reconciler is itself idempotent — running it twice produces zero
-additional writes (the audit_store's
-``WriteResult.skipped_idempotent`` rejects the second call).
+2. **SUBMITTED / PARTIAL with cached llm_calls** — the orphan-call
+   case (PRD §10): phase 1 of audit_store.write succeeded but phase
+   2 didn't. Each orphan is re-emitted through
+   :func:`bba.audit_pipeline.replay.apply_batch_results` using the
+   cached :class:`LlmCall.response_json` payload.
+
+3. **SUBMITTED / PARTIAL with NO cached llm_calls** — the
+   "Anthropic-polling crash" case (codex PR #54 P1 finding): the
+   pipeline persisted the anthropic_batch_id but died before any
+   results were retrieved. The reconciler calls
+   :meth:`AnthropicTransport.fetch_batch_results` on the cached
+   batch_id to pull the results down, then routes them through
+   :func:`apply_batch_results`. Without this step, repeated resumes
+   would keep declaring the row failed even though Anthropic has
+   completed the batch.
+
+The reconciler is idempotent — a second run produces zero additional
+writes (audit_store's :class:`WriteResult.skipped_idempotent`).
 """
 
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 
 from bba.audit_pipeline.models import (
+    BatchRun,
     BatchRunState,
     PipelineRowContext,
     ResumeReport,
@@ -43,8 +46,12 @@ from bba.audit_pipeline.models import (
 from bba.audit_pipeline.state_machine import is_terminal, transition
 from bba.audit_pipeline.store import BatchRunStore
 from bba.audit_store import AuditStore, LlmCall
+from bba.deterministic_classifier import ClassifierResult
 from bba.llm_client.models import (
+    AnthropicTransport,
+    BatchSubmissionRequest,
     BatchSubmissionResult,
+    LlmClientConfig,
     RawBatchResponse,
 )
 
@@ -54,36 +61,38 @@ def resume_on_startup(
     batch_run_store: BatchRunStore,
     audit_store: AuditStore,
     contexts: Mapping[str, PipelineRowContext] | None = None,
+    transport: AnthropicTransport | None = None,
+    llm_config: LlmClientConfig | None = None,
 ) -> ResumeReport:
     """Reconcile every non-terminal ``batch_runs`` row and return a report.
 
     ``contexts`` maps ``audit_id`` to a :class:`PipelineRowContext` so
     the reconciler can rebuild :class:`bba.audit_store.AuditRow` rows
     from cached LLM responses without re-querying upstream tables.
-    When ``contexts`` is ``None`` or missing an audit_id, that orphan
-    is reported via :attr:`ResumeReport.failed_audit_ids` rather than
-    silently fabricated.
+    Missing contexts surface as ``failed_audit_ids`` (the orphan is
+    real but the reconciler has no upstream snapshot to render it).
 
-    The reconciler does NOT re-poll Anthropic. It works exclusively
-    off the cached ``llm_calls`` rows already on disk (PRD §10:
-    audit_store persists the full Anthropic response so re-emit is
-    byte-exact without an HTTP round-trip). Batches that crashed
-    after submission but before any response landed (no cached
-    calls) are surfaced as ``failed_audit_ids`` for operator action;
-    re-submission goes through :func:`bba.audit_pipeline.run_pipeline`
-    with the same ``run_id`` (idempotent via audit_store's commit
-    marker).
+    ``transport`` is the production :class:`AnthropicTransport` (or a
+    cassette in tests). When provided, the reconciler polls
+    SUBMITTED/PARTIAL batches that have no cached llm_calls yet —
+    this is the failure-window codex flagged on PR #54 (SIGTERM
+    during Anthropic polling left the row stranded indefinitely).
+    When ``transport`` is ``None``, the no-cached-calls case falls
+    through to ``failed_audit_ids`` for operator action.
+
+    ``llm_config`` is consulted for the model id used to rebuild the
+    submission set that :meth:`fetch_batch_results` needs. Default
+    behaviour (None) skips Anthropic polling entirely.
 
     Returns a typed report:
 
     * ``polled_batch_ids`` — every batch_run touched by the resume.
     * ``completed_audit_ids`` — audit_ids whose audit_results row is
-      now committed (either pre-existed or re-emitted this run).
+      now committed.
     * ``reemitted_audit_ids`` — orphan calls whose audit_row was
       written by this resume pass.
     * ``failed_audit_ids`` — audit_ids that cannot be reconciled
-      without operator action (PENDING with no Anthropic call,
-      orphan with no context, or batch with no cached response).
+      without operator action.
     """
     contexts = contexts or {}
 
@@ -99,9 +108,6 @@ def resume_on_startup(
         polled.append(run.batch_id)
 
         if run.state is BatchRunState.PENDING:
-            # The local create landed but submission never happened.
-            # Without an anthropic_batch_id we can't poll; surface the
-            # row as FAILED so the operator can act (Codex review HIGH #4).
             failed.extend(run.audit_ids)
             failed_run = transition(
                 run,
@@ -115,70 +121,17 @@ def resume_on_startup(
             batch_run_store.update(failed_run)
             continue
 
-        # SUBMITTED / PARTIAL: walk the cached llm_calls, write
-        # audit_results for orphans where context is available.
-        #
-        # An "orphan" here is an audit_id whose ``llm_calls`` row exists
-        # but whose ``audit_results`` row was never written (crash
-        # between phase 1 and phase 2 of audit_store.write). The
-        # audit_store's :meth:`reconcile` produces ``orphan_call_ids``
-        # for this direction; we derive the audit_id set from the
-        # cached calls so we don't depend on call_id <-> audit_id
-        # translation outside the audit_store boundary.
-        cached_calls_by_audit_id = _cached_calls_by_audit_id(
-            audit_store, run_id=run.run_id
+        run_completed, run_reemitted, run_failed = _reconcile_submitted_or_partial(
+            run,
+            batch_run_store=batch_run_store,
+            audit_store=audit_store,
+            contexts=contexts,
+            transport=transport,
+            llm_config=llm_config,
         )
-        persisted_audit_ids = {
-            row.audit_id
-            for row in audit_store.read_audit_results(run_id=run.run_id)
-        }
-        run_reemitted: list[str] = []
-        run_failed: list[str] = []
-
-        for audit_id in run.audit_ids:
-            if audit_id in persisted_audit_ids:
-                completed.append(audit_id)
-                continue
-            calls = cached_calls_by_audit_id.get(audit_id, ())
-            if calls:
-                # Orphan call: phase 1 landed but phase 2 didn't.
-                if audit_id not in contexts:
-                    run_failed.append(audit_id)
-                    continue
-                _re_emit_audit_row(
-                    audit_id=audit_id,
-                    calls=calls,
-                    context=contexts[audit_id],
-                    audit_store=audit_store,
-                    run_id=run.run_id,
-                )
-                run_reemitted.append(audit_id)
-                completed.append(audit_id)
-            else:
-                # No audit_row AND no cached call — Anthropic was
-                # contacted but the call response never landed (e.g.,
-                # SIGTERM before the writer ran). Surface for operator
-                # action; the rerun pathway re-derives via run_pipeline.
-                run_failed.append(audit_id)
-
+        completed.extend(run_completed)
         reemitted.extend(run_reemitted)
         failed.extend(run_failed)
-
-        if not run_failed and len(set(run.audit_ids)) == len(
-            {aid for aid in run.audit_ids if aid in persisted_audit_ids}
-            | set(run_reemitted)
-        ):
-            completed_run = transition(
-                run, to_state=BatchRunState.COMPLETE, now=_now_utc()
-            )
-            batch_run_store.update(completed_run)
-        elif run.state is BatchRunState.SUBMITTED:
-            # Some rows landed; move to PARTIAL so the next resume
-            # can identify what's still pending.
-            partial_run = transition(
-                run, to_state=BatchRunState.PARTIAL, now=_now_utc()
-            )
-            batch_run_store.update(partial_run)
 
     return ResumeReport(
         polled_batch_ids=tuple(polled),
@@ -186,6 +139,200 @@ def resume_on_startup(
         reemitted_audit_ids=tuple(reemitted),
         failed_audit_ids=tuple(failed),
     )
+
+
+def _reconcile_submitted_or_partial(
+    run: BatchRun,
+    *,
+    batch_run_store: BatchRunStore,
+    audit_store: AuditStore,
+    contexts: Mapping[str, PipelineRowContext],
+    transport: AnthropicTransport | None,
+    llm_config: LlmClientConfig | None,
+) -> tuple[list[str], list[str], list[str]]:
+    """Reconcile one SUBMITTED/PARTIAL row.
+
+    Returns ``(completed, reemitted, failed)`` lists for the row. The
+    caller folds these into the top-level report.
+    """
+    cached_calls = _cached_calls_by_audit_id(audit_store, run_id=run.run_id)
+    persisted_audit_ids = {
+        row.audit_id
+        for row in audit_store.read_audit_results(run_id=run.run_id)
+    }
+
+    audit_ids_without_audit_row = [
+        aid for aid in run.audit_ids if aid not in persisted_audit_ids
+    ]
+    audit_ids_missing_cached_calls = [
+        aid for aid in audit_ids_without_audit_row if not cached_calls.get(aid)
+    ]
+
+    # Codex PR #54 P1: poll Anthropic for batches whose batch_id is
+    # known but whose results never landed. Without this step the
+    # SIGTERM-during-polling crash window stays stranded.
+    if (
+        audit_ids_missing_cached_calls
+        and transport is not None
+        and llm_config is not None
+        and run.anthropic_batch_id is not None
+    ):
+        try:
+            response = _fetch_response_for_batch(
+                run,
+                contexts=contexts,
+                transport=transport,
+                llm_config=llm_config,
+                audit_ids=audit_ids_missing_cached_calls,
+            )
+        except Exception:
+            # Anthropic-side failure (timeout, custom_id drift, SDK
+            # error) — leave the row in its current state; the next
+            # resume retries. Don't escalate to FAILED here because
+            # the cause may be transient (network blip, Anthropic
+            # rate limit).
+            response = None
+        if response is not None:
+            from bba.audit_pipeline.replay import apply_batch_results
+
+            polled_contexts = {
+                aid: contexts[aid]
+                for aid in audit_ids_missing_cached_calls
+                if aid in contexts
+            }
+            if polled_contexts:
+                apply_batch_results(
+                    response,
+                    audit_store=audit_store,
+                    run_id=run.run_id,
+                    contexts=polled_contexts,
+                )
+                # Refresh cached state — the call(s) and audit row(s)
+                # are now persisted.
+                cached_calls = _cached_calls_by_audit_id(
+                    audit_store, run_id=run.run_id
+                )
+                persisted_audit_ids = {
+                    row.audit_id
+                    for row in audit_store.read_audit_results(run_id=run.run_id)
+                }
+
+    run_completed: list[str] = []
+    run_reemitted: list[str] = []
+    run_failed: list[str] = []
+
+    for audit_id in run.audit_ids:
+        if audit_id in persisted_audit_ids:
+            run_completed.append(audit_id)
+            continue
+        calls = cached_calls.get(audit_id, ())
+        if calls:
+            if audit_id not in contexts:
+                run_failed.append(audit_id)
+                continue
+            _re_emit_audit_row(
+                audit_id=audit_id,
+                calls=calls,
+                context=contexts[audit_id],
+                audit_store=audit_store,
+                run_id=run.run_id,
+            )
+            run_reemitted.append(audit_id)
+            run_completed.append(audit_id)
+        else:
+            run_failed.append(audit_id)
+
+    if not run_failed and len(set(run.audit_ids)) == len(
+        {aid for aid in run.audit_ids if aid in persisted_audit_ids}
+        | set(run_reemitted)
+    ):
+        completed_run = transition(
+            run, to_state=BatchRunState.COMPLETE, now=_now_utc()
+        )
+        batch_run_store.update(completed_run)
+    elif run.state is BatchRunState.SUBMITTED:
+        partial_run = transition(
+            run, to_state=BatchRunState.PARTIAL, now=_now_utc()
+        )
+        batch_run_store.update(partial_run)
+
+    return run_completed, run_reemitted, run_failed
+
+
+def _fetch_response_for_batch(
+    run: BatchRun,
+    *,
+    contexts: Mapping[str, PipelineRowContext],
+    transport: AnthropicTransport,
+    llm_config: LlmClientConfig,
+    audit_ids: Sequence[str],
+) -> RawBatchResponse | None:
+    """Rebuild the submission set + call :meth:`fetch_batch_results`.
+
+    Returns ``None`` when the reconciler can't synthesise the
+    submission set (missing contexts for every audit_id in
+    ``audit_ids``). The caller then leaves the batch_run in its
+    current state for the next resume to retry.
+    """
+    requests = _rebuild_submission_requests(
+        run=run, contexts=contexts, audit_ids=audit_ids
+    )
+    if not requests:
+        return None
+    assert run.anthropic_batch_id is not None
+    return transport.fetch_batch_results(
+        run.anthropic_batch_id,
+        model=llm_config.sonnet_model_id,
+        requests=requests,
+        prompt_cache_enabled=llm_config.prompt_cache_enabled,
+    )
+
+
+def _rebuild_submission_requests(
+    *,
+    run: BatchRun,
+    contexts: Mapping[str, PipelineRowContext],
+    audit_ids: Sequence[str],
+) -> list[BatchSubmissionRequest]:
+    """Reconstruct the :class:`BatchSubmissionRequest` list for an
+    in-flight batch by re-running :mod:`bba.prompt_builder` against
+    the supplied contexts.
+
+    The prompt builder is a pure function over canonical inputs so
+    the rebuild produces the same prompt_hash + envelope_hash bytes
+    the submission used — :func:`apply_batch_results` then accepts
+    the response without contract drift.
+    """
+    from bba.prompt_builder import PromptBuildRequest, build_prompt
+
+    requests: list[BatchSubmissionRequest] = []
+    for audit_id in audit_ids:
+        ctx = contexts.get(audit_id)
+        if ctx is None or not ctx.evidence_chunks:
+            continue
+        # Default threshold mirrors run_pipeline's _build_submission_requests
+        threshold = (
+            ctx.cohort_assignment.threshold
+            if ctx.cohort_assignment.threshold is not None
+            else 7.0
+        )
+        prompt = build_prompt(
+            PromptBuildRequest(
+                task_mode="HB_7_10_REVIEW",
+                cohort_threshold=threshold,
+                evidence_chunks=ctx.evidence_chunks,
+                few_shot_examples=(),
+            )
+        )
+        requests.append(
+            BatchSubmissionRequest(
+                audit_id=audit_id,
+                run_id=run.run_id,
+                task_mode="HB_7_10_REVIEW",
+                prompt=prompt,
+            )
+        )
+    return requests
 
 
 def _cached_calls_by_audit_id(
@@ -264,10 +411,10 @@ def _now_utc() -> datetime:
     return datetime.now(UTC)
 
 
-# Re-export hashlib so module-level static analysis sees the use; the
-# hashlib import is used by _re_emit_audit_row in future expansions
-# (deterministic call_id rebuild). Kept as a forward-compat hook.
-_ = hashlib
+# hashlib + ClassifierResult held for forward-compat reconciler
+# extensions; both are imported but not directly used in the current
+# implementation (lint exemption acknowledged).
+_ = (hashlib, ClassifierResult)
 
 
 __all__ = ["resume_on_startup"]

@@ -520,10 +520,54 @@ class AnthropicTransport(Protocol):
     the test implementation (:class:`bba.llm_client.cassette.CassetteTransport`)
     replays a recorded JSON cassette so unit tests run offline.
 
-    The Protocol is intentionally narrow — one method per Batch API
-    operation — to keep the cassette implementation tractable and the
-    contract surface stable across SDK version bumps.
+    The Protocol exposes three operations:
+
+    * :meth:`submit_batch_only` — create the remote batch and return
+      the ``batch_id`` immediately (no polling). Persisting the
+      ``batch_id`` BEFORE waiting for results is what makes the
+      checkpoint table recoverable across SIGTERM during the polling
+      window (PRD §15 row-level checkpointing).
+    * :meth:`fetch_batch_results` — given a previously-submitted
+      ``batch_id``, poll until completion and return the parsed
+      results. Idempotent: callers MAY invoke this multiple times for
+      the same ``batch_id``; the audit_store's own commit-marker
+      handles double-application.
+    * :meth:`submit_batch` — convenience wrapper that calls both
+      operations in sequence. Preserved for backward compatibility
+      with callers that do not need split-phase checkpointing.
     """
+
+    def submit_batch_only(
+        self,
+        *,
+        model: str,
+        requests: Sequence[BatchSubmissionRequest],
+        prompt_cache_enabled: bool,
+    ) -> str:
+        """Create the remote batch and return its ``batch_id`` immediately.
+
+        Must NOT poll. The caller is expected to persist ``batch_id``
+        before invoking :meth:`fetch_batch_results` so a crash during
+        polling leaves a recoverable checkpoint row."""
+        ...
+
+    def fetch_batch_results(
+        self,
+        batch_id: str,
+        *,
+        model: str,
+        requests: Sequence[BatchSubmissionRequest],
+        prompt_cache_enabled: bool,
+    ) -> RawBatchResponse:
+        """Poll ``batch_id`` until completion and return the parsed results.
+
+        ``requests`` carries the original submission set so the result
+        envelope can be reconstructed (each result's ``request_json``
+        echoes the originating ``BatchSubmissionRequest``). Implementations
+        MAY raise :class:`AnthropicAPIError` on timeout or non-recoverable
+        error; the caller (resume reconciler) catches and surfaces the
+        row as failed for operator action."""
+        ...
 
     def submit_batch(
         self,
@@ -532,8 +576,10 @@ class AnthropicTransport(Protocol):
         requests: Sequence[BatchSubmissionRequest],
         prompt_cache_enabled: bool,
     ) -> RawBatchResponse:
-        """Submit a batch and return the parsed response.
+        """Convenience: :meth:`submit_batch_only` then :meth:`fetch_batch_results`.
 
+        Preserved for callers that don't need split-phase checkpointing;
+        the audit_pipeline orchestrator uses the split methods directly.
         Implementations MUST set ``custom_id`` on each result to the
         submission's ``audit_id`` and must surface the response headers
         (specifically ``anthropic-version`` and ``prompt_cache_id``).

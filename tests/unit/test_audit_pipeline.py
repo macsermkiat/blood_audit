@@ -814,6 +814,214 @@ class TestSigtermMidBatchResume:
         assert failed_run.error_message is not None
         assert "Anthropic" in failed_run.error_message
 
+    def test_pipeline_persists_submitted_state_before_polling(
+        self, tmp_path: object
+    ) -> None:
+        """Codex PR #54 P1: pipeline must persist (SUBMITTED, batch_id)
+        BEFORE waiting for results. A transport that asserts the
+        batch_run is already SUBMITTED at fetch time validates the
+        ordering."""
+        from pathlib import Path
+
+        from bba.audit_store import AuditStore, AuditStoreConfig
+        from bba.llm_client.models import (  # noqa: F401 used in type strings
+            BatchSubmissionRequest,
+            RawBatchResponse,
+        )
+
+        assert isinstance(tmp_path, Path)
+        audit_store = AuditStore(
+            AuditStoreConfig(
+                root_dir=tmp_path / "store", code_version="v0.1.0+test"
+            )
+        )
+        batch_run_store = InMemoryBatchRunStore()
+        contexts = tuple(
+            _row_context(
+                audit_id=f"audit-order-{i:03d}",
+                classification="POTENTIALLY_INAPPROPRIATE",
+            )
+            for i in range(2)
+        )
+
+        # Build a wrapping transport that asserts batch_run is in
+        # SUBMITTED state at fetch_batch_results time. This is the
+        # SIGTERM-recovery guarantee: by the time we wait for the
+        # Anthropic poll, the batch_id is durable on disk.
+        cassette = _cassette_for_contexts(contexts)
+        observed_states_at_fetch: list[BatchRunState] = []
+
+        class _OrderingProbe:
+            def submit_batch_only(
+                self, *, model: str, requests: "Sequence[BatchSubmissionRequest]",
+                prompt_cache_enabled: bool,
+            ) -> str:
+                return cassette.submit_batch_only(
+                    model=model,
+                    requests=requests,
+                    prompt_cache_enabled=prompt_cache_enabled,
+                )
+
+            def fetch_batch_results(
+                self,
+                batch_id: str,
+                *,
+                model: str,
+                requests: "Sequence[BatchSubmissionRequest]",
+                prompt_cache_enabled: bool,
+            ) -> RawBatchResponse:
+                # At this point every batch_run created in this
+                # pipeline run MUST be in SUBMITTED (or later) state.
+                for run in batch_run_store.list_all():
+                    observed_states_at_fetch.append(run.state)
+                return cassette.fetch_batch_results(
+                    batch_id,
+                    model=model,
+                    requests=requests,
+                    prompt_cache_enabled=prompt_cache_enabled,
+                )
+
+            def submit_batch(
+                self, *, model: str, requests: "Sequence[BatchSubmissionRequest]",
+                prompt_cache_enabled: bool,
+            ) -> RawBatchResponse:
+                return cassette.submit_batch(
+                    model=model,
+                    requests=requests,
+                    prompt_cache_enabled=prompt_cache_enabled,
+                )
+
+        run_pipeline(
+            contexts,
+            transport=_OrderingProbe(),
+            audit_store=audit_store,
+            batch_run_store=batch_run_store,
+            llm_config=_llm_config(),
+            pipeline_config=_pipeline_config(),
+            run_id="run-ordering",
+        )
+
+        # At fetch time, the row was SUBMITTED — i.e., the batch_id
+        # was already persisted before polling. PENDING at fetch time
+        # would mean a SIGTERM during polling could orphan the batch.
+        assert observed_states_at_fetch
+        assert all(
+            state is BatchRunState.SUBMITTED
+            for state in observed_states_at_fetch
+        )
+
+    def test_submitted_with_no_cached_calls_polls_anthropic(
+        self, tmp_path: object
+    ) -> None:
+        """Codex PR #54 P1: when the pipeline persisted SUBMITTED + a
+        batch_id but crashed before any results landed, resume must
+        poll Anthropic via transport.fetch_batch_results — not
+        declare the rows failed.
+
+        Stage a SUBMITTED batch_run with a known anthropic_batch_id;
+        pre-populate the cassette with the response keyed by THAT
+        batch_id. resume must retrieve the response and commit
+        audit_rows; the batch_run transitions to COMPLETE."""
+        from pathlib import Path
+
+        from bba.audit_store import AuditStore, AuditStoreConfig
+        from bba.llm_client import CassetteTransport
+        from bba.llm_client.models import (
+            BatchSubmissionResult,
+            CassetteInteraction,
+            RawBatchResponse,
+        )
+
+        assert isinstance(tmp_path, Path)
+        audit_store = AuditStore(
+            AuditStoreConfig(
+                root_dir=tmp_path / "store", code_version="v0.1.0+test"
+            )
+        )
+        run_id = "run-poll-recover"
+        ctx = _row_context(
+            audit_id="audit-poll-001",
+            classification="POTENTIALLY_INAPPROPRIATE",
+        )
+
+        # Build a cassette response that the resume reconciler will
+        # find via fetch_batch_results(anthropic_batch_id="msgbatch_in_flight").
+        response = RawBatchResponse(
+            batch_id="msgbatch_in_flight",
+            results=(
+                BatchSubmissionResult(
+                    custom_id=ctx.order.audit_id,
+                    model_id=SONNET_MODEL_ID,
+                    raw_response_json={
+                        "id": "msg_poll",
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "name": "classify_audit",
+                                "input": {
+                                    "classification": "APPROPRIATE",
+                                    "indications": [],
+                                    "negative_evidence": [],
+                                    "reasoning_summary_en": "poll-recovered",
+                                    "reasoning_summary_th": "poll-th",
+                                },
+                            }
+                        ],
+                        "stop_reason": "tool_use",
+                    },
+                    request_json={"messages": []},
+                    response_headers={"anthropic-version": "2023-06-01"},
+                    request_timestamp=_RUN_TS,
+                    latency_ms=2200,
+                    anthropic_version="2023-06-01",
+                    prompt_cache_id=None,
+                    extended_thinking_blocks=None,
+                ),
+            ),
+        )
+        cassette = CassetteTransport(
+            interactions=(
+                CassetteInteraction(
+                    model=SONNET_MODEL_ID,
+                    custom_ids=(ctx.order.audit_id,),
+                    response=response,
+                ),
+            )
+        )
+
+        batch_run_store = InMemoryBatchRunStore()
+        batch_run_store.create(
+            BatchRun(
+                batch_id="batch-poll",
+                state=BatchRunState.SUBMITTED,
+                run_id=run_id,
+                code_version="v0.1.0+test",
+                audit_ids=(ctx.order.audit_id,),
+                anthropic_batch_id="msgbatch_in_flight",
+                submitted_at=_RUN_TS,
+                updated_at=_RUN_TS,
+            )
+        )
+
+        # Resume reconciler: must poll Anthropic, write audit_row,
+        # transition batch_run to COMPLETE — no failed audit_ids.
+        report = resume_on_startup(
+            batch_run_store=batch_run_store,
+            audit_store=audit_store,
+            contexts={ctx.order.audit_id: ctx},
+            transport=cassette,
+            llm_config=_llm_config(),
+        )
+        assert report.failed_audit_ids == ()
+        assert ctx.order.audit_id in report.completed_audit_ids
+        rows = audit_store.read_audit_results(run_id=run_id)
+        assert len(rows) == 1
+        assert rows[0].audit_id == ctx.order.audit_id
+        assert (
+            batch_run_store.get("batch-poll").state is BatchRunState.COMPLETE
+        )
+
     def test_resume_walks_submitted_batches_and_classifies_audit_ids(
         self, tmp_path: object,
     ) -> None:
