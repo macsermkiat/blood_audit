@@ -26,7 +26,14 @@ from pathlib import Path
 
 import click
 
+from bba.cli._logging import get_logger
+from bba.cli.identity import code_version, compute_run_id
+from bba.cli.models import AuditCommandInput
 from bba.cli.store_protocol import AuditRunStore
+from bba.ingest import schema_fingerprint
+
+
+_log = get_logger()
 
 
 # ---------------------------------------------------------------------------
@@ -93,8 +100,33 @@ def bba_ingest(input_csv: Path, schema_version: str) -> None:
 def bba_audit(input_csv: Path | None, run_id: str | None, force: bool) -> None:
     """Run the audit pipeline. Re-running on the same input is a no-op
     unless ``--force`` is set."""
-    raise NotImplementedError(
-        "bba audit — GREEN phase wires compute_run_id + audit_pipeline.run_pipeline"
+    inputs = AuditCommandInput(input_csv=input_csv, run_id=run_id, force=force)
+    store = _get_audit_run_store()
+    resolved = _resolve_run_id(inputs)
+    if store.run_complete(resolved):
+        if not inputs.force:
+            _log.info(
+                "audit.noop",
+                run_id=resolved,
+                row_count=store.run_count(resolved),
+            )
+            return
+        store.record_idempotency_override(resolved, reason="cli --force flag")
+        _log.warning(
+            "audit.force_override",
+            run_id=resolved,
+            idempotency_override=True,
+        )
+    if inputs.input_csv is None:
+        raise click.UsageError(
+            "bba audit --run-id without --input cannot reach the pipeline; "
+            "the run was not previously completed"
+        )
+    _run_audit_pipeline(run_id=resolved, input_csv=inputs.input_csv)
+    _log.info(
+        "audit.complete",
+        run_id=resolved,
+        row_count=store.run_count(resolved),
     )
 
 
@@ -162,12 +194,29 @@ def _run_audit_pipeline(*, run_id: str, input_csv: Path) -> None:
     """Hand off to :func:`bba.audit_pipeline.run_pipeline`.
 
     Separated from :func:`bba_audit` so tests can patch the pipeline call
-    without monkeypatching the whole click command. GREEN-phase signature
-    will likely grow a ``config`` argument; the CLI test suite cares only
-    about call-count.
+    without monkeypatching the whole click command.
+
+    The body delegates straight to :func:`bba.audit_pipeline.run_pipeline`;
+    the CLI deliberately holds no business logic past this hand-off.
     """
-    raise NotImplementedError(
-        "_run_audit_pipeline — GREEN phase wires audit_pipeline.run_pipeline"
+    from bba.audit_pipeline import run_pipeline
+
+    run_pipeline(run_id=run_id, input_csv=input_csv)
+
+
+def _resolve_run_id(inputs: AuditCommandInput) -> str:
+    """Return the ``run_id`` for the audit invocation.
+
+    If ``--run-id`` was passed, use it verbatim. Otherwise compute it
+    from the input CSV's bytes, the active schema fingerprint, and the
+    package version — the formula from PRD §20."""
+    if inputs.run_id is not None:
+        return inputs.run_id
+    assert inputs.input_csv is not None, "AuditCommandInput XOR invariant"
+    return compute_run_id(
+        input_csv=inputs.input_csv,
+        schema_fingerprint=schema_fingerprint(),
+        code_version_str=code_version(),
     )
 
 
