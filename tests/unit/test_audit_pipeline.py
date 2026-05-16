@@ -57,6 +57,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from bba.audit_orders import AuditOrder
+from bba.audit_store import LlmCall
 from bba.audit_store.models import Classification
 from bba.audit_pipeline import (
     VALID_TRANSITIONS,
@@ -264,6 +265,48 @@ def _cassette_for_contexts(
         response=RawBatchResponse(batch_id="msgbatch_smoke", results=results),
     )
     return CassetteTransport(interactions=(interaction,))
+
+
+def _orphan_llm_call(ctx: PipelineRowContext, *, run_id: str) -> LlmCall:
+    """Build a stand-alone :class:`LlmCall` for the orphan-re-emit test.
+
+    Carries an Anthropic-shaped response payload so the resume
+    reconciler can reconstruct a :class:`BatchSubmissionResult` and
+    feed it through :func:`apply_batch_results`. Headers are folded
+    in via the ``__bba_response_headers__`` namespaced key (same
+    contract the real writer uses)."""
+    return LlmCall(
+        call_id=f"call-{ctx.order.audit_id}-orphan",
+        audit_id=ctx.order.audit_id,
+        run_id=run_id,
+        model_id=SONNET_MODEL_ID,
+        anthropic_version="2023-06-01",
+        prompt_cache_id=None,
+        request_json={"messages": [{"role": "user", "content": "..."}]},
+        response_json={
+            "id": "msg_orphan",
+            "type": "message",
+            "stop_reason": "tool_use",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "name": "classify_audit",
+                    "input": {
+                        "classification": "APPROPRIATE",
+                        "indications": [],
+                        "negative_evidence": [],
+                        "reasoning_summary_en": "orphan-replay",
+                        "reasoning_summary_th": "orphan-th",
+                    },
+                }
+            ],
+            "__bba_response_headers__": {"anthropic-version": "2023-06-01"},
+        },
+        request_timestamp=_RUN_TS,
+        latency_ms=900,
+        extended_thinking_blocks=None,
+        cold_storage_uri=None,
+    )
 
 
 def _row_context(
@@ -633,28 +676,130 @@ class TestSigtermMidBatchResume:
         """A crash after llm_calls phase 1 but before audit_results
         phase 2 leaves an orphan call. The reconciler re-emits it
         through the verifier + winning-attempt rule and persists the
-        audit row. PRD §10 names this as the expected failure mode."""
+        audit row. PRD §10 names this as the expected failure mode.
+
+        Codex review HIGH #6: assert behaviour, not just the typed
+        return shape. Seeds a real orphan LlmCall, runs resume, and
+        verifies a committed audit_row + zero duplicate writes on a
+        second resume pass.
+        """
         from pathlib import Path
 
         from bba.audit_store import AuditStore, AuditStoreConfig
 
-        store = InMemoryBatchRunStore()
         assert isinstance(tmp_path, Path)
         audit_store = AuditStore(
             AuditStoreConfig(
                 root_dir=tmp_path / "store", code_version="v0.1.0+test"
             )
         )
-        # The reconciler must produce a non-empty reemitted_audit_ids
-        # whenever orphans exist. Implementation lands in GREEN; the
-        # contract is the typed return shape.
+        run_id = "run-orphan"
+        ctx = _row_context(
+            audit_id="audit-orphan-001",
+            classification="POTENTIALLY_INAPPROPRIATE",
+        )
+
+        # Phase-1-only state: seed an orphan llm_call via the
+        # audit_store's leading-underscore seam (the same seam tests
+        # for audit_store itself use to stage "crashed between phases"
+        # states). No audit_results row is written.
+        orphan_call = _orphan_llm_call(ctx, run_id=run_id)
+        audit_store._persist_llm_calls([orphan_call])  # type: ignore[reportPrivateUsage]
+
+        batch_run_store = InMemoryBatchRunStore()
+        batch_run_store.create(
+            BatchRun(
+                batch_id="batch-orphan",
+                state=BatchRunState.SUBMITTED,
+                run_id=run_id,
+                code_version="v0.1.0+test",
+                audit_ids=(ctx.order.audit_id,),
+                anthropic_batch_id="msgbatch_orphan",
+                submitted_at=_RUN_TS,
+                updated_at=_RUN_TS,
+            )
+        )
+
+        # First resume: re-emits the orphan + commits the audit_row.
+        first = resume_on_startup(
+            batch_run_store=batch_run_store,
+            audit_store=audit_store,
+            transport=_cassette_transport(),
+            llm_config=_llm_config(),
+            contexts={ctx.order.audit_id: ctx},
+        )
+        assert ctx.order.audit_id in first.reemitted_audit_ids
+        assert ctx.order.audit_id in first.completed_audit_ids
+        rows = audit_store.read_audit_results(run_id=run_id)
+        assert len(rows) == 1
+        assert rows[0].audit_id == ctx.order.audit_id
+        # The batch_runs row must have advanced to COMPLETE.
+        assert (
+            batch_run_store.get("batch-orphan").state is BatchRunState.COMPLETE
+        )
+        # No orphan llm_calls remain after the reconcile.
+        reconcile = audit_store.reconcile(run_id=run_id)
+        assert reconcile.orphan_call_ids == ()
+
+        # Second resume: every state already settled. The batch_run
+        # is COMPLETE (terminal) so it's skipped — the report carries
+        # NO new completions or re-emissions. The audit_results row
+        # remains a single committed row.
+        second = resume_on_startup(
+            batch_run_store=batch_run_store,
+            audit_store=audit_store,
+            transport=_cassette_transport(),
+            llm_config=_llm_config(),
+            contexts={ctx.order.audit_id: ctx},
+        )
+        assert second.reemitted_audit_ids == ()
+        assert second.completed_audit_ids == ()
+        assert second.polled_batch_ids == ()
+        # Still exactly one audit_row — no double-write.
+        rows_after = audit_store.read_audit_results(run_id=run_id)
+        assert len(rows_after) == 1
+
+    def test_pending_batch_is_marked_failed(self, tmp_path: object) -> None:
+        """PENDING + no Anthropic batch_id is unrecoverable.
+
+        Resume must surface the audit_ids as failed and transition the
+        batch_run to FAILED with an operator-visible error_message
+        (Codex review HIGH #4: PENDING rows previously dropped silently).
+        """
+        from pathlib import Path
+
+        from bba.audit_store import AuditStore, AuditStoreConfig
+
+        assert isinstance(tmp_path, Path)
+        audit_store = AuditStore(
+            AuditStoreConfig(
+                root_dir=tmp_path / "store", code_version="v0.1.0+test"
+            )
+        )
+        batch_run_store = InMemoryBatchRunStore()
+        batch_run_store.create(
+            BatchRun(
+                batch_id="batch-stuck",
+                state=BatchRunState.PENDING,
+                run_id="run-stuck",
+                code_version="v0.1.0+test",
+                audit_ids=("audit-stuck-001",),
+                updated_at=_RUN_TS,
+            )
+        )
+
         report = resume_on_startup(
-            batch_run_store=store,
+            batch_run_store=batch_run_store,
             audit_store=audit_store,
             transport=_cassette_transport(),
             llm_config=_llm_config(),
         )
-        assert isinstance(report.reemitted_audit_ids, tuple)
+
+        assert "audit-stuck-001" in report.failed_audit_ids
+        failed_run = batch_run_store.get("batch-stuck")
+        assert failed_run.state is BatchRunState.FAILED
+        assert failed_run.error_message is not None
+        assert "Anthropic" in failed_run.error_message
 
     def test_resume_walks_submitted_batches_and_classifies_audit_ids(
         self, tmp_path: object,

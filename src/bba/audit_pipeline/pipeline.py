@@ -228,7 +228,6 @@ def _persist_deterministic_row(
     skip — same ``(audit_id, run_id, code_version)`` already on disk).
     """
     from bba.audit_pipeline.replay import _audit_row_for_needs_review
-    from bba.audit_store import AuditRow
 
     row: AuditRow
     classifier = context.classifier_result
