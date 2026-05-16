@@ -28,10 +28,16 @@ authority — see :class:`TestPhiRegexesProvenance` in
 
 from __future__ import annotations
 
+import faulthandler
 import re
+import sys
+import traceback
+from collections.abc import Mapping
 from pathlib import Path
 from types import TracebackType
-from typing import Final, Protocol
+from typing import Any, Final, Protocol
+
+from bba.cli._logging import get_logger
 
 
 # ---------------------------------------------------------------------------
@@ -88,29 +94,95 @@ class StructlogLogger(Protocol):
     def error(self, event: str, /, **kwargs: object) -> None: ...
 
 
+_REDACTED_VALUE_MARKER: Final[str] = "<REDACTED:phi>"
+"""String inserted in place of a regex-matched PHI substring."""
+
+
+def _redact_by_name(value: object) -> str:
+    """Return the ``<REDACTED:type=X len=N>`` marker for a PHI-named local.
+
+    ``len`` is the string-length of the value's ``repr`` if available,
+    or the value's ``__len__`` otherwise; falling back to ``-1`` for
+    objects with no notion of length keeps the marker non-throwing for
+    arbitrary frame locals."""
+    typename = type(value).__name__
+    try:
+        length = len(value)  # type: ignore[arg-type]
+    except TypeError:
+        length = -1
+    return f"<REDACTED:type={typename} len={length}>"
+
+
+def _redact_phi_in_string(text: str) -> str:
+    """Apply :data:`PHI_REGEXES` to ``text``; each match → ``<REDACTED:phi>``."""
+    for pattern in PHI_REGEXES:
+        text = pattern.sub(_REDACTED_VALUE_MARKER, text)
+    return text
+
+
+def _scrub_frame_dict(scope: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a scrubbed copy of a frame's locals / globals.
+
+    Two passes:
+    1. PHI-named keys are replaced with the type/len marker regardless
+       of value type (a ``patient`` dict, a ``bundle`` Mapping, a
+       ``note`` str — all collapse to one marker).
+    2. Remaining string values are regex-swept against
+       :data:`PHI_REGEXES`; matched substrings collapse to
+       ``<REDACTED:phi>``.
+
+    Built-in module bindings (``__builtins__``, ``__name__``, ...) are
+    dropped — they are noisy and never PHI."""
+    out: dict[str, Any] = {}
+    for name, value in scope.items():
+        if name.startswith("__") and name.endswith("__"):
+            continue
+        if PHI_LOCAL_NAME_REGEX.match(name):
+            out[name] = _redact_by_name(value)
+            continue
+        if isinstance(value, str):
+            out[name] = _redact_phi_in_string(value)
+            continue
+        out[name] = value
+    return out
+
+
 def scrub_traceback(
     exc_type: type[BaseException],
     exc_value: BaseException,
     exc_tb: TracebackType | None,
 ) -> str:
-    """Return a scrubbed, human-readable rendering of ``(exc_type, exc_value, exc_tb)``.
+    """Return a scrubbed rendering of ``(exc_type, exc_value, exc_tb)``.
 
-    GREEN-phase steps:
-    1. Walk ``exc_tb`` frame-by-frame.
-    2. For each frame, copy ``frame.f_locals`` / ``frame.f_globals`` into
-       a working dict; replace PHI-named bindings with
-       ``"<REDACTED:type=<typename> len=<len>>"``.
-    3. For every string in the working dict, apply :data:`PHI_REGEXES`
-       and replace each match with ``"<REDACTED:phi>"``.
-    4. Render the scrubbed frame chain into a multi-line string using
-       :mod:`traceback.format_list`-style formatting.
+    Walks the traceback frame-by-frame and emits, for each frame:
 
-    The returned string must satisfy: contains ``"<REDACTED"`` for every
-    redacted slot; contains no substring from the original PHI values.
+    * the file / line / function header (``traceback.format_list`` form);
+    * the source line (already redacted by Python's traceback module);
+    * a ``locals:`` block of ``name = repr`` entries built from the
+      scrubbed copy of the frame's locals.
+
+    The output is multi-line; tests assert the *absence* of PHI
+    substrings and the *presence* of ``<REDACTED``.
     """
-    raise NotImplementedError(
-        "scrub_traceback — GREEN phase wires frame-locals walk + regex sweep"
-    )
+    scrubbed_message = _redact_phi_in_string(str(exc_value))
+    lines: list[str] = [f"{exc_type.__name__}: {scrubbed_message}"]
+    tb: TracebackType | None = exc_tb
+    while tb is not None:
+        frame = tb.tb_frame
+        code = frame.f_code
+        lines.append(
+            f'  File "{code.co_filename}", line {tb.tb_lineno}, '
+            f"in {code.co_name}"
+        )
+        scrubbed_locals = _scrub_frame_dict(frame.f_locals)
+        for name, value in scrubbed_locals.items():
+            try:
+                rendered = repr(value)
+            except Exception:  # noqa: BLE001 — repr must not blow up the hook
+                rendered = "<repr-failed>"
+            lines.append(f"    {name} = {_redact_phi_in_string(rendered)}")
+        tb = tb.tb_next
+    return "\n".join(lines)
 
 
 def install_excepthook(
@@ -118,18 +190,36 @@ def install_excepthook(
     logger: StructlogLogger | None = None,
     faulthandler_sidecar: Path | None = None,
 ) -> None:
-    """Install the PHI-scrubbing ``sys.excepthook`` and ``faulthandler`` redirect.
+    """Install the PHI-scrubbing ``sys.excepthook`` + ``faulthandler`` sidecar.
 
-    Idempotent: a second call replaces the prior hook (so tests can
-    re-install per-fixture without leaking state). Does *not* clobber an
-    upstream hook chained via ``sys.__excepthook__`` — the prior hook is
-    captured and may be invoked on a scrubbed copy if the GREEN-phase
-    design chooses to chain.
+    Idempotent — a second call replaces the prior hook so tests can
+    re-install per-fixture without leaking state.
 
-    ``logger`` defaults to ``structlog.get_logger("bba.cli")``;
-    ``faulthandler_sidecar`` defaults to
-    ``$BBA_DATA_DIR/_faulthandler.sidecar``.
+    ``logger`` defaults to ``structlog.get_logger("bba.cli")`` (bridged
+    to stdlib logging via :mod:`bba.cli._logging`). ``faulthandler_sidecar``
+    defaults to ``None`` (no sidecar); when set, :mod:`faulthandler` is
+    enabled and redirects to that file's ``fd`` so a hard crash dumps a
+    stack trace which a downstream reader scrubs before display.
     """
-    raise NotImplementedError(
-        "install_excepthook — GREEN phase wires sys.excepthook + faulthandler"
+    active_logger: StructlogLogger = (
+        logger if logger is not None else get_logger()
     )
+
+    def _hook(
+        exc_type: type[BaseException],
+        exc_value: BaseException,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        scrubbed = scrub_traceback(exc_type, exc_value, exc_tb)
+        active_logger.error(
+            "uncaught_exception",
+            exc_type=exc_type.__name__,
+            traceback=scrubbed,
+        )
+
+    sys.excepthook = _hook
+
+    if faulthandler_sidecar is not None:
+        faulthandler_sidecar.parent.mkdir(parents=True, exist_ok=True)
+        sidecar_fh = faulthandler_sidecar.open("a", encoding="utf-8")
+        faulthandler.enable(file=sidecar_fh, all_threads=True)
