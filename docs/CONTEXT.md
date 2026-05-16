@@ -9,8 +9,8 @@ Scope: Phase 1 of the KCMH RBC transfusion audit pipeline. PRD: [issue #1].
 Sections are added per ticket as each module merges to `main`. Currently
 covered: `#3 ingest`, `#4 audit_orders`, `#5 hb_lookup`, `#6 vitals_extractor`,
 `#16 evidence_bundle_builder`, `#17 deid_redactor`, `#18 quote_grounder`,
-`#19 audit_store`, `#21 prompt_builder`, `#22 llm_client`, `#25 review_actions`,
-`#28 report_generator`.
+`#19 audit_store`, `#21 prompt_builder`, `#22 llm_client`,
+`#23 confidence_calibrator`, `#25 review_actions`, `#28 report_generator`.
 
 ## Ingest concepts (#3)
 
@@ -1621,6 +1621,238 @@ re-litigate:
   `build_anthropic_request` boundary
   (`TestAnthropicRequestCacheControlTranslation`), not at the
   cassette replay layer.
+
+## Confidence-calibrator concepts (#23)
+
+### Calibrated confidence
+
+A probability in `[0.0, 1.0]` produced by feeding the raw LLM-reported
+confidence through the fitted isotonic curve. This is the value the
+audit pipeline compares against `REVIEW_CONFIDENCE_THRESHOLD = 0.7`
+to gate `NEEDS_REVIEW`. PRD §14 / user-story #40: the deployed
+threshold must reflect empirical P(correct), not the model's
+self-reported number — every calibration step exists to make that
+substitution defensible.
+
+### Raw LLM confidence
+
+The number Sonnet/Opus emits inside its structured-output tool call
+(`LlmClassificationResponse.confidence`) before any calibration. The
+calibrator's training set is `(raw_confidence, gold_label)` pairs
+drawn from the held-out evaluation split; predicting on a new raw
+confidence yields a calibrated probability.
+
+### Isotonic calibrator
+
+`bba.confidence_calibrator.IsotonicCalibrator` — stateful wrapper
+around an `IsotonicFit`. `fit(scores, labels)` runs PAV and stores
+the curve; `predict(scores)` interpolates and clips. The instance
+starts unfitted; calling `predict` or accessing `fit_result` before
+`fit` raises `CalibratorNotFittedError` so a missing calibration
+step surfaces immediately instead of silently returning the identity
+mapping or zero.
+
+### Refit overwrites
+
+Successive `fit` calls overwrite the prior curve — monthly
+recalibration semantics. PRD §14 "Monthly recalibration check via
+ECE on held-out 200": when ECE on the holdout drifts past the
+operator's tolerance, the recalibration job calls `fit` again on
+the freshest training-split outputs and the new curve replaces
+the old one.
+
+### Pool-adjacent violators (PAV)
+
+The standard algorithm behind `pav_fit`. Sort by score, treat each
+point as a unit-weight block with `mean_y = label`, scan left-to-
+right; whenever a block's `mean_y` exceeds its right neighbor's,
+merge the two by weighted average and re-check leftward. The
+single-pass stack implementation in `isotonic.py` is O(n log n)
+including the sort; duplicate `scores` are merged by weighted
+average before PAV runs, matching `sklearn.isotonic.IsotonicRegression`.
+
+### Isotonic fit
+
+Frozen dataclass `IsotonicFit` storing the materialized curve as
+`x_thresholds` (strictly increasing) and `y_values` (non-decreasing,
+each in `[0.0, 1.0]`), plus `n_training` for monthly recalibration
+audit. Each PAV block contributes two threshold points
+`(left_x, mean_y)`, `(right_x, mean_y)` so the piecewise-constant
+shape is preserved; linear interpolation between blocks happens at
+`predict` time, not at fit time.
+
+### Boundary clipping
+
+A `predict` input below `min(x_thresholds)` clips to `y_values[0]`,
+above `max(x_thresholds)` clips to `y_values[-1]`. Isotonic regression
+is undefined outside the fitted range; extrapolating could produce
+calibrated probabilities outside `[0.0, 1.0]` and silently break the
+0.7 gate. Clip is the explicit choice over extrapolation or raising.
+
+### Sklearn reference pinning
+
+The audit container has no scikit-learn runtime dependency (mirrors
+`bba.eval_harness.intervals` which references scipy without
+importing it). `tests/unit/test_confidence_calibrator.py` pins the
+`SKLEARN_REF_SCORES` / `SKLEARN_REF_LABELS` / `SKLEARN_REF_PRED`
+vectors computed offline against
+`sklearn.isotonic.IsotonicRegression(out_of_bounds='clip')`. A drift
+in `pav_fit` semantics breaks the reference test, not a runtime
+import.
+
+### Expected Calibration Error (ECE)
+
+Guo, Pleiss, Sun, Weinberger (2017) eq. (3): the count-weighted sum
+of `|mean_confidence_in_bin - accuracy_in_bin|` over equal-width
+bins. `bba.confidence_calibrator.compute_ece` returns an `EceResult`
+with the scalar plus a per-bin `BinStats` tuple so the reliability
+diagram can render every interval. The ECE_REF in the test suite
+is a hand-derivable 4-sample / 2-bin example yielding `ECE = 0.275`.
+
+### Closed-right last bin
+
+Bin edges are `[i/n_bins, (i+1)/n_bins)` half-open except the final
+bin, which closes on the right so a prediction at exactly `1.0`
+lands in the last bin rather than overflowing. Implemented as
+`min(int(p * n_bins), n_bins - 1)` — concise enough to be the only
+place the convention lives, audited by
+`test_probability_at_one_lands_in_last_bin`.
+
+### Empty bin contributes zero weight (ECE)
+
+A bin with `count == 0` carries `mean_confidence = 0.0` and
+`accuracy = 0.0` in the returned `BinStats` and contributes zero
+weight to the weighted ECE sum. Matches the Guo et al. convention
+and is asserted by `test_empty_bins_contribute_zero_weight` — the
+alternative (treating empty bins as a 0-vs-0 gap of zero, or
+skipping them entirely) would produce the same scalar ECE but a
+different `BinStats` shape, which the reliability renderer relies on.
+
+### Reliability diagram (SVG)
+
+`generate_reliability_diagram(probs, labels, out_path, n_bins,
+title)` writes an SVG calibration plot to `out_path` (default
+target: `docs/eval/`). SVG rather than PNG so the audit container
+has no `matplotlib` runtime dependency (on-prem KCMH deployment
+runs with `TRANSFORMERS_OFFLINE=1`); SVG renders natively in
+browsers, GitHub markdown, and the reviewer dashboard.
+
+### Empty bin skipped (renderer)
+
+The reliability renderer emits one `<circle class="reliability-bin"/>`
+per **non-empty** bin only. An empty bin's `accuracy` is by
+construction `0.0` (see *empty bin contributes zero weight*); emitting
+a marker for it would falsely paint a zero-accuracy point on the
+diagram and mislead the transfusion committee's drift review. Note
+the subtle asymmetry with ECE: the empty bin still appears in
+`EceResult.bins` so the operator can introspect the empty interval,
+but it is invisible on the rendered plot.
+
+### XML-escaped title
+
+The caller-supplied `title` parameter is passed through
+`xml.sax.saxutils.escape` before interpolation into the SVG
+`<title>` element. A title containing `&` / `<` / `>` would
+otherwise either malform the XML or inject markup. Numeric fields
+(ECE value, coordinates) are formatted internally and cannot
+contain unsafe characters; escaping there would be noise.
+
+### Validate-before-IO
+
+`generate_reliability_diagram` delegates input validation to
+`compute_ece`, which raises `InvalidCalibrationDataError` before any
+`Path.mkdir` or `write_text` runs. PRD §"reproducibility" anti-
+pattern: a half-written or stale diagram on disk after a failed
+recalibration job would mislead the operator who sees a fresh
+mtime. Asserted by `test_invalid_inputs_raise_before_writing`.
+
+### Agreement-based confidence
+
+PRD §14 / user-story #40 alternative to isotonic regression: run
+Sonnet three times with reshuffled few-shot ordering; confidence =
+fraction of runs that agree on the majority classification.
+`bba.confidence_calibrator.agreement_confidence` is the pure-Python
+piece that consumes the three classification strings and returns an
+`AgreementResult`. The actual prompt reshuffle and LLM dispatch are
+out of scope (they live in `bba.prompt_builder` / `bba.llm_client`);
+this module handles seed generation and vote tabulation only.
+
+### Shuffle seeds (deterministic)
+
+`shuffle_seeds(base_seed, n_runs=3)` returns a tuple of `n_runs`
+integer seeds derived from `int.from_bytes(sha256(f"{base_seed}:
+{i}").digest()[:4], "big")`. Same `base_seed` + same `n_runs`
+yields the same tuple, every time, forever — the cornerstone of
+audit-row reproducibility for the agreement path. SHA-256 mixing
+(not `base_seed + i`) so a small change in `base_seed` does not
+produce three near-correlated shufflings. Negative `base_seed` or
+`n_runs < 1` raises `InvalidCalibrationDataError`.
+
+### First-seen tie-breaking
+
+When `agreement_confidence` receives a 1-1-1 three-way split, the
+classification appearing first in the input wins. Audited by
+`test_three_way_tie_resolves_to_first_seen`. The choice is
+deterministic so a tie does not race the dict-ordering or sort-
+stability internals; PRD §14 "deterministic seed control" is a
+contract that extends to tie-breaking, not just to the seed
+generator itself.
+
+### REVIEW_CONFIDENCE_THRESHOLD
+
+`REVIEW_CONFIDENCE_THRESHOLD = 0.7` — the deployed gate from PRD §14.
+A calibrated confidence below this routes the audit row to
+`NEEDS_REVIEW`. The constant lives in
+`bba.confidence_calibrator.models` so the downstream pipeline reads
+the value from one place; the calibrator itself does not apply the
+threshold (it produces the probability, the audit-pipeline gate
+applies the comparison).
+
+### ECE_RECAL_HOLDOUT_SIZE
+
+`ECE_RECAL_HOLDOUT_SIZE = 200` — the row count of the held-out
+sample the monthly recalibration job evaluates ECE on. The
+calibrator does not run the recalibration job itself; the constant
+is exposed so the scheduling module (`bba.monitoring`, #29) and
+this module agree on the sample size.
+
+### Calibrator-not-fitted fail-loud
+
+Calling `predict` or accessing `fit_result` on an unfitted
+`IsotonicCalibrator` raises `CalibratorNotFittedError` (descended
+from `ConfidenceCalibratorError`). The silent alternatives
+(returning the identity, returning all-zero, raising `AttributeError`
+deep inside numpy) would all mask a deployment that skipped
+calibration entirely. PRD §"reproducibility = we have the original
+answer": the audit row's calibrated confidence must trace to a
+specific fit invocation.
+
+### Deferred review (post-merge)
+
+Codex review ran for 2 in-session rounds (NEEDS-CHANGES → fixes →
+PASS). Items intentionally **not** in scope so a future reader does
+not re-litigate:
+
+* **`docs/eval/` path enforcement on the renderer** — codex flagged
+  the renderer for not enforcing the output directory. Not adopted:
+  the renderer is a generic SVG writer; path choice is the caller's,
+  matching every other "write artifact" function in the repo
+  (`bba.report_generator.generator`, `bba.report_generator.csv_writer`).
+  Adding a path guard would couple the renderer to a directory
+  convention beyond the ticket's plain reading.
+* **Live SDK integration for the agreement-based path** — this
+  module handles seed generation + vote tabulation only. Wiring
+  the three reshuffled Sonnet calls into the audit pipeline lives
+  in `bba.audit_pipeline` (#24), not here.
+* **Monthly recalibration scheduler** — `ECE_RECAL_HOLDOUT_SIZE`
+  is the contract anchor, not the scheduler. The "compute ECE on
+  200 → refit if drifted" job lives in `bba.monitoring` (#29).
+* **Confidence-interval / Platt-scaling alternative** — PRD §14
+  mentions "Platt scaling" as an alternative to isotonic; the v1
+  cut implements isotonic only because the held-out 200 is large
+  enough to fit a non-parametric curve without overfitting. Platt
+  is a follow-up ticket if the empirical reliability diagram
+  shows over-fitting.
 
 ## Vocabulary not in this file
 
