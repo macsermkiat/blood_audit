@@ -182,19 +182,27 @@ class TestBoundsConstants:
 class TestBoundsPredicates:
     """Inclusive bound predicates accept the endpoints and reject just outside."""
 
-    @pytest.mark.parametrize(("v", "ok"), [(59, False), (60, True), (220, True), (221, False)])
+    @pytest.mark.parametrize(
+        ("v", "ok"), [(59, False), (60, True), (220, True), (221, False)]
+    )
     def test_sbp(self, v: int, ok: bool) -> None:
         assert is_sbp_valid(v) is ok
 
-    @pytest.mark.parametrize(("v", "ok"), [(29, False), (30, True), (150, True), (151, False)])
+    @pytest.mark.parametrize(
+        ("v", "ok"), [(29, False), (30, True), (150, True), (151, False)]
+    )
     def test_dbp(self, v: int, ok: bool) -> None:
         assert is_dbp_valid(v) is ok
 
-    @pytest.mark.parametrize(("v", "ok"), [(29, False), (30, True), (200, True), (201, False)])
+    @pytest.mark.parametrize(
+        ("v", "ok"), [(29, False), (30, True), (200, True), (201, False)]
+    )
     def test_hr(self, v: int, ok: bool) -> None:
         assert is_hr_valid(v) is ok
 
-    @pytest.mark.parametrize(("v", "ok"), [(4, False), (5, True), (50, True), (51, False)])
+    @pytest.mark.parametrize(
+        ("v", "ok"), [(4, False), (5, True), (50, True), (51, False)]
+    )
     def test_rr(self, v: int, ok: bool) -> None:
         assert is_rr_valid(v) is ok
 
@@ -502,7 +510,9 @@ class TestRegexRobustness:
         spacing=st.sampled_from([" ", ":", " :", ": "]),
     )
     @settings(max_examples=200)
-    def test_bp_round_trip_when_in_bounds(self, sbp: int, dbp: int, spacing: str) -> None:
+    def test_bp_round_trip_when_in_bounds(
+        self, sbp: int, dbp: int, spacing: str
+    ) -> None:
         # For every in-bounds (sbp, dbp) pair and every separator the issue
         # documents, the extractor must round-trip the values.
         text = f"BP{spacing}{sbp}/{dbp}"
@@ -516,7 +526,9 @@ class TestRegexRobustness:
         v = extract_vitals_from_text(f"HR {hr}")
         assert v.hr == hr
 
-    @given(bt_tenths=st.integers(min_value=int(BT_MIN * 10), max_value=int(BT_MAX * 10)))
+    @given(
+        bt_tenths=st.integers(min_value=int(BT_MIN * 10), max_value=int(BT_MAX * 10))
+    )
     @settings(max_examples=200)
     def test_bt_round_trip_when_in_bounds(self, bt_tenths: int) -> None:
         # Iterate on a tenths grid so the printed decimal is exact (no float

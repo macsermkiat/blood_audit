@@ -94,9 +94,7 @@ def _validate_safe_id(value: str) -> str:
     if not value:
         raise ValueError("identifier must not be empty")
     if not _SAFE_ID_PATTERN.match(value):
-        raise ValueError(
-            f"identifier must match [A-Za-z0-9._-]+ (got {value!r})"
-        )
+        raise ValueError(f"identifier must match [A-Za-z0-9._-]+ (got {value!r})")
     if value in {".", ".."}:
         raise ValueError(
             f"identifier must not be a path-traversal segment (got {value!r})"

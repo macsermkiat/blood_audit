@@ -66,9 +66,7 @@ OPUS_MODEL_ID: Final[str] = "claude-opus-4-7-20251030"
 retries are exhausted (PRD §13)."""
 
 
-ALLOWED_MODELS: Final[frozenset[str]] = frozenset(
-    {SONNET_MODEL_ID, OPUS_MODEL_ID}
-)
+ALLOWED_MODELS: Final[frozenset[str]] = frozenset({SONNET_MODEL_ID, OPUS_MODEL_ID})
 """The two model IDs the client is permitted to invoke.
 
 A free-form model_id would let a refactor silently bypass the snapshot-
@@ -388,9 +386,7 @@ class DisagreementVerdict(BaseModel):
             self.sonnet_classification is not None
             and self.opus_classification is not None
         ):
-            should_agree = (
-                self.sonnet_classification == self.opus_classification
-            )
+            should_agree = self.sonnet_classification == self.opus_classification
             if should_agree != self.agreed:
                 raise ValueError(
                     f"agreed ({self.agreed}) must equal "
@@ -439,13 +435,9 @@ class LlmClientResult(BaseModel):
                 "(PRD §13 fail-closed)"
             )
         if self.parse_failure and not self.needs_review:
-            raise ValueError(
-                "parse_failure=True forces needs_review=True"
-            )
+            raise ValueError("parse_failure=True forces needs_review=True")
         if self.needs_review and self.review_reason is None:
-            raise ValueError(
-                "needs_review=True requires a review_reason"
-            )
+            raise ValueError("needs_review=True requires a review_reason")
         # Every persisted call must share the result's (audit_id, run_id).
         # The audit_store contract rejects mismatches at write time; we
         # reject them at the model boundary so the bug surfaces earlier.
@@ -492,18 +484,14 @@ class LlmClientConfig(BaseModel):
     @classmethod
     def _sonnet_is_sonnet(cls, v: str) -> str:
         if "sonnet" not in v:
-            raise ValueError(
-                f"sonnet_model_id must contain 'sonnet' (got {v!r})"
-            )
+            raise ValueError(f"sonnet_model_id must contain 'sonnet' (got {v!r})")
         return v
 
     @field_validator("opus_model_id")
     @classmethod
     def _opus_is_opus(cls, v: str) -> str:
         if "opus" not in v:
-            raise ValueError(
-                f"opus_model_id must contain 'opus' (got {v!r})"
-            )
+            raise ValueError(f"opus_model_id must contain 'opus' (got {v!r})")
         return v
 
 

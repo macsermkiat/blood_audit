@@ -49,7 +49,9 @@ def ingest(config: IngestConfig) -> IngestResult:
     drift or incomplete input — so a malformed input dir never writes a
     completion marker.
     """
-    known_tables: tuple[CSVTable, ...] = cast("tuple[CSVTable, ...]", get_args(CSVTable))
+    known_tables: tuple[CSVTable, ...] = cast(
+        "tuple[CSVTable, ...]", get_args(CSVTable)
+    )
 
     if not config.input_dir.exists() or not config.input_dir.is_dir():
         raise IncompleteInputError(

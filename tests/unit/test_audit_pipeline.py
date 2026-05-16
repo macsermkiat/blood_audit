@@ -644,9 +644,7 @@ class TestResumeOnStartup:
         store = InMemoryBatchRunStore()
         assert isinstance(tmp_path, Path)
         audit_store = AuditStore(
-            AuditStoreConfig(
-                root_dir=tmp_path / "store", code_version="v0.1.0+test"
-            )
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
         )
         report = resume_on_startup(
             batch_run_store=store,
@@ -667,9 +665,7 @@ class TestResumeOnStartup:
         store = InMemoryBatchRunStore()
         assert isinstance(tmp_path, Path)
         audit_store = AuditStore(
-            AuditStoreConfig(
-                root_dir=tmp_path / "store", code_version="v0.1.0+test"
-            )
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
         )
         first = resume_on_startup(
             batch_run_store=store,
@@ -708,9 +704,7 @@ class TestSigtermMidBatchResume:
 
         assert isinstance(tmp_path, Path)
         audit_store = AuditStore(
-            AuditStoreConfig(
-                root_dir=tmp_path / "store", code_version="v0.1.0+test"
-            )
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
         )
         run_id = "run-orphan"
         ctx = _row_context(
@@ -751,9 +745,7 @@ class TestSigtermMidBatchResume:
         assert len(rows) == 1
         assert rows[0].audit_id == ctx.order.audit_id
         # The batch_runs row must have advanced to COMPLETE.
-        assert (
-            batch_run_store.get("batch-orphan").state is BatchRunState.COMPLETE
-        )
+        assert batch_run_store.get("batch-orphan").state is BatchRunState.COMPLETE
         # No orphan llm_calls remain after the reconcile.
         reconcile = audit_store.reconcile(run_id=run_id)
         assert reconcile.orphan_call_ids == ()
@@ -787,9 +779,7 @@ class TestSigtermMidBatchResume:
 
         assert isinstance(tmp_path, Path)
         audit_store = AuditStore(
-            AuditStoreConfig(
-                root_dir=tmp_path / "store", code_version="v0.1.0+test"
-            )
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
         )
         batch_run_store = InMemoryBatchRunStore()
         batch_run_store.create(
@@ -831,9 +821,7 @@ class TestSigtermMidBatchResume:
 
         assert isinstance(tmp_path, Path)
         audit_store = AuditStore(
-            AuditStoreConfig(
-                root_dir=tmp_path / "store", code_version="v0.1.0+test"
-            )
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
         )
         batch_run_store = InMemoryBatchRunStore()
         contexts = tuple(
@@ -853,7 +841,10 @@ class TestSigtermMidBatchResume:
 
         class _OrderingProbe:
             def submit_batch_only(
-                self, *, model: str, requests: "Sequence[BatchSubmissionRequest]",
+                self,
+                *,
+                model: str,
+                requests: "Sequence[BatchSubmissionRequest]",
                 prompt_cache_enabled: bool,
             ) -> str:
                 return cassette.submit_batch_only(
@@ -882,7 +873,10 @@ class TestSigtermMidBatchResume:
                 )
 
             def submit_batch(
-                self, *, model: str, requests: "Sequence[BatchSubmissionRequest]",
+                self,
+                *,
+                model: str,
+                requests: "Sequence[BatchSubmissionRequest]",
                 prompt_cache_enabled: bool,
             ) -> RawBatchResponse:
                 return cassette.submit_batch(
@@ -906,8 +900,7 @@ class TestSigtermMidBatchResume:
         # would mean a SIGTERM during polling could orphan the batch.
         assert observed_states_at_fetch
         assert all(
-            state is BatchRunState.SUBMITTED
-            for state in observed_states_at_fetch
+            state is BatchRunState.SUBMITTED for state in observed_states_at_fetch
         )
 
     def test_submitted_with_no_cached_calls_polls_anthropic(
@@ -934,9 +927,7 @@ class TestSigtermMidBatchResume:
 
         assert isinstance(tmp_path, Path)
         audit_store = AuditStore(
-            AuditStoreConfig(
-                root_dir=tmp_path / "store", code_version="v0.1.0+test"
-            )
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
         )
         run_id = "run-poll-recover"
         ctx = _row_context(
@@ -1018,12 +1009,11 @@ class TestSigtermMidBatchResume:
         rows = audit_store.read_audit_results(run_id=run_id)
         assert len(rows) == 1
         assert rows[0].audit_id == ctx.order.audit_id
-        assert (
-            batch_run_store.get("batch-poll").state is BatchRunState.COMPLETE
-        )
+        assert batch_run_store.get("batch-poll").state is BatchRunState.COMPLETE
 
     def test_resume_walks_submitted_batches_and_classifies_audit_ids(
-        self, tmp_path: object,
+        self,
+        tmp_path: object,
     ) -> None:
         """Coverage for the non-empty reconcile path.
 
@@ -1042,9 +1032,7 @@ class TestSigtermMidBatchResume:
 
         assert isinstance(tmp_path, Path)
         audit_store = AuditStore(
-            AuditStoreConfig(
-                root_dir=tmp_path / "store", code_version="v0.1.0+test"
-            )
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
         )
 
         audited_contexts = _build_synthetic_contexts(n=2)
@@ -1098,9 +1086,7 @@ class TestSigtermMidBatchResume:
         store = InMemoryBatchRunStore()
         assert isinstance(tmp_path, Path)
         audit_store = AuditStore(
-            AuditStoreConfig(
-                root_dir=tmp_path / "store", code_version="v0.1.0+test"
-            )
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
         )
         report = resume_on_startup(
             batch_run_store=store,
@@ -1122,7 +1108,9 @@ class TestSigtermMidBatchResume:
 
 
 _AUDIT_ID = st.text(
-    alphabet=st.characters(whitelist_categories=("Ll", "Lu", "Nd"), min_codepoint=48, max_codepoint=122),
+    alphabet=st.characters(
+        whitelist_categories=("Ll", "Lu", "Nd"), min_codepoint=48, max_codepoint=122
+    ),
     min_size=3,
     max_size=12,
 ).map(lambda s: f"audit-{s}")
@@ -1166,9 +1154,7 @@ class TestReplayIdempotencyProperty:
 
         tmp_path: Path = tmp_path_factory.mktemp(f"replay_{seed}_{n_results}")
         audit_store = AuditStore(
-            AuditStoreConfig(
-                root_dir=tmp_path / "store", code_version="v0.1.0+test"
-            )
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
         )
         synthetic_response = _build_synthetic_raw_batch_response(
             n_results=n_results, seed=seed, classification=classification
@@ -1195,9 +1181,9 @@ class TestReplayIdempotencyProperty:
             contexts=contexts,
         )
         assert first.audit_ids_persisted  # at least one row written first pass
-        assert (
-            second.audit_ids_persisted == ()
-        ), "second application must be a no-op (zero new rows)"
+        assert second.audit_ids_persisted == (), (
+            "second application must be a no-op (zero new rows)"
+        )
 
 
 def _build_synthetic_raw_batch_response(
@@ -1270,9 +1256,7 @@ class TestEndToEndSmoke:
 
         assert isinstance(tmp_path, Path)
         audit_store = AuditStore(
-            AuditStoreConfig(
-                root_dir=tmp_path / "store", code_version="v0.1.0+test"
-            )
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
         )
         synthetic_contexts = _build_synthetic_contexts(n=5)
         result = run_pipeline(
@@ -1334,9 +1318,7 @@ class TestEndToEndSmoke:
 
         assert isinstance(tmp_path, Path)
         audit_store = AuditStore(
-            AuditStoreConfig(
-                root_dir=tmp_path / "store", code_version="v0.1.0+test"
-            )
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
         )
         synthetic_contexts = _build_synthetic_contexts(n=5)
         result = run_pipeline(
@@ -1353,9 +1335,7 @@ class TestEndToEndSmoke:
         reconcile_report = audit_store.reconcile(run_id="run-smoke")
         assert reconcile_report.orphan_call_ids == ()
 
-    def test_inappropriate_branch_from_llm_downgrade(
-        self, tmp_path: object
-    ) -> None:
+    def test_inappropriate_branch_from_llm_downgrade(self, tmp_path: object) -> None:
         """Codex MEDIUM #9: explicit coverage of the INAPPROPRIATE
         final classification via the LLM downgrade path.
 
@@ -1369,9 +1349,7 @@ class TestEndToEndSmoke:
 
         assert isinstance(tmp_path, Path)
         audit_store = AuditStore(
-            AuditStoreConfig(
-                root_dir=tmp_path / "store", code_version="v0.1.0+test"
-            )
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
         )
         contexts = tuple(
             _row_context(
@@ -1430,7 +1408,11 @@ class TestParseFailureBranches:
                     "id": "msg_x",
                     "type": "message",
                     "content": [
-                        {"type": "tool_use", "name": "classify_audit", "input": "not-a-dict"}
+                        {
+                            "type": "tool_use",
+                            "name": "classify_audit",
+                            "input": "not-a-dict",
+                        }
                     ],
                     "stop_reason": "tool_use",
                 },
@@ -1474,9 +1456,7 @@ class TestParseFailureBranches:
 
         assert isinstance(tmp_path, Path)
         audit_store = AuditStore(
-            AuditStoreConfig(
-                root_dir=tmp_path / "store", code_version="v0.1.0+test"
-            )
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
         )
         ctx = _row_context(
             audit_id="audit-parse-001",
@@ -1525,8 +1505,8 @@ def _build_synthetic_contexts(*, n: int) -> Sequence[PipelineRowContext]:
     """
     classifications: tuple[Classification, ...] = (
         "POTENTIALLY_INAPPROPRIATE",  # routes via LLM
-        "APPROPRIATE",                # deterministic-final
-        "INSUFFICIENT_EVIDENCE",      # deterministic-final (missing Hb)
+        "APPROPRIATE",  # deterministic-final
+        "INSUFFICIENT_EVIDENCE",  # deterministic-final (missing Hb)
         "POTENTIALLY_INAPPROPRIATE",  # routes via LLM
         "POTENTIALLY_INAPPROPRIATE",  # routes via LLM
     )
@@ -1632,9 +1612,7 @@ class TestAdversarialQuoteGrounderRoutesToNeedsReview:
 
         assert isinstance(tmp_path, Path)
         audit_store = AuditStore(
-            AuditStoreConfig(
-                root_dir=tmp_path / "store", code_version="v0.1.0+test"
-            )
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
         )
         # Adversarial verifier: every Tier-1 citation rejected. The
         # winning-attempt rule then surfaces NEEDS_REVIEW with
@@ -1676,9 +1654,7 @@ class TestAdversarialVitalsExtractorPropagates:
 
         assert isinstance(tmp_path, Path)
         audit_store = AuditStore(
-            AuditStoreConfig(
-                root_dir=tmp_path / "store", code_version="v0.1.0+test"
-            )
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
         )
         contexts = _build_adversarial_vitals_contexts()
         run_pipeline(
@@ -1733,5 +1709,3 @@ def _build_adversarial_vitals_contexts() -> Sequence[PipelineRowContext]:
         )
         for i in range(2)
     )
-
-

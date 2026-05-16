@@ -39,9 +39,7 @@ def _build_config(
     an absolute path resolved from the repo root.
     """
     if not migrations_root.exists():
-        raise FileNotFoundError(
-            f"migrations_root does not exist: {migrations_root}"
-        )
+        raise FileNotFoundError(f"migrations_root does not exist: {migrations_root}")
 
     alembic_cfg = Config()
     alembic_cfg.set_main_option("script_location", str(migrations_root))
@@ -79,9 +77,7 @@ def current_revision(
     :class:`bba.review_actions.MigrationStateError`.
     """
     if not migrations_root.exists():
-        raise FileNotFoundError(
-            f"migrations_root does not exist: {migrations_root}"
-        )
+        raise FileNotFoundError(f"migrations_root does not exist: {migrations_root}")
 
     engine = create_engine(config.sqlalchemy_dsn)
     try:
@@ -114,9 +110,7 @@ def head_revision(
             merge revision before any deployment).
     """
     if not migrations_root.exists():
-        raise FileNotFoundError(
-            f"migrations_root does not exist: {migrations_root}"
-        )
+        raise FileNotFoundError(f"migrations_root does not exist: {migrations_root}")
 
     alembic_cfg = Config()
     alembic_cfg.set_main_option("script_location", str(migrations_root))

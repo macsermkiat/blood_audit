@@ -614,7 +614,12 @@ class TestBypassReasonDistinct:
                 crystalloid_liters_prior_4h=2.5,
             )
         )
-        reasons = {mtp.bypass_reason, peri.bypass_reason, delta.bypass_reason, hemo.bypass_reason}
+        reasons = {
+            mtp.bypass_reason,
+            peri.bypass_reason,
+            delta.bypass_reason,
+            hemo.bypass_reason,
+        }
         assert reasons == {
             BypassReason.MTP,
             BypassReason.PERI_PROCEDURAL_6H,

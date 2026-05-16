@@ -93,12 +93,7 @@ def parse_hosxp_time(raw: str | None) -> ParseResult:
         )
 
     # HH:MM: 5 chars with a literal colon at position 2.
-    if (
-        len(raw) == 5
-        and raw[2] == ":"
-        and raw[:2].isdigit()
-        and raw[3:].isdigit()
-    ):
+    if len(raw) == 5 and raw[2] == ":" and raw[:2].isdigit() and raw[3:].isdigit():
         h, m = int(raw[:2]), int(raw[3:])
         if 0 <= h <= 23 and 0 <= m <= 59:
             return ParseResult(

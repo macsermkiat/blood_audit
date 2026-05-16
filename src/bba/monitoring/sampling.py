@@ -74,21 +74,14 @@ def draw_weekly_reviewer_sample(
     Raises :class:`ValueError` if ``sample_size`` is out of range or
     exceeds the available population.
     """
-    if not (
-        WEEKLY_REVIEWER_SAMPLE_MIN
-        <= sample_size
-        <= WEEKLY_REVIEWER_SAMPLE_MAX
-    ):
+    if not (WEEKLY_REVIEWER_SAMPLE_MIN <= sample_size <= WEEKLY_REVIEWER_SAMPLE_MAX):
         raise ValueError(
             f"sample_size must be in [{WEEKLY_REVIEWER_SAMPLE_MIN}, "
             f"{WEEKLY_REVIEWER_SAMPLE_MAX}] (got {sample_size!r})"
         )
     ids = _extract_audit_ids(audit_rows)
     if sample_size > len(ids):
-        raise ValueError(
-            f"sample_size ({sample_size}) exceeds population "
-            f"({len(ids)})"
-        )
+        raise ValueError(f"sample_size ({sample_size}) exceeds population ({len(ids)})")
     rng = random.Random(
         _stable_seed(week_iso=week_iso, sample_size=sample_size, seed=seed)
     )

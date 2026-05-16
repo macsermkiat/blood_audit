@@ -176,7 +176,10 @@ def _process_one(
 
     # Sonnet eventually succeeded (with or without cross-check).
     if sonnet_response is not None:
-        if cross_check_disagreement is not None and cross_check_disagreement.routed_to_needs_review:
+        if (
+            cross_check_disagreement is not None
+            and cross_check_disagreement.routed_to_needs_review
+        ):
             return LlmClientResult(
                 audit_id=request.audit_id,
                 run_id=request.run_id,

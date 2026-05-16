@@ -208,9 +208,7 @@ class TestModulePublicSurface:
         constant is the single source of truth, not a magic number on
         the model."""
         assert SPRT_DEFAULT_MIN_N >= 1
-        cfg = SprtConfig(
-            signal="needs_review_rate", p_null=0.05, p_alt=0.10
-        )
+        cfg = SprtConfig(signal="needs_review_rate", p_null=0.05, p_alt=0.10)
         assert cfg.min_n == SPRT_DEFAULT_MIN_N
 
 
@@ -546,9 +544,7 @@ class TestSprtResetClearsState:
     """``reset()`` zeroes the cumulative log-LR so the next window starts
     fresh — the cron-driven monitor relies on per-window independence."""
 
-    def test_reset_returns_to_continue_at_origin(
-        self, sprt_config: SprtConfig
-    ) -> None:
+    def test_reset_returns_to_continue_at_origin(self, sprt_config: SprtConfig) -> None:
         monitor = WaldSprtMonitor(sprt_config)
         for _ in range(20):
             monitor.step(True)
@@ -768,9 +764,7 @@ class TestGoldenSetIndicationDriftDetects:
             _golden_entry(
                 _fake_audit_id(i),
                 indications=(
-                    ("Hb_lt_7", "active_bleeding")
-                    if i < 11
-                    else ("Hb_lt_7",)
+                    ("Hb_lt_7", "active_bleeding") if i < 11 else ("Hb_lt_7",)
                 ),
             )
             for i in range(100)
@@ -783,15 +777,11 @@ class TestGoldenSetIndicationDriftDetects:
         """Indications are a set, not a list — reordering MUST NOT count
         as a change."""
         baseline = [
-            _golden_entry(
-                _fake_audit_id(i), indications=("Hb_lt_7", "active_bleeding")
-            )
+            _golden_entry(_fake_audit_id(i), indications=("Hb_lt_7", "active_bleeding"))
             for i in range(10)
         ]
         current = [
-            _golden_entry(
-                _fake_audit_id(i), indications=("active_bleeding", "Hb_lt_7")
-            )
+            _golden_entry(_fake_audit_id(i), indications=("active_bleeding", "Hb_lt_7"))
             for i in range(10)
         ]
         report = evaluate_golden_set_drift(baseline=baseline, current=current)
@@ -845,9 +835,7 @@ class TestAlertingEmitsStructuredLog:
         )
         with caplog.at_level(logging.WARNING, logger="bba.monitoring.alarms"):
             emit_alarm(alarm)
-        assert any(
-            rec.name == "bba.monitoring.alarms" for rec in caplog.records
-        )
+        assert any(rec.name == "bba.monitoring.alarms" for rec in caplog.records)
 
     def test_emit_alarm_includes_kind_in_record(
         self,
@@ -864,9 +852,7 @@ class TestAlertingEmitsStructuredLog:
         )
         with caplog.at_level(logging.WARNING, logger="bba.monitoring.alarms"):
             emit_alarm(alarm)
-        assert any(
-            "sentinel_kappa" in rec.getMessage() for rec in caplog.records
-        )
+        assert any("sentinel_kappa" in rec.getMessage() for rec in caplog.records)
 
 
 class TestNoSlackEmailPagingImport:
@@ -946,8 +932,7 @@ class TestNoSchedulerImports:
         for py_file in MONITORING_PACKAGE_DIR.glob("*.py"):
             src = py_file.read_text(encoding="utf-8")
             assert (
-                f"import {forbidden}" not in src
-                and f"from {forbidden}" not in src
+                f"import {forbidden}" not in src and f"from {forbidden}" not in src
             ), (
                 f"{py_file.name} pulls in scheduler {forbidden!r}; "
                 f"cadence scheduling is #29's job (issue #27 constraint)"
@@ -1259,9 +1244,7 @@ class TestSprtMonotonicallyAccumulatesLogLR:
         max_examples=20,
         suppress_health_check=[HealthCheck.too_slow],
     )
-    def test_all_success_log_lr_non_decreasing(
-        self, n_obs: int, p_null: float
-    ) -> None:
+    def test_all_success_log_lr_non_decreasing(self, n_obs: int, p_null: float) -> None:
         # Construct a valid config: p_alt strictly > p_null.
         p_alt = min(p_null + 0.05, 0.95)
         config = SprtConfig(
@@ -1286,9 +1269,7 @@ class TestSprtMonotonicallyAccumulatesLogLR:
         max_examples=20,
         suppress_health_check=[HealthCheck.too_slow],
     )
-    def test_all_failure_log_lr_non_increasing(
-        self, n_obs: int, p_null: float
-    ) -> None:
+    def test_all_failure_log_lr_non_increasing(self, n_obs: int, p_null: float) -> None:
         p_alt = min(p_null + 0.05, 0.95)
         config = SprtConfig(
             signal="needs_review_rate",
@@ -1380,9 +1361,7 @@ class TestSentinelDisjointHistory:
     """If the previous + current run share NO audit_ids with the manifest,
     the comparison cannot proceed — :class:`InsufficientHistoryError`."""
 
-    def test_disjoint_previous_and_current_raises(
-        self, utc_now: datetime
-    ) -> None:
+    def test_disjoint_previous_and_current_raises(self, utc_now: datetime) -> None:
         manifest = SentinelManifest(
             size=3,
             seed=SENTINEL_SET_SEED,
@@ -1445,9 +1424,7 @@ class TestMonitoringStoreSinceFilter:
         assert len(result) == 1
         assert result[0].raised_at == later
 
-    def test_naive_since_rejected(
-        self, monitoring_config: MonitoringConfig
-    ) -> None:
+    def test_naive_since_rejected(self, monitoring_config: MonitoringConfig) -> None:
         store = MonitoringStore(monitoring_config)
         with pytest.raises(ValueError):
             store.list_alarms(since=datetime(2026, 5, 16, 12, 0, 0))
@@ -1481,9 +1458,7 @@ class TestMonitoringStoreLifecycle:
                 )
             )
 
-    def test_close_is_idempotent(
-        self, monitoring_config: MonitoringConfig
-    ) -> None:
+    def test_close_is_idempotent(self, monitoring_config: MonitoringConfig) -> None:
         store = MonitoringStore(monitoring_config)
         store.close()
         store.close()  # second call must not raise
@@ -1506,9 +1481,7 @@ class TestMonitoringStoreLifecycle:
         with pytest.raises(RuntimeError):
             store.list_alarms()
 
-    def test_store_exposes_config(
-        self, monitoring_config: MonitoringConfig
-    ) -> None:
+    def test_store_exposes_config(self, monitoring_config: MonitoringConfig) -> None:
         """``store.config`` is the read-only handle the dashboard / report
         consumer uses to print which DSN the alarms came from."""
         store = MonitoringStore(monitoring_config)
@@ -1556,9 +1529,7 @@ class TestMonitoringStoreConcurrentWrites:
                     )
                 )
 
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=n_workers
-        ) as pool:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as pool:
             futures = [pool.submit(writer, i) for i in range(n_workers)]
             for fut in concurrent.futures.as_completed(futures):
                 fut.result()  # re-raise any worker exception
@@ -1590,9 +1561,7 @@ class TestPropertyReplayStoreIdempotent:
         max_examples=15,
         suppress_health_check=[HealthCheck.too_slow],
     )
-    def test_replay_persist_yields_single_row(
-        self, seed: int, size: int
-    ) -> None:
+    def test_replay_persist_yields_single_row(self, seed: int, size: int) -> None:
         config = MonitoringConfig(
             dsn="postgresql://test:test@localhost:5432/test_idempotent"
         )

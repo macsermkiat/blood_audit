@@ -48,9 +48,7 @@ def load_cassette(path: Path) -> tuple[CassetteInteraction, ...]:
             f"cassette at {path} missing 'interactions' list "
             f"(got {type(interactions).__name__})"
         )
-    return tuple(
-        CassetteInteraction.model_validate(entry) for entry in interactions
-    )
+    return tuple(CassetteInteraction.model_validate(entry) for entry in interactions)
 
 
 class CassetteTransport:
@@ -80,9 +78,7 @@ class CassetteTransport:
         for interaction in interactions:
             key = (interaction.model, tuple(sorted(interaction.custom_ids)))
             if key in self._table:
-                raise LlmClientError(
-                    f"duplicate cassette interaction for key {key!r}"
-                )
+                raise LlmClientError(f"duplicate cassette interaction for key {key!r}")
             self._table[key] = interaction.response
             self._by_batch_id[interaction.response.batch_id] = interaction.response
 
@@ -141,8 +137,7 @@ class CassetteTransport:
         key = (model, tuple(sorted(r.audit_id for r in requests)))
         if key not in self._table:
             raise KeyError(
-                f"no recorded interaction for {key!r}; "
-                f"known: {sorted(self._table)}"
+                f"no recorded interaction for {key!r}; known: {sorted(self._table)}"
             )
         return self._table[key]
 

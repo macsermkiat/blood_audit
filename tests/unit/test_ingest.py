@@ -188,7 +188,9 @@ class TestTimeParserInvariants:
     def test_hhmmss_round_trip(self, h: int, m: int, s: int) -> None:
         raw = f"{h:02d}{m:02d}{s:02d}"
         r = parse_hosxp_time(raw)
-        assert r.parse_warning is None, f"valid HHMMSS rejected: {raw!r} → {r.parse_warning!r}"
+        assert r.parse_warning is None, (
+            f"valid HHMMSS rejected: {raw!r} → {r.parse_warning!r}"
+        )
         assert r.value is not None
         assert (r.value.hour, r.value.minute, r.value.second) == (h, m, s)
         assert r.raw == raw
@@ -216,10 +218,16 @@ class TestTimeParserInvariants:
             "exactly one must be set"
         )
 
-    @given(st.text(min_size=1, max_size=8).filter(
-        lambda s: not (s.isdigit() and len(s) == 6)
-        and not (len(s) == 5 and s[2] == ":" and s[:2].isdigit() and s[3:].isdigit())
-    ))
+    @given(
+        st.text(min_size=1, max_size=8).filter(
+            lambda s: (
+                not (s.isdigit() and len(s) == 6)
+                and not (
+                    len(s) == 5 and s[2] == ":" and s[:2].isdigit() and s[3:].isdigit()
+                )
+            )
+        )
+    )
     @settings(max_examples=300)
     def test_unknown_format_never_silently_yields_a_value(self, raw: str) -> None:
         # Inputs that are NOT on the allow-list must produce value=None.
@@ -272,7 +280,18 @@ class TestValidateHeader:
 
     def test_unknown_column_raises(self) -> None:
         with pytest.raises(SchemaDriftError) as exc_info:
-            validate_header("BDVST", ["HN", "AN", "REQNO", "BDVSTST", "REQTYPE", "CANCELDATE", "MYSTERY_COL"])
+            validate_header(
+                "BDVST",
+                [
+                    "HN",
+                    "AN",
+                    "REQNO",
+                    "BDVSTST",
+                    "REQTYPE",
+                    "CANCELDATE",
+                    "MYSTERY_COL",
+                ],
+            )
         msg = str(exc_info.value)
         assert "MYSTERY_COL" in msg
         assert "BDVST" in msg
@@ -288,7 +307,9 @@ class TestValidateHeader:
     def test_unknown_and_missing_both_named(self) -> None:
         # BDVST: missing REQNO + has extra MYSTERY_COL.
         with pytest.raises(SchemaDriftError) as exc_info:
-            validate_header("BDVST", ["HN", "AN", "BDVSTST", "REQTYPE", "CANCELDATE", "MYSTERY_COL"])
+            validate_header(
+                "BDVST", ["HN", "AN", "BDVSTST", "REQTYPE", "CANCELDATE", "MYSTERY_COL"]
+            )
         msg = str(exc_info.value)
         assert "REQNO" in msg
         assert "MYSTERY_COL" in msg
@@ -310,7 +331,9 @@ class TestSchemaDriftDetection:
         # Craft a single-table input dir; the BDVST.csv has an unknown column.
         in_dir = tmp_path / "in"
         in_dir.mkdir()
-        (in_dir / "BDVST.csv").write_text("HN,SOMETHING_NEW\n123,foo\n", encoding="utf-8")
+        (in_dir / "BDVST.csv").write_text(
+            "HN,SOMETHING_NEW\n123,foo\n", encoding="utf-8"
+        )
 
         cfg = IngestConfig(
             input_dir=in_dir,
@@ -321,7 +344,9 @@ class TestSchemaDriftDetection:
             ingest(cfg)
         msg = str(exc_info.value)
         # Helpful error must surface both the offending column and the table.
-        assert "SOMETHING_NEW" in msg, f"drift error did not name unknown column: {msg!r}"
+        assert "SOMETHING_NEW" in msg, (
+            f"drift error did not name unknown column: {msg!r}"
+        )
         assert "BDVST" in msg, f"drift error did not name the source table: {msg!r}"
 
 
@@ -366,7 +391,9 @@ class TestRowTimestamp:
     def test_default_tz_is_bangkok(self) -> None:
         # The default arg encodes the PRD's source-zone choice; an off-default
         # caller has to be explicit.
-        ts_default = RowTimestamp.from_parts(date(2026, 5, 14), ParsedTimeOfDay(15, 0, 0))
+        ts_default = RowTimestamp.from_parts(
+            date(2026, 5, 14), ParsedTimeOfDay(15, 0, 0)
+        )
         ts_bangkok = RowTimestamp.from_parts(
             date(2026, 5, 14), ParsedTimeOfDay(15, 0, 0), tz="Asia/Bangkok"
         )
@@ -689,7 +716,10 @@ class TestIncompleteInputRejection:
         )
         with pytest.raises(IncompleteInputError) as exc_info:
             ingest(cfg)
-        assert "does-not-exist" in str(exc_info.value) or "missing" in str(exc_info.value).lower()
+        assert (
+            "does-not-exist" in str(exc_info.value)
+            or "missing" in str(exc_info.value).lower()
+        )
 
     def test_empty_input_dir_raises(self, tmp_path: Path) -> None:
         in_dir = tmp_path / "in"

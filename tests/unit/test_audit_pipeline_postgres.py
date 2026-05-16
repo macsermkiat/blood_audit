@@ -40,6 +40,7 @@ def _postgres_container() -> Iterator[object]:
     pytest.importorskip("docker")
     try:
         from testcontainers.postgres import PostgresContainer
+
         with PostgresContainer("postgres:16-alpine") as pg:
             yield pg
     except Exception as exc:  # pragma: no cover - environment-dependent

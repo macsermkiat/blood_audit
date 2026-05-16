@@ -29,9 +29,7 @@ from bba.eval_harness.exceptions import EmptyInputError, ShapeMismatchError
 from bba.eval_harness.models import AgreementResult
 
 
-def _check_sequences(
-    a: Sequence[str], b: Sequence[str]
-) -> tuple[list[str], list[str]]:
+def _check_sequences(a: Sequence[str], b: Sequence[str]) -> tuple[list[str], list[str]]:
     if len(a) != len(b):
         raise ShapeMismatchError(
             f"agreement: rater sequences differ in length: {len(a)} vs {len(b)}"

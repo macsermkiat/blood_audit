@@ -136,7 +136,9 @@ def apply_batch_results(
             run_id=run_id,
         )
         calls = [
-            _build_llm_call(record.result, attempt_index=record.attempt_id, run_id=run_id)
+            _build_llm_call(
+                record.result, attempt_index=record.attempt_id, run_id=run_id
+            )
             for record in attempt_records
         ]
         write_result = audit_store.write(row, calls)
@@ -300,12 +302,16 @@ def _build_audit_row(
         reqno=context.order.reqno,
         order_datetime=context.order.order_datetime,
         products_ordered=tuple(context.order.products_ordered),
-        hb_value=context.hb_result.value_g_dl if context.hb_result.value_g_dl is not None else 0.0,
+        hb_value=context.hb_result.value_g_dl
+        if context.hb_result.value_g_dl is not None
+        else 0.0,
         hb_datetime=context.hb_result.datetime_utc
         if context.hb_result.datetime_utc is not None
         else context.order.order_datetime,
         hb_freshness=context.hb_result.freshness,
-        hb_source=str(context.hb_result.source) if context.hb_result.source else "missing",
+        hb_source=str(context.hb_result.source)
+        if context.hb_result.source
+        else "missing",
         vitals_sbp=context.vitals_result.vitals.sbp,
         vitals_hr=context.vitals_result.vitals.hr,
         vitals_timestamp=context.vitals_result.note_timestamp,
@@ -378,12 +384,16 @@ def _audit_row_for_needs_review(
         reqno=context.order.reqno,
         order_datetime=context.order.order_datetime,
         products_ordered=tuple(context.order.products_ordered),
-        hb_value=context.hb_result.value_g_dl if context.hb_result.value_g_dl is not None else 0.0,
+        hb_value=context.hb_result.value_g_dl
+        if context.hb_result.value_g_dl is not None
+        else 0.0,
         hb_datetime=context.hb_result.datetime_utc
         if context.hb_result.datetime_utc is not None
         else context.order.order_datetime,
         hb_freshness=context.hb_result.freshness,
-        hb_source=str(context.hb_result.source) if context.hb_result.source else "missing",
+        hb_source=str(context.hb_result.source)
+        if context.hb_result.source
+        else "missing",
         vitals_sbp=context.vitals_result.vitals.sbp,
         vitals_hr=context.vitals_result.vitals.hr,
         vitals_timestamp=context.vitals_result.note_timestamp,

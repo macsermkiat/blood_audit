@@ -135,7 +135,9 @@ class RedactorBackend(Protocol):
     model load.
     """
 
-    def redact(self, text: str) -> BackendRedactionResult:  # pragma: no cover - protocol
+    def redact(
+        self, text: str
+    ) -> BackendRedactionResult:  # pragma: no cover - protocol
         ...
 
 
@@ -224,9 +226,7 @@ def _ensure_admission_month(value: str) -> str:
         )
     month_int = int(parts[1])
     if month_int < 1 or month_int > 12:
-        raise ValueError(
-            f"admission_month month must be 01-12 (got {value!r})"
-        )
+        raise ValueError(f"admission_month month must be 01-12 (got {value!r})")
     return value
 
 
@@ -247,9 +247,7 @@ def _ensure_age_band(value: str) -> str:
         )
     lo, hi = int(parts[0]), int(parts[1])
     if lo < 0 or hi < lo:
-        raise ValueError(
-            f"age_band must have lo <= hi and lo >= 0 (got {value!r})"
-        )
+        raise ValueError(f"age_band must have lo <= hi and lo >= 0 (got {value!r})")
     return value
 
 
@@ -318,9 +316,7 @@ def _ensure_utc_datetime(dt: datetime) -> datetime:
     compared to tz-aware in-text dates.
     """
     if dt.tzinfo is None:
-        raise ValueError(
-            "datetime must be tz-aware (see CONTEXT.md 'tz-aware UTC')"
-        )
+        raise ValueError("datetime must be tz-aware (see CONTEXT.md 'tz-aware UTC')")
     return dt
 
 

@@ -98,9 +98,7 @@ def _ensure_first_of_month(d: date) -> date:
     eliminates the ambiguity.
     """
     if d.day != 1:
-        raise ValueError(
-            f"month must be the first of the month (got {d.isoformat()})"
-        )
+        raise ValueError(f"month must be the first of the month (got {d.isoformat()})")
     return d
 
 

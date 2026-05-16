@@ -297,7 +297,6 @@ def physician_own_view_filename(physician_id: str) -> str:
         )
     if physician_id in {".", ".."}:
         raise ValueError(
-            f"physician_id must not be a path-traversal segment "
-            f"(got {physician_id!r})"
+            f"physician_id must not be a path-traversal segment (got {physician_id!r})"
         )
     return f"physician_own_view_{physician_id}.csv"

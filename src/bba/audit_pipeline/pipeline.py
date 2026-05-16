@@ -352,7 +352,9 @@ def _deterministic_audit_row(
         if context.hb_result.datetime_utc is not None
         else context.order.order_datetime,
         hb_freshness=context.hb_result.freshness,
-        hb_source=str(context.hb_result.source) if context.hb_result.source else "missing",
+        hb_source=str(context.hb_result.source)
+        if context.hb_result.source
+        else "missing",
         vitals_sbp=context.vitals_result.vitals.sbp,
         vitals_hr=context.vitals_result.vitals.hr,
         vitals_timestamp=context.vitals_result.note_timestamp,

@@ -57,9 +57,7 @@ def outcome_anchored_falsification(
     n_supported = n_inappropriate - n_contradicted
 
     support_rate = _safe_wilson(n_supported, n_inappropriate, confidence=0.95)
-    contradiction_rate = _safe_wilson(
-        n_contradicted, n_inappropriate, confidence=0.95
-    )
+    contradiction_rate = _safe_wilson(n_contradicted, n_inappropriate, confidence=0.95)
 
     return FalsificationResult(
         n_labeled=len(predictions),

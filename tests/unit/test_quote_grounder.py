@@ -277,9 +277,7 @@ class TestLayer4WithinDocUniqueness:
 
     def test_absent_quote_rejected(self) -> None:
         # Zero occurrences is also a failure of uniqueness ("exactly one").
-        assert (
-            within_doc_unique("hematuria since morning", _SOURCE_E1_TEXT) is False
-        )
+        assert within_doc_unique("hematuria since morning", _SOURCE_E1_TEXT) is False
 
 
 # =============================================================================
@@ -497,9 +495,7 @@ class TestVerifyCitationCombined:
     def test_lab_tuple_mismatch_rejected(self) -> None:
         # Quote passes layers 1-5, but the structured tuple disagrees.
         tup = LabTuple(analyte="Hb", value=7.0, unit="g/dL")  # source says 8.3
-        verdict = verify_citation(
-            _cit(_QUOTE_E1_VALID, "E1", lab_tuple=tup), _bundle()
-        )
+        verdict = verify_citation(_cit(_QUOTE_E1_VALID, "E1", lab_tuple=tup), _bundle())
         assert verdict.passed is False
         assert verdict.reason == VerdictReason.LAB_TUPLE_MISMATCH
 
@@ -576,9 +572,7 @@ class TestAdversarialNFCvsNFD:
         thai = "ผู้ป่วยมาด้วยอาการถ่ายดำมาตั้งแต่เมื่อวานนี้"
         source_nfd = unicodedata.normalize("NFD", thai)
         quote_nfc = unicodedata.normalize("NFC", thai)
-        verdict = verify_citation(
-            _cit(quote_nfc, "E1"), (_src("E1", source_nfd),)
-        )
+        verdict = verify_citation(_cit(quote_nfc, "E1"), (_src("E1", source_nfd),))
         assert verdict.passed is True
 
 
@@ -650,9 +644,7 @@ class TestAdversarialNumericParaphrase:
         # source's triples.
         quote_with_unmatched = "Patient noted Hb 7.0 g/dL on admission today"
         source_with_different = "Patient noted Hb 8.3 g/dL on admission today"
-        assert (
-            _lab_grounded(None, quote_with_unmatched, source_with_different) is False
-        )
+        assert _lab_grounded(None, quote_with_unmatched, source_with_different) is False
 
 
 class TestAdversarialCrossSourceAttribution:
@@ -677,9 +669,7 @@ class TestAdversarialConcatenatedQuotes:
     def test_concatenated_quote_rejected(self) -> None:
         # Take two real fragments from E1 and join them — the seam is the
         # bug; no contiguous run in the source matches.
-        quote = (
-            "Patient has melena since yesterday and transfuse 1 unit PRBC"
-        )
+        quote = "Patient has melena since yesterday and transfuse 1 unit PRBC"
         # Each substring appears; the concatenation does not.
         assert "Patient has melena since yesterday" in _SOURCE_E1_TEXT
         assert "transfuse 1 unit PRBC" in _SOURCE_E1_TEXT
@@ -816,7 +806,10 @@ class TestVerifierAsClassifierOverLabeledSet:
         return [
             # Positives — genuinely grounded citations.
             (_cit("Patient came with melena and Hb 8.3 g/dL on admission", "E1"), True),
-            (_cit("No active bleeding observed during physical examination", "E1"), True),
+            (
+                _cit("No active bleeding observed during physical examination", "E1"),
+                True,
+            ),
             (_cit("Plan: transfuse 1 unit PRBC and recheck Hb in 6 hours", "E1"), True),
             (_cit("Cardiology: stable angina, no acute coronary syndrome", "E2"), True),
             (_cit("Hb 10.2 g/dL on day 1, repeat 8.7 g/dL on day 3", "E2"), True),
@@ -1054,9 +1047,7 @@ class TestVerifierOutputImmutability:
             verdict.passed = False  # type: ignore[misc]
 
     def test_verify_citations_output_tuple_unmutable(self) -> None:
-        verdicts = verify_citations(
-            [_cit(_QUOTE_E1_VALID, "E1")], _bundle()
-        )
+        verdicts = verify_citations([_cit(_QUOTE_E1_VALID, "E1")], _bundle())
         # tuple has no __setitem__ — direct assertion of the immutability shape.
         with pytest.raises(TypeError):
             verdicts[0] = verdicts[0]  # type: ignore[index]
@@ -1080,9 +1071,7 @@ class TestNLIGateProtocol:
 
         # Verifies the gate is accepted at the verify_citation boundary
         # without raising a type error (structural typing).
-        verdict = verify_citation(
-            _cit(_QUOTE_E1_VALID, "E1"), _bundle(), nli_gate=gate
-        )
+        verdict = verify_citation(_cit(_QUOTE_E1_VALID, "E1"), _bundle(), nli_gate=gate)
         assert verdict.reason == VerdictReason.PASS
 
     def test_class_with_call_satisfies_protocol(self) -> None:
