@@ -32,6 +32,7 @@ Classification = Literal[
     "INAPPROPRIATE",
     "NEEDS_REVIEW",
     "INSUFFICIENT_EVIDENCE",
+    "POTENTIALLY_INAPPROPRIATE",
 ]
 
 
