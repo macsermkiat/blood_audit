@@ -91,15 +91,19 @@ def config(tmp_path: Path) -> ReviewActionsConfig:
 def _postgres_container() -> Iterator[object]:
     """Session-scoped Postgres container via testcontainers-python.
 
-    Imported lazily so test-collection doesn't fail when testcontainers is
-    not yet installed (GREEN-phase will pin it as a dev dep). RED tests that
-    consume this fixture will ERROR with ImportError until then — which is
-    the desired failure mode.
+    Skipped automatically when testcontainers, the docker python client,
+    or the Docker daemon itself is unavailable — the suite reports a skip
+    rather than a spurious ERROR (mirrors test_audit_pipeline_postgres).
     """
-    from testcontainers.postgres import PostgresContainer
+    pytest.importorskip("testcontainers.postgres")
+    pytest.importorskip("docker")
+    try:
+        from testcontainers.postgres import PostgresContainer
 
-    with PostgresContainer("postgres:16-alpine") as pg:
-        yield pg
+        with PostgresContainer("postgres:16-alpine") as pg:
+            yield pg
+    except Exception as exc:  # pragma: no cover - environment-dependent
+        pytest.skip(f"Postgres testcontainer unavailable: {exc}")
 
 
 _TEST_ROLES_TO_DROP: tuple[str, ...] = (
