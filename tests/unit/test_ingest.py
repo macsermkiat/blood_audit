@@ -50,6 +50,8 @@ REQUIRED_TABLES: tuple[CSVTable, ...] = (
     "IPDADMPROGRESS",
     "IPDNRFOCUSDT",
     "UnUSE_Patient_Background",
+    "IPTSUMOPRT",
+    "ICD9CM",
 )
 
 
@@ -239,14 +241,15 @@ class TestSchemaCoverage:
         schema = get_schema(table)
         assert schema is not None
 
-    def test_all_tables_returns_canonical_ten(self) -> None:
+    def test_all_tables_returns_canonical_set(self) -> None:
         assert tuple(all_tables()) == REQUIRED_TABLES
 
     def test_no_extra_tables_silently_registered(self) -> None:
         # Adding a table without bumping the schema version would change the
         # fingerprint and produce a new run_id — but we still want a hard
-        # tripwire so a contributor cannot register a tenth-plus-one silently.
-        assert len(all_tables()) == 10
+        # tripwire so a contributor cannot register an extra one silently.
+        # Canonical set: 10 HOSxP tables + 2 procedure tables added for #7.
+        assert len(all_tables()) == 12
 
 
 # =============================================================================

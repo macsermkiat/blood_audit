@@ -24,6 +24,8 @@ CSVTable = Literal[
     "IPDADMPROGRESS",
     "IPDNRFOCUSDT",
     "UnUSE_Patient_Background",
+    "IPTSUMOPRT",
+    "ICD9CM",
 ]
 
 

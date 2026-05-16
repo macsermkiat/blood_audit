@@ -86,6 +86,19 @@ _REGISTRY_V1: Mapping[CSVTable, DataFrameSchema] = {
     "UnUSE_Patient_Background": DataFrameSchema(
         {"HN": _str(nullable=False), "BIRTHDATE": _str(), "SEX": _str()},
     ),
+    "IPTSUMOPRT": DataFrameSchema(
+        {
+            "HN": _str(nullable=False),
+            "AN": _str(),
+            "ICD9": _str(),
+            "Orflag": _str(),
+            "OPDATETIME": _str(),
+            "OPRNAME": _str(),
+        },
+    ),
+    "ICD9CM": DataFrameSchema(
+        {"ICD9": _str(nullable=False), "CODENAME": _str()},
+    ),
 }
 
 
