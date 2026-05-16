@@ -55,7 +55,6 @@ RED scaffold:
 
 from __future__ import annotations
 
-import hashlib
 import importlib
 import logging
 import os
@@ -139,11 +138,13 @@ def _restore_excepthook() -> Iterator[None]:
 
 @pytest.fixture
 def fake_csv(tmp_path: Path) -> Path:
-    """A small CSV that satisfies ``click.Path(exists=True)``.
+    """A HOSxP-named CSV that satisfies ``click.Path(exists=True)``.
 
-    Content is irrelevant — the CLI's idempotency tests stub the audit
-    pipeline. Only the *bytes* matter for run_id computation."""
-    p = tmp_path / "input.csv"
+    File stem is ``BDVST`` (a known HOSxP table) so the bundle-aware
+    :func:`compute_run_id` picks it up — see
+    :class:`TestRunIdBundleAwareness` for why a non-HOSxP stem would
+    raise."""
+    p = tmp_path / "BDVST.csv"
     p.write_bytes(b"HN,AN,REQNO\n00000001,A1,R1\n")
     return p
 
@@ -354,6 +355,31 @@ class TestPhiSurface:
     def test_thai_honorific_matches(self) -> None:
         assert any(r.search("นาย สมชาย แสงทอง") for r in PHI_REGEXES)
 
+    def test_thai_honorific_redacts_full_name_not_just_honorific(self) -> None:
+        """Regression guard for PR-56 codex P1 #1: the Thai-honorific
+        pattern must consume the trailing given+family name so
+        ``pattern.sub('<REDACTED:phi>', "นายสมชาย ใจดี")`` collapses to
+        ``'<REDACTED:phi>'`` — not ``'<REDACTED:phi>สมชาย ใจดี'`` which
+        would leak the patient's name into the operator log."""
+        from bba.cli.phi_scrubber import _redact_phi_in_string
+
+        for original in (
+            "นายสมชาย ใจดี",
+            "นาย สมชาย แสงทอง",
+            "นางสาวสุดา ปัญญา",
+            "เด็กชายภูมิ ใจกล้า",
+            "นาย Somchai Saengthong",
+        ):
+            scrubbed = _redact_phi_in_string(original)
+            assert "<REDACTED" in scrubbed, (original, scrubbed)
+            # No Thai-script name tokens survive the redaction.
+            assert not any(
+                ord(ch) in range(0x0E00, 0x0E7F) for ch in scrubbed
+            ), (original, scrubbed)
+            # No Latin name token survives either.
+            for leak in ("Somchai", "Saengthong"):
+                assert leak not in scrubbed, (original, scrubbed)
+
     def test_innocuous_strings_unmatched(self) -> None:
         """Sanity guard: non-PHI text must not trigger redaction."""
         for s in ("the patient was discharged", "ward 7", "transfusion ordered"):
@@ -446,18 +472,25 @@ class TestRunIdRecipe:
         assert all(c in "0123456789abcdef" for c in rid), rid
 
     def test_run_id_matches_spec_formula(self, fake_csv: Path) -> None:
-        from bba.ingest.hashing import content_hash
+        """The CLI's run_id is the 16-char prefix of
+        :class:`bba.ingest.RunIdentity` computed over every HOSxP-named
+        CSV in ``input_csv.parent``. ``fake_csv`` is named ``BDVST.csv``
+        and is the only HOSxP-named file in its parent dir, so the
+        expected identity uses a one-entry ``per_file_hashes`` map."""
+        from bba.ingest import RunIdentity, content_hash
 
-        input_hash = content_hash(fake_csv)
-        expected = hashlib.sha256(
-            (input_hash + "schema-fp-v1" + "0.1.0").encode("utf-8")
-        ).hexdigest()[:RUN_ID_LENGTH]
+        per_file_hashes = {"BDVST": content_hash(fake_csv)}
+        expected_full = RunIdentity.from_inputs(
+            per_file_hashes,  # type: ignore[arg-type]
+            "schema-fp-v1",
+            "0.1.0",
+        ).run_id
         actual = compute_run_id(
             input_csv=fake_csv,
             schema_fingerprint=SchemaFingerprint("schema-fp-v1"),
             code_version_str=CodeVersion("0.1.0"),
         )
-        assert actual == expected
+        assert actual == expected_full[:RUN_ID_LENGTH]
 
 
 class TestRunIdDeterminism:
@@ -476,47 +509,94 @@ class TestRunIdDeterminism:
         )
         assert a == b
 
-    def test_identical_bytes_at_different_paths_same_id(
+    def test_identical_bundles_in_different_directories_same_id(
         self, tmp_path: Path
     ) -> None:
-        """The recipe is content-based, not path-based: same bytes at
-        ``/tmp/a.csv`` and ``/tmp/b.csv`` produce the same run_id."""
-        p1 = tmp_path / "a.csv"
-        p2 = tmp_path / "b.csv"
-        p1.write_bytes(b"HN,AN\n1,2\n")
-        p2.write_bytes(b"HN,AN\n1,2\n")
-        a = compute_run_id(
-            input_csv=p1,
+        """Two parent directories with the same HOSxP-named bundle
+        contents produce the same run_id. The recipe is content-based
+        (per-table file hash), not path-based."""
+        dir_a = tmp_path / "a"
+        dir_b = tmp_path / "b"
+        for d in (dir_a, dir_b):
+            d.mkdir()
+            (d / "BDVST.csv").write_bytes(b"HN,AN\n1,2\n")
+        run_a = compute_run_id(
+            input_csv=dir_a / "BDVST.csv",
             schema_fingerprint=SchemaFingerprint("x"),
             code_version_str=CodeVersion("0.1.0"),
         )
-        b = compute_run_id(
-            input_csv=p2,
+        run_b = compute_run_id(
+            input_csv=dir_b / "BDVST.csv",
             schema_fingerprint=SchemaFingerprint("x"),
             code_version_str=CodeVersion("0.1.0"),
         )
-        assert a == b
+        assert run_a == run_b
 
 
 class TestRunIdSensitivity:
     """Changing any component of the triple must change the run_id."""
 
-    def test_different_input_different_id(self, tmp_path: Path) -> None:
-        a_path = tmp_path / "a.csv"
-        b_path = tmp_path / "b.csv"
-        a_path.write_bytes(b"a,b\n1,2\n")
-        b_path.write_bytes(b"a,b\n1,3\n")
+    def test_different_input_bytes_different_id(
+        self, tmp_path: Path
+    ) -> None:
+        dir_a = tmp_path / "a"
+        dir_b = tmp_path / "b"
+        dir_a.mkdir()
+        dir_b.mkdir()
+        (dir_a / "BDVST.csv").write_bytes(b"a,b\n1,2\n")
+        (dir_b / "BDVST.csv").write_bytes(b"a,b\n1,3\n")
         a = compute_run_id(
-            input_csv=a_path,
+            input_csv=dir_a / "BDVST.csv",
             schema_fingerprint=SchemaFingerprint("x"),
             code_version_str=CodeVersion("0.1.0"),
         )
         b = compute_run_id(
-            input_csv=b_path,
+            input_csv=dir_b / "BDVST.csv",
             schema_fingerprint=SchemaFingerprint("x"),
             code_version_str=CodeVersion("0.1.0"),
         )
         assert a != b
+
+    def test_sibling_table_edit_changes_run_id(
+        self, tmp_path: Path
+    ) -> None:
+        """Regression for PR-56 codex P1 #2: editing a sibling HOSxP
+        table (not the one passed via ``--input``) must change the
+        run_id. Otherwise ``bba audit`` would treat the bundle as
+        already-audited and no-op against stale outputs."""
+        bundle = tmp_path / "bundle"
+        bundle.mkdir()
+        (bundle / "BDVST.csv").write_bytes(b"HN,AN\n1,2\n")
+        (bundle / "Diagnosis.csv").write_bytes(b"HN,AN\n1,A01\n")
+        before = compute_run_id(
+            input_csv=bundle / "BDVST.csv",
+            schema_fingerprint=SchemaFingerprint("x"),
+            code_version_str=CodeVersion("0.1.0"),
+        )
+        # The user only edits Diagnosis.csv — BDVST.csv stays the same.
+        (bundle / "Diagnosis.csv").write_bytes(b"HN,AN\n1,B02\n")
+        after = compute_run_id(
+            input_csv=bundle / "BDVST.csv",
+            schema_fingerprint=SchemaFingerprint("x"),
+            code_version_str=CodeVersion("0.1.0"),
+        )
+        assert before != after, (
+            "sibling-table edit must invalidate run_id; otherwise the "
+            "idempotency guard reuses stale audit results"
+        )
+
+    def test_empty_bundle_raises_cli_error(self, tmp_path: Path) -> None:
+        """A directory with no HOSxP-named CSVs cannot anchor an audit
+        run; ``compute_run_id`` raises early rather than persist an
+        idempotency marker for an unanchored bundle."""
+        non_hosxp = tmp_path / "unknown.csv"
+        non_hosxp.write_bytes(b"a,b\n1,2\n")
+        with pytest.raises(CliError, match="no HOSxP-named CSV"):
+            compute_run_id(
+                input_csv=non_hosxp,
+                schema_fingerprint=SchemaFingerprint("x"),
+                code_version_str=CodeVersion("0.1.0"),
+            )
 
     def test_different_schema_different_id(self, fake_csv: Path) -> None:
         a = compute_run_id(
@@ -549,21 +629,23 @@ class TestRunIdSensitivity:
         max_examples=25,
     )
     @given(payload=st.binary(min_size=1, max_size=256))
-    def test_property_bytewise_identical_inputs_same_id(
+    def test_property_bytewise_identical_bundles_same_id(
         self, tmp_path: Path, payload: bytes
     ) -> None:
-        """Property: bytewise-identical inputs ⇒ identical run_id."""
-        p1 = tmp_path / "p1.csv"
-        p2 = tmp_path / "p2.csv"
-        p1.write_bytes(payload)
-        p2.write_bytes(payload)
+        """Property: two HOSxP-named bundles with identical bytes
+        produce identical run_ids regardless of parent path."""
+        dir_a = tmp_path / "a"
+        dir_b = tmp_path / "b"
+        for d in (dir_a, dir_b):
+            d.mkdir(exist_ok=True)
+            (d / "BDVST.csv").write_bytes(payload)
         r1 = compute_run_id(
-            input_csv=p1,
+            input_csv=dir_a / "BDVST.csv",
             schema_fingerprint=SchemaFingerprint("x"),
             code_version_str=CodeVersion("0.1.0"),
         )
         r2 = compute_run_id(
-            input_csv=p2,
+            input_csv=dir_b / "BDVST.csv",
             schema_fingerprint=SchemaFingerprint("x"),
             code_version_str=CodeVersion("0.1.0"),
         )

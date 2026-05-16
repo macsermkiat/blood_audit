@@ -1,28 +1,30 @@
 """Run-level idempotency identity for ``bba audit``.
 
-The CLI's ``run_id`` is the truncated sha256 over
-``input_csv_hash + schema_fingerprint + code_version`` (PRD §20). It is
-deliberately *not* the same construction as :class:`bba.ingest.RunIdentity`
-— ingest works at the *bundle* level (a directory of HOSxP tables) and
-keeps the full 64-char digest; the CLI works at the *single-file* level
-that the operator passes on the command line and surfaces a short 16-char
-prefix that is grep-friendly in logs without sacrificing collision
-resistance for Phase-1-scale corpora.
+The CLI's ``run_id`` is the 16-char prefix of
+:class:`bba.ingest.RunIdentity` computed over every HOSxP-named CSV in
+``input_csv.parent`` — the same set of files that
+:func:`bba.ingest.ingest` actually reads. Hashing only the operator's
+``--input`` file would make ``bba audit`` blind to sibling-table edits:
+e.g., a freshly-exported ``Diagnosis.csv`` next to an unchanged
+``BDVST.csv`` would yield the same run_id as the prior audit, so the
+idempotency check would no-op and reuse stale results.
 
-Both constructions agree on the *recipe* (sha256 over input bytes +
-schema fingerprint + package version) so a single change in any
-component changes the run_id and forces a fresh audit, satisfying the
-"no silent re-use of stale outputs" invariant.
+The CLI keeps the short 16-char prefix (grep-friendly in logs) while
+delegating the per-file aggregation to
+:class:`bba.ingest.RunIdentity`, so the CLI's idempotency key and the
+ingest module's run identity stay aligned by construction.
 """
 
 from __future__ import annotations
 
-import hashlib
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
-from typing import NewType
+from typing import NewType, cast
 
-from bba.ingest.hashing import content_hash
+from bba.ingest import RunIdentity, all_tables, content_hash
+from bba.ingest.models import CSVTable
+
+from bba.cli.exceptions import CliError
 
 
 InputCsvHash = NewType("InputCsvHash", str)
@@ -71,14 +73,37 @@ def compute_run_id(
     schema_fingerprint: SchemaFingerprint,
     code_version_str: CodeVersion,
 ) -> RunId:
-    """Compute the CLI ``run_id`` for the (input, schema, code) triple.
+    """Compute the CLI ``run_id`` for the (bundle, schema, code) triple.
 
-    Recipe::
+    The bundle is every HOSxP-named CSV file in ``input_csv.parent``
+    (the same set :func:`bba.ingest.ingest` reads). Each file is hashed
+    via :func:`bba.ingest.content_hash` and the per-file hashes feed
+    :meth:`bba.ingest.RunIdentity.from_inputs`, whose 64-char digest is
+    truncated to :data:`RUN_ID_LENGTH` for the CLI's grep-friendly id.
 
-        sha256(content_hash(input_csv) + schema_fingerprint + code_version)
-        .hexdigest()[:RUN_ID_LENGTH]
+    Raises :class:`CliError` if no HOSxP-named CSVs are present in the
+    parent directory — :func:`bba.ingest.ingest` would raise
+    :class:`bba.ingest.IncompleteInputError` later anyway; failing
+    early avoids persisting an idempotency marker for an unanchored
+    bundle.
     """
-    input_hash = content_hash(input_csv)
-    payload = (input_hash + schema_fingerprint + code_version_str).encode("utf-8")
-    digest = hashlib.sha256(payload).hexdigest()
-    return RunId(digest[:RUN_ID_LENGTH])
+    bundle_dir = input_csv.parent
+    known: frozenset[str] = frozenset(all_tables())
+    per_file_hashes: dict[CSVTable, str] = {}
+    for csv_path in sorted(bundle_dir.glob("*.csv")):
+        if csv_path.stem in known:
+            per_file_hashes[cast(CSVTable, csv_path.stem)] = content_hash(
+                csv_path
+            )
+    if not per_file_hashes:
+        raise CliError(
+            f"compute_run_id: {bundle_dir} contains no HOSxP-named CSV "
+            "files; cannot derive a stable run identity for an unanchored "
+            f"input bundle ({input_csv})"
+        )
+    identity = RunIdentity.from_inputs(
+        per_file_hashes,
+        schema_fingerprint,
+        code_version_str,
+    )
+    return RunId(identity.run_id[:RUN_ID_LENGTH])
