@@ -11,7 +11,13 @@ specified in PRD §"Implementation Decisions §6":
 5. Bypass: delta-Hb trigger fired   → ``APPROPRIATE`` (``bypass_reason=delta_hb``)
 6. Hemodilution: Hb < threshold AND ≥ 2 L crystalloid in 4 h
                                     → ``NEEDS_REVIEW`` (``bypass_reason=hemodilution_flagged``)
-7. Plain Hb-tier rule:
+7. Single-low-Hb-no-trend: Hb < threshold AND ``needs_review_single_low_hb``
+                                    → ``NEEDS_REVIEW`` (``bypass_reason=none``;
+                                       isolated Hb < 8 with no prior 24 h
+                                       observation cannot be interpreted as
+                                       confirmed anemia without a trend —
+                                       PR #52 Codex P1 + hb_lookup contract)
+8. Plain Hb-tier rule:
    - Hb < ``cohort_threshold``       → ``APPROPRIATE``
    - ``cohort_threshold`` ≤ Hb < 10  → ``NEEDS_REVIEW``
    - Hb ≥ 10                         → ``POTENTIALLY_INAPPROPRIATE``
@@ -133,8 +139,12 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
             rationale="cohort_non_threshold",
         )
 
-    # 6 + 7. Plain Hb-tier rule with hemodilution carve-out scoped to the
-    #        sub-threshold branch.
+    # 6 + 7. Plain Hb-tier rule with two carve-outs scoped to the would-be
+    #        auto-APPROPRIATE sub-threshold branch:
+    #          * Hemodilution-flagged (≥ 2 L crystalloid in 4 h)
+    #          * Single-low-Hb-no-trend (PR #52 Codex P1 + hb_lookup contract:
+    #            isolated Hb < 8 with no prior 24 h observation cannot be
+    #            interpreted as confirmed anemia without a confirming value).
     hb_value = hb.value_g_dl
     if hb_value < threshold:
         if inputs.crystalloid_liters_prior_4h >= HEMODILUTION_CRYSTALLOID_LITERS:
@@ -143,6 +153,13 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
                 bypass_reason=BypassReason.HEMODILUTION_FLAGGED,
                 cohort_threshold=threshold,
                 rationale="bypass_hemodilution",
+            )
+        if hb.needs_review_single_low_hb:
+            return ClassifierResult(
+                classification="NEEDS_REVIEW",
+                bypass_reason=BypassReason.NONE,
+                cohort_threshold=threshold,
+                rationale="single_low_hb_no_trend",
             )
         return ClassifierResult(
             classification="APPROPRIATE",

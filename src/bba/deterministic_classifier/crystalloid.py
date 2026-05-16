@@ -31,17 +31,20 @@ administrations in [order_datetime - 4 h, order_datetime]."""
 
 
 _DOSE_PATTERN = re.compile(
-    r"(\d+(?:\.\d+)?)\s*(mL|cc|L)\b",
+    r"(\d+(?:\.\d+)?)\s*(mL|cc|L)\b(?!\s*/)",
     re.IGNORECASE,
 )
 """Capture the last numeric dose + unit on a HOSxP drug string.
 
 The grouping is intentionally permissive on whitespace and case so
 ``"NSS 1000 mL"``, ``"RLS 1 L"``, ``"D5W 500 cc"``, ``"NSS1000ML"`` all
-parse to the same numeric value. ``\\b`` after the unit prevents
-``"500 mL/h"`` infusion-rate strings (Phase 2) from being read as a
-500 mL bolus — the trailing slash breaks the word boundary differently
-in some shells, so the orchestrator currently filters those upstream.
+parse to the same numeric value.
+
+Infusion-rate strings (``"NSS 500 mL/h"``, ``"D5W 200 cc/hour"``,
+``"RLS 1 L/hr"``) are excluded by the negative lookahead ``(?!\\s*/)``:
+``\\b`` alone matches at the L→/ boundary because ``/`` is non-alphanumeric,
+which would incorrectly count a rate as a delivered bolus (PR #52 Codex P2).
+The lookahead is whitespace-tolerant so ``"500 mL / h"`` is also rejected.
 """
 
 

@@ -150,12 +150,15 @@ def _hb(
     *,
     delta_bypass: bool = False,
     freshness: str = "fresh",
+    needs_review_single_low_hb: bool = False,
 ) -> HbLookupResult:
     """Build a minimal :class:`HbLookupResult` for tests.
 
     Pass ``value_g_dl=None`` to model the "Hb missing" tier (forces
     freshness=missing). ``delta_bypass=True`` substitutes a triggered
     6 h window so the classifier sees ``delta_hb_bypass=True``.
+    ``needs_review_single_low_hb=True`` models the upstream flag for an
+    isolated Hb < 8 with no 24 h trend (PRD §3 + hb_lookup contract).
     """
     if value_g_dl is None:
         return HbLookupResult(
@@ -174,7 +177,7 @@ def _hb(
         freshness=freshness,  # type: ignore[arg-type]
         delta_hb_bypass=delta_bypass,
         delta_hb_windows=_triggered_delta() if delta_bypass else _untriggered_delta(),
-        needs_review_single_low_hb=False,
+        needs_review_single_low_hb=needs_review_single_low_hb,
     )
 
 
@@ -696,6 +699,94 @@ class TestMonotonicityProperty:
 
 
 # =============================================================================
+# Single-low-Hb review flag (PR #52 Codex P1)
+# =============================================================================
+
+
+class TestSingleLowHbReviewFlag:
+    """When :attr:`bba.hb_lookup.HbLookupResult.needs_review_single_low_hb`
+    is set, the deterministic engine MUST route to ``NEEDS_REVIEW`` rather
+    than auto-classifying sub-threshold Hb as ``APPROPRIATE``.
+
+    Upstream contract (PRD §3, hb_lookup model docstring): the flag is
+    True only when the most-recent Hb is < 8 g/dL and no prior 24 h
+    observation exists — i.e., a worrying value with no trend to
+    interpret it against. The deterministic stage cannot honor confirmed
+    anemia without a confirming observation, so an isolated low value
+    routes to human review.
+    """
+
+    def test_isolated_low_hb_routes_to_needs_review(self) -> None:
+        """ESRD/ortho-cardiac patient with Hb 7.5 and no 24 h trend
+        (sub-threshold for the 8.0 cohort) → NEEDS_REVIEW, not APPROPRIATE."""
+        result = classify(
+            _inputs(
+                hb=_hb(7.5, needs_review_single_low_hb=True),
+                cohort=_cohort(CohortLabel.ESRD_EPO, ESRD_EPO_THRESHOLD),
+            )
+        )
+        assert result.classification == "NEEDS_REVIEW"
+        assert result.bypass_reason == BypassReason.NONE
+
+    def test_isolated_low_hb_default_cohort_routes_to_needs_review(self) -> None:
+        """Default-cohort case: Hb 6.5 with the flag set → NEEDS_REVIEW
+        (the lone-value-no-trend rule applies to every threshold-driven
+        cohort, not just the high-target ones)."""
+        result = classify(
+            _inputs(
+                hb=_hb(6.5, needs_review_single_low_hb=True),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+            )
+        )
+        assert result.classification == "NEEDS_REVIEW"
+        assert result.bypass_reason == BypassReason.NONE
+
+    def test_flag_does_not_override_mtp_bypass(self) -> None:
+        """MTP is the auto-APPROPRIATE safety signal — the cluster pattern
+        is itself the "confirming" observation, so the single-low-Hb flag
+        does NOT downgrade an MTP-cohort row to NEEDS_REVIEW."""
+        result = classify(
+            _inputs(
+                hb=_hb(7.5, needs_review_single_low_hb=True),
+                cohort=_cohort(CohortLabel.MTP, None),
+            )
+        )
+        assert result.classification == "APPROPRIATE"
+        assert result.bypass_reason == BypassReason.MTP
+
+    def test_flag_does_not_override_peri_procedural_bypass(self) -> None:
+        """A procedure within 6 h is itself a positive-evidence anchor
+        for the order, so the single-low-Hb flag does NOT downgrade the
+        peri-procedural bypass."""
+        result = classify(
+            _inputs(
+                hb=_hb(7.5, needs_review_single_low_hb=True),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                procedure_proximity_hours=3.0,
+            )
+        )
+        assert result.classification == "APPROPRIATE"
+        assert result.bypass_reason == BypassReason.PERI_PROCEDURAL_6H
+
+    def test_flag_does_not_override_delta_hb_bypass(self) -> None:
+        """A triggered delta-Hb window IS a trend, so the single-low-Hb
+        flag (which fires for "no trend available") does not apply when
+        the bypass is also set. The classifier honors the delta-Hb path."""
+        result = classify(
+            _inputs(
+                hb=_hb(
+                    7.5,
+                    delta_bypass=True,
+                    needs_review_single_low_hb=True,
+                ),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+            )
+        )
+        assert result.classification == "APPROPRIATE"
+        assert result.bypass_reason == BypassReason.DELTA_HB
+
+
+# =============================================================================
 # Cohort UNKNOWN — user constraint #9
 # =============================================================================
 
@@ -827,6 +918,32 @@ class TestCrystalloidHelper:
             self._med("LRS 1 L", 2.0),
         )
         assert total_crystalloid_liters(events, ORDER_DT) == pytest.approx(2.0)
+
+    def test_excludes_infusion_rate_strings(self) -> None:
+        """PR #52 Codex P2: ``NSS 500 mL/h`` is an infusion RATE, not a
+        delivered bolus. The parser MUST NOT sum it into the 4 h total —
+        counting a rate as a bolus can push the total over the 2 L
+        hemodilution threshold and incorrectly flip a sub-threshold Hb
+        from APPROPRIATE to NEEDS_REVIEW.
+        """
+        events = (
+            self._med("NSS 500 mL/h", 1.0),  # rate — must be excluded
+            self._med("NSS 500 mL/hr", 1.5),  # rate variant — must be excluded
+            self._med("D5W 200 cc/hour", 2.0),  # cc rate — must be excluded
+            self._med("RLS 1 L/h", 2.5),  # L rate — must be excluded
+        )
+        assert total_crystalloid_liters(events, ORDER_DT) == 0.0
+
+    def test_mixed_rates_and_boluses(self) -> None:
+        """A rate co-existing with a real bolus must sum only the bolus.
+        Two rate lines (no liters) plus one 1 L bolus → 1.0 L total,
+        well below the 2 L hemodilution trigger."""
+        events = (
+            self._med("NSS 500 mL/h", 0.5),
+            self._med("NSS 1000 mL", 1.0),  # real bolus
+            self._med("D5W 200 cc/hour", 2.0),
+        )
+        assert total_crystalloid_liters(events, ORDER_DT) == pytest.approx(1.0)
 
 
 # =============================================================================
