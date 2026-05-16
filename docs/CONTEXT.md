@@ -10,7 +10,8 @@ Sections are added per ticket as each module merges to `main`. Currently
 covered: `#3 ingest`, `#4 audit_orders`, `#5 hb_lookup`, `#6 vitals_extractor`,
 `#16 evidence_bundle_builder`, `#17 deid_redactor`, `#18 quote_grounder`,
 `#19 audit_store`, `#21 prompt_builder`, `#22 llm_client`,
-`#23 confidence_calibrator`, `#25 review_actions`, `#28 report_generator`.
+`#23 confidence_calibrator`, `#24 audit_pipeline`, `#25 review_actions`,
+`#27 monitoring`, `#28 report_generator`.
 
 ## Ingest concepts (#3)
 
@@ -2358,6 +2359,154 @@ re-litigate:
 * **Full integration with `bba.quote_grounder`** — the verifier
   callable is a Protocol; the Phase-1 default returns `True`. Wiring
   `verify_citations` into the verifier hook is the next ticket's job.
+
+## Monitoring concepts (#27)
+
+### Weekly reviewer sample
+
+50–75 audit rows drawn deterministically each ISO week for human
+clinical review. `bba.monitoring.draw_weekly_reviewer_sample(audit_rows,
+*, week_iso, sample_size, seed)` returns a `WeeklyReviewerSample`
+whose `audit_ids` are stable across processes, machines, and Python
+restarts: the RNG seed is derived from `sha256("week_iso|sample_size|
+seed")[:8]`, not from `hash()` (which is `PYTHONHASHSEED`-dependent).
+"Same week → same audit_ids" is the historical-audit invariant the
+operator relies on to re-derive a past sample from the manifest alone.
+
+### Sentinel set / sentinel manifest
+
+A fixed 200-case cohort (default seed=42, exported as
+`SENTINEL_SET_SEED`) constructed once per deployment via
+`build_sentinel_manifest(audit_rows, size, seed)` and re-run weekly
+through `bba.audit_pipeline` to verify model output is stable
+week-over-week. The persisted `SentinelManifest` (size + seed +
+`audit_ids` tuple + `built_at`) is the contract the weekly κ comparison
+joins against.
+
+### Intra-model κ alarm
+
+`evaluate_sentinel_run(*, manifest, previous, current, kappa_threshold=0.90)`
+pairs the last week's `final_classification` map against this week's
+and computes Cohen's κ + Gwet's AC1 — imported from
+`bba.eval_harness.agreement`, NOT re-implemented. `alarm_fired=True`
+when `cohen_kappa < kappa_threshold`. Empty `previous` (no prior week)
+raises `InsufficientHistoryError`; a fully-disjoint previous/current
+also raises (nothing to pair).
+
+### Wald SPRT
+
+Wald's Sequential Probability Ratio Test for binomial drift, in
+`bba.monitoring.drift_sprt`. The two hypotheses are H0 = `rate ==
+p_null` (long-run baseline) and H1 = `rate == p_alt` (operator-chosen
+minimum detectable shift). The cumulative log-likelihood ratio
+increments by `log(p_alt/p_null)` on a success and
+`log((1-p_alt)/(1-p_null))` on a failure; the verdict is computed
+against the Wald bounds.
+
+### Wald bounds (A, B)
+
+`wald_bounds(*, alpha, beta) → (lower, upper)` where
+`upper = log((1-beta)/alpha)` and `lower = log(beta/(1-alpha))`.
+Symmetric in α/β: when `alpha == beta`, `upper == -lower`. Both rates
+MUST be in `(0, 1)` open interval — boundary values would push the
+bounds to ±∞ and are rejected by the `SprtConfig` validator at
+construction time.
+
+### Drift signal
+
+The named binomial rate the SPRT watches. Two literals in Phase 1:
+`quote_grounding_failure_rate` (`verifier_pass=False`) and
+`needs_review_rate` (`needs_human_review=True`). The signal is carried
+on `SprtConfig.signal` and surfaces as `SprtState.signal` so an alarm
+record can identify which rate tripped.
+
+### SPRT verdict / cycle reset
+
+`SprtState.verdict ∈ {"continue", "reject_null", "accept_null"}`.
+`run_sprt_on_window(observations, config)` walks the iterable through a
+monitor: on `reject_null` it returns immediately (alarm fires); on
+`accept_null` it resets the monitor and continues (a single
+accept-null crossing under H0 is expected, not an alarm); at end of
+window it returns the terminal state. `n_observations` on the returned
+state is the TOTAL observations consumed across cycles, not the count
+in the final cycle.
+
+### Min-N gate
+
+`SprtConfig.min_n` (default `SPRT_DEFAULT_MIN_N = 30`). The monitor
+returns `verdict="continue"` until at least `min_n` observations have
+been processed, even if log_lr has crossed a bound. Prevents
+single-observation alarms when the random walk happens to start with a
+long success run.
+
+### ARL₀
+
+Average run length under H0 — the expected number of observations
+between false alarms. PRD §18 sets the target at ≥ 500 (≈1 false
+alarm/year at expected throughput). The empirical regression check
+computes `total_observations / max(n_false_alarms, 1)` over 50 null
+streams × 2000 obs; the zero-alarm case is treated as right-censored
+(`ARL₀ > total_observations`) rather than reported as a concrete
+estimate.
+
+### Golden-set drift probe
+
+A fixed 100-row cohort re-run quarterly through `bba.audit_pipeline`
+against the same Anthropic snapshot ID.
+`evaluate_golden_set_drift(*, baseline, current, ...)` pairs entries
+by `audit_id` and emits independent classification drift
+(`classification_changed_pct > 0.05`) and indication drift
+(`indications_changed_pct > 0.10`) alarms. Indication comparison is
+set-based — reordering is NOT a change. Any `audit_id` missing from
+either side raises `GoldenSetMismatchError` (the golden set itself was
+edited; the comparison contract is broken).
+
+### Monitoring alarm
+
+Append-only record raised by one of the three alarm-emitting monitors
+(SPRT, sentinel-κ, golden-set drift). The `AlarmKind` literal tags the
+source; `signal` (nullable) names the SPRT signal for `drift_sprt`
+alarms; `detail` is a free-form `Mapping[str, str|int|float|bool]` of
+monitor-specific fields. Weekly reviewer-sample draws are NOT alarms
+(no deviation signal) — they persist via `persist_sample_manifest`
+instead.
+
+### Alerting stub (Phase 1)
+
+Two passive channels: a stdlib `logging.WARNING` event on the
+`bba.monitoring.alarms` logger carrying structured `extra` fields
+(`monitoring_alarm_kind`, `monitoring_alarm_signal`,
+`monitoring_alarm_detail`) for log-aggregation tools, and an
+append-only row in the in-memory `MonitoringStore`. Slack / email /
+paging integration and a Postgres-backed store are explicit Phase 1.5
+follow-ups. The boundary is structurally enforced by
+`TestNoSlackEmailPagingImport` (no `slack_sdk` / `smtplib` /
+`pagerduty` / `opsgenie` / `twilio` imports anywhere in the package).
+
+### MonitoringStore
+
+In-memory append-only store for `monitoring_alarms` rows and weekly
+sample manifests. Construct with `MonitoringConfig(dsn, app_name)` —
+both fields are carried for Phase 1.5 substitutability (Postgres swap)
+but ignored by the in-memory implementation. `persist_sample_manifest`
+is idempotent on `(week_iso, sample_size, seed)`: first write wins,
+later writes are silently no-op so cron retries don't multiply rows.
+Lock-guarded for multi-threaded write safety; the
+`TestMonitoringStoreConcurrentWrites` regression uses a
+`threading.Barrier` to force contention.
+
+### Operational, not clinical
+
+`bba.monitoring` reads pipeline artifacts (`audit_results`, `llm_calls`
+via `bba.audit_store`) and statistical helpers (κ / AC1 via
+`bba.eval_harness.agreement`); it does NOT import any clinical-logic
+module (`hb_lookup`, `vitals_extractor`, `cohort_detector`,
+`deterministic_classifier`, `quote_grounder`, `prompt_builder`,
+`evidence_bundle_builder`, `deid_redactor`). The structural import
+gates (`TestNoClinicalImports`, `TestNoSchedulerImports`,
+`TestNoLiveAnthropicInDriftProbe`) prevent accidental coupling. Cron
+scheduling itself is `#29 cli`'s job; the monitoring module exposes
+callables only.
 
 ## Vocabulary not in this file
 
