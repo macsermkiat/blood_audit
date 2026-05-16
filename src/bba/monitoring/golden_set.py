@@ -25,11 +25,13 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from bba.monitoring.exceptions import GoldenSetMismatchError
 from bba.monitoring.models import (
     GOLDEN_SET_CLASSIFICATION_DRIFT_THRESHOLD,
     GOLDEN_SET_INDICATION_DRIFT_THRESHOLD,
     GoldenSetDriftReport,
     GoldenSetEntry,
+    GoldenSetRowDelta,
 )
 
 
@@ -44,15 +46,74 @@ def evaluate_golden_set_drift(
 
     Rows are paired by ``audit_id``. ``classification_changed`` is True
     when ``baseline.classification != current.classification``;
-    ``indications_changed`` is True when the indication sets differ
-    (order-independent comparison — indications are a set, not a list).
+    ``indications_changed`` is True when the indication SETS differ
+    (order-independent — indications are a set, not a sequence).
 
-    Raises :class:`bba.monitoring.GoldenSetMismatchError` when ``baseline``
-    and ``current`` do not cover the same ``audit_id`` set (a row missing
+    Raises :class:`GoldenSetMismatchError` when ``baseline`` and
+    ``current`` do not cover the same ``audit_id`` set. A row missing
     from either side means the golden set itself was edited, which
-    invalidates the comparison contract).
+    invalidates the comparison contract — the operator must rebuild
+    both quarters from a common manifest before re-running the probe.
     """
-    raise NotImplementedError
+    baseline_map = {entry.audit_id: entry for entry in baseline}
+    current_map = {entry.audit_id: entry for entry in current}
+    if baseline_map.keys() != current_map.keys():
+        missing_in_current = sorted(
+            baseline_map.keys() - current_map.keys()
+        )
+        missing_in_baseline = sorted(
+            current_map.keys() - baseline_map.keys()
+        )
+        raise GoldenSetMismatchError(
+            f"golden-set audit_id sets differ: "
+            f"missing_in_current={missing_in_current!r}, "
+            f"missing_in_baseline={missing_in_baseline!r}"
+        )
+
+    deltas: list[GoldenSetRowDelta] = []
+    n_classification_changed = 0
+    n_indications_changed = 0
+    for audit_id in sorted(baseline_map.keys()):
+        baseline_entry = baseline_map[audit_id]
+        current_entry = current_map[audit_id]
+        classification_changed = (
+            baseline_entry.classification != current_entry.classification
+        )
+        indications_changed = set(baseline_entry.indications) != set(
+            current_entry.indications
+        )
+        if classification_changed:
+            n_classification_changed += 1
+        if indications_changed:
+            n_indications_changed += 1
+        deltas.append(
+            GoldenSetRowDelta(
+                audit_id=audit_id,
+                classification_changed=classification_changed,
+                indications_changed=indications_changed,
+                baseline_classification=baseline_entry.classification,
+                current_classification=current_entry.classification,
+                baseline_indications=baseline_entry.indications,
+                current_indications=current_entry.indications,
+            )
+        )
+
+    n_rows = len(deltas)
+    classification_pct = n_classification_changed / n_rows if n_rows else 0.0
+    indications_pct = n_indications_changed / n_rows if n_rows else 0.0
+
+    return GoldenSetDriftReport(
+        n_rows=n_rows,
+        classification_changed_pct=classification_pct,
+        indications_changed_pct=indications_pct,
+        classification_alarm_fired=(
+            classification_pct > classification_change_threshold
+        ),
+        indications_alarm_fired=(
+            indications_pct > indication_change_threshold
+        ),
+        deltas=tuple(deltas),
+    )
 
 
 __all__ = ("evaluate_golden_set_drift",)

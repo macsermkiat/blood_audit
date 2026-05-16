@@ -50,8 +50,27 @@ def emit_alarm(
 
     ``logger`` defaults to ``bba.monitoring.alarms``; tests inject a
     captured logger for assertions on the structured record.
+
+    Emits at ``WARNING`` level so default operator-log configs surface
+    alarms without re-tuning. The ``extra`` dict carries the structured
+    fields aggregation tools (Datadog, Elastic, Loki) consume directly;
+    the formatted message itself includes ``kind`` so plain-text greps
+    still locate the event.
     """
-    raise NotImplementedError
+    target = logger if logger is not None else _alarm_log
+    signal_repr = alarm.signal if alarm.signal is not None else "none"
+    detail_dict = dict(alarm.detail)
+    target.warning(
+        "monitoring.alarm kind=%s signal=%s detail=%s",
+        alarm.kind,
+        signal_repr,
+        detail_dict,
+        extra={
+            "monitoring_alarm_kind": alarm.kind,
+            "monitoring_alarm_signal": signal_repr,
+            "monitoring_alarm_detail": detail_dict,
+        },
+    )
 
 
 __all__ = ("emit_alarm",)
