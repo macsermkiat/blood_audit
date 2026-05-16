@@ -75,19 +75,28 @@ class InMemoryBatchRunStore:
         self._rows: dict[str, BatchRun] = {}
 
     def create(self, run: BatchRun) -> None:
-        raise NotImplementedError("RED-phase scaffold; see issue #24")
+        if run.batch_id in self._rows:
+            raise ValueError(
+                f"batch_id {run.batch_id!r} already exists; "
+                "use update() to advance an existing row"
+            )
+        self._rows[run.batch_id] = run
 
     def get(self, batch_id: str) -> BatchRun:
-        raise NotImplementedError("RED-phase scaffold; see issue #24")
+        if batch_id not in self._rows:
+            raise KeyError(batch_id)
+        return self._rows[batch_id]
 
     def update(self, run: BatchRun) -> None:
-        raise NotImplementedError("RED-phase scaffold; see issue #24")
+        if run.batch_id not in self._rows:
+            raise KeyError(run.batch_id)
+        self._rows[run.batch_id] = run
 
     def list_by_state(self, state: BatchRunState) -> tuple[BatchRun, ...]:
-        raise NotImplementedError("RED-phase scaffold; see issue #24")
+        return tuple(row for row in self._rows.values() if row.state is state)
 
     def list_all(self) -> tuple[BatchRun, ...]:
-        raise NotImplementedError("RED-phase scaffold; see issue #24")
+        return tuple(self._rows.values())
 
 
 # Static check: InMemoryBatchRunStore satisfies the BatchRunStore protocol.
