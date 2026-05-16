@@ -73,16 +73,21 @@ def assign_cohort(inputs: CohortInputs) -> CohortAssignment:
     well-formed :class:`CohortInputs`. Constructing :class:`CohortInputs`
     with invalid types fails at the Pydantic boundary, not here.
     """
-    # MTP first — auto-bypass safety signal trumps everything else,
-    # and it depends only on blood orders (independent of procedure data).
+    # Procedure data unavailable -> UNKNOWN before any cohort detection
+    # runs (PR #51 Codex P2 finding): if the IPTSUMOPRT join was skipped,
+    # we cannot rule out a cardiac / ortho context for an apparent MTP,
+    # and the conservative route is NEEDS_REVIEW so a human verifies the
+    # transfusion. The downstream classifier and dashboard surface the
+    # UNKNOWN-with-MTP-pattern case for that human review.
+    if inputs.procedure_events is None:
+        return _make(CohortLabel.UNKNOWN)
+
+    # MTP override — auto-bypass safety signal trumps every other cohort
+    # in the precedence chain, but only once we have confirmed that
+    # procedure data was actually delivered (above).
     mtp_match = detect_mtp_pattern(inputs.blood_orders, inputs.order_datetime)
     if mtp_match is not None:
         return _make(CohortLabel.MTP)
-
-    # Procedure data unavailable -> UNKNOWN; cannot rule out
-    # cardiac/ortho. Routes to NEEDS_REVIEW downstream (never silent 7.0).
-    if inputs.procedure_events is None:
-        return _make(CohortLabel.UNKNOWN)
 
     # ORTHO_CARDIAC checked before plain CARDIAC_SURGERY — it carries
     # the stricter 8.0 threshold, so when both signals are present the

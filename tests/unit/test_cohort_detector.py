@@ -795,6 +795,21 @@ class TestCohortUnknown:
         )
         assert result.label == CohortLabel.UNKNOWN
 
+    def test_unknown_overrides_even_mtp_pattern(self) -> None:
+        # PR #51 Codex P2: the MTP auto-bypass MUST NOT silently fire
+        # when procedure data is unavailable. Conservative routing wins
+        # because we cannot rule out a cardiac / ortho context for the
+        # apparent MTP — a human reviewer needs to verify before the
+        # auto-APPROPRIATE bypass takes effect.
+        result = assign_cohort(
+            _inputs(
+                procedure_events=None,
+                blood_orders=(_order(rbc_units=4, minutes_before_anchor=10),),
+            )
+        )
+        assert result.label == CohortLabel.UNKNOWN
+        assert result.threshold is None
+
 
 class TestProcedureNoneVersusEmptyTuple:
     """The None / () distinction is load-bearing — silent collapse breaks AC ⑥."""
