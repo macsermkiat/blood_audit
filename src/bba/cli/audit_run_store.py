@@ -2,11 +2,12 @@
 
 Phase 1 ships a deliberately simple implementation: a directory tree
 under ``BBA_DATA_DIR/audit_runs/`` with one marker file per completed
-run, one Parquet/marker per audited row, and one JSONL file capturing
-the ``audit_log`` of ``--force`` overrides.
+run, one row marker per audited row, an exclusive ``fcntl.flock`` per
+run for the check-then-act sequence, and one JSONL file capturing the
+``audit_log`` of ``--force`` overrides.
 
 The simpler-than-Postgres choice is intentional. The CLI's contract on
-:class:`~bba.cli.store_protocol.AuditRunStore` is narrow — four methods,
+:class:`~bba.cli.store_protocol.AuditRunStore` is narrow — six methods,
 all on a single ``run_id`` key — and the durability requirements are
 write-once-then-read-many. A flat file layout satisfies both at zero
 operational cost and is trivial to audit by hand. A future
@@ -14,10 +15,17 @@ Postgres-backed adapter (covered by :mod:`bba.audit_store`'s extension
 ticket) can implement the same Protocol and swap in via
 :func:`bba.cli.main._get_audit_run_store` without touching the CLI.
 
+**Platform support.** This adapter relies on :mod:`fcntl` for advisory
+file locking and on POSIX-atomic ``O_APPEND`` writes for the audit log.
+Both are available on Linux and macOS (the Phase 1 deployment targets);
+Windows is out of scope. A future adapter for Windows would either use
+:mod:`msvcrt`-based locking or move to the Postgres backend.
+
 On-disk layout::
 
     <data_dir>/audit_runs/
         run_<run_id>.complete                 — marker; touched after pipeline
+        run_<run_id>.lock                     — fcntl.flock target per run
         rows_<run_id>/<audit_id>.row          — one marker per audited row
         audit_log.jsonl                       — appended; one JSON line per event
 """
@@ -88,7 +96,24 @@ class FileBackedAuditRunStore:
             0o644,
         )
         try:
-            os.write(fd, line)
+            # ``os.write`` may return a short count on some platforms;
+            # loop until the entire JSONL line is written. Each
+            # iteration starts a fresh ``write(2)`` syscall, which on
+            # POSIX with ``O_APPEND`` is atomic up to ``PIPE_BUF`` — so
+            # a short write followed by a concurrent writer's full
+            # write cannot interleave bytes inside our line.
+            view = memoryview(line)
+            while view:
+                written = os.write(fd, view)
+                if written == 0:
+                    raise OSError(
+                        f"unexpected zero-byte write to {self._audit_log_path}"
+                    )
+                view = view[written:]
+            # fsync so a power-loss between this call and the next
+            # idempotency_override cannot eat the compliance record
+            # (PRD §10 "audit_log is the immutable compliance surface").
+            os.fsync(fd)
         finally:
             os.close(fd)
 

@@ -365,13 +365,29 @@ def _run_audit_pipeline(
     # The audit_id namespace ``phase1_ingest_<table>`` is reserved for
     # the ingest-leg-only Phase 1; the full LLM-driven leg will write
     # ``audit_<hn_hash>_<requested_at>`` rows under the same run_id.
-    for table_name in sorted(_iter_ingested_tables(output_dir)):
+    ingested_tables = sorted(_iter_ingested_tables(output_dir))
+    if not ingested_tables:
+        # A successful ingest must produce ≥ 1 parquet file. Reaching
+        # here means ingest silently produced no output — refusing to
+        # mark the run complete is the loud-failure contract from PRD
+        # §20 ("CLI fails loud"). Without this guard ``bba_audit``
+        # would write a ``run_<id>.complete`` marker for a run with
+        # zero row markers, leaving an inconsistent on-disk state for
+        # the next idempotency check.
+        raise CliError(
+            f"audit pipeline for run_id={run_id} produced zero ingested "
+            f"tables under {output_dir}; refusing to mark the run "
+            "complete (a successful Phase 1 audit must yield at least "
+            "one HOSxP table parquet file)"
+        )
+    for table_name in ingested_tables:
         store.record_row(run_id, f"phase1_ingest_{table_name}")
     _log.info(
         "audit.pipeline_ingest_complete",
         run_id=run_id,
         output_dir=str(output_dir),
         leg="phase1_ingest_only",
+        table_count=len(ingested_tables),
     )
 
 

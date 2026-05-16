@@ -58,6 +58,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import logging
+import os
 import re
 import sys
 from collections.abc import Iterator
@@ -1130,6 +1131,52 @@ class TestFileBackedAuditRunStore:
             "b",
         )
 
+    def test_record_idempotency_override_handles_short_writes(
+        self, tmp_path: Path
+    ) -> None:
+        """``os.write`` may return a short count under filesystem
+        pressure; the implementation loops until the full payload is
+        written. Simulate a short write that returns the buffer length
+        in two slices and assert the final on-disk content matches."""
+        from bba.cli.audit_run_store import FileBackedAuditRunStore
+
+        store = FileBackedAuditRunStore(tmp_path)
+        run_id = "short-write-run"
+        real_os_write = os.write
+        call_count = {"n": 0}
+
+        def short_write(fd: int, data: bytes) -> int:
+            # First call writes 10 bytes; subsequent calls write the rest.
+            call_count["n"] += 1
+            if call_count["n"] == 1 and len(data) > 10:
+                return real_os_write(fd, data[:10])
+            return real_os_write(fd, data)
+
+        with patch("bba.cli.audit_run_store.os.write", side_effect=short_write):
+            store.record_idempotency_override(
+                run_id, reason="short-write test"
+            )
+
+        # Two writes total — the first short, the second covers the rest.
+        assert call_count["n"] >= 2
+        entries = store.audit_log_entries(run_id)
+        assert len(entries) == 1
+        assert entries[0]["reason"] == "short-write test"
+
+    def test_record_idempotency_override_zero_byte_write_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """A 0-byte ``os.write`` is a write(2) contract violation —
+        raise OSError rather than spinning forever."""
+        from bba.cli.audit_run_store import FileBackedAuditRunStore
+
+        store = FileBackedAuditRunStore(tmp_path)
+        with patch("bba.cli.audit_run_store.os.write", return_value=0):
+            with pytest.raises(OSError, match="zero-byte write"):
+                store.record_idempotency_override(
+                    "any-run", reason="zero-write test"
+                )
+
     def test_empty_audit_log_returns_empty_tuple(self, tmp_path: Path) -> None:
         from bba.cli.audit_run_store import FileBackedAuditRunStore
 
@@ -1495,16 +1542,24 @@ class TestRunAuditPipelineIngestLeg:
         import bba.cli.main as main_module
 
         monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
-        with patch("bba.cli.main.ingest") as mock_ingest:
+        run_id = "abc123def4567890"
+
+        def _fake_ingest(config: object) -> None:
+            # Real ingest would write per-table parquet under output_dir;
+            # mimic the side-effect minimally so the zero-table guard
+            # in _run_audit_pipeline does not fire.
+            out_dir = config.output_dir  # type: ignore[attr-defined]
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "BDVST.parquet").write_bytes(b"")
+
+        with patch("bba.cli.main.ingest", side_effect=_fake_ingest) as mock_ingest:
             main_module._run_audit_pipeline(
-                run_id="abc123def4567890",
-                input_csv=fake_csv,
-                store=stub_store,
+                run_id=run_id, input_csv=fake_csv, store=stub_store
             )
         mock_ingest.assert_called_once()
         (config,) = mock_ingest.call_args.args
         assert config.input_dir == fake_csv.parent
-        assert config.output_dir == tmp_path / "audit" / "abc123def4567890"
+        assert config.output_dir == tmp_path / "audit" / run_id
 
     def test_missing_data_dir_raises_cli_error(
         self,
@@ -1554,3 +1609,65 @@ class TestRunAuditPipelineIngestLeg:
             "phase1_ingest_BDTYPE",
             "phase1_ingest_Diagnosis",
         }
+
+    def test_zero_ingested_tables_raises_cli_error(
+        self,
+        tmp_path: Path,
+        fake_csv: Path,
+        stub_store: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """If ingest silently produces no parquet files the pipeline
+        must fail loud rather than letting ``bba_audit`` write a
+        ``run_<id>.complete`` marker for a run with zero row markers."""
+        import bba.cli.main as main_module
+
+        monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
+        # Patched ingest does NOT create the output directory, so the
+        # glob yields zero tables — the empty-ingest failure mode.
+        with patch("bba.cli.main.ingest"):
+            with pytest.raises(CliError, match="zero ingested tables"):
+                main_module._run_audit_pipeline(
+                    run_id="abc123def4567890",
+                    input_csv=fake_csv,
+                    store=stub_store,
+                )
+        stub_store.record_row.assert_not_called()
+
+    def test_real_store_run_count_matches_after_pipeline(
+        self,
+        runner: CliRunner,
+        fake_csv: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Integration: against the real :class:`FileBackedAuditRunStore`,
+        ``run_count`` after a successful audit equals the number of
+        ingested HOSxP tables and ``run_complete`` is True. This proves
+        the round-2 inconsistency (complete=True with count=0) is
+        impossible: the pipeline writes the markers BEFORE bba_audit
+        writes the completion marker."""
+        from bba.cli.audit_run_store import FileBackedAuditRunStore
+
+        monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
+
+        # Stub the underlying ingest call to create per-table parquet
+        # files in the per-run output directory — mirrors the real
+        # ingest side-effect without paying its cost.
+        def _fake_ingest(config: object) -> None:
+            out_dir = config.output_dir  # type: ignore[attr-defined]
+            out_dir.mkdir(parents=True, exist_ok=True)
+            for table in ("BDVST", "Diagnosis", "Lab"):
+                (out_dir / f"{table}.parquet").write_bytes(b"")
+
+        with patch("bba.cli.main.ingest", side_effect=_fake_ingest):
+            result = runner.invoke(cli, ["audit", "--input", str(fake_csv)])
+        assert result.exit_code == 0, result.output
+
+        # Recover the run_id from the marker file then assert consistency.
+        markers = list((tmp_path / "audit_runs").glob("run_*.complete"))
+        assert len(markers) == 1, markers
+        run_id = markers[0].stem.removeprefix("run_").removesuffix(".complete")
+        store = FileBackedAuditRunStore(tmp_path)
+        assert store.run_complete(run_id) is True
+        assert store.run_count(run_id) == 3
