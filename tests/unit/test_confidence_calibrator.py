@@ -472,14 +472,42 @@ class TestReliabilityDiagram:
         # SVG without re-parsing geometry.
         assert "reliability-diagonal" in content
 
-    def test_renders_one_marker_per_bin(self, tmp_path: Path) -> None:
+    def test_renders_one_marker_per_non_empty_bin(self, tmp_path: Path) -> None:
+        # The reference inputs put 2 samples in each of the 2 bins, so
+        # both bins are non-empty and both emit a marker.
         out = tmp_path / "reliability.svg"
         generate_reliability_diagram(
             ECE_REF_PROBS, ECE_REF_LABELS, out, n_bins=ECE_REF_N_BINS,
         )
         content = out.read_text(encoding="utf-8")
-        # One SVG marker (e.g., <circle class="reliability-bin"/>) per bin.
         assert content.count("reliability-bin") == ECE_REF_N_BINS
+
+    def test_empty_bins_are_skipped(self, tmp_path: Path) -> None:
+        # Both probs fall in bin 0; bin 1 is empty. The empty bin must
+        # NOT produce a marker — a marker at accuracy=0 would falsely
+        # show zero accuracy for a bin that had no samples and would
+        # mislead the transfusion committee's drift review.
+        out = tmp_path / "reliability.svg"
+        generate_reliability_diagram(
+            [0.05, 0.10], [0, 1], out, n_bins=2,
+        )
+        content = out.read_text(encoding="utf-8")
+        assert content.count("reliability-bin") == 1
+
+    def test_title_is_xml_escaped(self, tmp_path: Path) -> None:
+        # Caller-supplied title may contain ``&`` / ``<`` / ``>``; the
+        # renderer must escape them so the SVG stays well-formed and
+        # cannot be markup-injected.
+        out = tmp_path / "reliability.svg"
+        generate_reliability_diagram(
+            ECE_REF_PROBS, ECE_REF_LABELS, out, n_bins=ECE_REF_N_BINS,
+            title="Drift & calibration <check>",
+        )
+        content = out.read_text(encoding="utf-8")
+        assert "&amp;" in content
+        assert "&lt;check&gt;" in content
+        # The raw injected ``<check>`` tag must not appear unescaped.
+        assert "<check>" not in content
 
     def test_invalid_inputs_raise_before_writing(self, tmp_path: Path) -> None:
         out = tmp_path / "should_not_exist.svg"

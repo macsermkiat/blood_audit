@@ -8,16 +8,19 @@ markdown, and the reviewer dashboard without a binary build step.
 
 The diagram shows:
 
-* Per-bin accuracy markers at the bin midpoint (one marker per bin,
-  including empty bins, so a missing marker means a regression).
+* Per-bin accuracy markers at the bin midpoint, one marker per
+  *non-empty* bin. Empty bins (count == 0) are skipped so the plot
+  does not falsely show a zero-accuracy point.
 * A diagonal y=x reference line (perfect calibration).
-* The ECE value in the diagram title.
+* The ECE value in the diagram title (XML-escaped so a ``&`` / ``<``
+  / ``>`` in the title cannot break the SVG).
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
+from xml.sax.saxutils import escape as xml_escape
 
 from bba.confidence_calibrator.ece import compute_ece
 from bba.confidence_calibrator.models import DEFAULT_N_BINS
@@ -70,7 +73,12 @@ def generate_reliability_diagram(
         f'width="{_SVG_WIDTH}" height="{_SVG_HEIGHT}" '
         f'viewBox="0 0 {_SVG_WIDTH} {_SVG_HEIGHT}">',
     )
-    parts.append(f"<title>{title} (ECE={ece_result.ece:.4f})</title>")
+    # ``title`` is caller-supplied free text; XML-escape it so a ``&``,
+    # ``<``, or ``>`` cannot break the SVG or inject markup. Numeric
+    # fields are formatted in code and cannot contain unsafe characters.
+    parts.append(
+        f"<title>{xml_escape(title)} (ECE={ece_result.ece:.4f})</title>",
+    )
     parts.append(
         f'<rect x="0" y="0" width="{_SVG_WIDTH}" height="{_SVG_HEIGHT}" '
         'fill="white"/>',
@@ -93,8 +101,13 @@ def generate_reliability_diagram(
         'stroke="gray" stroke-dasharray="4,4"/>',
     )
 
-    # One marker per bin (including empty bins).
+    # One marker per non-empty bin. Empty bins are skipped so the
+    # diagram does not show a falsely-zero accuracy point (codex review
+    # finding: a marker at accuracy=0 for a count=0 bin would mislead
+    # the transfusion committee's calibration-drift review).
     for bin_stats in ece_result.bins:
+        if bin_stats.count == 0:
+            continue
         midpoint = (bin_stats.bin_lower + bin_stats.bin_upper) / 2.0
         cx, cy = _to_svg_xy(midpoint, bin_stats.accuracy)
         parts.append(
