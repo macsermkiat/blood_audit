@@ -9,7 +9,6 @@ configures first.
 
 from __future__ import annotations
 
-import logging
 from typing import Final
 
 import structlog
@@ -51,12 +50,3 @@ def get_logger(name: str = _BBA_LOGGER_NAME) -> structlog.stdlib.BoundLogger:
     """
     _configure_once()
     return structlog.stdlib.get_logger(name)
-
-
-def stdlib_logger(name: str = _BBA_LOGGER_NAME) -> logging.Logger:
-    """Return the stdlib ``Logger`` the structlog bridge writes through.
-
-    Useful when the caller wants to attach a custom handler / change
-    the level without poking structlog directly.
-    """
-    return logging.getLogger(name)

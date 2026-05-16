@@ -31,11 +31,10 @@ from __future__ import annotations
 import faulthandler
 import re
 import sys
-import traceback
 from collections.abc import Mapping
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Final, Protocol
+from typing import Any, Final, Protocol, cast
 
 from bba.cli._logging import get_logger
 
@@ -201,8 +200,11 @@ def install_excepthook(
     enabled and redirects to that file's ``fd`` so a hard crash dumps a
     stack trace which a downstream reader scrubs before display.
     """
+    # ``get_logger()`` returns a structlog BoundLogger; cast satisfies
+    # the structural Protocol contract without dragging the concrete
+    # structlog type into the signature.
     active_logger: StructlogLogger = (
-        logger if logger is not None else get_logger()
+        logger if logger is not None else cast(StructlogLogger, get_logger())
     )
 
     def _hook(

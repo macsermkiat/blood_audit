@@ -928,3 +928,225 @@ class TestReimportSafety:
 
         after = dict(cli_after_reload.commands)
         assert set(after) == set(before)
+
+
+# =============================================================================
+# Subcommand behaviour — thin-glue wiring + loud-failure contracts
+# =============================================================================
+
+
+class TestBbaIngestWiring:
+    """``bba ingest`` delegates to :func:`bba.ingest.ingest` with an
+    :class:`~bba.ingest.IngestConfig` built from BBA_DATA_DIR + the
+    package version."""
+
+    def test_ingest_calls_underlying_facade_with_config(
+        self,
+        runner: CliRunner,
+        fake_csv: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
+        with patch("bba.cli.main.ingest") as mock_ingest:
+            result = runner.invoke(cli, ["ingest", str(fake_csv)])
+        assert result.exit_code == 0, result.output
+        mock_ingest.assert_called_once()
+        (config,) = mock_ingest.call_args.args
+        assert config.input_dir == fake_csv.parent
+        assert config.output_dir == tmp_path / "ingest" / "v1"
+        assert isinstance(config.code_version, str)
+
+    def test_ingest_without_data_dir_env_fails_loud(
+        self,
+        runner: CliRunner,
+        fake_csv: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("BBA_DATA_DIR", raising=False)
+        result = runner.invoke(cli, ["ingest", str(fake_csv)])
+        assert result.exit_code != 0
+        assert "BBA_DATA_DIR" in str(result.exception)
+
+
+class TestUnwiredSubcommandsFailLoud:
+    """The four subcommands whose underlying module does not yet expose
+    a single-call facade fail loud with :class:`CliError` rather than
+    fabricating defaults. Verifies the contract phrasing names the
+    integration seam."""
+
+    @pytest.mark.parametrize(
+        ("argv", "expected_seam"),
+        [
+            (["evaluate", "--run-id", "abc"], "bba.cli.main.bba_evaluate"),
+            (
+                ["report", "--run-id", "abc", "--format", "pdf"],
+                "bba.cli.main.bba_report",
+            ),
+            (
+                ["serve-dashboard", "--port", "8765"],
+                "bba.cli.main.bba_serve_dashboard",
+            ),
+            (["sentinel", "--weekly"], "bba.cli.main.bba_sentinel"),
+        ],
+    )
+    def test_unwired_subcommand_raises_cli_error(
+        self,
+        runner: CliRunner,
+        argv: list[str],
+        expected_seam: str,
+    ) -> None:
+        result = runner.invoke(cli, argv)
+        assert result.exit_code != 0
+        assert isinstance(result.exception, CliError), result.exception
+        assert expected_seam in str(result.exception), result.exception
+
+
+class TestSentinelRequiresCadenceFlag:
+    """``bba sentinel`` must reject an invocation without either
+    ``--weekly`` or ``--quarterly`` — click delivers ``None`` for the
+    flag group when neither is set."""
+
+    def test_no_cadence_is_a_usage_error(self, runner: CliRunner) -> None:
+        result = runner.invoke(cli, ["sentinel"])
+        assert result.exit_code != 0
+        # click.UsageError raises with exit_code 2; surfaces in output.
+        assert (
+            "weekly" in result.output.lower()
+            or "quarterly" in result.output.lower()
+            or "cadence" in result.output.lower()
+        ), result.output
+
+
+class TestGetAuditRunStoreEnvGate:
+    """The production resolver ``_get_audit_run_store`` reads
+    ``BBA_DB_URL`` from env and fails loud if it is missing."""
+
+    def test_missing_db_url_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import bba.cli.main as main_module
+
+        monkeypatch.delenv("BBA_DB_URL", raising=False)
+        with pytest.raises(CliError, match="BBA_DB_URL"):
+            main_module._get_audit_run_store()
+
+    def test_present_db_url_raises_contract_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The adapter is not yet wired: with a DSN set, the resolver
+        still fails loud but points at the CLI seam, not the env var."""
+        import bba.cli.main as main_module
+
+        monkeypatch.setenv("BBA_DB_URL", "postgresql://example/db")
+        with pytest.raises(
+            CliError, match="bba.cli.main._get_audit_run_store"
+        ):
+            main_module._get_audit_run_store()
+
+
+class TestAuditWithoutInputCannotReachPipeline:
+    """``bba audit --run-id X`` where the store says run is not complete
+    cannot proceed: the pipeline needs the input CSV. The CLI raises
+    :class:`click.UsageError` rather than silently no-op'ing."""
+
+    def test_run_id_only_with_incomplete_store_is_usage_error(
+        self,
+        runner: CliRunner,
+        stub_store: MagicMock,
+    ) -> None:
+        stub_store.run_complete.return_value = False
+        with patch(
+            "bba.cli.main._get_audit_run_store", return_value=stub_store
+        ):
+            result = runner.invoke(cli, ["audit", "--run-id", "abc123"])
+        assert result.exit_code != 0
+        # click.UsageError flows through; message names the constraint.
+        assert (
+            "without --input" in result.output
+            or "without --input" in str(result.exception)
+        ), (result.output, result.exception)
+
+
+class TestPhiScrubberEdgeCases:
+    """Defensive branches in :mod:`bba.cli.phi_scrubber` — non-Sized
+    objects, repr() that raises, dunder skipping, and the
+    faulthandler_sidecar argument path."""
+
+    def test_redact_by_name_handles_objects_without_len(self) -> None:
+        """A PHI-named local whose value has no ``__len__`` (e.g. an
+        int) still redacts to a marker; the marker length is ``-1``
+        rather than throwing :class:`TypeError`."""
+
+        def boom() -> None:
+            patient_age = 42  # noqa: F841 — name matches PHI_LOCAL_NAME_REGEX
+            raise RuntimeError("boom")
+
+        try:
+            boom()
+        except RuntimeError as exc:
+            scrubbed = scrub_traceback(type(exc), exc, exc.__traceback__)
+
+        assert "<REDACTED:type=int len=-1>" in scrubbed, scrubbed
+
+    def test_repr_failed_branch_does_not_crash(self) -> None:
+        """If a frame-local's ``repr`` itself raises, the scrubber emits
+        ``<repr-failed>`` rather than letting the exception escape and
+        clobbering the original traceback."""
+
+        class _ReprBomb:
+            def __repr__(self) -> str:
+                raise ValueError("repr blew up")
+
+        def boom() -> None:
+            other = _ReprBomb()  # noqa: F841 — non-PHI name, hit regex sweep
+            raise RuntimeError("boom")
+
+        try:
+            boom()
+        except RuntimeError as exc:
+            scrubbed = scrub_traceback(type(exc), exc, exc.__traceback__)
+
+        assert "<repr-failed>" in scrubbed, scrubbed
+
+    def test_dunder_locals_skipped(self) -> None:
+        """``__doc__`` / ``__name__`` / ``__builtins__`` style bindings
+        in a frame are filtered out of the scrubbed dump."""
+
+        def boom() -> None:
+            __secret__ = "should-not-appear"  # noqa: F841
+            raise RuntimeError("boom")
+
+        try:
+            boom()
+        except RuntimeError as exc:
+            scrubbed = scrub_traceback(type(exc), exc, exc.__traceback__)
+
+        assert "__secret__" not in scrubbed, scrubbed
+
+    def test_install_excepthook_with_sidecar_creates_file(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """The optional ``faulthandler_sidecar`` argument creates the
+        parent directory and opens the file for append."""
+        sidecar = tmp_path / "sub" / "faulthandler.sidecar"
+        install_excepthook(faulthandler_sidecar=sidecar)
+        assert sidecar.exists()
+        assert sidecar.parent.is_dir()
+
+
+class TestRunAuditPipelineFailsLoudInProduction:
+    """The ``_run_audit_pipeline`` seam raises :class:`CliError` when
+    called outside of a patched test context — the audit pipeline
+    orchestrator lives in :mod:`bba.audit_pipeline` and is not part of
+    issue #29's deliverable."""
+
+    def test_unpatched_seam_raises_cli_error(self, tmp_path: Path) -> None:
+        import bba.cli.main as main_module
+
+        with pytest.raises(CliError, match="bba.cli.main._run_audit_pipeline"):
+            main_module._run_audit_pipeline(
+                run_id="abc123def4567890",
+                input_csv=tmp_path / "fake.csv",
+            )
