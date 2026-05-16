@@ -27,10 +27,12 @@ from __future__ import annotations
 import hashlib
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
+from typing import NamedTuple
 
 from bba.audit_pipeline.models import PipelineRowContext, PipelineRunResult
 from bba.audit_store import AuditRow, AuditStore, LlmCall
 from bba.audit_store.models import Classification
+from bba.deterministic_classifier import ClassifierResult
 from bba.llm_client.models import BatchSubmissionResult, RawBatchResponse
 
 
@@ -62,6 +64,7 @@ def apply_batch_results(
     audit_store: AuditStore,
     run_id: str,
     contexts: Mapping[str, PipelineRowContext],
+    classifier_results: Mapping[str, ClassifierResult] | None = None,
     verifier: Verifier = default_verifier,
 ) -> PipelineRunResult:
     """Apply a single :class:`RawBatchResponse` to the audit_store.
@@ -90,6 +93,16 @@ def apply_batch_results(
     """
     persisted: list[str] = []
 
+    # When the caller supplies classifier_results explicitly we use
+    # them; otherwise compose ClassifierInputs from each context and
+    # call the deterministic engine ourselves. The replay path
+    # (resume reconciler + property test) hands the classifier_results
+    # in pre-computed; the LLM-bound call site in run_pipeline does
+    # the same so we run classify() at most once per audit_id.
+    resolved_classifier_results: dict[str, ClassifierResult] = (
+        dict(classifier_results) if classifier_results is not None else {}
+    )
+
     by_audit_id: dict[str, list[BatchSubmissionResult]] = defaultdict(list)
     for result in response.results:
         by_audit_id[result.custom_id].append(result)
@@ -102,20 +115,29 @@ def apply_batch_results(
                 "to avoid silent fabrication of clinical data"
             )
         context = contexts[audit_id]
+        classifier = resolved_classifier_results.get(audit_id)
+        if classifier is None:
+            classifier = _classify_from_context(context)
+            resolved_classifier_results[audit_id] = classifier
         attempt_records = tuple(
-            (i, attempt, verifier(attempt, context))
+            _AttemptRecord(
+                attempt_id=i,
+                result=attempt,
+                verifier_pass=verifier(attempt, context),
+            )
             for i, attempt in enumerate(attempts)
         )
-        winner = _select_winner(attempt_records)
+        winner = select_winning_attempt(attempt_records)
         row = _build_audit_row(
             attempts=attempt_records,
-            winner=winner,
+            winner=winner,  # type: ignore[arg-type]
             context=context,
+            classifier_result=classifier,
             run_id=run_id,
         )
         calls = [
-            _build_llm_call(attempt, attempt_index=i, run_id=run_id)
-            for i, attempt, _verifier_pass in attempt_records
+            _build_llm_call(record.result, attempt_index=record.attempt_id, run_id=run_id)
+            for record in attempt_records
         ]
         write_result = audit_store.write(row, calls)
         if not write_result.skipped_idempotent:
@@ -129,6 +151,20 @@ def apply_batch_results(
     )
 
 
+class _AttemptRecord(NamedTuple):
+    """In-pipeline record shape consumed by :func:`select_winning_attempt`.
+
+    Wraps a single :class:`BatchSubmissionResult` with the verifier's
+    verdict and a stable ``attempt_id`` (the submission-order index).
+    The orchestrator emits attempts in order, so the latest index is
+    the latest try (escalation attempts come last per PRD §13).
+    """
+
+    attempt_id: int
+    result: BatchSubmissionResult
+    verifier_pass: bool
+
+
 def select_winning_attempt(
     calls: Sequence[object],
 ) -> object | None:
@@ -139,15 +175,38 @@ def select_winning_attempt(
     passed verifier — caller routes that to ``NEEDS_REVIEW`` with
     ``hallucination_suspect=True``.
 
-    Callers pass a sequence of mapping-shaped records (test fixtures
-    use plain ``dict`` with ``attempt_id`` + ``verifier_pass`` keys)
-    or attribute-bearing records. The lookup is duck-typed so the
-    same primitive serves both call sites.
+    This is the CANONICAL primitive — :func:`apply_batch_results`
+    calls it directly on :class:`_AttemptRecord` tuples emitted by
+    the pipeline (Codex review MEDIUM #10: the function was previously
+    only exposed and never wired). Callers may also pass mapping-shaped
+    records (``{"attempt_id": int, "verifier_pass": bool, ...}``);
+    the lookup is duck-typed so the same primitive serves both call
+    sites.
     """
     passing = [c for c in calls if _verifier_passed(c)]
     if not passing:
         return None
     return max(passing, key=_attempt_key)
+
+
+def _classify_from_context(context: "PipelineRowContext") -> ClassifierResult:
+    """Compose ClassifierInputs and run the deterministic engine.
+
+    Mirrors :func:`bba.audit_pipeline.pipeline._classifier_inputs_for`
+    so the resume / property paths get the same classifier result
+    the main pipeline does."""
+    from bba.deterministic_classifier import ClassifierInputs, classify
+
+    return classify(
+        ClassifierInputs(
+            audit_id=context.order.audit_id,
+            hb_result=context.hb_result,
+            cohort_assignment=context.cohort_assignment,
+            order_datetime=context.order.order_datetime,
+            procedure_proximity_hours=context.procedure_proximity_hours,
+            crystalloid_liters_prior_4h=context.crystalloid_liters_prior_4h,
+        )
+    )
 
 
 def _verifier_passed(call: object) -> bool:
@@ -181,47 +240,36 @@ def _attempt_key(call: object) -> int:
     return int(attempt)
 
 
-def _select_winner(
-    attempts: Sequence[tuple[int, BatchSubmissionResult, bool]],
-) -> tuple[int, BatchSubmissionResult, bool] | None:
-    """Pick the latest-verifier-passed attempt from ``(idx, result, pass)``
-    triples; ``None`` when no attempt passed verifier."""
-    passing = [t for t in attempts if t[2]]
-    if not passing:
-        return None
-    # ``idx`` doubles as ``attempt_id`` here — the orchestrator emits
-    # attempts in submission order so the latest index is the latest
-    # try (escalation attempts come last per PRD §13).
-    return max(passing, key=lambda t: t[0])
-
-
 def _build_audit_row(
     *,
-    attempts: Sequence[tuple[int, BatchSubmissionResult, bool]],
-    winner: tuple[int, BatchSubmissionResult, bool] | None,
+    attempts: Sequence[_AttemptRecord],
+    winner: _AttemptRecord | None,
     context: PipelineRowContext,
+    classifier_result: ClassifierResult,
     run_id: str,
 ) -> AuditRow:
     """Translate the winning :class:`BatchSubmissionResult` + caller
-    context into a persistable :class:`AuditRow`.
+    context + deterministic classifier result into a persistable
+    :class:`AuditRow`.
 
-    Every clinical / reproducibility field comes from ``context`` so
-    a re-application of the same response produces byte-identical
-    bytes (the audit_store idempotency contract relies on this).
-    There is NO hardcoded clinical data (Codex review HIGH #5).
+    Every clinical / reproducibility field comes from ``context`` or
+    ``classifier_result`` so a re-application of the same response
+    produces byte-identical bytes (the audit_store idempotency contract
+    relies on this). There is NO hardcoded clinical data (Codex review
+    HIGH #5).
     """
-    rule_classification = context.classifier_result.classification
+    rule_classification = classifier_result.classification
 
     if winner is None:
         # No attempt passed verifier → hallucination-suspect path
         # (user constraint #6). The final classification is forced
         # to NEEDS_REVIEW and the review_reason carries the typed
         # slug so operators can quarantine the row.
-        last_result = attempts[-1][1] if attempts else None
+        last_result = attempts[-1].result if attempts else None
         return _audit_row_for_needs_review(
             run_id=run_id,
             context=context,
-            rule_classification=rule_classification,
+            classifier_result=classifier_result,
             review_reason="hallucination_suspect",
             verifier_pass=False,
             verifier_retries=max(len(attempts) - 1, 0),
@@ -234,7 +282,7 @@ def _build_audit_row(
             escalated=False,
         )
 
-    _idx, winning_result, _pass = winner
+    winning_result = winner.result
     parsed = _classification_from_result(winning_result)
     final_classification = parsed.classification
     review_reason = parsed.parse_failure_reason
@@ -242,9 +290,7 @@ def _build_audit_row(
     indications = _indications_from_result(winning_result)
     negative_evidence = _negative_evidence_from_result(winning_result)
     confidence = _confidence_from_attempts(indications)
-    escalated = any(
-        "opus" in attempt.model_id for _idx, attempt, _verifier_pass in attempts
-    )
+    escalated = any("opus" in record.result.model_id for record in attempts)
     return AuditRow(
         audit_id=context.order.audit_id,
         run_id=run_id,
@@ -268,7 +314,7 @@ def _build_audit_row(
         prior_rbc_units_7d=context.prior_rbc_units_7d,
         cohort_threshold=context.cohort_assignment.threshold
         if context.cohort_assignment.threshold is not None
-        else context.classifier_result.cohort_threshold or 0.0,
+        else classifier_result.cohort_threshold or 0.0,
         delta_hb_window_results=tuple(
             {
                 "window_hours": w.window_hours,
@@ -304,7 +350,7 @@ def _audit_row_for_needs_review(
     *,
     run_id: str,
     context: PipelineRowContext,
-    rule_classification: Classification,
+    classifier_result: ClassifierResult,
     review_reason: str,
     verifier_pass: bool,
     verifier_retries: int,
@@ -346,7 +392,7 @@ def _audit_row_for_needs_review(
         prior_rbc_units_7d=context.prior_rbc_units_7d,
         cohort_threshold=context.cohort_assignment.threshold
         if context.cohort_assignment.threshold is not None
-        else context.classifier_result.cohort_threshold or 0.0,
+        else classifier_result.cohort_threshold or 0.0,
         delta_hb_window_results=tuple(
             {
                 "window_hours": w.window_hours,
@@ -356,7 +402,7 @@ def _audit_row_for_needs_review(
             }
             for w in context.hb_result.delta_hb_windows
         ),
-        rule_classification=rule_classification,
+        rule_classification=classifier_result.classification,
         final_classification="NEEDS_REVIEW",
         cohort_applied=context.cohort_assignment.label.value,
         indications_json=indications,

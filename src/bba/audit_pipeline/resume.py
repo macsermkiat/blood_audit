@@ -44,9 +44,7 @@ from bba.audit_pipeline.state_machine import is_terminal, transition
 from bba.audit_pipeline.store import BatchRunStore
 from bba.audit_store import AuditStore, LlmCall
 from bba.llm_client.models import (
-    AnthropicTransport,
     BatchSubmissionResult,
-    LlmClientConfig,
     RawBatchResponse,
 )
 
@@ -55,8 +53,6 @@ def resume_on_startup(
     *,
     batch_run_store: BatchRunStore,
     audit_store: AuditStore,
-    transport: AnthropicTransport,
-    llm_config: LlmClientConfig,
     contexts: Mapping[str, PipelineRowContext] | None = None,
 ) -> ResumeReport:
     """Reconcile every non-terminal ``batch_runs`` row and return a report.
@@ -68,6 +64,16 @@ def resume_on_startup(
     is reported via :attr:`ResumeReport.failed_audit_ids` rather than
     silently fabricated.
 
+    The reconciler does NOT re-poll Anthropic. It works exclusively
+    off the cached ``llm_calls`` rows already on disk (PRD §10:
+    audit_store persists the full Anthropic response so re-emit is
+    byte-exact without an HTTP round-trip). Batches that crashed
+    after submission but before any response landed (no cached
+    calls) are surfaced as ``failed_audit_ids`` for operator action;
+    re-submission goes through :func:`bba.audit_pipeline.run_pipeline`
+    with the same ``run_id`` (idempotent via audit_store's commit
+    marker).
+
     Returns a typed report:
 
     * ``polled_batch_ids`` — every batch_run touched by the resume.
@@ -77,9 +83,8 @@ def resume_on_startup(
       written by this resume pass.
     * ``failed_audit_ids`` — audit_ids that cannot be reconciled
       without operator action (PENDING with no Anthropic call,
-      orphan with no context).
+      orphan with no context, or batch with no cached response).
     """
-    _ = (transport, llm_config)  # held for future Anthropic-polling expansion
     contexts = contexts or {}
 
     polled: list[str] = []

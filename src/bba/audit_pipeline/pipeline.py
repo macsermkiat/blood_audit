@@ -48,6 +48,11 @@ from bba.audit_pipeline.replay import (
 from bba.audit_pipeline.state_machine import transition
 from bba.audit_pipeline.store import BatchRunStore
 from bba.audit_store import AuditRow, AuditStore, LlmCall
+from bba.deterministic_classifier import (
+    ClassifierInputs,
+    ClassifierResult,
+    classify,
+)
 from bba.llm_client.models import (
     AnthropicTransport,
     BatchSubmissionRequest,
@@ -112,37 +117,54 @@ def run_pipeline(
     persisted: list[str] = []
     touched: list[str] = []
 
-    deterministic_final: list[PipelineRowContext] = []
-    llm_required: list[PipelineRowContext] = []
+    # Call the deterministic classifier ON EACH context (user
+    # constraint #1: the pipeline composes the deterministic engine —
+    # callers no longer pre-compute it). Partition into the two
+    # buckets based on the classifier's verdict.
+    classified: list[tuple[PipelineRowContext, ClassifierResult]] = []
+    deterministic_final: list[tuple[PipelineRowContext, ClassifierResult]] = []
+    llm_required: list[tuple[PipelineRowContext, ClassifierResult]] = []
     for ctx in contexts:
-        if ctx.classifier_result.classification in _DETERMINISTIC_FINAL_CLASSIFICATIONS:
-            deterministic_final.append(ctx)
+        result = classify(_classifier_inputs_for(ctx))
+        classified.append((ctx, result))
+        if result.classification in _DETERMINISTIC_FINAL_CLASSIFICATIONS:
+            deterministic_final.append((ctx, result))
         else:
-            llm_required.append(ctx)
+            llm_required.append((ctx, result))
 
-    for ctx in deterministic_final:
+    for ctx, result in deterministic_final:
         if _persist_deterministic_row(
             ctx,
+            classifier_result=result,
             audit_store=audit_store,
             run_id=run_id,
         ):
             persisted.append(ctx.order.audit_id)
 
-    for chunk in _chunked(llm_required, pipeline_config.max_batch_size):
-        batch_id = _batch_id_for(run_id, chunk)
+    llm_contexts_only = [ctx for ctx, _result in llm_required]
+    llm_results_by_id: dict[str, ClassifierResult] = {
+        ctx.order.audit_id: result for ctx, result in llm_required
+    }
+
+    for chunk_contexts in _chunked(llm_contexts_only, pipeline_config.max_batch_size):
+        chunk_results = {
+            ctx.order.audit_id: llm_results_by_id[ctx.order.audit_id]
+            for ctx in chunk_contexts
+        }
+        batch_id = _batch_id_for(run_id, chunk_contexts)
         now = _now_utc()
         pending = BatchRun(
             batch_id=batch_id,
             state=BatchRunState.PENDING,
             run_id=run_id,
             code_version=pipeline_config.code_version,
-            audit_ids=tuple(c.order.audit_id for c in chunk),
+            audit_ids=tuple(c.order.audit_id for c in chunk_contexts),
             updated_at=now,
         )
         batch_run_store.create(pending)
         touched.append(batch_id)
 
-        requests = _build_submission_requests(chunk, run_id=run_id)
+        requests = _build_submission_requests(chunk_contexts, run_id=run_id)
         response = transport.submit_batch(
             model=llm_config.sonnet_model_id,
             requests=requests,
@@ -157,12 +179,13 @@ def run_pipeline(
         )
         batch_run_store.update(submitted)
 
-        context_map = {ctx.order.audit_id: ctx for ctx in chunk}
+        context_map = {ctx.order.audit_id: ctx for ctx in chunk_contexts}
         write_summary = apply_batch_results(
             response,
             audit_store=audit_store,
             run_id=run_id,
             contexts=context_map,
+            classifier_results=chunk_results,
             verifier=verifier,
         )
         persisted.extend(write_summary.audit_ids_persisted)
@@ -219,6 +242,7 @@ def process_audit_order(
 def _persist_deterministic_row(
     context: PipelineRowContext,
     *,
+    classifier_result: ClassifierResult,
     audit_store: AuditStore,
     run_id: str,
 ) -> bool:
@@ -230,7 +254,7 @@ def _persist_deterministic_row(
     from bba.audit_pipeline.replay import _audit_row_for_needs_review
 
     row: AuditRow
-    classifier = context.classifier_result
+    classifier = classifier_result
     if classifier.classification == "NEEDS_REVIEW":
         # POTENTIALLY_INAPPROPRIATE and friends that route through the
         # LLM never land here — only legitimate deterministic-final
@@ -238,7 +262,7 @@ def _persist_deterministic_row(
         row = _audit_row_for_needs_review(
             run_id=run_id,
             context=context,
-            rule_classification=classifier.classification,
+            classifier_result=classifier,
             review_reason=classifier.bypass_reason.value
             if classifier.bypass_reason
             else "deterministic_review",
@@ -255,6 +279,7 @@ def _persist_deterministic_row(
     else:
         row = _deterministic_audit_row(
             context=context,
+            classifier_result=classifier,
             run_id=run_id,
         )
 
@@ -262,13 +287,18 @@ def _persist_deterministic_row(
     # at least one llm_call to satisfy the audit_store transactional
     # invariant. Build a "deterministic" marker call that records the
     # rule rationale instead of an Anthropic payload.
-    marker_call = _deterministic_marker_call(context=context, run_id=run_id)
+    marker_call = _deterministic_marker_call(
+        context=context, classifier_result=classifier, run_id=run_id
+    )
     write_result = audit_store.write(row, [marker_call])
     return not write_result.skipped_idempotent
 
 
 def _deterministic_audit_row(
-    *, context: PipelineRowContext, run_id: str
+    *,
+    context: PipelineRowContext,
+    classifier_result: ClassifierResult,
+    run_id: str,
 ) -> AuditRow:
     """AuditRow for the deterministic-final path.
 
@@ -283,7 +313,7 @@ def _deterministic_audit_row(
     # ``freshness == "missing"`` as the explicit "no Hb" signal (per
     # PRD §"Output schema"). All non-INSUFFICIENT classifications must
     # supply real Hb data — fail loud otherwise.
-    classifier = context.classifier_result
+    classifier = classifier_result
     if (
         classifier.classification != "INSUFFICIENT_EVIDENCE"
         and context.hb_result.value_g_dl is None
@@ -351,7 +381,10 @@ def _deterministic_audit_row(
 
 
 def _deterministic_marker_call(
-    *, context: PipelineRowContext, run_id: str
+    *,
+    context: PipelineRowContext,
+    classifier_result: ClassifierResult,
+    run_id: str,
 ) -> LlmCall:
     """A placeholder :class:`LlmCall` for deterministic-final rows.
 
@@ -362,7 +395,7 @@ def _deterministic_marker_call(
     """
     from bba.audit_store import LlmCall
 
-    classifier = context.classifier_result
+    classifier = classifier_result
     fingerprint = hashlib.sha256(
         f"{run_id}|{context.order.audit_id}|deterministic".encode("utf-8")
     ).hexdigest()[:16]
@@ -416,29 +449,31 @@ def _build_submission_requests(
 ) -> list[BatchSubmissionRequest]:
     """Build :class:`BatchSubmissionRequest` objects for ``chunk``.
 
-    Each context already carries the redacted evidence chunks
-    assembled by the caller (via :mod:`bba.evidence_bundle_builder` +
+    Each context MUST carry redacted evidence chunks assembled by the
+    caller (via :mod:`bba.evidence_bundle_builder` +
     :mod:`bba.deid_redactor`). The prompt builder is invoked here to
     produce the canonical-envelope :class:`PromptBuildResult`; the
     caller never re-implements that stage.
+
+    Raises :class:`ValueError` for any context with empty
+    ``evidence_chunks`` — the LLM path requires redacted evidence, and
+    silently inserting a placeholder would let a row route to Anthropic
+    with no real content to ground citations against (Codex review
+    CRITICAL #2: "fabricates fallback evidence when evidence_chunks is
+    empty").
     """
-    from bba.prompt_builder import (
-        EvidenceChunk,
-        PromptBuildRequest,
-        build_prompt,
-    )
+    from bba.prompt_builder import PromptBuildRequest, build_prompt
 
     out: list[BatchSubmissionRequest] = []
     for context in chunk:
-        chunks = context.evidence_chunks
-        if not chunks:
-            chunks = (
-                EvidenceChunk(
-                    evidence_id="E1",
-                    source="IPDNRFOCUSDT",
-                    text=f"no redacted evidence supplied for {context.order.audit_id}",
-                ),
+        if not context.evidence_chunks:
+            raise ValueError(
+                f"audit_id={context.order.audit_id!r}: LLM-required row "
+                "has empty evidence_chunks; caller must supply redacted "
+                "evidence (bba.evidence_bundle_builder + "
+                "bba.deid_redactor) before routing through the pipeline"
             )
+        chunks = context.evidence_chunks
         prompt = build_prompt(
             PromptBuildRequest(
                 task_mode="HB_7_10_REVIEW",
@@ -471,6 +506,26 @@ def _detect_orphans(
     """
     persisted_set = set(persisted)
     return tuple(aid for aid in expected_audit_ids if aid not in persisted_set)
+
+
+def _classifier_inputs_for(context: PipelineRowContext) -> ClassifierInputs:
+    """Compose the :class:`bba.deterministic_classifier.ClassifierInputs`
+    from the upstream-derived data on ``context``.
+
+    The pipeline calls :func:`bba.deterministic_classifier.classify`
+    on each context — never delegates that to the caller — so the
+    composition chain order (user constraint #1) is structural:
+    ``deterministic_classifier`` always runs BEFORE the LLM path
+    decision.
+    """
+    return ClassifierInputs(
+        audit_id=context.order.audit_id,
+        hb_result=context.hb_result,
+        cohort_assignment=context.cohort_assignment,
+        order_datetime=context.order.order_datetime,
+        procedure_proximity_hours=context.procedure_proximity_hours,
+        crystalloid_liters_prior_4h=context.crystalloid_liters_prior_4h,
+    )
 
 
 def _now_utc() -> datetime:

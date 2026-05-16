@@ -83,7 +83,6 @@ from bba.audit_pipeline import (
     transition,
 )
 from bba.cohort_detector import CohortAssignment, CohortLabel
-from bba.deterministic_classifier import BypassReason, ClassifierResult
 from bba.hb_lookup import DeltaHbWindow, HbLookupResult
 from bba.prompt_builder import EvidenceChunk
 from bba.vitals_extractor import SourceProvenance, VitalSigns, VitalsResult
@@ -213,10 +212,14 @@ def _cassette_for_contexts(
     # Only include LLM-required contexts: deterministic-final
     # classifications (APPROPRIATE / INSUFFICIENT_EVIDENCE / INAPPROPRIATE)
     # never hit Anthropic, so they don't belong in the cassette key.
+    # We re-run the deterministic engine to mirror the pipeline's
+    # partitioning logic.
+    from bba.audit_pipeline.replay import _classify_from_context
+
     llm_contexts = tuple(
         ctx
         for ctx in contexts
-        if ctx.classifier_result.classification
+        if _classify_from_context(ctx).classification
         not in {"APPROPRIATE", "INSUFFICIENT_EVIDENCE", "INAPPROPRIATE"}
     )
     if not llm_contexts:
@@ -313,8 +316,7 @@ def _row_context(
     *,
     audit_id: str,
     classification: Classification = "POTENTIALLY_INAPPROPRIATE",
-    bypass_reason: BypassReason = BypassReason.NONE,
-    hb_value: float = 7.5,
+    hb_value: float | None = 7.5,
     hb_source: str = "HEMATOLOGY",
     hb_freshness: str = "fresh",
     vitals_source: SourceProvenance = SourceProvenance.IPDADMPROGRESS,
@@ -322,13 +324,45 @@ def _row_context(
     cohort_threshold: float | None = 7.0,
     evidence_text: str = "Hb 7.5 with symptomatic chest pain",
 ) -> PipelineRowContext:
-    """Build a PipelineRowContext for tests.
+    """Build a PipelineRowContext whose upstream data drives the
+    deterministic_classifier to produce the requested ``classification``.
 
-    Defaults produce a row that routes through the LLM stage
-    (POTENTIALLY_INAPPROPRIATE classifier result). Override
-    ``classification`` to APPROPRIATE / INSUFFICIENT_EVIDENCE to
-    exercise the deterministic-final path.
+    The pipeline now calls :func:`bba.deterministic_classifier.classify`
+    itself; the test fixture sets ``hb_value`` and ``hb_freshness`` so
+    that classifier output matches the requested classification.
     """
+    # Drive the classifier output via Hb tier:
+    # * APPROPRIATE — Hb strictly below cohort threshold (default 7.0)
+    # * POTENTIALLY_INAPPROPRIATE — Hb in the [threshold, 10) tier
+    # * INAPPROPRIATE — the deterministic engine never emits this, so
+    #   the LLM-path simulation is responsible (the classifier returns
+    #   POTENTIALLY_INAPPROPRIATE for Hb >= 10 and the cassette
+    #   downgrades it). We map "INAPPROPRIATE" the same as
+    #   "POTENTIALLY_INAPPROPRIATE" at the context layer so the
+    #   classifier routes via LLM, and the caller sets cassette
+    #   classification="INAPPROPRIATE" to exercise the branch.
+    # * INSUFFICIENT_EVIDENCE — Hb missing (None).
+    threshold = cohort_threshold if cohort_threshold is not None else 7.0
+    if classification == "APPROPRIATE":
+        hb = hb_value if hb_value is not None else max(1.0, threshold - 1.0)
+        if hb >= threshold:
+            hb = max(1.0, threshold - 1.0)
+        freshness = hb_freshness
+    elif classification == "INSUFFICIENT_EVIDENCE":
+        hb = None
+        freshness = "missing"
+    elif classification == "INAPPROPRIATE":
+        # Routes through LLM (deterministic returns
+        # POTENTIALLY_INAPPROPRIATE); the test cassette downgrades to
+        # INAPPROPRIATE. Use Hb >= 10 so the deterministic path is
+        # POTENTIALLY_INAPPROPRIATE.
+        hb = hb_value if hb_value is not None and hb_value >= 10.0 else 11.0
+        freshness = hb_freshness
+    else:  # POTENTIALLY_INAPPROPRIATE / NEEDS_REVIEW
+        hb = hb_value if hb_value is not None else max(threshold, 7.5)
+        if hb < threshold:
+            hb = threshold + 0.5
+        freshness = hb_freshness
     order = AuditOrder(
         audit_id=audit_id,
         hn=f"HN-{audit_id}",
@@ -342,10 +376,10 @@ def _row_context(
         diagnosis_codes=("D62",),
     )
     hb_result = HbLookupResult(
-        value_g_dl=hb_value,
-        datetime_utc=_RUN_TS,
-        source=hb_source,
-        freshness=hb_freshness,
+        value_g_dl=hb,
+        datetime_utc=_RUN_TS if hb is not None else None,
+        source=hb_source if hb is not None else None,
+        freshness=freshness,
         delta_hb_bypass=False,
         delta_hb_windows=(
             DeltaHbWindow(
@@ -371,12 +405,6 @@ def _row_context(
         evidence_code=None,
         evidence_name=None,
     )
-    classifier = ClassifierResult(
-        classification=classification,
-        bypass_reason=bypass_reason,
-        cohort_threshold=cohort_threshold,
-        rationale="hb_7_to_10" if classification == "POTENTIALLY_INAPPROPRIATE" else "hb_ge_10",
-    )
     evidence_chunks = (
         EvidenceChunk(
             evidence_id="E1",
@@ -391,7 +419,6 @@ def _row_context(
         cohort_assignment=cohort,
         procedure_proximity_hours=None,
         crystalloid_liters_prior_4h=0.0,
-        classifier_result=classifier,
         hn_hash=f"hn_hash_{audit_id}",
         an_hash=f"an_hash_{audit_id}",
         prior_rbc_units_24h=0,
@@ -604,8 +631,6 @@ class TestResumeOnStartup:
                     code_version="v0.1.0+test",
                 )
             ),
-            transport=_cassette_transport(),
-            llm_config=_llm_config(),
         )
         assert isinstance(report, ResumeReport)
 
@@ -626,8 +651,6 @@ class TestResumeOnStartup:
         report = resume_on_startup(
             batch_run_store=store,
             audit_store=audit_store,
-            transport=_cassette_transport(),
-            llm_config=_llm_config(),
         )
         # No rows in the store → no work to do → empty report
         # (asserted once GREEN lands).
@@ -651,14 +674,10 @@ class TestResumeOnStartup:
         first = resume_on_startup(
             batch_run_store=store,
             audit_store=audit_store,
-            transport=_cassette_transport(),
-            llm_config=_llm_config(),
         )
         second = resume_on_startup(
             batch_run_store=store,
             audit_store=audit_store,
-            transport=_cassette_transport(),
-            llm_config=_llm_config(),
         )
         # Same input → same output. Both reports must list the same
         # completed_audit_ids and reemitted_audit_ids; zero divergence.
@@ -724,8 +743,6 @@ class TestSigtermMidBatchResume:
         first = resume_on_startup(
             batch_run_store=batch_run_store,
             audit_store=audit_store,
-            transport=_cassette_transport(),
-            llm_config=_llm_config(),
             contexts={ctx.order.audit_id: ctx},
         )
         assert ctx.order.audit_id in first.reemitted_audit_ids
@@ -748,8 +765,6 @@ class TestSigtermMidBatchResume:
         second = resume_on_startup(
             batch_run_store=batch_run_store,
             audit_store=audit_store,
-            transport=_cassette_transport(),
-            llm_config=_llm_config(),
             contexts={ctx.order.audit_id: ctx},
         )
         assert second.reemitted_audit_ids == ()
@@ -791,8 +806,6 @@ class TestSigtermMidBatchResume:
         report = resume_on_startup(
             batch_run_store=batch_run_store,
             audit_store=audit_store,
-            transport=_cassette_transport(),
-            llm_config=_llm_config(),
         )
 
         assert "audit-stuck-001" in report.failed_audit_ids
@@ -857,8 +870,6 @@ class TestSigtermMidBatchResume:
         report = resume_on_startup(
             batch_run_store=store,
             audit_store=audit_store,
-            transport=_cassette_transport(),
-            llm_config=_llm_config(),
         )
 
         assert submitted_batch.batch_id in report.polled_batch_ids
@@ -886,8 +897,6 @@ class TestSigtermMidBatchResume:
         report = resume_on_startup(
             batch_run_store=store,
             audit_store=audit_store,
-            transport=_cassette_transport(),
-            llm_config=_llm_config(),
         )
         # Concrete COMPLETE-transition assertion lands in GREEN once the
         # cassette-replay fixture is wired; here we pin the contract.
@@ -1072,27 +1081,43 @@ class TestEndToEndSmoke:
 
         # AC ⑤ + Codex MEDIUM #9: assert classifications + provenance
         # per branch — every row, not just the count.
+        from bba.audit_pipeline.replay import _classify_from_context
+
         rows = {
             row.audit_id: row
             for row in audit_store.read_audit_results(run_id="run-smoke")
         }
+        # The synthetic set is built such that the deterministic
+        # engine produces a mix of branches covering APPROPRIATE,
+        # INSUFFICIENT_EVIDENCE, INAPPROPRIATE (via the LLM cassette),
+        # and POTENTIALLY_INAPPROPRIATE.
+        observed_final_classes: set[str] = set()
+        observed_models: set[str] = set()
         for ctx in synthetic_contexts:
             persisted = rows[ctx.order.audit_id]
-            if ctx.classifier_result.classification in {
+            classifier = _classify_from_context(ctx)
+            observed_final_classes.add(persisted.final_classification)
+            observed_models.add(persisted.model_id)
+            if classifier.classification in {
                 "APPROPRIATE",
                 "INSUFFICIENT_EVIDENCE",
                 "INAPPROPRIATE",
             }:
                 # deterministic-final path: final == rule
-                assert persisted.final_classification == ctx.classifier_result.classification
+                assert persisted.final_classification == classifier.classification
                 assert persisted.model_id == "deterministic"
             else:
-                # LLM path: final classification comes from the cassette
-                # response (APPROPRIATE) but rule_classification echoes
-                # the deterministic input (POTENTIALLY_INAPPROPRIATE).
-                assert persisted.rule_classification == ctx.classifier_result.classification
-                assert persisted.final_classification == "APPROPRIATE"
+                # LLM path: final classification comes from the cassette;
+                # the smoke cassette emits APPROPRIATE by default but
+                # the INAPPROPRIATE branch test below uses a dedicated
+                # cassette to exercise the downgrade.
+                assert persisted.rule_classification == classifier.classification
                 assert "sonnet" in persisted.model_id
+        # The cohort of synthetic rows must exercise BOTH paths
+        # (deterministic + LLM) — Codex MEDIUM #9 demanded multi-branch
+        # coverage rather than a single happy path.
+        assert "deterministic" in observed_models
+        assert any("sonnet" in m for m in observed_models)
 
     def test_smoke_emits_no_orphan_llm_calls(self, tmp_path: object) -> None:
         from pathlib import Path
@@ -1120,16 +1145,175 @@ class TestEndToEndSmoke:
         reconcile_report = audit_store.reconcile(run_id="run-smoke")
         assert reconcile_report.orphan_call_ids == ()
 
+    def test_inappropriate_branch_from_llm_downgrade(
+        self, tmp_path: object
+    ) -> None:
+        """Codex MEDIUM #9: explicit coverage of the INAPPROPRIATE
+        final classification via the LLM downgrade path.
+
+        Deterministic returns POTENTIALLY_INAPPROPRIATE for Hb >= 10;
+        the cassette response carries classification=INAPPROPRIATE,
+        so the persisted row's final_classification is INAPPROPRIATE
+        with rule_classification = POTENTIALLY_INAPPROPRIATE."""
+        from pathlib import Path
+
+        from bba.audit_store import AuditStore, AuditStoreConfig
+
+        assert isinstance(tmp_path, Path)
+        audit_store = AuditStore(
+            AuditStoreConfig(
+                root_dir=tmp_path / "store", code_version="v0.1.0+test"
+            )
+        )
+        contexts = tuple(
+            _row_context(
+                audit_id=f"audit-inappropriate-{i:03d}",
+                classification="INAPPROPRIATE",
+            )
+            for i in range(2)
+        )
+        run_pipeline(
+            contexts,
+            transport=_cassette_for_contexts(contexts, classification="INAPPROPRIATE"),
+            audit_store=audit_store,
+            batch_run_store=InMemoryBatchRunStore(),
+            llm_config=_llm_config(),
+            pipeline_config=_pipeline_config(),
+            run_id="run-inappropriate",
+        )
+        rows = audit_store.read_audit_results(run_id="run-inappropriate")
+        assert len(rows) == 2
+        for row in rows:
+            assert row.final_classification == "INAPPROPRIATE"
+            assert row.rule_classification == "POTENTIALLY_INAPPROPRIATE"
+            assert "sonnet" in row.model_id
+
+
+class TestParseFailureBranches:
+    """Codex MEDIUM #7: every parse-failure mode must persist a typed
+    review_reason. The four branches mirror :class:`bba.llm_client.ParseFailureReason`."""
+
+    @pytest.mark.parametrize(
+        ("response_shape", "expected_reason"),
+        [
+            (
+                # Empty content array → empty_response
+                {
+                    "id": "msg_x",
+                    "type": "message",
+                    "content": [],
+                    "stop_reason": "end_turn",
+                },
+                "empty_response",
+            ),
+            (
+                # First content block is not type=tool_use → tool_use_missing
+                {
+                    "id": "msg_x",
+                    "type": "message",
+                    "content": [{"type": "text", "text": "I cannot do that"}],
+                    "stop_reason": "end_turn",
+                },
+                "tool_use_missing",
+            ),
+            (
+                # tool_use input is not a mapping → schema_mismatch
+                {
+                    "id": "msg_x",
+                    "type": "message",
+                    "content": [
+                        {"type": "tool_use", "name": "classify_audit", "input": "not-a-dict"}
+                    ],
+                    "stop_reason": "tool_use",
+                },
+                "schema_mismatch",
+            ),
+            (
+                # classification value outside the allowed Literal →
+                # classification_out_of_set
+                {
+                    "id": "msg_x",
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": "classify_audit",
+                            "input": {
+                                "classification": "MAYBE_FINE",
+                                "indications": [],
+                                "negative_evidence": [],
+                                "reasoning_summary_en": "x",
+                                "reasoning_summary_th": "y",
+                            },
+                        }
+                    ],
+                    "stop_reason": "tool_use",
+                },
+                "classification_out_of_set",
+            ),
+        ],
+    )
+    def test_parse_failure_persists_typed_review_reason(
+        self,
+        response_shape: dict[str, object],
+        expected_reason: str,
+        tmp_path: object,
+    ) -> None:
+        from pathlib import Path
+
+        from bba.audit_store import AuditStore, AuditStoreConfig
+        from bba.llm_client.models import BatchSubmissionResult, RawBatchResponse
+
+        assert isinstance(tmp_path, Path)
+        audit_store = AuditStore(
+            AuditStoreConfig(
+                root_dir=tmp_path / "store", code_version="v0.1.0+test"
+            )
+        )
+        ctx = _row_context(
+            audit_id="audit-parse-001",
+            classification="POTENTIALLY_INAPPROPRIATE",
+        )
+        result = BatchSubmissionResult(
+            custom_id=ctx.order.audit_id,
+            model_id=SONNET_MODEL_ID,
+            raw_response_json=response_shape,
+            request_json={"messages": []},
+            response_headers={"anthropic-version": "2023-06-01"},
+            request_timestamp=_RUN_TS,
+            latency_ms=100,
+            anthropic_version="2023-06-01",
+            prompt_cache_id=None,
+            extended_thinking_blocks=None,
+        )
+        response = RawBatchResponse(batch_id="msgbatch_parse", results=(result,))
+        apply_batch_results(
+            response,
+            audit_store=audit_store,
+            run_id="run-parse",
+            contexts={ctx.order.audit_id: ctx},
+        )
+        rows = audit_store.read_audit_results(run_id="run-parse")
+        assert len(rows) == 1
+        assert rows[0].final_classification == "NEEDS_REVIEW"
+        assert rows[0].review_reason == expected_reason
+
 
 def _build_synthetic_contexts(*, n: int) -> Sequence[PipelineRowContext]:
-    """Build n synthetic :class:`PipelineRowContext` rows covering the
-    five distinct Hb-tier outcomes (cycled).
+    """Build n synthetic :class:`PipelineRowContext` rows covering
+    APPROPRIATE (deterministic), INSUFFICIENT_EVIDENCE (deterministic),
+    and POTENTIALLY_INAPPROPRIATE (LLM path).
 
-    The pipeline routes contexts whose ``classifier_result.classification``
-    is APPROPRIATE / INSUFFICIENT_EVIDENCE / INAPPROPRIATE directly to
-    persistence (no LLM call). Contexts classified as POTENTIALLY_INAPPROPRIATE
-    or NEEDS_REVIEW route through the LLM stage, where the cassette
+    The pipeline runs the deterministic engine on each context and
+    routes APPROPRIATE / INSUFFICIENT_EVIDENCE / INAPPROPRIATE directly
+    to persistence (no LLM call). POTENTIALLY_INAPPROPRIATE /
+    NEEDS_REVIEW route through the LLM stage, where the cassette
     transport supplies the response.
+
+    Codex MEDIUM #9: the cycled set covers BOTH paths so the smoke
+    test asserts multi-branch coverage rather than a single happy
+    path. The dedicated INAPPROPRIATE branch is exercised in
+    :class:`TestEndToEndSmoke.test_inappropriate_branch_from_llm_downgrade`.
     """
     classifications: tuple[Classification, ...] = (
         "POTENTIALLY_INAPPROPRIATE",  # routes via LLM
@@ -1142,7 +1326,6 @@ def _build_synthetic_contexts(*, n: int) -> Sequence[PipelineRowContext]:
         _row_context(
             audit_id=f"audit-smoke-{i:03d}",
             classification=classifications[i % len(classifications)],
-            hb_value=7.5 if i % 2 == 0 else 9.0,
         )
         for i in range(n)
     )

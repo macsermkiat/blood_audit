@@ -40,7 +40,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from bba.audit_orders import AuditOrder
 from bba.audit_store.models import SafeId, UTCDatetime
 from bba.cohort_detector import CohortAssignment
-from bba.deterministic_classifier import ClassifierResult
 from bba.hb_lookup import HbLookupResult
 from bba.prompt_builder import EvidenceChunk
 from bba.vitals_extractor import VitalsResult
@@ -165,7 +164,6 @@ class PipelineRowContext(BaseModel):
     cohort_assignment: CohortAssignment
     procedure_proximity_hours: float | None
     crystalloid_liters_prior_4h: float = Field(ge=0.0)
-    classifier_result: ClassifierResult
 
     hn_hash: str = Field(min_length=1)
     an_hash: str = Field(min_length=1)

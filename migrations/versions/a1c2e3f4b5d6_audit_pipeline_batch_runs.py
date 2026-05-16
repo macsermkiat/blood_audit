@@ -13,10 +13,12 @@ transitions rows through PENDING → SUBMITTED → PARTIAL → COMPLETE | FAILED
 via :func:`bba.audit_pipeline.state_machine.transition`. The state machine
 is enforced application-side; the DB only stores the latest state.
 
-The migration ALSO installs the (audit_id, run_id, code_version)
-uniqueness invariant that the audit_store relies on for idempotency —
-two batch_runs rows for the same triple are a contract violation
-(would let two concurrent pipelines double-write audit_results).
+NOTE on ``(audit_id, run_id, code_version)`` uniqueness: that triple is
+the audit_store's idempotency key for :class:`bba.audit_store.AuditRow`
+persistence — NOT a constraint on batch_runs (which carries multiple
+audit_ids per row via ``audit_ids TEXT[]``). The audit_store's commit-
+marker filesystem layout enforces it there; batch_runs gets its own
+UNIQUE constraint on ``(batch_id)`` via the PRIMARY KEY.
 """
 
 from __future__ import annotations
@@ -89,6 +91,19 @@ def upgrade() -> None:
         CREATE INDEX batch_runs_state_idx
             ON batch_runs (state)
             WHERE state IN ('pending', 'submitted', 'partial');
+        """
+    )
+
+    # Two batch_runs rows must NEVER share the same Anthropic batch_id
+    # within a single run — that would let two pipelines persist the
+    # same Anthropic batch's results twice. Partial unique index so the
+    # constraint applies only when anthropic_batch_id is non-null
+    # (PENDING and FAILED rows are exempt).
+    op.execute(
+        """
+        CREATE UNIQUE INDEX batch_runs_anthropic_batch_unique
+            ON batch_runs (run_id, anthropic_batch_id)
+            WHERE anthropic_batch_id IS NOT NULL;
         """
     )
 
