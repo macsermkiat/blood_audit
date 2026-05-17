@@ -5,8 +5,16 @@ description: Run bba ingest and bba audit end-to-end against a HOSxP export.
 
 import CliCommandCard from "../../../../components/CliCommandCard.astro";
 
-This page walks the happy path: a HOSxP export goes in, a populated
-`audit_store` Postgres table comes out.
+This page walks the happy path: a HOSxP export goes in, an idempotent
+DuckDB + Parquet snapshot comes out under `$BBA_DATA_DIR/audit/<run_id>/`.
+
+:::note[Phase 1 scope]
+In Phase 1, `bba audit` runs the **ingest leg** only. Classification rows
+(`APPROPRIATE`, `INAPPROPRIATE`, `NEEDS_REVIEW`, etc.) are not yet
+written by this command; the LLM analysis leg is wired in Phase 1.5.
+See [audit command](/blood_audit/en/operators/audit-command/) for the
+exact contract.
+:::
 
 ## 1. Ingest the export bundle
 
@@ -29,40 +37,51 @@ Under the hood, the `run_id` is `sha256(input_csv_hash +
 schema_fingerprint + code_version)`. You do not need to compute it
 yourself; the CLI does.
 
-## 2. Run the audit
+## 2. Run the audit (Phase 1: ingest leg)
 
 <CliCommandCard
   command="bba audit --input INPUT_CSV"
-  summary="Runs the full 12-stage pipeline against the ingested bundle and writes audit rows to Postgres."
+  summary="Phase 1: materializes the HOSxP CSV bundle into DuckDB + Parquet under $BBA_DATA_DIR/audit/<run_id>/ and records a completion marker."
   flags={[
     { name: "--input INPUT_CSV", description: "Same CSV path used for ingest." },
-    { name: "--run-id RUN_ID", description: "Re-run an existing snapshot by run_id (alternative to --input)." },
-    { name: "--force", description: "Override idempotency. Writes a compliance row to audit_log explaining why." },
+    { name: "--run-id RUN_ID", description: "Reuse an existing run_id (no-op unless --force)." },
+    { name: "--force", description: "Override idempotency. Writes a compliance row to audit_log with idempotency_override=true." },
   ]}
-  envVars={["BBA_DATA_DIR", "BBA_DB_URL", "ANTHROPIC_API_KEY"]}
+  envVars={["BBA_DATA_DIR"]}
   example={`uv run bba audit --input /var/data/exports/PHI_xxx_001.csv`}
 />
 
-The audit is **idempotent**. Re-running the same CSV is a no-op unless
-`--force` is passed. The completion row in `audit_log` records every run,
-forced or otherwise.
+The command is **idempotent**. Re-running the same CSV is a no-op
+unless `--force` is passed. The completion row in `audit_log` records
+every forced re-run.
 
-## 3. Inspect the results
+## 3. Inspect the snapshot
 
-The four CLI subcommands that would surface the results
-(`evaluate`, `report`, `serve-dashboard`, `sentinel`) raise `CliError` in
-Phase 1 — see [Integration seams](/blood_audit/en/operators/integration-seams/).
-For now, query Postgres directly:
+The four post-audit subcommands (`evaluate`, `report`,
+`serve-dashboard`, `sentinel`) raise `CliError` in Phase 1 — see
+[Integration seams](/blood_audit/en/operators/integration-seams/).
 
-```sql
-SELECT classification, COUNT(*) AS n
-FROM audit_store
-WHERE run_id = 'YOUR_RUN_ID'
-GROUP BY classification;
+For now, the most useful checks are on the materialized snapshot:
+
+```bash
+# Confirm the run_id directory exists and is complete.
+ls -la "$BBA_DATA_DIR/audit/<RUN_ID>/"
+ls "$BBA_DATA_DIR/audit_runs/<RUN_ID>/"
+
+# Inspect the ingested HOSxP tables via DuckDB.
+duckdb "$BBA_DATA_DIR/audit/<RUN_ID>/ingest.duckdb" \
+  "SELECT table_name FROM information_schema.tables;"
 ```
 
-Expected output: counts for `APPROPRIATE`, `POTENTIALLY_INAPPROPRIATE`,
-`LLM_REVIEW`, and (if any failed grounding) `hallucination_suspect`.
+## What you will see in Phase 1.5
+
+Once the LLM analysis leg is wired, `bba audit` will additionally write
+one `AuditRow` per audited order to the audit store. The
+`final_classification` column holds one of `APPROPRIATE`,
+`INAPPROPRIATE`, `NEEDS_REVIEW`, `INSUFFICIENT_EVIDENCE`, or
+`POTENTIALLY_INAPPROPRIATE`. `LLM_REVIEW` is a routing concept (not a
+stored value); failed quote-grounding becomes
+`final_classification = NEEDS_REVIEW` with `review_reason` set.
 
 ## Next steps
 

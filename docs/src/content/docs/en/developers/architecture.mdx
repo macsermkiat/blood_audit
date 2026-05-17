@@ -47,12 +47,16 @@ The full glossary lives in [Module glossary](/blood_audit/en/reference/module-gl
 
 1. **Deterministic-first.** The deterministic classifier is authoritative.
    The LLM is only consulted for Tier 3 (Hb > 10 g/dL).
-2. **Idempotent re-runs.** `(run_id, encounter_id)` is unique in the store;
-   re-runs no-op unless `--force` is passed.
+2. **Idempotent re-runs.** `run_id = sha256(input_csv_hash +
+   schema_fingerprint + code_version)`. `bba audit` is a no-op on a
+   completed `run_id` unless `--force` is passed (which writes an
+   `idempotency_override=true` row to `audit_log`).
 3. **Quote-grounded LLM output.** All six grounding layers run; failure
-   routes to `hallucination_suspect`, never to a result row.
-4. **No real-time path.** No subscriber to the audit stream emits clinician
-   alerts. This is QI, not SaMD.
+   sets `final_classification = NEEDS_REVIEW` with `review_reason =
+   "hallucination_suspect"`, never an `APPROPRIATE` / `INAPPROPRIATE`
+   result row.
+4. **No real-time path.** No subscriber to the audit stream emits
+   clinician alerts. This is QI, not SaMD.
 5. **De-identification happens before any cross-container hop.** The
    `bba.deid_redactor` step is non-optional.
 

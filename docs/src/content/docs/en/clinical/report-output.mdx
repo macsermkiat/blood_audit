@@ -3,39 +3,47 @@ title: Report output
 description: What the QI committee sees — six CSV sections plus a PDF summary.
 ---
 
-The audit pipeline produces a monthly report whose schema lives in
+The audit pipeline produces a monthly report whose authoritative schema
+lives in
 [`docs/report-schema.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/report-schema.md).
-A summary appears below; for the authoritative column-by-column contract,
-see the source file.
+A summary appears below; for the column-by-column contract, see the
+source file.
 
-## Six CSV sections
+## Six CSV sections (plus per-physician files and a PDF)
 
-| Section | Audience |
-| --- | --- |
-| Hospital trend | Senior QI committee. Month-over-month classification rates. |
-| Ward scorecard | Ward leads. Per-ward classification distribution. |
-| Physician own-view | Each reviewing clinician sees only their own audit. |
-| Indication breakdown | QI committee. Distribution by primary indication. |
-| Cohort breakdown | QI committee. ICU / Surgery / Oncology / Medicine. |
-| Health-state breakdown | QI committee. Stratification by acuity proxies. |
+| Section file | Audience | Contents |
+| --- | --- | --- |
+| `hospital_trend.csv` | QI committee | One row per month covered: total / appropriate / inappropriate / needs_review / insufficient_evidence counts, plus inappropriate_rate. |
+| `ward_scorecard.csv` | Ward leads + QI committee | One row per `ward_id`. Same counts as the hospital trend, scoped to the ward. |
+| `physician_own_view_<physician_id>.csv` | The named physician only | One file per physician. Holds the physician's own absolute numbers plus peer median / p25 / p75 inappropriate-rate quartiles. No other physician's individual rate is in the file. |
+| `indication_distribution.csv` | QI committee | One row per distinct indication code. An order with N indication codes contributes 1 to each. |
+| `cohort_exception.csv` | QI committee | One row per `cohort_applied` (including `default`). Useful for spotting cohorts with unusual inappropriate-rates. |
+| `pipeline_health.csv` | QI committee | Single-row operational summary: classified vs needs-review vs insufficient-evidence counts and rates. Documentation absence is its own bucket — never folded into "inappropriate". |
+| `report_<YYYY-MM-DD>.pdf` | QI committee | Single PDF with all the above sections rendered as tables, plus the reproducibility footer on every page. |
 
-## PDF summary
+## Per-physician separation by design
 
-A bundled PDF summary contains:
+`physician_own_view` does **not** ship as a single committee CSV. That
+would expose every physician's own rate to every recipient. Instead the
+generator emits one `physician_own_view_<physician_id>.csv` per physician
+in `ReportInputs.physician_ids_for_own_view`. Each file holds exactly
+one data row. Sending the file to that physician therefore never leaks
+another physician's rate.
 
-- Cover page with run metadata (`run_id`, `code_version`, ingestion date).
-- An executive summary table aggregating the six CSV sections.
-- A QI-not-SaMD framing reminder.
+The committee PDF still renders a physician-own-view table for the
+committee's internal review.
 
-## Filename contract
+## Reproducibility footer
 
-PDF filenames follow the format documented in `docs/report-schema.md`
-under "PDF filename contract" — concretely, the `run_id` is embedded so
-every distributed copy traces back to the run that produced it.
+Every CSV row and every PDF page carry six identifiers:
+`policy_version`, `model_id`, `redactor_version`, `redactor_model_sha`,
+`prompt_hash`, `evidence_bundle_hash`. A six-month-later auditor can
+reproduce any line from the same inputs plus the same code.
 
-## Where this lives in code
+## How this is produced
 
-`src/bba/report_generator/`. The `bba report` CLI subcommand is an
-[integration seam](/blood_audit/en/operators/integration-seams/) — the
-module ships and is tested, but the CLI wiring waits for the
-deployment-specific resolver that pulls from `audit_store`.
+`bba.report_generator.generate_monthly_report(inputs: ReportInputs)`.
+The `bba report` CLI subcommand is an
+[integration seam](/blood_audit/en/operators/integration-seams/) in
+Phase 1 — the deployer wires `ReportInputs` from the configured audit
+store.

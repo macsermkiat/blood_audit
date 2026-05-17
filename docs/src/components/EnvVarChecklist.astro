@@ -3,7 +3,7 @@ interface EnvVar {
   name: string;
   example: string;
   purpose: string;
-  required: boolean;
+  phase: "1" | "1.5";
 }
 
 interface Props {
@@ -14,35 +14,42 @@ const defaultVars: EnvVar[] = [
   {
     name: "BBA_DATA_DIR",
     example: "/var/lib/blood_audit/data",
-    purpose: "Persistent root for Parquet, DuckDB, and run-state markers.",
-    required: true,
+    purpose:
+      "Persistent root for DuckDB + Parquet snapshots and the file-backed run-state store. Read by every CLI invocation.",
+    phase: "1",
   },
   {
     name: "BBA_DB_URL",
     example: "postgresql+psycopg://bba@localhost/blood_audit",
-    purpose: "Postgres DSN for audit_store, batch_runs, review_actions, audit_log. Use the +psycopg driver suffix.",
-    required: true,
+    purpose:
+      "Postgres DSN for batch_runs and review_actions. Read by the Phase 1.5 LLM analysis leg, not by Phase 1 ingest. Use the +psycopg driver suffix.",
+    phase: "1.5",
   },
   {
     name: "ANTHROPIC_API_KEY",
     example: "sk-ant-…",
-    purpose: "Batch API key for the LLM_REVIEW leg. Required before `bba audit` invokes Batch.",
-    required: true,
+    purpose:
+      "Batch API key for the LLM analysis leg. Read by Phase 1.5 wiring, not by Phase 1 ingest.",
+    phase: "1.5",
   },
 ];
 
 const { vars = defaultVars } = Astro.props;
+
+const phaseLabel = (phase: EnvVar["phase"]) =>
+  phase === "1" ? "required (Phase 1)" : "Phase 1.5";
+
+const phasePill = (phase: EnvVar["phase"]) =>
+  phase === "1" ? "ba-pill ba-pill--err" : "ba-pill ba-pill--warn";
 ---
 
-<section class="env-checklist" aria-label="Required environment variables">
+<section class="env-checklist" aria-label="blood_audit environment variables">
   <ul class="ba-stack" role="list">
     {vars.map((v) => (
       <li class="ba-card env-row">
         <div class="ba-row env-row__head">
           <code class="env-name">{v.name}</code>
-          <span class={`ba-pill ${v.required ? "ba-pill--err" : "ba-pill--warn"}`}>
-            {v.required ? "required" : "optional"}
-          </span>
+          <span class={phasePill(v.phase)}>{phaseLabel(v.phase)}</span>
         </div>
         <p class="env-purpose">{v.purpose}</p>
         <code class="env-example">{v.example}</code>

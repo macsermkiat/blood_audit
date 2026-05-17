@@ -5,19 +5,40 @@ description: Six fail-closed layers between an LLM citation and a published audi
 
 import QuoteGroundingLayers from "../../../../components/QuoteGroundingLayers.astro";
 
-When the deterministic classifier routes a row to `LLM_REVIEW`, the LLM
+When the deterministic classifier routes a row to LLM review, the LLM
 emits a clinical reasoning summary along with quoted evidence from the
-de-identified bundle. **Every quote** is gated by the layers below before
-the row is accepted into `audit_store`.
+de-identified bundle. Every quote passes through six mandatory
+fail-closed layers; a seventh medical-NLI semantic-entailment layer is
+opt-in.
 
 <QuoteGroundingLayers />
 
 ## What "fail-closed" means
 
-Any layer that returns false routes the row to `hallucination_suspect`
-in `audit_store`. It is never silently downgraded, retried with relaxed
-constraints, or written to a result row. The QI committee can audit the
-`hallucination_suspect` queue separately.
+Any of the six mandatory layers that returns false marks the row as
+`final_classification = NEEDS_REVIEW` with `review_reason =
+"hallucination_suspect"`. The row is never silently downgraded, retried
+with relaxed constraints, or accepted as an `APPROPRIATE` /
+`INAPPROPRIATE` result. The QI committee can filter on
+`review_reason = "hallucination_suspect"` to audit grounding failures
+separately.
+
+`hallucination_suspect` is a `review_reason` flag, not a classification
+literal. The stored `Classification` literals are `APPROPRIATE`,
+`INAPPROPRIATE`, `NEEDS_REVIEW`, `INSUFFICIENT_EVIDENCE`,
+`POTENTIALLY_INAPPROPRIATE` — see [Audit store](/blood_audit/en/developers/audit-store/).
+
+## The medical-NLI layer is opt-in
+
+`bba.quote_grounder.verify_citation(..., nli_gate=None)` defaults to
+**no NLI check**. The verifier only evaluates the medical-NLI layer
+when the caller passes a non-null `NLIEntailmentGate`. Default call
+sites in the repo do not pass one, so the layer is not part of the
+mandatory fail-closed stack today.
+
+PRD §9 specifies medical-NLI as opt-in. Deployments that want the
+extra semantic check construct an `NLIEntailmentGate` (typically over a
+hosted ClinicalBERT-NLI checkpoint) and pass it into the verifier.
 
 ## What you may not do
 

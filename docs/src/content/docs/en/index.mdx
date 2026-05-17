@@ -23,18 +23,34 @@ import PipelineDiagram from "../../../components/PipelineDiagram.astro";
 ## What blood_audit does
 
 blood_audit reads completed HOSxP exports from the hospital information
-system. It checks each red blood cell (RBC) transfusion against the
-3-tier hemoglobin (Hb) policy. It writes one audit row per transfusion.
+system. It compares each red blood cell (RBC) transfusion against the
+3-tier hemoglobin (Hb) policy, then writes one audit row per
+transfusion to the audit store.
 
-Each transfusion gets one of three labels:
+The final `final_classification` stored for each transfusion is one of:
 
-- `APPROPRIATE` — Hb is below the cohort threshold, or the acute-blood-loss
-  override applies.
-- `POTENTIALLY_INAPPROPRIATE` — Hb is above the threshold and no override
-  conditions are documented.
-- `LLM_REVIEW` — Hb is above 10 g/dL. The row is sent to a large language
-  model (LLM) for clinical reasoning, with every quote checked against
-  the source evidence.
+- `APPROPRIATE` — the order matched policy.
+- `INAPPROPRIATE` — the order did not match policy.
+- `POTENTIALLY_INAPPROPRIATE` — the deterministic rule flagged the order
+  but did not promote it to LLM review.
+- `NEEDS_REVIEW` — the LLM ran but its answer requires a human reviewer
+  (uncertain reasoning, failed quote-grounding, or low confidence).
+- `INSUFFICIENT_EVIDENCE` — documented evidence was missing; the row is
+  *not* `INAPPROPRIATE`, by design.
+
+Rows that the deterministic classifier routes to the LLM go through six
+fail-closed quote-grounding layers; a failed grounding becomes
+`NEEDS_REVIEW`, never a published result.
+
+## Phase 1 status
+
+`bba audit` today wraps the **ingest leg** of the pipeline. It
+materializes the HOSxP CSV bundle into DuckDB + Parquet under
+`$BBA_DATA_DIR/audit/<run_id>/` with idempotent run-level guarantees.
+The LLM-driven analysis leg (deterministic classifier → evidence bundle
+→ de-id → prompt → batch → quote grounding → audit-store write) is
+implemented as separate modules but is **wired in Phase 1.5**. See
+[audit command](/blood_audit/en/operators/audit-command/) for what runs today.
 
 Six fail-closed quote-grounding layers protect every LLM_REVIEW row from
 hallucination. The deterministic classifier remains the authoritative source.

@@ -5,8 +5,11 @@ description: Common failures and how to diagnose them.
 
 ## `CliError: BBA_DATA_DIR not set` at startup
 
-You missed one of the [three required env vars](/blood_audit/en/operators/env-vars/).
-The CLI fails fast and does not degrade. Set the variable, re-run.
+`BBA_DATA_DIR` is the only env var the Phase 1 CLI validates directly.
+See [Environment variables](/blood_audit/en/operators/env-vars/) for
+the full three-variable contract and which are needed in Phase 1 vs
+Phase 1.5. Set `BBA_DATA_DIR` to an absolute path the service user can
+write to, then re-run.
 
 ## `sqlalchemy.exc.NoSuchModuleError: Can't load plugin: sqlalchemy.dialects:postgresql.psycopg2`
 

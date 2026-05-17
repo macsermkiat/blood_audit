@@ -11,12 +11,19 @@ import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
 
 blood_audit ทบทวนการให้เลือดแดงเข้มข้น (RBC, red blood cell) ในผู้ป่วยใน
 ผู้ใหญ่ ณ โรงพยาบาลจุฬาฯ หลังจากการให้เลือดเสร็จสิ้นแล้ว ระบบอ่านข้อมูล
-ส่งออกจาก HOSxP ของโรงพยาบาล สำหรับแต่ละหน่วยเลือดจะกำหนด 1 ใน 3 ป้าย:
-`APPROPRIATE`, `LLM_REVIEW`, หรือ `POTENTIALLY_INAPPROPRIATE`
+ส่งออกจาก HOSxP ของโรงพยาบาล สำหรับแต่ละหน่วยเลือดจะบันทึก 1 ใน 5
+classification: `APPROPRIATE`, `INAPPROPRIATE`, `NEEDS_REVIEW`,
+`INSUFFICIENT_EVIDENCE`, หรือ `POTENTIALLY_INAPPROPRIATE`
 การตัดสินใจอ้างอิงตามแนวทางภายในของ KCMH คือ PR 17.2 (Procedure
 Revision 17.2) และมาตรฐาน AABB 2023 (Association for the Advancement of
 Blood &amp; Biotherapies) ใช้นโยบายฮีโมโกลบิน (Hb) แบบ 3-ชั้น
 พร้อมเกณฑ์เฉพาะกลุ่มผู้ป่วย และกลไก override สำหรับภาวะเสียเลือดเฉียบพลัน
+
+แถวที่ deterministic classifier ส่งไปยัง LLM (Tier 3, Hb > 10 g/dL)
+จะผ่าน quote-grounding แบบ fail-closed 6 ชั้น "LLM_REVIEW" เป็นเพียง
+แนวคิดการ routing ภายใน pipeline ไม่ใช่ classification ที่บันทึก
+ถ้า grounding ล้มเหลว ผลจะเป็น `final_classification = NEEDS_REVIEW`
+พร้อม `review_reason` ที่ระบุเหตุผล เพื่อให้คนทบทวนต่อ
 
 ## สิ่งที่ระบบนี้ **ไม่ใช่**
 
