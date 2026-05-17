@@ -2,7 +2,8 @@
 interface Tier {
   label: string;
   range: string;
-  ruleOutput: "APPROPRIATE" | "POTENTIALLY_INAPPROPRIATE" | "→ LLM review";
+  ruleOutput: "APPROPRIATE" | "NEEDS_REVIEW" | "POTENTIALLY_INAPPROPRIATE";
+  routes: "auto-classify" | "LLM review";
   rule: string;
 }
 
@@ -13,21 +14,24 @@ interface Props {
 const defaultTiers: Tier[] = [
   {
     label: "Tier 1",
-    range: "Hb ≤ 7.0 g/dL (ICU) · Hb ≤ 8.0 g/dL (non-ICU)",
+    range: "Hb < cohort threshold (e.g. < 7 g/dL ICU · < 8 g/dL non-ICU)",
     ruleOutput: "APPROPRIATE",
-    rule: "Below cohort-aware threshold. Deterministic rule classifies as appropriate unless procedure-proximal + acute-blood-loss override conditions apply.",
+    routes: "auto-classify",
+    rule: "Below cohort threshold. Auto-classified appropriate unless a higher-precedence bypass already fired (MTP cohort, peri-procedural ≤ 6h, delta-Hb trigger, hemodilution, or single-low-Hb-no-trend).",
   },
   {
     label: "Tier 2",
-    range: "Hb 7.0 – 10.0 g/dL",
-    ruleOutput: "POTENTIALLY_INAPPROPRIATE",
-    rule: "Above threshold. Rule classifies as potentially inappropriate unless acute-blood-loss override fires (delta-Hb ≥ 1.5 g/dL / 6h, ≥ 2 g/dL / 12h, ≥ 2.5 g/dL / 24h).",
+    range: "cohort threshold ≤ Hb < 10 g/dL",
+    ruleOutput: "NEEDS_REVIEW",
+    routes: "LLM review",
+    rule: "Gray zone. Deterministic rule outputs NEEDS_REVIEW. The pipeline routes the row to the LLM for clinical reasoning.",
   },
   {
     label: "Tier 3",
-    range: "Hb > 10.0 g/dL",
-    ruleOutput: "→ LLM review",
-    rule: "Routed to the LLM with quote-grounded clinical reasoning. final_classification depends on the LLM result (one of APPROPRIATE, INAPPROPRIATE, NEEDS_REVIEW, INSUFFICIENT_EVIDENCE).",
+    range: "Hb ≥ 10 g/dL",
+    ruleOutput: "POTENTIALLY_INAPPROPRIATE",
+    routes: "LLM review",
+    rule: "High pre-transfusion Hb. Deterministic rule outputs POTENTIALLY_INAPPROPRIATE. The pipeline routes the row to the LLM, which may override on documented positive evidence.",
   },
 ];
 
@@ -37,6 +41,9 @@ const pillClass = (c: Tier["ruleOutput"]) =>
   c === "APPROPRIATE" ? "ba-pill ba-pill--ok"
   : c === "POTENTIALLY_INAPPROPRIATE" ? "ba-pill ba-pill--err"
   : "ba-pill ba-pill--warn";
+
+const routesPill = (r: Tier["routes"]) =>
+  r === "auto-classify" ? "ba-pill ba-pill--ok" : "ba-pill ba-pill--warn";
 ---
 
 <section class="hb-matrix" aria-label="3-tier Hb classification policy">
@@ -45,7 +52,8 @@ const pillClass = (c: Tier["ruleOutput"]) =>
       <tr>
         <th scope="col">Tier</th>
         <th scope="col">Hb range</th>
-        <th scope="col">Rule output / routing</th>
+        <th scope="col">Rule output</th>
+        <th scope="col">Routing</th>
         <th scope="col">Rule</th>
       </tr>
     </thead>
@@ -55,6 +63,7 @@ const pillClass = (c: Tier["ruleOutput"]) =>
           <th scope="row">{t.label}</th>
           <td>{t.range}</td>
           <td><span class={pillClass(t.ruleOutput)}>{t.ruleOutput}</span></td>
+          <td><span class={routesPill(t.routes)}>{t.routes}</span></td>
           <td>{t.rule}</td>
         </tr>
       ))}

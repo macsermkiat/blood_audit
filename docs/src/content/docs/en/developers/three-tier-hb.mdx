@@ -5,46 +5,67 @@ description: The deterministic policy that classifies every RBC transfusion orde
 
 import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
 
-The deterministic classifier is the **authoritative** decision layer.
-The LLM is only invoked for Tier 3 (Hb above 10 g/dL).
+The deterministic classifier is the **authoritative** decision layer for
+auto-classified rows. Rule output is one of three Hb-tier labels;
+**both** the `NEEDS_REVIEW` and `POTENTIALLY_INAPPROPRIATE` tiers route
+to the LLM for additional reasoning.
 
 <HbTierMatrix />
 
-## The acute-blood-loss override
+## Precedence order (top wins)
 
-The override is the only pathway that bypasses the Hb threshold. It fires
-only when **all** of these are documented:
+The Hb-tier rule is only step 8 in the classifier. Earlier checks can
+short-circuit the result:
 
-- Procedure-proximal anchor datetime (within an active surgical or
-  procedural episode).
-- Delta-Hb meets one of:
+1. `Hb missing` → `INSUFFICIENT_EVIDENCE`
+2. Cohort `MTP` (massive transfusion protocol) → `APPROPRIATE`
+3. Cohort `UNKNOWN` → `NEEDS_REVIEW`
+4. Peri-procedural anchor ≤ 6h → `APPROPRIATE`
+5. Delta-Hb trigger → `APPROPRIATE`
+6. Hemodilution (Hb < threshold + ≥ 2L crystalloid / 4h) → `NEEDS_REVIEW`
+7. Single-low-Hb-no-trend (isolated Hb < 8 + no prior 24h Hb) → `NEEDS_REVIEW`
+8. Hb-tier rule (the matrix above)
+
+## The bypass paths to `APPROPRIATE`
+
+Two bypasses can promote a sub-threshold row to `APPROPRIATE` without
+the Hb-tier rule running:
+
+- **Peri-procedural ≤ 6h** — the order is within 6 hours of an active
+  surgical or procedural episode.
+- **Delta-Hb trigger** (the "acute-blood-loss override") — a documented
+  delta-Hb meets one of:
   - ≥ 1.5 g/dL drop within 6 hours
   - ≥ 2.0 g/dL drop within 12 hours
   - ≥ 2.5 g/dL drop within 24 hours
 
-Vital signs (low BP, high HR) are **supporting evidence only**. They never
-override the Hb tier on their own.
+Vital signs (low BP, high HR) are **supporting evidence only**. They
+never trigger a bypass on their own and never override the Hb tier.
 
 ## Why vitals are not standalone
 
 Hemoglobin is the published threshold in KCMH PR 17.2 and AABB 2023.
-Vital-sign-driven transfusion is a discretionary clinical judgment outside
-the audit's deterministic scope. Vitals enter the LLM evidence bundle for
-Tier 3 reasoning; they do not change the deterministic classification.
+Vital-sign-driven transfusion is a discretionary clinical judgment
+outside the audit's deterministic scope. Vitals enter the LLM evidence
+bundle when a row routes to the LLM; they do not change the
+deterministic classification.
 
-## Cohort thresholds
+## Cohort thresholds (typical)
 
 | Cohort | Hb threshold for `APPROPRIATE` |
 | --- | --- |
-| ICU | ≤ 7.0 g/dL |
-| Non-ICU (medicine, surgery, oncology) | ≤ 8.0 g/dL |
+| ICU | < 7.0 g/dL |
+| Non-ICU (medicine, surgery, oncology) | < 8.0 g/dL |
 
 Cohort assignment comes from `bba.cohort_detector` and uses procedure-code
 proximity, ward, and admission service.
 
 ## Where this lives in code
 
-- `src/bba/deterministic_classifier/` — the rule engine.
+- `src/bba/deterministic_classifier/classifier.py` — the rule engine
+  with the full 8-step precedence list.
 - `src/bba/cohort_detector/` — cohort assignment.
+- `src/bba/audit_pipeline/pipeline.py` — routes `NEEDS_REVIEW` and
+  `POTENTIALLY_INAPPROPRIATE` rule outputs to the LLM stage.
 - Policy text (paraphrased above): see KCMH PR 17.2 and the internal
   3-tier Hb specification.
