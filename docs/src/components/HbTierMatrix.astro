@@ -44,31 +44,40 @@ const pillClass = (c: Tier["ruleOutput"]) =>
 
 const routesPill = (r: Tier["routes"]) =>
   r === "auto-classify" ? "ba-pill ba-pill--ok" : "ba-pill ba-pill--warn";
+
+const tierNumber = (label: string) => label.replace(/[^0-9]/g, "") || "—";
 ---
 
 <section class="hb-matrix" aria-label="3-tier Hb classification policy">
-  <table class="hb-matrix__table">
-    <thead>
-      <tr>
-        <th scope="col">Tier</th>
-        <th scope="col">Hb range</th>
-        <th scope="col">Rule output</th>
-        <th scope="col">Routing</th>
-        <th scope="col">Rule</th>
-      </tr>
-    </thead>
-    <tbody>
-      {tiers.map((t) => (
+  <div class="hb-matrix__table-wrap">
+    <table class="hb-matrix__table">
+      <thead>
         <tr>
-          <th scope="row">{t.label}</th>
-          <td>{t.range}</td>
-          <td><span class={pillClass(t.ruleOutput)}>{t.ruleOutput}</span></td>
-          <td><span class={routesPill(t.routes)}>{t.routes}</span></td>
-          <td>{t.rule}</td>
+          <th scope="col" class="hb-matrix__th-tier">Tier</th>
+          <th scope="col">Hb range</th>
+          <th scope="col">Rule output</th>
+          <th scope="col">Routing</th>
+          <th scope="col">Rule</th>
         </tr>
-      ))}
-    </tbody>
-  </table>
+      </thead>
+      <tbody>
+        {tiers.map((t) => (
+          <tr>
+            <th scope="row" class="hb-matrix__tier-cell">
+              <span class="hb-matrix__tier-number" aria-hidden="true">
+                {tierNumber(t.label)}
+              </span>
+              <span class="hb-matrix__tier-label">{t.label}</span>
+            </th>
+            <td class="hb-matrix__range">{t.range}</td>
+            <td><span class={pillClass(t.ruleOutput)}>{t.ruleOutput}</span></td>
+            <td><span class={routesPill(t.routes)}>{t.routes}</span></td>
+            <td class="hb-matrix__rule">{t.rule}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
   <p class="hb-matrix__note">
     Vitals (BP, HR, urine output, temperature) are <strong>supporting evidence only</strong>.
     They never override the Hb-based tier on their own. The acute-blood-loss override is
@@ -77,24 +86,80 @@ const routesPill = (r: Tier["routes"]) =>
 </section>
 
 <style>
-  .hb-matrix { margin: 1rem 0; }
+  .hb-matrix {
+    margin: 1.25rem 0;
+  }
+  .hb-matrix__table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.625rem;
+    background: var(--sl-color-bg-nav);
+  }
   .hb-matrix__table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 0.9rem;
+    font-size: 0.9375rem;
+    margin: 0;
   }
   .hb-matrix__table th,
   .hb-matrix__table td {
-    border: 1px solid var(--sl-color-gray-5);
-    padding: 0.5rem 0.75rem;
+    padding: 0.625rem 0.75rem;
     text-align: left;
     vertical-align: top;
+    line-height: 1.5;
+    border-bottom: 1px solid var(--sl-color-gray-6);
+  }
+  .hb-matrix__table tbody tr:last-child th,
+  .hb-matrix__table tbody tr:last-child td {
+    border-bottom: 0;
+  }
+  .hb-matrix__table tbody tr:nth-child(even) {
+    background: color-mix(in oklch, var(--sl-color-gray-6) 50%, transparent);
   }
   .hb-matrix__table thead th {
     background: var(--sl-color-gray-6);
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--sl-color-gray-2);
+  }
+  .hb-matrix__th-tier {
+    width: 6.5rem;
+  }
+  .hb-matrix__tier-cell {
+    font-weight: 600;
+    color: var(--sl-color-white);
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+  }
+  .hb-matrix__tier-number {
+    font-family: var(--ba-font-mono);
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--sl-color-accent);
+    line-height: 1;
+  }
+  .hb-matrix__tier-label {
+    font-size: 0.8125rem;
+    color: var(--sl-color-gray-2);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+  }
+  .hb-matrix__range {
+    color: var(--sl-color-gray-2);
+    font-feature-settings: "tnum" 1;
+  }
+  .hb-matrix__rule {
+    color: var(--sl-color-gray-2);
+    max-width: 36rem;
   }
   .hb-matrix__note {
-    margin-top: 0.75rem;
+    margin: 0.875rem 0 0;
     font-size: 0.9rem;
+    color: var(--sl-color-gray-2);
+    line-height: 1.55;
   }
 </style>

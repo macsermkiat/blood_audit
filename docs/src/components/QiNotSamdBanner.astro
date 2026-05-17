@@ -3,25 +3,134 @@ interface Props {
   variant?: "default" | "compact";
 }
 const { variant = "default" } = Astro.props;
+const isDefault = variant === "default";
 ---
 
-<aside class="ba-card ba-card--accent qi-banner" data-variant={variant} aria-label="Quality Improvement scope">
-  <p class="ba-card__title">Quality Improvement &mdash; not clinical decision support</p>
-  {variant === "default" && (
-    <p>
-      blood_audit is a <strong>post-hoc</strong> audit pipeline. It reads finished HOSxP
-      exports and classifies completed RBC transfusions for quality review. It is
-      <strong> not</strong> SaMD, does not influence transfusion orders at the point of
-      care, and has no real-time clinical decision support pathway.
+<aside
+  class:list={[
+    "ba-card",
+    "ba-card--accent",
+    "qi-banner",
+    `qi-banner--${variant}`,
+    isDefault && "ba-reveal",
+  ]}
+  data-variant={variant}
+  aria-label="Quality Improvement scope"
+>
+  <div class="qi-banner__inner">
+    <span class="qi-banner__tag">scope</span>
+    <p class="qi-banner__title">
+      Quality Improvement, not clinical decision support.
     </p>
-  )}
-  {variant === "compact" && (
-    <p>Post-hoc audit. Not SaMD. No point-of-care alerts.</p>
-  )}
+    {isDefault && (
+      <p class="qi-banner__body">
+        blood_audit is a <strong>post-hoc</strong> audit pipeline. It reads finished
+        HOSxP exports and classifies completed RBC transfusions for quality review.
+        It is <strong>not</strong> SaMD, does not influence transfusion orders at
+        the point of care, and has no real-time clinical decision support pathway.
+      </p>
+    )}
+    {!isDefault && (
+      <p class="qi-banner__body">Post-hoc audit. Not SaMD. No point-of-care alerts.</p>
+    )}
+  </div>
 </aside>
 
 <style>
   .qi-banner {
-    margin: 1.5rem 0;
+    margin: 1.5rem 0 2rem;
+  }
+  .qi-banner__inner {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.5rem 1rem;
+    align-items: start;
+  }
+  .qi-banner__tag {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--sl-color-accent);
+    padding-top: 0.2rem;
+    grid-row: 1 / span 2;
+    border-right: 1px solid var(--sl-color-accent);
+    padding-right: 1rem;
+    align-self: stretch;
+  }
+  .qi-banner__title {
+    margin: 0;
+    font-weight: 700;
+    font-size: 1.0625rem;
+    line-height: 1.4;
+    color: var(--sl-color-white);
+  }
+  .qi-banner__body {
+    margin: 0;
+    grid-column: 2;
+    color: var(--sl-color-gray-2);
+    line-height: 1.6;
+  }
+  .qi-banner--compact {
+    margin: 1rem 0 1.25rem;
+    padding: 0.625rem 0.875rem;
+  }
+  .qi-banner--compact .qi-banner__title {
+    font-size: 0.875rem;
+  }
+  .qi-banner--compact .qi-banner__body {
+    font-size: 0.8125rem;
+  }
+  .qi-banner--compact .qi-banner__tag {
+    font-size: 0.625rem;
+    padding-right: 0.75rem;
+  }
+  @media (max-width: 30rem) {
+    .qi-banner__inner {
+      grid-template-columns: 1fr;
+    }
+    .qi-banner__tag {
+      grid-row: auto;
+      border-right: none;
+      padding-right: 0;
+      padding-bottom: 0.25rem;
+    }
+    .qi-banner__body {
+      grid-column: 1;
+    }
   }
 </style>
+
+<script>
+  // Global reveal-on-scroll observer. Idempotent: only attaches once.
+  // Defined here because QiNotSamdBanner is on every entry-point page.
+  if (typeof window !== "undefined" && !(window as any).__baRevealInit) {
+    (window as any).__baRevealInit = true;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reducedMotion) {
+      document.querySelectorAll(".ba-reveal").forEach((el) => {
+        el.classList.add("is-visible");
+      });
+    } else {
+      const observer = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              entry.target.classList.add("is-visible");
+              observer.unobserve(entry.target);
+            }
+          });
+        },
+        { rootMargin: "0px 0px -8% 0px", threshold: 0.05 },
+      );
+      const attach = () => {
+        document.querySelectorAll(".ba-reveal:not(.is-visible)").forEach((el) => {
+          observer.observe(el);
+        });
+      };
+      attach();
+      // Re-scan after Starlight client-side route swaps if they happen.
+      document.addEventListener("astro:after-swap", attach);
+    }
+  }
+</script>

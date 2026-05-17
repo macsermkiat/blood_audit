@@ -37,39 +37,83 @@ const defaultVars: EnvVar[] = [
 const { vars = defaultVars } = Astro.props;
 
 const phaseLabel = (phase: EnvVar["phase"]) =>
-  phase === "1" ? "required (Phase 1)" : "Phase 1.5";
+  phase === "1" ? "required · Phase 1" : "Phase 1.5";
 
 const phasePill = (phase: EnvVar["phase"]) =>
   phase === "1" ? "ba-pill ba-pill--err" : "ba-pill ba-pill--warn";
 ---
 
 <section class="env-checklist" aria-label="blood_audit environment variables">
-  <ul class="ba-stack" role="list">
+  <ul class="env-checklist__list" role="list">
     {vars.map((v) => (
-      <li class="ba-card env-row">
-        <div class="ba-row env-row__head">
-          <code class="env-name">{v.name}</code>
+      <li class="env-row">
+        <div class="env-row__head">
+          <code class="env-row__name">{v.name}</code>
           <span class={phasePill(v.phase)}>{phaseLabel(v.phase)}</span>
         </div>
-        <p class="env-purpose">{v.purpose}</p>
-        <code class="env-example">{v.example}</code>
+        <p class="env-row__purpose">{v.purpose}</p>
+        <code class="env-row__example" aria-label="Example value">{v.example}</code>
       </li>
     ))}
   </ul>
 </section>
 
 <style>
-  .env-checklist { margin: 1rem 0; }
-  .env-row__head { margin-bottom: 0.5rem; }
-  .env-name { font-size: 1rem; font-weight: 600; }
-  .env-purpose { margin: 0.25rem 0; }
-  .env-example {
+  .env-checklist {
+    margin: 1.25rem 0;
+  }
+  .env-checklist__list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.625rem;
+    padding: 0;
+    margin: 0;
+    list-style: none;
+  }
+  .env-row {
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    padding: 0.75rem 0.875rem 0.875rem;
+    background: var(--sl-color-bg-nav);
+    transition: border-color var(--ba-duration-fast) var(--ba-ease-out);
+  }
+  .env-row:hover {
+    border-color: var(--sl-color-gray-4);
+  }
+  .env-row__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.375rem;
+    flex-wrap: wrap;
+  }
+  .env-row__name {
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: var(--sl-color-white);
+    letter-spacing: 0;
+  }
+  .env-row__purpose {
+    margin: 0 0 0.5rem;
+    font-size: 0.9375rem;
+    color: var(--sl-color-gray-2);
+    line-height: 1.55;
+  }
+  .env-row__example {
     display: block;
-    margin-top: 0.5rem;
-    padding: 0.25rem 0.5rem;
-    background: var(--sl-color-gray-6);
-    border-radius: 0.25rem;
-    font-size: 0.85rem;
+    padding: 0.375rem 0.5rem;
+    background: var(--sl-color-bg);
+    border: 1px solid var(--sl-color-gray-6);
+    border-radius: 0.3125rem;
+    font-size: 0.8125rem;
+    color: var(--sl-color-gray-2);
     word-break: break-all;
+    line-height: 1.4;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .env-row {
+      transition: none;
+    }
   }
 </style>

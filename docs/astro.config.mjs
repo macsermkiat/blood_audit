@@ -1,5 +1,6 @@
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
+import tailwindcss from "@tailwindcss/vite";
 
 // Project site lives at https://macsermkiat.github.io/blood_audit/
 // `site` + `base` together control absolute asset URLs in the built output.
@@ -7,6 +8,9 @@ export default defineConfig({
   site: "https://macsermkiat.github.io",
   base: "/blood_audit",
   trailingSlash: "ignore",
+  vite: {
+    plugins: [tailwindcss()],
+  },
   integrations: [
     starlight({
       title: "blood_audit",

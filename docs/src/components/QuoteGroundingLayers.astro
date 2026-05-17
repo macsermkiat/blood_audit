@@ -10,14 +10,14 @@ interface Props {
 }
 
 const defaultLayers: Layer[] = [
-  { name: "1. NFC normalization", purpose: "Unicode-normalize quote and source to NFC before any compare." },
-  { name: "2. Substring match", purpose: "The quote must appear verbatim within the cited source document." },
-  { name: "3. cited_id resolution", purpose: "The source document referenced must exist in the evidence bundle." },
-  { name: "4. Within-doc uniqueness", purpose: "The quote must occur exactly once in the cited document — no ambiguity." },
-  { name: "5. Minimum length (≥ 25 chars)", purpose: "Rejects trivially generic quotes that could match by chance." },
-  { name: "6. Numeric-tuple agreement", purpose: "All numbers in the quote must match the structured evidence values." },
+  { name: "NFC normalization", purpose: "Unicode-normalize quote and source to NFC before any compare." },
+  { name: "Substring match", purpose: "The quote must appear verbatim within the cited source document." },
+  { name: "cited_id resolution", purpose: "The source document referenced must exist in the evidence bundle." },
+  { name: "Within-doc uniqueness", purpose: "The quote must occur exactly once in the cited document. No ambiguity." },
+  { name: "Minimum length (≥ 25 chars)", purpose: "Rejects trivially generic quotes that could match by chance." },
+  { name: "Numeric-tuple agreement", purpose: "All numbers in the quote must match the structured evidence values." },
   {
-    name: "7. Medical-NLI entailment (optional)",
+    name: "Medical-NLI entailment",
     purpose:
       "Semantic check: does the quote actually support the LLM's clinical claim? Opt-in per PRD §9. The verifier runs this layer only when the caller passes a non-null nli_gate; default call sites do not.",
     optional: true,
@@ -30,32 +30,95 @@ const { layers = defaultLayers } = Astro.props;
 <section class="grounding-layers" aria-label="Quote-grounding stack: 6 mandatory layers plus an optional NLI gate">
   <p class="grounding-layers__intro">
     Quote grounding is <strong>fail-closed and layered</strong>. The first six layers
-    always run; a failure on any of them sets <code>final_classification = NEEDS_REVIEW</code>
-    with <code>review_reason = "hallucination_suspect"</code>, never an
+    always run; a failure on any of them sets
+    <code>final_classification = NEEDS_REVIEW</code> with
+    <code>review_reason = "hallucination_suspect"</code>, never an
     <code>APPROPRIATE</code>/<code>INAPPROPRIATE</code> result row. None of those six
     layers may be mocked or short-circuited in tests. The seventh layer (medical-NLI)
     is opt-in.
   </p>
-  <ol class="ba-stack grounding-layers__list" role="list">
-    {layers.map((layer) => (
-      <li class:list={["ba-card grounding-layer", { "grounding-layer--optional": layer.optional }]}>
-        <div class="ba-row">
-          <p class="ba-card__title">{layer.name}</p>
-          {layer.optional && <span class="ba-pill ba-pill--warn">opt-in</span>}
+  <ol class="grounding-layers__list" role="list">
+    {layers.map((layer, idx) => (
+      <li class:list={["grounding-layer", { "grounding-layer--optional": layer.optional }]}>
+        <span class="grounding-layer__index" aria-hidden="true">
+          {String(idx + 1).padStart(2, "0")}
+        </span>
+        <div class="grounding-layer__body">
+          <div class="grounding-layer__head">
+            <p class="grounding-layer__name">{layer.name}</p>
+            {layer.optional && <span class="ba-pill ba-pill--warn">opt-in</span>}
+          </div>
+          <p class="grounding-layer__purpose">{layer.purpose}</p>
         </div>
-        <p class="grounding-layer__purpose">{layer.purpose}</p>
       </li>
     ))}
   </ol>
 </section>
 
 <style>
-  .grounding-layers { margin: 1rem 0; }
-  .grounding-layers__intro { margin-bottom: 0.75rem; }
-  .grounding-layers__list { list-style: none; padding: 0; margin: 0; }
-  .grounding-layer__purpose { margin: 0; }
+  .grounding-layers {
+    margin: 1.25rem 0;
+  }
+  .grounding-layers__intro {
+    margin: 0 0 0.875rem;
+    max-width: 70ch;
+  }
+  .grounding-layers__list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .grounding-layer {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.875rem;
+    padding: 0.75rem 0.875rem 0.875rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    background: var(--sl-color-bg-nav);
+    transition: border-color var(--ba-duration-fast) var(--ba-ease-out);
+  }
+  .grounding-layer:hover {
+    border-color: var(--sl-color-gray-4);
+  }
   .grounding-layer--optional {
     border-style: dashed;
-    opacity: 0.92;
+    background: transparent;
+  }
+  .grounding-layer__index {
+    font-family: var(--ba-font-mono);
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--sl-color-accent);
+    line-height: 1.4;
+  }
+  .grounding-layer__body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .grounding-layer__head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.625rem;
+    flex-wrap: wrap;
+  }
+  .grounding-layer__name {
+    margin: 0;
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+  .grounding-layer__purpose {
+    margin: 0;
+    color: var(--sl-color-gray-2);
+    line-height: 1.55;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .grounding-layer {
+      transition: none;
+    }
   }
 </style>
