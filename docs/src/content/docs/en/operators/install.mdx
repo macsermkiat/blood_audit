@@ -1,0 +1,49 @@
+---
+title: Install
+description: Install blood_audit with uv and verify the CLI.
+---
+
+## Prerequisites
+
+| Requirement | Version |
+| --- | --- |
+| Python | ≥ 3.13 |
+| uv | ≥ 0.9.24 |
+| PostgreSQL | ≥ 14 (psycopg3 driver) |
+| Docker (for tests only) | latest |
+
+## Clone and sync
+
+```bash
+git clone https://github.com/macsermkiat/blood_audit.git
+cd blood_audit
+uv sync --frozen
+```
+
+The lockfile is frozen. **Do not set `UV_LOCKED=1`** — it conflicts with
+`--frozen` in uv ≥ 0.9.
+
+## Verify the CLI
+
+```bash
+uv run bba --help
+```
+
+You should see six subcommands. Four of them — `evaluate`, `report`,
+`serve-dashboard`, `sentinel` — raise `CliError` by design. That is
+**not a bug**; see [Integration seams](/blood_audit/en/operators/integration-seams/).
+
+## GitHub Pages one-time setup (docs site only)
+
+Skip this if you are operating the pipeline, not publishing this docs site.
+
+If you are publishing this docs site from your own fork:
+
+1. Repository settings → **Pages** → Source: **GitHub Actions**.
+2. Merge a change touching `docs/**` to `main`.
+3. The `deploy-docs` workflow builds and deploys; the Pages URL lands in
+   the run summary.
+
+## Next steps
+
+Configure [environment variables](/blood_audit/en/operators/env-vars/).

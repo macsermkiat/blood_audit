@@ -1,0 +1,43 @@
+---
+title: Report schema
+description: The column-by-column report contract lives in docs/report-schema.md; key shape summarized here.
+---
+
+The authoritative report schema lives in
+[`docs/report-schema.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/report-schema.md).
+This page is a navigation aid.
+
+## Sections (six CSVs + PDF)
+
+| Section | File pattern |
+| --- | --- |
+| Hospital trend | `hospital_trend.csv` |
+| Ward scorecard | `ward_scorecard.csv` |
+| Physician own-view | `physician_<id>.csv` (one per reviewing clinician) |
+| Indication breakdown | `indication_breakdown.csv` |
+| Cohort breakdown | `cohort_breakdown.csv` |
+| Health-state breakdown | `health_state_breakdown.csv` |
+
+## PDF filename contract
+
+The combined PDF summary embeds the `run_id` so every distributed copy
+traces back to the producing run. See `docs/report-schema.md` for the
+exact pattern.
+
+## Common columns
+
+Across all six sections, expect:
+
+- `run_id` — the SHA-256 key for the producing run.
+- `period_start`, `period_end` — the audit window.
+- `classification` — one of `APPROPRIATE`, `POTENTIALLY_INAPPROPRIATE`,
+  `LLM_REVIEW`, or (rarely) `hallucination_suspect`.
+
+Section-specific columns are documented in the source file.
+
+## How this is produced
+
+`bba.report_generator.generate_monthly_report(inputs: ReportInputs)`. The
+CLI wrapper (`bba report`) is an
+[integration seam](/blood_audit/en/operators/integration-seams/) in
+Phase 1 — wire `ReportInputs` from your deployment's data sources.

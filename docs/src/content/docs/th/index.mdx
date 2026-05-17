@@ -1,0 +1,46 @@
+---
+title: blood_audit
+description: ระบบตรวจสอบการให้เลือดแดงเข้มข้น (RBC) สำหรับโรงพยาบาลจุฬาฯ เทียบกับ PR 17.2 และ AABB 2023
+template: splash
+hero:
+  tagline: ระบบออดิทย้อนหลังการให้เลือดแดงเข้มข้นในผู้ป่วยในผู้ใหญ่ ณ KCMH เทียบกับ PR 17.2 + AABB 2023
+  actions:
+    - text: ติดตั้งและรันออดิทครั้งแรก
+      link: /blood_audit/th/operators/install/
+      icon: right-arrow
+      variant: primary
+    - text: ดูบน GitHub
+      link: https://github.com/macsermkiat/blood_audit
+      icon: external
+      variant: minimal
+---
+
+import QiNotSamdBanner from "../../../components/QiNotSamdBanner.astro";
+import PipelineDiagram from "../../../components/PipelineDiagram.astro";
+
+<QiNotSamdBanner />
+
+## blood_audit ทำอะไร
+
+อ่านข้อมูลส่งออกจาก HOSxP ที่เสร็จสมบูรณ์แล้ว จัดประเภทการให้เลือดแต่ละครั้ง
+ตาม **นโยบายฮีโมโกลบิน 3-ชั้น** พร้อมเกณฑ์เฉพาะกลุ่มผู้ป่วยและกลไก override
+สำหรับภาวะเสียเลือดเฉียบพลัน แล้วบันทึกผลออดิทต่อหน่วยเลือด:
+
+- `APPROPRIATE` — Hb ต่ำกว่าเกณฑ์ของกลุ่ม (หรือ acute-blood-loss override ทำงาน)
+- `POTENTIALLY_INAPPROPRIATE` — Hb สูงกว่าเกณฑ์และไม่มีเงื่อนไข override
+- `LLM_REVIEW` — Hb สูงกว่า 10 g/dL ส่งให้ LLM อ่านพร้อม quote-grounding
+
+มีระบบป้องกัน hallucination แบบ fail-closed 6 ชั้นสำหรับทุกแถว LLM_REVIEW
+แต่ deterministic classifier ยังคงเป็นผู้ตัดสินใจหลัก
+
+## 12 ขั้นตอนของ pipeline
+
+<PipelineDiagram />
+
+## ขั้นถัดไป
+
+- **ผู้ดูแลระบบ (KCMH IT):** เริ่มที่ [ติดตั้ง](/blood_audit/th/operators/install/) และ
+  [3 environment variables ที่จำเป็น](/blood_audit/th/operators/env-vars/) จากนั้นรัน
+  [ออดิทครั้งแรก](/blood_audit/th/operators/first-audit-run/)
+- **นักพัฒนา:** ดู [Architecture](/blood_audit/en/developers/architecture/) (เอกสารภาษาอังกฤษ)
+- **ผู้ทบทวนทางคลินิก:** อ่าน [นี่คืออะไร](/blood_audit/th/clinical/what-this-is/)

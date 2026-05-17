@@ -1,0 +1,67 @@
+---
+title: First audit run
+description: Run bba ingest and bba audit end-to-end against a HOSxP export.
+---
+
+import CliCommandCard from "../../../../components/CliCommandCard.astro";
+
+This page walks the happy path: a HOSxP export goes in, a populated
+`audit_store` Postgres table comes out.
+
+## 1. Ingest the export bundle
+
+<CliCommandCard
+  command="bba ingest INPUT_CSV --schema-version v1"
+  summary="Validates the HOSxP CSV bundle, hashes inputs, and writes a DuckDB + Parquet snapshot under $BBA_DATA_DIR."
+  flags={[
+    { name: "INPUT_CSV", description: "Path to the primary HOSxP export CSV.", required: true },
+    { name: "--schema-version v1", description: "Schema fingerprint to record with the snapshot." },
+  ]}
+  envVars={["BBA_DATA_DIR"]}
+  example={`uv run bba ingest /var/data/exports/PHI_xxx_001.csv --schema-version v1`}
+/>
+
+A successful ingest prints a `run_id` derived from
+`sha256(input_csv_hash + schema_fingerprint + code_version)`.
+Record this value — every downstream command keys off it.
+
+## 2. Run the audit
+
+<CliCommandCard
+  command="bba audit --input INPUT_CSV"
+  summary="Runs the full 12-stage pipeline against the ingested bundle and writes audit rows to Postgres."
+  flags={[
+    { name: "--input INPUT_CSV", description: "Same CSV path used for ingest." },
+    { name: "--run-id RUN_ID", description: "Re-run an existing snapshot by run_id (alternative to --input)." },
+    { name: "--force", description: "Override idempotency. Writes a compliance row to audit_log explaining why." },
+  ]}
+  envVars={["BBA_DATA_DIR", "BBA_DB_URL", "ANTHROPIC_API_KEY"]}
+  example={`uv run bba audit --input /var/data/exports/PHI_xxx_001.csv`}
+/>
+
+The audit is **idempotent**. Re-running the same CSV is a no-op unless
+`--force` is passed. The completion row in `audit_log` records every run,
+forced or otherwise.
+
+## 3. Inspect the results
+
+The four CLI subcommands that would surface the results
+(`evaluate`, `report`, `serve-dashboard`, `sentinel`) raise `CliError` in
+Phase 1 — see [Integration seams](/blood_audit/en/operators/integration-seams/).
+For now, query Postgres directly:
+
+```sql
+SELECT classification, COUNT(*) AS n
+FROM audit_store
+WHERE run_id = 'YOUR_RUN_ID'
+GROUP BY classification;
+```
+
+Expected output: counts for `APPROPRIATE`, `POTENTIALLY_INAPPROPRIATE`,
+`LLM_REVIEW`, and (if any failed grounding) `hallucination_suspect`.
+
+## Next steps
+
+- [Ingest CSV](/blood_audit/en/operators/ingest-csv/) — expected input shape.
+- [audit command](/blood_audit/en/operators/audit-command/) — every flag.
+- [Troubleshooting](/blood_audit/en/operators/troubleshooting/) — common failures.

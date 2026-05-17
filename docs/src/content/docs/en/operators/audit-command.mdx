@@ -1,0 +1,53 @@
+---
+title: audit command
+description: Every flag of bba audit, the inputs it reads, and its idempotency contract.
+---
+
+import CliCommandCard from "../../../../components/CliCommandCard.astro";
+
+`bba audit` is the only wired write path in Phase 1. It runs the full
+12-stage pipeline, classifies each RBC transfusion, and writes audit rows
+to Postgres. The four post-audit subcommands (`evaluate`, `report`,
+`serve-dashboard`, `sentinel`) are [integration seams](/blood_audit/en/operators/integration-seams/).
+
+<CliCommandCard
+  command="bba audit"
+  summary="Run the deterministic + LLM audit against a HOSxP snapshot."
+  flags={[
+    { name: "--input INPUT_CSV", description: "Path to the CSV to ingest + audit in one step." },
+    { name: "--run-id RUN_ID", description: "Audit an already-ingested snapshot by run_id (alternative to --input)." },
+    { name: "--force", description: "Override run-level idempotency. Writes a compliance row to audit_log." },
+  ]}
+  envVars={["BBA_DATA_DIR", "BBA_DB_URL", "ANTHROPIC_API_KEY"]}
+  exitCodes={[
+    { code: 0, meaning: "All rows audited and persisted (or no-op if run_id already complete)." },
+    { code: 1, meaning: "CliError — missing env var, bad DSN, ingest failure, or Batch API failure." },
+  ]}
+  example={`uv run bba audit --input /var/data/exports/PHI_xxx_001.csv`}
+/>
+
+## Either `--input` or `--run-id`, not both
+
+Choose `--input` for first-time audits (ingest + audit in one step) or
+`--run-id` to re-run audit against an existing snapshot.
+
+## `--force` writes a compliance row
+
+When `--force` is set, the pipeline writes an entry to `audit_log`
+documenting **why** the re-run was forced. This preserves the audit trail
+for the QI committee. Do not bypass this by editing the database directly.
+
+## Batch API resume semantics
+
+Each LLM_REVIEW row corresponds to a `batch_runs` row with state
+`pending → submitted → partial → complete` (`failed` is a terminal sink).
+If the process crashes mid-Batch, the next `bba audit` invocation resumes
+from `submitted`/`partial` rows. You will not lose work.
+
+## What never happens
+
+- The audit does not modify any HOSxP table.
+- The audit never emits real-time alerts. This is QI, not SaMD.
+- The audit cannot accidentally produce two rows for the same
+  `(run_id, encounter_id)` — that invariant lives in the store layer and
+  is non-negotiable.

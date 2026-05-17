@@ -1,0 +1,32 @@
+---
+interface Props {
+  command: string;
+  missingGlue: string;
+  rationale?: string;
+}
+
+const { command, missingGlue, rationale } = Astro.props;
+---
+
+<article class="ba-card ba-card--warning seam-card">
+  <header class="ba-row seam-card__head">
+    <code class="seam-card__cmd">{command}</code>
+    <span class="ba-pill ba-pill--warn">Integration seam</span>
+  </header>
+  <p>
+    Raises <code>CliError</code> by design. The underlying module ships and is tested;
+    the CLI hand-off awaits deployment-specific glue that does not belong in Phase 1.
+  </p>
+  <p>
+    <strong>Missing glue:</strong> {missingGlue}
+  </p>
+  {rationale && (
+    <p class="seam-card__rationale"><strong>Why:</strong> {rationale}</p>
+  )}
+</article>
+
+<style>
+  .seam-card { margin: 1rem 0; }
+  .seam-card__cmd { font-size: 1rem; font-weight: 600; }
+  .seam-card__rationale { margin-top: 0.5rem; }
+</style>

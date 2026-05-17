@@ -1,0 +1,54 @@
+---
+title: What this is
+description: A post-hoc audit pipeline for KCMH RBC transfusions. Not point-of-care CDS.
+---
+
+import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
+
+<QiNotSamdBanner />
+
+## In one paragraph
+
+blood_audit is a **post-hoc** audit pipeline for inpatient adult RBC
+transfusions at Chulalongkorn Hospital. It reads finished HOSxP exports
+after the transfusion has already occurred and classifies each unit as
+`APPROPRIATE`, `LLM_REVIEW`, or `POTENTIALLY_INAPPROPRIATE` against
+KCMH PR 17.2 + AABB 2023 with a 3-tier hemoglobin policy, cohort-aware
+thresholds, and an acute-blood-loss override.
+
+## What it is not
+
+- **Not Software as a Medical Device.** Nothing in this codebase influences
+  a transfusion order at the point of care.
+- **Not real-time.** No subscriber to the audit stream emits clinician
+  alerts. No POC dashboard pushes recommendations.
+- **Not a single-physician scorecard.** Per-physician views exist for the
+  reviewing clinician's own audit (own-view layout); they are not a
+  quality scorecard for management review.
+
+If anyone asks for real-time CDS hooks, decline. That would move the
+project into SaMD territory and change everything: regulatory scope,
+review processes, deployment risk profile.
+
+## What it produces
+
+A monthly audit dataset for the QI committee. From this dataset, six
+report sections are derived:
+
+- Hospital-trend summary.
+- Ward-scorecard.
+- Physician own-view (per reviewer).
+- Indication breakdown.
+- Cohort breakdown.
+- Health-state breakdown.
+
+The report schema lives in [`docs/report-schema.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/report-schema.md)
+and is summarized at [Report output](/blood_audit/en/clinical/report-output/).
+
+## Anti-hallucination guarantees
+
+For rows that the deterministic classifier routes to `LLM_REVIEW`
+(Tier 3, Hb > 10 g/dL), the LLM's clinical reasoning is gated by
+[six fail-closed quote-grounding layers](/blood_audit/en/developers/quote-grounding/).
+A failed grounding routes the row to `hallucination_suspect`, not to a
+result row.

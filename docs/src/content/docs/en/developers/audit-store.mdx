@@ -1,0 +1,47 @@
+---
+title: Audit store
+description: How audit_store enforces run-level idempotency and provides resumable batch runs.
+---
+
+`bba.audit_store` is the persistence boundary. Every audited transfusion
+becomes a row keyed by `(run_id, encounter_id)`. Re-runs are no-ops by
+default; `--force` requires a compliance entry in `audit_log`.
+
+## Tables
+
+| Table | Purpose |
+| --- | --- |
+| `audit_store` | One row per audited transfusion. Includes classification, quote-grounded LLM reasoning (if any), and references to the evidence bundle. |
+| `audit_log` | Compliance trail. Every `bba audit` invocation appends a row, including `--force` re-runs. |
+| `batch_runs` | LLM Batch API state machine. Resumable across process restarts. |
+| `review_actions` | Per-physician review actions (when the dashboard integration seam is wired). |
+| `monitoring_alarms` | Sentinel and drift-detection events (structlog stub today; notification sinks in Phase 1.5). |
+
+## run_id formula
+
+```text
+run_id = sha256(input_csv_hash + schema_fingerprint + code_version)
+```
+
+Same input + same code = same `run_id`. The store refuses duplicate
+`(run_id, encounter_id)` writes. This invariant is non-negotiable; do
+not weaken it.
+
+## SQLAlchemy DSN normalization
+
+Use the canonical converter to feed any DSN into SQLAlchemy or Alembic:
+
+```python
+from bba.review_actions.models import ReviewActionsConfig
+dsn = ReviewActionsConfig.sqlalchemy_dsn(raw_dsn)
+```
+
+This guarantees the `+psycopg` driver suffix is in place. SQLAlchemy
+silently routes bare `postgresql://` to psycopg2, which this project
+does not ship.
+
+## Cold storage
+
+Audit rows older than 90 days are archived to Parquet under
+`$BBA_DATA_DIR/parquet/cold/`. Postgres retention can be adjusted in
+deployment, but the Parquet archive is authoritative.

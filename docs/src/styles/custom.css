@@ -1,0 +1,76 @@
+/*
+ * blood_audit docs — custom theme tokens.
+ *
+ * This file is intentionally minimal. Visual polish is deferred to a
+ * follow-up `/impeccable` pass. Component shells under src/components/
+ * are slot-based and themable via the CSS variables below.
+ */
+
+:root {
+  --sl-color-accent: #b91c1c;
+  --sl-color-accent-low: #fee2e2;
+  --sl-color-accent-high: #7f1d1d;
+}
+
+:root[data-theme="dark"] {
+  --sl-color-accent: #ef4444;
+  --sl-color-accent-low: #450a0a;
+  --sl-color-accent-high: #fca5a5;
+}
+
+/* Shared component primitives — components.css equivalents inlined here
+   to keep the v1 scaffold tree shallow. */
+.ba-card {
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  background: var(--sl-color-bg-nav);
+}
+
+.ba-card--accent {
+  border-color: var(--sl-color-accent);
+  background: var(--sl-color-accent-low);
+}
+
+.ba-card--warning {
+  border-left: 4px solid var(--sl-color-accent);
+}
+
+.ba-card__title {
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+}
+
+.ba-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.ba-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.ba-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.ba-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  background: var(--sl-color-gray-6);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.ba-pill--ok { background: #166534; color: #f0fdf4; }
+.ba-pill--warn { background: #92400e; color: #fffbeb; }
+.ba-pill--err { background: #7f1d1d; color: #fef2f2; }

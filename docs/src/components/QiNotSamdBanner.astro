@@ -1,0 +1,27 @@
+---
+interface Props {
+  variant?: "default" | "compact";
+}
+const { variant = "default" } = Astro.props;
+---
+
+<aside class="ba-card ba-card--accent qi-banner" data-variant={variant} aria-label="Quality Improvement scope">
+  <p class="ba-card__title">Quality Improvement &mdash; not clinical decision support</p>
+  {variant === "default" && (
+    <p>
+      blood_audit is a <strong>post-hoc</strong> audit pipeline. It reads finished HOSxP
+      exports and classifies completed RBC transfusions for quality review. It is
+      <strong> not</strong> SaMD, does not influence transfusion orders at the point of
+      care, and has no real-time clinical decision support pathway.
+    </p>
+  )}
+  {variant === "compact" && (
+    <p>Post-hoc audit. Not SaMD. No point-of-care alerts.</p>
+  )}
+</aside>
+
+<style>
+  .qi-banner {
+    margin: 1.5rem 0;
+  }
+</style>

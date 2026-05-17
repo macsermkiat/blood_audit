@@ -1,0 +1,55 @@
+---
+title: Environment variables
+description: The three environment variables blood_audit requires before any audit can run.
+---
+
+import EnvVarChecklist from "../../../../components/EnvVarChecklist.astro";
+
+blood_audit enforces a strict 3-variable contract. Missing or malformed
+values fail fast with `CliError` at startup — they never silently degrade.
+
+<EnvVarChecklist />
+
+## Important details
+
+### `BBA_DATA_DIR`
+
+Must be an **absolute path**. The directory must exist and be writable by
+the service user. Validated by `_resolve_data_dir()` in
+`src/bba/cli/main.py`. Holds:
+
+- DuckDB ingest snapshots
+- Parquet audit rows (cold storage)
+- Run-state completion markers used by idempotency
+
+### `BBA_DB_URL`
+
+Postgres DSN. Always use the `+psycopg` driver suffix — SQLAlchemy
+routes a bare `postgresql://` URL to psycopg2 by default, which is **not**
+the driver this project ships. Canonical converter:
+`bba.review_actions.models.ReviewActionsConfig.sqlalchemy_dsn`.
+
+Example:
+
+```text
+postgresql+psycopg://bba_user@db.internal:5432/blood_audit
+```
+
+### `ANTHROPIC_API_KEY`
+
+Required before `bba audit` invokes the Batch API. The cost guard in
+`src/bba/audit_pipeline/cost_guard.py` rejects live API access in tests
+to prevent accidental Batch submission during development.
+
+## Verify
+
+```bash
+env | grep -E '^(BBA_DATA_DIR|BBA_DB_URL|ANTHROPIC_API_KEY)='
+```
+
+All three lines should print. Values for `ANTHROPIC_API_KEY` should never
+be logged; redact before sharing terminal output.
+
+## Next steps
+
+Run your [first audit](/blood_audit/en/operators/first-audit-run/).

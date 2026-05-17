@@ -1,0 +1,45 @@
+---
+interface Layer {
+  name: string;
+  purpose: string;
+}
+
+interface Props {
+  layers?: Layer[];
+}
+
+const defaultLayers: Layer[] = [
+  { name: "1. NFC normalization", purpose: "Unicode-normalize quote and source to NFC before any compare." },
+  { name: "2. Substring match", purpose: "The quote must appear verbatim within the cited source document." },
+  { name: "3. cited_id resolution", purpose: "The source document referenced must exist in the evidence bundle." },
+  { name: "4. Within-doc uniqueness", purpose: "The quote must occur exactly once in the cited document — no ambiguity." },
+  { name: "5. Minimum length (≥ 25 chars)", purpose: "Rejects trivially generic quotes that could match by chance." },
+  { name: "6. Numeric-tuple agreement", purpose: "All numbers in the quote must match the structured evidence values." },
+  { name: "7. Medical NLI entailment", purpose: "Semantic check: does the quote actually support the LLM's clinical claim?" },
+];
+
+const { layers = defaultLayers } = Astro.props;
+---
+
+<section class="grounding-layers" aria-label="Six-layer quote-grounding stack">
+  <p class="grounding-layers__intro">
+    Quote grounding is <strong>fail-closed and layered</strong>. Any failure routes the
+    row to <code>hallucination_suspect</code> &mdash; never to a result row.
+    None of these layers may be mocked or short-circuited in tests.
+  </p>
+  <ol class="ba-stack grounding-layers__list" role="list">
+    {layers.map((layer) => (
+      <li class="ba-card grounding-layer">
+        <p class="ba-card__title">{layer.name}</p>
+        <p class="grounding-layer__purpose">{layer.purpose}</p>
+      </li>
+    ))}
+  </ol>
+</section>
+
+<style>
+  .grounding-layers { margin: 1rem 0; }
+  .grounding-layers__intro { margin-bottom: 0.75rem; }
+  .grounding-layers__list { list-style: none; padding: 0; margin: 0; }
+  .grounding-layer__purpose { margin: 0; }
+</style>

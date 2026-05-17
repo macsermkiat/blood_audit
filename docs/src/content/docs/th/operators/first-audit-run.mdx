@@ -1,0 +1,61 @@
+---
+title: รันออดิทครั้งแรก
+description: รัน bba ingest และ bba audit ครบจบจากข้อมูลส่งออก HOSxP
+---
+
+import CliCommandCard from "../../../../components/CliCommandCard.astro";
+
+เอกสารนี้พาเดิน happy path ตั้งแต่ข้อมูลส่งออกจาก HOSxP เข้าไป
+จนถึงตาราง `audit_store` ใน Postgres ที่มีข้อมูลครบ
+
+## 1. Ingest ชุดข้อมูล
+
+<CliCommandCard
+  command="bba ingest INPUT_CSV --schema-version v1"
+  summary="ตรวจสอบไฟล์ CSV HOSxP, hash inputs, และเขียน DuckDB + Parquet snapshot ลง $BBA_DATA_DIR"
+  flags={[
+    { name: "INPUT_CSV", description: "เส้นทางของ CSV หลักจาก HOSxP", required: true },
+    { name: "--schema-version v1", description: "schema fingerprint ที่จะบันทึกพร้อม snapshot" },
+  ]}
+  envVars={["BBA_DATA_DIR"]}
+  example={`uv run bba ingest /var/data/exports/PHI_xxx_001.csv --schema-version v1`}
+/>
+
+เมื่อ ingest สำเร็จจะพิมพ์ `run_id` ที่มาจาก
+`sha256(input_csv_hash + schema_fingerprint + code_version)`
+จดค่านี้ไว้ — ทุกคำสั่งถัดไปจะอ้างอิงด้วยค่านี้
+
+## 2. รัน audit
+
+<CliCommandCard
+  command="bba audit --input INPUT_CSV"
+  summary="รัน pipeline ครบ 12 ขั้นกับชุดข้อมูลที่ ingest แล้ว และเขียน audit rows ลง Postgres"
+  flags={[
+    { name: "--input INPUT_CSV", description: "เส้นทาง CSV เดียวกับที่ใช้ตอน ingest" },
+    { name: "--run-id RUN_ID", description: "รัน snapshot เดิมซ้ำด้วย run_id (ใช้แทน --input)" },
+    { name: "--force", description: "ข้าม idempotency จะเพิ่มแถว compliance ลง audit_log" },
+  ]}
+  envVars={["BBA_DATA_DIR", "BBA_DB_URL", "ANTHROPIC_API_KEY"]}
+  example={`uv run bba audit --input /var/data/exports/PHI_xxx_001.csv`}
+/>
+
+Audit เป็นแบบ **idempotent** การรันซ้ำด้วย CSV เดิมจะไม่ทำอะไรใหม่
+ยกเว้นใส่ `--force` แถว completion ใน `audit_log` จะบันทึกทุก ๆ การรัน
+ไม่ว่าจะเป็น forced หรือไม่
+
+## 3. ตรวจสอบผลลัพธ์
+
+Subcommand 4 ตัวที่ใช้ดูผลลัพธ์ (`evaluate`, `report`, `serve-dashboard`,
+`sentinel`) จะ raise `CliError` ใน Phase 1 — ดู
+[Integration seams](/blood_audit/en/operators/integration-seams/) (เอกสารภาษาอังกฤษ)
+ตอนนี้ให้ query Postgres ตรง ๆ:
+
+```sql
+SELECT classification, COUNT(*) AS n
+FROM audit_store
+WHERE run_id = 'YOUR_RUN_ID'
+GROUP BY classification;
+```
+
+ผลลัพธ์ที่คาดหวัง: จำนวน `APPROPRIATE`, `POTENTIALLY_INAPPROPRIATE`,
+`LLM_REVIEW` และ (ถ้ามีการ grounding ล้มเหลว) `hallucination_suspect`

@@ -1,0 +1,50 @@
+---
+title: blood_audit
+description: KCMH RBC transfusion audit pipeline — post-hoc quality-improvement audit against PR 17.2 + AABB 2023.
+template: splash
+hero:
+  tagline: Post-hoc audit of inpatient adult RBC transfusions at KCMH against PR 17.2 + AABB 2023.
+  actions:
+    - text: Install & first audit run
+      link: /blood_audit/en/operators/install/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/macsermkiat/blood_audit
+      icon: external
+      variant: minimal
+---
+
+import QiNotSamdBanner from "../../../components/QiNotSamdBanner.astro";
+import PipelineDiagram from "../../../components/PipelineDiagram.astro";
+
+<QiNotSamdBanner />
+
+## What blood_audit does
+
+Reads finished HOSxP exports, classifies each RBC transfusion against a
+**3-tier hemoglobin policy** with cohort-aware thresholds and an
+acute-blood-loss override, and emits an audit row per transfusion:
+
+- `APPROPRIATE` — Hb below the cohort threshold (or acute-blood-loss override fires).
+- `POTENTIALLY_INAPPROPRIATE` — Hb above threshold and no override conditions.
+- `LLM_REVIEW` — Hb above 10 g/dL, routed to an LLM for quote-grounded clinical reasoning.
+
+Six fail-closed quote-grounding layers protect every LLM_REVIEW row from
+hallucination. The deterministic classifier remains the authoritative source.
+
+## The 12 pipeline stages
+
+<PipelineDiagram />
+
+## Where to go next
+
+- **Operators (KCMH IT):** start with [Install](/blood_audit/en/operators/install/) and the
+  [3 required environment variables](/blood_audit/en/operators/env-vars/), then run the
+  [first audit](/blood_audit/en/operators/first-audit-run/).
+- **Developers maintaining `src/bba/`:** see the
+  [Architecture overview](/blood_audit/en/developers/architecture/) and the
+  [module glossary](/blood_audit/en/reference/module-glossary/).
+- **Clinical reviewers / QI committee:** read
+  [What this is](/blood_audit/en/clinical/what-this-is/) and the
+  [policy summary](/blood_audit/en/clinical/policy-summary/).
