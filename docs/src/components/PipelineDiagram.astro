@@ -1,0 +1,94 @@
+---
+interface Stage {
+  slug: string;
+  label: string;
+  module: string;
+}
+
+interface Props {
+  highlightStage?: string;
+}
+
+const stages: Stage[] = [
+  { slug: "ingest", label: "Ingest", module: "bba.ingest" },
+  { slug: "audit_orders", label: "Audit orders", module: "bba.audit_orders" },
+  { slug: "hb_lookup", label: "Hb lookup", module: "bba.hb_lookup" },
+  { slug: "vitals_extractor", label: "Vitals", module: "bba.vitals_extractor" },
+  { slug: "cohort_detector", label: "Cohort", module: "bba.cohort_detector" },
+  { slug: "deterministic_classifier", label: "Deterministic classify", module: "bba.deterministic_classifier" },
+  { slug: "evidence_bundle_builder", label: "Evidence bundle", module: "bba.evidence_bundle_builder" },
+  { slug: "deid_redactor", label: "De-identify", module: "bba.deid_redactor" },
+  { slug: "prompt_builder", label: "Prompt build", module: "bba.prompt_builder" },
+  { slug: "llm_client", label: "LLM batch", module: "bba.llm_client" },
+  { slug: "quote_grounder", label: "Quote ground", module: "bba.quote_grounder" },
+  { slug: "audit_store", label: "Audit store", module: "bba.audit_store" },
+];
+
+const { highlightStage } = Astro.props;
+---
+
+<figure class="pipeline" aria-label="blood_audit pipeline — 12 stages">
+  <ol class="pipeline__list" role="list">
+    {stages.map((s, idx) => (
+      <li
+        class:list={["pipeline__stage", { "pipeline__stage--active": s.slug === highlightStage }]}
+        data-slug={s.slug}
+      >
+        <span class="pipeline__index" aria-hidden="true">{idx + 1}</span>
+        <span class="pipeline__label">{s.label}</span>
+        <code class="pipeline__module">{s.module}</code>
+      </li>
+    ))}
+  </ol>
+  <figcaption class="pipeline__caption">
+    Happy-path stages of <code>bba audit</code>. Each stage is an importable subpackage
+    under <code>src/bba/</code>. Run-level idempotency is enforced at <code>audit_store</code>.
+  </figcaption>
+</figure>
+
+<style>
+  .pipeline {
+    margin: 1.5rem 0;
+    padding: 0;
+  }
+  .pipeline__list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+    gap: 0.5rem;
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .pipeline__stage {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.75rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    background: var(--sl-color-bg-nav);
+    position: relative;
+  }
+  .pipeline__stage--active {
+    border-color: var(--sl-color-accent);
+    background: var(--sl-color-accent-low);
+  }
+  .pipeline__index {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: var(--sl-color-gray-3);
+    letter-spacing: 0.05em;
+  }
+  .pipeline__label {
+    font-weight: 600;
+  }
+  .pipeline__module {
+    font-size: 0.75rem;
+    color: var(--sl-color-gray-2);
+  }
+  .pipeline__caption {
+    margin-top: 0.75rem;
+    font-size: 0.85rem;
+    color: var(--sl-color-gray-3);
+  }
+</style>

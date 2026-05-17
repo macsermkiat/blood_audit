@@ -1,0 +1,46 @@
+---
+title: Integration seams
+description: Four CLI subcommands raise CliError by design — they are deployment hand-offs, not bugs.
+---
+
+import IntegrationSeamCard from "../../../../components/IntegrationSeamCard.astro";
+
+Four subcommands of `bba` raise `CliError` when invoked in Phase 1. This is
+**by design**: the underlying modules ship and are tested, but the CLI
+hand-off requires deployment-specific wiring (auth, stores, resolvers)
+that does not belong in Phase 1. Do not "fix" them.
+
+<IntegrationSeamCard
+  command="bba evaluate --run-id RUN_ID"
+  missingGlue="Composition of bba.eval_harness primitives (stratified_sample, agreement, cluster_ci) into an end-to-end harness."
+  rationale="Phase 1 ships the primitives; the harness shape depends on which gold-standard cohort the deployment selects."
+/>
+
+<IntegrationSeamCard
+  command="bba report --run-id RUN_ID --format html|pdf|json"
+  missingGlue="A ReportInputs resolver that pulls from audit_store, monitoring, and review_actions in your deployment's combination."
+  rationale="The 6-section report schema is fixed in src/bba/report_generator/. The CLI does not know your deployment's data fan-in."
+/>
+
+<IntegrationSeamCard
+  command="bba serve-dashboard --port PORT"
+  missingGlue="A DashboardConfig with concrete store handles, PHI resolvers, and authentication middleware."
+  rationale="The FastAPI app exists in src/bba/dashboard/. Production auth and PHI handling vary per deployment."
+/>
+
+<IntegrationSeamCard
+  command="bba sentinel --weekly | --quarterly"
+  missingGlue="A deployment-side scheduler and a notification channel. The structlog stub ships now; Slack, email, and paging are Phase 1.5."
+  rationale="The sentinel already computes kappa (κ) agreement between reviewers and runs the sequential probability ratio test (SPRT) for golden-set drift. The deployment team decides who receives alerts and how."
+/>
+
+## Why fail loud instead of running with defaults?
+
+Each of these seams touches PHI, billing, or clinician notification. A
+silent default could leak data or alert the wrong people. The CLI surfaces
+the missing contract explicitly so the deployer wires it deliberately.
+
+## When will these be wired?
+
+Phase 1.5, after the M8 pilot signs off. Tracked under the
+deployment-readiness epic in the project repo, not as a code bug.

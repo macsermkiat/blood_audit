@@ -1,0 +1,93 @@
+---
+interface Flag {
+  name: string;
+  description: string;
+  required?: boolean;
+}
+
+interface Props {
+  command: string;
+  summary: string;
+  flags?: Flag[];
+  envVars?: string[];
+  exitCodes?: { code: number; meaning: string }[];
+  example?: string;
+}
+
+const {
+  command,
+  summary,
+  flags = [],
+  envVars = [],
+  exitCodes = [
+    { code: 0, meaning: "success" },
+    { code: 1, meaning: "CliError" },
+  ],
+  example,
+} = Astro.props;
+---
+
+<article class="ba-card cli-card">
+  <header class="ba-row cli-card__head">
+    <code class="cli-card__cmd">{command}</code>
+  </header>
+  <p class="cli-card__summary">{summary}</p>
+
+  {flags.length > 0 && (
+    <section class="cli-card__section">
+      <h4 class="ba-card__title">Flags</h4>
+      <ul role="list">
+        {flags.map((f) => (
+          <li>
+            <code>{f.name}</code>
+            {f.required && <span class="ba-pill ba-pill--err">required</span>}
+            {" — "}
+            {f.description}
+          </li>
+        ))}
+      </ul>
+    </section>
+  )}
+
+  {envVars.length > 0 && (
+    <section class="cli-card__section">
+      <h4 class="ba-card__title">Env vars consumed</h4>
+      <ul role="list">
+        {envVars.map((e) => <li><code>{e}</code></li>)}
+      </ul>
+    </section>
+  )}
+
+  <section class="cli-card__section">
+    <h4 class="ba-card__title">Exit codes</h4>
+    <ul role="list">
+      {exitCodes.map((c) => (
+        <li><code>{c.code}</code> — {c.meaning}</li>
+      ))}
+    </ul>
+  </section>
+
+  {example && (
+    <section class="cli-card__section">
+      <h4 class="ba-card__title">Example</h4>
+      <pre class="cli-card__example"><code>{example}</code></pre>
+    </section>
+  )}
+</article>
+
+<style>
+  .cli-card { margin: 1rem 0; }
+  .cli-card__cmd { font-size: 1rem; font-weight: 600; }
+  .cli-card__summary { margin: 0.5rem 0 0.75rem; }
+  .cli-card__section { margin-top: 0.75rem; }
+  .cli-card__section ul { margin: 0.25rem 0 0; padding-left: 1.25rem; }
+  .cli-card__section li { margin-bottom: 0.25rem; }
+  .cli-card__example {
+    margin: 0;
+    padding: 0.75rem;
+    background: var(--sl-color-gray-6);
+    border-radius: 0.375rem;
+    font-size: 0.85rem;
+    overflow-x: auto;
+  }
+</style>

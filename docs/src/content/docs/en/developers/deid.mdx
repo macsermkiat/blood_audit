@@ -1,0 +1,44 @@
+---
+title: De-identification
+description: How the deid_redactor protects PHI before any cross-container hop.
+---
+
+`bba.deid_redactor` runs between `evidence_bundle_builder` and
+`prompt_builder`. It is non-optional. No audit row reaches the LLM without
+passing through this stage.
+
+## What it redacts
+
+- Hospital numbers (HN), admission numbers (AN), and request numbers
+  (REQNO).
+- Patient names (when present in free-text notes).
+- Exact dates of birth.
+- Identifying age components for patients ≥ 90 (replaced with
+  "≥ 90 years").
+- Specific dates within free-text notes (replaced with relative offsets).
+
+## Where the patterns live
+
+The PHI regex set is exposed as `bba.deid_redactor.PHI_REGEXES`. Reuse
+it; never duplicate. Tests that need PHI-shaped fixtures should generate
+synthetic placeholders matching the canonical mapping:
+
+```text
+HN: PHI_xxx_001
+AN: PHI_xxx_002
+REQNO: PHI_xxx_003
+```
+
+## The `sys.excepthook` guard
+
+On import, `bba.deid_redactor` installs a process-wide PHI-scrubbing
+`sys.excepthook`. Any uncaught exception traceback is scanned and
+PHI-shaped substrings are redacted before being written to logs. This
+prevents accidental PHI leakage through the standard error stream.
+
+## Mock-AN bundle for development
+
+The `Bloodbank/data/encrypted/` directory holds a mock-AN bundle (30%
+real-from-BDVST + 70% synthetic `PHI_xxx_NNN`) used for development
+fixtures. This bundle does not contain real patient identifiers and is
+safe to commit. Treat anything outside that bundle as real PHI.

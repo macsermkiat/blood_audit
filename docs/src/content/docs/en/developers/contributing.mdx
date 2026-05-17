@@ -1,0 +1,65 @@
+---
+title: Contributing
+description: Repository conventions, branch naming, and the ralph-loop ticket workflow.
+---
+
+## Branch naming
+
+Use one of: `feat/`, `fix/`, `refactor/`, `docs/`, `chore/`, `perf/`, `test/`, `ci/`.
+
+Direct push to `main` is hook-blocked. All changes go through PRs.
+
+## Commit messages
+
+Conventional commits:
+
+```text
+<type>: <description>
+
+<optional body>
+```
+
+Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`,
+`style`. The `Co-Authored-By` line is disabled globally.
+
+## PR merge style
+
+Repo convention is `gh pr merge --merge` (merge commit, not squash) so
+the per-commit story is preserved.
+
+## The ralph-loop ticket workflow
+
+Per-ticket workflow used for every module in Phase 1:
+
+```bash
+./scripts/ralph_ticket.sh <N> <module_path>
+```
+
+This generates a three-step Claude Code workflow:
+
+1. `/tdd` — scaffold failing tests + the public interface (RED).
+2. `/ralph-loop` — iterate red → green → refactor until
+   `<promise>ISSUE-N-COMPLETE</promise>` fires.
+3. `/codex:review` — independent review on the diff via the GitHub Codex bot.
+
+After review passes, close the issue (`gh issue close N`) and merge the PR.
+
+## Parallel work via worktrees
+
+```bash
+git worktree add ../blood_audit-<branch> -b feat/<branch> main
+```
+
+Prune stale worktrees explicitly — `git worktree prune` does not remove
+directories on disk.
+
+## After merging
+
+Append new public concepts to `docs/CONTEXT.md` (the module glossary).
+That file is transcluded into [Module glossary](/blood_audit/en/reference/module-glossary/).
+
+## Codex review
+
+Trigger a Codex pass with `@codex review` as a PR comment. The bot
+returns within ~30-90 seconds with P1/P2/P3 findings or
+"Didn't find any major issues" if clean.

@@ -1,0 +1,55 @@
+---
+title: นี่คืออะไร
+description: ระบบออดิทย้อนหลังของการให้เลือดแดงเข้มข้นที่ KCMH ไม่ใช่ CDS ณ จุดดูแล
+---
+
+import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
+
+<QiNotSamdBanner />
+
+## สรุปในย่อหน้าเดียว
+
+blood_audit ทบทวนการให้เลือดแดงเข้มข้น (RBC, red blood cell) ในผู้ป่วยใน
+ผู้ใหญ่ ณ โรงพยาบาลจุฬาฯ หลังจากการให้เลือดเสร็จสิ้นแล้ว ระบบอ่านข้อมูล
+ส่งออกจาก HOSxP ของโรงพยาบาล สำหรับแต่ละหน่วยเลือดจะกำหนด 1 ใน 3 ป้าย:
+`APPROPRIATE`, `LLM_REVIEW`, หรือ `POTENTIALLY_INAPPROPRIATE`
+การตัดสินใจอ้างอิงตามแนวทางภายในของ KCMH คือ PR 17.2 (Procedure
+Revision 17.2) และมาตรฐาน AABB 2023 (Association for the Advancement of
+Blood &amp; Biotherapies) ใช้นโยบายฮีโมโกลบิน (Hb) แบบ 3-ชั้น
+พร้อมเกณฑ์เฉพาะกลุ่มผู้ป่วย และกลไก override สำหรับภาวะเสียเลือดเฉียบพลัน
+
+## สิ่งที่ระบบนี้ **ไม่ใช่**
+
+- **ไม่ใช่ Software as a Medical Device** ไม่มีอะไรในโค้ดนี้ที่จะมีผลต่อ
+  คำสั่งให้เลือด ณ จุดดูแล
+- **ไม่ใช่ real-time** ไม่มี subscriber ใด ๆ ที่ส่งสัญญาณเตือนแพทย์
+  ไม่มี dashboard ณ จุดดูแลที่ push คำแนะนำ
+- **ไม่ใช่ scorecard รายแพทย์** มี physician own-view สำหรับให้แพทย์
+  เห็นการออดิทของตนเอง ไม่ใช่ scorecard สำหรับการบริหารจัดการ
+
+ถ้าใครขอ hooks สำหรับ CDS แบบ real-time ต้องปฏิเสธ เพราะจะเปลี่ยน
+สถานะเป็น SaMD ซึ่งจะเปลี่ยนทุกอย่าง: ขอบเขตเชิงกำกับดูแล กระบวนการ
+ตรวจสอบ และโปรไฟล์ความเสี่ยงของการ deploy
+
+## สิ่งที่ระบบนี้ผลิต
+
+ชุดข้อมูลออดิทรายเดือนสำหรับคณะกรรมการคุณภาพ จากชุดข้อมูลนี้ จะสรุปเป็น
+รายงาน 6 ส่วน:
+
+- สรุปแนวโน้มของโรงพยาบาล
+- Scorecard ของแต่ละ ward
+- Physician own-view (ผู้ทบทวนเห็นเฉพาะของตนเอง)
+- การแยกตามข้อบ่งชี้
+- การแยกตามกลุ่มผู้ป่วย
+- การแยกตามสภาวะสุขภาพ
+
+Schema ของรายงานอยู่ที่ [`docs/report-schema.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/report-schema.md)
+และสรุปไว้ที่ [Report output](/blood_audit/en/clinical/report-output/) (เอกสารภาษาอังกฤษ)
+
+## การรับประกันป้องกัน hallucination
+
+สำหรับแถวที่ deterministic classifier ส่งไปยัง `LLM_REVIEW`
+(Tier 3, Hb > 10 g/dL) เหตุผลทางคลินิกของ LLM จะถูกกรองด้วย
+[6 quote-grounding layers แบบ fail-closed](/blood_audit/en/developers/quote-grounding/) (เอกสารภาษาอังกฤษ)
+ถ้า grounding ล้มเหลว แถวจะถูกส่งไปยัง `hallucination_suspect`
+ไม่ใช่แถวผลลัพธ์

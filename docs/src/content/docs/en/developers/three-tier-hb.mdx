@@ -1,0 +1,50 @@
+---
+title: 3-tier Hb classifier
+description: The deterministic policy that classifies every RBC transfusion order.
+---
+
+import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
+
+The deterministic classifier is the **authoritative** decision layer.
+The LLM is only invoked for Tier 3 (Hb above 10 g/dL).
+
+<HbTierMatrix />
+
+## The acute-blood-loss override
+
+The override is the only pathway that bypasses the Hb threshold. It fires
+only when **all** of these are documented:
+
+- Procedure-proximal anchor datetime (within an active surgical or
+  procedural episode).
+- Delta-Hb meets one of:
+  - ≥ 1.5 g/dL drop within 6 hours
+  - ≥ 2.0 g/dL drop within 12 hours
+  - ≥ 2.5 g/dL drop within 24 hours
+
+Vital signs (low BP, high HR) are **supporting evidence only**. They never
+override the Hb tier on their own.
+
+## Why vitals are not standalone
+
+Hemoglobin is the published threshold in KCMH PR 17.2 and AABB 2023.
+Vital-sign-driven transfusion is a discretionary clinical judgment outside
+the audit's deterministic scope. Vitals enter the LLM evidence bundle for
+Tier 3 reasoning; they do not change the deterministic classification.
+
+## Cohort thresholds
+
+| Cohort | Hb threshold for `APPROPRIATE` |
+| --- | --- |
+| ICU | ≤ 7.0 g/dL |
+| Non-ICU (medicine, surgery, oncology) | ≤ 8.0 g/dL |
+
+Cohort assignment comes from `bba.cohort_detector` and uses procedure-code
+proximity, ward, and admission service.
+
+## Where this lives in code
+
+- `src/bba/deterministic_classifier/` — the rule engine.
+- `src/bba/cohort_detector/` — cohort assignment.
+- Policy text (paraphrased above): see KCMH PR 17.2 and the internal
+  3-tier Hb specification.

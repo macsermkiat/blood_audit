@@ -1,0 +1,91 @@
+---
+interface Tier {
+  label: string;
+  range: string;
+  classification: "APPROPRIATE" | "POTENTIALLY_INAPPROPRIATE" | "LLM_REVIEW";
+  rule: string;
+}
+
+interface Props {
+  tiers?: Tier[];
+}
+
+const defaultTiers: Tier[] = [
+  {
+    label: "Tier 1",
+    range: "Hb ≤ 7.0 g/dL (ICU) · Hb ≤ 8.0 g/dL (non-ICU)",
+    classification: "APPROPRIATE",
+    rule: "Below cohort-aware threshold. Auto-classified appropriate unless procedure-proximal + acute-blood-loss override conditions apply.",
+  },
+  {
+    label: "Tier 2",
+    range: "Hb 7.0 – 10.0 g/dL",
+    classification: "POTENTIALLY_INAPPROPRIATE",
+    rule: "Above threshold. Classified inappropriate unless acute-blood-loss override fires (delta-Hb ≥ 1.5 g/dL/6h, ≥ 2 g/dL/12h, ≥ 2.5 g/dL/24h).",
+  },
+  {
+    label: "Tier 3",
+    range: "Hb > 10.0 g/dL",
+    classification: "LLM_REVIEW",
+    rule: "Routed to LLM_REVIEW with quote-grounded clinical reasoning. Never auto-classified.",
+  },
+];
+
+const { tiers = defaultTiers } = Astro.props;
+
+const pillClass = (c: Tier["classification"]) =>
+  c === "APPROPRIATE" ? "ba-pill ba-pill--ok"
+  : c === "POTENTIALLY_INAPPROPRIATE" ? "ba-pill ba-pill--err"
+  : "ba-pill ba-pill--warn";
+---
+
+<section class="hb-matrix" aria-label="3-tier Hb classification policy">
+  <table class="hb-matrix__table">
+    <thead>
+      <tr>
+        <th scope="col">Tier</th>
+        <th scope="col">Hb range</th>
+        <th scope="col">Classification</th>
+        <th scope="col">Rule</th>
+      </tr>
+    </thead>
+    <tbody>
+      {tiers.map((t) => (
+        <tr>
+          <th scope="row">{t.label}</th>
+          <td>{t.range}</td>
+          <td><span class={pillClass(t.classification)}>{t.classification}</span></td>
+          <td>{t.rule}</td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+  <p class="hb-matrix__note">
+    Vitals (BP, HR, urine output, temperature) are <strong>supporting evidence only</strong>.
+    They never override the Hb-based tier on their own. The acute-blood-loss override is
+    the only path that bypasses the Hb threshold, and only with documented delta-Hb.
+  </p>
+</section>
+
+<style>
+  .hb-matrix { margin: 1rem 0; }
+  .hb-matrix__table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+  }
+  .hb-matrix__table th,
+  .hb-matrix__table td {
+    border: 1px solid var(--sl-color-gray-5);
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    vertical-align: top;
+  }
+  .hb-matrix__table thead th {
+    background: var(--sl-color-gray-6);
+  }
+  .hb-matrix__note {
+    margin-top: 0.75rem;
+    font-size: 0.9rem;
+  }
+</style>

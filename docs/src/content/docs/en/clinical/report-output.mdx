@@ -1,0 +1,41 @@
+---
+title: Report output
+description: What the QI committee sees — six CSV sections plus a PDF summary.
+---
+
+The audit pipeline produces a monthly report whose schema lives in
+[`docs/report-schema.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/report-schema.md).
+A summary appears below; for the authoritative column-by-column contract,
+see the source file.
+
+## Six CSV sections
+
+| Section | Audience |
+| --- | --- |
+| Hospital trend | Senior QI committee. Month-over-month classification rates. |
+| Ward scorecard | Ward leads. Per-ward classification distribution. |
+| Physician own-view | Each reviewing clinician sees only their own audit. |
+| Indication breakdown | QI committee. Distribution by primary indication. |
+| Cohort breakdown | QI committee. ICU / Surgery / Oncology / Medicine. |
+| Health-state breakdown | QI committee. Stratification by acuity proxies. |
+
+## PDF summary
+
+A bundled PDF summary contains:
+
+- Cover page with run metadata (`run_id`, `code_version`, ingestion date).
+- An executive summary table aggregating the six CSV sections.
+- A QI-not-SaMD framing reminder.
+
+## Filename contract
+
+PDF filenames follow the format documented in `docs/report-schema.md`
+under "PDF filename contract" — concretely, the `run_id` is embedded so
+every distributed copy traces back to the run that produced it.
+
+## Where this lives in code
+
+`src/bba/report_generator/`. The `bba report` CLI subcommand is an
+[integration seam](/blood_audit/en/operators/integration-seams/) — the
+module ships and is tested, but the CLI wiring waits for the
+deployment-specific resolver that pulls from `audit_store`.

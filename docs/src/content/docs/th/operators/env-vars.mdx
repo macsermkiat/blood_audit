@@ -1,0 +1,55 @@
+---
+title: Environment variables
+description: ตัวแปรสภาพแวดล้อม 3 ตัวที่ blood_audit ต้องใช้ก่อนรันออดิทได้
+---
+
+import EnvVarChecklist from "../../../../components/EnvVarChecklist.astro";
+
+blood_audit บังคับใช้สัญญา 3-ตัวแปรอย่างเคร่งครัด ถ้าค่าหายหรือผิดรูปแบบ
+จะ fail fast ด้วย `CliError` ตอนเริ่มโปรแกรม จะไม่ทำงานต่อแบบเงียบ ๆ
+
+<EnvVarChecklist />
+
+## รายละเอียดที่สำคัญ
+
+### `BBA_DATA_DIR`
+
+ต้องเป็น **absolute path** ไดเรกทอรีต้องมีอยู่จริงและ service user
+ต้องเขียนได้ ตรวจสอบโดย `_resolve_data_dir()` ใน `src/bba/cli/main.py`
+เก็บข้อมูล:
+
+- DuckDB ingest snapshots
+- Parquet audit rows (cold storage)
+- Run-state completion markers สำหรับ idempotency
+
+### `BBA_DB_URL`
+
+Postgres DSN ใช้ driver suffix `+psycopg` เสมอ — เพราะ SQLAlchemy
+จะ route `postgresql://` แบบเปลือยไปยัง psycopg2 ซึ่ง **ไม่ใช่** driver
+ที่โปรเจกต์นี้ใช้ มีตัวแปลงมาตรฐานที่
+`bba.review_actions.models.ReviewActionsConfig.sqlalchemy_dsn`
+
+ตัวอย่าง:
+
+```text
+postgresql+psycopg://bba_user@db.internal:5432/blood_audit
+```
+
+### `ANTHROPIC_API_KEY`
+
+จำเป็นต้องมีก่อน `bba audit` จะเรียก Batch API ส่วน cost guard ที่
+`src/bba/audit_pipeline/cost_guard.py` จะปฏิเสธ live API access ในเทสต์
+เพื่อป้องกันการส่ง Batch โดยไม่ตั้งใจระหว่างพัฒนา
+
+## ตรวจสอบ
+
+```bash
+env | grep -E '^(BBA_DATA_DIR|BBA_DB_URL|ANTHROPIC_API_KEY)='
+```
+
+ต้องเห็นทั้ง 3 บรรทัด ห้าม log ค่า `ANTHROPIC_API_KEY` ลบออกก่อนแชร์
+output จาก terminal เสมอ
+
+## ขั้นถัดไป
+
+รัน [ออดิทครั้งแรก](/blood_audit/th/operators/first-audit-run/)

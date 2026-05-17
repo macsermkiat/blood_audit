@@ -1,0 +1,68 @@
+---
+interface EnvVar {
+  name: string;
+  example: string;
+  purpose: string;
+  required: boolean;
+}
+
+interface Props {
+  vars?: EnvVar[];
+}
+
+const defaultVars: EnvVar[] = [
+  {
+    name: "BBA_DATA_DIR",
+    example: "/var/lib/blood_audit/data",
+    purpose: "Persistent root for Parquet, DuckDB, and run-state markers.",
+    required: true,
+  },
+  {
+    name: "BBA_DB_URL",
+    example: "postgresql+psycopg://bba@localhost/blood_audit",
+    purpose: "Postgres DSN for audit_store, batch_runs, review_actions, audit_log. Use the +psycopg driver suffix.",
+    required: true,
+  },
+  {
+    name: "ANTHROPIC_API_KEY",
+    example: "sk-ant-…",
+    purpose: "Batch API key for the LLM_REVIEW leg. Required before `bba audit` invokes Batch.",
+    required: true,
+  },
+];
+
+const { vars = defaultVars } = Astro.props;
+---
+
+<section class="env-checklist" aria-label="Required environment variables">
+  <ul class="ba-stack" role="list">
+    {vars.map((v) => (
+      <li class="ba-card env-row">
+        <div class="ba-row env-row__head">
+          <code class="env-name">{v.name}</code>
+          <span class={`ba-pill ${v.required ? "ba-pill--err" : "ba-pill--warn"}`}>
+            {v.required ? "required" : "optional"}
+          </span>
+        </div>
+        <p class="env-purpose">{v.purpose}</p>
+        <code class="env-example">{v.example}</code>
+      </li>
+    ))}
+  </ul>
+</section>
+
+<style>
+  .env-checklist { margin: 1rem 0; }
+  .env-row__head { margin-bottom: 0.5rem; }
+  .env-name { font-size: 1rem; font-weight: 600; }
+  .env-purpose { margin: 0.25rem 0; }
+  .env-example {
+    display: block;
+    margin-top: 0.5rem;
+    padding: 0.25rem 0.5rem;
+    background: var(--sl-color-gray-6);
+    border-radius: 0.25rem;
+    font-size: 0.85rem;
+    word-break: break-all;
+  }
+</style>

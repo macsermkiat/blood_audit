@@ -1,0 +1,35 @@
+---
+title: Changelog
+description: Phase 1 is feature-complete. The v0.1.0 tag and authoritative release notes live on GitHub.
+---
+
+## Status
+
+Phase 1 is feature-complete: 20 modules under `bba.*` merged to `main`,
+`version = "0.1.0"` in `pyproject.toml`. The `v0.1.0` tag itself is
+pending — the maintainer will trigger it explicitly with shared-state
+intent.
+
+Until the tag fires, this page is a stub. The authoritative changelog
+will live at
+[GitHub Releases](https://github.com/macsermkiat/blood_audit/releases).
+
+## What "Phase 1 feature-complete" includes
+
+- 12-stage audit pipeline (ingest → audit_store).
+- Deterministic 3-tier Hb classifier with cohort-aware thresholds.
+- Acute-blood-loss override with documented delta-Hb gates.
+- LLM_REVIEW pathway with Anthropic Batch API + Sonnet→Opus escalation.
+- Six fail-closed quote-grounding layers.
+- Audit store with run-level idempotency.
+- Eval harness primitives.
+- Monitoring (sentinel κ-statistic, golden-set drift SPRT).
+- Dashboard, report generator, CLI scaffold.
+- CI: ruff + mypy strict (src) + pytest with testcontainers Postgres.
+
+## What is explicitly out of Phase 1
+
+- Wiring of the four integration-seam subcommands.
+- Pilot validation (M8 — gating milestone before any production
+  deployment).
+- Phase B operative-table data re-encryption (pending KCMH IT).

@@ -1,0 +1,87 @@
+---
+title: Pipeline stages
+description: What each of the 12 stages reads, writes, and guarantees.
+---
+
+import PipelineDiagram from "../../../../components/PipelineDiagram.astro";
+
+<PipelineDiagram />
+
+## Stage-by-stage
+
+### 1. `bba.ingest`
+
+Reads the HOSxP CSV bundle. Validates against the published schema,
+computes `input_csv_hash`, writes DuckDB + Parquet under `$BBA_DATA_DIR`,
+and emits a `run_id`. Idempotent on the file content.
+
+### 2. `bba.audit_orders`
+
+Filters the ingested orders down to RBC transfusion orders. Hard
+exclusions: age < 15, non-RBC products (LPRC, LDPRC, SDR), ICD-10 gates.
+Resolves the per-order anchor datetime.
+
+### 3. `bba.hb_lookup`
+
+For each surviving order, finds the most recent pre-transfusion Hb result
+in the Lab table within a configurable window.
+
+### 4. `bba.vitals_extractor`
+
+Extracts BP, HR, urine output, and temperature from MED + progress notes
+around the anchor datetime. Outputs structured vitals records.
+
+### 5. `bba.cohort_detector`
+
+Classifies each order into Surgery / ICU / Oncology / Medicine using
+procedure-code proximity, ward, and admission service. Cohort drives the
+Hb threshold in the deterministic classifier.
+
+### 6. `bba.deterministic_classifier`
+
+The 3-tier engine. See [3-tier Hb classifier](/blood_audit/en/developers/three-tier-hb/)
+for the full rule.
+
+### 7. `bba.evidence_bundle_builder`
+
+Builds the unredacted evidence bundle for the LLM context window: lab
+values, vitals, anchor notes, cohort, ICD codes.
+
+### 8. `bba.deid_redactor`
+
+De-identifies the bundle. Installs a PHI-scrubbing `sys.excepthook` so any
+uncaught exception cannot leak PHI to logs. Reuses
+`bba.deid_redactor.PHI_REGEXES` — never duplicate that pattern set.
+
+### 9. `bba.prompt_builder`
+
+Renders the few-shot + clinical-history system message. Stable across runs
+for prompt-caching effectiveness.
+
+### 10. `bba.llm_client`
+
+Submits the Batch API request. Sonnet → Opus escalation; prompt caching
+on; structured-output schema validation. Resumable: on restart, re-queries
+`batch_runs` rows in `pending` / `submitted` / `partial` states.
+
+### 11. `bba.quote_grounder`
+
+Runs the [6 fail-closed grounding layers](/blood_audit/en/developers/quote-grounding/).
+Failures route to `hallucination_suspect`, not to result rows.
+
+### 12. `bba.audit_store`
+
+Writes the audit row to Postgres + appends the Parquet snapshot. Enforces
+`(run_id, encounter_id)` uniqueness. Appends `audit_log` compliance row.
+
+## State machine for LLM_REVIEW rows
+
+Each LLM_REVIEW row carries a `batch_runs` state:
+
+```text
+pending → submitted → partial → complete
+                              ↘ failed
+```
+
+A crashed process is resumable from any non-terminal state without manual
+intervention. `failed` is terminal and requires investigation.

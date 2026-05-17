@@ -1,0 +1,56 @@
+---
+title: blood_audit
+description: KCMH RBC transfusion audit pipeline — post-hoc quality-improvement audit against PR 17.2 + AABB 2023.
+template: splash
+hero:
+  tagline: Post-hoc audit of inpatient adult RBC transfusions at KCMH against PR 17.2 + AABB 2023.
+  actions:
+    - text: Install & first audit run
+      link: /blood_audit/en/operators/install/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/macsermkiat/blood_audit
+      icon: external
+      variant: minimal
+---
+
+import QiNotSamdBanner from "../../../components/QiNotSamdBanner.astro";
+import PipelineDiagram from "../../../components/PipelineDiagram.astro";
+
+<QiNotSamdBanner />
+
+## What blood_audit does
+
+blood_audit reads completed HOSxP exports from the hospital information
+system. It checks each red blood cell (RBC) transfusion against the
+3-tier hemoglobin (Hb) policy. It writes one audit row per transfusion.
+
+Each transfusion gets one of three labels:
+
+- `APPROPRIATE` — Hb is below the cohort threshold, or the acute-blood-loss
+  override applies.
+- `POTENTIALLY_INAPPROPRIATE` — Hb is above the threshold and no override
+  conditions are documented.
+- `LLM_REVIEW` — Hb is above 10 g/dL. The row is sent to a large language
+  model (LLM) for clinical reasoning, with every quote checked against
+  the source evidence.
+
+Six fail-closed quote-grounding layers protect every LLM_REVIEW row from
+hallucination. The deterministic classifier remains the authoritative source.
+
+## The 12 pipeline stages
+
+<PipelineDiagram />
+
+## Where to go next
+
+- **Operators (KCMH IT):** start with [Install](/blood_audit/en/operators/install/) and the
+  [3 required environment variables](/blood_audit/en/operators/env-vars/), then run the
+  [first audit](/blood_audit/en/operators/first-audit-run/).
+- **Developers maintaining `src/bba/`:** see the
+  [Architecture overview](/blood_audit/en/developers/architecture/) and the
+  [module glossary](/blood_audit/en/reference/module-glossary/).
+- **Clinical reviewers / QI committee:** read
+  [What this is](/blood_audit/en/clinical/what-this-is/) and the
+  [policy summary](/blood_audit/en/clinical/policy-summary/).
