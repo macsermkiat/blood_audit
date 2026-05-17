@@ -9,12 +9,14 @@ import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
 
 ## สรุปในย่อหน้าเดียว
 
-blood_audit เป็น pipeline ออดิท **ย้อนหลัง** ของการให้เลือดแดงเข้มข้นในผู้ป่วยใน
-ผู้ใหญ่ ณ โรงพยาบาลจุฬาฯ อ่านข้อมูลส่งออกจาก HOSxP หลังจากการให้เลือดเกิดขึ้นแล้ว
-จัดประเภทแต่ละหน่วยเป็น `APPROPRIATE`, `LLM_REVIEW`, หรือ
-`POTENTIALLY_INAPPROPRIATE` ตาม KCMH PR 17.2 + AABB 2023 ด้วยนโยบาย
-ฮีโมโกลบิน 3-ชั้น เกณฑ์เฉพาะกลุ่มผู้ป่วย และกลไก override สำหรับ
-ภาวะเสียเลือดเฉียบพลัน
+blood_audit ทบทวนการให้เลือดแดงเข้มข้น (RBC, red blood cell) ในผู้ป่วยใน
+ผู้ใหญ่ ณ โรงพยาบาลจุฬาฯ หลังจากการให้เลือดเสร็จสิ้นแล้ว ระบบอ่านข้อมูล
+ส่งออกจาก HOSxP ของโรงพยาบาล สำหรับแต่ละหน่วยเลือดจะกำหนด 1 ใน 3 ป้าย:
+`APPROPRIATE`, `LLM_REVIEW`, หรือ `POTENTIALLY_INAPPROPRIATE`
+การตัดสินใจอ้างอิงตามแนวทางภายในของ KCMH คือ PR 17.2 (Procedure
+Revision 17.2) และมาตรฐาน AABB 2023 (Association for the Advancement of
+Blood &amp; Biotherapies) ใช้นโยบายฮีโมโกลบิน (Hb) แบบ 3-ชั้น
+พร้อมเกณฑ์เฉพาะกลุ่มผู้ป่วย และกลไก override สำหรับภาวะเสียเลือดเฉียบพลัน
 
 ## สิ่งที่ระบบนี้ **ไม่ใช่**
 

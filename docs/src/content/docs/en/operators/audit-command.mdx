@@ -39,15 +39,26 @@ for the QI committee. Do not bypass this by editing the database directly.
 
 ## Batch API resume semantics
 
-Each LLM_REVIEW row corresponds to a `batch_runs` row with state
-`pending → submitted → partial → complete` (`failed` is a terminal sink).
-If the process crashes mid-Batch, the next `bba audit` invocation resumes
-from `submitted`/`partial` rows. You will not lose work.
+For each LLM_REVIEW transfusion, the system creates one tracking row in
+the `batch_runs` table. Each row moves through these states:
 
-## What never happens
+- `pending` — waiting to be sent to the Anthropic Batch API.
+- `submitted` — sent; waiting for a response.
+- `partial` — some results returned; still polling.
+- `complete` — all results returned and stored.
+- `failed` — terminal; needs investigation.
 
-- The audit does not modify any HOSxP table.
-- The audit never emits real-time alerts. This is QI, not SaMD.
-- The audit cannot accidentally produce two rows for the same
-  `(run_id, encounter_id)` — that invariant lives in the store layer and
-  is non-negotiable.
+If the audit process crashes part-way through, the next `bba audit` run
+picks up from `submitted` and `partial` rows automatically. You will not
+lose work.
+
+## Safety boundaries
+
+- The audit reads HOSxP exports only. All audit output is written to the
+  audit database and audit files. HOSxP tables are never touched.
+- The audit runs after the fact and stays silent. It does not send
+  real-time alerts to clinicians. This is quality improvement (QI), not
+  Software as a Medical Device (SaMD).
+- The audit store rejects duplicate `(run_id, encounter_id)` writes.
+  Re-runs of the same input always produce the same result, in the same
+  place. This invariant lives in the store layer and stays that way.

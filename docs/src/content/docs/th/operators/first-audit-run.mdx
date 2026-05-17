@@ -21,9 +21,12 @@ import CliCommandCard from "../../../../components/CliCommandCard.astro";
   example={`uv run bba ingest /var/data/exports/PHI_xxx_001.csv --schema-version v1`}
 />
 
-เมื่อ ingest สำเร็จจะพิมพ์ `run_id` ที่มาจาก
-`sha256(input_csv_hash + schema_fingerprint + code_version)`
-จดค่านี้ไว้ — ทุกคำสั่งถัดไปจะอ้างอิงด้วยค่านี้
+เมื่อ ingest สำเร็จจะพิมพ์ `run_id` ซึ่งเป็นรหัสไม่ซ้ำกันของการรวม
+input bundle, schema version, และ code version จดค่านี้ไว้ — ทุกคำสั่ง
+ถัดไปจะใช้ค่านี้เพื่อค้นหา snapshot ที่ถูกต้อง
+
+เบื้องหลัง `run_id` คือ `sha256(input_csv_hash + schema_fingerprint +
+code_version)` คุณไม่ต้องคำนวณเอง CLI ทำให้
 
 ## 2. รัน audit
 

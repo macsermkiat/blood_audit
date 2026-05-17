@@ -9,12 +9,18 @@ import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
 
 ## Who this section is for
 
-You are operating blood_audit on behalf of KCMH IT. You will install it,
-configure three environment variables, run `bba ingest` followed by
-`bba audit`, and hand the resulting audit dataset to the QI committee.
-You will **not** wire the four integration-seam subcommands
-(`evaluate`, `report`, `serve-dashboard`, `sentinel`) — those are deployment
-hand-offs documented in [Integration seams](/blood_audit/en/operators/integration-seams/).
+You are operating blood_audit on behalf of KCMH IT. Your operator job has
+four steps:
+
+1. Install the package.
+2. Configure three environment variables.
+3. Run `bba ingest`, then `bba audit`.
+4. Hand the audit dataset to the QI (Quality Improvement) committee.
+
+The other four subcommands — `evaluate`, `report`, `serve-dashboard`,
+`sentinel` — are wired up later by deployment teams. See
+[Integration seams](/blood_audit/en/operators/integration-seams/) if you
+want to know why they fail today.
 
 ## What you need before starting
 

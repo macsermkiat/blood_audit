@@ -12,13 +12,18 @@ materializes the input bundle into a DuckDB + Parquet snapshot under
 The HOSxP export bundle contains roughly 10 tables. The audit pipeline
 reads, at minimum:
 
-- **Transfusion order header** — (HN, REQNO) pairs, product code, request
-  datetime. Hard exclusions remove non-RBC products (LPRC, LDPRC, SDR).
-- **Lab** — pre-transfusion hemoglobin results, keyed by HN and timestamp.
-- **MED / progress notes** — text source for vital signs and acute-blood-loss
-  indicators.
-- **Operative table** — procedure code + timestamp (used for cohort
-  detection and procedure-proximity logic).
+- **Transfusion order header** — HN (hospital number), REQNO (request
+  number), product code, and request datetime. The audit only keeps
+  red blood cell (RBC) orders. Other blood products are filtered out:
+  LPRC (leukocyte-poor red cells), LDPRC (leukocyte-depleted red cells),
+  and SDR (saline-diluted red cells).
+- **Lab** — pre-transfusion hemoglobin (Hb) results, keyed by HN and
+  timestamp.
+- **MED / progress notes** — free-text source for vital signs and
+  acute-blood-loss indicators.
+- **Operative table** — procedure code and timestamp. Used to detect the
+  patient's cohort (surgery, ICU, oncology, medicine) and to check
+  whether the transfusion happened close to a procedure.
 - **ICD-10 / ICD-9-CM** — diagnosis and procedure code reference.
 
 The exact column contract is defined in `src/bba/ingest/`.

@@ -21,9 +21,13 @@ This page walks the happy path: a HOSxP export goes in, a populated
   example={`uv run bba ingest /var/data/exports/PHI_xxx_001.csv --schema-version v1`}
 />
 
-A successful ingest prints a `run_id` derived from
-`sha256(input_csv_hash + schema_fingerprint + code_version)`.
-Record this value — every downstream command keys off it.
+A successful ingest prints a `run_id`. This is the unique ID for this
+combination of input bundle, schema version, and code version. Record it
+— every later command uses it to find the right snapshot.
+
+Under the hood, the `run_id` is `sha256(input_csv_hash +
+schema_fingerprint + code_version)`. You do not need to compute it
+yourself; the CLI does.
 
 ## 2. Run the audit
 

@@ -22,16 +22,18 @@ import PipelineDiagram from "../../../components/PipelineDiagram.astro";
 
 ## blood_audit ทำอะไร
 
-อ่านข้อมูลส่งออกจาก HOSxP ที่เสร็จสมบูรณ์แล้ว จัดประเภทการให้เลือดแต่ละครั้ง
-ตาม **นโยบายฮีโมโกลบิน 3-ชั้น** พร้อมเกณฑ์เฉพาะกลุ่มผู้ป่วยและกลไก override
-สำหรับภาวะเสียเลือดเฉียบพลัน แล้วบันทึกผลออดิทต่อหน่วยเลือด:
+blood_audit อ่านข้อมูลส่งออกจาก HOSxP ที่เสร็จสมบูรณ์แล้ว
+ตรวจสอบการให้เลือดแดงเข้มข้น (RBC, red blood cell) แต่ละครั้ง
+เทียบกับนโยบายฮีโมโกลบิน (Hb) แบบ 3-ชั้น แล้วเขียนผลออดิท 1 แถว
+ต่อหน่วยเลือด 1 หน่วย
 
-- `APPROPRIATE` — Hb ต่ำกว่าเกณฑ์ของกลุ่ม (หรือ acute-blood-loss override ทำงาน)
+การให้เลือดแต่ละครั้งจะได้รับ 1 ใน 3 ป้าย:
+
+- `APPROPRIATE` — Hb ต่ำกว่าเกณฑ์ของกลุ่ม หรือเข้าเงื่อนไข
+  acute-blood-loss override
 - `POTENTIALLY_INAPPROPRIATE` — Hb สูงกว่าเกณฑ์และไม่มีเงื่อนไข override
-- `LLM_REVIEW` — Hb สูงกว่า 10 g/dL ส่งให้ LLM อ่านพร้อม quote-grounding
-
-มีระบบป้องกัน hallucination แบบ fail-closed 6 ชั้นสำหรับทุกแถว LLM_REVIEW
-แต่ deterministic classifier ยังคงเป็นผู้ตัดสินใจหลัก
+- `LLM_REVIEW` — Hb สูงกว่า 10 g/dL ส่งไปให้ large language model (LLM)
+  วิเคราะห์เหตุผลทางคลินิก โดยมีการตรวจสอบทุก quote กับข้อมูลต้นทาง
 
 ## 12 ขั้นตอนของ pipeline
 

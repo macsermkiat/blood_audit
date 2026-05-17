@@ -9,12 +9,16 @@ import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
 
 ## เอกสารส่วนนี้สำหรับใคร
 
-คุณกำลังดูแล blood_audit ในนามทีม KCMH IT คุณจะเป็นผู้ติดตั้งระบบ
-ตั้งค่า environment variables 3 ตัว รัน `bba ingest` ตามด้วย
-`bba audit` แล้วส่งชุดข้อมูลออดิทให้คณะกรรมการคุณภาพ
+คุณกำลังดูแล blood_audit ในนามทีม KCMH IT งานของคุณมี 4 ขั้นตอน:
 
-คุณ **ไม่จำเป็น** ต้องเชื่อมต่อ subcommand ทั้งสี่ที่เป็น integration seam
-(`evaluate`, `report`, `serve-dashboard`, `sentinel`) — รายละเอียดดูที่
+1. ติดตั้ง package
+2. ตั้งค่า environment variables 3 ตัว
+3. รัน `bba ingest` ตามด้วย `bba audit`
+4. ส่งชุดข้อมูลออดิทให้คณะกรรมการคุณภาพ (Quality Improvement, QI)
+
+ส่วน subcommand อีก 4 ตัว — `evaluate`, `report`, `serve-dashboard`,
+`sentinel` — จะถูกเชื่อมต่อโดยทีม deployment ในภายหลัง อยากทราบเหตุผลที่
+ทำไมตอนนี้มันถึง fail ดูได้ที่
 [Integration seams](/blood_audit/en/operators/integration-seams/) (เอกสารภาษาอังกฤษ)
 
 ## สิ่งที่ต้องเตรียมก่อนเริ่ม

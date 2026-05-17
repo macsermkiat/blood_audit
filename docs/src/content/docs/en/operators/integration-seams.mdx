@@ -30,8 +30,8 @@ that does not belong in Phase 1. Do not "fix" them.
 
 <IntegrationSeamCard
   command="bba sentinel --weekly | --quarterly"
-  missingGlue="A deployment cadence dispatcher and notification sink (structlog stub ships; Slack/email/paging is Phase 1.5)."
-  rationale="The κ-statistic sentinel and golden-set drift SPRT compute correctly; the question is who and how to notify."
+  missingGlue="A deployment-side scheduler and a notification channel. The structlog stub ships now; Slack, email, and paging are Phase 1.5."
+  rationale="The sentinel already computes kappa (κ) agreement between reviewers and runs the sequential probability ratio test (SPRT) for golden-set drift. The deployment team decides who receives alerts and how."
 />
 
 ## Why fail loud instead of running with defaults?
