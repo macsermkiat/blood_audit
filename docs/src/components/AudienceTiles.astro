@@ -1,0 +1,192 @@
+---
+interface Tile {
+  label: string;
+  audience: string;
+  description: string;
+  primaryHref: string;
+  primaryText: string;
+  secondaryHref?: string;
+  secondaryText?: string;
+}
+
+interface Props {
+  tiles?: Tile[];
+}
+
+const defaultTiles: Tile[] = [
+  {
+    label: "Operators",
+    audience: "KCMH IT",
+    description:
+      "Install the package, configure three env vars, run bba ingest then bba audit, hand the dataset to the QI committee.",
+    primaryHref: "/blood_audit/en/operators/install/",
+    primaryText: "Install",
+    secondaryHref: "/blood_audit/en/operators/first-audit-run/",
+    secondaryText: "First audit run",
+  },
+  {
+    label: "Developers",
+    audience: "maintaining src/bba/",
+    description:
+      "12 pipeline stages, deterministic 3-tier Hb classifier, six fail-closed quote-grounding layers, audit store.",
+    primaryHref: "/blood_audit/en/developers/architecture/",
+    primaryText: "Architecture",
+    secondaryHref: "/blood_audit/en/reference/module-glossary/",
+    secondaryText: "Module glossary",
+  },
+  {
+    label: "Clinical",
+    audience: "QI committee",
+    description:
+      "Post-hoc audit scope, five stored classifications, six report sections. Not Software as a Medical Device.",
+    primaryHref: "/blood_audit/en/clinical/what-this-is/",
+    primaryText: "What this is",
+    secondaryHref: "/blood_audit/en/clinical/policy-summary/",
+    secondaryText: "Policy summary",
+  },
+];
+
+const { tiles = defaultTiles } = Astro.props;
+---
+
+<section class="audience-tiles ba-reveal" aria-label="Doorways for each audience">
+  <ol class="audience-tiles__list" role="list">
+    {tiles.map((tile, idx) => (
+      <li class="audience-tile">
+        <header class="audience-tile__head">
+          <span class="audience-tile__index" aria-hidden="true">
+            {String(idx + 1).padStart(2, "0")}
+          </span>
+          <div class="audience-tile__title-wrap">
+            <p class="audience-tile__label">{tile.label}</p>
+            <p class="audience-tile__audience">{tile.audience}</p>
+          </div>
+        </header>
+        <p class="audience-tile__description">{tile.description}</p>
+        <nav class="audience-tile__nav" aria-label={`${tile.label} entry points`}>
+          <a href={tile.primaryHref} class="audience-tile__link audience-tile__link--primary">
+            {tile.primaryText}
+            <span aria-hidden="true" class="audience-tile__arrow">→</span>
+          </a>
+          {tile.secondaryHref && tile.secondaryText && (
+            <a href={tile.secondaryHref} class="audience-tile__link">
+              {tile.secondaryText}
+            </a>
+          )}
+        </nav>
+      </li>
+    ))}
+  </ol>
+</section>
+
+<style>
+  .audience-tiles {
+    margin: 1.5rem 0 2rem;
+  }
+  .audience-tiles__list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    gap: 0.75rem;
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .audience-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 0.625rem;
+    padding: 1rem 1.125rem 1.125rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.625rem;
+    background: var(--sl-color-bg-nav);
+    transition: border-color var(--ba-duration-fast) var(--ba-ease-out),
+                background-color var(--ba-duration-fast) var(--ba-ease-out);
+  }
+  .audience-tile:hover,
+  .audience-tile:focus-within {
+    border-color: var(--sl-color-accent);
+  }
+  .audience-tile__head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.625rem;
+  }
+  .audience-tile__index {
+    font-family: var(--ba-font-mono);
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: var(--sl-color-accent);
+    letter-spacing: 0;
+    line-height: 1;
+  }
+  .audience-tile__title-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+  }
+  .audience-tile__label {
+    margin: 0;
+    font-size: 1.0625rem;
+    font-weight: 700;
+    color: var(--sl-color-white);
+    line-height: 1.2;
+  }
+  .audience-tile__audience {
+    margin: 0;
+    font-size: 0.75rem;
+    color: var(--sl-color-gray-3);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+  }
+  .audience-tile__description {
+    margin: 0;
+    color: var(--sl-color-gray-2);
+    line-height: 1.55;
+    font-size: 0.9375rem;
+    flex: 1;
+  }
+  .audience-tile__nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    align-items: center;
+    margin-top: 0.25rem;
+  }
+  .audience-tile__link {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--sl-color-gray-2);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    padding-bottom: 1px;
+    transition: color var(--ba-duration-fast) var(--ba-ease-out),
+                border-color var(--ba-duration-fast) var(--ba-ease-out);
+  }
+  .audience-tile__link:hover {
+    color: var(--sl-color-accent);
+    border-bottom-color: var(--sl-color-accent);
+  }
+  .audience-tile__link--primary {
+    color: var(--sl-color-accent);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+  }
+  .audience-tile__arrow {
+    transition: transform var(--ba-duration-fast) var(--ba-ease-out);
+  }
+  .audience-tile__link--primary:hover .audience-tile__arrow {
+    transform: translateX(2px);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .audience-tile,
+    .audience-tile__link,
+    .audience-tile__arrow {
+      transition: none;
+    }
+    .audience-tile__link--primary:hover .audience-tile__arrow {
+      transform: none;
+    }
+  }
+</style>
