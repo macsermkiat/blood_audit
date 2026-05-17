@@ -2,7 +2,7 @@
 interface Tier {
   label: string;
   range: string;
-  classification: "APPROPRIATE" | "POTENTIALLY_INAPPROPRIATE" | "LLM_REVIEW";
+  ruleOutput: "APPROPRIATE" | "POTENTIALLY_INAPPROPRIATE" | "→ LLM review";
   rule: string;
 }
 
@@ -14,26 +14,26 @@ const defaultTiers: Tier[] = [
   {
     label: "Tier 1",
     range: "Hb ≤ 7.0 g/dL (ICU) · Hb ≤ 8.0 g/dL (non-ICU)",
-    classification: "APPROPRIATE",
-    rule: "Below cohort-aware threshold. Auto-classified appropriate unless procedure-proximal + acute-blood-loss override conditions apply.",
+    ruleOutput: "APPROPRIATE",
+    rule: "Below cohort-aware threshold. Deterministic rule classifies as appropriate unless procedure-proximal + acute-blood-loss override conditions apply.",
   },
   {
     label: "Tier 2",
     range: "Hb 7.0 – 10.0 g/dL",
-    classification: "POTENTIALLY_INAPPROPRIATE",
-    rule: "Above threshold. Classified inappropriate unless acute-blood-loss override fires (delta-Hb ≥ 1.5 g/dL/6h, ≥ 2 g/dL/12h, ≥ 2.5 g/dL/24h).",
+    ruleOutput: "POTENTIALLY_INAPPROPRIATE",
+    rule: "Above threshold. Rule classifies as potentially inappropriate unless acute-blood-loss override fires (delta-Hb ≥ 1.5 g/dL / 6h, ≥ 2 g/dL / 12h, ≥ 2.5 g/dL / 24h).",
   },
   {
     label: "Tier 3",
     range: "Hb > 10.0 g/dL",
-    classification: "LLM_REVIEW",
-    rule: "Routed to LLM_REVIEW with quote-grounded clinical reasoning. Never auto-classified.",
+    ruleOutput: "→ LLM review",
+    rule: "Routed to the LLM with quote-grounded clinical reasoning. final_classification depends on the LLM result (one of APPROPRIATE, INAPPROPRIATE, NEEDS_REVIEW, INSUFFICIENT_EVIDENCE).",
   },
 ];
 
 const { tiers = defaultTiers } = Astro.props;
 
-const pillClass = (c: Tier["classification"]) =>
+const pillClass = (c: Tier["ruleOutput"]) =>
   c === "APPROPRIATE" ? "ba-pill ba-pill--ok"
   : c === "POTENTIALLY_INAPPROPRIATE" ? "ba-pill ba-pill--err"
   : "ba-pill ba-pill--warn";
@@ -45,7 +45,7 @@ const pillClass = (c: Tier["classification"]) =>
       <tr>
         <th scope="col">Tier</th>
         <th scope="col">Hb range</th>
-        <th scope="col">Classification</th>
+        <th scope="col">Rule output / routing</th>
         <th scope="col">Rule</th>
       </tr>
     </thead>
@@ -54,7 +54,7 @@ const pillClass = (c: Tier["classification"]) =>
         <tr>
           <th scope="row">{t.label}</th>
           <td>{t.range}</td>
-          <td><span class={pillClass(t.classification)}>{t.classification}</span></td>
+          <td><span class={pillClass(t.ruleOutput)}>{t.ruleOutput}</span></td>
           <td>{t.rule}</td>
         </tr>
       ))}

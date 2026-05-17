@@ -5,10 +5,23 @@ description: The three environment variables blood_audit requires before any aud
 
 import EnvVarChecklist from "../../../../components/EnvVarChecklist.astro";
 
-blood_audit enforces a strict 3-variable contract. Missing or malformed
-values fail fast with `CliError` at startup — they never silently degrade.
+blood_audit enforces a strict 3-variable contract for the full
+deployment. Missing or malformed values fail fast with `CliError` — they
+never silently degrade.
 
 <EnvVarChecklist />
+
+## Which variables are needed today
+
+| Variable | Required for Phase 1 `bba audit`? | First used by |
+| --- | --- | --- |
+| `BBA_DATA_DIR` | Yes — validated at every CLI invocation | `bba.cli.main._resolve_data_dir` |
+| `BBA_DB_URL` | No — needed in Phase 1.5 | `bba.audit_pipeline.store.PostgresBatchRunStore`, `bba.review_actions` |
+| `ANTHROPIC_API_KEY` | No — needed in Phase 1.5 | `bba.llm_client` (Anthropic Batch API) |
+
+Set all three when configuring a long-lived deployment. Only
+`BBA_DATA_DIR` is strictly required for running the Phase 1 ingest leg
+locally.
 
 ## Important details
 

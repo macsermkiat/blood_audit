@@ -7,6 +7,15 @@ import PipelineDiagram from "../../../../components/PipelineDiagram.astro";
 
 <PipelineDiagram />
 
+:::note[What runs today via `bba audit`]
+In Phase 1, `bba audit` wraps **stage 1 only** (ingest). Stages 2–12 are
+implemented as standalone modules with their own tests, but the
+orchestration glue in `bba.audit_pipeline.run_pipeline` is wired through
+the CLI in Phase 1.5. The descriptions below cover what each module
+does; the CLI-level scope is documented on
+[audit command](/blood_audit/en/operators/audit-command/).
+:::
+
 ## Stage-by-stage
 
 ### 1. `bba.ingest`
@@ -67,12 +76,16 @@ on; structured-output schema validation. Resumable: on restart, re-queries
 ### 11. `bba.quote_grounder`
 
 Runs the [6 fail-closed grounding layers](/blood_audit/en/developers/quote-grounding/).
-Failures route to `hallucination_suspect`, not to result rows.
+Failures set `final_classification = NEEDS_REVIEW` with `review_reason =
+"hallucination_suspect"`. Grounding never silently passes.
 
 ### 12. `bba.audit_store`
 
-Writes the audit row to Postgres + appends the Parquet snapshot. Enforces
-`(run_id, encounter_id)` uniqueness. Appends `audit_log` compliance row.
+Persists one `AuditRow` per audited order (and one `LlmCall` per
+Anthropic call) immutably to Parquet. Datetimes are tz-aware UTC at the
+model boundary; nested JSON fields are deeply frozen. See
+[Audit store](/blood_audit/en/developers/audit-store/) for the
+classification literals and the Phase 1 vs 1.5 split.
 
 ## State machine for LLM_REVIEW rows
 

@@ -7,33 +7,59 @@ The authoritative report schema lives in
 [`docs/report-schema.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/report-schema.md).
 This page is a navigation aid.
 
-## Sections (six CSVs + PDF)
+## Section files
 
-| Section | File pattern |
+```
+<output_dir>/
+  hospital_trend.csv                          # committee
+  ward_scorecard.csv                          # committee
+  indication_distribution.csv                 # committee
+  cohort_exception.csv                        # committee
+  pipeline_health.csv                         # committee
+  physician_own_view_<physician_id>.csv       # one file per requested physician
+  report_<YYYY-MM-DD>.pdf                     # committee PDF
+```
+
+The PDF filename embeds the first-of-month date
+(e.g. `report_2026-05-01.pdf`).
+
+## Stored classifications (used by every section)
+
+The `final_classification` column comes from the audit store and is one
+of five literals:
+
+- `APPROPRIATE`
+- `INAPPROPRIATE`
+- `NEEDS_REVIEW`
+- `INSUFFICIENT_EVIDENCE`
+- `POTENTIALLY_INAPPROPRIATE` *(rule-only; not used by every report
+  section)*
+
+`LLM_REVIEW` is a routing concept inside the deterministic classifier;
+it is not a stored value. Failed quote-grounding becomes
+`final_classification = NEEDS_REVIEW` with `review_reason` set.
+
+`INSUFFICIENT_EVIDENCE` is **never** folded into `INAPPROPRIATE` — PRD
+contract: "documentation absence ≠ inappropriate". The
+`pipeline_health` section keeps these counts in separate buckets.
+
+## Reproducibility footer (every row, every PDF page)
+
+| Column | Meaning |
 | --- | --- |
-| Hospital trend | `hospital_trend.csv` |
-| Ward scorecard | `ward_scorecard.csv` |
-| Physician own-view | `physician_<id>.csv` (one per reviewing clinician) |
-| Indication breakdown | `indication_breakdown.csv` |
-| Cohort breakdown | `cohort_breakdown.csv` |
-| Health-state breakdown | `health_state_breakdown.csv` |
+| `policy_version` | KCMH PR-17.x policy revision driving the deterministic classifier. |
+| `model_id` | Snapshot-pinned Anthropic model ID. |
+| `redactor_version` | Version of `macsermkiat/thai-medical-deid`. |
+| `redactor_model_sha` | SHA of the redactor's HuggingFace model checkpoint. |
+| `prompt_hash` | SHA of the system prompt + few-shot bundle. |
+| `evidence_bundle_hash` | SHA of the canonical evidence-bundle schema. |
 
-## PDF filename contract
+## Month bucketing
 
-The combined PDF summary embeds the `run_id` so every distributed copy
-traces back to the producing run. See `docs/report-schema.md` for the
-exact pattern.
-
-## Common columns
-
-Across all six sections, expect:
-
-- `run_id` — the SHA-256 key for the producing run.
-- `period_start`, `period_end` — the audit window.
-- `classification` — one of `APPROPRIATE`, `POTENTIALLY_INAPPROPRIATE`,
-  `LLM_REVIEW`, or (rarely) `hallucination_suspect`.
-
-Section-specific columns are documented in the source file.
+`ReportInputs.month` is a `date` pinned to the first of the month. The
+filter window is `[month_local_start, next_month_local_start)`
+interpreted in Asia/Bangkok. An order at 23:00 Bangkok on the 31st
+belongs to its local month, not to the UTC-month it happens to fall in.
 
 ## How this is produced
 

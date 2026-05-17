@@ -23,17 +23,34 @@ import PipelineDiagram from "../../../components/PipelineDiagram.astro";
 ## blood_audit ทำอะไร
 
 blood_audit อ่านข้อมูลส่งออกจาก HOSxP ที่เสร็จสมบูรณ์แล้ว
-ตรวจสอบการให้เลือดแดงเข้มข้น (RBC, red blood cell) แต่ละครั้ง
-เทียบกับนโยบายฮีโมโกลบิน (Hb) แบบ 3-ชั้น แล้วเขียนผลออดิท 1 แถว
-ต่อหน่วยเลือด 1 หน่วย
+เปรียบเทียบการให้เลือดแดงเข้มข้น (RBC, red blood cell) แต่ละครั้ง
+กับนโยบายฮีโมโกลบิน (Hb) แบบ 3-ชั้น แล้วเขียนผลออดิท 1 แถว
+ต่อหน่วยเลือด 1 หน่วย ลงใน audit store
 
-การให้เลือดแต่ละครั้งจะได้รับ 1 ใน 3 ป้าย:
+ค่า `final_classification` ที่บันทึกสำหรับการให้เลือดแต่ละครั้ง จะเป็น
+1 ใน 5 ค่า:
 
-- `APPROPRIATE` — Hb ต่ำกว่าเกณฑ์ของกลุ่ม หรือเข้าเงื่อนไข
-  acute-blood-loss override
-- `POTENTIALLY_INAPPROPRIATE` — Hb สูงกว่าเกณฑ์และไม่มีเงื่อนไข override
-- `LLM_REVIEW` — Hb สูงกว่า 10 g/dL ส่งไปให้ large language model (LLM)
-  วิเคราะห์เหตุผลทางคลินิก โดยมีการตรวจสอบทุก quote กับข้อมูลต้นทาง
+- `APPROPRIATE` — คำสั่งตรงกับนโยบาย
+- `INAPPROPRIATE` — คำสั่งไม่ตรงกับนโยบาย
+- `POTENTIALLY_INAPPROPRIATE` — กฎตรวจพบ แต่ไม่ได้ส่งต่อให้ LLM
+- `NEEDS_REVIEW` — LLM ทำงานแล้ว แต่คำตอบต้องให้คนทบทวน
+  (เหตุผลไม่ชัด, quote-grounding ล้มเหลว, หรือ confidence ต่ำ)
+- `INSUFFICIENT_EVIDENCE` — เอกสารหลักฐานไม่พอ ไม่ใช่ `INAPPROPRIATE`
+  โดยตั้งใจ
+
+แถวที่ deterministic classifier ส่งต่อให้ LLM จะผ่าน quote-grounding
+แบบ fail-closed 6 ชั้น ถ้า grounding ล้มเหลว ผลจะเป็น `NEEDS_REVIEW`
+ไม่ใช่ผลลัพธ์ที่เผยแพร่
+
+## สถานะ Phase 1
+
+ตอนนี้ `bba audit` ทำเฉพาะ **ส่วน ingest** ของ pipeline คือแปลงไฟล์ CSV
+จาก HOSxP เป็น DuckDB + Parquet ภายใต้
+`$BBA_DATA_DIR/audit/<run_id>/` พร้อม run-level idempotency
+ส่วน LLM analysis (deterministic classifier → evidence bundle → de-id →
+prompt → batch → quote grounding → audit-store write) เขียนเป็นโมดูล
+แยกแล้ว แต่จะ **เชื่อมต่อใน Phase 1.5** ดูรายละเอียดที่
+[audit command](/blood_audit/en/operators/audit-command/) (เอกสารภาษาอังกฤษ)
 
 ## 12 ขั้นตอนของ pipeline
 

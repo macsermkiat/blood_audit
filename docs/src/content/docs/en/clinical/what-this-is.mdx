@@ -12,12 +12,20 @@ import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
 blood_audit reviews inpatient adult red blood cell (RBC) transfusions at
 Chulalongkorn Hospital, after they are complete. It reads HOSxP exports
 from the hospital information system. For each transfused unit, it
-assigns one of three labels: `APPROPRIATE`, `LLM_REVIEW`, or
+records one of five stored classifications: `APPROPRIATE`,
+`INAPPROPRIATE`, `NEEDS_REVIEW`, `INSUFFICIENT_EVIDENCE`, or
 `POTENTIALLY_INAPPROPRIATE`. The decision follows the KCMH internal
 guideline PR 17.2 (Procedure Revision 17.2) and the AABB 2023
 (Association for the Advancement of Blood & Biotherapies) standard,
 using a 3-tier hemoglobin (Hb) policy with cohort-specific thresholds
 and an acute-blood-loss override.
+
+Rows that the deterministic classifier routes to the LLM (Tier 3,
+Hb > 10 g/dL) go through six fail-closed quote-grounding layers.
+"LLM_REVIEW" is a routing concept inside the pipeline; it is not a
+stored classification. A failed grounding becomes
+`final_classification = NEEDS_REVIEW` with `review_reason` set, so a
+human reviewer can adjudicate.
 
 ## What it is not
 
