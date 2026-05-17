@@ -49,7 +49,7 @@ const defaultTiles: Tile[] = [
 const { tiles = defaultTiles } = Astro.props;
 ---
 
-<section class="audience-tiles ba-reveal" aria-label="Doorways for each audience">
+<section class="audience-tiles" aria-label="Doorways for each audience">
   <ol class="audience-tiles__list" role="list">
     {tiles.map((tile, idx) => (
       <li class="audience-tile">

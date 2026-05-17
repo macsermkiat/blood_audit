@@ -17,8 +17,8 @@ interface Props {
 
 const groups: StageGroup[] = [
   {
-    legLabel: "Ingest leg",
-    legSubtitle: "Phase 1 — runs today via bba audit",
+    legLabel: "Data preparation",
+    legSubtitle: "Stage 1 runs today via bba audit; stages 2-5 wire in Phase 1.5",
     stages: [
       { slug: "ingest", label: "Ingest", module: "bba.ingest" },
       { slug: "audit_orders", label: "Audit orders", module: "bba.audit_orders" },
@@ -28,8 +28,8 @@ const groups: StageGroup[] = [
     ],
   },
   {
-    legLabel: "Analysis leg",
-    legSubtitle: "Phase 1.5 — wired by the deployer",
+    legLabel: "Analysis",
+    legSubtitle: "Modules implemented; CLI wiring lands in Phase 1.5",
     stages: [
       { slug: "deterministic_classifier", label: "Deterministic classify", module: "bba.deterministic_classifier" },
       { slug: "evidence_bundle_builder", label: "Evidence bundle", module: "bba.evidence_bundle_builder" },
@@ -47,7 +47,7 @@ const { highlightStage } = Astro.props;
 let globalIndex = 0;
 ---
 
-<figure class="pipeline ba-reveal" aria-label="blood_audit pipeline — 12 stages across 2 legs">
+<figure class="pipeline" aria-label="blood_audit pipeline — 12 stages across 2 legs">
   {groups.map((group, gIdx) => (
     <section class="pipeline__leg" data-leg={gIdx === 0 ? "ingest" : "analysis"}>
       <header class="pipeline__leg-header">
@@ -74,10 +74,11 @@ let globalIndex = 0;
     </section>
   ))}
   <figcaption class="pipeline__caption">
-    Twelve happy-path stages of <code>bba audit</code>. Each stage is an importable
-    subpackage under <code>src/bba/</code>. Run-level idempotency is enforced at
-    <code>audit_store</code>. The ingest leg runs today; the analysis leg is wired
-    in Phase 1.5.
+    Twelve happy-path stages. Each stage is an importable subpackage under
+    <code>src/bba/</code>. In Phase 1, <code>bba audit</code> wires
+    <code>bba.ingest</code> only; stages 2-12 are implemented modules wired
+    into the CLI in Phase 1.5. Run-level idempotency is enforced at
+    <code>audit_store</code>.
   </figcaption>
 </figure>
 
