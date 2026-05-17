@@ -77,7 +77,15 @@ def fresh_db(_postgres_container: object) -> Iterator[str]:
 
     alembic_cfg = Config(str(REPO_ROOT / "alembic.ini"))
     alembic_cfg.set_main_option("script_location", str(REPO_ROOT / "migrations"))
-    alembic_cfg.set_main_option("sqlalchemy.url", dsn)
+    # The project ships psycopg (psycopg3) only — no psycopg2. SQLAlchemy
+    # routes a bare ``postgresql://`` URL to the psycopg2 driver by default,
+    # so we must opt into psycopg3 explicitly via the +psycopg suffix. This
+    # mirrors bba.review_actions.models.ReviewActionsConfig.sqlalchemy_dsn,
+    # which is the canonical converter.
+    alembic_cfg.set_main_option(
+        "sqlalchemy.url",
+        dsn.replace("postgresql://", "postgresql+psycopg://", 1),
+    )
     command.upgrade(alembic_cfg, "head")
     yield dsn
 
