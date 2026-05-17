@@ -2,6 +2,7 @@
 interface Layer {
   name: string;
   purpose: string;
+  optional?: boolean;
 }
 
 interface Props {
@@ -15,22 +16,33 @@ const defaultLayers: Layer[] = [
   { name: "4. Within-doc uniqueness", purpose: "The quote must occur exactly once in the cited document — no ambiguity." },
   { name: "5. Minimum length (≥ 25 chars)", purpose: "Rejects trivially generic quotes that could match by chance." },
   { name: "6. Numeric-tuple agreement", purpose: "All numbers in the quote must match the structured evidence values." },
-  { name: "7. Medical NLI entailment", purpose: "Semantic check: does the quote actually support the LLM's clinical claim?" },
+  {
+    name: "7. Medical-NLI entailment (optional)",
+    purpose:
+      "Semantic check: does the quote actually support the LLM's clinical claim? Opt-in per PRD §9. The verifier runs this layer only when the caller passes a non-null nli_gate; default call sites do not.",
+    optional: true,
+  },
 ];
 
 const { layers = defaultLayers } = Astro.props;
 ---
 
-<section class="grounding-layers" aria-label="Six-layer quote-grounding stack">
+<section class="grounding-layers" aria-label="Quote-grounding stack: 6 mandatory layers plus an optional NLI gate">
   <p class="grounding-layers__intro">
-    Quote grounding is <strong>fail-closed and layered</strong>. Any failure routes the
-    row to <code>hallucination_suspect</code> &mdash; never to a result row.
-    None of these layers may be mocked or short-circuited in tests.
+    Quote grounding is <strong>fail-closed and layered</strong>. The first six layers
+    always run; a failure on any of them sets <code>final_classification = NEEDS_REVIEW</code>
+    with <code>review_reason = "hallucination_suspect"</code>, never an
+    <code>APPROPRIATE</code>/<code>INAPPROPRIATE</code> result row. None of those six
+    layers may be mocked or short-circuited in tests. The seventh layer (medical-NLI)
+    is opt-in.
   </p>
   <ol class="ba-stack grounding-layers__list" role="list">
     {layers.map((layer) => (
-      <li class="ba-card grounding-layer">
-        <p class="ba-card__title">{layer.name}</p>
+      <li class:list={["ba-card grounding-layer", { "grounding-layer--optional": layer.optional }]}>
+        <div class="ba-row">
+          <p class="ba-card__title">{layer.name}</p>
+          {layer.optional && <span class="ba-pill ba-pill--warn">opt-in</span>}
+        </div>
         <p class="grounding-layer__purpose">{layer.purpose}</p>
       </li>
     ))}
@@ -42,4 +54,8 @@ const { layers = defaultLayers } = Astro.props;
   .grounding-layers__intro { margin-bottom: 0.75rem; }
   .grounding-layers__list { list-style: none; padding: 0; margin: 0; }
   .grounding-layer__purpose { margin: 0; }
+  .grounding-layer--optional {
+    border-style: dashed;
+    opacity: 0.92;
+  }
 </style>
