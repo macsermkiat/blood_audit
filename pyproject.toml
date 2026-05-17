@@ -52,6 +52,15 @@ dev = [
 pythonpath = ["src"]
 testpaths = ["tests"]
 
+[tool.mypy]
+# Enable --strict-equivalent settings by default. src/ is type-clean under
+# strict; making it the configured default closes the gap between the CI
+# job's "src strict" label and what `uv run mypy src` actually checks
+# (Codex review of PR #57: a bare `mypy src` accepts untyped defs and
+# unchecked Any access, so the gate did not enforce the contract it
+# advertised). Per-file overrides below opt specific modules out.
+strict = true
+
 [[tool.mypy.overrides]]
 # reportlab does not ship PEP 561 type stubs and has no maintained
 # types-reportlab package on PyPI. The report_generator's reportlab usage

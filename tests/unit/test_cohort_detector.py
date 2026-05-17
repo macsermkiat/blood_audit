@@ -175,9 +175,7 @@ def _op(
     )
 
 
-def _med(
-    drug: str, *, hours_before_anchor: int = 12
-) -> MedEvent:
+def _med(drug: str, *, hours_before_anchor: int = 12) -> MedEvent:
     return MedEvent(
         drug=drug,
         timestamp=ANCHOR - timedelta(hours=hours_before_anchor),
@@ -310,9 +308,7 @@ class TestCohortCardiacSurgery:
         # 3814 = aortic resection w/ replacement.
         result = assign_cohort(
             _inputs(
-                procedure_events=(
-                    _op("3814", or_flag=True, days_before_anchor=20),
-                ),
+                procedure_events=(_op("3814", or_flag=True, days_before_anchor=20),),
             )
         )
         assert result.label == CohortLabel.CARDIAC_SURGERY
@@ -322,9 +318,7 @@ class TestCohortCardiacSurgery:
         # 3925 = aorta-iliac-femoral bypass.
         result = assign_cohort(
             _inputs(
-                procedure_events=(
-                    _op("3925", or_flag=True, days_before_anchor=1),
-                ),
+                procedure_events=(_op("3925", or_flag=True, days_before_anchor=1),),
             )
         )
         assert result.label == CohortLabel.CARDIAC_SURGERY
@@ -336,9 +330,7 @@ class TestCohortCardiacSurgery:
         # join doesn't silently drop the cardiac signal.
         result = assign_cohort(
             _inputs(
-                procedure_events=(
-                    _op("36.01", or_flag=True, days_before_anchor=10),
-                ),
+                procedure_events=(_op("36.01", or_flag=True, days_before_anchor=10),),
             )
         )
         assert result.label == CohortLabel.CARDIAC_SURGERY
@@ -352,9 +344,7 @@ class TestCardiacSurgeryLookback:
         # (a procedure on day 30 still counts).
         result = assign_cohort(
             _inputs(
-                procedure_events=(
-                    _op("3601", or_flag=True, days_before_anchor=30),
-                ),
+                procedure_events=(_op("3601", or_flag=True, days_before_anchor=30),),
             )
         )
         assert result.label == CohortLabel.CARDIAC_SURGERY
@@ -362,9 +352,7 @@ class TestCardiacSurgeryLookback:
     def test_31_days_excluded(self) -> None:
         result = assign_cohort(
             _inputs(
-                procedure_events=(
-                    _op("3601", or_flag=True, days_before_anchor=31),
-                ),
+                procedure_events=(_op("3601", or_flag=True, days_before_anchor=31),),
             )
         )
         # Falls through to DEFAULT — a 31-day-old surgery is no longer
@@ -390,9 +378,7 @@ class TestCardiacRequiresOrFlag:
     def test_or_flag_false_excluded(self) -> None:
         result = assign_cohort(
             _inputs(
-                procedure_events=(
-                    _op("3601", or_flag=False, days_before_anchor=10),
-                ),
+                procedure_events=(_op("3601", or_flag=False, days_before_anchor=10),),
             )
         )
         assert result.label == CohortLabel.DEFAULT
@@ -486,9 +472,7 @@ class TestCohortOrthoCardiac:
 
     def test_ortho_alone_does_not_trigger_ortho_cardiac(self) -> None:
         # Plain ortho is not a cohort by itself per the PRD §5 table.
-        result = assign_cohort(
-            _inputs(procedure_events=(_op("8151", or_flag=True),))
-        )
+        result = assign_cohort(_inputs(procedure_events=(_op("8151", or_flag=True),)))
         assert result.label == CohortLabel.DEFAULT
         assert result.threshold == 7.0
 
@@ -645,9 +629,7 @@ class TestMtpBoundary:
         assert result.label != CohortLabel.MTP
 
     def test_4_rbc_units_at_threshold_triggers(self) -> None:
-        orders = (
-            _order(rbc_units=4, minutes_before_anchor=10),
-        )
+        orders = (_order(rbc_units=4, minutes_before_anchor=10),)
         result = assign_cohort(_inputs(blood_orders=orders))
         assert result.label == CohortLabel.MTP
 
@@ -1057,8 +1039,12 @@ class TestCohortDeterminism:
         # must yield the same CohortAssignment (pure-function contract).
         ev = (_op("3601", or_flag=True, days_before_anchor=days),)
         orders = (_order(rbc_units=units, minutes_before_anchor=30),)
-        a = assign_cohort(_inputs(procedure_events=ev, blood_orders=orders, anc_value=anc))
-        b = assign_cohort(_inputs(procedure_events=ev, blood_orders=orders, anc_value=anc))
+        a = assign_cohort(
+            _inputs(procedure_events=ev, blood_orders=orders, anc_value=anc)
+        )
+        b = assign_cohort(
+            _inputs(procedure_events=ev, blood_orders=orders, anc_value=anc)
+        )
         assert a == b
 
 
@@ -1083,9 +1069,7 @@ class TestMtpBoundaryProperty:
 
     @given(orders=st.lists(_BLOOD_ORDER_STRATEGY, min_size=0, max_size=8))
     @settings(max_examples=200)
-    def test_mtp_invariant_matches_spec(
-        self, orders: list[BloodOrderEvent]
-    ) -> None:
+    def test_mtp_invariant_matches_spec(self, orders: list[BloodOrderEvent]) -> None:
         # Recompute the MTP truth using a brute-force read of the spec
         # (independent of the implementation). The detector must agree
         # with this independent calculation for every generated input.

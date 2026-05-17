@@ -87,6 +87,4 @@ def horvitz_thompson_prevalence(
     prevalence = max(0.0, min(1.0, prevalence))
     variance = max(0.0, variance_sum)
     se = math.sqrt(variance)
-    return HorvitzThompsonEstimate(
-        prevalence=prevalence, variance=variance, se=se
-    )
+    return HorvitzThompsonEstimate(prevalence=prevalence, variance=variance, se=se)

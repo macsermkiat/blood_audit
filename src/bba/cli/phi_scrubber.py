@@ -159,8 +159,7 @@ def scrub_traceback(
         frame = tb.tb_frame
         code = frame.f_code
         lines.append(
-            f'  File "{code.co_filename}", line {tb.tb_lineno}, '
-            f"in {code.co_name}"
+            f'  File "{code.co_filename}", line {tb.tb_lineno}, in {code.co_name}'
         )
         scrubbed_locals = _scrub_frame_dict(frame.f_locals)
         for name, value in scrubbed_locals.items():

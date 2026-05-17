@@ -65,9 +65,7 @@ class AuditCommandInput(_FrozenModel):
     def _xor_input_or_run_id(self) -> Self:
         provided = (self.input_csv is not None, self.run_id is not None)
         if provided == (False, False):
-            raise ValueError(
-                "bba audit requires exactly one of --input or --run-id"
-            )
+            raise ValueError("bba audit requires exactly one of --input or --run-id")
         if provided == (True, True):
             raise ValueError(
                 "bba audit accepts only one of --input or --run-id, not both"

@@ -86,9 +86,7 @@ def _row(
         "prior_rbc_units_24h": 0,
         "prior_rbc_units_7d": 2,
         "cohort_threshold": 7.0,
-        "delta_hb_window_results": (
-            {"window": "24h", "delta": 1.4, "trigger": False},
-        ),
+        "delta_hb_window_results": ({"window": "24h", "delta": 1.4, "trigger": False},),
         # Pipeline outputs
         "rule_classification": "APPROPRIATE",
         "final_classification": final_classification,
@@ -195,10 +193,17 @@ class TestAuditRowRoundTrip:
     def test_round_trip_preserves_nested_json_fields(self, store: AuditStore) -> None:
         row = _row(
             indications_json=(
-                {"code": "B1", "quote": "Hb 6.8", "source_id": "X:1", "confidence": 0.9},
+                {
+                    "code": "B1",
+                    "quote": "Hb 6.8",
+                    "source_id": "X:1",
+                    "confidence": 0.9,
+                },
                 {"code": "B2", "quote": "tachy", "source_id": "Y:2", "confidence": 0.8},
             ),
-            negative_evidence_json=({"code": "no_bleed", "quote": "stable", "source_id": "Z:3"},),
+            negative_evidence_json=(
+                {"code": "no_bleed", "quote": "stable", "source_id": "Z:3"},
+            ),
         )
         store.write(row, [_call()])
 
@@ -207,14 +212,26 @@ class TestAuditRowRoundTrip:
         assert rt.negative_evidence_json == row.negative_evidence_json
 
     def test_multiple_runs_coexist_in_same_dataset(self, store: AuditStore) -> None:
-        store.write(_row(audit_id="a1", run_id="r1"), [_call(call_id="c1", audit_id="a1", run_id="r1")])
-        store.write(_row(audit_id="a2", run_id="r2"), [_call(call_id="c2", audit_id="a2", run_id="r2")])
+        store.write(
+            _row(audit_id="a1", run_id="r1"),
+            [_call(call_id="c1", audit_id="a1", run_id="r1")],
+        )
+        store.write(
+            _row(audit_id="a2", run_id="r2"),
+            [_call(call_id="c2", audit_id="a2", run_id="r2")],
+        )
 
         assert {r.run_id for r in store.read_audit_results()} == {"r1", "r2"}
 
     def test_read_audit_results_filters_by_run_id(self, store: AuditStore) -> None:
-        store.write(_row(audit_id="a1", run_id="r1"), [_call(call_id="c1", audit_id="a1", run_id="r1")])
-        store.write(_row(audit_id="a2", run_id="r2"), [_call(call_id="c2", audit_id="a2", run_id="r2")])
+        store.write(
+            _row(audit_id="a1", run_id="r1"),
+            [_call(call_id="c1", audit_id="a1", run_id="r1")],
+        )
+        store.write(
+            _row(audit_id="a2", run_id="r2"),
+            [_call(call_id="c2", audit_id="a2", run_id="r2")],
+        )
 
         only_r1 = store.read_audit_results(run_id="r1")
 
@@ -224,7 +241,9 @@ class TestAuditRowRoundTrip:
 class TestLlmCallRoundTrip:
     """LlmCall round-trip must preserve extended_thinking_blocks verbatim."""
 
-    def test_call_round_trip_preserves_extended_thinking(self, store: AuditStore) -> None:
+    def test_call_round_trip_preserves_extended_thinking(
+        self, store: AuditStore
+    ) -> None:
         call = _call(
             extended_thinking_blocks=(
                 {"type": "thinking", "text": "thought A"},
@@ -247,8 +266,14 @@ class TestLlmCallRoundTrip:
         assert {c.call_id for c in calls} == {"c1", "c2"}
 
     def test_read_llm_calls_filters_by_run_id(self, store: AuditStore) -> None:
-        store.write(_row(audit_id="a1", run_id="r1"), [_call(call_id="c1", audit_id="a1", run_id="r1")])
-        store.write(_row(audit_id="a2", run_id="r2"), [_call(call_id="c2", audit_id="a2", run_id="r2")])
+        store.write(
+            _row(audit_id="a1", run_id="r1"),
+            [_call(call_id="c1", audit_id="a1", run_id="r1")],
+        )
+        store.write(
+            _row(audit_id="a2", run_id="r2"),
+            [_call(call_id="c2", audit_id="a2", run_id="r2")],
+        )
 
         only_r1 = store.read_llm_calls(run_id="r1")
         assert {c.call_id for c in only_r1} == {"c1"}
@@ -326,9 +351,7 @@ class TestTransactionalOrderingInvariant:
         with pytest.raises(TransactionalOrderingError):
             store.validate_invariants(row.run_id)
 
-    def test_invariant_error_names_offending_audit_id(
-        self, store: AuditStore
-    ) -> None:
+    def test_invariant_error_names_offending_audit_id(self, store: AuditStore) -> None:
         row = _row(audit_id="audit-orphan-42")
         store._persist_audit_result(row)
 
@@ -364,9 +387,7 @@ class TestReconciliationFindsOrphanCalls:
         assert "orphan-c1" in report.orphan_call_ids
         assert report.orphan_audit_ids == ()
 
-    def test_reconcile_returns_empty_report_when_clean(
-        self, store: AuditStore
-    ) -> None:
+    def test_reconcile_returns_empty_report_when_clean(self, store: AuditStore) -> None:
         store.write(
             _row(audit_id="a1", run_id="r1"),
             [_call(call_id="c1", audit_id="a1", run_id="r1")],
@@ -426,10 +447,12 @@ class TestIdempotentRerun:
         # Same audit_id, different run_id (e.g., code-version bump → new run)
         # is NOT a no-op: it is a re-derivation and must persist.
         store.write(
-            _row(audit_id="a1", run_id="r1"), [_call(call_id="c1", audit_id="a1", run_id="r1")]
+            _row(audit_id="a1", run_id="r1"),
+            [_call(call_id="c1", audit_id="a1", run_id="r1")],
         )
         store.write(
-            _row(audit_id="a1", run_id="r2"), [_call(call_id="c2", audit_id="a1", run_id="r2")]
+            _row(audit_id="a1", run_id="r2"),
+            [_call(call_id="c2", audit_id="a1", run_id="r2")],
         )
 
         rows = store.read_audit_results()
@@ -466,11 +489,19 @@ class TestSnapshotViewConsistency:
         assert "a-existing" in visible_ids
         assert "a-new" not in visible_ids
 
-    def test_reopening_same_day_returns_same_frozen_set(self, store: AuditStore) -> None:
-        store.write(_row(audit_id="a1", run_id="r1"), [_call(call_id="c1", audit_id="a1", run_id="r1")])
+    def test_reopening_same_day_returns_same_frozen_set(
+        self, store: AuditStore
+    ) -> None:
+        store.write(
+            _row(audit_id="a1", run_id="r1"),
+            [_call(call_id="c1", audit_id="a1", run_id="r1")],
+        )
 
         view_morning = SnapshotView.open(store, as_of=date(2026, 5, 1))
-        store.write(_row(audit_id="a2", run_id="r2"), [_call(call_id="c2", audit_id="a2", run_id="r2")])
+        store.write(
+            _row(audit_id="a2", run_id="r2"),
+            [_call(call_id="c2", audit_id="a2", run_id="r2")],
+        )
         view_afternoon = SnapshotView.open(store, as_of=date(2026, 5, 1))
 
         # Same as_of must return identical frozen content — re-opening the day's
@@ -482,9 +513,15 @@ class TestSnapshotViewConsistency:
     def test_next_day_snapshot_sees_writes_from_previous_day(
         self, store: AuditStore
     ) -> None:
-        store.write(_row(audit_id="a1", run_id="r1"), [_call(call_id="c1", audit_id="a1", run_id="r1")])
+        store.write(
+            _row(audit_id="a1", run_id="r1"),
+            [_call(call_id="c1", audit_id="a1", run_id="r1")],
+        )
         SnapshotView.open(store, as_of=date(2026, 5, 1))
-        store.write(_row(audit_id="a2", run_id="r2"), [_call(call_id="c2", audit_id="a2", run_id="r2")])
+        store.write(
+            _row(audit_id="a2", run_id="r2"),
+            [_call(call_id="c2", audit_id="a2", run_id="r2")],
+        )
 
         view_next_day = SnapshotView.open(store, as_of=date(2026, 5, 2))
 
@@ -505,10 +542,19 @@ class TestColdStorageMigration:
         old_ts = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
         store.write(
             _row(audit_id="a1", run_id="r1"),
-            [_call(call_id="c-old", audit_id="a1", run_id="r1", request_timestamp=old_ts)],
+            [
+                _call(
+                    call_id="c-old",
+                    audit_id="a1",
+                    run_id="r1",
+                    request_timestamp=old_ts,
+                )
+            ],
         )
 
-        report = migrate_cold_storage(store, older_than=datetime(2026, 4, 2, 0, 0, 0, tzinfo=UTC))
+        report = migrate_cold_storage(
+            store, older_than=datetime(2026, 4, 2, 0, 0, 0, tzinfo=UTC)
+        )
 
         assert isinstance(report, ColdStorageReport)
         assert "c-old" in report.moved_call_ids
@@ -519,10 +565,19 @@ class TestColdStorageMigration:
         old_ts = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
         store.write(
             _row(audit_id="a1", run_id="r1"),
-            [_call(call_id="c-old", audit_id="a1", run_id="r1", request_timestamp=old_ts)],
+            [
+                _call(
+                    call_id="c-old",
+                    audit_id="a1",
+                    run_id="r1",
+                    request_timestamp=old_ts,
+                )
+            ],
         )
 
-        migrate_cold_storage(store, older_than=datetime(2026, 4, 2, 0, 0, 0, tzinfo=UTC))
+        migrate_cold_storage(
+            store, older_than=datetime(2026, 4, 2, 0, 0, 0, tzinfo=UTC)
+        )
 
         migrated = next(c for c in store.read_llm_calls() if c.call_id == "c-old")
         assert migrated.extended_thinking_blocks is None
@@ -532,7 +587,14 @@ class TestColdStorageMigration:
         recent = datetime(2026, 5, 1, 0, 0, 0, tzinfo=UTC)
         store.write(
             _row(audit_id="a1", run_id="r1"),
-            [_call(call_id="c-recent", audit_id="a1", run_id="r1", request_timestamp=recent)],
+            [
+                _call(
+                    call_id="c-recent",
+                    audit_id="a1",
+                    run_id="r1",
+                    request_timestamp=recent,
+                )
+            ],
         )
 
         cutoff = recent - timedelta(days=90)
@@ -546,7 +608,14 @@ class TestColdStorageMigration:
         old_ts = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
         store.write(
             _row(audit_id="a1", run_id="r1"),
-            [_call(call_id="c-old", audit_id="a1", run_id="r1", request_timestamp=old_ts)],
+            [
+                _call(
+                    call_id="c-old",
+                    audit_id="a1",
+                    run_id="r1",
+                    request_timestamp=old_ts,
+                )
+            ],
         )
         cutoff = datetime(2026, 4, 2, 0, 0, 0, tzinfo=UTC)
 
@@ -609,9 +678,7 @@ class TestReadHonorsCommitMarker:
         store._persist_llm_calls(
             [_call(call_id="c-bad", audit_id="a-crashed", run_id="r-mix")]
         )
-        store._persist_audit_parquet_only(
-            _row(audit_id="a-crashed", run_id="r-mix")
-        )
+        store._persist_audit_parquet_only(_row(audit_id="a-crashed", run_id="r-mix"))
 
         ids = {r.audit_id for r in store.read_audit_results(run_id="r-mix")}
         assert ids == {"a-ok"}
@@ -705,9 +772,7 @@ class TestWriteRejectsMalformedCalls:
         with pytest.raises(ValueError, match="at least one"):
             store.write(_row(), [])
 
-    def test_write_rejects_mismatched_call_audit_id(
-        self, store: AuditStore
-    ) -> None:
+    def test_write_rejects_mismatched_call_audit_id(self, store: AuditStore) -> None:
         row = _row(audit_id="a-row")
         bad = _call(call_id="c1", audit_id="a-other", run_id=row.run_id)
 
@@ -766,7 +831,9 @@ class TestModelsEnforceTzAwareUTC:
         assert row.run_timestamp.utcoffset() == timedelta(0)
 
     def test_optional_vitals_timestamp_allows_none(self) -> None:
-        row = _row(vitals_timestamp=None, vitals_sbp=None, vitals_hr=None, vitals_source=None)
+        row = _row(
+            vitals_timestamp=None, vitals_sbp=None, vitals_hr=None, vitals_source=None
+        )
 
         assert row.vitals_timestamp is None
 
@@ -1145,9 +1212,7 @@ class TestNestedJsonDeepImmutability:
 
         assert row.indications_json[0]["metadata"]["note"] == "fresh"
 
-    def test_deep_freeze_round_trip_preserves_equality(
-        self, store: AuditStore
-    ) -> None:
+    def test_deep_freeze_round_trip_preserves_equality(self, store: AuditStore) -> None:
         row = _row(
             indications_json=(
                 {
@@ -1182,7 +1247,10 @@ class TestLlmCallNestedJsonImmutability:
 
     def test_request_json_rejects_nested_mutation(self) -> None:
         call = _call(
-            request_json={"system": "x", "messages": [{"role": "user", "content": "hi"}]},
+            request_json={
+                "system": "x",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
         )
 
         with pytest.raises(TypeError):
@@ -1223,8 +1291,15 @@ class TestLlmCallNestedJsonImmutability:
         self, store: AuditStore
     ) -> None:
         call = _call(
-            request_json={"system": "x", "messages": [{"role": "user", "content": "hi"}]},
-            response_json={"id": "msg_1", "stop_reason": "tool_use", "usage": {"input": 100}},
+            request_json={
+                "system": "x",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+            response_json={
+                "id": "msg_1",
+                "stop_reason": "tool_use",
+                "usage": {"input": 100},
+            },
             extended_thinking_blocks=({"type": "thinking", "text": "step 1"},),
         )
         store.write(_row(), [call])
@@ -1315,9 +1390,7 @@ class TestCodeVersionInAuditPaths:
 
         assert {c.call_id for c in only_v2} == {"c-v2"}
 
-    def test_read_llm_calls_default_returns_every_version(
-        self, tmp_path: Path
-    ) -> None:
+    def test_read_llm_calls_default_returns_every_version(self, tmp_path: Path) -> None:
         # Default behavior (no code_version filter) returns calls from every
         # committed version — symmetric with read_audit_results.
         root = tmp_path / "store"
@@ -1335,9 +1408,7 @@ class TestCodeVersionInAuditPaths:
 
         assert ids == {"c-v1", "c-v2"}
 
-    def test_cold_storage_preserves_original_call_slug(
-        self, tmp_path: Path
-    ) -> None:
+    def test_cold_storage_preserves_original_call_slug(self, tmp_path: Path) -> None:
         # Migration must rewrite each call at its ORIGINAL path. If the
         # migrator runs under a different code_version, the rewrite must not
         # accidentally land at a new (current-slug) path.
@@ -1373,9 +1444,7 @@ class TestCodeVersionInAuditPaths:
             f"instead of rewriting in place: {[p.name for p in call_files]}"
         )
 
-    def test_read_audit_results_filters_by_code_version(
-        self, tmp_path: Path
-    ) -> None:
+    def test_read_audit_results_filters_by_code_version(self, tmp_path: Path) -> None:
         """``read_audit_results`` exposes a ``code_version`` filter symmetric
         with ``read_llm_calls``. WHY: SnapshotView materializes from the
         unfiltered read, and dashboards/eval need to scope to a specific
@@ -1397,9 +1466,7 @@ class TestCodeVersionInAuditPaths:
         assert {r.reasoning_summary_en for r in v1_rows} == {"v1"}
         assert {r.reasoning_summary_en for r in v2_rows} == {"v2"}
 
-    def test_reconcile_scopes_orphans_by_code_version(
-        self, tmp_path: Path
-    ) -> None:
+    def test_reconcile_scopes_orphans_by_code_version(self, tmp_path: Path) -> None:
         """A v2 orphan call must be detected even when v1 has committed the
         same ``audit_id`` — the call belongs to v2's reproducibility chain,
         not v1's, so it cannot be "covered" by v1's audit row.
@@ -1454,9 +1521,7 @@ class TestCodeVersionInAuditPaths:
             "v2's orphan audit row was masked by v1's call for the same audit_id"
         )
 
-    def test_validate_invariants_scopes_by_code_version(
-        self, tmp_path: Path
-    ) -> None:
+    def test_validate_invariants_scopes_by_code_version(self, tmp_path: Path) -> None:
         """A v2 audit row without v2 calls must raise even when v1 has matching
         calls — v1's calls don't reproduce the v2 row."""
         root = tmp_path / "store"

@@ -32,9 +32,7 @@ def assert_custom_ids_match(
     submitted_ids = [r.audit_id for r in requests]
     result_ids = [r.custom_id for r in results]
 
-    duplicate_results = sorted(
-        cid for cid, n in Counter(result_ids).items() if n > 1
-    )
+    duplicate_results = sorted(cid for cid, n in Counter(result_ids).items() if n > 1)
     if duplicate_results:
         raise CustomIdMismatchError(
             f"duplicate custom_id(s) in results: {duplicate_results}"

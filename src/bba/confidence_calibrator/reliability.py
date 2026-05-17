@@ -80,8 +80,7 @@ def generate_reliability_diagram(
         f"<title>{xml_escape(title)} (ECE={ece_result.ece:.4f})</title>",
     )
     parts.append(
-        f'<rect x="0" y="0" width="{_SVG_WIDTH}" height="{_SVG_HEIGHT}" '
-        'fill="white"/>',
+        f'<rect x="0" y="0" width="{_SVG_WIDTH}" height="{_SVG_HEIGHT}" fill="white"/>',
     )
 
     plot_w = _SVG_WIDTH - 2 * _SVG_MARGIN

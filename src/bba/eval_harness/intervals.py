@@ -63,25 +63,47 @@ def normal_quantile(p: float) -> float:
     Raises ``ValueError`` for ``p`` outside the open interval (0, 1).
     """
     if not 0.0 < p < 1.0:
-        raise ValueError(
-            f"normal_quantile: p must be in (0, 1), got {p!r}"
-        )
+        raise ValueError(f"normal_quantile: p must be in (0, 1), got {p!r}")
     if p < _ACK_PLOW:
         q = math.sqrt(-2.0 * math.log(p))
         return (
-            ((((_ACK_C[0] * q + _ACK_C[1]) * q + _ACK_C[2]) * q + _ACK_C[3]) * q + _ACK_C[4]) * q + _ACK_C[5]
+            (
+                (((_ACK_C[0] * q + _ACK_C[1]) * q + _ACK_C[2]) * q + _ACK_C[3]) * q
+                + _ACK_C[4]
+            )
+            * q
+            + _ACK_C[5]
         ) / ((((_ACK_D[0] * q + _ACK_D[1]) * q + _ACK_D[2]) * q + _ACK_D[3]) * q + 1.0)
     if p > _ACK_PHIGH:
         q = math.sqrt(-2.0 * math.log(1.0 - p))
         return -(
-            ((((_ACK_C[0] * q + _ACK_C[1]) * q + _ACK_C[2]) * q + _ACK_C[3]) * q + _ACK_C[4]) * q + _ACK_C[5]
+            (
+                (((_ACK_C[0] * q + _ACK_C[1]) * q + _ACK_C[2]) * q + _ACK_C[3]) * q
+                + _ACK_C[4]
+            )
+            * q
+            + _ACK_C[5]
         ) / ((((_ACK_D[0] * q + _ACK_D[1]) * q + _ACK_D[2]) * q + _ACK_D[3]) * q + 1.0)
     q = p - 0.5
     r = q * q
     return (
-        ((((_ACK_A[0] * r + _ACK_A[1]) * r + _ACK_A[2]) * r + _ACK_A[3]) * r + _ACK_A[4]) * r + _ACK_A[5]
-    ) * q / (
-        ((((_ACK_B[0] * r + _ACK_B[1]) * r + _ACK_B[2]) * r + _ACK_B[3]) * r + _ACK_B[4]) * r + 1.0
+        (
+            (
+                (((_ACK_A[0] * r + _ACK_A[1]) * r + _ACK_A[2]) * r + _ACK_A[3]) * r
+                + _ACK_A[4]
+            )
+            * r
+            + _ACK_A[5]
+        )
+        * q
+        / (
+            (
+                (((_ACK_B[0] * r + _ACK_B[1]) * r + _ACK_B[2]) * r + _ACK_B[3]) * r
+                + _ACK_B[4]
+            )
+            * r
+            + 1.0
+        )
     )
 
 
@@ -101,13 +123,9 @@ def wilson_ci(
             "wilson_ci: trials must be > 0 (no defined center on zero obs)"
         )
     if successes < 0 or successes > trials:
-        raise ValueError(
-            f"wilson_ci: successes ({successes}) must be in [0, {trials}]"
-        )
+        raise ValueError(f"wilson_ci: successes ({successes}) must be in [0, {trials}]")
     if not 0.0 < confidence < 1.0:
-        raise ValueError(
-            f"wilson_ci: confidence must be in (0, 1), got {confidence!r}"
-        )
+        raise ValueError(f"wilson_ci: confidence must be in (0, 1), got {confidence!r}")
 
     z = normal_quantile(0.5 + confidence / 2.0)
     n = float(trials)
@@ -115,11 +133,7 @@ def wilson_ci(
     z2 = z * z
     denom = 1.0 + z2 / n
     center = (p_hat + z2 / (2.0 * n)) / denom
-    margin = (
-        z * math.sqrt(p_hat * (1.0 - p_hat) / n + z2 / (4.0 * n * n))
-    ) / denom
+    margin = (z * math.sqrt(p_hat * (1.0 - p_hat) / n + z2 / (4.0 * n * n))) / denom
     lower = max(0.0, center - margin)
     upper = min(1.0, center + margin)
-    return WilsonInterval(
-        point=p_hat, lower=lower, upper=upper, confidence=confidence
-    )
+    return WilsonInterval(point=p_hat, lower=lower, upper=upper, confidence=confidence)

@@ -173,8 +173,8 @@ class AnthropicBatchTransport:
         poll_interval_seconds: float = 30.0,
         max_wait_seconds: float = 86_400.0,
     ) -> None:
-        resolved_key = api_key if api_key is not None else os.environ.get(
-            "ANTHROPIC_API_KEY"
+        resolved_key = (
+            api_key if api_key is not None else os.environ.get("ANTHROPIC_API_KEY")
         )
         if not resolved_key:
             raise LlmClientConfigError(
@@ -214,9 +214,7 @@ class AnthropicBatchTransport:
         try:
             batch = client.messages.batches.create(requests=per_row_requests)
         except Exception as exc:  # SDK error surface intentionally broad
-            raise AnthropicAPIError(
-                f"Message Batches create failed: {exc!r}"
-            ) from exc
+            raise AnthropicAPIError(f"Message Batches create failed: {exc!r}") from exc
         batch_id: str = batch.id
         return batch_id
 
@@ -242,8 +240,7 @@ class AnthropicBatchTransport:
                 break
             if time.monotonic() > deadline:
                 raise AnthropicAPIError(
-                    f"batch {batch_id!r} did not complete within "
-                    f"{self._max_wait}s"
+                    f"batch {batch_id!r} did not complete within {self._max_wait}s"
                 )
             time.sleep(self._poll_interval)
 
@@ -345,7 +342,9 @@ def _result_from_batch_entry(
         response_dict = (
             message.model_dump() if hasattr(message, "model_dump") else dict(message)
         )
-        usage = response_dict.get("usage", {}) if isinstance(response_dict, dict) else {}
+        usage = (
+            response_dict.get("usage", {}) if isinstance(response_dict, dict) else {}
+        )
         if isinstance(usage, dict) and usage.get("cache_read_input_tokens"):
             prompt_cache_id = "cache-hit"
     else:
@@ -356,7 +355,11 @@ def _result_from_batch_entry(
         elif hasattr(error_detail, "model_dump"):
             error_dict = error_detail.model_dump()
         else:
-            error_dict = dict(error_detail) if isinstance(error_detail, dict) else {"detail": str(error_detail)}
+            error_dict = (
+                dict(error_detail)
+                if isinstance(error_detail, dict)
+                else {"detail": str(error_detail)}
+            )
         # Synthesize a response envelope that parses as EMPTY_RESPONSE
         # (no content key) — the audit row routes to NEEDS_REVIEW with
         # the structured error preserved for the reviewer to inspect.

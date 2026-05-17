@@ -49,7 +49,6 @@ from bba.audit_store import (
 )
 from bba.dashboard import (
     BreakGlassRequest,
-    CareTeamAccessDeniedError,
     CaseDetail,
     DashboardConfig,
     DashboardError,
@@ -125,9 +124,7 @@ class _InMemoryReviewActionsStore(ReviewActionsStore):
 
     def __init__(self) -> None:
         super().__init__(
-            ReviewActionsConfig(
-                dsn="postgresql://fake:fake@localhost:5432/fake"
-            )
+            ReviewActionsConfig(dsn="postgresql://fake:fake@localhost:5432/fake")
         )
         # Bypass migration / privilege / trigger checks — we never hit DB.
         self._migrated_checked = True
@@ -149,9 +146,7 @@ class _InMemoryReviewActionsStore(ReviewActionsStore):
         return log
 
     @contextmanager
-    def access_phi(
-        self, access: PhiAccessInput
-    ) -> Iterator[PhiAccessLog]:
+    def access_phi(self, access: PhiAccessInput) -> Iterator[PhiAccessLog]:
         # Mirror the parent's contract: log row is committed BEFORE the
         # body runs (PRD §17 "log row exists before un-redacted text is
         # surfaced"). On body raise, the log row stays — the access
@@ -366,16 +361,12 @@ def context_outsider(reviewer_outside_care_team: Reviewer) -> RouteContext:
 
 @pytest.fixture
 def context_physician_self(physician_self: Reviewer) -> RouteContext:
-    return RouteContext(
-        reviewer=physician_self, subject_physician_id="phys-001"
-    )
+    return RouteContext(reviewer=physician_self, subject_physician_id="phys-001")
 
 
 @pytest.fixture
 def context_physician_other_subject(physician_self: Reviewer) -> RouteContext:
-    return RouteContext(
-        reviewer=physician_self, subject_physician_id="phys-002"
-    )
+    return RouteContext(reviewer=physician_self, subject_physician_id="phys-002")
 
 
 # =============================================================================
@@ -577,9 +568,7 @@ class TestFiveViewsRender:
             row_b, (_llm_call(audit_id="audit-appropriate", run_id="run-002"),)
         )
 
-        scorecard = get_ward_scorecard(
-            config, context_in_care_team, "ward-001"
-        )
+        scorecard = get_ward_scorecard(config, context_in_care_team, "ward-001")
 
         assert isinstance(scorecard, WardScorecard)
         assert scorecard.ward_id == "ward-001"
@@ -615,9 +604,7 @@ class TestFiveViewsRender:
         row, calls = _writeable_audit_row_pair()
         audit_store.write(row, calls)
 
-        scorecard = get_physician_scorecard(
-            config, context_physician_self, "phys-001"
-        )
+        scorecard = get_physician_scorecard(config, context_physician_self, "phys-001")
 
         assert isinstance(scorecard, PhysicianScorecard)
         assert scorecard.physician_id == "phys-001"
@@ -659,9 +646,7 @@ class TestFiveViewsRender:
         appears in the snapshot frame — otherwise the average reflects
         invisible audits."""
         # Materialize today's snapshot with audit-001 (latency_ms=100).
-        row_pre, calls_pre = _writeable_audit_row_pair(
-            "audit-001", "run-001"
-        )
+        row_pre, calls_pre = _writeable_audit_row_pair("audit-001", "run-001")
         audit_store.write(row_pre, calls_pre)
         # First read materializes the snapshot — audit-001 only.
         get_pipeline_health(config, context_in_care_team)
@@ -725,17 +710,14 @@ class TestBreakGlassFlow:
             justification="Urgent clinical review per attending"
         )
 
-        record_break_glass_access(
-            config, context_outsider, "audit-001", request
-        )
+        record_break_glass_access(config, context_outsider, "audit-001", request)
 
         logs = review_actions_store.list_phi_access(
             reviewer_id="reviewer-outsider", audit_id="audit-001"
         )
         assert len(logs) == 1
         assert (
-            logs[0].break_glass_justification
-            == "Urgent clinical review per attending"
+            logs[0].break_glass_justification == "Urgent clinical review per attending"
         )
 
     def test_break_glass_empty_justification_rejected_at_model_boundary(
@@ -800,9 +782,7 @@ class TestBreakGlassFlow:
         # committed at __enter__. We assert that calling the handler
         # produces a log row (the structural test); the "crash mid-render"
         # variant is implied by the access_phi() contract.
-        record_break_glass_access(
-            config, context_outsider, "audit-001", request
-        )
+        record_break_glass_access(config, context_outsider, "audit-001", request)
         logs = review_actions_store.list_phi_access(
             reviewer_id="reviewer-outsider", audit_id="audit-001"
         )
@@ -876,9 +856,7 @@ class TestBreakGlassFlow:
         )
 
         with pytest.raises(UnredactedSourceUnavailableError):
-            get_case_detail(
-                config_without_unredacted_resolver, context, "audit-001"
-            )
+            get_case_detail(config_without_unredacted_resolver, context, "audit-001")
 
 
 # =============================================================================
@@ -900,9 +878,7 @@ class TestPhysicianOwnViewGuard:
         row, calls = _writeable_audit_row_pair()
         audit_store.write(row, calls)
 
-        scorecard = get_physician_scorecard(
-            config, context_physician_self, "phys-001"
-        )
+        scorecard = get_physician_scorecard(config, context_physician_self, "phys-001")
 
         assert scorecard.physician_id == "phys-001"
 
@@ -912,9 +888,7 @@ class TestPhysicianOwnViewGuard:
         context_physician_other_subject: RouteContext,
     ) -> None:
         with pytest.raises(PhysicianAccessDeniedError):
-            get_physician_scorecard(
-                config, context_physician_other_subject, "phys-002"
-            )
+            get_physician_scorecard(config, context_physician_other_subject, "phys-002")
 
     def test_ordinary_reviewer_cannot_view_any_physician_scorecard(
         self,
@@ -955,20 +929,12 @@ class TestPhysicianOwnViewGuard:
 
     @given(
         viewer_physician_id=st.text(
-            alphabet=(
-                "abcdefghijklmnopqrstuvwxyz"
-                "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                "0123456789"
-            ),
+            alphabet=("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"),
             min_size=1,
             max_size=20,
         ),
         subject_physician_id=st.text(
-            alphabet=(
-                "abcdefghijklmnopqrstuvwxyz"
-                "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                "0123456789"
-            ),
+            alphabet=("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"),
             min_size=1,
             max_size=20,
         ),
@@ -1006,9 +972,7 @@ class TestPhysicianOwnViewGuard:
             # the property is that the route guard does NOT misfire on
             # own-view requests.
             try:
-                get_physician_scorecard(
-                    config, context, subject_physician_id
-                )
+                get_physician_scorecard(config, context, subject_physician_id)
             except PhysicianAccessDeniedError:
                 pytest.fail(
                     "PhysicianAccessDeniedError raised for matching "
@@ -1021,9 +985,7 @@ class TestPhysicianOwnViewGuard:
             # Different ids — MUST raise PhysicianAccessDeniedError
             # specifically, before any data retrieval.
             with pytest.raises(PhysicianAccessDeniedError):
-                get_physician_scorecard(
-                    config, context, subject_physician_id
-                )
+                get_physician_scorecard(config, context, subject_physician_id)
 
 
 # =============================================================================
@@ -1145,9 +1107,7 @@ class TestRouteSmoke:
     """HTTP-200 smoke tests for every route the dashboard exposes."""
 
     @pytest.fixture
-    def client(
-        self, config: DashboardConfig, audit_store: AuditStore
-    ) -> Iterator[Any]:
+    def client(self, config: DashboardConfig, audit_store: AuditStore) -> Iterator[Any]:
         # Pre-seed the snapshot with audit-001 so case-detail and
         # break-glass routes have a row to find. The smoke contract is
         # "route reachable" — without a row the case routes legitimately
@@ -1170,9 +1130,7 @@ class TestRouteSmoke:
         assert "tailwindcss" in response.text
         assert "htmx.org" in response.text
 
-    def test_get_queue_htmx_request_returns_table_fragment(
-        self, client: Any
-    ) -> None:
+    def test_get_queue_htmx_request_returns_table_fragment(self, client: Any) -> None:
         """HTMX swap target is ``#queue-table`` with ``outerHTML``. An
         HX-Request must therefore receive a TABLE fragment, not a full
         HTML document — otherwise HTMX swaps a ``<html>...</html>`` blob
@@ -1184,9 +1142,7 @@ class TestRouteSmoke:
         assert "<html" not in response.text
         assert "<head" not in response.text
 
-    def test_get_queue_plain_browser_returns_full_document(
-        self, client: Any
-    ) -> None:
+    def test_get_queue_plain_browser_returns_full_document(self, client: Any) -> None:
         """Plain browser navigation (no HX-Request header) gets the full
         page with nav chrome, Tailwind, and HTMX script tag."""
         response = client.get("/queue")
@@ -1219,9 +1175,7 @@ class TestRouteSmoke:
         assert "audit-low" in response.text
         assert "audit-high" in response.text
         # Lower Hb appears before higher in ascending order.
-        assert response.text.index("audit-low") < response.text.index(
-            "audit-high"
-        )
+        assert response.text.index("audit-low") < response.text.index("audit-high")
 
     def test_get_case_detail_returns_200(self, client: Any) -> None:
         response = client.get("/case/audit-001")
@@ -1335,9 +1289,7 @@ class TestModelContracts:
     """
 
     def test_reviewer_is_frozen(self) -> None:
-        reviewer = Reviewer(
-            reviewer_id="r1", name="N", role="reviewer"
-        )
+        reviewer = Reviewer(reviewer_id="r1", name="N", role="reviewer")
         with pytest.raises(ValidationError):
             reviewer.name = "tampered"  # type: ignore[misc]
 
@@ -1374,9 +1326,7 @@ class TestModelContracts:
 
     def test_route_context_default_subject_physician_id_is_none(self) -> None:
         ctx = RouteContext(
-            reviewer=Reviewer(
-                reviewer_id="r1", name="N", role="reviewer"
-            )
+            reviewer=Reviewer(reviewer_id="r1", name="N", role="reviewer")
         )
         assert ctx.subject_physician_id is None
         assert ctx.ward_id is None

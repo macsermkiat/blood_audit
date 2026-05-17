@@ -360,9 +360,7 @@ def find_esrd_diagnosis(diagnosis_codes: Sequence[str]) -> str | None:
     return _first_match(diagnosis_codes, sorted(ESRD_ICD10_CODES))
 
 
-def find_dialysis_med(
-    meds: Sequence[MedEvent], anchor: datetime
-) -> MedEvent | None:
+def find_dialysis_med(meds: Sequence[MedEvent], anchor: datetime) -> MedEvent | None:
     """Return the most-recent :class:`MedEvent` matching
     :func:`is_dialysis_med` whose timestamp is within
     :data:`DIALYSIS_LOOKBACK` of ``anchor``, or None.
@@ -376,17 +374,14 @@ def find_dialysis_med(
     candidates = [
         med
         for med in meds
-        if is_dialysis_med(med.drug)
-        and cutoff <= med.timestamp <= anchor
+        if is_dialysis_med(med.drug) and cutoff <= med.timestamp <= anchor
     ]
     if not candidates:
         return None
     return max(candidates, key=lambda m: m.timestamp)
 
 
-def find_chemo_med(
-    meds: Sequence[MedEvent], anchor: datetime
-) -> MedEvent | None:
+def find_chemo_med(meds: Sequence[MedEvent], anchor: datetime) -> MedEvent | None:
     """Return the most-recent :class:`MedEvent` matching
     :func:`is_chemo_med` whose timestamp is within :data:`CHEMO_LOOKBACK`
     of ``anchor``, or None.
@@ -400,8 +395,7 @@ def find_chemo_med(
     candidates = [
         med
         for med in meds
-        if is_chemo_med(med.drug)
-        and cutoff <= med.timestamp <= anchor
+        if is_chemo_med(med.drug) and cutoff <= med.timestamp <= anchor
     ]
     if not candidates:
         return None
@@ -442,11 +436,7 @@ def detect_mtp_pattern(
     ignored.
     """
     cutoff = anchor - MTP_TIME_WINDOW
-    in_window = [
-        order
-        for order in orders
-        if cutoff <= order.timestamp <= anchor
-    ]
+    in_window = [order for order in orders if cutoff <= order.timestamp <= anchor]
     if not in_window:
         return None
     has_ffp = any(order.co_ordered_with_ffp for order in in_window)

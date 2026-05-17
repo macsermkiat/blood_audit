@@ -164,12 +164,8 @@ def upgrade() -> None:
         )
 
     # ----- Grant minimal privileges to application role -------------------
-    op.execute(
-        "GRANT INSERT, SELECT ON review_actions TO review_actions_app;"
-    )
-    op.execute(
-        "GRANT INSERT, SELECT ON phi_access_log TO review_actions_app;"
-    )
+    op.execute("GRANT INSERT, SELECT ON review_actions TO review_actions_app;")
+    op.execute("GRANT INSERT, SELECT ON phi_access_log TO review_actions_app;")
     op.execute(
         "GRANT USAGE, SELECT ON SEQUENCE review_actions_action_id_seq "
         "TO review_actions_app;"
@@ -184,28 +180,20 @@ def upgrade() -> None:
     # explicit so a future migration that re-grants ALL privileges does not
     # silently re-enable mutation without removing the trigger guard.
     op.execute(
-        "REVOKE UPDATE, DELETE, TRUNCATE "
-        "ON review_actions FROM review_actions_app;"
+        "REVOKE UPDATE, DELETE, TRUNCATE ON review_actions FROM review_actions_app;"
     )
     op.execute(
-        "REVOKE UPDATE, DELETE, TRUNCATE "
-        "ON phi_access_log FROM review_actions_app;"
+        "REVOKE UPDATE, DELETE, TRUNCATE ON phi_access_log FROM review_actions_app;"
     )
-    op.execute(
-        "REVOKE UPDATE, DELETE, TRUNCATE ON review_actions FROM PUBLIC;"
-    )
-    op.execute(
-        "REVOKE UPDATE, DELETE, TRUNCATE ON phi_access_log FROM PUBLIC;"
-    )
+    op.execute("REVOKE UPDATE, DELETE, TRUNCATE ON review_actions FROM PUBLIC;")
+    op.execute("REVOKE UPDATE, DELETE, TRUNCATE ON phi_access_log FROM PUBLIC;")
 
     # ----- Grant SELECT on alembic_version --------------------------------
     # The store's startup integrity check reads alembic_version to compare
     # the live DB's revision against the on-disk head. Without this grant,
     # the app role gets a permission-denied. SELECT-only — only the migrator
     # (running as a privileged role) updates the version row.
-    op.execute(
-        "GRANT SELECT ON alembic_version TO review_actions_app;"
-    )
+    op.execute("GRANT SELECT ON alembic_version TO review_actions_app;")
 
 
 def downgrade() -> None:
@@ -218,9 +206,7 @@ def downgrade() -> None:
     for table in ("review_actions", "phi_access_log"):
         op.execute(f"DROP TRIGGER IF EXISTS {table}_block_update ON {table};")
         op.execute(f"DROP TRIGGER IF EXISTS {table}_block_delete ON {table};")
-        op.execute(
-            f"DROP TRIGGER IF EXISTS {table}_block_truncate ON {table};"
-        )
+        op.execute(f"DROP TRIGGER IF EXISTS {table}_block_truncate ON {table};")
 
     op.execute("DROP FUNCTION IF EXISTS review_actions_block_mutation();")
 

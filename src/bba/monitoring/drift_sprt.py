@@ -58,15 +58,11 @@ class WaldSprtMonitor:
 
     def __init__(self, config: SprtConfig) -> None:
         self._config = config
-        self._lower, self._upper = wald_bounds(
-            alpha=config.alpha, beta=config.beta
-        )
+        self._lower, self._upper = wald_bounds(alpha=config.alpha, beta=config.beta)
         # Pre-compute per-observation log-LR increments so :meth:`step`
         # avoids a `math.log` call on every observation in the hot loop.
         self._step_success = math.log(config.p_alt / config.p_null)
-        self._step_failure = math.log(
-            (1.0 - config.p_alt) / (1.0 - config.p_null)
-        )
+        self._step_failure = math.log((1.0 - config.p_alt) / (1.0 - config.p_null))
         self._n_observations: int = 0
         self._n_successes: int = 0
         self._log_lr: float = 0.0

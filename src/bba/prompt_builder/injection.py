@@ -282,6 +282,4 @@ def scan_chunks(chunks: Sequence[EvidenceChunk]) -> InjectionVerdict:
         all_matches.extend(
             scan_injection(evidence_id=chunk.evidence_id, text=chunk.text)
         )
-    return InjectionVerdict(
-        flagged=bool(all_matches), matches=tuple(all_matches)
-    )
+    return InjectionVerdict(flagged=bool(all_matches), matches=tuple(all_matches))

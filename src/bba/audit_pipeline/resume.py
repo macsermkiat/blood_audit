@@ -157,8 +157,7 @@ def _reconcile_submitted_or_partial(
     """
     cached_calls = _cached_calls_by_audit_id(audit_store, run_id=run.run_id)
     persisted_audit_ids = {
-        row.audit_id
-        for row in audit_store.read_audit_results(run_id=run.run_id)
+        row.audit_id for row in audit_store.read_audit_results(run_id=run.run_id)
     }
 
     audit_ids_without_audit_row = [
@@ -209,9 +208,7 @@ def _reconcile_submitted_or_partial(
                 )
                 # Refresh cached state — the call(s) and audit row(s)
                 # are now persisted.
-                cached_calls = _cached_calls_by_audit_id(
-                    audit_store, run_id=run.run_id
-                )
+                cached_calls = _cached_calls_by_audit_id(audit_store, run_id=run.run_id)
                 persisted_audit_ids = {
                     row.audit_id
                     for row in audit_store.read_audit_results(run_id=run.run_id)
@@ -246,14 +243,10 @@ def _reconcile_submitted_or_partial(
         {aid for aid in run.audit_ids if aid in persisted_audit_ids}
         | set(run_reemitted)
     ):
-        completed_run = transition(
-            run, to_state=BatchRunState.COMPLETE, now=_now_utc()
-        )
+        completed_run = transition(run, to_state=BatchRunState.COMPLETE, now=_now_utc())
         batch_run_store.update(completed_run)
     elif run.state is BatchRunState.SUBMITTED:
-        partial_run = transition(
-            run, to_state=BatchRunState.PARTIAL, now=_now_utc()
-        )
+        partial_run = transition(run, to_state=BatchRunState.PARTIAL, now=_now_utc())
         batch_run_store.update(partial_run)
 
     return run_completed, run_reemitted, run_failed

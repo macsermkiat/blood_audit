@@ -63,7 +63,10 @@ def parse_structured_response(result: BatchSubmissionResult) -> ParseOutcome:
         )
 
     classification = parsed_dict.get("classification")
-    if isinstance(classification, str) and classification not in _ALLOWED_CLASSIFICATIONS:
+    if (
+        isinstance(classification, str)
+        and classification not in _ALLOWED_CLASSIFICATIONS
+    ):
         return _failure(
             ParseFailureReason.CLASSIFICATION_OUT_OF_SET,
             _stringify(parsed_dict),

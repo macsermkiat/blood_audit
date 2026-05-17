@@ -184,9 +184,7 @@ def bba_audit(input_csv: Path | None, run_id: str | None, force: bool) -> None:
                     row_count=store.run_count(resolved),
                 )
                 return
-            store.record_idempotency_override(
-                resolved, reason="cli --force flag"
-            )
+            store.record_idempotency_override(resolved, reason="cli --force flag")
             _log.warning(
                 "audit.force_override",
                 run_id=resolved,
@@ -197,9 +195,7 @@ def bba_audit(input_csv: Path | None, run_id: str | None, force: bool) -> None:
                 "bba audit --run-id without --input cannot reach the "
                 "pipeline; the run was not previously completed"
             )
-        _run_audit_pipeline(
-            run_id=resolved, input_csv=inputs.input_csv, store=store
-        )
+        _run_audit_pipeline(run_id=resolved, input_csv=inputs.input_csv, store=store)
         store.mark_run_complete(resolved)
         _log.info(
             "audit.complete",

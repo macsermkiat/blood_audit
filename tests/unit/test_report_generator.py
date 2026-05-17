@@ -276,9 +276,7 @@ class TestModelImmutability:
             "",
         ],
     )
-    def test_monthly_report_row_rejects_unsafe_physician_id(
-        self, bad_id: str
-    ) -> None:
+    def test_monthly_report_row_rejects_unsafe_physician_id(self, bad_id: str) -> None:
         # physician_id flows into a per-physician CSV filename; an
         # upstream value containing path separators or null bytes would
         # let the writer escape the output directory. The model boundary
@@ -390,18 +388,14 @@ class TestPhysicianOwnViewAggregation:
             _row(
                 audit_id=f"a{i}",
                 physician_id="phys-A",
-                final_classification=(
-                    "APPROPRIATE" if i < 7 else "INAPPROPRIATE"
-                ),
+                final_classification=("APPROPRIATE" if i < 7 else "INAPPROPRIATE"),
             )
             for i in range(10)
         ) + tuple(
             _row(
                 audit_id=f"b{i}",
                 physician_id="phys-B",
-                final_classification=(
-                    "APPROPRIATE" if i < 5 else "INAPPROPRIATE"
-                ),
+                final_classification=("APPROPRIATE" if i < 5 else "INAPPROPRIATE"),
             )
             for i in range(10)
         )
@@ -422,9 +416,7 @@ class TestPhysicianOwnViewAggregation:
                         audit_id=f"{phys}-{i}",
                         physician_id=phys,
                         final_classification=(
-                            "INAPPROPRIATE"
-                            if i < n_inappropriate
-                            else "APPROPRIATE"
+                            "INAPPROPRIATE" if i < n_inappropriate else "APPROPRIATE"
                         ),
                     )
                 )
@@ -536,12 +528,21 @@ class TestCohortExceptionAggregation:
 
     def test_inappropriate_rate_per_cohort(self) -> None:
         rows = (
-            _row(audit_id="a", cohort_applied="cardiac_surgery",
-                 final_classification="INAPPROPRIATE"),
-            _row(audit_id="b", cohort_applied="cardiac_surgery",
-                 final_classification="APPROPRIATE"),
-            _row(audit_id="c", cohort_applied="default",
-                 final_classification="APPROPRIATE"),
+            _row(
+                audit_id="a",
+                cohort_applied="cardiac_surgery",
+                final_classification="INAPPROPRIATE",
+            ),
+            _row(
+                audit_id="b",
+                cohort_applied="cardiac_surgery",
+                final_classification="APPROPRIATE",
+            ),
+            _row(
+                audit_id="c",
+                cohort_applied="default",
+                final_classification="APPROPRIATE",
+            ),
         )
         result = aggregate_cohort_exception(rows)
         by_cohort = {r.cohort_applied: r for r in result}
@@ -581,9 +582,7 @@ class TestPipelineHealthAggregation:
         # PRD §"Documentation absence ≠ INAPPROPRIATE": a row whose
         # final_classification is INSUFFICIENT_EVIDENCE must NOT count
         # toward needs_review_count.
-        rows = (
-            _row(audit_id="x", final_classification="INSUFFICIENT_EVIDENCE"),
-        )
+        rows = (_row(audit_id="x", final_classification="INSUFFICIENT_EVIDENCE"),)
         r = aggregate_pipeline_health(rows)[0]
         assert r.needs_review_count == 0
         assert r.insufficient_evidence_count == 1
@@ -607,10 +606,16 @@ class TestPipelineHealthAggregation:
 
     def test_needs_review_flag_adds_to_count(self) -> None:
         rows = (
-            _row(audit_id="a", final_classification="APPROPRIATE",
-                 needs_human_review=True),
-            _row(audit_id="b", final_classification="APPROPRIATE",
-                 needs_human_review=False),
+            _row(
+                audit_id="a",
+                final_classification="APPROPRIATE",
+                needs_human_review=True,
+            ),
+            _row(
+                audit_id="b",
+                final_classification="APPROPRIATE",
+                needs_human_review=False,
+            ),
         )
         result = aggregate_pipeline_health(rows)
         # 1 row flagged for human review (the APPROPRIATE one with the flag)
@@ -705,9 +710,7 @@ class TestFooterStamping:
         # PRD reproducibility: even an empty section must carry the
         # footer so a downstream consumer can tell which policy / model /
         # redactor versions produced the empty result.
-        section = ReportSection(
-            name="cohort_exception", rows=(), footer=_footer()
-        )
+        section = ReportSection(name="cohort_exception", rows=(), footer=_footer())
         out = write_section_csv(section, tmp_path)
         lines = out.read_text(encoding="utf-8").splitlines()
         assert len(lines) >= 2, "empty section must still emit a footer-bearing row"
@@ -715,15 +718,11 @@ class TestFooterStamping:
         assert "PR17.2-v1" in footer_row
         assert "sha-bundle-001" in footer_row
 
-    def test_empty_section_emits_numeric_placeholders(
-        self, tmp_path: Path
-    ) -> None:
+    def test_empty_section_emits_numeric_placeholders(self, tmp_path: Path) -> None:
         # An empty pipeline_health section must produce cells that parse
         # as their declared numeric type — blank strings would NaN-poison
         # a downstream pandas read of total_orders / *_rate columns.
-        section = ReportSection(
-            name="pipeline_health", rows=(), footer=_footer()
-        )
+        section = ReportSection(name="pipeline_health", rows=(), footer=_footer())
         out = write_section_csv(section, tmp_path)
         lines = out.read_text(encoding="utf-8").splitlines()
         # pipeline_health columns: total_orders, classified_orders,
@@ -761,9 +760,7 @@ class TestGoldenSnapshotHospitalTrend:
             _row(audit_id="d", final_classification="NEEDS_REVIEW"),
         )
         trend = aggregate_hospital_trend(rows, MONTH)
-        section = ReportSection(
-            name="hospital_trend", rows=trend, footer=_footer()
-        )
+        section = ReportSection(name="hospital_trend", rows=trend, footer=_footer())
         out = write_section_csv(section, tmp_path)
         actual = out.read_bytes()
         expected = (
@@ -788,9 +785,7 @@ class TestGoldenSnapshotWardScorecard:
             _row(audit_id="3", ward_id="WARD-B", final_classification="APPROPRIATE"),
         )
         scorecard = aggregate_ward_scorecard(rows)
-        section = ReportSection(
-            name="ward_scorecard", rows=scorecard, footer=_footer()
-        )
+        section = ReportSection(name="ward_scorecard", rows=scorecard, footer=_footer())
         out = write_section_csv(section, tmp_path)
         actual = out.read_bytes()
         expected = (
@@ -841,12 +836,21 @@ class TestGoldenSnapshotCohortException:
 
     def test_byte_identical_csv(self, tmp_path: Path) -> None:
         rows = (
-            _row(audit_id="a", cohort_applied="cardiac_surgery",
-                 final_classification="INAPPROPRIATE"),
-            _row(audit_id="b", cohort_applied="cardiac_surgery",
-                 final_classification="APPROPRIATE"),
-            _row(audit_id="c", cohort_applied="default",
-                 final_classification="APPROPRIATE"),
+            _row(
+                audit_id="a",
+                cohort_applied="cardiac_surgery",
+                final_classification="INAPPROPRIATE",
+            ),
+            _row(
+                audit_id="b",
+                cohort_applied="cardiac_surgery",
+                final_classification="APPROPRIATE",
+            ),
+            _row(
+                audit_id="c",
+                cohort_applied="default",
+                final_classification="APPROPRIATE",
+            ),
         )
         section = ReportSection(
             name="cohort_exception",
@@ -908,14 +912,22 @@ class TestGoldenSnapshotPhysicianOwnView:
     def test_byte_identical_csv(self, tmp_path: Path) -> None:
         # Three physicians with rates {0.0, 0.5, 1.0}.
         rows = (
-            _row(audit_id="a1", physician_id="phys-A",
-                 final_classification="APPROPRIATE"),
-            _row(audit_id="b1", physician_id="phys-B",
-                 final_classification="APPROPRIATE"),
-            _row(audit_id="b2", physician_id="phys-B",
-                 final_classification="INAPPROPRIATE"),
-            _row(audit_id="c1", physician_id="phys-C",
-                 final_classification="INAPPROPRIATE"),
+            _row(
+                audit_id="a1", physician_id="phys-A", final_classification="APPROPRIATE"
+            ),
+            _row(
+                audit_id="b1", physician_id="phys-B", final_classification="APPROPRIATE"
+            ),
+            _row(
+                audit_id="b2",
+                physician_id="phys-B",
+                final_classification="INAPPROPRIATE",
+            ),
+            _row(
+                audit_id="c1",
+                physician_id="phys-C",
+                final_classification="INAPPROPRIATE",
+            ),
         )
         rendered = aggregate_physician_own_view(rows, ("phys-A",))
         section = ReportSection(
@@ -976,8 +988,7 @@ class TestCsvSchemaDocumented:
             "evidence_bundle_hash",
         ):
             assert footer_field in text, (
-                f"docs/report-schema.md must reference footer field "
-                f"{footer_field!r}"
+                f"docs/report-schema.md must reference footer field {footer_field!r}"
             )
 
 
@@ -1101,12 +1112,12 @@ class TestMonthBoundaryFiltering:
         )
         december_2026 = date(2026, 12, 1)
         january_2027 = date(2027, 1, 1)
-        assert filter_rows_for_month(
-            (rollover_row, late_december), december_2026
-        ) == (late_december,)
-        assert filter_rows_for_month(
-            (rollover_row, late_december), january_2027
-        ) == (rollover_row,)
+        assert filter_rows_for_month((rollover_row, late_december), december_2026) == (
+            late_december,
+        )
+        assert filter_rows_for_month((rollover_row, late_december), january_2027) == (
+            rollover_row,
+        )
 
 
 # =============================================================================
@@ -1125,7 +1136,12 @@ class TestClassificationBucketsSum:
     @given(
         st.lists(
             st.sampled_from(
-                ["APPROPRIATE", "INAPPROPRIATE", "NEEDS_REVIEW", "INSUFFICIENT_EVIDENCE"]
+                [
+                    "APPROPRIATE",
+                    "INAPPROPRIATE",
+                    "NEEDS_REVIEW",
+                    "INSUFFICIENT_EVIDENCE",
+                ]
             ),
             min_size=1,
             max_size=20,
@@ -1159,10 +1175,14 @@ class TestGenerateMonthlyReport:
         self, tmp_path: Path
     ) -> None:
         rows = (
-            _row(audit_id="a", physician_id="phys-1",
-                 final_classification="APPROPRIATE"),
-            _row(audit_id="b", physician_id="phys-2",
-                 final_classification="INAPPROPRIATE"),
+            _row(
+                audit_id="a", physician_id="phys-1", final_classification="APPROPRIATE"
+            ),
+            _row(
+                audit_id="b",
+                physician_id="phys-2",
+                final_classification="INAPPROPRIATE",
+            ),
         )
         artifacts = generate_monthly_report(
             _inputs(
@@ -1224,8 +1244,7 @@ class TestGenerateMonthlyReport:
             # The single data row begins with this physician's id; no
             # other physician's id appears in the file.
             assert data_lines[0].startswith(f"{pid},"), (
-                f"row 1 of {path.name} must begin with the artifact's "
-                f"own physician_id"
+                f"row 1 of {path.name} must begin with the artifact's own physician_id"
             )
             for other in {"phys-1", "phys-2", "phys-3"} - {pid}:
                 assert other not in text, (

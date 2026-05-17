@@ -29,9 +29,7 @@ def _safe_wilson(successes: int, trials: int, *, confidence: float) -> WilsonInt
     set still produces a valid (if uninformative) report row.
     """
     if trials == 0:
-        return WilsonInterval(
-            point=0.0, lower=0.0, upper=0.0, confidence=confidence
-        )
+        return WilsonInterval(point=0.0, lower=0.0, upper=0.0, confidence=confidence)
     return wilson_ci(successes, trials, confidence=confidence)
 
 
@@ -58,9 +56,7 @@ def evaluate_confusion_matrix(
 
     sens_p = sensitivity.point
     ppv_p = ppv.point
-    f1 = (
-        (2.0 * ppv_p * sens_p) / (ppv_p + sens_p) if (ppv_p + sens_p) > 0 else 0.0
-    )
+    f1 = (2.0 * ppv_p * sens_p) / (ppv_p + sens_p) if (ppv_p + sens_p) > 0 else 0.0
 
     return ClassifierMetrics(
         accuracy=accuracy,

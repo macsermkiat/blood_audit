@@ -112,7 +112,8 @@ class BatchRun(BaseModel):
                 "(set only on SUBMITTED transition)"
             )
         if (
-            self.state in {BatchRunState.SUBMITTED, BatchRunState.PARTIAL, BatchRunState.COMPLETE}
+            self.state
+            in {BatchRunState.SUBMITTED, BatchRunState.PARTIAL, BatchRunState.COMPLETE}
             and self.anthropic_batch_id is None
         ):
             raise ValueError(

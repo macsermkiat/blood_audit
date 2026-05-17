@@ -117,9 +117,7 @@ class FileBackedAuditRunStore:
         finally:
             os.close(fd)
 
-    def audit_log_entries(
-        self, run_id: str, /
-    ) -> tuple[Mapping[str, object], ...]:
+    def audit_log_entries(self, run_id: str, /) -> tuple[Mapping[str, object], ...]:
         """Return all ``audit_log.jsonl`` rows matching ``run_id`` in order."""
         return tuple(self._iter_audit_log(run_id))
 

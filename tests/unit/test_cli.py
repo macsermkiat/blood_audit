@@ -214,34 +214,36 @@ class TestModulePublicSurface:
         )
         assert _referenced  # exercise the tuple so it cannot be elided.
 
-        expected_names: frozenset[str] = frozenset({
-            "AuditCommandInput",
-            "AuditRunStore",
-            "CliError",
-            "CodeVersion",
-            "EvaluateCommandInput",
-            "IdempotencyError",
-            "IngestCommandInput",
-            "InputCsvHash",
-            "MutuallyExclusiveOptionError",
-            "PHI_LOCAL_NAME_REGEX",
-            "PHI_REGEXES",
-            "RUN_ID_LENGTH",
-            "ReportCommandInput",
-            "ReportFormat",
-            "RunId",
-            "RunNotFoundError",
-            "SchemaFingerprint",
-            "SchemaVersion",
-            "SentinelCadence",
-            "SentinelCommandInput",
-            "ServeDashboardInput",
-            "cli",
-            "code_version",
-            "compute_run_id",
-            "install_excepthook",
-            "scrub_traceback",
-        })
+        expected_names: frozenset[str] = frozenset(
+            {
+                "AuditCommandInput",
+                "AuditRunStore",
+                "CliError",
+                "CodeVersion",
+                "EvaluateCommandInput",
+                "IdempotencyError",
+                "IngestCommandInput",
+                "InputCsvHash",
+                "MutuallyExclusiveOptionError",
+                "PHI_LOCAL_NAME_REGEX",
+                "PHI_REGEXES",
+                "RUN_ID_LENGTH",
+                "ReportCommandInput",
+                "ReportFormat",
+                "RunId",
+                "RunNotFoundError",
+                "SchemaFingerprint",
+                "SchemaVersion",
+                "SentinelCadence",
+                "SentinelCommandInput",
+                "ServeDashboardInput",
+                "cli",
+                "code_version",
+                "compute_run_id",
+                "install_excepthook",
+                "scrub_traceback",
+            }
+        )
         missing = expected_names - set(cli_pkg.__all__)
         assert missing == set(), (
             f"names referenced in tests but missing from bba.cli.__all__: "
@@ -272,9 +274,18 @@ class TestModulePublicSurface:
         kinds the issue body calls out: bundle / patient / note / hn /
         an / encounter (case-insensitive prefix)."""
         for name in (
-            "bundle", "patient", "note", "hn", "an", "encounter",
-            "Bundle", "PATIENT", "Hn_value", "AN_NUMBER",
-            "encounter_id", "noteText",
+            "bundle",
+            "patient",
+            "note",
+            "hn",
+            "an",
+            "encounter",
+            "Bundle",
+            "PATIENT",
+            "Hn_value",
+            "AN_NUMBER",
+            "encounter_id",
+            "noteText",
         ):
             assert PHI_LOCAL_NAME_REGEX.match(name), name
 
@@ -373,9 +384,10 @@ class TestPhiSurface:
             scrubbed = _redact_phi_in_string(original)
             assert "<REDACTED" in scrubbed, (original, scrubbed)
             # No Thai-script name tokens survive the redaction.
-            assert not any(
-                ord(ch) in range(0x0E00, 0x0E7F) for ch in scrubbed
-            ), (original, scrubbed)
+            assert not any(ord(ch) in range(0x0E00, 0x0E7F) for ch in scrubbed), (
+                original,
+                scrubbed,
+            )
             # No Latin name token survives either.
             for leak in ("Somchai", "Saengthong"):
                 assert leak not in scrubbed, (original, scrubbed)
@@ -444,9 +456,7 @@ class TestAuditHelpExposesForceFlag:
     ``--run-id`` — the three options the issue body names."""
 
     @pytest.mark.parametrize("flag", ["--input", "--run-id", "--force"])
-    def test_audit_help_documents_flag(
-        self, runner: CliRunner, flag: str
-    ) -> None:
+    def test_audit_help_documents_flag(self, runner: CliRunner, flag: str) -> None:
         result = runner.invoke(cli, ["audit", "--help"])
         assert result.exit_code == 0, result.output
         assert flag in result.output, (
@@ -536,9 +546,7 @@ class TestRunIdDeterminism:
 class TestRunIdSensitivity:
     """Changing any component of the triple must change the run_id."""
 
-    def test_different_input_bytes_different_id(
-        self, tmp_path: Path
-    ) -> None:
+    def test_different_input_bytes_different_id(self, tmp_path: Path) -> None:
         dir_a = tmp_path / "a"
         dir_b = tmp_path / "b"
         dir_a.mkdir()
@@ -557,9 +565,7 @@ class TestRunIdSensitivity:
         )
         assert a != b
 
-    def test_sibling_table_edit_changes_run_id(
-        self, tmp_path: Path
-    ) -> None:
+    def test_sibling_table_edit_changes_run_id(self, tmp_path: Path) -> None:
         """Regression for PR-56 codex P1 #2: editing a sibling HOSxP
         table (not the one passed via ``--input``) must change the
         run_id. Otherwise ``bba audit`` would treat the bundle as
@@ -665,6 +671,7 @@ class TestCodeVersionFromMetadata:
         manually-edited ``__version__`` cannot drift from
         ``pyproject.toml``."""
         from importlib.metadata import version as _pkg_version
+
         assert code_version() == _pkg_version("blood-audit")
 
 
@@ -683,11 +690,12 @@ class TestAuditIdempotencyNoop:
         stub_store.run_count.return_value = 1
         stub_store.audit_log_entries.return_value = ()
 
-        with patch(
-            "bba.cli.main._get_audit_run_store", return_value=stub_store
-        ), patch(
-            "bba.cli.main._run_audit_pipeline", return_value=None
-        ) as fake_pipeline:
+        with (
+            patch("bba.cli.main._get_audit_run_store", return_value=stub_store),
+            patch(
+                "bba.cli.main._run_audit_pipeline", return_value=None
+            ) as fake_pipeline,
+        ):
             r1 = runner.invoke(cli, ["audit", "--input", str(fake_csv)])
             r2 = runner.invoke(cli, ["audit", "--input", str(fake_csv)])
 
@@ -709,16 +717,15 @@ class TestAuditIdempotencyNoop:
         stub_store.run_complete.side_effect = [False, True]
         stub_store.run_count.return_value = 1
 
-        with patch(
-            "bba.cli.main._get_audit_run_store", return_value=stub_store
-        ), patch("bba.cli.main._run_audit_pipeline", return_value=None):
+        with (
+            patch("bba.cli.main._get_audit_run_store", return_value=stub_store),
+            patch("bba.cli.main._run_audit_pipeline", return_value=None),
+        ):
             runner.invoke(cli, ["audit", "--input", str(fake_csv)])
             runner.invoke(cli, ["audit", "--input", str(fake_csv)])
 
         # The run_id used for the lookup must be the same both times.
-        recorded_ids = {
-            call.args[0] for call in stub_store.run_count.call_args_list
-        }
+        recorded_ids = {call.args[0] for call in stub_store.run_count.call_args_list}
         assert len(recorded_ids) == 1, (
             f"expected one distinct run_id queried; got {recorded_ids}"
         )
@@ -742,14 +749,13 @@ class TestAuditForceOverride:
     ) -> None:
         stub_store.run_complete.return_value = True
 
-        with patch(
-            "bba.cli.main._get_audit_run_store", return_value=stub_store
-        ), patch(
-            "bba.cli.main._run_audit_pipeline", return_value=None
-        ) as fake_pipeline:
-            result = runner.invoke(
-                cli, ["audit", "--input", str(fake_csv), "--force"]
-            )
+        with (
+            patch("bba.cli.main._get_audit_run_store", return_value=stub_store),
+            patch(
+                "bba.cli.main._run_audit_pipeline", return_value=None
+            ) as fake_pipeline,
+        ):
+            result = runner.invoke(cli, ["audit", "--input", str(fake_csv), "--force"])
 
         assert result.exit_code == 0, result.output
         assert fake_pipeline.call_count == 1
@@ -773,15 +779,12 @@ class TestAuditForceLogsOverridePerInvocation:
 
         stub_store.record_idempotency_override.side_effect = _record
 
-        with patch(
-            "bba.cli.main._get_audit_run_store", return_value=stub_store
-        ), patch("bba.cli.main._run_audit_pipeline", return_value=None):
-            r1 = runner.invoke(
-                cli, ["audit", "--input", str(fake_csv), "--force"]
-            )
-            r2 = runner.invoke(
-                cli, ["audit", "--input", str(fake_csv), "--force"]
-            )
+        with (
+            patch("bba.cli.main._get_audit_run_store", return_value=stub_store),
+            patch("bba.cli.main._run_audit_pipeline", return_value=None),
+        ):
+            r1 = runner.invoke(cli, ["audit", "--input", str(fake_csv), "--force"])
+            r2 = runner.invoke(cli, ["audit", "--input", str(fake_csv), "--force"])
 
         assert r1.exit_code == 0, r1.output
         assert r2.exit_code == 0, r2.output
@@ -1120,9 +1123,7 @@ class TestSentinelRequiresCadenceFlag:
     ) -> None:
         """The 'exactly one' contract rejects both being supplied —
         otherwise click's last-wins behaviour would silently pick one."""
-        result = runner.invoke(
-            cli, ["sentinel", "--weekly", "--quarterly"]
-        )
+        result = runner.invoke(cli, ["sentinel", "--weekly", "--quarterly"])
         assert result.exit_code != 0
         assert "mutually exclusive" in result.output.lower(), result.output
 
@@ -1131,9 +1132,7 @@ class TestGetAuditRunStoreEnvGate:
     """The production resolver ``_get_audit_run_store`` returns a
     :class:`FileBackedAuditRunStore` rooted at ``$BBA_DATA_DIR``."""
 
-    def test_missing_data_dir_raises(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_missing_data_dir_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import bba.cli.main as main_module
 
         monkeypatch.delenv("BBA_DATA_DIR", raising=False)
@@ -1179,9 +1178,7 @@ class TestFileBackedAuditRunStore:
         store.record_row(run_id, "audit-0002")
         assert store.run_count(run_id) == 2
 
-    def test_idempotency_override_appends_jsonl_per_call(
-        self, tmp_path: Path
-    ) -> None:
+    def test_idempotency_override_appends_jsonl_per_call(self, tmp_path: Path) -> None:
         from bba.cli.audit_run_store import FileBackedAuditRunStore
 
         store = FileBackedAuditRunStore(tmp_path)
@@ -1209,9 +1206,7 @@ class TestFileBackedAuditRunStore:
             "a",
             "a2",
         )
-        assert tuple(e["reason"] for e in store.audit_log_entries("run-B")) == (
-            "b",
-        )
+        assert tuple(e["reason"] for e in store.audit_log_entries("run-B")) == ("b",)
 
     def test_record_idempotency_override_handles_short_writes(
         self, tmp_path: Path
@@ -1235,9 +1230,7 @@ class TestFileBackedAuditRunStore:
             return real_os_write(fd, data)
 
         with patch("bba.cli.audit_run_store.os.write", side_effect=short_write):
-            store.record_idempotency_override(
-                run_id, reason="short-write test"
-            )
+            store.record_idempotency_override(run_id, reason="short-write test")
 
         # Two writes total — the first short, the second covers the rest.
         assert call_count["n"] >= 2
@@ -1255,9 +1248,7 @@ class TestFileBackedAuditRunStore:
         store = FileBackedAuditRunStore(tmp_path)
         with patch("bba.cli.audit_run_store.os.write", return_value=0):
             with pytest.raises(OSError, match="zero-byte write"):
-                store.record_idempotency_override(
-                    "any-run", reason="zero-write test"
-                )
+                store.record_idempotency_override("any-run", reason="zero-write test")
 
     def test_empty_audit_log_returns_empty_tuple(self, tmp_path: Path) -> None:
         from bba.cli.audit_run_store import FileBackedAuditRunStore
@@ -1289,10 +1280,7 @@ class TestFileBackedAuditRunStore:
                     run_id, reason=f"thread-{thread_idx}-call-{i}"
                 )
 
-        threads = [
-            threading.Thread(target=worker, args=(t,))
-            for t in range(n_threads)
-        ]
+        threads = [threading.Thread(target=worker, args=(t,)) for t in range(n_threads)]
         for t in threads:
             t.start()
         for t in threads:
@@ -1325,9 +1313,7 @@ class TestFileBackedAuditRunStore:
         # File persists post-exit; the flock is released, not the file.
         assert lock_path.is_file()
 
-    def test_acquire_run_lock_blocks_across_processes(
-        self, tmp_path: Path
-    ) -> None:
+    def test_acquire_run_lock_blocks_across_processes(self, tmp_path: Path) -> None:
         """``fcntl.flock`` is advisory per-open-file-description; the
         guarantee that matters in production is *cross-process*
         exclusion. Spawn a subprocess that holds the lock, then assert
@@ -1410,15 +1396,12 @@ class TestAuditWithoutInputCannotReachPipeline:
         stub_store: MagicMock,
     ) -> None:
         stub_store.run_complete.return_value = False
-        with patch(
-            "bba.cli.main._get_audit_run_store", return_value=stub_store
-        ):
+        with patch("bba.cli.main._get_audit_run_store", return_value=stub_store):
             result = runner.invoke(cli, ["audit", "--run-id", "abc123"])
         assert result.exit_code != 0
         # click.UsageError flows through; message names the constraint.
-        assert (
-            "without --input" in result.output
-            or "without --input" in str(result.exception)
+        assert "without --input" in result.output or "without --input" in str(
+            result.exception
         ), (result.output, result.exception)
 
 
@@ -1576,12 +1559,8 @@ class TestEndToEndAuditIdempotency:
         monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
         with patch("bba.cli.main._run_audit_pipeline", return_value=None):
             r0 = runner.invoke(cli, ["audit", "--input", str(fake_csv)])
-            r1 = runner.invoke(
-                cli, ["audit", "--input", str(fake_csv), "--force"]
-            )
-            r2 = runner.invoke(
-                cli, ["audit", "--input", str(fake_csv), "--force"]
-            )
+            r1 = runner.invoke(cli, ["audit", "--input", str(fake_csv), "--force"])
+            r2 = runner.invoke(cli, ["audit", "--input", str(fake_csv), "--force"])
         assert r0.exit_code == 0, r0.output
         assert r1.exit_code == 0, r1.output
         assert r2.exit_code == 0, r2.output
@@ -1632,9 +1611,7 @@ class TestRunAuditPipelineIngestLeg:
             tables_written=("BDVST",),
             skipped_idempotent=False,
         )
-        with patch(
-            "bba.cli.main.ingest", return_value=fake_result
-        ) as mock_ingest:
+        with patch("bba.cli.main.ingest", return_value=fake_result) as mock_ingest:
             main_module._run_audit_pipeline(
                 run_id=run_id, input_csv=fake_csv, store=stub_store
             )

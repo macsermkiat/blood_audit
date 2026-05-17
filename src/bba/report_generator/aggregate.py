@@ -330,9 +330,7 @@ def aggregate_pipeline_health(
             ),
         )
     classified = sum(
-        1
-        for r in rows
-        if r.final_classification in ("APPROPRIATE", "INAPPROPRIATE")
+        1 for r in rows if r.final_classification in ("APPROPRIATE", "INAPPROPRIATE")
     )
     # PipelineHealthRow's contract: needs_review_count counts NEEDS_REVIEW
     # rows *plus* APPROPRIATE/INAPPROPRIATE rows whose needs_human_review

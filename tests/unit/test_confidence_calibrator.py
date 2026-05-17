@@ -437,7 +437,10 @@ class TestReliabilityDiagram:
     def test_creates_svg_file_at_target_path(self, tmp_path: Path) -> None:
         out = tmp_path / "docs" / "eval" / "reliability.svg"
         returned = generate_reliability_diagram(
-            ECE_REF_PROBS, ECE_REF_LABELS, out, n_bins=ECE_REF_N_BINS,
+            ECE_REF_PROBS,
+            ECE_REF_LABELS,
+            out,
+            n_bins=ECE_REF_N_BINS,
         )
         assert returned == out
         assert out.exists()
@@ -448,7 +451,10 @@ class TestReliabilityDiagram:
     def test_creates_parent_directories(self, tmp_path: Path) -> None:
         out = tmp_path / "a" / "b" / "c" / "reliability.svg"
         generate_reliability_diagram(
-            ECE_REF_PROBS, ECE_REF_LABELS, out, n_bins=ECE_REF_N_BINS,
+            ECE_REF_PROBS,
+            ECE_REF_LABELS,
+            out,
+            n_bins=ECE_REF_N_BINS,
         )
         assert out.exists()
 
@@ -456,7 +462,10 @@ class TestReliabilityDiagram:
         out = tmp_path / "reliability.svg"
         out.write_text("stale", encoding="utf-8")
         generate_reliability_diagram(
-            ECE_REF_PROBS, ECE_REF_LABELS, out, n_bins=ECE_REF_N_BINS,
+            ECE_REF_PROBS,
+            ECE_REF_LABELS,
+            out,
+            n_bins=ECE_REF_N_BINS,
         )
         assert "stale" not in out.read_text(encoding="utf-8")
 
@@ -465,7 +474,10 @@ class TestReliabilityDiagram:
         # it the diagram cannot communicate drift visually.
         out = tmp_path / "reliability.svg"
         generate_reliability_diagram(
-            ECE_REF_PROBS, ECE_REF_LABELS, out, n_bins=ECE_REF_N_BINS,
+            ECE_REF_PROBS,
+            ECE_REF_LABELS,
+            out,
+            n_bins=ECE_REF_N_BINS,
         )
         content = out.read_text(encoding="utf-8")
         # Convention: the diagonal is tagged so it is locatable from the
@@ -477,7 +489,10 @@ class TestReliabilityDiagram:
         # both bins are non-empty and both emit a marker.
         out = tmp_path / "reliability.svg"
         generate_reliability_diagram(
-            ECE_REF_PROBS, ECE_REF_LABELS, out, n_bins=ECE_REF_N_BINS,
+            ECE_REF_PROBS,
+            ECE_REF_LABELS,
+            out,
+            n_bins=ECE_REF_N_BINS,
         )
         content = out.read_text(encoding="utf-8")
         assert content.count("reliability-bin") == ECE_REF_N_BINS
@@ -489,7 +504,10 @@ class TestReliabilityDiagram:
         # mislead the transfusion committee's drift review.
         out = tmp_path / "reliability.svg"
         generate_reliability_diagram(
-            [0.05, 0.10], [0, 1], out, n_bins=2,
+            [0.05, 0.10],
+            [0, 1],
+            out,
+            n_bins=2,
         )
         content = out.read_text(encoding="utf-8")
         assert content.count("reliability-bin") == 1
@@ -500,7 +518,10 @@ class TestReliabilityDiagram:
         # cannot be markup-injected.
         out = tmp_path / "reliability.svg"
         generate_reliability_diagram(
-            ECE_REF_PROBS, ECE_REF_LABELS, out, n_bins=ECE_REF_N_BINS,
+            ECE_REF_PROBS,
+            ECE_REF_LABELS,
+            out,
+            n_bins=ECE_REF_N_BINS,
             title="Drift & calibration <check>",
         )
         content = out.read_text(encoding="utf-8")
@@ -534,8 +555,11 @@ class TestModelImmutability:
 
     def test_bin_stats_is_frozen(self) -> None:
         bs = BinStats(
-            bin_lower=0.0, bin_upper=0.5, count=2,
-            mean_confidence=0.25, accuracy=0.5,
+            bin_lower=0.0,
+            bin_upper=0.5,
+            count=2,
+            mean_confidence=0.25,
+            accuracy=0.5,
         )
         with pytest.raises(ValidationError):
             bs.count = 99  # type: ignore[misc]
@@ -547,8 +571,10 @@ class TestModelImmutability:
 
     def test_agreement_result_is_frozen(self) -> None:
         a = AgreementResult(
-            classifications=("A",), majority="A",
-            agreement_count=1, confidence=1.0,
+            classifications=("A",),
+            majority="A",
+            agreement_count=1,
+            confidence=1.0,
         )
         with pytest.raises(ValidationError):
             a.confidence = 0.5  # type: ignore[misc]

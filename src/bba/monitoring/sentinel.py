@@ -73,9 +73,7 @@ def build_sentinel_manifest(
         raise ValueError(f"size must be positive, got {size!r}")
     ids = _extract_audit_ids(audit_rows)
     if size > len(ids):
-        raise ValueError(
-            f"size ({size}) exceeds population ({len(ids)})"
-        )
+        raise ValueError(f"size ({size}) exceeds population ({len(ids)})")
     rng = random.Random(_stable_seed(size=size, seed=seed))
     chosen = rng.sample(ids, size)
     return SentinelManifest(
@@ -111,7 +109,8 @@ def evaluate_sentinel_run(
         )
     manifest_set = set(manifest.audit_ids)
     paired_ids = [
-        aid for aid in manifest.audit_ids
+        aid
+        for aid in manifest.audit_ids
         if aid in manifest_set and aid in previous and aid in current
     ]
     if not paired_ids:

@@ -58,12 +58,8 @@ def evaluate_golden_set_drift(
     baseline_map = {entry.audit_id: entry for entry in baseline}
     current_map = {entry.audit_id: entry for entry in current}
     if baseline_map.keys() != current_map.keys():
-        missing_in_current = sorted(
-            baseline_map.keys() - current_map.keys()
-        )
-        missing_in_baseline = sorted(
-            current_map.keys() - baseline_map.keys()
-        )
+        missing_in_current = sorted(baseline_map.keys() - current_map.keys())
+        missing_in_baseline = sorted(current_map.keys() - baseline_map.keys())
         raise GoldenSetMismatchError(
             f"golden-set audit_id sets differ: "
             f"missing_in_current={missing_in_current!r}, "
@@ -109,9 +105,7 @@ def evaluate_golden_set_drift(
         classification_alarm_fired=(
             classification_pct > classification_change_threshold
         ),
-        indications_alarm_fired=(
-            indications_pct > indication_change_threshold
-        ),
+        indications_alarm_fired=(indications_pct > indication_change_threshold),
         deltas=tuple(deltas),
     )
 

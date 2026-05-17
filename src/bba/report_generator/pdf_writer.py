@@ -78,10 +78,13 @@ def _section_table(section: ReportSection) -> Table:
     columns = _data_columns(section.name)
     header_row = [str(c) for c in columns]
     data_rows = [
-        [_format_cell_value(getattr(row, c)) for c in columns]
-        for row in section.rows
+        [_format_cell_value(getattr(row, c)) for c in columns] for row in section.rows
     ]
-    table_data = [header_row, *data_rows] if data_rows else [header_row, ["(no data)"] + [""] * (len(header_row) - 1)]
+    table_data = (
+        [header_row, *data_rows]
+        if data_rows
+        else [header_row, ["(no data)"] + [""] * (len(header_row) - 1)]
+    )
     table = Table(table_data, repeatRows=1)
     table.setStyle(
         TableStyle(

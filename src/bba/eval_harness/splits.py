@@ -42,9 +42,7 @@ def dataset_month_span(cases: Sequence[AuditCase]) -> int:
     """
     if not cases:
         raise EmptyInputError("dataset_month_span: cases must be non-empty")
-    months = sorted(
-        {(c.order_datetime.year, c.order_datetime.month) for c in cases}
-    )
+    months = sorted({(c.order_datetime.year, c.order_datetime.month) for c in cases})
     first_year, first_month = months[0]
     last_year, last_month = months[-1]
     return (last_year - first_year) * 12 + (last_month - first_month) + 1
@@ -110,10 +108,10 @@ def blocked_temporal_split(
             f"got {len(cases)}"
         )
     if n_blocks < 1:
-        raise ValueError(f"blocked_temporal_split: n_blocks must be >= 1, got {n_blocks}")
-    ordered = sorted(
-        cases, key=lambda c: (c.order_datetime, c.audit_id)
-    )
+        raise ValueError(
+            f"blocked_temporal_split: n_blocks must be >= 1, got {n_blocks}"
+        )
+    ordered = sorted(cases, key=lambda c: (c.order_datetime, c.audit_id))
     n = len(ordered)
     # When fewer cases than requested blocks (e.g., sparse-span dataset that
     # auto-routed to blocked but only contains a handful of orders), cap

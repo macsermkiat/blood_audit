@@ -92,9 +92,7 @@ def compute_run_id(
     per_file_hashes: dict[CSVTable, str] = {}
     for csv_path in sorted(bundle_dir.glob("*.csv")):
         if csv_path.stem in known:
-            per_file_hashes[cast(CSVTable, csv_path.stem)] = content_hash(
-                csv_path
-            )
+            per_file_hashes[cast(CSVTable, csv_path.stem)] = content_hash(csv_path)
     if not per_file_hashes:
         raise CliError(
             f"compute_run_id: {bundle_dir} contains no HOSxP-named CSV "

@@ -191,18 +191,16 @@ class TestRefusedStatusExclusion:
         result = build_audit_orders([_input(bdvstst=status)], config)
         # Must NOT be excluded by status; some other gate may still fire
         # but the reason here must not be ``status_not_eligible``.
-        assert all(
-            r.reason != "status_not_eligible" for r in result.excluded
-        ), "eligible status should not be excluded by the status gate"
+        assert all(r.reason != "status_not_eligible" for r in result.excluded), (
+            "eligible status should not be excluded by the status gate"
+        )
 
 
 class TestCancelledExclusion:
     """``CANCELDATE`` non-null → hard-excluded per issue #4 AC."""
 
     def test_cancelled_record_excluded(self, config: AuditOrdersConfig) -> None:
-        result = build_audit_orders(
-            [_input(canceldate="20260501")], config
-        )
+        result = build_audit_orders([_input(canceldate="20260501")], config)
         assert len(result.excluded) == 1
         assert result.excluded[0].reason == "cancelled"
 
@@ -278,17 +276,13 @@ class TestPediatricExclusion:
 
     def test_age_15_included(self, config: AuditOrdersConfig) -> None:
         # 15 years exactly on order date 2026-05-01 → included
-        result = build_audit_orders(
-            [_input(birthdate=date(2011, 5, 1))], config
-        )
+        result = build_audit_orders([_input(birthdate=date(2011, 5, 1))], config)
         assert len(result.included) == 1
         assert result.included[0].age_years == MIN_AGE_YEARS
 
     def test_age_15_minus_one_day_excluded(self, config: AuditOrdersConfig) -> None:
         # Order 2026-05-01, birthdate 2011-05-02 → 14y 364d → excluded.
-        result = build_audit_orders(
-            [_input(birthdate=date(2011, 5, 2))], config
-        )
+        result = build_audit_orders([_input(birthdate=date(2011, 5, 2))], config)
         assert len(result.excluded) == 1
         assert result.excluded[0].reason == "pediatric"
 
@@ -310,9 +304,7 @@ class TestObstetricExclusion:
     def test_obstetric_codes_excluded(
         self, config: AuditOrdersConfig, code: str
     ) -> None:
-        result = build_audit_orders(
-            [_input(diagnosis_codes=(code,))], config
-        )
+        result = build_audit_orders([_input(diagnosis_codes=(code,))], config)
         assert len(result.excluded) == 1
         assert result.excluded[0].reason == "obstetric"
         assert result.excluded[0].detail == code
@@ -322,9 +314,7 @@ class TestObstetricExclusion:
     ) -> None:
         # E.g., "AO12" is gibberish but must not pretend to be obstetric.
         # The prefix match anchors at position 0.
-        result = build_audit_orders(
-            [_input(diagnosis_codes=("AO12.0",))], config
-        )
+        result = build_audit_orders([_input(diagnosis_codes=("AO12.0",))], config)
         assert all(r.reason != "obstetric" for r in result.excluded)
 
 
@@ -337,33 +327,25 @@ class TestHemoglobinopathyExclusion:
     """
 
     def test_d55_excluded(self, config: AuditOrdersConfig) -> None:
-        result = build_audit_orders(
-            [_input(diagnosis_codes=("D55.0",))], config
-        )
+        result = build_audit_orders([_input(diagnosis_codes=("D55.0",))], config)
         assert len(result.excluded) == 1
         assert result.excluded[0].reason == "hemoglobinopathy"
         assert result.excluded[0].detail == "D55.0"
 
     def test_d56_excluded(self, config: AuditOrdersConfig) -> None:
-        result = build_audit_orders(
-            [_input(diagnosis_codes=("D56.1",))], config
-        )
+        result = build_audit_orders([_input(diagnosis_codes=("D56.1",))], config)
         assert len(result.excluded) == 1
         assert result.excluded[0].reason == "hemoglobinopathy"
         assert result.excluded[0].detail == "D56.1"
 
     def test_d57_excluded(self, config: AuditOrdersConfig) -> None:
-        result = build_audit_orders(
-            [_input(diagnosis_codes=("D57.1",))], config
-        )
+        result = build_audit_orders([_input(diagnosis_codes=("D57.1",))], config)
         assert len(result.excluded) == 1
         assert result.excluded[0].reason == "hemoglobinopathy"
         assert result.excluded[0].detail == "D57.1"
 
     def test_d58_excluded(self, config: AuditOrdersConfig) -> None:
-        result = build_audit_orders(
-            [_input(diagnosis_codes=("D58.9",))], config
-        )
+        result = build_audit_orders([_input(diagnosis_codes=("D58.9",))], config)
         assert len(result.excluded) == 1
         assert result.excluded[0].reason == "hemoglobinopathy"
         assert result.excluded[0].detail == "D58.9"
@@ -371,9 +353,7 @@ class TestHemoglobinopathyExclusion:
     def test_no_dot_code_d55_bare(self, config: AuditOrdersConfig) -> None:
         # HOSxP sometimes exports the 3-char code without subcategory.
         # ``"D55"`` alone must still match the hard-exclusion.
-        result = build_audit_orders(
-            [_input(diagnosis_codes=("D55",))], config
-        )
+        result = build_audit_orders([_input(diagnosis_codes=("D55",))], config)
         assert len(result.excluded) == 1
         assert result.excluded[0].reason == "hemoglobinopathy"
 
@@ -388,20 +368,14 @@ class TestAihaExclusion:
     @pytest.mark.parametrize(
         "code", ["D59.0", "D59.1", "D59.2", "D59.3", "D59.4", "D59.8", "D59.9"]
     )
-    def test_d59_subcodes_excluded(
-        self, config: AuditOrdersConfig, code: str
-    ) -> None:
-        result = build_audit_orders(
-            [_input(diagnosis_codes=(code,))], config
-        )
+    def test_d59_subcodes_excluded(self, config: AuditOrdersConfig, code: str) -> None:
+        result = build_audit_orders([_input(diagnosis_codes=(code,))], config)
         assert len(result.excluded) == 1
         assert result.excluded[0].reason == "aiha"
         assert result.excluded[0].detail == code
 
     def test_d59_bare_excluded(self, config: AuditOrdersConfig) -> None:
-        result = build_audit_orders(
-            [_input(diagnosis_codes=("D59",))], config
-        )
+        result = build_audit_orders([_input(diagnosis_codes=("D59",))], config)
         assert len(result.excluded) == 1
         assert result.excluded[0].reason == "aiha"
 
@@ -410,9 +384,7 @@ class TestTmaExclusion:
     """TMA cohorts (M31.1, TTP) → hard-exclusion per issue #4 AC."""
 
     def test_m31_1_excluded(self, config: AuditOrdersConfig) -> None:
-        result = build_audit_orders(
-            [_input(diagnosis_codes=("M31.1",))], config
-        )
+        result = build_audit_orders([_input(diagnosis_codes=("M31.1",))], config)
         assert len(result.excluded) == 1
         assert result.excluded[0].reason == "tma"
         assert result.excluded[0].detail == "M31.1"
@@ -421,9 +393,7 @@ class TestTmaExclusion:
         # M31.0 is hypersensitivity angiitis, not TMA — must NOT be excluded
         # under the TMA rule. (Test is here to defend against an over-broad
         # "M31" prefix match.)
-        result = build_audit_orders(
-            [_input(diagnosis_codes=("M31.0",))], config
-        )
+        result = build_audit_orders([_input(diagnosis_codes=("M31.0",))], config)
         assert all(r.reason != "tma" for r in result.excluded)
 
 
@@ -453,9 +423,7 @@ class TestAnchorImputed:
     the anchor and ``anchor_imputed = True``."""
 
     def test_imputed_when_req_date_null(self, config: AuditOrdersConfig) -> None:
-        result = build_audit_orders(
-            [_input(req_date=None)], config
-        )
+        result = build_audit_orders([_input(req_date=None)], config)
         assert len(result.included) == 1
         order = result.included[0]
         assert order.anchor_imputed is True
@@ -473,12 +441,8 @@ class TestAnchorImputed:
         assert len(result.included) == 1
         assert result.included[0].anchor_imputed is True
 
-    def test_imputed_when_both_req_fields_null(
-        self, config: AuditOrdersConfig
-    ) -> None:
-        result = build_audit_orders(
-            [_input(req_date=None, req_time=None)], config
-        )
+    def test_imputed_when_both_req_fields_null(self, config: AuditOrdersConfig) -> None:
+        result = build_audit_orders([_input(req_date=None, req_time=None)], config)
         assert len(result.included) == 1
         assert result.included[0].anchor_imputed is True
 
@@ -550,9 +514,7 @@ class TestOutputSchemaIdentityAndAnchor:
     A field rename here is a breaking change for #5–#8.
     """
 
-    def test_audit_order_has_required_fields(
-        self, config: AuditOrdersConfig
-    ) -> None:
+    def test_audit_order_has_required_fields(self, config: AuditOrdersConfig) -> None:
         result = build_audit_orders([_input()], config)
         order = result.included[0]
         # Identity
@@ -569,9 +531,7 @@ class TestOutputSchemaIdentityAndAnchor:
         assert hasattr(order, "sex")
         assert hasattr(order, "diagnosis_codes")
 
-    def test_order_datetime_is_tz_aware_utc(
-        self, config: AuditOrdersConfig
-    ) -> None:
+    def test_order_datetime_is_tz_aware_utc(self, config: AuditOrdersConfig) -> None:
         result = build_audit_orders([_input()], config)
         dt = result.included[0].order_datetime
         # tzinfo present; offset is exactly UTC (not naive, not Bangkok)
@@ -628,9 +588,7 @@ class TestAuditIdDeterminism:
             f"audit_id {aid!r} contains characters outside the SafeId allow-list"
         )
 
-    def test_pipeline_uses_build_audit_id(
-        self, config: AuditOrdersConfig
-    ) -> None:
+    def test_pipeline_uses_build_audit_id(self, config: AuditOrdersConfig) -> None:
         # The pipeline-emitted id for (hn, reqno) must equal the
         # standalone formula's output. This is the contract that lets
         # #9 re-derive the id without round-tripping the canonical table.
@@ -658,9 +616,7 @@ class TestPartitionInvariant:
         assert result.included == ()
         assert result.excluded == ()
 
-    def test_total_coverage_on_mixed_batch(
-        self, config: AuditOrdersConfig
-    ) -> None:
+    def test_total_coverage_on_mixed_batch(self, config: AuditOrdersConfig) -> None:
         records = [
             _input(reqno="REQ-A"),  # clean
             _input(reqno="REQ-B", products=("FFP",)),  # not_rbc_product
@@ -675,17 +631,14 @@ class TestPartitionInvariant:
             _input(reqno="REQ-K", diagnosis_codes=("O80",)),  # obstetric
         ]
         result = build_audit_orders(records, config)
-        seen = (
-            {o.reqno for o in result.included}
-            | {e.reqno for e in result.excluded}
-        )
+        seen = {o.reqno for o in result.included} | {e.reqno for e in result.excluded}
         assert seen == {r.reqno for r in records}, (
             f"input reqnos {sorted(r.reqno for r in records)} but "
             f"partition covered {sorted(seen)}"
         )
-        assert (
-            len(result.included) + len(result.excluded) == len(records)
-        ), "partition double-counted or dropped a record"
+        assert len(result.included) + len(result.excluded) == len(records), (
+            "partition double-counted or dropped a record"
+        )
 
     def test_input_ordering_preserved_within_buckets(
         self, config: AuditOrdersConfig
@@ -824,8 +777,7 @@ class TestPropertyPartitionAndIdentity:
         ex_reqnos = [e.reqno for e in result.excluded]
         # Disjoint
         assert set(in_reqnos).isdisjoint(set(ex_reqnos)), (
-            f"record landed in both buckets: "
-            f"{set(in_reqnos) & set(ex_reqnos)}"
+            f"record landed in both buckets: {set(in_reqnos) & set(ex_reqnos)}"
         )
         # Total: input count == included + excluded
         assert len(in_reqnos) + len(ex_reqnos) == len(inputs), (
@@ -897,16 +849,12 @@ class TestAdversarialIcdMatching:
         # the hard-exclusion rule is "block hemoglobinopathy", not
         # "block only the published subcodes". A long-tail subcategory
         # must still trip the exclusion.
-        result = build_audit_orders(
-            [_input(diagnosis_codes=("D55.999",))], config
+        result = build_audit_orders([_input(diagnosis_codes=("D55.999",))], config)
+        assert any(r.reason == "hemoglobinopathy" for r in result.excluded), (
+            "D55.999 should hit the hemoglobinopathy block"
         )
-        assert any(
-            r.reason == "hemoglobinopathy" for r in result.excluded
-        ), "D55.999 should hit the hemoglobinopathy block"
 
-    def test_d550_without_dot_is_NOT_d55(
-        self, config: AuditOrdersConfig
-    ) -> None:
+    def test_d550_without_dot_is_NOT_d55(self, config: AuditOrdersConfig) -> None:
         # ICD-10 chapters are 3-char ``<letter><digit><digit>``, optionally
         # followed by a dot and a subcategory. ``"D550"`` has four chars
         # without a dot — it is NOT a D55 subcategory, just a malformed
@@ -917,26 +865,20 @@ class TestAdversarialIcdMatching:
         # Codex review feedback (NEEDS-CHANGES): the prior assertion
         # allowed either outcome and so was not failing-capable. This
         # is the strict form.
-        result = build_audit_orders(
-            [_input(diagnosis_codes=("D550",))], config
+        result = build_audit_orders([_input(diagnosis_codes=("D550",))], config)
+        assert all(r.reason != "hemoglobinopathy" for r in result.excluded), (
+            "D550 must NOT match the D55 chapter without a dot boundary"
         )
-        assert all(
-            r.reason != "hemoglobinopathy" for r in result.excluded
-        ), "D550 must NOT match the D55 chapter without a dot boundary"
 
-    def test_lowercase_d55_does_not_match(
-        self, config: AuditOrdersConfig
-    ) -> None:
+    def test_lowercase_d55_does_not_match(self, config: AuditOrdersConfig) -> None:
         # HOSxP ICD-10 codes are uppercase. A lowercase ``"d55.0"`` is
         # therefore data drift, not a real hemoglobinopathy. The matcher
         # is case-sensitive — silently upper-casing would also silently
         # upper-case future codes that happen to share a substring.
-        result = build_audit_orders(
-            [_input(diagnosis_codes=("d55.0",))], config
+        result = build_audit_orders([_input(diagnosis_codes=("d55.0",))], config)
+        assert all(r.reason != "hemoglobinopathy" for r in result.excluded), (
+            "lowercase ICD-10 should not match the uppercase D55 prefix"
         )
-        assert all(
-            r.reason != "hemoglobinopathy" for r in result.excluded
-        ), "lowercase ICD-10 should not match the uppercase D55 prefix"
 
     def test_first_diagnosis_code_match_wins_detail(
         self, config: AuditOrdersConfig
@@ -977,9 +919,7 @@ class TestAdversarialAnchorTimes:
         # Simulates: BDVST.REQTIME was "0" / "9999" / decimal hour — the
         # parser returned ParsedTimeOfDay=None. The fallback must fire
         # rather than silently anchoring at 00:00:00 of req_date.
-        result = build_audit_orders(
-            [_input(req_time=None)], config
-        )
+        result = build_audit_orders([_input(req_time=None)], config)
         assert len(result.included) == 1
         assert result.included[0].anchor_imputed is True
 
@@ -988,9 +928,7 @@ class TestAdversarialAnchorTimes:
     ) -> None:
         # The BDVST fallback's time being None must not affect the primary
         # path — REQ alone is sufficient.
-        result = build_audit_orders(
-            [_input(bdvst_time=None)], config
-        )
+        result = build_audit_orders([_input(bdvst_time=None)], config)
         assert len(result.included) == 1
         assert result.included[0].anchor_imputed is False
 
@@ -1002,9 +940,7 @@ class TestAdversarialAnchorTimes:
         # pipeline decides to raise. The two-step separation lets a future
         # caller (e.g., a dashboard "preview" mode) inspect rather than
         # explode.
-        rec = _input(
-            req_date=None, req_time=None, bdvst_date=None, bdvst_time=None
-        )
+        rec = _input(req_date=None, req_time=None, bdvst_date=None, bdvst_time=None)
         result: AnchorResolution = resolve_anchor(rec)
         assert result.anchor is None
 
@@ -1061,9 +997,7 @@ class TestPerRulePredicates:
         assert e.reason == "inter_hospital"
 
     def test_check_age_clean(self) -> None:
-        assert (
-            check_age(_input(birthdate=date(1980, 1, 1)), date(2026, 5, 1)) is None
-        )
+        assert check_age(_input(birthdate=date(1980, 1, 1)), date(2026, 5, 1)) is None
 
     def test_check_age_excludes_pediatric(self) -> None:
         e = check_age(_input(birthdate=date(2015, 1, 1)), date(2026, 5, 1))

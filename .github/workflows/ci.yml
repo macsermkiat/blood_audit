@@ -1,0 +1,103 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A newer push on the same ref cancels older in-flight runs.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pin uv to match the version that produced uv.lock locally (uv --version).
+  UV_VERSION: "0.9.24"
+  # uv writes its cache here; cached across runs via actions/cache.
+  UV_CACHE_DIR: /tmp/.uv-cache
+  # Note: each `uv sync` call below uses `--frozen`, which already
+  # forbids lockfile modification. UV_LOCKED is mutually exclusive
+  # with --frozen in uv >= 0.9, so we don't set it.
+
+jobs:
+  lint:
+    name: ruff (lint + format)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+  typecheck:
+    name: mypy (src strict, tests warn)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - run: uv sync --frozen
+
+      # src/ is type-clean and must stay that way.
+      - name: mypy src (strict)
+        run: uv run mypy src
+
+      # tests/ has 41 type-helper errors (Phase 1 debt, tracked separately).
+      # Surfaced as a job annotation so the badge stays accurate without
+      # blocking PRs on test-fixture type sloppiness.
+      - name: mypy tests (advisory)
+        continue-on-error: true
+        run: |
+          set +e
+          uv run mypy tests 2>&1 | tee mypy-tests.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            count=$(grep -cE "^tests/.*: error:" mypy-tests.log || echo 0)
+            echo "::warning title=mypy tests::${count} type errors in tests/ (advisory; Phase 1 debt)"
+          fi
+          exit 0
+
+  test:
+    name: pytest (with docker)
+    runs-on: ubuntu-latest
+    # Docker is already available on ubuntu-latest images, so the
+    # testcontainers-postgres integration tests exercise rather than skip.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - run: uv sync --frozen
+
+      - name: pytest
+        run: uv run pytest -q --tb=short
+
+  ci:
+    name: ci
+    needs: [lint, typecheck, test]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Aggregate result
+        run: |
+          if [ "${{ needs.lint.result }}" != "success" ] \
+             || [ "${{ needs.typecheck.result }}" != "success" ] \
+             || [ "${{ needs.test.result }}" != "success" ]; then
+            echo "::error::one or more required jobs failed"
+            exit 1
+          fi
+          echo "all required jobs succeeded"

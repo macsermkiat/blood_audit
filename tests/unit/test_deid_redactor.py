@@ -435,9 +435,7 @@ class TestExtractContext:
     def test_extract_context_returns_window_around_span(self) -> None:
         text = "0123456789" * 20
         span = RedactionSpan(start=100, end=105, entity_type="PERSON")
-        ctx = extract_context(
-            original_text=text, span=span, window=ROLE_CONTEXT_WINDOW
-        )
+        ctx = extract_context(original_text=text, span=span, window=ROLE_CONTEXT_WINDOW)
         # Must include text just before and after the span, total length
         # bounded by 2 * window + a single-char separator.
         assert len(ctx) <= 2 * ROLE_CONTEXT_WINDOW + 1
@@ -579,7 +577,9 @@ class TestUpgradePersonTokens:
         redacted = "[PERSON] ordered 2U PRBC"
         original = "Dr. John ordered 2U PRBC"
         spans = (
-            RedactionSpan(start=0, end=8, entity_type="PERSON", original_text="Dr. John"),
+            RedactionSpan(
+                start=0, end=8, entity_type="PERSON", original_text="Dr. John"
+            ),
         )
 
         def classifier(
@@ -602,8 +602,12 @@ class TestUpgradePersonTokens:
         redacted = "[PERSON] told [PERSON] to recheck Hb"
         original = "Dr. Smith told Nurse Jane to recheck Hb"
         spans = (
-            RedactionSpan(start=0, end=9, entity_type="PERSON", original_text="Dr. Smith"),
-            RedactionSpan(start=15, end=25, entity_type="PERSON", original_text="Nurse Jane"),
+            RedactionSpan(
+                start=0, end=9, entity_type="PERSON", original_text="Dr. Smith"
+            ),
+            RedactionSpan(
+                start=15, end=25, entity_type="PERSON", original_text="Nurse Jane"
+            ),
         )
 
         def classifier(
@@ -612,11 +616,7 @@ class TestUpgradePersonTokens:
             context: str,
             span: RedactionSpan,
         ) -> RoleToken | None:
-            return (
-                RoleToken.ATTENDING
-                if span.start == 0
-                else RoleToken.NURSE
-            )
+            return RoleToken.ATTENDING if span.start == 0 else RoleToken.NURSE
 
         result = upgrade_person_tokens(
             redacted_text=redacted,
@@ -672,8 +672,12 @@ class TestUpgradePersonTokens:
         original = "Dr. X on 2026-05-10 in ward 7"
         spans = (
             RedactionSpan(start=0, end=5, entity_type="PERSON", original_text="Dr. X"),
-            RedactionSpan(start=9, end=19, entity_type="DATE", original_text="2026-05-10"),
-            RedactionSpan(start=23, end=29, entity_type="LOCATION", original_text="ward 7"),
+            RedactionSpan(
+                start=9, end=19, entity_type="DATE", original_text="2026-05-10"
+            ),
+            RedactionSpan(
+                start=23, end=29, entity_type="LOCATION", original_text="ward 7"
+            ),
         )
 
         def classifier(**_kwargs: object) -> RoleToken | None:
@@ -725,10 +729,14 @@ class TestSemanticDegradation:
         # Each [PERSON] is 8 chars; with 15-char gap, last start at
         # ~4 * (8 + 15) = 92; no 50-char window covers all 5 starts.
         text = (
-            "[PERSON]" + " " * 15
-            + "[PERSON]" + " " * 15
-            + "[PERSON]" + " " * 15
-            + "[PERSON]" + " " * 15
+            "[PERSON]"
+            + " " * 15
+            + "[PERSON]"
+            + " " * 15
+            + "[PERSON]"
+            + " " * 15
+            + "[PERSON]"
+            + " " * 15
             + "[PERSON]"
         )
         assert detect_semantic_degradation(text) is False
@@ -867,7 +875,9 @@ class TestCanonical:
 class TestRedactionResultValidation:
     """The result model's hash-match invariant (mirrors EvidenceBundle)."""
 
-    def _build_valid_result(self, *, override_hash: str | None = None) -> RedactionResult:
+    def _build_valid_result(
+        self, *, override_hash: str | None = None
+    ) -> RedactionResult:
         """Construct a :class:`RedactionResult` whose hash matches its envelope.
 
         ``override_hash`` lets tests verify the validator rejects a
@@ -975,9 +985,7 @@ class TestRedactBundleEndToEnd:
         backend = _stub_backend()
         backend.register("plain note", redacted="plain note")
         req = _request(patient_age_years=95)
-        result = redact_bundle(
-            req, backend=backend, k_gate=lambda qi: 10
-        )
+        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
         assert result.redacted_age == AGE_CAP
         assert result.age_capped is True
 
@@ -985,9 +993,7 @@ class TestRedactBundleEndToEnd:
         backend = _stub_backend()
         backend.register("plain note", redacted="plain note")
         req = _request(patient_age_years=70)
-        result = redact_bundle(
-            req, backend=backend, k_gate=lambda qi: 10
-        )
+        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
         assert result.redacted_age == 70
         assert result.age_capped is False
 
@@ -995,9 +1001,7 @@ class TestRedactBundleEndToEnd:
         backend = _stub_backend()
         backend.register("plain note", redacted="plain note")
         req = _request()
-        result = redact_bundle(
-            req, backend=backend, k_gate=lambda qi: 7
-        )
+        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 7)
         assert result.k_anonymity_size == 7
         assert result.k_anonymity_passed is True
         # Without semantic degradation, no routing.
@@ -1007,9 +1011,7 @@ class TestRedactBundleEndToEnd:
         backend = _stub_backend()
         backend.register("plain note", redacted="plain note")
         req = _request()
-        result = redact_bundle(
-            req, backend=backend, k_gate=lambda qi: 2
-        )
+        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 2)
         assert result.k_anonymity_passed is False
         assert result.route_to_needs_review is True
         assert NeedsReviewReason.K_ANONYMITY_FAIL in result.needs_review_reasons
@@ -1026,14 +1028,9 @@ class TestRedactBundleEndToEnd:
             ),
         )
         req = _request(notes=(NoteInput(note_id="E1", text="PHI heavy"),))
-        result = redact_bundle(
-            req, backend=backend, k_gate=lambda qi: 10
-        )
+        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
         assert result.route_to_needs_review is True
-        assert (
-            NeedsReviewReason.SEMANTIC_DEGRADATION
-            in result.needs_review_reasons
-        )
+        assert NeedsReviewReason.SEMANTIC_DEGRADATION in result.needs_review_reasons
 
     def test_in_text_date_shifted(self) -> None:
         backend = _stub_backend()
@@ -1048,9 +1045,7 @@ class TestRedactBundleEndToEnd:
             notes=(NoteInput(note_id="E1", text="Admitted 2026-05-10 stable"),),
             admission_date=date(2026, 5, 10),
         )
-        result = redact_bundle(
-            req, backend=backend, k_gate=lambda qi: 10
-        )
+        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
         assert "2026-05-10" not in result.notes[0].redacted_text
         assert "Day 0" in result.notes[0].redacted_text
 
@@ -1074,14 +1069,10 @@ class TestRedactBundleEndToEnd:
             ),
         )
         req = _request(
-            notes=(
-                NoteInput(note_id="E1", text="Admitted 2026-05-13 for low Hb"),
-            ),
+            notes=(NoteInput(note_id="E1", text="Admitted 2026-05-13 for low Hb"),),
             admission_date=date(2026, 5, 10),
         )
-        result = redact_bundle(
-            req, backend=backend, k_gate=lambda qi: 10
-        )
+        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
         # Backend-tagged [DATE] becomes Day +3 (May 13 vs admission May 10).
         assert "[DATE]" not in result.notes[0].redacted_text
         assert "Day +3" in result.notes[0].redacted_text
@@ -1109,9 +1100,7 @@ class TestRedactBundleEndToEnd:
             notes=(NoteInput(note_id="E1", text="Seen on May 13, 2026"),),
             admission_date=date(2026, 5, 10),
         )
-        result = redact_bundle(
-            req, backend=backend, k_gate=lambda qi: 10
-        )
+        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
         assert "[DATE]" in result.notes[0].redacted_text
 
     def test_backend_date_span_zero_offset(self) -> None:
@@ -1162,9 +1151,7 @@ class TestRedactBundleEndToEnd:
             ),
         )
         req = _request(
-            notes=(
-                NoteInput(note_id="E1", text="Seen 2026-05-10 then 2026-05-15"),
-            ),
+            notes=(NoteInput(note_id="E1", text="Seen 2026-05-10 then 2026-05-15"),),
             admission_date=date(2026, 5, 10),
         )
         result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
@@ -1221,9 +1208,7 @@ class TestRedactBundleEndToEnd:
             ),
         )
         req = _request(
-            notes=(
-                NoteInput(note_id="E1", text="Seen 2026-05-10 and 2026-05-11"),
-            ),
+            notes=(NoteInput(note_id="E1", text="Seen 2026-05-10 and 2026-05-11"),),
         )
         with pytest.raises(BackendRedactionError):
             redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
@@ -1247,9 +1232,7 @@ class TestRedactBundleEndToEnd:
             ),
         )
         req = _request(
-            notes=(
-                NoteInput(note_id="E1", text="Seen 2026-05-10 and 2026-05-11"),
-            ),
+            notes=(NoteInput(note_id="E1", text="Seen 2026-05-10 and 2026-05-11"),),
         )
         with pytest.raises(BackendRedactionError):
             redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
@@ -1269,13 +1252,9 @@ class TestRedactBundleEndToEnd:
             ),
         )
         req = _request(
-            notes=(
-                NoteInput(note_id="E1", text="Dr. Smith ordered 2U PRBC"),
-            ),
+            notes=(NoteInput(note_id="E1", text="Dr. Smith ordered 2U PRBC"),),
         )
-        result = redact_bundle(
-            req, backend=backend, k_gate=lambda qi: 10
-        )
+        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
         assert "[ATTENDING]" in result.notes[0].redacted_text
         assert "[PERSON]" not in result.notes[0].redacted_text
 
@@ -1292,7 +1271,9 @@ class TestRedactBundleEndToEnd:
                 k_gate=lambda qi: 10,
             )
 
-    def test_redact_bundle_is_pure_no_io(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_redact_bundle_is_pure_no_io(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         # PRD §"Architectural decisions" — uncaught exceptions are
         # routed by sys.excepthook; the redactor itself must not write
         # PHI to stdout/stderr. Tested by capturing output during a
@@ -1326,9 +1307,7 @@ class TestBundleHashStability:
             ),
         )
         req = _request(
-            notes=(
-                NoteInput(note_id="E1", text="Dr. Smith ordered 2U PRBC"),
-            ),
+            notes=(NoteInput(note_id="E1", text="Dr. Smith ordered 2U PRBC"),),
         )
         r1 = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
         r2 = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
@@ -1472,9 +1451,7 @@ def _build_corpus_backend_response(
     return redacted, (span,)
 
 
-def _find_person_token_index(
-    note_text: str, tokens: list[str]
-) -> int | None:
+def _find_person_token_index(note_text: str, tokens: list[str]) -> int | None:
     """Locate the proper-name token in a corpus entry, or None.
 
     Heuristic: the first capitalized ASCII-alpha token whose lowercase
@@ -1610,9 +1587,7 @@ class TestSemanticDegradationProperties:
 
     @given(n_tokens=st.integers(min_value=SEMANTIC_PERSON_THRESHOLD + 1, max_value=20))
     @settings(deadline=None, max_examples=20)
-    def test_above_threshold_in_tight_burst_always_fires(
-        self, n_tokens: int
-    ) -> None:
+    def test_above_threshold_in_tight_burst_always_fires(self, n_tokens: int) -> None:
         # When concatenated end-to-end, n_tokens [PERSON] literals fit
         # inside an n_tokens * 8-char span; pick n large enough that
         # any 50-char window catches > threshold tokens.
@@ -1662,9 +1637,7 @@ class TestBundleHashStabilityProperties:
         seed=st.integers(min_value=0, max_value=1000),
     )
     @settings(deadline=None, max_examples=20)
-    def test_two_independent_runs_same_hash(
-        self, n_notes: int, seed: int
-    ) -> None:
+    def test_two_independent_runs_same_hash(self, n_notes: int, seed: int) -> None:
         backend = _stub_backend()
         notes: list[NoteInput] = []
         for i in range(n_notes):

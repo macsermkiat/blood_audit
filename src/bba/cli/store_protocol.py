@@ -72,9 +72,7 @@ class AuditRunStore(Protocol):
         compliance entry.
         """
 
-    def audit_log_entries(
-        self, run_id: str, /
-    ) -> tuple[Mapping[str, object], ...]:
+    def audit_log_entries(self, run_id: str, /) -> tuple[Mapping[str, object], ...]:
         """Return the immutable audit-log tuple for ``run_id``.
 
         Order is insertion-time. Returns an empty tuple if there are no

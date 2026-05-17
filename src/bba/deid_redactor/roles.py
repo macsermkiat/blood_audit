@@ -134,15 +134,11 @@ def _compile_role_patterns() -> tuple[tuple[RoleToken, re.Pattern[str]], ...]:
                     alternatives.append(rf"\b{escaped}\b")
             else:
                 alternatives.append(re.escape(cue))
-        compiled.append(
-            (role, re.compile("|".join(alternatives), re.IGNORECASE))
-        )
+        compiled.append((role, re.compile("|".join(alternatives), re.IGNORECASE)))
     return tuple(compiled)
 
 
-_ROLE_PATTERNS: tuple[tuple[RoleToken, re.Pattern[str]], ...] = (
-    _compile_role_patterns()
-)
+_ROLE_PATTERNS: tuple[tuple[RoleToken, re.Pattern[str]], ...] = _compile_role_patterns()
 
 
 _HONORIFICS: tuple[tuple[RoleToken, tuple[str, ...]], ...] = (
@@ -195,9 +191,7 @@ def _compile_honorific_patterns() -> tuple[tuple[RoleToken, re.Pattern[str]], ..
                     alternatives.append(rf"\b{escaped}\b")
             else:
                 alternatives.append(re.escape(cue))
-        compiled.append(
-            (role, re.compile("|".join(alternatives), re.IGNORECASE))
-        )
+        compiled.append((role, re.compile("|".join(alternatives), re.IGNORECASE)))
     return tuple(compiled)
 
 

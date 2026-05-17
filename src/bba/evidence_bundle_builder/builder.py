@@ -113,7 +113,9 @@ from clinical relevance."""
 # =============================================================================
 
 
-def _within(*, ts: datetime, anchor: datetime, before: timedelta, after: timedelta) -> bool:
+def _within(
+    *, ts: datetime, anchor: datetime, before: timedelta, after: timedelta
+) -> bool:
     """True iff ``anchor - before <= ts <= anchor + after``."""
     delta = ts - anchor
     return -before <= delta <= after
@@ -123,19 +125,36 @@ def _filter_progress(
     notes: Sequence[ProgressNote], anchor: datetime
 ) -> tuple[ProgressNote, ...]:
     return tuple(
-        n for n in notes if _within(ts=n.timestamp, anchor=anchor, before=WINDOW_PROGRESS, after=WINDOW_PROGRESS)
+        n
+        for n in notes
+        if _within(
+            ts=n.timestamp, anchor=anchor, before=WINDOW_PROGRESS, after=WINDOW_PROGRESS
+        )
     )
 
 
-def _filter_focus(notes: Sequence[FocusNote], anchor: datetime) -> tuple[FocusNote, ...]:
+def _filter_focus(
+    notes: Sequence[FocusNote], anchor: datetime
+) -> tuple[FocusNote, ...]:
     return tuple(
-        n for n in notes if _within(ts=n.timestamp, anchor=anchor, before=WINDOW_FOCUS, after=WINDOW_FOCUS)
+        n
+        for n in notes
+        if _within(
+            ts=n.timestamp, anchor=anchor, before=WINDOW_FOCUS, after=WINDOW_FOCUS
+        )
     )
 
 
 def _filter_meds(meds: Sequence[MedRecord], anchor: datetime) -> tuple[MedRecord, ...]:
     return tuple(
-        m for m in meds if _within(ts=m.timestamp, anchor=anchor, before=WINDOW_MED_BEFORE, after=WINDOW_MED_AFTER)
+        m
+        for m in meds
+        if _within(
+            ts=m.timestamp,
+            anchor=anchor,
+            before=WINDOW_MED_BEFORE,
+            after=WINDOW_MED_AFTER,
+        )
     )
 
 
@@ -148,13 +167,21 @@ def _filter_hb(hbs: Sequence[HbRecord], anchor: datetime) -> tuple[HbRecord, ...
     # and admitting it to the bundle would let the LLM cite evidence the
     # classifier never saw.
     return tuple(
-        h for h in hbs if anchor - h.timestamp < WINDOW_HB_BEFORE and h.timestamp <= anchor
+        h
+        for h in hbs
+        if anchor - h.timestamp < WINDOW_HB_BEFORE and h.timestamp <= anchor
     )
 
 
-def _filter_vitals(vitals: Sequence[VitalsRecord], anchor: datetime) -> tuple[VitalsRecord, ...]:
+def _filter_vitals(
+    vitals: Sequence[VitalsRecord], anchor: datetime
+) -> tuple[VitalsRecord, ...]:
     return tuple(
-        v for v in vitals if _within(ts=v.timestamp, anchor=anchor, before=WINDOW_VITALS, after=WINDOW_VITALS)
+        v
+        for v in vitals
+        if _within(
+            ts=v.timestamp, anchor=anchor, before=WINDOW_VITALS, after=WINDOW_VITALS
+        )
     )
 
 
@@ -171,8 +198,7 @@ def _has_any_vital_value(v: VitalsRecord) -> bool:
     citation that points at provenance metadata only — same dead-
     reference shape the round-7 progress-note filter closes."""
     return any(
-        getattr(v, field) is not None
-        for field in ("sbp", "dbp", "hr", "rr", "bt")
+        getattr(v, field) is not None for field in ("sbp", "dbp", "hr", "rr", "bt")
     )
 
 
@@ -206,7 +232,11 @@ def _cap_progress_closest(
       change the cap-set selection across re-runs of the same data."""
     ranked = sorted(
         notes,
-        key=lambda n: (abs((n.timestamp - anchor).total_seconds()), n.timestamp, n.text),
+        key=lambda n: (
+            abs((n.timestamp - anchor).total_seconds()),
+            n.timestamp,
+            n.text,
+        ),
     )
     return tuple(ranked[:CAP_PROGRESS])
 
@@ -411,9 +441,7 @@ def _drop_one_by_priority(
     return tuple(items_list)
 
 
-def _find_last_of_source(
-    items: Sequence[EvidenceItem], source: EvidenceSource
-) -> int:
+def _find_last_of_source(items: Sequence[EvidenceItem], source: EvidenceSource) -> int:
     """Return last index where ``items[i].source == source``, or -1."""
     last = -1
     for i, it in enumerate(items):
@@ -431,7 +459,9 @@ def _find_last_poct_lab(items: Sequence[EvidenceItem]) -> int:
     return last
 
 
-def _drop_empty_progress_items(items: Sequence[EvidenceItem]) -> tuple[EvidenceItem, ...]:
+def _drop_empty_progress_items(
+    items: Sequence[EvidenceItem],
+) -> tuple[EvidenceItem, ...]:
     """Filter out IPDADMPROGRESS items whose section list became empty.
 
     A zero-section item gives the LLM an evidence ID with no quoteable

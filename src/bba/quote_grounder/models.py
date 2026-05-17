@@ -148,7 +148,9 @@ class NLIEntailmentGate(Protocol):
     grounder API boundary.
     """
 
-    def __call__(self, *, premise: str, hypothesis: str) -> bool:  # pragma: no cover - protocol
+    def __call__(
+        self, *, premise: str, hypothesis: str
+    ) -> bool:  # pragma: no cover - protocol
         ...
 
 

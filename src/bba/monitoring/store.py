@@ -50,9 +50,7 @@ class MonitoringStore:
         self._config = config
         self._lock = Lock()
         self._alarms: list[MonitoringAlarm] = []
-        self._manifests: dict[
-            tuple[str, int, int], WeeklyReviewerSample
-        ] = {}
+        self._manifests: dict[tuple[str, int, int], WeeklyReviewerSample] = {}
         self._next_alarm_id: int = 1
         self._closed = False
 
@@ -134,9 +132,7 @@ class MonitoringStore:
             items = list(self._manifests.values())
         if week_iso is not None:
             items = [m for m in items if m.week_iso == week_iso]
-        items.sort(
-            key=lambda m: (m.week_iso, m.sample_size, m.seed)
-        )
+        items.sort(key=lambda m: (m.week_iso, m.sample_size, m.seed))
         return tuple(items)
 
     def close(self) -> None:

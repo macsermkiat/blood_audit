@@ -258,19 +258,26 @@ def _result(
     raw_response_override: dict[str, Any] | None = None,
     prompt_cache_id: str | None = "cache-aaa",
 ) -> BatchSubmissionResult:
-    raw = raw_response_override if raw_response_override is not None else {
-        "id": "msg_01",
-        "type": "message",
-        "role": "assistant",
-        "model": model_id,
-        "stop_reason": "tool_use",
-        "content": content if content is not None else _tool_use_content(),
-    }
+    raw = (
+        raw_response_override
+        if raw_response_override is not None
+        else {
+            "id": "msg_01",
+            "type": "message",
+            "role": "assistant",
+            "model": model_id,
+            "stop_reason": "tool_use",
+            "content": content if content is not None else _tool_use_content(),
+        }
+    )
     return BatchSubmissionResult(
         custom_id=custom_id,
         model_id=model_id,  # type: ignore[arg-type]
         raw_response_json=raw,
-        request_json={"model": model_id, "messages": [{"role": "user", "content": "..."}]},
+        request_json={
+            "model": model_id,
+            "messages": [{"role": "user", "content": "..."}],
+        },
         response_headers={"anthropic-version": "2023-06-01"},
         request_timestamp=datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC),
         latency_ms=1200,
@@ -289,7 +296,9 @@ class _StubTransport:
     :class:`TestCassetteReplay`.
     """
 
-    def __init__(self, scripted: dict[tuple[str, tuple[str, ...]], RawBatchResponse]) -> None:
+    def __init__(
+        self, scripted: dict[tuple[str, tuple[str, ...]], RawBatchResponse]
+    ) -> None:
         self._scripted = scripted
         self.calls: list[tuple[str, tuple[str, ...], bool]] = []
 
@@ -476,9 +485,7 @@ class TestCustomIdAssertion:
             batch_id="batch_01",
             results=(_result(custom_id="WRONG"),),
         )
-        transport = _StubTransport(
-            scripted={(SONNET_MODEL_ID, ("a1",)): bad_response}
-        )
+        transport = _StubTransport(scripted={(SONNET_MODEL_ID, ("a1",)): bad_response})
         with pytest.raises(CustomIdMismatchError):
             process_batch(reqs, transport, _config())
 
@@ -542,7 +549,9 @@ class TestMalformedJsonFailClosed:
         )
         outcome = parse_structured_response(bad)
         assert outcome.parse_failure is True
-        assert outcome.parse_failure_reason == ParseFailureReason.CLASSIFICATION_OUT_OF_SET
+        assert (
+            outcome.parse_failure_reason == ParseFailureReason.CLASSIFICATION_OUT_OF_SET
+        )
 
     def test_missing_tool_use_block_yields_tool_use_missing(self) -> None:
         bad = _result(
@@ -612,7 +621,9 @@ class TestMalformedJsonFailClosed:
         )
         bad_opus = RawBatchResponse(
             batch_id="batch_opus",
-            results=(_result(custom_id="a1", content=bad_content, model_id=OPUS_MODEL_ID),),
+            results=(
+                _result(custom_id="a1", content=bad_content, model_id=OPUS_MODEL_ID),
+            ),
         )
         transport = _StubTransport(
             scripted={
@@ -646,9 +657,7 @@ class TestRetryEscalation:
             batch_id="batch_01",
             results=(_result(custom_id="a1"),),
         )
-        transport = _StubTransport(
-            scripted={(SONNET_MODEL_ID, ("a1",)): good}
-        )
+        transport = _StubTransport(scripted={(SONNET_MODEL_ID, ("a1",)): good})
         out = process_batch(reqs, transport, _config())
 
         assert len(out) == 1
@@ -662,9 +671,7 @@ class TestRetryEscalation:
         # Single failure → second Sonnet attempt → success. Opus
         # never invoked. This is the "transient hiccup" path.
         reqs = [_request(audit_id="a1")]
-        bad_content = [
-            {"type": "tool_use", "name": "x", "input": "{garbage"}
-        ]
+        bad_content = [{"type": "tool_use", "name": "x", "input": "{garbage"}]
         # The stub transport returns a fixed scripted response per
         # (model, custom_ids) key — to script different responses on
         # subsequent attempts, the implementation must use a different
@@ -687,9 +694,7 @@ class TestRetryEscalation:
 
     def test_sonnet_fails_twice_then_opus_invoked(self) -> None:
         reqs = [_request(audit_id="a1")]
-        bad_content = [
-            {"type": "tool_use", "name": "x", "input": "{garbage"}
-        ]
+        bad_content = [{"type": "tool_use", "name": "x", "input": "{garbage"}]
         sequence = [
             RawBatchResponse(
                 batch_id="batch_01",
@@ -906,9 +911,7 @@ class TestDisagreementDetection:
             ),
         ]
         transport = _SequenceTransport(sequence)
-        out = process_batch(
-            reqs, transport, _config(cross_check_with_opus=True)
-        )
+        out = process_batch(reqs, transport, _config(cross_check_with_opus=True))
         assert out[0].final_classification == "NEEDS_REVIEW"
         assert out[0].needs_review is True
         assert out[0].review_reason == "disagreement"
@@ -954,9 +957,7 @@ class TestDisagreementDetection:
             ),
         ]
         transport = _SequenceTransport(sequence)
-        out = process_batch(
-            reqs, transport, _config(cross_check_with_opus=True)
-        )
+        out = process_batch(reqs, transport, _config(cross_check_with_opus=True))
         assert out[0].final_classification == "NEEDS_REVIEW"
         assert out[0].needs_review is True
         assert out[0].review_reason == "opus_cross_check_parse_failure"
@@ -988,9 +989,7 @@ class TestDisagreementDetection:
             ),
         ]
         transport = _SequenceTransport(sequence)
-        out = process_batch(
-            reqs, transport, _config(cross_check_with_opus=True)
-        )
+        out = process_batch(reqs, transport, _config(cross_check_with_opus=True))
         assert out[0].final_classification == "APPROPRIATE"
         assert out[0].needs_review is False
         assert out[0].disagreement is not None
@@ -1031,7 +1030,9 @@ class TestFullResponsePersistence:
         assert call.request_timestamp.tzinfo is not None
         assert call.latency_ms == 1200
 
-    def test_persisted_call_round_trips_through_audit_store(self, tmp_path: Path) -> None:
+    def test_persisted_call_round_trips_through_audit_store(
+        self, tmp_path: Path
+    ) -> None:
         # The transactional-ordering contract requires every
         # llm_calls row to share (audit_id, run_id) with the audit_row
         # it backs. The client must produce calls that satisfy that
@@ -1081,7 +1082,9 @@ class TestFullResponsePersistence:
         )
         out_a = process_batch(reqs, _SequenceTransport([good_a]), _config())
         out_b = process_batch(reqs, _SequenceTransport([good_b]), _config())
-        assert out_a[0].persisted_calls[0].call_id == out_b[0].persisted_calls[0].call_id
+        assert (
+            out_a[0].persisted_calls[0].call_id == out_b[0].persisted_calls[0].call_id
+        )
 
     def test_escalation_persists_all_three_calls(self) -> None:
         reqs = [_request(audit_id="a1")]
@@ -1196,7 +1199,9 @@ class TestCassetteReplay:
                                         },
                                         "request_json": {
                                             "model": SONNET_MODEL_ID,
-                                            "messages": [{"role": "user", "content": "..."}],
+                                            "messages": [
+                                                {"role": "user", "content": "..."}
+                                            ],
                                         },
                                         "response_headers": {
                                             "anthropic-version": "2023-06-01"
@@ -1249,9 +1254,7 @@ class TestCassetteReplay:
         # If a refactor changes the Protocol signature, this assertion
         # surfaces the drift at collection time rather than letting
         # mypy be the only line of defense.
-        assert isinstance(
-            CassetteTransport(()), AnthropicTransport
-        )
+        assert isinstance(CassetteTransport(()), AnthropicTransport)
 
 
 # =============================================================================
@@ -1275,9 +1278,7 @@ class TestPromptCacheMarkersTranslated:
             batch_id="b1",
             results=(_result(custom_id="a1"),),
         )
-        transport = _StubTransport(
-            scripted={(SONNET_MODEL_ID, ("a1",)): good}
-        )
+        transport = _StubTransport(scripted={(SONNET_MODEL_ID, ("a1",)): good})
         process_batch(reqs, transport, _config(prompt_cache_enabled=True))
         assert transport.calls[0][2] is True  # prompt_cache_enabled
 
@@ -1287,9 +1288,7 @@ class TestPromptCacheMarkersTranslated:
             batch_id="b1",
             results=(_result(custom_id="a1"),),
         )
-        transport = _StubTransport(
-            scripted={(SONNET_MODEL_ID, ("a1",)): good}
-        )
+        transport = _StubTransport(scripted={(SONNET_MODEL_ID, ("a1",)): good})
         process_batch(reqs, transport, _config(prompt_cache_enabled=False))
         assert transport.calls[0][2] is False
 
@@ -1310,9 +1309,7 @@ class TestModelImmutability:
             r.classification = "INAPPROPRIATE"  # type: ignore[misc]
 
     def test_indication_citation_is_frozen(self) -> None:
-        c = IndicationCitation(
-            code="x", quote="y", source_id="E1", confidence=0.5
-        )
+        c = IndicationCitation(code="x", quote="y", source_id="E1", confidence=0.5)
         with pytest.raises(ValidationError):
             c.confidence = 0.0  # type: ignore[misc]
 
@@ -1425,7 +1422,11 @@ def _build_multi_system_block_prompt() -> PromptBuildResult:
         PromptBlock(role="system", text="System block A", cache_marker=False),
         PromptBlock(role="system", text="System block B", cache_marker=False),
         PromptBlock(role="system", text="System block C (cached)", cache_marker=True),
-        PromptBlock(role="user", text="<evidence id=\"E1\" untrusted=\"true\">x</evidence>", cache_marker=False),
+        PromptBlock(
+            role="user",
+            text='<evidence id="E1" untrusted="true">x</evidence>',
+            cache_marker=False,
+        ),
     )
     envelope = build_envelope(
         blocks=[
@@ -1530,7 +1531,10 @@ class TestSubmitBatchPreflight:
 
     def test_duplicate_custom_ids_raises(self) -> None:
         transport = _StubTransport(scripted={})
-        reqs = [_request(audit_id="a1"), _request(audit_id="a1", run_id="run-different")]
+        reqs = [
+            _request(audit_id="a1"),
+            _request(audit_id="a1", run_id="run-different"),
+        ]
         with pytest.raises(BatchSubmissionError):
             submit_batch(reqs, transport, _config())
 
@@ -1540,9 +1544,7 @@ class TestSubmitBatchPreflight:
             batch_id="b1",
             results=(_result(custom_id="a1"),),
         )
-        transport = _StubTransport(
-            scripted={(SONNET_MODEL_ID, ("a1",)): good}
-        )
+        transport = _StubTransport(scripted={(SONNET_MODEL_ID, ("a1",)): good})
         out = submit_batch(reqs, transport, _config())
         assert out.batch_id == "b1"
         assert out.results[0].custom_id == "a1"
@@ -1578,12 +1580,12 @@ class TestAnthropicRequestCacheControlTranslation:
         assert system_blocks[-1].get("cache_control") == {"type": "ephemeral"}
         # The trailing user payload (evidence) is never cacheable.
         user_blocks = payload["messages"][0]["content"]
-        cached_user_blocks = [
-            b for b in user_blocks if "cache_control" in b
-        ]
+        cached_user_blocks = [b for b in user_blocks if "cache_control" in b]
         assert cached_user_blocks == []
 
-    def test_cache_marker_lands_on_last_system_block_in_multi_block_prompt(self) -> None:
+    def test_cache_marker_lands_on_last_system_block_in_multi_block_prompt(
+        self,
+    ) -> None:
         # Multi-system-block fixture: a forged PromptBuildResult with
         # 3 system blocks, only the LAST of which has cache_marker=True.
         # The translated Anthropic payload must mark ONLY the last

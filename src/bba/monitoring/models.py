@@ -160,9 +160,7 @@ def _validate_safe_id(value: str) -> str:
     if not value:
         raise ValueError("identifier must not be empty")
     if not _SAFE_ID_PATTERN.match(value):
-        raise ValueError(
-            f"identifier must match [A-Za-z0-9._-]+ (got {value!r})"
-        )
+        raise ValueError(f"identifier must match [A-Za-z0-9._-]+ (got {value!r})")
     if value in {".", ".."}:
         raise ValueError(
             f"identifier must not be a path-traversal segment (got {value!r})"
@@ -216,9 +214,7 @@ def _validate_week_iso(value: str) -> str:
     structural check at the model boundary stops that class of bug.
     """
     if not _WEEK_ISO_PATTERN.match(value):
-        raise ValueError(
-            f"week_iso must be ISO week format YYYY-Www (got {value!r})"
-        )
+        raise ValueError(f"week_iso must be ISO week format YYYY-Www (got {value!r})")
     return value
 
 
@@ -300,13 +296,9 @@ class SprtConfig(BaseModel):
         * ``min_n >= 1`` — the min-N gate is a positive integer count.
         """
         if not 0.0 < self.p_null < 1.0:
-            raise ValueError(
-                f"p_null must be in (0, 1), got {self.p_null!r}"
-            )
+            raise ValueError(f"p_null must be in (0, 1), got {self.p_null!r}")
         if not 0.0 < self.p_alt < 1.0:
-            raise ValueError(
-                f"p_alt must be in (0, 1), got {self.p_alt!r}"
-            )
+            raise ValueError(f"p_alt must be in (0, 1), got {self.p_alt!r}")
         if self.p_null >= self.p_alt:
             raise ValueError(
                 f"p_null ({self.p_null}) must be strictly less than "
@@ -314,17 +306,11 @@ class SprtConfig(BaseModel):
                 f"log-LR with the wrong sign"
             )
         if not 0.0 < self.alpha < 1.0:
-            raise ValueError(
-                f"alpha must be in (0, 1), got {self.alpha!r}"
-            )
+            raise ValueError(f"alpha must be in (0, 1), got {self.alpha!r}")
         if not 0.0 < self.beta < 1.0:
-            raise ValueError(
-                f"beta must be in (0, 1), got {self.beta!r}"
-            )
+            raise ValueError(f"beta must be in (0, 1), got {self.beta!r}")
         if self.min_n < 1:
-            raise ValueError(
-                f"min_n must be >= 1, got {self.min_n!r}"
-            )
+            raise ValueError(f"min_n must be >= 1, got {self.min_n!r}")
         return self
 
 
