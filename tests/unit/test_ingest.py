@@ -834,6 +834,78 @@ class TestNormalizeRowsStream:
         assert out[2].parse_warnings == ()
 
 
+class TestPipelineLogsWarningDetail:
+    """Codex P2 from PR #62: the per-file drain must surface the actual
+    ``(column, message)`` warning content, not just an aggregate count.
+    Aggregated by column with bounded example messages so the log stays
+    bounded even when every row warns."""
+
+    def test_indate_parse_warnings_logged_per_column(
+        self,
+        tmp_path: Path,
+        complete_hosxp_dir: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Replace IPTSUMOPRT with rows whose INDATE values are deliberately
+        # broken in distinct ways. The drain must:
+        #   - aggregate the count by column (INDATE)
+        #   - log up to 3 example messages so the operator can diagnose
+        #   - emit at WARNING level (operators filtering by severity see it)
+        import csv as _csv  # local import to avoid shadowing module-scope name
+
+        kept_cols = list(get_schema("IPTSUMOPRT").columns)
+        indate_idx = kept_cols.index("INDATE")
+
+        def cells_for(indate: str) -> list[str]:
+            row = ["" for _ in kept_cols]
+            row[indate_idx] = indate
+            return row
+
+        # Use csv.writer so values containing commas (like the valid
+        # English-locale date "June 7, 2025, 12:00 AM") are properly
+        # quoted; otherwise the commas would be re-interpreted as field
+        # separators and the test would measure a different row shape.
+        indates = [
+            "garbage-1",
+            "garbage-2",
+            "not-a-date",
+            "June 7, 2025, 12:00 AM",  # clean, must NOT warn
+        ]
+        with (complete_hosxp_dir / "IPTSUMOPRT.csv").open(
+            "w", newline="", encoding="utf-8"
+        ) as fh:
+            writer = _csv.writer(fh)
+            writer.writerow(kept_cols)
+            for indate in indates:
+                writer.writerow(cells_for(indate))
+
+        cfg = IngestConfig(
+            input_dir=complete_hosxp_dir,
+            output_dir=tmp_path / "out",
+            code_version="test-0.0.1",
+        )
+        with caplog.at_level("WARNING", logger="bba.ingest.pipeline"):
+            ingest(cfg)
+
+        # Find the IPTSUMOPRT INDATE warning log line.
+        indate_logs = [
+            r
+            for r in caplog.records
+            if r.levelname == "WARNING"
+            and "IPTSUMOPRT" in r.message
+            and "column=INDATE" in r.message
+        ]
+        assert indate_logs, (
+            f"per-column parse_warning log not emitted; records: "
+            f"{[(r.levelname, r.message) for r in caplog.records]}"
+        )
+        msg = indate_logs[0].message
+        assert "count=3" in msg, f"expected count=3 in {msg!r}"
+        # The 'examples=' detail must surface actual reasons so an
+        # operator can diagnose which parser regression hit.
+        assert "examples=" in msg
+
+
 class TestPipelineDrainsRows:
     """Integration: ingest() reads rows after validate_header succeeds
     and logs per-table stats (rows_in / rows_kept / rows_filtered /

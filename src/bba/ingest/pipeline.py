@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import csv
 import logging
+from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
 from typing import cast, get_args
@@ -63,6 +64,14 @@ def _stream_csv_rows(path: Path) -> Iterator[list[str]]:
         yield from reader
 
 
+# Per-column cap on the number of distinct example warning messages
+# logged after a drain. Aggregating by ``(column, count)`` keeps the log
+# bounded even when 16.9M rows each carry a unique warning message; the
+# examples give an operator enough surface to diagnose the failure
+# pattern without flooding the audit.
+_PARSE_WARNING_EXAMPLES_PER_COLUMN: int = 3
+
+
 def _drain_normalize_rows(
     table: CSVTable,
     raw_header: list[str],
@@ -76,7 +85,14 @@ def _drain_normalize_rows(
     row-level pipeline runs end-to-end on the real bundle without
     crashing, (b) surface year-filter drop counts to the run audit, and
     (c) emit per-row parse warnings (e.g., unparseable IPTSUMOPRT INDATE
-    values) so an operator can spot regressions in the export shape.
+    values or ragged rows) so an operator can spot regressions in the
+    export shape.
+
+    Parse warnings are aggregated by column and logged at WARNING level
+    after the drain: one line per column with a count plus up to
+    :data:`_PARSE_WARNING_EXAMPLES_PER_COLUMN` example messages. This
+    keeps the log bounded for high-cardinality unique messages while
+    preserving enough detail to identify which column / parser changed.
 
     The next ticket replaces "discard" with the Parquet write.
     """
@@ -90,10 +106,18 @@ def _drain_normalize_rows(
 
     rows_kept = 0
     rows_with_warnings = 0
+    warning_counts: Counter[str] = Counter()
+    warning_examples: dict[str, list[str]] = {}
+
     for normalized in normalize_rows(table, raw_header, kept_header, counting_input()):
         rows_kept += 1
         if normalized.parse_warnings:
             rows_with_warnings += 1
+            for col, msg in normalized.parse_warnings:
+                warning_counts[col] += 1
+                examples = warning_examples.setdefault(col, [])
+                if len(examples) < _PARSE_WARNING_EXAMPLES_PER_COLUMN:
+                    examples.append(msg)
 
     rows_filtered = rows_in - rows_kept
     if rows_in > 0:
@@ -106,6 +130,14 @@ def _drain_normalize_rows(
             rows_filtered,
             rows_with_warnings,
         )
+        for col, count in warning_counts.most_common():
+            logger.warning(
+                "normalize: table=%s parse_warning column=%s count=%d examples=%s",
+                table,
+                col,
+                count,
+                warning_examples[col],
+            )
 
 
 def ingest(config: IngestConfig) -> IngestResult:
