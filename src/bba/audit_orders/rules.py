@@ -53,6 +53,7 @@ TMA_PREFIXES: frozenset[str] = frozenset({"M31.1"})
 # the puerperium" and out of scope for Phase 1.
 OBSTETRIC_PREFIX: str = "O"
 
+
 def is_rbc_product(product: str) -> bool:
     """True iff ``product`` is one of the allow-listed RBC products."""
     return product in RBC_PRODUCTS

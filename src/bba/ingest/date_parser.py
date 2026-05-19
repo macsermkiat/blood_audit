@@ -67,9 +67,7 @@ def parse_iptsumoprt_date(raw: str | None) -> DateParseResult:
             value=None, parse_warning="empty: input was None", raw=""
         )
     if raw == "":
-        return DateParseResult(
-            value=None, parse_warning="empty: empty string", raw=raw
-        )
+        return DateParseResult(value=None, parse_warning="empty: empty string", raw=raw)
 
     match = _LONG_FORM_RE.match(raw)
     if match is None:

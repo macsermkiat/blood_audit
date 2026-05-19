@@ -78,9 +78,7 @@ class NormalizedHeader:
     dropped: list[str]
 
 
-def normalize_header(
-    table: CSVTable, raw_header: Sequence[str]
-) -> NormalizedHeader:
+def normalize_header(table: CSVTable, raw_header: Sequence[str]) -> NormalizedHeader:
     """Apply the per-table normalize rules and project to declared columns.
 
     Returns a :class:`NormalizedHeader`. Does not raise on
