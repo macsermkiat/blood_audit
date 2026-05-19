@@ -17,8 +17,11 @@ wins so the typed reason matches the most specific gate that fired:
 7. ``check_aiha``         — D59.x
 8. ``check_tma``          — M31.1
 9. ``check_obstetric``    — O-chapter
-10. (anchor resolution + age) — last, because age depends on the resolved
-    anchor date; anchor-unrecoverable raises rather than silently drops.
+10. (anchor resolution)   — last, because anchor-unrecoverable raises
+    rather than silently drops. Age-based ``"pediatric"`` exclusion is
+    not in the audit pipeline: post-schema-lock (2026-05-19) the bundle
+    has no per-row age column and the upstream IT pre-filter handles
+    ``age > 15`` exclusively. See ``docs/ingest-mapping.md``.
 
 Per PRD §"Testing Decisions" the test suite asserts the partition invariant
 (every input lands in exactly one bucket), not the exact rule firing order.
@@ -41,7 +44,6 @@ from bba.audit_orders.models import (
     FilterResult,
 )
 from bba.audit_orders.rules import (
-    check_age,
     check_aiha,
     check_an_scoped,
     check_cancelled,
@@ -52,12 +54,11 @@ from bba.audit_orders.rules import (
     check_status,
     check_tma,
     rbc_products_in,
-    years_between,
 )
 
-# Pre-anchor rules run in this fixed order. Age is intentionally NOT here:
-# it depends on the resolved anchor's local date and runs after anchor
-# resolution.
+# Pre-anchor rules run in this fixed order. The only post-anchor step is
+# anchor resolution itself — there is no longer an age gate at this layer
+# (per the 2026-05-19 schema lock; see ``docs/ingest-mapping.md``).
 _PRE_ANCHOR_RULES: tuple[Callable[[BloodOrderInput], ExcludedRecord | None], ...] = (
     check_rbc_product,
     check_status,
@@ -116,18 +117,9 @@ def build_audit_orders(
                 f"REQ nor BDVST anchor pair; cannot derive order_datetime"
             )
 
-        # Age depends on the resolved local date (Bangkok wall-clock day
-        # of the order, not UTC date — they can disagree near midnight).
-        age_exclusion = check_age(record, resolved.local_date)
-        if age_exclusion is not None:
-            excluded.append(age_exclusion)
-            continue
-
-        # All gates passed — construct the canonical row.
-        # an + birthdate are non-None at this point (check_an_scoped +
-        # check_age passed); assert to narrow for mypy.
+        # All gates passed — construct the canonical row. an is non-None at
+        # this point (check_an_scoped passed); assert to narrow for mypy.
         assert record.an is not None  # noqa: S101 — type narrowing
-        assert record.birthdate is not None  # noqa: S101 — type narrowing
         included.append(
             AuditOrder(
                 audit_id=build_audit_id(record.hn, record.reqno),
@@ -137,8 +129,6 @@ def build_audit_orders(
                 order_datetime=resolved.anchor.utc,
                 anchor_imputed=resolved.imputed,
                 products_ordered=rbc_products_in(record.products),
-                age_years=years_between(record.birthdate, resolved.local_date),
-                sex=record.sex,
                 diagnosis_codes=record.diagnosis_codes,
             )
         )

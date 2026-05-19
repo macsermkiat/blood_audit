@@ -199,7 +199,8 @@ def is_cardiac_surgery_code(code: str, or_flag: bool) -> bool:
 
     Three gates, applied in order:
 
-    1. ``or_flag`` must be True (Orflag=1 in IPTSUMOPRT).
+    1. ``or_flag`` must be True (ORFLAG="1" in the ICD9CM dictionary for
+       this code; see :class:`OperativeEvent`).
     2. ``code`` (dot-stripped) must NOT be in
        :data:`CARDIAC_SURGERY_EXCLUDED_CODES`.
     3. ``code`` (dot-stripped) must start with one of the prefixes in

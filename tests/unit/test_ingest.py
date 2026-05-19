@@ -36,20 +36,21 @@ from bba.ingest.schemas import (
     schema_fingerprint,
     validate_header,
 )
+from bba.ingest.date_parser import parse_iptsumoprt_date
+from bba.ingest.normalize import normalize_header
 from bba.ingest.time_parser import parse_hosxp_time
 
 
 REQUIRED_TABLES: tuple[CSVTable, ...] = (
     "BDVST",
     "BDVSTDT",
-    "BDTYPE",
     "BDVSTST",
+    "BDTYPE",
     "Diagnosis",
     "Lab",
-    "MED",
+    "Med",
     "IPDADMPROGRESS",
     "IPDNRFOCUSDT",
-    "UnUSE_Patient_Background",
     "IPTSUMOPRT",
     "ICD9CM",
 )
@@ -239,7 +240,216 @@ class TestTimeParserInvariants:
 
 
 # =============================================================================
-# AC: All 10 CSVs ingestable — pandera schemas registered for every table
+# AC: KCMH-export date parser — IPTSUMOPRT.INDATE long-form, date-only output
+# (companion to parse_hosxp_time's long-form branch which discards date; this
+# parser discards the embedded time and extracts only the calendar date.)
+# =============================================================================
+
+
+class TestIPTSUMOPRTDateParserHappyPath:
+    """Allow-listed English-locale long-form formats parse to a date with no warning."""
+
+    def test_basic_morning(self) -> None:
+        r = parse_iptsumoprt_date("June 7, 2025, 12:00 AM")
+        assert r.parse_warning is None
+        assert r.value is not None
+        assert (r.value.year, r.value.month, r.value.day) == (2025, 6, 7)
+        assert r.raw == "June 7, 2025, 12:00 AM"
+
+    def test_january_first(self) -> None:
+        r = parse_iptsumoprt_date("January 1, 2014, 12:00 AM")
+        assert r.parse_warning is None
+        assert r.value is not None
+        assert (r.value.year, r.value.month, r.value.day) == (2014, 1, 1)
+
+    def test_pm_time_ignored(self) -> None:
+        # PM in the embedded time component must not affect the extracted date.
+        r = parse_iptsumoprt_date("June 18, 2025, 6:13 PM")
+        assert r.parse_warning is None
+        assert r.value is not None
+        assert (r.value.year, r.value.month, r.value.day) == (2025, 6, 18)
+
+    def test_two_digit_day(self) -> None:
+        r = parse_iptsumoprt_date("December 31, 2024, 11:59 PM")
+        assert r.parse_warning is None
+        assert r.value is not None
+        assert (r.value.year, r.value.month, r.value.day) == (2024, 12, 31)
+
+    def test_single_digit_day(self) -> None:
+        r = parse_iptsumoprt_date("February 3, 2025, 12:00 AM")
+        assert r.parse_warning is None
+        assert r.value is not None
+        assert (r.value.year, r.value.month, r.value.day) == (2025, 2, 3)
+
+
+class TestIPTSUMOPRTDateParserRejectsUnrecognizedFormats:
+    """Strict invariant (mirrors PRD §1 fix E35): unrecognized formats produce a
+    parse_warning, never a silently mis-shifted date."""
+
+    def test_none_input(self) -> None:
+        r = parse_iptsumoprt_date(None)
+        assert r.value is None
+        assert r.parse_warning is not None
+
+    def test_empty_string(self) -> None:
+        r = parse_iptsumoprt_date("")
+        assert r.value is None
+        assert r.parse_warning is not None
+
+    def test_hosxp_standard_format_is_not_accepted(self) -> None:
+        # The HOSxP standard "2025-06-07 00:00:00.000" must NOT be accepted by
+        # this parser — that branch is handled elsewhere and silent overlap
+        # would mask schema-source confusion.
+        r = parse_iptsumoprt_date("2025-06-07 00:00:00.000")
+        assert r.value is None
+        assert r.parse_warning is not None
+
+    def test_iso_date_only(self) -> None:
+        r = parse_iptsumoprt_date("2025-06-07")
+        assert r.value is None
+        assert r.parse_warning is not None
+
+    def test_invalid_calendar_date(self) -> None:
+        # "June 31, 2025" is not a real date. Must reject, never shift to July 1.
+        r = parse_iptsumoprt_date("June 31, 2025, 12:00 AM")
+        assert r.value is None
+        assert r.parse_warning is not None
+        assert "invalid calendar date" in r.parse_warning
+
+    def test_unknown_month_name(self) -> None:
+        r = parse_iptsumoprt_date("Junio 7, 2025, 12:00 AM")
+        assert r.value is None
+        assert r.parse_warning is not None
+
+    def test_garbage(self) -> None:
+        r = parse_iptsumoprt_date("not-a-date-at-all")
+        assert r.value is None
+        assert r.parse_warning is not None
+
+    def test_value_xor_warning_invariant(self) -> None:
+        # Exactly one of value / parse_warning is non-None — same invariant as
+        # the time parser (covered by property test there).
+        for raw in [
+            "June 7, 2025, 12:00 AM",
+            "garbage",
+            "",
+            None,
+            "2025-06-07 00:00:00.000",
+            "June 31, 2025, 12:00 AM",
+        ]:
+            r = parse_iptsumoprt_date(raw)
+            has_value = r.value is not None
+            has_warning = r.parse_warning is not None
+            assert has_value ^ has_warning, (
+                f"parser produced value={r.value!r}, warning={r.parse_warning!r} "
+                f"for raw={raw!r}; exactly one must be set"
+            )
+
+
+# =============================================================================
+# AC: Normalize layer — projection + case-normalize + dedupe before
+# validate_header. Policy (a) per docs/ingest-mapping.md: drop undeclared
+# extras and log them rather than failing loud, but keep "missing required
+# column" as a fatal drift signal.
+# =============================================================================
+
+
+class TestNormalizeHeaderProjection:
+    """Undeclared extras land in ``dropped``; declared columns land in ``header``."""
+
+    def test_clean_header_passes_through_unchanged(self) -> None:
+        # Every declared column present, no extras — projection is a no-op.
+        cols = list(get_schema("BDVST").columns)
+        r = normalize_header("BDVST", cols)
+        assert r.header == cols
+        assert r.dropped == []
+
+    def test_undeclared_extras_are_dropped(self) -> None:
+        cols = list(get_schema("BDVST").columns)
+        r = normalize_header("BDVST", [*cols, "FOO", "BAR"])
+        assert set(r.header) == set(cols)
+        assert r.dropped == ["FOO", "BAR"]
+
+    def test_only_undeclared_columns_yields_empty_kept(self) -> None:
+        # Pathological input: nothing declared is present. Header is empty
+        # (validate_header will then raise on every missing required column).
+        r = normalize_header("BDVST", ["FOO", "BAR"])
+        assert r.header == []
+        assert r.dropped == ["FOO", "BAR"]
+
+    def test_dropped_preserves_input_order(self) -> None:
+        # Auditors reading the dropped list should see file order, not sort
+        # order, so they can correlate with column positions.
+        cols = list(get_schema("BDVST").columns)
+        r = normalize_header("BDVST", [*cols, "Z_LAST", "A_FIRST"])
+        assert r.dropped == ["Z_LAST", "A_FIRST"]
+
+
+class TestNormalizeHeaderCaseNormalize:
+    """IPTSUMOPRT and ICD9CM exports use Title-Case; normalize uppercases
+    before projection so they line up with ALL-CAPS schema declarations."""
+
+    def test_iptsumoprt_title_case_uppercased(self) -> None:
+        # The real file header (Title-Case) projects to the declared
+        # ALL-CAPS columns after normalize.
+        title_case = ["An", "Diagorder", "Itemno", "Icd9cm", "Indate", "Intime"]
+        r = normalize_header("IPTSUMOPRT", title_case)
+        assert "AN" in r.header
+        assert "ICD9CM" in r.header
+        assert "INDATE" in r.header
+        assert "INTIME" in r.header
+        # Diagorder/Itemno are not in the locked schema → dropped (as upper-cased).
+        assert "DIAGORDER" in r.dropped
+        assert "ITEMNO" in r.dropped
+
+    def test_icd9cm_title_case_uppercased(self) -> None:
+        title_case = ["Icd9cm", "Name", "Thainame", "Orflag", "Firststf"]
+        r = normalize_header("ICD9CM", title_case)
+        assert set(r.header) == {"ICD9CM", "NAME", "ORFLAG"}
+        # Thainame and Firststf are not declared → dropped (upper-cased).
+        assert "THAINAME" in r.dropped
+        assert "FIRSTSTF" in r.dropped
+
+    def test_non_procedure_table_keeps_case_as_is(self) -> None:
+        # Only IPTSUMOPRT and ICD9CM are case-normalized. Other tables that
+        # somehow arrive with mixed-case columns would correctly fail the
+        # projection (mixed-case names are not in the declared set).
+        r = normalize_header("BDVST", ["hn", "REQNO"])
+        # "hn" lowercase is NOT the same as declared "HN" → dropped.
+        assert "hn" in r.dropped
+        assert r.header == ["REQNO"]
+
+
+class TestNormalizeHeaderDedupe:
+    """IPDADMPROGRESS arrives with duplicate HN and AN columns (positions
+    1 + 30 and 2 + 3). The normalize layer drops duplicates by first-
+    occurrence-wins, which matches the locked spec's positional-read rule
+    without needing column-index bookkeeping."""
+
+    def test_ipdadmprogress_duplicate_hn_an_deduped(self) -> None:
+        # Real header shape (abbreviated to the duplicates + a declared field).
+        r = normalize_header(
+            "IPDADMPROGRESS",
+            ["HN", "AN", "AN", "PROGDATE", "HN", "OBJECTIVE"],
+        )
+        # First HN and first AN survive; second occurrences land in dropped.
+        assert r.header.count("HN") == 1
+        assert r.header.count("AN") == 1
+        # Two duplicate names → two entries in dropped, in source order.
+        assert r.dropped == ["AN", "HN"]
+
+    def test_dedupe_applied_universally(self) -> None:
+        # The dedupe rule is global so an unexpected duplicate in any future
+        # export shows up in the dropped list rather than silently corrupting
+        # validate_header's set-based drift check.
+        cols = list(get_schema("BDVST").columns)
+        r = normalize_header("BDVST", [*cols, "HN"])
+        assert r.header == cols
+        assert r.dropped == ["HN"]  # the second HN, dropped by first-wins rule
+
+
+# =============================================================================
+# AC: All 11 CSVs ingestable — pandera schemas registered for every table
 # =============================================================================
 
 
@@ -256,8 +466,11 @@ class TestSchemaCoverage:
         # Adding a table without bumping the schema version would change the
         # fingerprint and produce a new run_id — but we still want a hard
         # tripwire so a contributor cannot register an extra one silently.
-        # Canonical set: 10 HOSxP tables + 2 procedure tables added for #7.
-        assert len(all_tables()) == 12
+        # Canonical set (2026-05-19 schema lock): 11 tables — see
+        # docs/ingest-mapping.md. UnUSE_Patient_Background dropped because
+        # the bundle's file with that name is obstetric records, not patient
+        # demographics; audit no longer needs per-row age/sex.
+        assert len(all_tables()) == 11
 
 
 # =============================================================================
@@ -324,30 +537,43 @@ class TestValidateHeader:
 
 
 class TestSchemaDriftDetection:
-    """Integration: drift detected by validate_header propagates through ingest()
-    and does NOT write a completion marker (no side-effects on drift)."""
+    """Integration: drift detection (for *missing required* columns) still
+    propagates through ingest() with no side-effects. Per the 2026-05-19
+    schema lock (policy a; see docs/ingest-mapping.md), *unknown* extra
+    columns are no longer fatal — they are projected away by the normalize
+    layer and logged. The fatal direction is now only "missing required"."""
 
-    def test_unknown_column_raises_schema_drift_error(self, tmp_path: Path) -> None:
-        # Craft a single-table input dir; the BDVST.csv has an unknown column.
-        in_dir = tmp_path / "in"
-        in_dir.mkdir()
-        (in_dir / "BDVST.csv").write_text(
-            "HN,SOMETHING_NEW\n123,foo\n", encoding="utf-8"
-        )
+    def test_undeclared_extra_column_is_projected_not_raised(
+        self, tmp_path: Path, complete_hosxp_dir: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Start from a complete fixture and add a wholly-undeclared column
+        # to BDVST. With the normalize layer wired in, ingest must NOT raise:
+        # the extra is projected away and logged.
+        bdvst_path = complete_hosxp_dir / "BDVST.csv"
+        from bba.ingest.schemas import get_schema
+
+        declared = list(get_schema("BDVST").columns)
+        header = ",".join([*declared, "SOMETHING_NEW"])
+        row = ",".join("" for _ in declared) + ",extra-value"
+        bdvst_path.write_text(f"{header}\n{row}\n", encoding="utf-8")
 
         cfg = IngestConfig(
-            input_dir=in_dir,
+            input_dir=complete_hosxp_dir,
             output_dir=tmp_path / "out",
             code_version="test-0.0.1",
         )
-        with pytest.raises(SchemaDriftError) as exc_info:
-            ingest(cfg)
-        msg = str(exc_info.value)
-        # Helpful error must surface both the offending column and the table.
-        assert "SOMETHING_NEW" in msg, (
-            f"drift error did not name unknown column: {msg!r}"
+        with caplog.at_level("INFO", logger="bba.ingest.pipeline"):
+            result = ingest(cfg)
+        # Ingest completes without drift.
+        assert result.skipped_idempotent is False
+        # The dropped column shows up in the run log so reviewers can diff.
+        assert any(
+            "BDVST" in rec.message and "SOMETHING_NEW" in rec.message
+            for rec in caplog.records
+        ), (
+            f"normalize did not log the dropped column; caplog records: "
+            f"{[r.message for r in caplog.records]}"
         )
-        assert "BDVST" in msg, f"drift error did not name the source table: {msg!r}"
 
 
 # =============================================================================
@@ -479,8 +705,8 @@ class TestRunIdentity:
     def test_from_inputs_invariant_under_dict_order(self) -> None:
         # The aggregate-hash step must sort by table; the same dict in different
         # iteration orders must yield the same run_id (cross-platform reproducibility).
-        a: dict[CSVTable, str] = {"BDVST": "h1", "Lab": "h2", "MED": "h3"}
-        b: dict[CSVTable, str] = {"MED": "h3", "BDVST": "h1", "Lab": "h2"}
+        a: dict[CSVTable, str] = {"BDVST": "h1", "Lab": "h2", "Med": "h3"}
+        b: dict[CSVTable, str] = {"Med": "h3", "BDVST": "h1", "Lab": "h2"}
         assert (
             RunIdentity.from_inputs(a, "schema-fp", "v1").run_id
             == RunIdentity.from_inputs(b, "schema-fp", "v1").run_id

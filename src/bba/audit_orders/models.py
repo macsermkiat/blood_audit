@@ -34,6 +34,14 @@ RBCProduct = Literal["LPRC", "LDPRC", "SDR"]
 # subgroup named in the issue acceptance criteria; the ``detail`` field on
 # :class:`ExcludedRecord` carries the specific ICD-10 code (e.g., "D55.1")
 # when the reason category is broader than a single code.
+#
+# ``"pediatric"`` is preserved as a back-compat value for runs that pre-date
+# the 2026-05-19 schema lock (when the audit still received birthdate from a
+# patient-demographics table). Current ingest bundles have no per-row age
+# column, so the upstream IT pre-filter (``age > 15``) handles the gate
+# exclusively and the audit pipeline never fires ``"pediatric"`` itself.
+# ``"obstetric"`` fires on ICD-10 O-codes only — no sex-gate, since sex is
+# no longer in scope either. See ``docs/ingest-mapping.md`` for context.
 ExclusionReason = Literal[
     "not_rbc_product",
     "status_not_eligible",
@@ -53,9 +61,8 @@ class BloodOrderInput(BaseModel):
 
     Carries the BDVST identity + status fields, the anchor candidates from
     both BDVST (``req_date`` / ``req_time``) and BDVSTDT (``bdvst_date`` /
-    ``bdvst_time``), the joined BDTYPE products, the joined Diagnosis
-    ICD-10 codes scoped to the same admission (AN), and the joined patient
-    birthdate from UnUSE_Patient_Background.
+    ``bdvst_time``), the joined BDTYPE products, and the joined Diagnosis
+    ICD-10 codes scoped to the same admission (AN).
 
     The input shape is "already joined" so the filter logic does not have to
     perform DuckDB joins itself — that is the orchestrator's job. Keeping the
@@ -87,10 +94,6 @@ class BloodOrderInput(BaseModel):
     # Joined ICD-10 codes from Diagnosis (AN-scoped)
     diagnosis_codes: tuple[str, ...]
 
-    # Joined patient data from UnUSE_Patient_Background
-    birthdate: date | None
-    sex: str | None
-
 
 class AuditOrder(BaseModel):
     """One canonical audit_orders row — output of the filter for an included input.
@@ -114,8 +117,6 @@ class AuditOrder(BaseModel):
     order_datetime: datetime
     anchor_imputed: bool
     products_ordered: tuple[RBCProduct, ...]
-    age_years: int
-    sex: str | None
     diagnosis_codes: tuple[str, ...]
 
 

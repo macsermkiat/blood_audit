@@ -55,9 +55,14 @@ class OperativeEvent(BaseModel):
     any decimal point during the join so this module's prefix matchers
     can stay format-stable.
 
-    ``or_flag`` is True iff IPTSUMOPRT.Orflag == 1 (operating-room procedure).
-    The cohort allow-lists require ``or_flag`` to gate non-OR cardiac items
-    like 894 (cardiac stress test) and 3796 (pacemaker pulse generator).
+    ``or_flag`` is True iff ICD9CM.ORFLAG == "1" (operating-room procedure)
+    looked up by the row's ICD-9-CM code in the dictionary. Post-schema-lock
+    (2026-05-19; see ``docs/ingest-mapping.md``) IPTSUMOPRT no longer carries
+    a per-encounter Orflag column — the orchestrator joins
+    ``IPTSUMOPRT.ICD9CM → ICD9CM.ICD9CM → ICD9CM.ORFLAG`` to surface the
+    per-code curated surgical flag. The cohort allow-lists require
+    ``or_flag`` to gate non-OR cardiac items like 894 (cardiac stress test)
+    and 3796 (pacemaker pulse generator).
 
     ``operative_datetime`` MUST be tz-aware UTC; naive datetimes are
     rejected by :class:`AwareDatetime`. ``name`` is the procedure

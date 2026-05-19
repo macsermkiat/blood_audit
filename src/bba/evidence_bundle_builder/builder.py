@@ -91,7 +91,7 @@ budget after the system prompt + few-shot examples."""
 DROP_PRIORITY: tuple[EvidenceSource, ...] = (
     "IPDADMPROGRESS",
     "IPDNRFOCUSDT",
-    "MED",
+    "Med",
     "Vitals",
     "Lab",
     "Diagnosis",
@@ -672,7 +672,7 @@ def _assign_ids(
         items.append(
             EvidenceItem(
                 id=_next_id(),
-                source="MED",
+                source="Med",
                 timestamp_utc=_to_utc(m.timestamp),
                 payload=_med_payload(m),
             )

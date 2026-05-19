@@ -371,8 +371,6 @@ def _row_context(
         order_datetime=_RUN_TS,
         anchor_imputed=False,
         products_ordered=("LPRC",),
-        age_years=55,
-        sex="M",
         diagnosis_codes=("D62",),
     )
     hb_result = HbLookupResult(

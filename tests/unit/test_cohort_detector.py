@@ -1217,15 +1217,26 @@ class TestBundledIngestSchemas:
         schema = get_schema("ICD9CM")
         assert schema is not None
 
-    def test_iptsumoprt_has_orflag_and_icd9_columns(self) -> None:
-        # The cohort detector consumes Orflag (OR-procedure gate) and
-        # an ICD-9-CM code column from IPTSUMOPRT — both must be in the
-        # registered schema or the upstream join silently drops them.
+    def test_orflag_join_path_intact(self) -> None:
+        # The cohort detector's OperativeEvent.or_flag sources from
+        # ICD9CM.ORFLAG (per-code surgical flag) joined via the row's
+        # procedure code from IPTSUMOPRT. Post-2026-05-19 schema lock,
+        # IPTSUMOPRT no longer carries a per-encounter Orflag; the join
+        # path IPTSUMOPRT.ICD9CM → ICD9CM.ICD9CM → ICD9CM.ORFLAG must
+        # have both endpoints declared, or the orchestrator silently
+        # loses the OR-procedure gate. See docs/ingest-mapping.md.
         from bba.ingest.schemas import get_schema
 
-        cols = set(get_schema("IPTSUMOPRT").columns)
-        assert "Orflag" in cols or "ORFLAG" in cols, (
-            f"IPTSUMOPRT schema must declare an Orflag column; got {sorted(cols)}"
+        iptsumoprt_cols = set(get_schema("IPTSUMOPRT").columns)
+        assert "ICD9CM" in iptsumoprt_cols, (
+            f"IPTSUMOPRT schema must declare ICD9CM (procedure code) for the "
+            f"ORFLAG join; got {sorted(iptsumoprt_cols)}"
+        )
+
+        icd9cm_cols = set(get_schema("ICD9CM").columns)
+        assert "ORFLAG" in icd9cm_cols, (
+            f"ICD9CM schema must declare ORFLAG (per-code surgical flag) for "
+            f"the cohort detector's OR-procedure gate; got {sorted(icd9cm_cols)}"
         )
 
     def test_all_tables_now_includes_new_two(self) -> None:

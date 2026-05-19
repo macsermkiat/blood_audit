@@ -672,7 +672,7 @@ class TestModelImmutability:
             "items": [
                 {
                     "id": "E1",
-                    "source": "MED",  # mismatched source
+                    "source": "Med",  # mismatched source
                     "timestamp_utc": None,
                     "payload": {"icd10": "D50.9"},
                 }
@@ -746,19 +746,19 @@ class TestMedWindow:
 
     def test_inside_minus_72h_kept(self) -> None:
         bundle = _build_minimal(meds=(_med(offset_hours=-71.9),))
-        assert len(_items_by_source(bundle, "MED")) == 1
+        assert len(_items_by_source(bundle, "Med")) == 1
 
     def test_inside_plus_24h_kept(self) -> None:
         bundle = _build_minimal(meds=(_med(offset_hours=23.9),))
-        assert len(_items_by_source(bundle, "MED")) == 1
+        assert len(_items_by_source(bundle, "Med")) == 1
 
     def test_outside_minus_72h_dropped(self) -> None:
         bundle = _build_minimal(meds=(_med(offset_hours=-72.1),))
-        assert _items_by_source(bundle, "MED") == ()
+        assert _items_by_source(bundle, "Med") == ()
 
     def test_outside_plus_24h_dropped(self) -> None:
         bundle = _build_minimal(meds=(_med(offset_hours=24.1),))
-        assert _items_by_source(bundle, "MED") == ()
+        assert _items_by_source(bundle, "Med") == ()
 
 
 class TestHbHistoryWindow:
@@ -1637,7 +1637,7 @@ class TestStableEvidenceIDs:
         )
         sources = [item.source for item in bundle.items]
         assert sources.index("Diagnosis") < sources.index("IPDADMPROGRESS")
-        assert sources.index("IPDADMPROGRESS") < sources.index("MED")
+        assert sources.index("IPDADMPROGRESS") < sources.index("Med")
 
     def test_progress_emission_is_closest_to_anchor_first(self) -> None:
         # Round-21: IPDADMPROGRESS now emits closest-to-anchor first so
@@ -1848,7 +1848,7 @@ class TestCharCapEnforcement:
         items = tuple(
             EvidenceItem(
                 id=f"E{i}",
-                source="MED",
+                source="Med",
                 timestamp_utc=ANCHOR_DT - timedelta(hours=i),
                 payload={"drug": "X" * 200},
             )
@@ -1933,7 +1933,7 @@ class TestHbEmissionAndTruncationPriority:
             inputs=EvidenceInputs(anchor=anchor, meds=(near, stale)),
             char_cap=1100,
         )
-        med_items = _items_by_source(bundle, "MED")
+        med_items = _items_by_source(bundle, "Med")
         assert len(med_items) == 1, (
             "Expected exactly one MED to survive under cap pressure"
         )
@@ -2078,7 +2078,7 @@ class TestHbEmissionAndTruncationPriority:
             inputs=EvidenceInputs(anchor=anchor, meds=(post, pre_immediate, pre_stale)),
             char_cap=1300,
         )
-        med_items = _items_by_source(bundle, "MED")
+        med_items = _items_by_source(bundle, "Med")
         # Under cap pressure, expect the post-order MED to drop first
         # (lower priority); pre-order meds survive longer. The
         # immediate pre (-1h) survives until last.
@@ -2101,7 +2101,7 @@ class TestHbEmissionAndTruncationPriority:
         pre = _med(offset_hours=-1, drug="Pre")
         post = _med(offset_hours=2, drug="Post")
         bundle = _build_minimal(meds=(post, pre))
-        med_items = _items_by_source(bundle, "MED")
+        med_items = _items_by_source(bundle, "Med")
         assert len(med_items) == 2
         assert med_items[0].payload["drug"] == "Pre"
         assert med_items[1].payload["drug"] == "Post"
@@ -2112,7 +2112,7 @@ class TestHbEmissionAndTruncationPriority:
         near = _med(offset_hours=-1, drug="A")
         far = _med(offset_hours=-72, drug="B")
         bundle = _build_minimal(meds=(far, near))
-        med_items = _items_by_source(bundle, "MED")
+        med_items = _items_by_source(bundle, "Med")
         assert len(med_items) == 2
         assert med_items[0].payload["drug"] == "A"  # newest first
         assert med_items[1].payload["drug"] == "B"
@@ -2136,7 +2136,7 @@ class TestHbEmissionAndTruncationPriority:
             char_cap=1500,
         )
         lab_items = _items_by_source(bundle, "Lab")
-        med_items = _items_by_source(bundle, "MED")
+        med_items = _items_by_source(bundle, "Med")
         assert len(lab_items) == 1, (
             "Hb dropped under tight cap while MED items survived; the "
             "decision-time anemia signal must outlast lower-priority MED."

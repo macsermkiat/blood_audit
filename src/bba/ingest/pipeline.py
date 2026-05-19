@@ -2,7 +2,8 @@
 
 Public entry point: :func:`ingest`. Per PRD §1:
 
-* discover the 10 HOSxP CSVs in ``config.input_dir`` by file stem;
+* discover the 11 HOSxP CSVs in ``config.input_dir`` by file stem (per the
+  2026-05-19 schema lock; see ``docs/ingest-mapping.md``);
 * fail loud (:class:`IncompleteInputError`) if the input dir is missing or
   any canonical CSV is absent;
 * validate each header against its pandera schema, raising
@@ -20,17 +21,21 @@ the validated dataframes.
 from __future__ import annotations
 
 import csv
+import logging
 from pathlib import Path
 from typing import cast, get_args
 
 from bba.ingest.hashing import content_hash
 from bba.ingest.models import CSVTable, IngestConfig, IngestResult
+from bba.ingest.normalize import normalize_header
 from bba.ingest.run_identity import RunIdentity
 from bba.ingest.schemas import (
     IncompleteInputError,
     schema_fingerprint,
     validate_header,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _read_csv_header(path: Path) -> list[str]:
@@ -66,10 +71,23 @@ def ingest(config: IngestConfig) -> IngestResult:
         stem = csv_path.stem
         if stem not in known_tables:
             # Unknown filename — skip silently; the canonical set is exactly
-            # the 10 HOSxP tables and operators may stage extra artefacts.
+            # the 11 HOSxP tables and operators may stage extra artefacts.
             continue
         table = stem
-        validate_header(table, _read_csv_header(csv_path))
+        raw_header = _read_csv_header(csv_path)
+        normalized = normalize_header(table, raw_header)
+        if normalized.dropped:
+            # Policy (a) per docs/ingest-mapping.md: project + log dropped.
+            # An operator reviewing the run audit can diff the dropped set
+            # across runs to notice newly-arrived columns the schema doesn't
+            # yet declare.
+            logger.info(
+                "normalize: table=%s dropped %d columns: %s",
+                table,
+                len(normalized.dropped),
+                sorted(set(normalized.dropped)),
+            )
+        validate_header(table, normalized.header)
         per_file_hashes[table] = content_hash(csv_path)
         validated.append(table)
 

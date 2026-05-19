@@ -57,11 +57,9 @@ from bba.audit_orders import (
     BloodOrderInput,
     ExcludedRecord,
     FilterResult,
-    MIN_AGE_YEARS,
     UnrecoverableAnchorError,
     build_audit_id,
     build_audit_orders,
-    check_age,
     check_aiha,
     check_an_scoped,
     check_cancelled,
@@ -102,8 +100,6 @@ def _input(**overrides: Any) -> BloodOrderInput:
         "bdvst_time": ParsedTimeOfDay(hour=8, minute=45, second=0),
         "products": ("LPRC",),
         "diagnosis_codes": ("I50.9",),  # heart failure — not excluded
-        "birthdate": date(1980, 1, 1),
-        "sex": "M",
     }
     defaults.update(overrides)
     return BloodOrderInput(**defaults)
@@ -253,46 +249,6 @@ class TestInterHospitalExclusion:
     ) -> None:
         result = build_audit_orders([_input(reqtype="P")], config)
         assert all(r.reason != "inter_hospital" for r in result.excluded)
-
-
-class TestPediatricExclusion:
-    """Age < 15 at order date → excluded with reason ``pediatric``.
-
-    The age boundary is open: 15 is in, 14 is out. The boundary value is
-    a clinical decision (different transfusion guidelines below 15);
-    silently shifting it would change which cases the audit covers.
-    """
-
-    def test_age_14_excluded(self, config: AuditOrdersConfig) -> None:
-        # Order on 2026-05-01, birthdate 2012-05-02 → age 13 (still 13 the
-        # day before the birthday). Belt-and-braces: pick a date that's
-        # unambiguously < 15 to avoid floor-vs-ceil bugs in the test itself.
-        result = build_audit_orders(
-            [_input(birthdate=date(2012, 1, 1))],  # ~14 years
-            config,
-        )
-        assert len(result.excluded) == 1
-        assert result.excluded[0].reason == "pediatric"
-
-    def test_age_15_included(self, config: AuditOrdersConfig) -> None:
-        # 15 years exactly on order date 2026-05-01 → included
-        result = build_audit_orders([_input(birthdate=date(2011, 5, 1))], config)
-        assert len(result.included) == 1
-        assert result.included[0].age_years == MIN_AGE_YEARS
-
-    def test_age_15_minus_one_day_excluded(self, config: AuditOrdersConfig) -> None:
-        # Order 2026-05-01, birthdate 2011-05-02 → 14y 364d → excluded.
-        result = build_audit_orders([_input(birthdate=date(2011, 5, 2))], config)
-        assert len(result.excluded) == 1
-        assert result.excluded[0].reason == "pediatric"
-
-    def test_null_birthdate_excluded_as_pediatric(
-        self, config: AuditOrdersConfig
-    ) -> None:
-        # PRD-conservative: a missing birthdate cannot be assumed adult.
-        result = build_audit_orders([_input(birthdate=None)], config)
-        assert len(result.excluded) == 1
-        assert result.excluded[0].reason == "pediatric"
 
 
 class TestObstetricExclusion:
@@ -527,8 +483,6 @@ class TestOutputSchemaIdentityAndAnchor:
         assert hasattr(order, "anchor_imputed")
         assert hasattr(order, "products_ordered")
         # Joined inputs needed by #5–#7
-        assert hasattr(order, "age_years")
-        assert hasattr(order, "sex")
         assert hasattr(order, "diagnosis_codes")
 
     def test_order_datetime_is_tz_aware_utc(self, config: AuditOrdersConfig) -> None:
@@ -624,7 +578,6 @@ class TestPartitionInvariant:
             _input(reqno="REQ-D", bdvstst="6"),  # status_not_eligible
             _input(reqno="REQ-E", canceldate="20260501"),  # cancelled
             _input(reqno="REQ-F", reqtype="H"),  # inter_hospital
-            _input(reqno="REQ-G", birthdate=date(2015, 1, 1)),  # pediatric
             _input(reqno="REQ-H", diagnosis_codes=("D56.1",)),  # hemoglobinopathy
             _input(reqno="REQ-I", diagnosis_codes=("D59.3",)),  # aiha
             _input(reqno="REQ-J", diagnosis_codes=("M31.1",)),  # tma
@@ -736,8 +689,6 @@ class TestPropertyPartitionAndIdentity:
                             "D550",  # malformed near-miss (must NOT match D55)
                         ]
                     ),
-                    # age sampled across pediatric/adult boundary.
-                    "birth_year": st.integers(min_value=1950, max_value=2015),
                 }
             ),
             min_size=0,
@@ -768,7 +719,6 @@ class TestPropertyPartitionAndIdentity:
                 canceldate=spec["canceldate"],  # type: ignore[arg-type]
                 an=spec["an"],  # type: ignore[arg-type]
                 diagnosis_codes=(str(spec["diag"]),),
-                birthdate=date(int(spec["birth_year"]), 6, 1),  # type: ignore[arg-type]
             )
             for i, spec in enumerate(records_spec)
         ]
@@ -995,14 +945,6 @@ class TestPerRulePredicates:
         e = check_request_type(_input(reqtype="H"))
         assert isinstance(e, ExcludedRecord)
         assert e.reason == "inter_hospital"
-
-    def test_check_age_clean(self) -> None:
-        assert check_age(_input(birthdate=date(1980, 1, 1)), date(2026, 5, 1)) is None
-
-    def test_check_age_excludes_pediatric(self) -> None:
-        e = check_age(_input(birthdate=date(2015, 1, 1)), date(2026, 5, 1))
-        assert isinstance(e, ExcludedRecord)
-        assert e.reason == "pediatric"
 
     @pytest.mark.parametrize("code", ["D55.0", "D56.0", "D57.0", "D58.0"])
     def test_check_hemoglobinopathy_excludes(self, code: str) -> None:

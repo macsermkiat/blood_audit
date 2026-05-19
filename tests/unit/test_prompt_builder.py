@@ -969,7 +969,7 @@ class TestModelsValidation:
             EvidenceChunk(evidence_id="E1.5", source="Diagnosis", text="t")
 
     def test_evidence_chunk_valid(self) -> None:
-        c = EvidenceChunk(evidence_id="E42", source="MED", text="furosemide")
+        c = EvidenceChunk(evidence_id="E42", source="Med", text="furosemide")
         assert c.evidence_id == "E42"
 
     def test_evidence_chunk_rejects_blank_text(self) -> None:
@@ -979,9 +979,9 @@ class TestModelsValidation:
         # nothing to ground against. Reject at the model boundary so
         # the all-blank payload cannot slip past EMPTY_EVIDENCE routing.
         with pytest.raises(ValidationError):
-            EvidenceChunk(evidence_id="E1", source="MED", text="")
+            EvidenceChunk(evidence_id="E1", source="Med", text="")
         with pytest.raises(ValidationError):
-            EvidenceChunk(evidence_id="E1", source="MED", text="   \n\t  ")
+            EvidenceChunk(evidence_id="E1", source="Med", text="   \n\t  ")
 
     def test_few_shot_example_rejects_empty_fields(self) -> None:
         with pytest.raises(ValidationError):

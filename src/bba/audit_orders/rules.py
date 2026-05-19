@@ -15,7 +15,6 @@ while letting tests target the exact rule the issue calls out.
 
 from __future__ import annotations
 
-from datetime import date
 from typing import cast
 
 from bba.audit_orders.models import (
@@ -53,11 +52,6 @@ TMA_PREFIXES: frozenset[str] = frozenset({"M31.1"})
 # match is sufficient: the entire O-chapter is "Pregnancy, childbirth and
 # the puerperium" and out of scope for Phase 1.
 OBSTETRIC_PREFIX: str = "O"
-
-# Minimum age in years for Phase 1 inclusion (PRD §"Out of scope":
-# pediatric < 15 is excluded).
-MIN_AGE_YEARS: int = 15
-
 
 def is_rbc_product(product: str) -> bool:
     """True iff ``product`` is one of the allow-listed RBC products."""
@@ -159,44 +153,6 @@ def check_request_type(record: BloodOrderInput) -> ExcludedRecord | None:
         reason="inter_hospital",
         detail=record.reqtype,
     )
-
-
-def years_between(start: date, end: date) -> int:
-    """Whole years from ``start`` to ``end`` (i.e., age in years).
-
-    The boundary is open: a birthday on ``end`` counts as the new age; a
-    birthday after ``end`` (same calendar year) counts as the previous age.
-    """
-    years = end.year - start.year
-    if (end.month, end.day) < (start.month, start.day):
-        years -= 1
-    return years
-
-
-def check_age(record: BloodOrderInput, anchor_date: date) -> ExcludedRecord | None:
-    """Reject records whose patient age at the anchor date is < :data:`MIN_AGE_YEARS`.
-
-    ``anchor_date`` is the date component of the resolved anchor datetime —
-    age is computed relative to the order, not to today. A null birthdate
-    is treated as missing-eligibility; per Phase-1 conservatism it counts
-    as a pediatric exclusion.
-    """
-    if record.birthdate is None:
-        return ExcludedRecord(
-            hn=record.hn,
-            reqno=record.reqno,
-            reason="pediatric",
-            detail=None,
-        )
-    age = years_between(record.birthdate, anchor_date)
-    if age < MIN_AGE_YEARS:
-        return ExcludedRecord(
-            hn=record.hn,
-            reqno=record.reqno,
-            reason="pediatric",
-            detail=str(age),
-        )
-    return None
 
 
 def _code_matches_prefix(code: str, prefix: str) -> bool:
@@ -323,11 +279,9 @@ __all__ = (
     "AIHA_PREFIX",
     "ELIGIBLE_STATUS",
     "HEMOGLOBINOPATHY_PREFIXES",
-    "MIN_AGE_YEARS",
     "OBSTETRIC_PREFIX",
     "RBC_PRODUCTS",
     "TMA_PREFIXES",
-    "check_age",
     "check_aiha",
     "check_an_scoped",
     "check_cancelled",
@@ -339,5 +293,4 @@ __all__ = (
     "check_tma",
     "is_rbc_product",
     "rbc_products_in",
-    "years_between",
 )

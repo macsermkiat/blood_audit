@@ -57,7 +57,7 @@ EvidenceSource = Literal[
     "Diagnosis",
     "IPDADMPROGRESS",
     "IPDNRFOCUSDT",
-    "MED",
+    "Med",
     "Lab",
     "Vitals",
 ]

@@ -7,6 +7,7 @@ run_id idempotency contract.
 This module is the foundation for #4, #5, #6, #7, #9, #12.
 """
 
+from bba.ingest.date_parser import DateParseResult, parse_iptsumoprt_date
 from bba.ingest.hashing import content_hash
 from bba.ingest.models import (
     CSVTable,
@@ -15,6 +16,7 @@ from bba.ingest.models import (
     ParsedTimeOfDay,
     ParseResult,
 )
+from bba.ingest.normalize import NormalizedHeader, normalize_header
 from bba.ingest.pipeline import ingest
 from bba.ingest.row_timestamp import RowTimestamp
 from bba.ingest.run_identity import RunIdentity
@@ -30,9 +32,11 @@ from bba.ingest.time_parser import parse_hosxp_time
 
 __all__ = [
     "CSVTable",
+    "DateParseResult",
     "IncompleteInputError",
     "IngestConfig",
     "IngestResult",
+    "NormalizedHeader",
     "ParseResult",
     "ParsedTimeOfDay",
     "RowTimestamp",
@@ -42,7 +46,9 @@ __all__ = [
     "content_hash",
     "get_schema",
     "ingest",
+    "normalize_header",
     "parse_hosxp_time",
+    "parse_iptsumoprt_date",
     "schema_fingerprint",
     "validate_header",
 ]

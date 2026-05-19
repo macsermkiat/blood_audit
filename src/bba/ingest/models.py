@@ -16,14 +16,13 @@ from pydantic import BaseModel, ConfigDict
 CSVTable = Literal[
     "BDVST",
     "BDVSTDT",
-    "BDTYPE",
     "BDVSTST",
+    "BDTYPE",
     "Diagnosis",
     "Lab",
-    "MED",
+    "Med",
     "IPDADMPROGRESS",
     "IPDNRFOCUSDT",
-    "UnUSE_Patient_Background",
     "IPTSUMOPRT",
     "ICD9CM",
 ]
