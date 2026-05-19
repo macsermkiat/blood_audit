@@ -37,7 +37,12 @@ from bba.ingest.schemas import (
     validate_header,
 )
 from bba.ingest.date_parser import parse_iptsumoprt_date
-from bba.ingest.normalize import normalize_header
+from bba.ingest.normalize import (
+    _row_positions,
+    normalize_header,
+    normalize_row,
+    normalize_rows,
+)
 from bba.ingest.time_parser import parse_hosxp_time
 
 
@@ -446,6 +451,384 @@ class TestNormalizeHeaderDedupe:
         r = normalize_header("BDVST", [*cols, "HN"])
         assert r.header == cols
         assert r.dropped == ["HN"]  # the second HN, dropped by first-wins rule
+
+
+# =============================================================================
+# AC: Per-row normalize layer (issue #61) — position map, projection,
+# year-filter, INDATE date-parse, IPDADMPROGRESS positional dedupe
+# alignment. Drains rows after validate_header passes and before any
+# Parquet write; surfaces row-level parse warnings to the run audit.
+# =============================================================================
+
+
+class TestRowPositions:
+    """The position map mirrors normalize_header so the row pass aligns
+    1:1 with the projected header. First-occurrence wins on duplicates;
+    case-normalize applies to IPTSUMOPRT and ICD9CM."""
+
+    def test_plain_table_positions_match_input_order(self) -> None:
+        raw = list(get_schema("BDVST").columns)
+        kept = list(get_schema("BDVST").columns)
+        assert _row_positions("BDVST", raw, kept) == tuple(range(len(raw)))
+
+    def test_iptsumoprt_title_case_resolves_to_raw_positions(self) -> None:
+        # The real bundle ships Title-Case names. _row_positions must
+        # match by upper-cased name and return the raw position so the
+        # row reader picks the correct cell.
+        raw = ["An", "Diagorder", "Itemno", "Icd9cm", "Indate", "Intime"]
+        kept = ["AN", "ICD9CM", "INDATE", "INTIME"]
+        positions = _row_positions("IPTSUMOPRT", raw, kept)
+        # AN→0, ICD9CM→3, INDATE→4, INTIME→5
+        assert positions == (0, 3, 4, 5)
+
+    def test_ipdadmprogress_duplicates_resolve_to_first_position(self) -> None:
+        # Real file shape (abbreviated): HN at 0, AN at 1, duplicate AN
+        # at 2, PROGDATE at 3, duplicate HN at 4, SOAP fields follow.
+        raw = [
+            "HN",
+            "AN",
+            "AN",  # dup → ignored
+            "PROGDATE",
+            "HN",  # dup → ignored
+            "SUBJECTIVE",
+            "OBJECTIVE",
+            "ASSESSMENT",
+            "PLAN",
+        ]
+        kept = ["HN", "AN", "PROGDATE", "SUBJECTIVE", "OBJECTIVE", "ASSESSMENT", "PLAN"]
+        positions = _row_positions("IPDADMPROGRESS", raw, kept)
+        # First HN → 0, first AN → 1, PROGDATE → 3, SOAP → 5..8.
+        # The duplicate AN at 2 and duplicate HN at 4 are skipped.
+        assert positions == (0, 1, 3, 5, 6, 7, 8)
+
+
+class TestNormalizeRowProjection:
+    """Projection picks the right cells; the result aligns with kept_header."""
+
+    def test_projection_picks_cells_by_position(self) -> None:
+        raw = list(get_schema("BDVST").columns)
+        kept = list(get_schema("BDVST").columns)
+        positions = _row_positions("BDVST", raw, kept)
+        # Construct a raw row with distinctive values per column.
+        raw_row = [f"v{i}" for i in range(len(raw))]
+        result = normalize_row("BDVST", raw_row, positions, kept)
+        assert result is not None
+        # Cells align with kept_header order.
+        assert result.cells == tuple(raw_row)
+        # No row-level rules fire for BDVST → no warnings.
+        assert result.parse_warnings == ()
+
+    def test_projection_drops_undeclared_cells(self) -> None:
+        # Raw row has extras at the tail; positions only reference the
+        # declared columns, so the extras are not read.
+        raw = [*get_schema("BDVST").columns, "EXTRA_A", "EXTRA_B"]
+        kept = list(get_schema("BDVST").columns)
+        positions = _row_positions("BDVST", raw, kept)
+        raw_row = [f"v{i}" for i in range(len(raw))]
+        result = normalize_row("BDVST", raw_row, positions, kept)
+        assert result is not None
+        # Only the first len(kept) cells survive; trailing extras dropped.
+        assert result.cells == tuple(raw_row[: len(kept)])
+
+
+class TestNormalizeRowYearFilter:
+    """IPDADMPROGRESS and IPDNRFOCUSDT drop rows whose date column is
+    outside the cohort year. Single-point constant in normalize.py
+    (COHORT_YEAR) controls this; year-filter columns are per-table
+    declarative mappings."""
+
+    def _ipdadm_setup(self) -> tuple[tuple[int, ...], list[str]]:
+        kept = list(get_schema("IPDADMPROGRESS").columns)
+        positions = _row_positions("IPDADMPROGRESS", kept, kept)
+        return positions, kept
+
+    def _ipdadm_row(self, kept: list[str], progdate: str) -> list[str]:
+        idx = kept.index("PROGDATE")
+        row = ["" for _ in kept]
+        row[idx] = progdate
+        return row
+
+    def test_ipdadmprogress_in_cohort_year_kept(self) -> None:
+        positions, kept = self._ipdadm_setup()
+        row = self._ipdadm_row(kept, "2025-05-19 00:00:00.000")
+        result = normalize_row("IPDADMPROGRESS", row, positions, kept)
+        assert result is not None
+
+    def test_ipdadmprogress_prior_year_dropped(self) -> None:
+        positions, kept = self._ipdadm_setup()
+        row = self._ipdadm_row(kept, "2024-12-31 23:59:59.999")
+        assert normalize_row("IPDADMPROGRESS", row, positions, kept) is None
+
+    def test_ipdadmprogress_following_year_dropped(self) -> None:
+        # Spillover into the year after the cohort must also drop.
+        positions, kept = self._ipdadm_setup()
+        row = self._ipdadm_row(kept, "2026-01-01 00:00:00.000")
+        assert normalize_row("IPDADMPROGRESS", row, positions, kept) is None
+
+    def test_ipdadmprogress_empty_progdate_dropped(self) -> None:
+        # Blank PROGDATE cannot satisfy any year filter; conservatism
+        # keeps it out of the audit cohort.
+        positions, kept = self._ipdadm_setup()
+        row = self._ipdadm_row(kept, "")
+        assert normalize_row("IPDADMPROGRESS", row, positions, kept) is None
+
+    def test_ipdnrfocusdt_year_filter_on_progressdate(self) -> None:
+        kept = list(get_schema("IPDNRFOCUSDT").columns)
+        positions = _row_positions("IPDNRFOCUSDT", kept, kept)
+        idx = kept.index("PROGRESSDATE")
+        in_row = ["" for _ in kept]
+        in_row[idx] = "2025-08-01 00:00:00.000"
+        out_row = ["" for _ in kept]
+        out_row[idx] = "2021-08-01 00:00:00.000"
+        assert normalize_row("IPDNRFOCUSDT", in_row, positions, kept) is not None
+        assert normalize_row("IPDNRFOCUSDT", out_row, positions, kept) is None
+
+    def test_other_tables_have_no_year_filter(self) -> None:
+        # BDVST has no year-filter rule even though it has date columns.
+        # A row with a non-2025 anchor must still pass through (the
+        # audit-orders layer applies its own cohort logic).
+        kept = list(get_schema("BDVST").columns)
+        positions = _row_positions("BDVST", kept, kept)
+        row = ["" for _ in kept]
+        # Put a 1999 anchor in REQDATE and verify the row is kept.
+        row[kept.index("REQDATE")] = "1999-01-01 00:00:00.000"
+        result = normalize_row("BDVST", row, positions, kept)
+        assert result is not None
+
+    def test_custom_cohort_year_parameter(self) -> None:
+        # The cohort_year argument is the single point of change for
+        # future audit windows. A 2026 cohort run drops 2025 rows.
+        kept = list(get_schema("IPDADMPROGRESS").columns)
+        positions = _row_positions("IPDADMPROGRESS", kept, kept)
+        idx = kept.index("PROGDATE")
+        row = ["" for _ in kept]
+        row[idx] = "2025-05-19 00:00:00.000"
+        assert (
+            normalize_row("IPDADMPROGRESS", row, positions, kept, cohort_year=2026)
+            is None
+        )
+        assert (
+            normalize_row("IPDADMPROGRESS", row, positions, kept, cohort_year=2025)
+            is not None
+        )
+
+
+class TestNormalizeRowDateParse:
+    """IPTSUMOPRT.INDATE arrives in Excel-locale long form. The row pass
+    parses it to ISO via parse_iptsumoprt_date(). Parse failures attach a
+    warning to the row but DO NOT drop the row — strict-parser philosophy
+    per PRD §1 fix E35."""
+
+    def _iptsumoprt_row(
+        self, indate: str
+    ) -> tuple[list[str], tuple[int, ...], list[str]]:
+        kept = list(get_schema("IPTSUMOPRT").columns)
+        positions = _row_positions("IPTSUMOPRT", kept, kept)
+        row = ["" for _ in kept]
+        row[kept.index("INDATE")] = indate
+        return row, positions, kept
+
+    def test_indate_long_form_replaced_with_iso(self) -> None:
+        row, positions, kept = self._iptsumoprt_row("June 7, 2025, 12:00 AM")
+        result = normalize_row("IPTSUMOPRT", row, positions, kept)
+        assert result is not None
+        assert result.parse_warnings == ()
+        assert result.cells[kept.index("INDATE")] == "2025-06-07"
+
+    def test_indate_unparseable_yields_warning_but_keeps_row(self) -> None:
+        row, positions, kept = self._iptsumoprt_row("not-a-date")
+        result = normalize_row("IPTSUMOPRT", row, positions, kept)
+        assert result is not None  # row is NOT dropped
+        # Warning attached on the INDATE column.
+        assert len(result.parse_warnings) == 1
+        col, msg = result.parse_warnings[0]
+        assert col == "INDATE"
+        assert msg is not None and msg != ""
+        # Original (unparseable) cell value preserved so an auditor can
+        # inspect what the export sent.
+        assert result.cells[kept.index("INDATE")] == "not-a-date"
+
+    def test_indate_empty_yields_warning(self) -> None:
+        row, positions, kept = self._iptsumoprt_row("")
+        result = normalize_row("IPTSUMOPRT", row, positions, kept)
+        assert result is not None
+        assert len(result.parse_warnings) == 1
+        assert result.parse_warnings[0][0] == "INDATE"
+
+    def test_other_tables_do_not_run_date_parse(self) -> None:
+        # BDVST has BDVSTDATE in HOSxP standard format. The row pass
+        # must leave it alone (no English-locale parser invoked).
+        kept = list(get_schema("BDVST").columns)
+        positions = _row_positions("BDVST", kept, kept)
+        row = ["" for _ in kept]
+        row[kept.index("BDVSTDATE")] = "2025-05-19 00:00:00.000"
+        row[kept.index("REQDATE")] = "2025-05-19 00:00:00.000"
+        result = normalize_row("BDVST", row, positions, kept)
+        assert result is not None
+        assert result.parse_warnings == ()
+        # BDVSTDATE cell unchanged — not pushed through date parser.
+        assert result.cells[kept.index("BDVSTDATE")] == "2025-05-19 00:00:00.000"
+
+
+class TestIPDADMPROGRESSPositionalDedupeAlignment:
+    """The killer test for issue #61: when raw IPDADMPROGRESS rows arrive
+    with duplicate HN/AN cells, the projected row must align with the
+    projected header by INDEX, not by name. Without positional dedupe at
+    the row level, every cell past position 2 shifts and the SOAP fields
+    read from the wrong columns."""
+
+    def test_row_cells_align_with_projected_header_after_dedupe(self) -> None:
+        # Real file shape (abbreviated): HN, AN, AN(dup), PROGDATE,
+        # HN(dup), SUBJECTIVE, OBJECTIVE, ASSESSMENT, PLAN. Each cell
+        # carries its column name so the test asserts which cell ends
+        # up where after dedupe.
+        raw_header = [
+            "HN",
+            "AN",
+            "AN",
+            "PROGDATE",
+            "HN",
+            "SUBJECTIVE",
+            "OBJECTIVE",
+            "ASSESSMENT",
+            "PLAN",
+        ]
+        raw_row = [
+            "hn-real",
+            "an-real",
+            "an-dup",
+            "2025-05-19 00:00:00.000",
+            "hn-dup",
+            "subj text",
+            "obj text",
+            "asmnt text",
+            "plan text",
+        ]
+        kept = list(get_schema("IPDADMPROGRESS").columns)
+        # Strict containment: every kept col is in raw_header.
+        for col in kept:
+            assert col in raw_header
+        positions = _row_positions("IPDADMPROGRESS", raw_header, kept)
+        result = normalize_row("IPDADMPROGRESS", raw_row, positions, kept)
+        assert result is not None
+        d = dict(zip(kept, result.cells, strict=True))
+        # The real HN/AN survive; the duplicates are skipped.
+        assert d["HN"] == "hn-real"
+        assert d["AN"] == "an-real"
+        # SOAP fields read from THEIR positions, not shifted by the
+        # duplicate-cell columns.
+        assert d["SUBJECTIVE"] == "subj text"
+        assert d["OBJECTIVE"] == "obj text"
+        assert d["ASSESSMENT"] == "asmnt text"
+        assert d["PLAN"] == "plan text"
+
+
+class TestNormalizeRowsStream:
+    """The streaming generator yields kept rows in input order and lets
+    the caller count rows-in vs rows-yielded externally."""
+
+    def test_yields_kept_rows_in_input_order(self) -> None:
+        kept = list(get_schema("IPDADMPROGRESS").columns)
+        idx = kept.index("PROGDATE")
+
+        def make_row(progdate: str, marker: str) -> list[str]:
+            row = ["" for _ in kept]
+            row[idx] = progdate
+            row[kept.index("OBJECTIVE")] = marker
+            return row
+
+        rows_in = [
+            make_row("2025-01-01 00:00:00.000", "a"),
+            make_row("2024-06-01 00:00:00.000", "b"),  # filtered
+            make_row("2025-07-01 00:00:00.000", "c"),
+            make_row("2023-12-31 00:00:00.000", "d"),  # filtered
+            make_row("2025-12-31 00:00:00.000", "e"),
+        ]
+        kept_yielded = list(normalize_rows("IPDADMPROGRESS", kept, kept, iter(rows_in)))
+        assert [r.cells[kept.index("OBJECTIVE")] for r in kept_yielded] == [
+            "a",
+            "c",
+            "e",
+        ]
+
+    def test_parse_warnings_attach_per_row(self) -> None:
+        kept = list(get_schema("IPTSUMOPRT").columns)
+        idx = kept.index("INDATE")
+
+        def make_row(indate: str) -> list[str]:
+            row = ["" for _ in kept]
+            row[idx] = indate
+            return row
+
+        rows = [
+            make_row("June 7, 2025, 12:00 AM"),  # clean
+            make_row("garbage"),  # warning
+            make_row("January 1, 2014, 12:00 AM"),  # clean
+        ]
+        out = list(normalize_rows("IPTSUMOPRT", kept, kept, iter(rows)))
+        assert len(out) == 3  # parse failure does NOT drop the row
+        assert out[0].parse_warnings == ()
+        assert len(out[1].parse_warnings) == 1
+        assert out[2].parse_warnings == ()
+
+
+class TestPipelineDrainsRows:
+    """Integration: ingest() reads rows after validate_header succeeds
+    and logs per-table stats (rows_in / rows_kept / rows_filtered /
+    rows_with_warnings). Phase 1 discards the drained rows; the next
+    ticket replaces "discard" with Parquet write."""
+
+    def test_year_filter_drop_count_logged(
+        self,
+        tmp_path: Path,
+        complete_hosxp_dir: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Replace IPDADMPROGRESS with a multi-row CSV: 2 in-cohort,
+        # 3 out-of-cohort. The row drain must log rows_kept=2 and
+        # rows_filtered=3.
+        kept_cols = list(get_schema("IPDADMPROGRESS").columns)
+        idx = kept_cols.index("PROGDATE")
+
+        def csv_row(progdate: str) -> str:
+            cells = ["" for _ in kept_cols]
+            cells[idx] = progdate
+            return ",".join(cells)
+
+        lines = [
+            ",".join(kept_cols),
+            csv_row("2025-01-01 00:00:00.000"),
+            csv_row("2024-06-01 00:00:00.000"),
+            csv_row("2025-07-01 00:00:00.000"),
+            csv_row("2023-12-31 00:00:00.000"),
+            csv_row("2026-01-01 00:00:00.000"),
+        ]
+        (complete_hosxp_dir / "IPDADMPROGRESS.csv").write_text(
+            "\n".join(lines) + "\n", encoding="utf-8"
+        )
+
+        cfg = IngestConfig(
+            input_dir=complete_hosxp_dir,
+            output_dir=tmp_path / "out",
+            code_version="test-0.0.1",
+        )
+        with caplog.at_level("INFO", logger="bba.ingest.pipeline"):
+            ingest(cfg)
+
+        # Find the IPDADMPROGRESS stats log.
+        ipdadm_logs = [
+            r
+            for r in caplog.records
+            if "IPDADMPROGRESS" in r.message and "rows_in" in r.message
+        ]
+        assert ipdadm_logs, (
+            f"per-table row-stats log not emitted; records: "
+            f"{[r.message for r in caplog.records]}"
+        )
+        msg = ipdadm_logs[0].message
+        assert "rows_in=5" in msg
+        assert "rows_kept=2" in msg
+        assert "rows_filtered=3" in msg
 
 
 # =============================================================================
