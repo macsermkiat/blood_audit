@@ -52,16 +52,21 @@ def _read_csv_header(path: Path) -> list[str]:
 def _stream_csv_rows(path: Path) -> Iterator[list[str]]:
     """Yield raw rows from ``path``, skipping the header line.
 
-    The generator owns the file handle through its lifetime; callers MUST
-    consume to exhaustion (or call ``.close()``) so the ``with`` block
-    runs its cleanup. Pandas / Polars / DuckDB readers normally do this
-    on their own; the per-table drain in :func:`ingest` exhausts it
-    explicitly via ``for`` iteration.
+    Uses an explicit ``try/finally`` so the file handle closes
+    deterministically even if the consumer raises mid-iteration. The
+    functionally-equivalent ``with`` form would rely on generator
+    finalization (``.close()`` on GC) for that case, which is correct in
+    CPython but not guaranteed across Python implementations — Codex
+    P2.B.1 on PR #62 flagged the GC dependency as advisory; this is the
+    explicit version. See issue #63.
     """
-    with path.open("r", encoding="utf-8", newline="") as fh:
+    fh = path.open("r", encoding="utf-8", newline="")
+    try:
         reader = csv.reader(fh)
         next(reader, None)  # skip header
         yield from reader
+    finally:
+        fh.close()
 
 
 # Per-column cap on the number of distinct example warning messages
@@ -99,6 +104,12 @@ def _drain_normalize_rows(
     rows_in = 0
 
     def counting_input() -> Iterator[list[str]]:
+        # ``rows_in`` accuracy depends on the outer drain loop exhausting
+        # ``normalize_rows()`` to completion. If a future caller short-
+        # circuits the iteration (e.g., a row-limit kwarg), this counter
+        # undercounts silently — wrap the limiter with its own explicit
+        # accounting rather than relying on the closure here. See
+        # issue #63 (Codex P2.B.2).
         nonlocal rows_in
         for row in _stream_csv_rows(csv_path):
             rows_in += 1

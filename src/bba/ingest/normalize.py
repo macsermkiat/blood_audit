@@ -45,6 +45,7 @@ clears the projected header, before any Parquet write:
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 
@@ -72,10 +73,14 @@ _CASE_NORMALIZE_TABLES: frozenset[CSVTable] = frozenset(
 # in the per-rule dictionaries below.
 COHORT_YEAR: int = 2025
 
-# Year-filter rule: drop rows whose date column does not begin with
-# ``f"{COHORT_YEAR}-"``. The HOSxP standard format is
-# ``"2025-05-19 00:00:00.000"``, so a string prefix-match on the leading 4
-# characters is sufficient and avoids a per-row date parse.
+# Year-filter rule: drop rows whose date column's year does not match the
+# cohort year. The HOSxP standard format is ``"2025-05-19 00:00:00.000"``,
+# but real exports can also carry a UTF-8 BOM on the first cell and/or
+# leading whitespace. The match pattern strips both, then requires
+# **exactly 4** leading digits followed by a non-digit (or end of string)
+# so a clobbered cell like ``"20259-..."`` does not silently pass as the
+# cohort year. See issue #63 (Codex P2.A.3).
+_YEAR_FILTER_RE: re.Pattern[str] = re.compile(r"^[﻿\s]*(\d{4})(?:\D|$)")
 _YEAR_FILTER_COLUMN: dict[CSVTable, str] = {
     "IPDADMPROGRESS": "PROGDATE",
     "IPDNRFOCUSDT": "PROGRESSDATE",
@@ -88,6 +93,25 @@ _YEAR_FILTER_COLUMN: dict[CSVTable, str] = {
 _DATE_PARSE_COLUMN: dict[CSVTable, str] = {
     "IPTSUMOPRT": "INDATE",
 }
+
+# Rule-order guard: no table currently has both year-filter and date-parse
+# rules, and :func:`normalize_row` applies year-filter before date-parse
+# on the *raw* cell value. If a future table needs both, that ordering
+# decision must be made explicitly (e.g., parse the date first then
+# compare against the cohort year). Adding a table to both dicts without
+# revisiting the order is a silent bug — fail at module import so the
+# invariant cannot drift. See issue #63 (Codex P2.A.4).
+#
+# Using ``raise`` rather than ``assert`` so the guard survives
+# ``python -O`` (assertions are stripped under optimized builds).
+_rule_overlap = set(_YEAR_FILTER_COLUMN) & set(_DATE_PARSE_COLUMN)
+if _rule_overlap:
+    raise RuntimeError(
+        f"no table may appear in both _YEAR_FILTER_COLUMN and "
+        f"_DATE_PARSE_COLUMN without an explicit precedence decision in "
+        f"normalize_row(); overlap: {sorted(_rule_overlap)}"
+    )
+del _rule_overlap
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,7 +269,8 @@ def normalize_row(
     year_col = _YEAR_FILTER_COLUMN.get(table)
     if year_col is not None:
         idx = kept_header.index(year_col)
-        if not cells[idx].startswith(f"{cohort_year}-"):
+        match = _YEAR_FILTER_RE.match(cells[idx])
+        if match is None or int(match.group(1)) != cohort_year:
             return None
 
     parse_col = _DATE_PARSE_COLUMN.get(table)

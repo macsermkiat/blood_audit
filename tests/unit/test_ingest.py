@@ -834,6 +834,136 @@ class TestNormalizeRowsStream:
         assert out[2].parse_warnings == ()
 
 
+class TestYearFilterRobustness:
+    """Issue #63 (Codex advisory P2.A.3): year-filter must tolerate leading
+    whitespace and UTF-8 BOM, and must reject clobbered-prefix false
+    positives like ``"20259-..."`` that ``str.startswith`` would silently
+    accept as the cohort year."""
+
+    def _row_with_progdate(
+        self, progdate: str
+    ) -> tuple[list[str], tuple[int, ...], list[str]]:
+        kept = list(get_schema("IPDADMPROGRESS").columns)
+        positions = _row_positions("IPDADMPROGRESS", kept, kept)
+        row = ["" for _ in kept]
+        row[kept.index("PROGDATE")] = progdate
+        return row, positions, kept
+
+    def test_leading_whitespace_tolerated(self) -> None:
+        # A real export occasionally pads cells with whitespace; that
+        # should not silently drop the row when the year is otherwise
+        # correct.
+        row, positions, kept = self._row_with_progdate("  2025-05-19 00:00:00.000")
+        assert normalize_row("IPDADMPROGRESS", row, positions, kept) is not None, (
+            "leading whitespace must not falsely drop a cohort-year row"
+        )
+
+    def test_utf8_bom_tolerated(self) -> None:
+        # A file saved with BOM keeps the marker on the first cell of the
+        # first row; the year-filter must strip it.
+        row, positions, kept = self._row_with_progdate("﻿2025-05-19 00:00:00.000")
+        assert normalize_row("IPDADMPROGRESS", row, positions, kept) is not None, (
+            "leading BOM must not falsely drop a cohort-year row"
+        )
+
+    def test_clobbered_prefix_rejected(self) -> None:
+        # "20259-..." used to pass the old startswith("2025-") check
+        # silently. The regex now requires exactly 4 leading digits
+        # followed by a non-digit, so 5-digit prefixes are correctly
+        # rejected.
+        row, positions, kept = self._row_with_progdate("20259-05-19 00:00:00.000")
+        assert normalize_row("IPDADMPROGRESS", row, positions, kept) is None, (
+            "5-digit year prefix must NOT pass as 2025"
+        )
+
+    def test_non_year_prefix_rejected(self) -> None:
+        # Non-digit prefix should reject cleanly.
+        row, positions, kept = self._row_with_progdate("not-a-date")
+        assert normalize_row("IPDADMPROGRESS", row, positions, kept) is None
+
+
+class TestRuleOrderGuard:
+    """Issue #63 (Codex advisory P2.A.4): the year-filter and date-parse
+    rules currently run in fixed order (year first, parse second) on the
+    *raw* cell value. No table appears in both rule dicts. If a future
+    table needs both rules, the precedence must be revisited explicitly.
+    Asserted at module import; this test pins the invariant."""
+
+    def test_year_filter_and_date_parse_dicts_are_disjoint(self) -> None:
+        from bba.ingest.normalize import _DATE_PARSE_COLUMN, _YEAR_FILTER_COLUMN
+
+        overlap = set(_YEAR_FILTER_COLUMN) & set(_DATE_PARSE_COLUMN)
+        assert not overlap, (
+            f"_YEAR_FILTER_COLUMN and _DATE_PARSE_COLUMN must be disjoint; "
+            f"overlap: {sorted(overlap)}. If a real table needs both rules, "
+            f"decide the per-table precedence in normalize_row() first."
+        )
+
+
+class TestEmptyCSVNoLog:
+    """Issue #63: a CSV with only the header (no data rows) MUST NOT emit
+    a misleading per-table row-stats log line. The ``if rows_in > 0``
+    guard in ``_drain_normalize_rows`` enforces this."""
+
+    def test_header_only_csv_emits_no_row_stats_line(
+        self,
+        tmp_path: Path,
+        complete_hosxp_dir: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Overwrite BDVST with a header-only file (no data rows). The drain
+        # should observe zero rows_in and suppress the summary line.
+        bdvst_path = complete_hosxp_dir / "BDVST.csv"
+        kept_cols = list(get_schema("BDVST").columns)
+        bdvst_path.write_text(",".join(kept_cols) + "\n", encoding="utf-8")
+
+        cfg = IngestConfig(
+            input_dir=complete_hosxp_dir,
+            output_dir=tmp_path / "out",
+            code_version="test-0.0.1",
+        )
+        with caplog.at_level("INFO", logger="bba.ingest.pipeline"):
+            ingest(cfg)
+
+        # No "table=BDVST rows_in=" line for the empty BDVST.
+        # Bounded by "table=BDVST " (trailing space) so BDVSTDT/BDVSTST
+        # don't false-positive against the substring search.
+        misleading = [
+            r
+            for r in caplog.records
+            if "table=BDVST " in r.message and "rows_in" in r.message
+        ]
+        assert misleading == [], (
+            f"header-only BDVST.csv must not emit a row-stats line; got: "
+            f"{[r.message for r in misleading]}"
+        )
+
+
+class TestFixtureDrainSmoke:
+    """Issue #63: explicit smoke test that the 11 single-empty-row fixture
+    tables drain cleanly through ``ingest()``. The existing partition /
+    idempotency tests don't assert this, so a fixture-vs-drain regression
+    would pass silently. This test pins the contract."""
+
+    def test_all_11_tables_drain_without_crashing(
+        self,
+        tmp_path: Path,
+        complete_hosxp_dir: Path,
+    ) -> None:
+        cfg = IngestConfig(
+            input_dir=complete_hosxp_dir,
+            output_dir=tmp_path / "out",
+            code_version="test-0.0.1",
+        )
+        # Must not raise. The fixture's single empty row exercises every
+        # per-table rule branch with degenerate inputs (empty PROGDATE
+        # year-filter-drops, empty INDATE parse-warns, all other tables
+        # pass through), and the row-pipeline must handle each cleanly.
+        result = ingest(cfg)
+        assert len(result.tables_written) == 11
+        assert result.skipped_idempotent is False
+
+
 class TestPipelineLogsWarningDetail:
     """Codex P2 from PR #62: the per-file drain must surface the actual
     ``(column, message)`` warning content, not just an aggregate count.
