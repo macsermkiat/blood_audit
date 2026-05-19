@@ -16,7 +16,14 @@ from bba.ingest.models import (
     ParsedTimeOfDay,
     ParseResult,
 )
-from bba.ingest.normalize import NormalizedHeader, normalize_header
+from bba.ingest.normalize import (
+    COHORT_YEAR,
+    NormalizedHeader,
+    NormalizedRow,
+    normalize_header,
+    normalize_row,
+    normalize_rows,
+)
 from bba.ingest.pipeline import ingest
 from bba.ingest.row_timestamp import RowTimestamp
 from bba.ingest.run_identity import RunIdentity
@@ -31,12 +38,14 @@ from bba.ingest.schemas import (
 from bba.ingest.time_parser import parse_hosxp_time
 
 __all__ = [
+    "COHORT_YEAR",
     "CSVTable",
     "DateParseResult",
     "IncompleteInputError",
     "IngestConfig",
     "IngestResult",
     "NormalizedHeader",
+    "NormalizedRow",
     "ParseResult",
     "ParsedTimeOfDay",
     "RowTimestamp",
@@ -47,6 +56,8 @@ __all__ = [
     "get_schema",
     "ingest",
     "normalize_header",
+    "normalize_row",
+    "normalize_rows",
     "parse_hosxp_time",
     "parse_iptsumoprt_date",
     "schema_fingerprint",

@@ -22,12 +22,14 @@ from __future__ import annotations
 
 import csv
 import logging
+from collections import Counter
+from collections.abc import Iterator
 from pathlib import Path
 from typing import cast, get_args
 
 from bba.ingest.hashing import content_hash
 from bba.ingest.models import CSVTable, IngestConfig, IngestResult
-from bba.ingest.normalize import normalize_header
+from bba.ingest.normalize import normalize_header, normalize_rows
 from bba.ingest.run_identity import RunIdentity
 from bba.ingest.schemas import (
     IncompleteInputError,
@@ -45,6 +47,97 @@ def _read_csv_header(path: Path) -> list[str]:
             return next(reader)
         except StopIteration:
             return []
+
+
+def _stream_csv_rows(path: Path) -> Iterator[list[str]]:
+    """Yield raw rows from ``path``, skipping the header line.
+
+    The generator owns the file handle through its lifetime; callers MUST
+    consume to exhaustion (or call ``.close()``) so the ``with`` block
+    runs its cleanup. Pandas / Polars / DuckDB readers normally do this
+    on their own; the per-table drain in :func:`ingest` exhausts it
+    explicitly via ``for`` iteration.
+    """
+    with path.open("r", encoding="utf-8", newline="") as fh:
+        reader = csv.reader(fh)
+        next(reader, None)  # skip header
+        yield from reader
+
+
+# Per-column cap on the number of distinct example warning messages
+# logged after a drain. Aggregating by ``(column, count)`` keeps the log
+# bounded even when 16.9M rows each carry a unique warning message; the
+# examples give an operator enough surface to diagnose the failure
+# pattern without flooding the audit.
+_PARSE_WARNING_EXAMPLES_PER_COLUMN: int = 3
+
+
+def _drain_normalize_rows(
+    table: CSVTable,
+    raw_header: list[str],
+    kept_header: list[str],
+    csv_path: Path,
+) -> None:
+    """Stream all rows of ``csv_path`` through :func:`normalize_rows`,
+    discard the output, and log aggregate stats.
+
+    Phase 1 has no Parquet writer yet; the drain exists to (a) verify the
+    row-level pipeline runs end-to-end on the real bundle without
+    crashing, (b) surface year-filter drop counts to the run audit, and
+    (c) emit per-row parse warnings (e.g., unparseable IPTSUMOPRT INDATE
+    values or ragged rows) so an operator can spot regressions in the
+    export shape.
+
+    Parse warnings are aggregated by column and logged at WARNING level
+    after the drain: one line per column with a count plus up to
+    :data:`_PARSE_WARNING_EXAMPLES_PER_COLUMN` example messages. This
+    keeps the log bounded for high-cardinality unique messages while
+    preserving enough detail to identify which column / parser changed.
+
+    The next ticket replaces "discard" with the Parquet write.
+    """
+    rows_in = 0
+
+    def counting_input() -> Iterator[list[str]]:
+        nonlocal rows_in
+        for row in _stream_csv_rows(csv_path):
+            rows_in += 1
+            yield row
+
+    rows_kept = 0
+    rows_with_warnings = 0
+    warning_counts: Counter[str] = Counter()
+    warning_examples: dict[str, list[str]] = {}
+
+    for normalized in normalize_rows(table, raw_header, kept_header, counting_input()):
+        rows_kept += 1
+        if normalized.parse_warnings:
+            rows_with_warnings += 1
+            for col, msg in normalized.parse_warnings:
+                warning_counts[col] += 1
+                examples = warning_examples.setdefault(col, [])
+                if len(examples) < _PARSE_WARNING_EXAMPLES_PER_COLUMN:
+                    examples.append(msg)
+
+    rows_filtered = rows_in - rows_kept
+    if rows_in > 0:
+        logger.info(
+            "normalize: table=%s rows_in=%d rows_kept=%d rows_filtered=%d "
+            "rows_with_warnings=%d",
+            table,
+            rows_in,
+            rows_kept,
+            rows_filtered,
+            rows_with_warnings,
+        )
+        for col, count in warning_counts.most_common():
+            logger.warning(
+                "normalize: table=%s parse_warning column=%s count=%d examples=%s",
+                table,
+                col,
+                count,
+                warning_examples[col],
+            )
 
 
 def ingest(config: IngestConfig) -> IngestResult:
@@ -88,6 +181,7 @@ def ingest(config: IngestConfig) -> IngestResult:
                 sorted(set(normalized.dropped)),
             )
         validate_header(table, normalized.header)
+        _drain_normalize_rows(table, raw_header, normalized.header, csv_path)
         per_file_hashes[table] = content_hash(csv_path)
         validated.append(table)
 
