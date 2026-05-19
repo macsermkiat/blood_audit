@@ -24,6 +24,7 @@ import csv
 import logging
 from collections import Counter
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast, get_args
 
@@ -151,12 +152,48 @@ def _drain_normalize_rows(
             )
 
 
+@dataclass(frozen=True, slots=True)
+class _TableRef:
+    """Internal: state carried from the discovery/header phase of
+    :func:`ingest` to the row-drain phase. Built once per CSV in phase 1
+    so phase 2 can iterate without re-reading the header or recomputing
+    the normalized projection. Not part of the public surface — exists
+    purely as a structured tuple for the two-phase loop introduced in
+    issue #64 (idempotency-first reorder)."""
+
+    table: CSVTable
+    raw_header: list[str]
+    kept_header: list[str]
+    csv_path: Path
+
+
 def ingest(config: IngestConfig) -> IngestResult:
     """Ingest the configured CSV directory.
 
-    See module docstring for the contract. Raises before any side-effect on
-    drift or incomplete input — so a malformed input dir never writes a
-    completion marker.
+    Two-phase contract (issue #64): an already-complete re-run (matching
+    ``run_id`` marker on disk) returns ``skipped_idempotent=True`` without
+    streaming a single row through the normalize pipeline. The drain
+    phase only runs when the identity check says the work is genuinely
+    new.
+
+    * Phase 1 — discover every CSV, validate its header against the
+      pandera schema, compute its ``content_hash``. Raises before any
+      side-effect on schema drift or missing tables. Side-effect-free
+      apart from logging the per-file dropped-column summary, so the
+      ``IncompleteInputError`` / ``SchemaDriftError`` paths never write
+      a completion marker.
+    * Identity gate — compute :class:`RunIdentity` from the phase-1
+      hashes + schema fingerprint + code version. If the identity reports
+      itself complete on disk, return ``skipped_idempotent=True``
+      immediately. **The drain phase is skipped entirely on this path.**
+    * Phase 2 — only on a non-idempotent run, stream each CSV's rows
+      through :func:`_drain_normalize_rows` to surface row-level audit
+      events (filter counts, parse warnings). Phase 1's per-file state
+      is replayed from the cached :class:`_TableRef`s; no header re-read.
+
+    On the production-sized bundle (2.1 GB IPDNRFOCUSDT), an idempotent
+    re-run previously scanned every row before reaching the
+    ``is_complete()`` check. The new order saves that scan on retries.
     """
     known_tables: tuple[CSVTable, ...] = cast(
         "tuple[CSVTable, ...]", get_args(CSVTable)
@@ -168,8 +205,9 @@ def ingest(config: IngestConfig) -> IngestResult:
             f"a complete HOSxP export of {len(known_tables)} CSVs is required"
         )
 
+    # Phase 1: discovery + header validation + content hashing.
     per_file_hashes: dict[CSVTable, str] = {}
-    validated: list[CSVTable] = []
+    table_refs: list[_TableRef] = []
 
     for csv_path in sorted(config.input_dir.glob("*.csv")):
         stem = csv_path.stem
@@ -192,10 +230,17 @@ def ingest(config: IngestConfig) -> IngestResult:
                 sorted(set(normalized.dropped)),
             )
         validate_header(table, normalized.header)
-        _drain_normalize_rows(table, raw_header, normalized.header, csv_path)
         per_file_hashes[table] = content_hash(csv_path)
-        validated.append(table)
+        table_refs.append(
+            _TableRef(
+                table=table,
+                raw_header=raw_header,
+                kept_header=normalized.header,
+                csv_path=csv_path,
+            )
+        )
 
+    validated = [ref.table for ref in table_refs]
     missing_tables = sorted(set(known_tables) - set(validated))
     if missing_tables:
         raise IncompleteInputError(
@@ -203,6 +248,7 @@ def ingest(config: IngestConfig) -> IngestResult:
             f"required HOSxP tables: {missing_tables}"
         )
 
+    # Identity gate: short-circuit before any row scan on idempotent re-runs.
     identity = RunIdentity.from_inputs(
         per_file_hashes, schema_fingerprint(), config.code_version
     )
@@ -216,9 +262,13 @@ def ingest(config: IngestConfig) -> IngestResult:
             skipped_idempotent=True,
         )
 
-    # Per-row Parquet writes land here in subsequent tickets (#4–#7). For now
-    # the idempotency boundary is the marker file — once written, this run_id
-    # is considered complete.
+    # Phase 2: row drain — only reached when the run is genuinely new.
+    # Per-row Parquet writes land here in subsequent tickets (#4–#7). For
+    # now the drain surfaces filter counts + parse warnings to the run
+    # audit and the idempotency marker stamps the completion.
+    for ref in table_refs:
+        _drain_normalize_rows(ref.table, ref.raw_header, ref.kept_header, ref.csv_path)
+
     identity.mark_complete(config.output_dir)
 
     return IngestResult(
