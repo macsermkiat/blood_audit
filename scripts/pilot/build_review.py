@@ -432,10 +432,16 @@ def main() -> None:
         det = det_by_reqno.get(reqno) or {}
         llm = llm_by_reqno.get(reqno)
         det_class = det.get("classification") or "excluded"
-        llm_final = (
-            (llm or {}).get("llm_final", {}).get("final_classification")
-            if llm else "(deterministic-final)"
-        )
+        # ``llm_final`` may be explicitly null when run_llm_leg.py persisted
+        # a partial result (missing batch row); chaining ``.get`` on None
+        # would crash, so coalesce twice.
+        llm_final_obj = (llm or {}).get("llm_final") or {}
+        if not llm:
+            llm_final = "(deterministic-final)"
+        elif not llm_final_obj:
+            llm_final = "(missing)"
+        else:
+            llm_final = llm_final_obj.get("final_classification") or "—"
 
         summary_rows.append({
             "#": str(i),
@@ -483,23 +489,31 @@ def main() -> None:
 
         parts.append("<div class='vbox llm'>")
         parts.append("<h3>LLM verdict</h3>")
-        if llm:
-            fc = llm["llm_final"]["final_classification"]
-            conf = llm["llm_final"]["confidence"]
-            model = llm["llm_final"].get("model", "")
+        # ``llm_final`` may be explicitly None when run_llm_leg.py persisted
+        # a partial run (e.g. the batch row was missing). Treat that the
+        # same as "no LLM row at all" so the page renders instead of
+        # crashing.
+        llm_block = (llm or {}).get("llm_final") if llm else None
+        if llm_block:
+            fc = llm_block["final_classification"]
+            conf = llm_block["confidence"]
+            model = llm_block.get("model", "")
             parts.append(f"<div class='cls cls-{esc(fc).lower()}'>"
                           f"{esc(fc)} <span class='conf'>(conf {conf:.2f}; "
                           f"{esc(model)})</span></div>")
             parts.append("<h4>Indications</h4>")
-            parts.append(render_indications(llm["llm_final"]["indications"]))
+            parts.append(render_indications(llm_block["indications"]))
             parts.append("<h4>Negative evidence</h4>")
-            parts.append(render_negative(llm["llm_final"]["negative_evidence"]))
+            parts.append(render_negative(llm_block["negative_evidence"]))
             parts.append("<details><summary><b>Reasoning — English</b></summary>")
-            parts.append(f"<p>{esc(llm['llm_final']['reasoning_en'])}</p>")
+            parts.append(f"<p>{esc(llm_block['reasoning_en'])}</p>")
             parts.append("</details>")
             parts.append("<details><summary><b>Reasoning — ภาษาไทย</b></summary>")
-            parts.append(f"<p>{esc(llm['llm_final']['reasoning_th'])}</p>")
+            parts.append(f"<p>{esc(llm_block['reasoning_th'])}</p>")
             parts.append("</details>")
+        elif llm:
+            parts.append("<p class='empty'>(LLM submission recorded but final "
+                          "verdict missing — batch row dropped or unparsable)</p>")
         else:
             parts.append("<p class='empty'>(deterministic-final; LLM leg not invoked)</p>")
         parts.append("</div>")

@@ -43,9 +43,10 @@ import json
 import os
 import sys
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as _time, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 from bba.audit_orders import (
     AuditOrdersConfig,
@@ -504,8 +505,21 @@ def main() -> None:
                                           order.order_datetime)
         vitals = extract_vitals(anchor=order.order_datetime, notes=vitals_notes)
 
-        notes_lo = order.order_datetime - timedelta(days=WINDOW_NOTES_DAYS_BEFORE)
-        notes_hi = order.order_datetime + timedelta(days=WINDOW_NOTES_DAYS_AFTER + 1)
+        # Calendar-day window in the source-data timezone, not a rolling
+        # 48-h slice anchored on the order's clock time. For a 14:00
+        # order, the spec calls for "day-before + day-of transfusion",
+        # so the bound must be the local midnight that ends "day-of",
+        # not order_datetime + 24h (which would leak into the next day).
+        local_tz = ZoneInfo(TZ_LOCAL)
+        order_date_local = order.order_datetime.astimezone(local_tz).date()
+        notes_lo = datetime.combine(
+            order_date_local - timedelta(days=WINDOW_NOTES_DAYS_BEFORE),
+            _time.min, tzinfo=local_tz,
+        ).astimezone(timezone.utc)
+        notes_hi = datetime.combine(
+            order_date_local + timedelta(days=WINDOW_NOTES_DAYS_AFTER + 1),
+            _time.min, tzinfo=local_tz,
+        ).astimezone(timezone.utc)
         hb_lo = order.order_datetime - timedelta(days=WINDOW_HB_DAYS)
 
         diagnoses: tuple[DiagnosisRecord, ...] = tuple(
