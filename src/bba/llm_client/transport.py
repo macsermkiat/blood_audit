@@ -31,6 +31,7 @@ import os
 import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from importlib import import_module
 from typing import Any, Final
 
 from bba.llm_client.exceptions import (
@@ -297,7 +298,7 @@ class AnthropicBatchTransport:
         """Construct the SDK client. Lazy-imported so the SDK isn't a
         hard install dependency."""
         try:
-            import anthropic  # type: ignore[import-not-found]
+            anthropic = import_module("anthropic")
         except ImportError as exc:
             raise LlmClientConfigError(
                 "anthropic SDK not installed; "
