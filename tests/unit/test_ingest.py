@@ -975,6 +975,145 @@ class TestFixtureDrainSmoke:
         assert result.skipped_idempotent is False
 
 
+class TestIdempotentRunSkipsDrain:
+    """Issue #64: the row drain MUST NOT run on an already-complete re-run.
+    Previously the drain happened per-CSV before ``identity.is_complete()``
+    was checked, so an idempotent re-pass through the 2.1 GB bundle
+    scanned every row anyway. The two-phase ingest contract guarantees
+    the drain only fires when the run is genuinely new."""
+
+    def test_second_call_emits_no_row_stats(
+        self,
+        tmp_path: Path,
+        complete_hosxp_dir: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        cfg = IngestConfig(
+            input_dir=complete_hosxp_dir,
+            output_dir=tmp_path / "out",
+            code_version="test-0.0.1",
+        )
+
+        # First call: completion marker written; drain runs; per-table
+        # row-stats log lines emitted.
+        first = ingest(cfg)
+        assert first.skipped_idempotent is False
+
+        # Second call: identity matches the marker; drain MUST be
+        # skipped. Capture only this call's records.
+        with caplog.at_level("INFO", logger="bba.ingest.pipeline"):
+            caplog.clear()
+            second = ingest(cfg)
+
+        assert second.skipped_idempotent is True
+        assert second.run_id == first.run_id
+
+        # Zero "rows_in=" log lines from the second call — the assertion
+        # that proves the drain phase was skipped.
+        drain_records = [r for r in caplog.records if "rows_in=" in r.message]
+        assert drain_records == [], (
+            f"idempotent re-run must skip _drain_normalize_rows entirely; "
+            f"got {len(drain_records)} row-stats log lines: "
+            f"{[r.message for r in drain_records]}"
+        )
+
+    def test_second_call_returns_same_run_id(
+        self,
+        tmp_path: Path,
+        complete_hosxp_dir: Path,
+    ) -> None:
+        # Identity determinism: running twice on the same bundle yields
+        # the same run_id, regardless of whether the second call drained
+        # rows or not. The is_complete() short-circuit preserves the
+        # run_id field on the returned IngestResult.
+        cfg = IngestConfig(
+            input_dir=complete_hosxp_dir,
+            output_dir=tmp_path / "out",
+            code_version="test-0.0.1",
+        )
+        first = ingest(cfg)
+        second = ingest(cfg)
+        assert first.run_id == second.run_id
+        assert first.tables_written == second.tables_written
+        assert first.skipped_idempotent is False
+        assert second.skipped_idempotent is True
+
+    def test_drain_function_not_called_on_idempotent_rerun(
+        self,
+        tmp_path: Path,
+        complete_hosxp_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Stronger assertion than "no rows_in= log line": spy on
+        # _drain_normalize_rows and verify the call count drops to zero
+        # on the idempotent re-run. Closes the Codex review's blind
+        # spot where a future change could leave the drain running but
+        # suppress its logging — the spy would still catch it.
+        from bba.ingest import pipeline
+
+        cfg = IngestConfig(
+            input_dir=complete_hosxp_dir,
+            output_dir=tmp_path / "out",
+            code_version="test-0.0.1",
+        )
+
+        # First call: prime the marker with the real drain in place.
+        first = ingest(cfg)
+        assert first.skipped_idempotent is False
+
+        # Second call: replace the drain with a counter.
+        call_count = 0
+
+        def _spy(*args: object, **kwargs: object) -> None:
+            nonlocal call_count
+            call_count += 1
+
+        monkeypatch.setattr(pipeline, "_drain_normalize_rows", _spy)
+        second = ingest(cfg)
+
+        assert second.skipped_idempotent is True
+        assert call_count == 0, (
+            f"_drain_normalize_rows MUST NOT be called on an idempotent "
+            f"re-run; got {call_count} call(s)"
+        )
+
+
+class TestSchemaDriftStillRaisesBeforeMarker:
+    """Issue #64: the restructure splits ingest() into a phase-1 (headers +
+    hashes) and a phase-2 (drain). Phase 1 still raises on schema drift
+    or incomplete input — the completion marker is written only after a
+    successful drain, so a malformed bundle on a fresh run cannot leave
+    an orphan marker behind."""
+
+    def test_drift_raises_and_writes_no_marker(self, tmp_path: Path) -> None:
+        in_dir = tmp_path / "in"
+        in_dir.mkdir()
+        # BDVST file missing required columns → schema drift on validate.
+        (in_dir / "BDVST.csv").write_text("HN\n123\n", encoding="utf-8")
+        cfg = IngestConfig(
+            input_dir=in_dir,
+            output_dir=tmp_path / "out",
+            code_version="test-0.0.1",
+        )
+        with pytest.raises(SchemaDriftError):
+            ingest(cfg)
+
+        # No completion marker written — the side-effect must not happen
+        # on a bundle that fails header validation. The marker file is
+        # ``_run_<run_id>.complete`` per RunIdentity.mark_complete()'s
+        # private naming convention; glob that exact pattern so a
+        # regression that does write a marker would actually fail this
+        # test (rather than pass vacuously against an unrelated glob).
+        out_dir = tmp_path / "out"
+        if out_dir.exists():
+            markers = list(out_dir.glob("_run_*.complete")) + list(
+                out_dir.glob("**/_run_*.complete")
+            )
+            assert markers == [], (
+                f"completion marker must not exist after drift failure: {markers}"
+            )
+
+
 class TestPipelineLogsWarningDetail:
     """Codex P2 from PR #62: the per-file drain must surface the actual
     ``(column, message)`` warning content, not just an aggregate count.
