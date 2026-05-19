@@ -91,15 +91,19 @@ def config(tmp_path: Path) -> ReviewActionsConfig:
 def _postgres_container() -> Iterator[object]:
     """Session-scoped Postgres container via testcontainers-python.
 
-    Imported lazily so test-collection doesn't fail when testcontainers is
-    not yet installed (GREEN-phase will pin it as a dev dep). RED tests that
-    consume this fixture will ERROR with ImportError until then — which is
-    the desired failure mode.
+    Skipped automatically when testcontainers, the docker python client,
+    or the Docker daemon itself is unavailable — the suite reports a skip
+    rather than a spurious ERROR (mirrors test_audit_pipeline_postgres).
     """
-    from testcontainers.postgres import PostgresContainer
+    pytest.importorskip("testcontainers.postgres")
+    pytest.importorskip("docker")
+    try:
+        from testcontainers.postgres import PostgresContainer
 
-    with PostgresContainer("postgres:16-alpine") as pg:
-        yield pg
+        with PostgresContainer("postgres:16-alpine") as pg:
+            yield pg
+    except Exception as exc:  # pragma: no cover - environment-dependent
+        pytest.skip(f"Postgres testcontainer unavailable: {exc}")
 
 
 _TEST_ROLES_TO_DROP: tuple[str, ...] = (
@@ -145,9 +149,7 @@ def _reset_database(config: ReviewActionsConfig) -> None:
                 )
 
 
-def _swap_dsn_credentials(
-    dsn: str, *, user: str, password: str
-) -> str:
+def _swap_dsn_credentials(dsn: str, *, user: str, password: str) -> str:
     """Return a copy of ``dsn`` with the ``user:password`` portion replaced.
 
     Used to derive an unprivileged-role DSN from the superuser DSN that
@@ -194,8 +196,7 @@ def app_config(
     with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "ALTER ROLE review_actions_app WITH LOGIN "
-                "PASSWORD 'app_test_pw'"
+                "ALTER ROLE review_actions_app WITH LOGIN PASSWORD 'app_test_pw'"
             )
     app_dsn = _swap_dsn_credentials(
         postgres_config.dsn, user="review_actions_app", password="app_test_pw"
@@ -377,9 +378,7 @@ class TestModelContracts:
         boundary so the store never has to second-guess.
         """
         with pytest.raises(ValidationError):
-            _action_input(
-                action="agree", override_reason="stale text from earlier"
-            )
+            _action_input(action="agree", override_reason="stale text from earlier")
 
     def test_override_reason_rejects_empty_string(self) -> None:
         """Empty / whitespace-only ``override_reason`` is rejected even when
@@ -426,9 +425,10 @@ class TestModelContracts:
             note=None,
             created_at=datetime(2026, 5, 1, 19, 0, 0, tzinfo=bangkok),
         )
-        assert ra.created_at.utcoffset() == datetime(
-            2026, 5, 1, 0, 0, 0, tzinfo=UTC
-        ).utcoffset()
+        assert (
+            ra.created_at.utcoffset()
+            == datetime(2026, 5, 1, 0, 0, 0, tzinfo=UTC).utcoffset()
+        )
         # 19:00 +07 == 12:00 UTC
         assert ra.created_at.hour == 12
 
@@ -528,9 +528,7 @@ class TestAppendOnlyInvariantDBLevel:
         written = migrated_store.record_phi_access(_phi_access_input())
 
         with pytest.raises(AppendOnlyViolationError):
-            _raw_update_phi_access(
-                migrated_store, written.access_id, "new-hn-hash"
-            )
+            _raw_update_phi_access(migrated_store, written.access_id, "new-hn-hash")
 
     def test_delete_phi_access_log_revoked(
         self, migrated_store: ReviewActionsStore
@@ -674,17 +672,23 @@ class TestPhiAccessLogCompleteness:
         access = _phi_access_input(reviewer_id="reviewer-a", audit_id="audit-1")
         migrated_store.record_phi_access(access)
 
-        assert migrated_store.verify_phi_access_completeness(
-            reviewer_id="reviewer-a", audit_id="audit-1"
-        ) is True
+        assert (
+            migrated_store.verify_phi_access_completeness(
+                reviewer_id="reviewer-a", audit_id="audit-1"
+            )
+            is True
+        )
 
     def test_verify_phi_access_completeness_false_when_never_accessed(
         self, migrated_store: ReviewActionsStore
     ) -> None:
         # No record_phi_access call yet.
-        assert migrated_store.verify_phi_access_completeness(
-            reviewer_id="reviewer-never", audit_id="audit-never"
-        ) is False
+        assert (
+            migrated_store.verify_phi_access_completeness(
+                reviewer_id="reviewer-never", audit_id="audit-never"
+            )
+            is False
+        )
 
     def test_multiple_reviewers_same_audit_row_each_log_independently(
         self, migrated_store: ReviewActionsStore
@@ -992,12 +996,8 @@ class TestListActions:
     def test_list_actions_filters_by_reviewer_id(
         self, migrated_store: ReviewActionsStore
     ) -> None:
-        migrated_store.record_action(
-            _action_input(audit_id="a1", reviewer_id="alice")
-        )
-        migrated_store.record_action(
-            _action_input(audit_id="a2", reviewer_id="bob")
-        )
+        migrated_store.record_action(_action_input(audit_id="a1", reviewer_id="alice"))
+        migrated_store.record_action(_action_input(audit_id="a2", reviewer_id="bob"))
 
         only_alice = migrated_store.list_actions(reviewer_id="alice")
         assert {r.reviewer_id for r in only_alice} == {"alice"}
@@ -1093,9 +1093,7 @@ class TestStorePrivilegeCheck:
             with pytest.raises(MigrationStateError, match="superuser"):
                 store.record_action(_action_input())
 
-    def test_owner_role_is_rejected(
-        self, postgres_config: ReviewActionsConfig
-    ) -> None:
+    def test_owner_role_is_rejected(self, postgres_config: ReviewActionsConfig) -> None:
         """The owner of a protected table can DISABLE TRIGGER on it. Reject
         any DSN that connects as the table owner.
 
@@ -1107,15 +1105,9 @@ class TestStorePrivilegeCheck:
         # Create a non-superuser role and transfer table ownership to it.
         with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    "CREATE ROLE owner_role WITH LOGIN PASSWORD 'owner_pw'"
-                )
-                cur.execute(
-                    "ALTER TABLE review_actions OWNER TO owner_role"
-                )
-                cur.execute(
-                    "ALTER TABLE phi_access_log OWNER TO owner_role"
-                )
+                cur.execute("CREATE ROLE owner_role WITH LOGIN PASSWORD 'owner_pw'")
+                cur.execute("ALTER TABLE review_actions OWNER TO owner_role")
+                cur.execute("ALTER TABLE phi_access_log OWNER TO owner_role")
         owner_dsn = _swap_dsn_credentials(
             postgres_config.dsn, user="owner_role", password="owner_pw"
         )
@@ -1146,7 +1138,8 @@ class TestSchemaDriftDetection:
     drifted alembic head, multi-head graph)."""
 
     def test_missing_trigger_is_rejected(
-        self, app_config: ReviewActionsConfig,
+        self,
+        app_config: ReviewActionsConfig,
         postgres_config: ReviewActionsConfig,
     ) -> None:
         """Drop one of the required triggers; the store refuses to operate.
@@ -1158,19 +1151,17 @@ class TestSchemaDriftDetection:
         with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "DROP TRIGGER review_actions_block_update "
-                    "ON review_actions"
+                    "DROP TRIGGER review_actions_block_update ON review_actions"
                 )
         with ReviewActionsStore(
             app_config, migrations_root=REPO_ROOT / "migrations"
         ) as store:
-            with pytest.raises(
-                MigrationStateError, match="trigger guards missing"
-            ):
+            with pytest.raises(MigrationStateError, match="trigger guards missing"):
                 store.record_action(_action_input())
 
     def test_disabled_trigger_is_rejected(
-        self, app_config: ReviewActionsConfig,
+        self,
+        app_config: ReviewActionsConfig,
         postgres_config: ReviewActionsConfig,
     ) -> None:
         """``ALTER TABLE ... DISABLE TRIGGER`` keeps the row in
@@ -1185,13 +1176,12 @@ class TestSchemaDriftDetection:
         with ReviewActionsStore(
             app_config, migrations_root=REPO_ROOT / "migrations"
         ) as store:
-            with pytest.raises(
-                MigrationStateError, match="not enabled"
-            ):
+            with pytest.raises(MigrationStateError, match="not enabled"):
                 store.record_action(_action_input())
 
     def test_trigger_bound_to_wrong_function_is_rejected(
-        self, app_config: ReviewActionsConfig,
+        self,
+        app_config: ReviewActionsConfig,
         postgres_config: ReviewActionsConfig,
     ) -> None:
         """An attacker who swaps the trigger function for a no-op silently
@@ -1205,8 +1195,7 @@ class TestSchemaDriftDetection:
                     "$$ BEGIN RETURN NULL; END; $$"
                 )
                 cur.execute(
-                    "DROP TRIGGER review_actions_block_update "
-                    "ON review_actions"
+                    "DROP TRIGGER review_actions_block_update ON review_actions"
                 )
                 cur.execute(
                     "CREATE TRIGGER review_actions_block_update "
@@ -1220,16 +1209,15 @@ class TestSchemaDriftDetection:
                 store.record_action(_action_input())
 
     def test_alembic_revision_drift_is_rejected(
-        self, app_config: ReviewActionsConfig,
+        self,
+        app_config: ReviewActionsConfig,
         postgres_config: ReviewActionsConfig,
     ) -> None:
         """If the live DB's alembic version doesn't match the on-disk head,
         the store refuses. Forge the drift by writing a bogus revision id."""
         with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE alembic_version SET version_num = 'forged_drift'"
-                )
+                cur.execute("UPDATE alembic_version SET version_num = 'forged_drift'")
         with ReviewActionsStore(
             app_config, migrations_root=REPO_ROOT / "migrations"
         ) as store:
@@ -1237,7 +1225,8 @@ class TestSchemaDriftDetection:
                 store.record_action(_action_input())
 
     def test_multi_head_alembic_state_is_rejected(
-        self, app_config: ReviewActionsConfig,
+        self,
+        app_config: ReviewActionsConfig,
         postgres_config: ReviewActionsConfig,
     ) -> None:
         """Forge a multi-head DB state (an unmerged revision graph) by
@@ -1280,9 +1269,7 @@ class TestTriggerActuallyFires:
         """
         with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    "CREATE ROLE writer_role WITH LOGIN PASSWORD 'writer_pw'"
-                )
+                cur.execute("CREATE ROLE writer_role WITH LOGIN PASSWORD 'writer_pw'")
                 cur.execute(
                     "GRANT INSERT, SELECT, UPDATE, DELETE "
                     "ON review_actions TO writer_role"
@@ -1309,8 +1296,7 @@ class TestTriggerActuallyFires:
             with psycopg.connect(writer_role_dsn, autocommit=True) as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "UPDATE review_actions SET note = %s "
-                        "WHERE action_id = %s",
+                        "UPDATE review_actions SET note = %s WHERE action_id = %s",
                         ("tampered", written.action_id),
                     )
         except psycopg.errors.RaiseException as exc:
@@ -1355,22 +1341,12 @@ class TestOwnerMembershipBypassRejected:
         with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute("CREATE ROLE table_owner")
-                cur.execute(
-                    "ALTER TABLE review_actions OWNER TO table_owner"
-                )
-                cur.execute(
-                    "ALTER TABLE phi_access_log OWNER TO table_owner"
-                )
-                cur.execute(
-                    "GRANT SELECT ON alembic_version TO table_owner"
-                )
-                cur.execute(
-                    "CREATE ROLE shady_member WITH LOGIN PASSWORD 'pw'"
-                )
+                cur.execute("ALTER TABLE review_actions OWNER TO table_owner")
+                cur.execute("ALTER TABLE phi_access_log OWNER TO table_owner")
+                cur.execute("GRANT SELECT ON alembic_version TO table_owner")
+                cur.execute("CREATE ROLE shady_member WITH LOGIN PASSWORD 'pw'")
                 cur.execute("GRANT table_owner TO shady_member")
-                cur.execute(
-                    "GRANT SELECT ON alembic_version TO shady_member"
-                )
+                cur.execute("GRANT SELECT ON alembic_version TO shady_member")
         member_dsn = _swap_dsn_credentials(
             postgres_config.dsn, user="shady_member", password="pw"
         )
@@ -1378,9 +1354,7 @@ class TestOwnerMembershipBypassRejected:
             ReviewActionsConfig(dsn=member_dsn),
             migrations_root=REPO_ROOT / "migrations",
         ) as store:
-            with pytest.raises(
-                MigrationStateError, match="MEMBER access"
-            ):
+            with pytest.raises(MigrationStateError, match="MEMBER access"):
                 store.record_action(_action_input())
 
     def test_noinherit_member_of_owner_role_is_rejected(
@@ -1393,25 +1367,14 @@ class TestOwnerMembershipBypassRejected:
         with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute("CREATE ROLE table_owner")
+                cur.execute("ALTER TABLE review_actions OWNER TO table_owner")
+                cur.execute("ALTER TABLE phi_access_log OWNER TO table_owner")
+                cur.execute("GRANT SELECT ON alembic_version TO table_owner")
                 cur.execute(
-                    "ALTER TABLE review_actions OWNER TO table_owner"
+                    "CREATE ROLE noinherit_member WITH LOGIN NOINHERIT PASSWORD 'pw'"
                 )
-                cur.execute(
-                    "ALTER TABLE phi_access_log OWNER TO table_owner"
-                )
-                cur.execute(
-                    "GRANT SELECT ON alembic_version TO table_owner"
-                )
-                cur.execute(
-                    "CREATE ROLE noinherit_member WITH LOGIN NOINHERIT "
-                    "PASSWORD 'pw'"
-                )
-                cur.execute(
-                    "GRANT table_owner TO noinherit_member"
-                )
-                cur.execute(
-                    "GRANT SELECT ON alembic_version TO noinherit_member"
-                )
+                cur.execute("GRANT table_owner TO noinherit_member")
+                cur.execute("GRANT SELECT ON alembic_version TO noinherit_member")
         member_dsn = _swap_dsn_credentials(
             postgres_config.dsn,
             user="noinherit_member",
@@ -1421,9 +1384,7 @@ class TestOwnerMembershipBypassRejected:
             ReviewActionsConfig(dsn=member_dsn),
             migrations_root=REPO_ROOT / "migrations",
         ) as store:
-            with pytest.raises(
-                MigrationStateError, match="MEMBER access"
-            ):
+            with pytest.raises(MigrationStateError, match="MEMBER access"):
                 store.record_action(_action_input())
 
 
@@ -1442,8 +1403,7 @@ class TestTriggerShapeDriftDetection:
         with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "DROP TRIGGER review_actions_block_update "
-                    "ON review_actions"
+                    "DROP TRIGGER review_actions_block_update ON review_actions"
                 )
                 cur.execute(
                     "CREATE TRIGGER review_actions_block_update "
@@ -1470,10 +1430,7 @@ class TestTriggerShapeDriftDetection:
         with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute("CREATE SCHEMA shadow_schema")
-                cur.execute(
-                    "ALTER TABLE review_actions "
-                    "SET SCHEMA shadow_schema"
-                )
+                cur.execute("ALTER TABLE review_actions SET SCHEMA shadow_schema")
                 cur.execute(
                     "CREATE TABLE review_actions ("
                     "  action_id BIGSERIAL PRIMARY KEY, "
@@ -1483,8 +1440,7 @@ class TestTriggerShapeDriftDetection:
                     ")"
                 )
                 cur.execute(
-                    "GRANT INSERT, SELECT ON review_actions "
-                    "TO review_actions_app"
+                    "GRANT INSERT, SELECT ON review_actions TO review_actions_app"
                 )
                 cur.execute(
                     "GRANT USAGE, SELECT ON SEQUENCE "
@@ -1562,8 +1518,7 @@ class TestSecurityLogging:
                 store.record_action(_action_input())
 
         security_records = [
-            r for r in caplog.records
-            if r.name == "bba.review_actions.security"
+            r for r in caplog.records if r.name == "bba.review_actions.security"
         ]
         assert len(security_records) == 1
         record = security_records[0]
@@ -1583,8 +1538,7 @@ class TestSecurityLogging:
         with psycopg.connect(postgres_config.dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "DROP TRIGGER review_actions_block_update "
-                    "ON review_actions"
+                    "DROP TRIGGER review_actions_block_update ON review_actions"
                 )
 
         caplog.set_level("WARNING", logger="bba.review_actions.security")
@@ -1595,8 +1549,7 @@ class TestSecurityLogging:
                 store.record_action(_action_input())
 
         security_records = [
-            r for r in caplog.records
-            if r.name == "bba.review_actions.security"
+            r for r in caplog.records if r.name == "bba.review_actions.security"
         ]
         assert any(
             getattr(r, "review_actions_security_event", None)
@@ -1619,12 +1572,8 @@ class TestStoreLifecycle:
         # that ``close()`` was called. Re-entering the context after close
         # is not part of the contract.
 
-    def test_close_is_idempotent(
-        self, app_config: ReviewActionsConfig
-    ) -> None:
-        store = ReviewActionsStore(
-            app_config, migrations_root=REPO_ROOT / "migrations"
-        )
+    def test_close_is_idempotent(self, app_config: ReviewActionsConfig) -> None:
+        store = ReviewActionsStore(app_config, migrations_root=REPO_ROOT / "migrations")
         store.close()
         store.close()  # must not raise
 

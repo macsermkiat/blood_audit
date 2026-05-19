@@ -1,0 +1,51 @@
+---
+title: Policy summary
+description: Paraphrased summary of the 3-tier Hb policy applied by the audit. Authoritative text lives in the internal KCMH documents.
+---
+
+import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
+
+:::caution
+The text below is a **paraphrased operational summary**. The authoritative
+clinical policy is KCMH PR 17.2 and the internal 3-tier Hb specification
+(`policy/policy.md` in the internal Bloodbank policy bundle). Always
+defer to those documents in case of conflict.
+:::
+
+## Source documents (internal)
+
+- KCMH PR 17.2 — institutional RBC transfusion guideline.
+- AABB 2023 — international restrictive-transfusion guidance.
+- KCMH internal 3-tier Hb specification (`policy/policy.md`).
+
+## The 3-tier rule
+
+<HbTierMatrix />
+
+## Acute-blood-loss override
+
+The override is the only pathway that bypasses the Hb threshold and only
+when **all** of these are documented:
+
+- A procedure-proximal anchor datetime (active surgical or procedural
+  episode).
+- A delta-Hb that meets one of:
+  - ≥ 1.5 g/dL drop within 6 hours
+  - ≥ 2.0 g/dL drop within 12 hours
+  - ≥ 2.5 g/dL drop within 24 hours
+
+Vital-sign abnormalities alone (low BP, tachycardia) do not trigger the
+override.
+
+## Exclusions baked into the audit
+
+- Pediatric patients (age < 15) — different policy applies.
+- Non-RBC products (LPRC, LDPRC, SDR).
+- Orders without a documented pre-transfusion Hb.
+- ICD-10 conditions that take the patient out of scope per PR 17.2.
+
+## Why paraphrased here
+
+PR 17.2 is an internal hospital document. To respect institutional
+authorship, this public site paraphrases the operational rule rather than
+republishing the source. The audit code reflects the authoritative spec.

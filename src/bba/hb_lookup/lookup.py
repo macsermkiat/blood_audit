@@ -62,9 +62,7 @@ def lookup_hb(
     ``freshness="missing"`` and all value fields ``None``.
     """
     before_anchor = [o for o in observations if o.datetime_utc <= anchor_utc]
-    in_lookback = [
-        o for o in before_anchor if anchor_utc - o.datetime_utc < _LOOKBACK
-    ]
+    in_lookback = [o for o in before_anchor if anchor_utc - o.datetime_utc < _LOOKBACK]
     if not in_lookback:
         return _missing_result()
 
@@ -116,7 +114,9 @@ def _compute_delta_windows(
 ) -> tuple[DeltaHbWindow, ...]:
     """One ``DeltaHbWindow`` per (6h, 12h, 24h) threshold spec."""
     return tuple(
-        _delta_window_for(current=current, all_priors=all_priors, hours=hours, threshold=threshold)
+        _delta_window_for(
+            current=current, all_priors=all_priors, hours=hours, threshold=threshold
+        )
         for hours, threshold in _DELTA_HB_SPECS
     )
 
@@ -200,5 +200,3 @@ def _missing_result() -> HbLookupResult:
         ),
         needs_review_single_low_hb=False,
     )
-
-

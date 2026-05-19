@@ -1,0 +1,239 @@
+/*
+ * blood_audit docs — theme tokens and component primitives.
+ *
+ * Layer 1: Tailwind (utilities for composition + responsive layout).
+ * Layer 2: Token redefinitions for Starlight (OKLCH-tinted neutrals, accent).
+ * Layer 3: Project primitives (.ba-card, .ba-pill, motion helpers).
+ *
+ * Hue base 28 (warm red). Neutrals tinted toward the hue at chroma 0.005-0.01
+ * so the page never reads as cold white. No #000, no #fff anywhere.
+ */
+
+@import "tailwindcss";
+@import "@fontsource/noto-sans-thai/400.css";
+@import "@fontsource/noto-sans-thai/500.css";
+@import "@fontsource/noto-sans-thai/600.css";
+@import "@fontsource/noto-sans-thai/700.css";
+
+/* ------------------------------------------------------------------ */
+/*  Tokens                                                             */
+/* ------------------------------------------------------------------ */
+
+:root {
+  /* Accent role. KCMH red, light mode. */
+  --sl-color-accent: oklch(43% 0.18 28);
+  --sl-color-accent-low: oklch(94% 0.05 28);
+  --sl-color-accent-high: oklch(34% 0.16 28);
+
+  /* Tinted neutrals. Override Starlight defaults for the light theme. */
+  --sl-color-bg: oklch(99% 0.005 28);
+  --sl-color-bg-nav: oklch(97% 0.008 28);
+  --sl-color-bg-sidebar: oklch(98% 0.006 28);
+  --sl-color-bg-inline-code: oklch(94% 0.01 28);
+  --sl-color-gray-7: oklch(98% 0.006 28);
+  --sl-color-gray-6: oklch(94% 0.01 28);
+  --sl-color-gray-5: oklch(90% 0.012 28);
+  --sl-color-gray-4: oklch(72% 0.018 28);
+  --sl-color-gray-3: oklch(48% 0.02 28);
+  --sl-color-gray-2: oklch(34% 0.018 28);
+  --sl-color-gray-1: oklch(22% 0.015 28);
+  --sl-color-white: oklch(22% 0.015 28);
+
+  /* Font stacks. Latin in Inter, Thai in Noto Sans Thai. */
+  --ba-font-sans: "Inter", -apple-system, "Segoe UI", "Roboto",
+    "Noto Sans Thai", "Helvetica Neue", sans-serif;
+  --ba-font-mono: "JetBrains Mono", "Fira Code", ui-monospace, "SF Mono",
+    Menlo, Consolas, monospace;
+
+  /* Motion. ease-out-quart by default. */
+  --ba-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ba-duration-fast: 120ms;
+  --ba-duration-base: 180ms;
+}
+
+:root[data-theme="dark"] {
+  --sl-color-accent: oklch(64% 0.20 28);
+  --sl-color-accent-low: oklch(24% 0.06 28);
+  --sl-color-accent-high: oklch(82% 0.14 28);
+
+  --sl-color-bg: oklch(18% 0.015 28);
+  --sl-color-bg-nav: oklch(22% 0.018 28);
+  --sl-color-bg-sidebar: oklch(20% 0.016 28);
+  --sl-color-bg-inline-code: oklch(26% 0.02 28);
+  --sl-color-gray-7: oklch(20% 0.016 28);
+  --sl-color-gray-6: oklch(26% 0.02 28);
+  --sl-color-gray-5: oklch(34% 0.025 28);
+  --sl-color-gray-4: oklch(48% 0.03 28);
+  --sl-color-gray-3: oklch(70% 0.015 28);
+  --sl-color-gray-2: oklch(82% 0.012 28);
+  --sl-color-gray-1: oklch(94% 0.01 28);
+  --sl-color-white: oklch(94% 0.01 28);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Typography                                                         */
+/* ------------------------------------------------------------------ */
+
+html {
+  font-family: var(--ba-font-sans);
+}
+
+code, pre, kbd, samp {
+  font-family: var(--ba-font-mono);
+}
+
+:root[lang="th"],
+[lang="th"] {
+  line-height: 1.65;
+  letter-spacing: 0;
+  font-feature-settings: "liga" 0, "clig" 0;
+}
+
+/* Tighten heading rhythm vs Starlight default to align with the 1.25 scale. */
+.content h1 { letter-spacing: -0.01em; }
+.content h2 { letter-spacing: -0.005em; margin-top: 2rem; }
+.content h3 { margin-top: 1.5rem; }
+
+/* ------------------------------------------------------------------ */
+/*  Card primitive                                                     */
+/* ------------------------------------------------------------------ */
+
+.ba-card {
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  background: var(--sl-color-bg-nav);
+  transition: border-color var(--ba-duration-fast) var(--ba-ease-out),
+              background-color var(--ba-duration-fast) var(--ba-ease-out);
+}
+
+.ba-card--accent {
+  border-color: var(--sl-color-accent);
+  background: var(--sl-color-accent-low);
+}
+
+/* Warning card: full hairline border + soft warn tint. No side-stripe. */
+.ba-card--warning {
+  border-color: oklch(70% 0.12 70);
+  background: oklch(96% 0.04 70);
+}
+
+:root[data-theme="dark"] .ba-card--warning {
+  border-color: oklch(55% 0.13 70);
+  background: oklch(26% 0.06 70);
+}
+
+.ba-card--interactive:hover {
+  border-color: var(--sl-color-accent);
+}
+
+.ba-card__title {
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Layout primitives                                                  */
+/* ------------------------------------------------------------------ */
+
+.ba-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.ba-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.ba-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Pill primitive                                                     */
+/* ------------------------------------------------------------------ */
+
+.ba-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  background: var(--sl-color-gray-6);
+  color: var(--sl-color-gray-2);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.ba-pill--ok {
+  background: oklch(94% 0.04 150);
+  color: oklch(34% 0.12 150);
+}
+.ba-pill--warn {
+  background: oklch(94% 0.05 70);
+  color: oklch(40% 0.14 70);
+}
+.ba-pill--err {
+  background: oklch(94% 0.05 28);
+  color: oklch(38% 0.16 28);
+}
+
+:root[data-theme="dark"] .ba-pill--ok {
+  background: oklch(28% 0.05 150);
+  color: oklch(86% 0.10 150);
+}
+:root[data-theme="dark"] .ba-pill--warn {
+  background: oklch(28% 0.06 70);
+  color: oklch(88% 0.10 70);
+}
+:root[data-theme="dark"] .ba-pill--err {
+  background: oklch(28% 0.06 28);
+  color: oklch(88% 0.10 28);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Reveal-on-scroll                                                   */
+/* ------------------------------------------------------------------ */
+
+.ba-reveal {
+  opacity: 0;
+  transform: translateY(0.5rem);
+  transition: opacity var(--ba-duration-base) var(--ba-ease-out),
+              transform var(--ba-duration-base) var(--ba-ease-out);
+}
+
+.ba-reveal.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Reduced-motion override. No transforms, no transitions. */
+@media (prefers-reduced-motion: reduce) {
+  .ba-reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+  .ba-card,
+  .ba-card--interactive {
+    transition: none;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Focus                                                              */
+/* ------------------------------------------------------------------ */
+
+:where(a, button, [role="button"], summary):focus-visible {
+  outline: 2px solid var(--sl-color-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}

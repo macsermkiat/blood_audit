@@ -1,0 +1,119 @@
+---
+interface EnvVar {
+  name: string;
+  example: string;
+  purpose: string;
+  phase: "1" | "1.5";
+}
+
+interface Props {
+  vars?: EnvVar[];
+}
+
+const defaultVars: EnvVar[] = [
+  {
+    name: "BBA_DATA_DIR",
+    example: "/var/lib/blood_audit/data",
+    purpose:
+      "Persistent root for DuckDB + Parquet snapshots and the file-backed run-state store. Read by every CLI invocation.",
+    phase: "1",
+  },
+  {
+    name: "BBA_DB_URL",
+    example: "postgresql+psycopg://bba@localhost/blood_audit",
+    purpose:
+      "Postgres DSN for batch_runs and review_actions. Read by the Phase 1.5 LLM analysis leg, not by Phase 1 ingest. Use the +psycopg driver suffix.",
+    phase: "1.5",
+  },
+  {
+    name: "ANTHROPIC_API_KEY",
+    example: "sk-ant-…",
+    purpose:
+      "Batch API key for the LLM analysis leg. Read by Phase 1.5 wiring, not by Phase 1 ingest.",
+    phase: "1.5",
+  },
+];
+
+const { vars = defaultVars } = Astro.props;
+
+const phaseLabel = (phase: EnvVar["phase"]) =>
+  phase === "1" ? "required · Phase 1" : "Phase 1.5";
+
+const phasePill = (phase: EnvVar["phase"]) =>
+  phase === "1" ? "ba-pill ba-pill--err" : "ba-pill ba-pill--warn";
+---
+
+<section class="env-checklist" aria-label="blood_audit environment variables">
+  <ul class="env-checklist__list" role="list">
+    {vars.map((v) => (
+      <li class="env-row">
+        <div class="env-row__head">
+          <code class="env-row__name">{v.name}</code>
+          <span class={phasePill(v.phase)}>{phaseLabel(v.phase)}</span>
+        </div>
+        <p class="env-row__purpose">{v.purpose}</p>
+        <code class="env-row__example" aria-label="Example value">{v.example}</code>
+      </li>
+    ))}
+  </ul>
+</section>
+
+<style>
+  .env-checklist {
+    margin: 1.25rem 0;
+  }
+  .env-checklist__list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.625rem;
+    padding: 0;
+    margin: 0;
+    list-style: none;
+  }
+  .env-row {
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    padding: 0.75rem 0.875rem 0.875rem;
+    background: var(--sl-color-bg-nav);
+    transition: border-color var(--ba-duration-fast) var(--ba-ease-out);
+  }
+  .env-row:hover {
+    border-color: var(--sl-color-gray-4);
+  }
+  .env-row__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.375rem;
+    flex-wrap: wrap;
+  }
+  .env-row__name {
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: var(--sl-color-white);
+    letter-spacing: 0;
+  }
+  .env-row__purpose {
+    margin: 0 0 0.5rem;
+    font-size: 0.9375rem;
+    color: var(--sl-color-gray-2);
+    line-height: 1.55;
+  }
+  .env-row__example {
+    display: block;
+    padding: 0.375rem 0.5rem;
+    background: var(--sl-color-bg);
+    border: 1px solid var(--sl-color-gray-6);
+    border-radius: 0.3125rem;
+    font-size: 0.8125rem;
+    color: var(--sl-color-gray-2);
+    word-break: break-all;
+    line-height: 1.4;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .env-row {
+      transition: none;
+    }
+  }
+</style>

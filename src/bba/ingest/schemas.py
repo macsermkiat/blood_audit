@@ -1,4 +1,4 @@
-"""Pandera schemas (version v1) for the 10 HOSxP CSV tables.
+"""Pandera schemas (version v1) for the 11 HOSxP CSV tables.
 
 The schemas are the authoritative description of expected columns. Their joint
 sha256 fingerprint feeds into ``run_id``, so a silent schema bump (forgetting
@@ -7,7 +7,11 @@ than silently mutating prior outputs.
 
 Schema-drift policy (PRD §1, fix E29): an input CSV with an unknown column
 MUST fail loud with :class:`SchemaDriftError` containing the offending columns
-and the table name. Silent column drops are forbidden.
+and the table name. Silent column drops are forbidden — *except* through the
+normalize layer's per-table allow-list (policy a), which projects the file
+to the declared columns and logs the dropped extras to the run audit before
+``validate_header`` runs. See ``docs/ingest-mapping.md`` for the per-table
+column specs and normalize rules.
 """
 
 from __future__ import annotations
@@ -47,44 +51,121 @@ _REGISTRY_V1: Mapping[CSVTable, DataFrameSchema] = {
     "BDVST": DataFrameSchema(
         {
             "HN": _str(nullable=False),
-            "AN": _str(),
             "REQNO": _str(nullable=False),
+            "AN": _str(),
             "BDVSTST": _str(),
             "REQTYPE": _str(),
             "CANCELDATE": _str(),
+            "REQDATE": _str(),
+            "REQTIME": _str(),
+            "BDVSTDATE": _str(),
+            "BDVSTTIME": _str(),
+            "ICD10": _str(),
+            "DIAGNOSIS": _str(),
         }
     ),
     "BDVSTDT": DataFrameSchema(
-        {"REQNO": _str(nullable=False), "DATETIME": _str()},
-    ),
-    "BDTYPE": DataFrameSchema(
-        {"REQNO": _str(nullable=False), "PRODUCT": _str()},
+        {
+            "REQNO": _str(nullable=False),
+            "HN": _str(),
+            "BDVSTDATE": _str(),
+            "BDVSTTIME": _str(),
+            "USEDATE": _str(),
+            "USETIME": _str(),
+            "BDTYPE": _str(),
+            "ITEMNO": _str(),
+            "UNITAMT": _str(),
+        }
     ),
     "BDVSTST": DataFrameSchema(
-        {"REQNO": _str(nullable=False), "STATUS": _str()},
+        {
+            "BDVSTST": _str(nullable=False),
+            "NAME": _str(),
+        }
+    ),
+    "BDTYPE": DataFrameSchema(
+        {
+            "BDTYPE": _str(nullable=False),
+            "NAME": _str(),
+        }
     ),
     "Diagnosis": DataFrameSchema(
-        {"HN": _str(nullable=False), "AN": _str(), "ICD10": _str()},
+        {
+            "HN": _str(nullable=False),
+            "AN": _str(nullable=False),
+            "NAME_DIAGTYPE": _str(),
+            "ICD10": _str(),
+            "ICD10WHO": _str(),
+            "NAME_ICD10": _str(),
+        }
     ),
     "Lab": DataFrameSchema(
         {
             "HN": _str(nullable=False),
+            "AN": _str(nullable=False),
+            "LVSTDATE": _str(),
+            "LVSTTIME": _str(),
+            "LABGRP": _str(),
+            "NAME_LABGRP": _str(),
             "LABEXM": _str(),
-            "LABRESULT": _str(),
-            "DATETIME": _str(),
-        },
+            "NAME_LABEXM": _str(),
+            "RESULT": _str(),
+            "MINNRM": _str(),
+            "MAXNRM": _str(),
+            "NRMUNIT": _str(),
+        }
     ),
-    "MED": DataFrameSchema(
-        {"HN": _str(nullable=False), "DRUG": _str(), "DATETIME": _str()},
+    "Med": DataFrameSchema(
+        {
+            "HN": _str(nullable=False),
+            "AN": _str(nullable=False),
+            "PRSCDATE": _str(),
+            "PRSCTIME": _str(),
+            "MEDITEM": _str(),
+            "NAME_MEDITEM": _str(),
+            "GENERIC": _str(),
+            "NAME_GENERIC": _str(),
+            "STRENGTH": _str(),
+            "STRENGTHUNIT": _str(),
+            "MEDUSETYPE": _str(),
+            "MEDUSEQTY": _str(),
+        }
     ),
     "IPDADMPROGRESS": DataFrameSchema(
-        {"HN": _str(nullable=False), "OBJECTIVE": _str(), "DATETIME": _str()},
+        {
+            "HN": _str(nullable=False),
+            "AN": _str(nullable=False),
+            "PROGDATE": _str(),
+            "SUBJECTIVE": _str(),
+            "OBJECTIVE": _str(),
+            "ASSESSMENT": _str(),
+            "PLAN": _str(),
+        }
     ),
     "IPDNRFOCUSDT": DataFrameSchema(
-        {"HN": _str(nullable=False), "FOCUS": _str(), "DATETIME": _str()},
+        {
+            "HN": _str(nullable=False),
+            "AN": _str(nullable=False),
+            "PROGRESSDATE": _str(),
+            "PROGRESSTIME": _str(),
+            "ACTION": _str(),
+            "RESPONSE": _str(),
+        }
     ),
-    "UnUSE_Patient_Background": DataFrameSchema(
-        {"HN": _str(nullable=False), "BIRTHDATE": _str(), "SEX": _str()},
+    "IPTSUMOPRT": DataFrameSchema(
+        {
+            "AN": _str(nullable=False),
+            "ICD9CM": _str(),
+            "INDATE": _str(),
+            "INTIME": _str(),
+        }
+    ),
+    "ICD9CM": DataFrameSchema(
+        {
+            "ICD9CM": _str(nullable=False),
+            "NAME": _str(),
+            "ORFLAG": _str(),
+        }
     ),
 }
 
@@ -98,7 +179,7 @@ def get_schema(table: CSVTable) -> DataFrameSchema:
 
 
 def all_tables() -> tuple[CSVTable, ...]:
-    """Return the canonical tuple of all 10 required CSV tables.
+    """Return the canonical tuple of all 11 required CSV tables.
 
     The order matches the :data:`bba.ingest.models.CSVTable` literal so callers
     can rely on a stable iteration order across releases.

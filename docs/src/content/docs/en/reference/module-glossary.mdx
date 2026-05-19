@@ -1,0 +1,34 @@
+---
+title: Module glossary
+description: The full module + concept glossary lives in docs/CONTEXT.md, which is the canonical term bank.
+---
+
+The canonical module + concept glossary for `bba.*` lives in
+[`docs/CONTEXT.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/CONTEXT.md)
+in the repository. It is appended to as part of every ralph-loop ticket
+that adds a new public concept — keep it the source of truth.
+
+## Why we link out
+
+`CONTEXT.md` is large (~2700 lines) and is updated as part of the dev
+workflow. Mirroring it into MDX would force a manual sync step that
+inevitably drifts. Linking to the GitHub-rendered version guarantees the
+docs site shows the live glossary without divergence risk.
+
+## Quick navigation
+
+Common concept slugs to search for in the glossary:
+
+- `run_id` — the SHA-256-derived idempotency key.
+- `schema_fingerprint` — what makes `run_id` invariant across identical
+  inputs.
+- `batch_runs` — the 4-state machine for LLM_REVIEW rows.
+- `audit_log` — the compliance trail for every `bba audit` invocation.
+- `hallucination_suspect` — the queue that catches every grounded-quote
+  failure.
+- `parse_warning` — non-fatal ingest issues that surface in the run summary.
+- `idempotent re-run` — the contract that re-running the same input is
+  a no-op.
+
+For the full set, open the glossary on GitHub:
+[`docs/CONTEXT.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/CONTEXT.md).

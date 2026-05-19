@@ -1,0 +1,67 @@
+---
+title: Architecture
+description: How the 20 modules under bba.* fit together.
+---
+
+import PipelineDiagram from "../../../../components/PipelineDiagram.astro";
+import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
+
+<QiNotSamdBanner variant="compact" />
+
+## The 12-stage happy path
+
+<PipelineDiagram />
+
+Each stage is an importable subpackage under `src/bba/`. The `bba.audit_pipeline`
+module orchestrates them; no other module reaches across stage boundaries.
+
+## Module map (20 packages)
+
+| Module | Role |
+| --- | --- |
+| `bba.ingest` | HOSxP CSV → DuckDB + Parquet snapshot, content-hashed `run_id`. |
+| `bba.audit_orders` | Per-(HN, REQNO) RBC filter; hard exclusions (age, products, ICD gates). |
+| `bba.hb_lookup` | Pre-transfusion Hb from the Lab table. |
+| `bba.vitals_extractor` | BP, HR, urine output, temperature from MED + progress notes. |
+| `bba.cohort_detector` | Surgery / ICU / oncology / medicine cohort assignment. |
+| `bba.deterministic_classifier` | 3-tier Hb engine → `APPROPRIATE`, `POTENTIALLY_INAPPROPRIATE`, `LLM_REVIEW`. |
+| `bba.evidence_bundle_builder` | Structures evidence (unredacted) for the LLM context window. |
+| `bba.deid_redactor` | De-identifies the bundle before any data leaves the audit container. |
+| `bba.prompt_builder` | Few-shot + clinical-history system message. |
+| `bba.llm_client` | Anthropic Batch API client; Sonnet → Opus escalation; prompt caching. |
+| `bba.quote_grounder` | 6 fail-closed anti-hallucination layers. |
+| `bba.confidence_calibrator` | Isotonic regression + ECE for multi-model ensembles. |
+| `bba.audit_pipeline` | Orchestration; resumable batch run state machine. |
+| `bba.audit_store` | Append-only Parquet + Postgres ordering; idempotency enforcement. |
+| `bba.review_actions` | PHI-aware per-physician review action log. |
+| `bba.monitoring` | Sentinel κ-statistic; quarterly drift SPRT. |
+| `bba.dashboard` | FastAPI reviewer UI (integration seam). |
+| `bba.report_generator` | 6-section CSV + PDF monthly report. |
+| `bba.eval_harness` | Gold-standard performance primitives. |
+| `bba.cli` | Click entry point; dispatches to six subcommands. |
+
+The full glossary lives in [Module glossary](/blood_audit/en/reference/module-glossary/)
+(transcluded from `docs/CONTEXT.md`).
+
+## Invariants worth keeping
+
+1. **Deterministic-first.** The deterministic classifier is authoritative.
+   The LLM is only consulted for Tier 3 (Hb > 10 g/dL).
+2. **Idempotent re-runs.** `run_id = sha256(input_csv_hash +
+   schema_fingerprint + code_version)`. `bba audit` is a no-op on a
+   completed `run_id` unless `--force` is passed (which writes an
+   `idempotency_override=true` row to `audit_log`).
+3. **Quote-grounded LLM output.** All six grounding layers run; failure
+   sets `final_classification = NEEDS_REVIEW` with `review_reason =
+   "hallucination_suspect"`, never an `APPROPRIATE` / `INAPPROPRIATE`
+   result row.
+4. **No real-time path.** No subscriber to the audit stream emits
+   clinician alerts. This is QI, not SaMD.
+5. **De-identification happens before any cross-container hop.** The
+   `bba.deid_redactor` step is non-optional.
+
+## Where the integration seams live
+
+`bba.dashboard`, `bba.report_generator`, `bba.eval_harness`, and the
+sentinel orchestration in `bba.monitoring` ship complete but are not wired
+to the CLI by default. See [Integration seams](/blood_audit/en/operators/integration-seams/).

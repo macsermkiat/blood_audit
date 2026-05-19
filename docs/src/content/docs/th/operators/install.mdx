@@ -1,0 +1,49 @@
+---
+title: ติดตั้ง
+description: ติดตั้ง blood_audit ด้วย uv และตรวจสอบ CLI
+---
+
+## สิ่งที่ต้องมี
+
+| สิ่งที่ต้องมี | เวอร์ชัน |
+| --- | --- |
+| Python | ≥ 3.13 |
+| uv | ≥ 0.9.24 |
+| PostgreSQL | ≥ 14 (driver psycopg3) |
+| Docker (สำหรับเทสต์เท่านั้น) | latest |
+
+## Clone และ sync
+
+```bash
+git clone https://github.com/macsermkiat/blood_audit.git
+cd blood_audit
+uv sync --frozen
+```
+
+Lockfile ถูก freeze ไว้ **ห้ามตั้ง `UV_LOCKED=1`** เพราะจะขัดแย้งกับ
+`--frozen` ใน uv ≥ 0.9
+
+## ตรวจสอบ CLI
+
+```bash
+uv run bba --help
+```
+
+จะเห็น subcommand 6 ตัว โดย 4 ตัว — `evaluate`, `report`,
+`serve-dashboard`, `sentinel` — จะ raise `CliError` โดยตั้งใจ
+**ไม่ใช่บั๊ก** ดูรายละเอียดที่ [Integration seams](/blood_audit/en/operators/integration-seams/) (เอกสารภาษาอังกฤษ)
+
+## ตั้งค่า GitHub Pages ครั้งเดียว (เฉพาะการเผยแพร่เอกสารนี้)
+
+ข้ามได้ ถ้าคุณกำลังดูแล pipeline ไม่ใช่กำลังเผยแพร่เว็บเอกสารนี้
+
+ถ้าจะเผยแพร่เว็บเอกสารจาก fork ของคุณเอง:
+
+1. Settings ของ repo → **Pages** → Source: **GitHub Actions**
+2. Merge การเปลี่ยนแปลงที่แตะ `docs/**` เข้า `main`
+3. Workflow `deploy-docs` จะ build และ deploy ให้อัตโนมัติ
+   URL ของ Pages จะปรากฏใน run summary
+
+## ขั้นถัดไป
+
+ตั้งค่า [environment variables](/blood_audit/th/operators/env-vars/)

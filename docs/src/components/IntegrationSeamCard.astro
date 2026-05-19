@@ -1,0 +1,71 @@
+---
+interface Props {
+  command: string;
+  missingGlue: string;
+  rationale?: string;
+}
+
+const { command, missingGlue, rationale } = Astro.props;
+---
+
+<article class="ba-card ba-card--warning seam-card">
+  <header class="seam-card__head">
+    <code class="seam-card__cmd">{command}</code>
+    <span class="ba-pill ba-pill--warn">integration seam</span>
+  </header>
+  <p class="seam-card__lede">
+    Raises <code>CliError</code> by design. The underlying module ships and is tested;
+    the CLI hand-off awaits deployment-specific glue that does not belong in Phase 1.
+  </p>
+  <dl class="seam-card__defs">
+    <dt>Missing glue</dt>
+    <dd>{missingGlue}</dd>
+    {rationale && (
+      <>
+        <dt>Why</dt>
+        <dd>{rationale}</dd>
+      </>
+    )}
+  </dl>
+</article>
+
+<style>
+  .seam-card {
+    margin: 1.25rem 0;
+  }
+  .seam-card__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .seam-card__cmd {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+  .seam-card__lede {
+    margin: 0 0 0.75rem;
+  }
+  .seam-card__defs {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.25rem 0.75rem;
+    margin: 0;
+  }
+  .seam-card__defs dt {
+    font-weight: 600;
+    color: var(--sl-color-gray-2);
+    font-size: 0.875rem;
+  }
+  .seam-card__defs dd {
+    margin: 0;
+  }
+  @media (max-width: 30rem) {
+    .seam-card__defs {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

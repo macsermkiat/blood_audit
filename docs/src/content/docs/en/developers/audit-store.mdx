@@ -1,0 +1,81 @@
+---
+title: Audit store
+description: How the audit store persists AuditRow + LlmCall, and how run-level idempotency is enforced.
+---
+
+`bba.audit_store` is the persistence boundary for audit results.
+Two record types are persisted immutably:
+
+- **`AuditRow`** — one row per audited RBC order. Fields follow the PRD
+  "Output schema" verbatim.
+- **`LlmCall`** — one row per Anthropic API call, joined back to its
+  `audit_id`. The `extended_thinking_blocks` payload is the cold-storage
+  candidate after 90 days.
+
+Both models are `frozen=True` Pydantic; nested JSON fields use
+`FrozenJsonList` / `FrozenJsonDict` so post-construction mutation raises
+`TypeError`. Datetimes are tz-aware UTC at the model boundary; naive
+datetimes are rejected.
+
+## Stored `Classification` literals
+
+```python
+Classification = Literal[
+    "APPROPRIATE",
+    "INAPPROPRIATE",
+    "NEEDS_REVIEW",
+    "INSUFFICIENT_EVIDENCE",
+    "POTENTIALLY_INAPPROPRIATE",
+]
+```
+
+`AuditRow` carries two classification fields:
+
+- `rule_classification` — the deterministic classifier's output.
+- `final_classification` — the winner after the LLM leg and quote
+  grounding (same five literals).
+
+**Routing concepts that are not stored**:
+
+- `LLM_REVIEW` — a routing label inside the deterministic classifier
+  used to decide whether to invoke the LLM. Not a stored classification.
+- `hallucination_suspect` — set as `review_reason` (a string field) on
+  rows where quote grounding failed. The row's `final_classification`
+  becomes `NEEDS_REVIEW`.
+
+## Phase 1 vs Phase 1.5
+
+In Phase 1, `bba audit` ingests HOSxP into DuckDB + Parquet under
+`$BBA_DATA_DIR/audit/<run_id>/` and records completion markers under
+`$BBA_DATA_DIR/audit_runs/<run_id>/` via a file-backed
+`AuditRunStore`. The audit store's `AuditRow` write path is exercised
+by the module's own tests but is **not yet wired** through the CLI.
+
+In Phase 1.5, when `bba.audit_pipeline.run_pipeline` is invoked from
+the CLI, the audit store starts persisting `AuditRow` per audited
+order, with per-row checkpointing in the `batch_runs` Postgres table.
+
+## Related Postgres tables (wired in Phase 1.5)
+
+| Table | Owned by | Purpose |
+| --- | --- | --- |
+| `batch_runs` | `bba.audit_pipeline` | Five-state machine (`pending → submitted → partial → complete`; `failed` is terminal). Resume-on-startup re-queries non-terminal rows. |
+| `review_actions` | `bba.review_actions` | Per-physician review actions recorded from the dashboard. |
+
+DSN handling: always use the `+psycopg` driver suffix. SQLAlchemy
+routes bare `postgresql://` URLs to psycopg2 by default; this project
+ships psycopg3. The canonical converter is
+`bba.review_actions.models.ReviewActionsConfig.sqlalchemy_dsn`.
+
+## Cold storage
+
+`AuditRow.extended_thinking_blocks` and other heavy payloads are
+candidates for cold-storage migration after 90 days. The migration
+respects the tz-aware-UTC invariant (a naive timestamp on either side
+of the cutoff comparison raises `ValueError` at construction).
+
+## Safe-ID invariant
+
+`audit_id`, `run_id`, `call_id` all use the `SafeId` type — non-empty
+`[A-Za-z0-9._-]+`, not `.` or `..`. These flow directly into Parquet
+filenames; the model boundary prevents path traversal.

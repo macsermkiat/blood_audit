@@ -314,7 +314,11 @@ class AuditStore:
         was first persisted — call_id reuse across code-version reruns
         therefore never overwrites an earlier file.
         """
-        slug = code_version_slug if code_version_slug is not None else self._code_version_slug
+        slug = (
+            code_version_slug
+            if code_version_slug is not None
+            else self._code_version_slug
+        )
         self._calls_dir.mkdir(parents=True, exist_ok=True)
         path = self._calls_dir / f"call_{_hash_id(call.call_id)}_{slug}.parquet"
         _write_single_record(

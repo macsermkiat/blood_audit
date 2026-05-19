@@ -57,7 +57,7 @@ EvidenceSource = Literal[
     "Diagnosis",
     "IPDADMPROGRESS",
     "IPDNRFOCUSDT",
-    "MED",
+    "Med",
     "Lab",
     "Vitals",
 ]
@@ -285,9 +285,7 @@ class VitalsRecord(BaseModel):
     # buggy upstream extractor cannot leak a non-finite float into the
     # bundle, where the canonical-JSON serializer would otherwise raise mid-
     # pipeline (still safe, but with a less-targeted error).
-    bt: float | None = Field(
-        default=None, allow_inf_nan=False, ge=BT_MIN, le=BT_MAX
-    )
+    bt: float | None = Field(default=None, allow_inf_nan=False, ge=BT_MIN, le=BT_MAX)
 
 
 class EvidenceInputs(BaseModel):
@@ -395,9 +393,7 @@ class EvidenceBundle(BaseModel):
                 f"bundle_hash must be a 64-char sha256 hex (got {len(v)} chars)"
             )
         if not all(c in "0123456789abcdef" for c in v):
-            raise ValueError(
-                f"bundle_hash must be lowercase hex (got {v!r})"
-            )
+            raise ValueError(f"bundle_hash must be lowercase hex (got {v!r})")
         return v
 
     @model_validator(mode="after")
@@ -414,9 +410,7 @@ class EvidenceBundle(BaseModel):
         #   3. canonical_json IS canonical (re-emit equals input)
         #   4. parsed envelope shape has the expected "items" array
         #   5. parsed item IDs match self.items IDs (in order)
-        expected_hash = hashlib.sha256(
-            self.canonical_json.encode("utf-8")
-        ).hexdigest()
+        expected_hash = hashlib.sha256(self.canonical_json.encode("utf-8")).hexdigest()
         if self.bundle_hash != expected_hash:
             raise ValueError(
                 f"bundle_hash ({self.bundle_hash}) does not match "
@@ -427,9 +421,7 @@ class EvidenceBundle(BaseModel):
         try:
             parsed = json.loads(self.canonical_json)
         except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"canonical_json is not valid JSON: {exc.msg}"
-            ) from exc
+            raise ValueError(f"canonical_json is not valid JSON: {exc.msg}") from exc
 
         # Lazy import to avoid any future cycle if canonical.py grows a
         # models import; keeps the validator self-contained.
@@ -443,9 +435,7 @@ class EvidenceBundle(BaseModel):
             )
 
         if not isinstance(parsed, dict):
-            raise ValueError(
-                "canonical_json must be a JSON object (envelope shape)"
-            )
+            raise ValueError("canonical_json must be a JSON object (envelope shape)")
         # Envelope shape lock: builder always emits exactly {anchor, items}.
         # Anything more or less is an upstream bug — extras would be silent
         # data leakage; missing keys would mean the bundle is missing its
@@ -461,9 +451,7 @@ class EvidenceBundle(BaseModel):
                 f"missing={sorted(missing)})"
             )
         if not isinstance(parsed["anchor"], dict):
-            raise ValueError(
-                "canonical_json 'anchor' must be a JSON object"
-            )
+            raise ValueError("canonical_json 'anchor' must be a JSON object")
         # Anchor shape lock: builder always emits exactly these four
         # fields. An empty {} or extra-key anchor is silent loss of
         # decision context (an_hash, hn_hash for replay; order_datetime

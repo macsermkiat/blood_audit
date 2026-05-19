@@ -1,0 +1,206 @@
+---
+interface Flag {
+  name: string;
+  description: string;
+  required?: boolean;
+}
+
+interface Props {
+  command: string;
+  summary: string;
+  flags?: Flag[];
+  envVars?: string[];
+  exitCodes?: { code: number; meaning: string }[];
+  example?: string;
+}
+
+const {
+  command,
+  summary,
+  flags = [],
+  envVars = [],
+  exitCodes = [
+    { code: 0, meaning: "success" },
+    { code: 1, meaning: "CliError" },
+  ],
+  example,
+} = Astro.props;
+
+// HTML ids cannot contain whitespace, and aria-labelledby parses as a
+// space-separated IDREF list. Derive a stable slug from the command before
+// using it in id / aria-labelledby attributes.
+const slug = command
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, "-")
+  .replace(/^-+|-+$/g, "");
+---
+
+<article class="cli-card" aria-label={`CLI command: ${slug}`}>
+  <header class="cli-card__head">
+    <span class="cli-card__prompt" aria-hidden="true">$</span>
+    <code class="cli-card__cmd">{command}</code>
+  </header>
+  <p class="cli-card__summary">{summary}</p>
+
+  <div class="cli-card__body">
+    {flags.length > 0 && (
+      <section class="cli-card__section" aria-labelledby={`${slug}-flags`}>
+        <h4 id={`${slug}-flags`} class="cli-card__heading">Flags</h4>
+        <dl class="cli-card__defs">
+          {flags.map((f) => (
+            <>
+              <dt>
+                <code>{f.name}</code>
+                {f.required && <span class="ba-pill ba-pill--err">required</span>}
+              </dt>
+              <dd>{f.description}</dd>
+            </>
+          ))}
+        </dl>
+      </section>
+    )}
+
+    {envVars.length > 0 && (
+      <section class="cli-card__section" aria-labelledby={`${slug}-envs`}>
+        <h4 id={`${slug}-envs`} class="cli-card__heading">Env vars consumed</h4>
+        <ul class="cli-card__inline" role="list">
+          {envVars.map((e) => <li><code>{e}</code></li>)}
+        </ul>
+      </section>
+    )}
+
+    <section class="cli-card__section" aria-labelledby={`${slug}-exits`}>
+      <h4 id={`${slug}-exits`} class="cli-card__heading">Exit codes</h4>
+      <dl class="cli-card__defs cli-card__defs--narrow">
+        {exitCodes.map((c) => (
+          <>
+            <dt><code>{c.code}</code></dt>
+            <dd>{c.meaning}</dd>
+          </>
+        ))}
+      </dl>
+    </section>
+  </div>
+
+  {example && (
+    <section class="cli-card__example-wrap" aria-labelledby={`${slug}-example`}>
+      <h4 id={`${slug}-example`} class="cli-card__heading cli-card__heading--example">Example</h4>
+      <pre class="cli-card__example"><span class="cli-card__prompt" aria-hidden="true">$ </span><code>{example}</code></pre>
+    </section>
+  )}
+</article>
+
+<style>
+  .cli-card {
+    margin: 1.25rem 0;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.625rem;
+    background: var(--sl-color-bg-nav);
+    overflow: hidden;
+    transition: border-color var(--ba-duration-fast) var(--ba-ease-out);
+  }
+  .cli-card:hover {
+    border-color: var(--sl-color-gray-4);
+  }
+  .cli-card__head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0.875rem 1.125rem 0.5rem;
+    border-bottom: 1px solid var(--sl-color-gray-6);
+  }
+  .cli-card__prompt {
+    font-family: var(--ba-font-mono);
+    color: var(--sl-color-accent);
+    font-weight: 600;
+    font-size: 0.9375rem;
+  }
+  .cli-card__cmd {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+  .cli-card__summary {
+    margin: 0;
+    padding: 0.5rem 1.125rem 0.75rem;
+    color: var(--sl-color-gray-2);
+    line-height: 1.55;
+    border-bottom: 1px solid var(--sl-color-gray-6);
+  }
+  .cli-card__body {
+    padding: 0.875rem 1.125rem;
+    display: grid;
+    gap: 1rem;
+  }
+  .cli-card__heading {
+    margin: 0 0 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--sl-color-gray-3);
+  }
+  .cli-card__heading--example {
+    padding: 0.625rem 1.125rem 0;
+  }
+  .cli-card__defs {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.4rem 0.875rem;
+    margin: 0;
+    font-size: 0.9375rem;
+  }
+  .cli-card__defs--narrow {
+    grid-template-columns: max-content 1fr;
+    gap: 0.25rem 0.875rem;
+  }
+  .cli-card__defs dt {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+  }
+  .cli-card__defs dd {
+    margin: 0;
+    color: var(--sl-color-gray-2);
+    line-height: 1.5;
+  }
+  .cli-card__inline {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .cli-card__inline code {
+    font-size: 0.85rem;
+  }
+  .cli-card__example-wrap {
+    border-top: 1px solid var(--sl-color-gray-6);
+    background: var(--sl-color-bg);
+  }
+  .cli-card__example {
+    margin: 0;
+    padding: 0.75rem 1.125rem 0.875rem;
+    background: transparent;
+    font-size: 0.85rem;
+    overflow-x: auto;
+    line-height: 1.5;
+  }
+  .cli-card__example code {
+    background: transparent;
+    color: var(--sl-color-white);
+  }
+  @media (max-width: 30rem) {
+    .cli-card__defs {
+      grid-template-columns: 1fr;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cli-card {
+      transition: none;
+    }
+  }
+</style>

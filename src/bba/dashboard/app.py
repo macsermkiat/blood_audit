@@ -107,9 +107,7 @@ def _physician_id_for_row(config: DashboardConfig, row: AuditRow) -> str:
     return config.physician_attribution_resolver(row)
 
 
-def _resolve_unredacted_phi(
-    config: DashboardConfig, row: AuditRow
-) -> tuple[str, str]:
+def _resolve_unredacted_phi(config: DashboardConfig, row: AuditRow) -> tuple[str, str]:
     """Resolve un-redacted ``(hn, an)`` for an audit row, or raise.
 
     The dashboard refuses to surface un-redacted PHI without an explicit
@@ -131,9 +129,7 @@ def _resolve_unredacted_phi(
 # ---------------------------------------------------------------------------
 
 
-def _audit_row_to_queue_item(
-    config: DashboardConfig, row: AuditRow
-) -> QueueItem:
+def _audit_row_to_queue_item(config: DashboardConfig, row: AuditRow) -> QueueItem:
     return QueueItem(
         audit_id=row.audit_id,
         run_id=row.run_id,
@@ -171,9 +167,7 @@ def _audit_row_to_case_detail(
         reasoning_summary_en=row.reasoning_summary_en,
         reasoning_summary_thai=row.reasoning_summary_thai,
         indications_json=tuple(dict(item) for item in row.indications_json),
-        negative_evidence_json=tuple(
-            dict(item) for item in row.negative_evidence_json
-        ),
+        negative_evidence_json=tuple(dict(item) for item in row.negative_evidence_json),
         needs_human_review=row.needs_human_review,
         review_reason=row.review_reason,
         hb_value=row.hb_value,
@@ -201,9 +195,7 @@ def _find_audit_row(config: DashboardConfig, audit_id: str) -> AuditRow:
     for row in _read_snapshot_rows(config):
         if row.audit_id == audit_id:
             return row
-    raise AuditNotFoundError(
-        f"audit_id {audit_id!r} not found in today's snapshot"
-    )
+    raise AuditNotFoundError(f"audit_id {audit_id!r} not found in today's snapshot")
 
 
 def _count_classification(
@@ -223,9 +215,7 @@ def _aggregate_classifications(
     check wards / physicians with no audited orders today.
     """
     total = len(rows)
-    avg_confidence = (
-        sum(r.confidence for r in rows) / total if total > 0 else 0.0
-    )
+    avg_confidence = sum(r.confidence for r in rows) / total if total > 0 else 0.0
     return {
         "total_orders": total,
         "appropriate_count": _count_classification(rows, "APPROPRIATE"),
@@ -285,9 +275,7 @@ def list_queue(
     """
     del context  # queue scope is global (PRD §17 — no per-reviewer slice)
     rows = _read_snapshot_rows(config)
-    review_rows = tuple(
-        r for r in rows if r.final_classification == "NEEDS_REVIEW"
-    )
+    review_rows = tuple(r for r in rows if r.final_classification == "NEEDS_REVIEW")
     items = [_audit_row_to_queue_item(config, r) for r in review_rows]
     sort_fn: dict[str, Callable[[QueueItem], Any]] = {
         "order_datetime": lambda i: i.order_datetime,
@@ -352,9 +340,7 @@ def record_break_glass_access(
             "without a reviewer-supplied rationale"
         )
     row = _find_audit_row(config, audit_id)
-    access = _phi_access_input(
-        context, row, justification=request.justification
-    )
+    access = _phi_access_input(context, row, justification=request.justification)
     with config.review_actions_store.access_phi(access):
         return _audit_row_to_case_detail(config, row, unredacted=True)
 
@@ -373,9 +359,7 @@ def get_ward_scorecard(
     """
     del context
     rows = _read_snapshot_rows(config)
-    ward_rows = tuple(
-        r for r in rows if _ward_id_for_row(config, r) == ward_id
-    )
+    ward_rows = tuple(r for r in rows if _ward_id_for_row(config, r) == ward_id)
     aggs = _aggregate_classifications(ward_rows)
     return WardScorecard(
         ward_id=ward_id,
@@ -462,9 +446,7 @@ def get_pipeline_health(
     total = len(rows)
     snapshot_audit_ids = {r.audit_id for r in rows}
     all_calls = config.audit_store.read_llm_calls()
-    snapshot_calls = tuple(
-        c for c in all_calls if c.audit_id in snapshot_audit_ids
-    )
+    snapshot_calls = tuple(c for c in all_calls if c.audit_id in snapshot_audit_ids)
     avg_latency = _average_llm_latency_ms(snapshot_calls)
     if total == 0:
         return PipelineHealth(
@@ -604,9 +586,7 @@ def create_app(config: DashboardConfig) -> FastAPI:
             return templates.TemplateResponse(
                 request, "_queue_table.html", context_dict
             )
-        return templates.TemplateResponse(
-            request, "queue.html", context_dict
-        )
+        return templates.TemplateResponse(request, "queue.html", context_dict)
 
     @app.get("/case/{audit_id}", response_class=HTMLResponse)
     def _case_detail_route(
@@ -664,18 +644,14 @@ def create_app(config: DashboardConfig) -> FastAPI:
             request, "ward_scorecard.html", {"scorecard": scorecard}
         )
 
-    @app.get(
-        "/scorecard/physician/{physician_id}", response_class=HTMLResponse
-    )
+    @app.get("/scorecard/physician/{physician_id}", response_class=HTMLResponse)
     def _physician_scorecard_route(
         request: FastApiRequest,
         physician_id: str,
         context: RouteContext = Depends(get_route_context),
     ) -> HTMLResponse:
         try:
-            scorecard = get_physician_scorecard(
-                config, context, physician_id
-            )
+            scorecard = get_physician_scorecard(config, context, physician_id)
         except PhysicianAccessDeniedError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         return templates.TemplateResponse(

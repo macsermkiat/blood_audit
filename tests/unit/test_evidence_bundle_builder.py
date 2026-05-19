@@ -42,7 +42,6 @@ from __future__ import annotations
 import hashlib
 import json
 import unicodedata
-from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -68,7 +67,6 @@ from bba.evidence_bundle_builder import (
     ProgressNote,
     VitalsRecord,
     build_evidence_bundle,
-    bundle_hash,
     canonical_serialize,
     parse_soap_sections,
     split_focus_notes_5_5,
@@ -104,7 +102,9 @@ def _anchor(
     )
 
 
-def _progress(*, offset_hours: float, text: str = "S: nil\nO: stable\nA: ok\nP: observe") -> ProgressNote:
+def _progress(
+    *, offset_hours: float, text: str = "S: nil\nO: stable\nA: ok\nP: observe"
+) -> ProgressNote:
     return ProgressNote(
         timestamp=ANCHOR_DT + timedelta(hours=offset_hours),
         text=text,
@@ -393,7 +393,9 @@ class TestModelImmutability:
         # canonical_json with a forged or stale hash, the bundle would
         # silently lie about its identity. The model recomputes
         # sha256(canonical_json) and rejects on mismatch.
-        canonical_json = canonical_serialize({"anchor": _valid_anchor_envelope(), "items": []})
+        canonical_json = canonical_serialize(
+            {"anchor": _valid_anchor_envelope(), "items": []}
+        )
         wrong_hash = "0" * 64  # well-formed but wrong
         with pytest.raises(ValidationError, match="does not match"):
             EvidenceBundle(
@@ -405,7 +407,9 @@ class TestModelImmutability:
     def test_bundle_accepts_correctly_computed_hash(self) -> None:
         # Sanity: when the hash is genuinely the sha256 of canonical_json
         # AND canonical_json is a proper envelope, construction succeeds.
-        canonical_json = canonical_serialize({"anchor": _valid_anchor_envelope(), "items": []})
+        canonical_json = canonical_serialize(
+            {"anchor": _valid_anchor_envelope(), "items": []}
+        )
         right_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
         bundle = EvidenceBundle(
             items=(), canonical_json=canonical_json, bundle_hash=right_hash
@@ -426,9 +430,7 @@ class TestModelImmutability:
         # keys, missing NFC) is rejected so downstream tooling can't
         # carry a self-consistent hash for non-canonical bytes.
         non_canonical = '{"items": [], "anchor": {}}'  # unsorted keys, no indent
-        non_canonical_hash = hashlib.sha256(
-            non_canonical.encode("utf-8")
-        ).hexdigest()
+        non_canonical_hash = hashlib.sha256(non_canonical.encode("utf-8")).hexdigest()
         with pytest.raises(ValidationError, match="canonical form"):
             EvidenceBundle(
                 items=(),
@@ -670,7 +672,7 @@ class TestModelImmutability:
             "items": [
                 {
                     "id": "E1",
-                    "source": "MED",  # mismatched source
+                    "source": "Med",  # mismatched source
                     "timestamp_utc": None,
                     "payload": {"icd10": "D50.9"},
                 }
@@ -744,30 +746,34 @@ class TestMedWindow:
 
     def test_inside_minus_72h_kept(self) -> None:
         bundle = _build_minimal(meds=(_med(offset_hours=-71.9),))
-        assert len(_items_by_source(bundle, "MED")) == 1
+        assert len(_items_by_source(bundle, "Med")) == 1
 
     def test_inside_plus_24h_kept(self) -> None:
         bundle = _build_minimal(meds=(_med(offset_hours=23.9),))
-        assert len(_items_by_source(bundle, "MED")) == 1
+        assert len(_items_by_source(bundle, "Med")) == 1
 
     def test_outside_minus_72h_dropped(self) -> None:
         bundle = _build_minimal(meds=(_med(offset_hours=-72.1),))
-        assert _items_by_source(bundle, "MED") == ()
+        assert _items_by_source(bundle, "Med") == ()
 
     def test_outside_plus_24h_dropped(self) -> None:
         bundle = _build_minimal(meds=(_med(offset_hours=24.1),))
-        assert _items_by_source(bundle, "MED") == ()
+        assert _items_by_source(bundle, "Med") == ()
 
 
 class TestHbHistoryWindow:
     """Lab Hb: ``[anchor - 7 d, anchor]`` (pre-order only — mirrors :mod:`bba.hb_lookup`)."""
 
     def test_inside_7d_kept(self) -> None:
-        bundle = _build_minimal(hb_history=(_hb(offset_hours=-167.9),))  # 7d - small epsilon
+        bundle = _build_minimal(
+            hb_history=(_hb(offset_hours=-167.9),)
+        )  # 7d - small epsilon
         assert len(_items_by_source(bundle, "Lab")) == 1
 
     def test_outside_7d_dropped(self) -> None:
-        bundle = _build_minimal(hb_history=(_hb(offset_hours=-168.1),))  # 7d + small epsilon
+        bundle = _build_minimal(
+            hb_history=(_hb(offset_hours=-168.1),)
+        )  # 7d + small epsilon
         assert _items_by_source(bundle, "Lab") == ()
 
     def test_post_anchor_dropped(self) -> None:
@@ -787,9 +793,7 @@ class TestHbHistoryWindow:
 
     def test_just_inside_7d_boundary_kept(self) -> None:
         # 7 d minus 1 second is still inside (matches hb_lookup).
-        bundle = _build_minimal(
-            hb_history=(_hb(offset_hours=-168.0 + (1.0 / 3600.0)),)
-        )
+        bundle = _build_minimal(hb_history=(_hb(offset_hours=-168.0 + (1.0 / 3600.0)),))
         assert len(_items_by_source(bundle, "Lab")) == 1
 
 
@@ -797,7 +801,9 @@ class TestVitalsWindow:
     """Vitals: ``[anchor - 6 h, anchor + 6 h]`` (mirrors :mod:`bba.vitals_extractor`)."""
 
     def test_inside_6h_kept(self) -> None:
-        bundle = _build_minimal(vitals=(_vitals(offset_hours=-5.9), _vitals(offset_hours=5.9)))
+        bundle = _build_minimal(
+            vitals=(_vitals(offset_hours=-5.9), _vitals(offset_hours=5.9))
+        )
         assert len(_items_by_source(bundle, "Vitals")) == 2
 
     def test_outside_6h_dropped(self) -> None:
@@ -913,7 +919,9 @@ class TestSectionEmissionOrderInBundle:
     quote (S)."""
 
     def test_payload_lists_sections_in_priority_order(self) -> None:
-        bundle = _build_minimal(progress_notes=(_progress(offset_hours=-1, text=_FULL_SOAP),))
+        bundle = _build_minimal(
+            progress_notes=(_progress(offset_hours=-1, text=_FULL_SOAP),)
+        )
         progress_items = _items_by_source(bundle, "IPDADMPROGRESS")
         assert len(progress_items) == 1
         sections = progress_items[0].payload["sections"]
@@ -1097,8 +1105,7 @@ class TestTimestampTieDeterminism:
         # ``reverse=True`` (timestamp DESC implies text DESC too).
         focus_ids = [it.id for it in _items_by_source(bundle_a, "IPDNRFOCUSDT")]
         focus_payloads = [
-            it.payload["text"]
-            for it in _items_by_source(bundle_a, "IPDNRFOCUSDT")
+            it.payload["text"] for it in _items_by_source(bundle_a, "IPDNRFOCUSDT")
         ]
         assert len(focus_ids) == 4
         # Before side: timestamp DESC, then text DESC under the same reverse.
@@ -1107,7 +1114,9 @@ class TestTimestampTieDeterminism:
         # Both at +2h, so text-ASC: "charlie" then "delta".
         assert focus_payloads == ["bravo", "alpha", "charlie", "delta"]
 
-    def test_progress_notes_at_same_timestamp_kept_set_invariant_under_reorder(self) -> None:
+    def test_progress_notes_at_same_timestamp_kept_set_invariant_under_reorder(
+        self,
+    ) -> None:
         # 9 progress notes — 8 distinct + 2 sharing offset -1h with different
         # text. Cap is 8; one of the -1h pair must drop deterministically.
         notes_a = (
@@ -1201,12 +1210,8 @@ class TestTimestampTieDeterminism:
         # different SBP. Operationally rare but possible if upstream pushes
         # duplicate-timestamp rows; without the tiebreak, input order would
         # leak through.
-        v1 = VitalsRecord(
-            timestamp=ANCHOR_DT, source="IPDADMPROGRESS", sbp=110, hr=80
-        )
-        v2 = VitalsRecord(
-            timestamp=ANCHOR_DT, source="IPDADMPROGRESS", sbp=120, hr=88
-        )
+        v1 = VitalsRecord(timestamp=ANCHOR_DT, source="IPDADMPROGRESS", sbp=110, hr=80)
+        v2 = VitalsRecord(timestamp=ANCHOR_DT, source="IPDADMPROGRESS", sbp=120, hr=88)
         a = _build_minimal(vitals=(v1, v2))
         b = _build_minimal(vitals=(v2, v1))
         assert a.bundle_hash == b.bundle_hash
@@ -1484,9 +1489,7 @@ class TestEmptyProgressItemsNeverConstructed:
         # ASSESSMENT has content, others are blank — item ships with just
         # the non-empty section; no dead headers in the payload.
         bundle = _build_minimal(
-            progress_notes=(
-                _progress(offset_hours=-1, text="S:\nO:\nA: anemia\nP:"),
-            )
+            progress_notes=(_progress(offset_hours=-1, text="S:\nO:\nA: anemia\nP:"),)
         )
         progress_items = _items_by_source(bundle, "IPDADMPROGRESS")
         assert len(progress_items) == 1
@@ -1602,12 +1605,10 @@ class TestStableEvidenceIDs:
         meds_a = (_med(offset_hours=-1, drug="A"), _med(offset_hours=-2, drug="B"))
         meds_b = tuple(reversed(meds_a))
         ids_a = [
-            (it.source, it.payload, it.id)
-            for it in _build_minimal(meds=meds_a).items
+            (it.source, it.payload, it.id) for it in _build_minimal(meds=meds_a).items
         ]
         ids_b = [
-            (it.source, it.payload, it.id)
-            for it in _build_minimal(meds=meds_b).items
+            (it.source, it.payload, it.id) for it in _build_minimal(meds=meds_b).items
         ]
         # Same bag of records (just reordered) → same ID assignment per item.
         # Sort by id for comparison; payloads must match.
@@ -1636,7 +1637,7 @@ class TestStableEvidenceIDs:
         )
         sources = [item.source for item in bundle.items]
         assert sources.index("Diagnosis") < sources.index("IPDADMPROGRESS")
-        assert sources.index("IPDADMPROGRESS") < sources.index("MED")
+        assert sources.index("IPDADMPROGRESS") < sources.index("Med")
 
     def test_progress_emission_is_closest_to_anchor_first(self) -> None:
         # Round-21: IPDADMPROGRESS now emits closest-to-anchor first so
@@ -1729,8 +1730,12 @@ class TestCanonicalJSONNFCNormalization:
         )
         nfd_text = unicodedata.normalize("NFD", nfc_text)
         assert nfc_text != nfd_text, "fixture is malformed if NFD == NFC"
-        bundle_nfc = _build_minimal(progress_notes=(_progress(offset_hours=-1, text=nfc_text),))
-        bundle_nfd = _build_minimal(progress_notes=(_progress(offset_hours=-1, text=nfd_text),))
+        bundle_nfc = _build_minimal(
+            progress_notes=(_progress(offset_hours=-1, text=nfc_text),)
+        )
+        bundle_nfd = _build_minimal(
+            progress_notes=(_progress(offset_hours=-1, text=nfd_text),)
+        )
         assert bundle_nfc.bundle_hash == bundle_nfd.bundle_hash
 
 
@@ -1786,7 +1791,9 @@ class TestBundleHashStability:
         assert h == canonical_h
 
     def test_focus_note_reorder_does_not_change_hash(self) -> None:
-        notes_a = tuple(_focus(offset_hours=h, text=f"f{h}") for h in (-3, -2, -1, 1, 2, 3))
+        notes_a = tuple(
+            _focus(offset_hours=h, text=f"f{h}") for h in (-3, -2, -1, 1, 2, 3)
+        )
         notes_b = tuple(reversed(notes_a))
         a = _build_minimal(focus_notes=notes_a)
         b = _build_minimal(focus_notes=notes_b)
@@ -1814,9 +1821,13 @@ class TestCharCapEnforcement:
             _progress(offset_hours=-h, text=f"S: {'ข' * 600}\nO: o\nA: a\nP: p")
             for h in (1, 2, 3, 4, 5, 6, 7, 8)
         )
-        focus = tuple(_focus(offset_hours=h, text="ก" * 600) for h in (-6, -4, -2, 1, 3, 5))
+        focus = tuple(
+            _focus(offset_hours=h, text="ก" * 600) for h in (-6, -4, -2, 1, 3, 5)
+        )
         bundle = build_evidence_bundle(
-            inputs=EvidenceInputs(anchor=_anchor(), progress_notes=progress, focus_notes=focus),
+            inputs=EvidenceInputs(
+                anchor=_anchor(), progress_notes=progress, focus_notes=focus
+            ),
         )
         assert len(bundle.canonical_json) <= DEFAULT_CHAR_CAP
 
@@ -1837,7 +1848,7 @@ class TestCharCapEnforcement:
         items = tuple(
             EvidenceItem(
                 id=f"E{i}",
-                source="MED",
+                source="Med",
                 timestamp_utc=ANCHOR_DT - timedelta(hours=i),
                 payload={"drug": "X" * 200},
             )
@@ -1857,7 +1868,10 @@ class TestProgressNoteCap8:
 
     def test_cap_at_8_entries_keeps_closest(self) -> None:
         # 12 candidates, all in window; expect 8 closest by absolute offset.
-        notes = tuple(_progress(offset_hours=h) for h in (-12, -10, -8, -6, -4, -2, -1, 1, 2, 4, 6, 8))
+        notes = tuple(
+            _progress(offset_hours=h)
+            for h in (-12, -10, -8, -6, -4, -2, -1, 1, 2, 4, 6, 8)
+        )
         # Assemble a bundle without focus_notes to keep the test focused.
         inputs = EvidenceInputs(anchor=_anchor(), progress_notes=notes)
         bundle = build_evidence_bundle(inputs=inputs)
@@ -1885,7 +1899,10 @@ class TestHbEmissionAndTruncationPriority:
 
     def test_hb_newest_first_in_emission_order(self) -> None:
         # 4 Hb records spread over the lookback window.
-        hbs = tuple(_hb(offset_hours=-h, value=10.0 + i * 0.1) for i, h in enumerate((24, 48, 72, 96)))
+        hbs = tuple(
+            _hb(offset_hours=-h, value=10.0 + i * 0.1)
+            for i, h in enumerate((24, 48, 72, 96))
+        )
         bundle = build_evidence_bundle(
             inputs=EvidenceInputs(anchor=_anchor(), hb_history=hbs)
         )
@@ -1916,7 +1933,7 @@ class TestHbEmissionAndTruncationPriority:
             inputs=EvidenceInputs(anchor=anchor, meds=(near, stale)),
             char_cap=1100,
         )
-        med_items = _items_by_source(bundle, "MED")
+        med_items = _items_by_source(bundle, "Med")
         assert len(med_items) == 1, (
             "Expected exactly one MED to survive under cap pressure"
         )
@@ -2011,7 +2028,8 @@ class TestHbEmissionAndTruncationPriority:
             "Expected exactly one Vitals snapshot to survive cap pressure"
         )
         kept_offset = round(
-            (vitals_items[0].timestamp_utc - ANCHOR_DT).total_seconds() / 60.0, 0  # type: ignore[operator]
+            (vitals_items[0].timestamp_utc - ANCHOR_DT).total_seconds() / 60.0,
+            0,  # type: ignore[operator]
         )
         assert kept_offset == -30.0, (
             "Stale -5.5h vitals survived over closer -30min vitals; "
@@ -2047,9 +2065,7 @@ class TestHbEmissionAndTruncationPriority:
         # Audit-wise that's exactly inverted: the bundle would show
         # the LLM what was given AFTER the order while losing what
         # shaped the order.
-        pre_immediate = _med(
-            offset_hours=-1, drug="ImmediatePre-" + "x" * 200
-        )
+        pre_immediate = _med(offset_hours=-1, drug="ImmediatePre-" + "x" * 200)
         pre_stale = _med(offset_hours=-72, drug="StalePre-" + "y" * 200)
         post = _med(offset_hours=2, drug="PostOrder-" + "z" * 200)
         anchor = OrderAnchor(
@@ -2059,12 +2075,10 @@ class TestHbEmissionAndTruncationPriority:
             products=("LPRC",),
         )
         bundle = build_evidence_bundle(
-            inputs=EvidenceInputs(
-                anchor=anchor, meds=(post, pre_immediate, pre_stale)
-            ),
+            inputs=EvidenceInputs(anchor=anchor, meds=(post, pre_immediate, pre_stale)),
             char_cap=1300,
         )
-        med_items = _items_by_source(bundle, "MED")
+        med_items = _items_by_source(bundle, "Med")
         # Under cap pressure, expect the post-order MED to drop first
         # (lower priority); pre-order meds survive longer. The
         # immediate pre (-1h) survives until last.
@@ -2087,7 +2101,7 @@ class TestHbEmissionAndTruncationPriority:
         pre = _med(offset_hours=-1, drug="Pre")
         post = _med(offset_hours=2, drug="Post")
         bundle = _build_minimal(meds=(post, pre))
-        med_items = _items_by_source(bundle, "MED")
+        med_items = _items_by_source(bundle, "Med")
         assert len(med_items) == 2
         assert med_items[0].payload["drug"] == "Pre"
         assert med_items[1].payload["drug"] == "Post"
@@ -2098,7 +2112,7 @@ class TestHbEmissionAndTruncationPriority:
         near = _med(offset_hours=-1, drug="A")
         far = _med(offset_hours=-72, drug="B")
         bundle = _build_minimal(meds=(far, near))
-        med_items = _items_by_source(bundle, "MED")
+        med_items = _items_by_source(bundle, "Med")
         assert len(med_items) == 2
         assert med_items[0].payload["drug"] == "A"  # newest first
         assert med_items[1].payload["drug"] == "B"
@@ -2122,7 +2136,7 @@ class TestHbEmissionAndTruncationPriority:
             char_cap=1500,
         )
         lab_items = _items_by_source(bundle, "Lab")
-        med_items = _items_by_source(bundle, "MED")
+        med_items = _items_by_source(bundle, "Med")
         assert len(lab_items) == 1, (
             "Hb dropped under tight cap while MED items survived; the "
             "decision-time anemia signal must outlast lower-priority MED."
@@ -2152,9 +2166,7 @@ class TestHbEmissionAndTruncationPriority:
             item_no=1,
         )
         bundle = build_evidence_bundle(
-            inputs=EvidenceInputs(
-                anchor=_anchor(), hb_history=(hb_hema, hb_poct)
-            )
+            inputs=EvidenceInputs(anchor=_anchor(), hb_history=(hb_hema, hb_poct))
         )
         lab_items = _items_by_source(bundle, "Lab")
         assert len(lab_items) == 2
@@ -2192,9 +2204,7 @@ class TestHbEmissionAndTruncationPriority:
             products=("LPRC",),
         )
         bundle = build_evidence_bundle(
-            inputs=EvidenceInputs(
-                anchor=anchor, hb_history=(stale_hb, corrected_hb)
-            ),
+            inputs=EvidenceInputs(anchor=anchor, hb_history=(stale_hb, corrected_hb)),
             char_cap=900,
         )
         lab_items = _items_by_source(bundle, "Lab")
@@ -2277,8 +2287,7 @@ class TestHbEmissionAndTruncationPriority:
         # context and survives until the bundle structurally cannot fit.
         diagnoses = (DiagnosisRecord(icd10="D50.9"),)
         meds = tuple(
-            _med(offset_hours=-h, drug=f"Drug{h}-" + ("x" * 200))
-            for h in (1, 2, 3, 4)
+            _med(offset_hours=-h, drug=f"Drug{h}-" + ("x" * 200)) for h in (1, 2, 3, 4)
         )
         bundle = build_evidence_bundle(
             inputs=EvidenceInputs(
@@ -2313,7 +2322,8 @@ class TestHbEmissionAndTruncationPriority:
         assert len(lab_items) >= 1, "at least one Hb must survive truncation"
         # The first surviving Lab item is the most recent (offset -1 h).
         first_offset = round(
-            (lab_items[0].timestamp_utc - ANCHOR_DT).total_seconds() / 3600.0, 1  # type: ignore[operator]
+            (lab_items[0].timestamp_utc - ANCHOR_DT).total_seconds() / 3600.0,
+            1,  # type: ignore[operator]
         )
         assert first_offset == -1.0
 
@@ -2327,6 +2337,7 @@ class TestEmptyInputs:
         # Hash is still a 64-char sha256 hex of the canonical JSON of the
         # anchor-only bundle.
         assert len(bundle.bundle_hash) == 64
-        assert bundle.bundle_hash == hashlib.sha256(
-            bundle.canonical_json.encode("utf-8")
-        ).hexdigest()
+        assert (
+            bundle.bundle_hash
+            == hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest()
+        )

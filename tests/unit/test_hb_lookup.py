@@ -141,9 +141,11 @@ class TestParseHbValueProperty:
         assert parsed is not None, f"in-range value {value!r} rejected"
         assert parsed == pytest.approx(value)
 
-    @given(value=st.floats(allow_nan=False, allow_infinity=False).filter(
-        lambda v: v < 2.0 or v > 25.0
-    ))
+    @given(
+        value=st.floats(allow_nan=False, allow_infinity=False).filter(
+            lambda v: v < 2.0 or v > 25.0
+        )
+    )
     @settings(max_examples=200)
     def test_any_out_of_range_value_is_rejected(self, value: float) -> None:
         # The whole point of the range check: catch transcription errors
@@ -152,9 +154,7 @@ class TestParseHbValueProperty:
             f"out-of-range value {value!r} silently accepted"
         )
 
-    @given(raw=st.text(max_size=20).filter(
-        lambda s: not _looks_like_number(s)
-    ))
+    @given(raw=st.text(max_size=20).filter(lambda s: not _looks_like_number(s)))
     @settings(max_examples=300)
     def test_non_numeric_strings_always_return_none(self, raw: str) -> None:
         # Strict-loud: anything that is not a recognisable number is None.

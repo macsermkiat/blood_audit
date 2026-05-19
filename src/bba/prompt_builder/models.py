@@ -265,9 +265,7 @@ class PromptBuildRequest(BaseModel):
         if len(ids) != len(set(ids)):
             from collections import Counter
 
-            duplicates = sorted(
-                eid for eid, n in Counter(ids).items() if n > 1
-            )
+            duplicates = sorted(eid for eid, n in Counter(ids).items() if n > 1)
             raise ValueError(
                 f"evidence_chunks must have unique evidence_id values; "
                 f"duplicates: {duplicates}"

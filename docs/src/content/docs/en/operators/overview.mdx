@@ -1,0 +1,56 @@
+---
+title: Operator overview
+description: What blood_audit is, what you need to run it, and what success looks like.
+---
+
+import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
+
+<QiNotSamdBanner variant="compact" />
+
+## Who this section is for
+
+You are operating blood_audit on behalf of KCMH IT. Your operator job has
+four steps:
+
+1. Install the package.
+2. Configure three environment variables.
+3. Run `bba ingest`, then `bba audit`.
+4. Hand the audit dataset to the QI (Quality Improvement) committee.
+
+The other four subcommands — `evaluate`, `report`, `serve-dashboard`,
+`sentinel` — are wired up later by deployment teams. See
+[Integration seams](/blood_audit/en/operators/integration-seams/) if you
+want to know why they fail today.
+
+## What you need before starting
+
+- **Python 3.13+** with [uv](https://github.com/astral-sh/uv) ≥ 0.9.24.
+- **PostgreSQL 14+** for the audit / batch-runs / review-actions tables.
+  The DSN must use the `+psycopg` driver suffix (psycopg3, not psycopg2).
+- **Anthropic API key** with Batch API enabled.
+- **Persistent data directory** writable by the service user (Parquet,
+  DuckDB, run-state markers).
+- **HOSxP export bundle** — see [Ingest CSV](/blood_audit/en/operators/ingest-csv/)
+  for the expected table set.
+
+## What a successful run produces
+
+1. `bba ingest <csv>` validates the bundle, computes a content hash, and
+   writes a Parquet snapshot under `$BBA_DATA_DIR`.
+2. `bba audit --input <csv>` classifies every (HN, REQNO) transfusion row,
+   writes a row per transfusion to Postgres (`audit_store`), and appends a
+   compliance entry to `audit_log`.
+3. Re-running the same input is a no-op unless you pass `--force`
+   (run-level idempotency — see [Pitfall 13](/blood_audit/en/operators/troubleshooting/#run-level-idempotency)).
+
+## What to expect
+
+- The deterministic classifier handles roughly the majority of rows; LLM_REVIEW
+  rows go to the Anthropic Batch API and may take minutes to complete.
+- Hard exclusions filter out non-RBC products, age < 15, and orders without
+  pre-transfusion Hb.
+- All PHI is de-identified before any data leaves the audit container.
+
+## Next steps
+
+Continue to [Install](/blood_audit/en/operators/install/).

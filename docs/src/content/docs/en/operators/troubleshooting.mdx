@@ -1,0 +1,64 @@
+---
+title: Troubleshooting
+description: Common failures and how to diagnose them.
+---
+
+## `CliError: BBA_DATA_DIR not set` at startup
+
+`BBA_DATA_DIR` is the only env var the Phase 1 CLI validates directly.
+See [Environment variables](/blood_audit/en/operators/env-vars/) for
+the full three-variable contract and which are needed in Phase 1 vs
+Phase 1.5. Set `BBA_DATA_DIR` to an absolute path the service user can
+write to, then re-run.
+
+## `sqlalchemy.exc.NoSuchModuleError: Can't load plugin: sqlalchemy.dialects:postgresql.psycopg2`
+
+Your `BBA_DB_URL` is missing the `+psycopg` driver suffix. SQLAlchemy
+defaults to psycopg2; the project ships psycopg3.
+
+Fix: change `postgresql://...` to `postgresql+psycopg://...`.
+
+## `CliError: missing glue` from `bba evaluate` / `bba report` / `bba serve-dashboard` / `bba sentinel`
+
+These are [integration seams](/blood_audit/en/operators/integration-seams/),
+not bugs. Wait for Phase 1.5 deployment wiring.
+
+## Tests skip ~43 Postgres tests on a clean machine
+
+Expected. Those tests use testcontainers + Docker. If Docker is not
+running locally, they auto-skip. Start Docker Desktop, re-run pytest.
+
+## `mypy` exits with 212 errors
+
+You ran `uv run mypy tests`. The 212 errors are type-helper looseness
+under `tests/` only — none can mask a real bug in `src/`. Tracked as
+Phase 1 debt; the CI annotates them as a warning, not a failure.
+
+`uv run mypy src` should always exit 0.
+
+## `bba audit` re-run is a no-op
+
+Run-level idempotency.
+
+### Run-level idempotency
+
+`run_id = sha256(input_csv_hash + schema_fingerprint + code_version)`.
+Identical inputs and code → identical `run_id` → the audit store refuses
+to write a duplicate. Pass `--force` to override; a compliance row will
+be appended to `audit_log` explaining the override.
+
+## `timeout: command not found` on macOS
+
+macOS ships without GNU `timeout`. Install coreutils for `gtimeout`, or
+use Python's `httpx.ASGITransport` for in-process tests.
+
+## Anthropic API tests appear to make network calls
+
+They do not. Network access is rejected by the cost guard in
+`src/bba/audit_pipeline/cost_guard.py`. Cassette-backed responses live
+under `tests/unit/cassettes/`.
+
+## Direct push to `main` is rejected by a pre-push hook
+
+Expected. All changes go through PRs. Use `chore/`, `fix/`, `feat/`,
+`docs/` branch prefixes. Repo convention is `gh pr merge --merge`.

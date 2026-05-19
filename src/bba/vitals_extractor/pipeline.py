@@ -111,7 +111,9 @@ def extract_vitals(
 
     needs_fallback = regex_vitals.sbp is None or regex_vitals.hr is None
     if llm_fallback is not None and needs_fallback:
-        final_vitals, contributed = _merge_with_llm(regex_vitals, llm_fallback(chosen.text))
+        final_vitals, contributed = _merge_with_llm(
+            regex_vitals, llm_fallback(chosen.text)
+        )
         if contributed:
             source_prov = SourceProvenance.LLM_EXTRACTED
 

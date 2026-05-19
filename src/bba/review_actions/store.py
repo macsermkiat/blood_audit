@@ -212,9 +212,7 @@ class ReviewActionsStore:
             raise self._translate_raise(exc) from exc
 
     @contextmanager
-    def access_phi(
-        self, access: PhiAccessInput
-    ) -> Iterator[PhiAccessLog]:
+    def access_phi(self, access: PhiAccessInput) -> Iterator[PhiAccessLog]:
         """Context manager: write a ``phi_access_log`` row, THEN yield it.
 
         AC §"PHI-access log completeness" needs the audit trail row to exist
@@ -450,15 +448,11 @@ class ReviewActionsStore:
             )
             head = head_revision(migrations_root=self._migrations_root)
         except FileNotFoundError as exc:
-            raise MigrationStateError(
-                f"migrations_root not found: {exc}"
-            ) from exc
+            raise MigrationStateError(f"migrations_root not found: {exc}") from exc
         except RuntimeError as exc:
             # Migrator surfaces multi-head / no-revisions states as
             # RuntimeError; treat as fatal schema-drift signal.
-            raise MigrationStateError(
-                f"alembic state error: {exc}"
-            ) from exc
+            raise MigrationStateError(f"alembic state error: {exc}") from exc
         if current is None:
             self._raise_security(
                 "no_alembic_revisions",
@@ -567,8 +561,7 @@ class ReviewActionsStore:
         wrong event, would slip past a name-only check.
         """
         expected_lookup = {
-            (name, table): tgtype
-            for name, table, tgtype in _REQUIRED_TRIGGER_BINDINGS
+            (name, table): tgtype for name, table, tgtype in _REQUIRED_TRIGGER_BINDINGS
         }
         with self._ensure_pool().connection() as conn:
             with conn.cursor() as cur:
@@ -651,9 +644,7 @@ class ReviewActionsStore:
                 broken=broken,
             )
 
-    def _raise_security(
-        self, event: str, message: str, **fields: object
-    ) -> NoReturn:
+    def _raise_security(self, event: str, message: str, **fields: object) -> NoReturn:
         """Log a structured security-event record, then raise
         :class:`MigrationStateError`.
 
@@ -684,10 +675,7 @@ class ReviewActionsStore:
         """
         sqlstate = getattr(exc, "sqlstate", None)
         message = str(exc.diag.message_primary) if exc.diag else str(exc)
-        if (
-            sqlstate == _APPEND_ONLY_SQLSTATE
-            and _APPEND_ONLY_MESSAGE_TOKEN in message
-        ):
+        if sqlstate == _APPEND_ONLY_SQLSTATE and _APPEND_ONLY_MESSAGE_TOKEN in message:
             return AppendOnlyViolationError(message)
         return exc
 

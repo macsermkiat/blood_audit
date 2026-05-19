@@ -203,9 +203,7 @@ class TestStratifiedSampling:
         }
         for stratum, (n_total, n_pos) in sizes.items():
             population.extend(
-                _stratum_population(
-                    stratum, n_total=n_total, n_positives=n_pos
-                )
+                _stratum_population(stratum, n_total=n_total, n_positives=n_pos)
             )
         return population
 
@@ -232,9 +230,7 @@ class TestStratifiedSampling:
         )
         by_stratum = {d.stratum: d for d in sample.draws}
         for stratum, target in DEFAULT_STRATUM_TARGETS.items():
-            expected_min = min(
-                DEFAULT_INAPPROPRIATE_ENRICHMENT_PER_STRATUM, target
-            )
+            expected_min = min(DEFAULT_INAPPROPRIATE_ENRICHMENT_PER_STRATUM, target)
             assert by_stratum[stratum].drawn_positives >= expected_min, (
                 f"stratum {stratum} drew "
                 f"{by_stratum[stratum].drawn_positives} positives "
@@ -247,12 +243,8 @@ class TestStratifiedSampling:
         pop = self._full_population()
         a = stratified_with_enrichment(pop, _default_targets(), rng_seed=7)
         b = stratified_with_enrichment(pop, _default_targets(), rng_seed=7)
-        a_ids = tuple(
-            tuple(c.audit_id for c in d.cases) for d in a.draws
-        )
-        b_ids = tuple(
-            tuple(c.audit_id for c in d.cases) for d in b.draws
-        )
+        a_ids = tuple(tuple(c.audit_id for c in d.cases) for d in a.draws)
+        b_ids = tuple(tuple(c.audit_id for c in d.cases) for d in b.draws)
         assert a_ids == b_ids
 
     def test_different_seed_yields_different_draw(self) -> None:
@@ -301,9 +293,7 @@ class TestStratifiedSampling:
         # returns the entire stratum — NOT an error. The report can then
         # cite "n=population_size" with the correct Wilson CI width rather
         # than failing the whole run.
-        thin_pop = _stratum_population(
-            Stratum.ADVERSARIAL, n_total=30, n_positives=10
-        )
+        thin_pop = _stratum_population(Stratum.ADVERSARIAL, n_total=30, n_positives=10)
         targets = SamplingTargets(
             per_stratum={Stratum.ADVERSARIAL: 80},
             inappropriate_enrichment_per_stratum=5,
@@ -316,9 +306,7 @@ class TestStratifiedSampling:
         # If the stratum has fewer positives than the enrichment target,
         # take all positives and fill the remainder from negatives — do not
         # raise unless the *total* target also cannot be met.
-        pop = _stratum_population(
-            Stratum.COHORT_EXCEPTION, n_total=500, n_positives=40
-        )
+        pop = _stratum_population(Stratum.COHORT_EXCEPTION, n_total=500, n_positives=40)
         targets = SamplingTargets(
             per_stratum={Stratum.COHORT_EXCEPTION: 140},
             inappropriate_enrichment_per_stratum=138,
@@ -373,23 +361,20 @@ class TestHorvitzThompsonReweighting:
         def draw(
             stratum: Stratum, pop: int, pos_pop: int, drawn: int, drawn_pos: int
         ) -> StratumDraw:
-            cases = (
-                tuple(
-                    _case(
-                        audit_id=f"{stratum.value}-p-{i}",
-                        stratum=stratum,
-                        pred="INAPPROPRIATE",
-                    )
-                    for i in range(drawn_pos)
+            cases = tuple(
+                _case(
+                    audit_id=f"{stratum.value}-p-{i}",
+                    stratum=stratum,
+                    pred="INAPPROPRIATE",
                 )
-                + tuple(
-                    _case(
-                        audit_id=f"{stratum.value}-n-{i}",
-                        stratum=stratum,
-                        pred="APPROPRIATE",
-                    )
-                    for i in range(drawn - drawn_pos)
+                for i in range(drawn_pos)
+            ) + tuple(
+                _case(
+                    audit_id=f"{stratum.value}-n-{i}",
+                    stratum=stratum,
+                    pred="APPROPRIATE",
                 )
+                for i in range(drawn - drawn_pos)
             )
             return StratumDraw(
                 stratum=stratum,
@@ -736,8 +721,8 @@ class TestGwetAC1:
         #   marginal pi_Y = (43/50 + 42/50)/2 = 0.85
         #   p_e_ac1 (binary) = 2*pi_Y*(1-pi_Y) = 2*0.85*0.15 = 0.255
         #   AC1 = (0.90 - 0.255)/(1 - 0.255) = 0.645/0.745 ≈ 0.86577
-        a = (["Y"] * 40 + ["Y"] * 3 + ["N"] * 2 + ["N"] * 5)
-        b = (["Y"] * 40 + ["N"] * 3 + ["Y"] * 2 + ["N"] * 5)
+        a = ["Y"] * 40 + ["Y"] * 3 + ["N"] * 2 + ["N"] * 5
+        b = ["Y"] * 40 + ["N"] * 3 + ["Y"] * 2 + ["N"] * 5
         assert gwet_ac1(a, b) == pytest.approx(0.645 / 0.745, abs=1e-9)
 
     def test_perfect_agreement_is_one(self) -> None:
@@ -793,8 +778,8 @@ class TestAgreementCombined:
 
     def test_bundle_matches_individual_functions(self) -> None:
         # 50 items, the same fixture used in the published-example tests.
-        a = (["Y"] * 40 + ["Y"] * 3 + ["N"] * 2 + ["N"] * 5)
-        b = (["Y"] * 40 + ["N"] * 3 + ["Y"] * 2 + ["N"] * 5)
+        a = ["Y"] * 40 + ["Y"] * 3 + ["N"] * 2 + ["N"] * 5
+        b = ["Y"] * 40 + ["N"] * 3 + ["Y"] * 2 + ["N"] * 5
         bundle = agreement_with_metrics(a, b)
         assert isinstance(bundle, AgreementResult)
         assert bundle.cohen_kappa == pytest.approx(cohen_kappa(a, b), abs=1e-12)
@@ -811,8 +796,8 @@ class TestKappaPrevalenceParadox:
         # PRD §11 explicitly cites the Hb>10 majority-class stratum as the
         # case where κ deflates and AC1 / PABAK stay informative. Reproduce
         # the inequality with a published-style fixture.
-        a = (["Y"] * 40 + ["Y"] * 3 + ["N"] * 2 + ["N"] * 5)
-        b = (["Y"] * 40 + ["N"] * 3 + ["Y"] * 2 + ["N"] * 5)
+        a = ["Y"] * 40 + ["Y"] * 3 + ["N"] * 2 + ["N"] * 5
+        b = ["Y"] * 40 + ["N"] * 3 + ["Y"] * 2 + ["N"] * 5
         k = cohen_kappa(a, b)
         ac1 = gwet_ac1(a, b)
         pabak_v = pabak(a, b)
@@ -839,16 +824,12 @@ class TestClusterRobustSE:
         #   CR0 variance = sum_g U_g² / n² = 25/400 = 0.0625; SE = 0.25.
         indicators = [True] * 5 + [False] * 5 + [True] * 5 + [False] * 5
         cluster_ids = ["A"] * 5 + ["B"] * 5 + ["C"] * 5 + ["D"] * 5
-        est = cluster_robust_proportion_ci(
-            indicators, cluster_ids, confidence=0.95
-        )
+        est = cluster_robust_proportion_ci(indicators, cluster_ids, confidence=0.95)
         assert est.n_clusters == 4
         assert est.n_obs == 20
         assert est.point == pytest.approx(0.5, abs=1e-12)
         assert est.cluster_robust_se == pytest.approx(0.25, abs=1e-9)
-        assert est.naive_se == pytest.approx(
-            (0.5 * 0.5 / 20) ** 0.5, abs=1e-9
-        )
+        assert est.naive_se == pytest.approx((0.5 * 0.5 / 20) ** 0.5, abs=1e-9)
 
     def test_singletons_collapse_to_naive(self) -> None:
         # When every observation is its own cluster, the cluster-robust SE
@@ -888,7 +869,12 @@ class TestClusterRobustSE:
         # Positive intra-cluster correlation → cluster-robust SE ≥ naive SE.
         # Use 6 clusters with strongly correlated outcomes within cluster.
         indicators = (
-            [True] * 4 + [False] * 4 + [True] * 4 + [False] * 4 + [True] * 4 + [False] * 4
+            [True] * 4
+            + [False] * 4
+            + [True] * 4
+            + [False] * 4
+            + [True] * 4
+            + [False] * 4
         )
         cluster_ids = (
             ["c1"] * 4 + ["c2"] * 4 + ["c3"] * 4 + ["c4"] * 4 + ["c5"] * 4 + ["c6"] * 4
@@ -922,9 +908,7 @@ class TestLOMOCV:
 
     def test_one_split_per_month(self) -> None:
         # 6 months → 6 splits.
-        cases = _monthly_population(
-            [(2026, m) for m in range(1, 7)]
-        )
+        cases = _monthly_population([(2026, m) for m in range(1, 7)])
         splits = lomo_cv_splits(cases)
         assert len(splits) == 6
 
@@ -942,20 +926,15 @@ class TestLOMOCV:
         cases = _monthly_population([(2026, 1), (2026, 2), (2026, 3)])
         splits = lomo_cv_splits(cases)
         for split in splits:
-            assert (
-                set(split.train_audit_ids) & set(split.holdout_audit_ids)
-            ) == set()
-            assert (
-                len(split.train_audit_ids) + len(split.holdout_audit_ids)
-                == len(cases)
+            assert (set(split.train_audit_ids) & set(split.holdout_audit_ids)) == set()
+            assert len(split.train_audit_ids) + len(split.holdout_audit_ids) == len(
+                cases
             )
 
     def test_every_case_appears_in_some_holdout(self) -> None:
         cases = _monthly_population([(2026, 1), (2026, 2), (2026, 3)])
         splits = lomo_cv_splits(cases)
-        held_out = {
-            aid for split in splits for aid in split.holdout_audit_ids
-        }
+        held_out = {aid for split in splits for aid in split.holdout_audit_ids}
         assert held_out == {c.audit_id for c in cases}
 
     def test_single_month_raises(self) -> None:
@@ -1030,9 +1009,7 @@ class TestBlockedTemporalSplit:
         cases = _monthly_population([(2026, m) for m in range(1, 13)])
         splits = blocked_temporal_split(cases, n_blocks=4)
         by_id = {c.audit_id: c.order_datetime for c in cases}
-        max_per_block = [
-            max(by_id[aid] for aid in s.holdout_audit_ids) for s in splits
-        ]
+        max_per_block = [max(by_id[aid] for aid in s.holdout_audit_ids) for s in splits]
         assert max_per_block == sorted(max_per_block)
 
 
@@ -1133,9 +1110,7 @@ class TestBonferroniCorrection:
     def test_known_three_test_example(self) -> None:
         # k=3, raw=[0.01, 0.02, 0.10]. Adjusted = [0.03, 0.06, 0.30].
         # Reject at α=0.05: only the first.
-        out = bonferroni_correction(
-            {"a": 0.01, "b": 0.02, "c": 0.10}, alpha=0.05
-        )
+        out = bonferroni_correction({"a": 0.01, "b": 0.02, "c": 0.10}, alpha=0.05)
         by_name = {t.name: t for t in out}
         assert by_name["a"].adjusted_p == pytest.approx(0.03, abs=1e-12)
         assert by_name["b"].adjusted_p == pytest.approx(0.06, abs=1e-12)
@@ -1155,9 +1130,9 @@ class TestBonferroniCorrection:
     def test_preserves_input_order(self) -> None:
         # Dict iteration order is insertion order in Python 3.7+; the report
         # writer relies on it.
-        names = tuple(t.name for t in bonferroni_correction(
-            {"c": 0.01, "a": 0.02, "b": 0.03}
-        ))
+        names = tuple(
+            t.name for t in bonferroni_correction({"c": 0.01, "a": 0.02, "b": 0.03})
+        )
         assert names == ("c", "a", "b")
 
 
@@ -1216,9 +1191,7 @@ class TestBHFDRCorrection:
         assert benjamini_hochberg_correction({}) == ()
 
     def test_adjusted_capped_at_one(self) -> None:
-        out = benjamini_hochberg_correction(
-            {"a": 0.5, "b": 0.6, "c": 0.7, "d": 0.9}
-        )
+        out = benjamini_hochberg_correction({"a": 0.5, "b": 0.6, "c": 0.7, "d": 0.9})
         assert all(0 <= t.adjusted_p <= 1.0 for t in out)
 
 
@@ -1243,21 +1216,13 @@ class TestHierarchicalCorrection:
         primary_by_name = {t.name: t for t in result.primary}
         explor_by_name = {t.name: t for t in result.exploratory}
         # Primary: Bonferroni multiplies by k=2.
-        assert primary_by_name["p1"].adjusted_p == pytest.approx(
-            0.02, abs=1e-12
-        )
-        assert primary_by_name["p2"].adjusted_p == pytest.approx(
-            0.08, abs=1e-12
-        )
+        assert primary_by_name["p1"].adjusted_p == pytest.approx(0.02, abs=1e-12)
+        assert primary_by_name["p2"].adjusted_p == pytest.approx(0.08, abs=1e-12)
         assert primary_by_name["p1"].rejected is True
         assert primary_by_name["p2"].rejected is False
         # Exploratory: BH against k=10 — same as TestBHFDRCorrection.
-        assert explor_by_name["e1"].adjusted_p == pytest.approx(
-            0.01, abs=1e-9
-        )
-        assert explor_by_name["e2"].adjusted_p == pytest.approx(
-            0.04, abs=1e-9
-        )
+        assert explor_by_name["e1"].adjusted_p == pytest.approx(0.01, abs=1e-9)
+        assert explor_by_name["e2"].adjusted_p == pytest.approx(0.04, abs=1e-9)
 
     def test_families_do_not_pool(self) -> None:
         # If the families pooled, the primary family's "k" would be 12,
@@ -1342,10 +1307,9 @@ class TestOutcomeAnchoredFalsification:
         # 10 cases: all INAPPROPRIATE predictions; 8 supported (no further
         # transfusion), 2 contradicted (further transfusion).
         preds = ["INAPPROPRIATE"] * 10
-        outs = (
-            [FalsificationOutcome.NO_FURTHER_TRANSFUSION] * 8
-            + [FalsificationOutcome.FURTHER_TRANSFUSION_24H] * 2
-        )
+        outs = [FalsificationOutcome.NO_FURTHER_TRANSFUSION] * 8 + [
+            FalsificationOutcome.FURTHER_TRANSFUSION_24H
+        ] * 2
         result = outcome_anchored_falsification(preds, outs)
         assert result.n_labeled == 10
         assert result.n_inappropriate_pred == 10
@@ -1379,9 +1343,7 @@ class TestOutcomeAnchoredFalsification:
 
     def test_unequal_lengths_raise(self) -> None:
         with pytest.raises(ShapeMismatchError):
-            outcome_anchored_falsification(
-                ["INAPPROPRIATE"], []
-            )
+            outcome_anchored_falsification(["INAPPROPRIATE"], [])
 
     def test_empty_input_raises(self) -> None:
         with pytest.raises(EmptyInputError):
@@ -1455,9 +1417,7 @@ class TestPropertyBonferroniMonotonic:
         large = {f"t{i}": (p if i == 0 else 0.5) for i in range(small_k + extra)}
         small_out = {t.name: t for t in bonferroni_correction(small)}
         large_out = {t.name: t for t in bonferroni_correction(large)}
-        assert (
-            large_out["t0"].adjusted_p >= small_out["t0"].adjusted_p - 1e-12
-        )
+        assert large_out["t0"].adjusted_p >= small_out["t0"].adjusted_p - 1e-12
 
 
 class TestPropertyHorvitzThompsonUniform:
@@ -1481,15 +1441,11 @@ class TestPropertyHorvitzThompsonUniform:
         # Skip degenerate (no positives drawn → trivially zero)
         if drawn == 0:
             return
-        cases = (
-            tuple(
-                _case(audit_id=f"p{i}", pred="INAPPROPRIATE")
-                for i in range(drawn_pos)
-            )
-            + tuple(
-                _case(audit_id=f"n{i}", pred="APPROPRIATE")
-                for i in range(drawn - drawn_pos)
-            )
+        cases = tuple(
+            _case(audit_id=f"p{i}", pred="INAPPROPRIATE") for i in range(drawn_pos)
+        ) + tuple(
+            _case(audit_id=f"n{i}", pred="APPROPRIATE")
+            for i in range(drawn - drawn_pos)
         )
         # uniform inclusion: base prob == positive prob == drawn/pop_size
         uniform_p = drawn / pop_size
@@ -1578,9 +1534,7 @@ class TestModelImmutability:
             split.holdout_label = "2026-02"  # type: ignore[misc]
 
     def test_corrected_test_is_frozen(self) -> None:
-        t = CorrectedTest(
-            name="h1", raw_p=0.01, adjusted_p=0.03, rejected=True
-        )
+        t = CorrectedTest(name="h1", raw_p=0.01, adjusted_p=0.03, rejected=True)
         with pytest.raises(ValidationError):
             t.rejected = False  # type: ignore[misc]
 

@@ -1,0 +1,51 @@
+---
+title: ภาพรวมสำหรับผู้ดูแลระบบ
+description: blood_audit คืออะไร สิ่งที่ต้องเตรียม และผลลัพธ์ที่ถือว่าสำเร็จ
+---
+
+import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
+
+<QiNotSamdBanner variant="compact" />
+
+## เอกสารส่วนนี้สำหรับใคร
+
+คุณกำลังดูแล blood_audit ในนามทีม KCMH IT งานของคุณมี 4 ขั้นตอน:
+
+1. ติดตั้ง package
+2. ตั้งค่า environment variables 3 ตัว
+3. รัน `bba ingest` ตามด้วย `bba audit`
+4. ส่งชุดข้อมูลออดิทให้คณะกรรมการคุณภาพ (Quality Improvement, QI)
+
+ส่วน subcommand อีก 4 ตัว — `evaluate`, `report`, `serve-dashboard`,
+`sentinel` — จะถูกเชื่อมต่อโดยทีม deployment ในภายหลัง อยากทราบเหตุผลที่
+ทำไมตอนนี้มันถึง fail ดูได้ที่
+[Integration seams](/blood_audit/en/operators/integration-seams/) (เอกสารภาษาอังกฤษ)
+
+## สิ่งที่ต้องเตรียมก่อนเริ่ม
+
+- **Python 3.13+** พร้อม [uv](https://github.com/astral-sh/uv) เวอร์ชัน ≥ 0.9.24
+- **PostgreSQL 14+** สำหรับตาราง audit / batch-runs / review-actions
+  ต้องใช้ DSN ที่มี driver suffix `+psycopg` (psycopg3 ไม่ใช่ psycopg2)
+- **Anthropic API key** ที่เปิดใช้งาน Batch API ได้
+- **ไดเรกทอรีข้อมูลถาวร** ที่ service user เขียนได้ (Parquet, DuckDB, run-state markers)
+- **ชุดข้อมูลส่งออกจาก HOSxP** — ดูรายละเอียดที่ [Ingest CSV](/blood_audit/en/operators/ingest-csv/) (เอกสารภาษาอังกฤษ)
+
+## ผลลัพธ์เมื่อรันสำเร็จ
+
+1. `bba ingest <csv>` ตรวจสอบชุดข้อมูล คำนวณ hash และเขียน Parquet snapshot ลง `$BBA_DATA_DIR`
+2. `bba audit --input <csv>` จัดประเภททุกแถวการให้เลือด `(HN, REQNO)`
+   เขียนผลลง Postgres (`audit_store`) และเพิ่มแถว compliance ใน `audit_log`
+3. การรันซ้ำด้วย input เดิมจะไม่ทำอะไรใหม่ ยกเว้นใส่ `--force`
+   (รายละเอียดดู [Run-level idempotency](/blood_audit/en/operators/troubleshooting/#run-level-idempotency))
+
+## สิ่งที่คาดหวังได้
+
+- Deterministic classifier จัดการแถวส่วนใหญ่ ส่วนแถว LLM_REVIEW
+  จะส่งไปยัง Anthropic Batch API ซึ่งอาจใช้เวลาหลายนาทีกว่าจะเสร็จ
+- มี hard exclusions สำหรับผลิตภัณฑ์ที่ไม่ใช่ RBC ผู้ป่วยอายุ < 15 ปี
+  และคำสั่งที่ไม่มี pre-transfusion Hb
+- PHI ทั้งหมดจะถูก de-identify ก่อนที่ข้อมูลใด ๆ จะออกจาก audit container
+
+## ขั้นถัดไป
+
+ไปต่อที่ [ติดตั้ง](/blood_audit/th/operators/install/)

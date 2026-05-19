@@ -1,0 +1,69 @@
+---
+title: Report schema
+description: The column-by-column report contract lives in docs/report-schema.md; key shape summarized here.
+---
+
+The authoritative report schema lives in
+[`docs/report-schema.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/report-schema.md).
+This page is a navigation aid.
+
+## Section files
+
+```
+<output_dir>/
+  hospital_trend.csv                          # committee
+  ward_scorecard.csv                          # committee
+  indication_distribution.csv                 # committee
+  cohort_exception.csv                        # committee
+  pipeline_health.csv                         # committee
+  physician_own_view_<physician_id>.csv       # one file per requested physician
+  report_<YYYY-MM-DD>.pdf                     # committee PDF
+```
+
+The PDF filename embeds the first-of-month date
+(e.g. `report_2026-05-01.pdf`).
+
+## Stored classifications (used by every section)
+
+The `final_classification` column comes from the audit store and is one
+of five literals:
+
+- `APPROPRIATE`
+- `INAPPROPRIATE`
+- `NEEDS_REVIEW`
+- `INSUFFICIENT_EVIDENCE`
+- `POTENTIALLY_INAPPROPRIATE` *(rule-only; not used by every report
+  section)*
+
+`LLM_REVIEW` is a routing concept inside the deterministic classifier;
+it is not a stored value. Failed quote-grounding becomes
+`final_classification = NEEDS_REVIEW` with `review_reason` set.
+
+`INSUFFICIENT_EVIDENCE` is **never** folded into `INAPPROPRIATE` — PRD
+contract: "documentation absence ≠ inappropriate". The
+`pipeline_health` section keeps these counts in separate buckets.
+
+## Reproducibility footer (every row, every PDF page)
+
+| Column | Meaning |
+| --- | --- |
+| `policy_version` | KCMH PR-17.x policy revision driving the deterministic classifier. |
+| `model_id` | Snapshot-pinned Anthropic model ID. |
+| `redactor_version` | Version of `macsermkiat/thai-medical-deid`. |
+| `redactor_model_sha` | SHA of the redactor's HuggingFace model checkpoint. |
+| `prompt_hash` | SHA of the system prompt + few-shot bundle. |
+| `evidence_bundle_hash` | SHA of the canonical evidence-bundle schema. |
+
+## Month bucketing
+
+`ReportInputs.month` is a `date` pinned to the first of the month. The
+filter window is `[month_local_start, next_month_local_start)`
+interpreted in Asia/Bangkok. An order at 23:00 Bangkok on the 31st
+belongs to its local month, not to the UTC-month it happens to fall in.
+
+## How this is produced
+
+`bba.report_generator.generate_monthly_report(inputs: ReportInputs)`. The
+CLI wrapper (`bba report`) is an
+[integration seam](/blood_audit/en/operators/integration-seams/) in
+Phase 1 — wire `ReportInputs` from your deployment's data sources.

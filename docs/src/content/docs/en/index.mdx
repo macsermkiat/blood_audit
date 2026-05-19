@@ -1,0 +1,65 @@
+---
+title: blood_audit
+description: KCMH RBC transfusion audit pipeline — post-hoc quality-improvement audit against PR 17.2 + AABB 2023.
+template: splash
+hero:
+  tagline: Post-hoc audit of inpatient adult RBC transfusions at KCMH against PR 17.2 + AABB 2023.
+  actions:
+    - text: Install & first audit run
+      link: /blood_audit/en/operators/install/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/macsermkiat/blood_audit
+      icon: external
+      variant: minimal
+---
+
+import QiNotSamdBanner from "../../../components/QiNotSamdBanner.astro";
+import PipelineDiagram from "../../../components/PipelineDiagram.astro";
+import AudienceTiles from "../../../components/AudienceTiles.astro";
+
+<QiNotSamdBanner />
+
+## What blood_audit does
+
+blood_audit reads completed HOSxP exports from the hospital information
+system. It compares each red blood cell (RBC) transfusion against the
+3-tier hemoglobin (Hb) policy, then writes one audit row per
+transfusion to the audit store.
+
+The final `final_classification` stored for each transfusion is one of:
+
+- `APPROPRIATE` — the order matched policy.
+- `INAPPROPRIATE` — the order did not match policy.
+- `POTENTIALLY_INAPPROPRIATE` — the deterministic rule flagged the order
+  but did not promote it to LLM review.
+- `NEEDS_REVIEW` — the LLM ran but its answer requires a human reviewer
+  (uncertain reasoning, failed quote-grounding, or low confidence).
+- `INSUFFICIENT_EVIDENCE` — documented evidence was missing; the row is
+  *not* `INAPPROPRIATE`, by design.
+
+Rows that the deterministic classifier routes to the LLM go through six
+fail-closed quote-grounding layers; a failed grounding becomes
+`NEEDS_REVIEW`, never a published result.
+
+## Phase 1 status
+
+`bba audit` today wraps the **ingest leg** of the pipeline. It
+materializes the HOSxP CSV bundle into DuckDB + Parquet under
+`$BBA_DATA_DIR/audit/<run_id>/` with idempotent run-level guarantees.
+The LLM-driven analysis leg (deterministic classifier → evidence bundle
+→ de-id → prompt → batch → quote grounding → audit-store write) is
+implemented as separate modules but is **wired in Phase 1.5**. See
+[audit command](/blood_audit/en/operators/audit-command/) for what runs today.
+
+Six fail-closed quote-grounding layers protect every LLM_REVIEW row from
+hallucination. The deterministic classifier remains the authoritative source.
+
+## The 12 pipeline stages
+
+<PipelineDiagram />
+
+## Where to go next
+
+<AudienceTiles />

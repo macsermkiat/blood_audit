@@ -83,9 +83,7 @@ def _draw_stratum(
     #   )
     enrichment_cap = min(enrichment_target, target, population_positives)
     negatives_floor = max(0, target - population_negatives)
-    desired_positives = min(
-        max(enrichment_cap, negatives_floor), population_positives
-    )
+    desired_positives = min(max(enrichment_cap, negatives_floor), population_positives)
     desired_negatives = target - desired_positives
     if desired_negatives > population_negatives or desired_positives < 0:
         # Even at maximum positive draw the stratum cannot meet target.
@@ -103,9 +101,7 @@ def _draw_stratum(
     positive_pi = (
         desired_positives / population_positives if population_positives else 0.0
     )
-    base_pi = (
-        desired_negatives / population_negatives if population_negatives else 0.0
-    )
+    base_pi = desired_negatives / population_negatives if population_negatives else 0.0
 
     return StratumDraw(
         stratum=stratum,

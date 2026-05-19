@@ -1,0 +1,84 @@
+---
+title: audit command
+description: Every flag of bba audit, the inputs it reads, and its idempotency contract.
+---
+
+import CliCommandCard from "../../../../components/CliCommandCard.astro";
+
+:::caution[Phase 1 scope]
+In Phase 1, `bba audit` wraps the **ingest leg** of the pipeline. It
+materializes the HOSxP CSV bundle into DuckDB + Parquet under
+`$BBA_DATA_DIR/audit/<run_id>/` and records a completion marker for
+idempotency. The LLM-driven analysis leg (deterministic classifier →
+evidence bundle → de-id → prompt → batch → quote ground → audit-store
+write) is implemented as separate modules but is **wired in Phase 1.5**.
+Until then, classification rows are not yet produced by this command.
+:::
+
+<CliCommandCard
+  command="bba audit"
+  summary="Phase 1: ingest a HOSxP snapshot with idempotent run-level semantics. Phase 1.5: also classify and write audit rows."
+  flags={[
+    { name: "--input INPUT_CSV", description: "Path to the HOSxP CSV bundle to ingest." },
+    { name: "--run-id RUN_ID", description: "Reuse a previously completed run_id (no-op unless --force)." },
+    { name: "--force", description: "Override run-level idempotency. Writes a compliance row to audit_log with idempotency_override=true." },
+  ]}
+  envVars={["BBA_DATA_DIR"]}
+  exitCodes={[
+    { code: 0, meaning: "Ingest complete and run_id marked complete, OR no-op because run_id was already complete." },
+    { code: 1, meaning: "CliError — usually a missing env var or an ingest validation failure." },
+  ]}
+  example={`uv run bba audit --input /var/data/exports/PHI_xxx_001.csv`}
+/>
+
+The other four subcommands (`evaluate`, `report`, `serve-dashboard`,
+`sentinel`) are [integration seams](/blood_audit/en/operators/integration-seams/)
+that fail loud by design.
+
+## When to use `--input` vs `--run-id`
+
+- `--input INPUT_CSV` — first run for this bundle. Computes a `run_id`
+  from the input hash + schema fingerprint + code version, ingests, and
+  marks the run complete.
+- `--run-id RUN_ID` — re-attach to an already-completed run. With no
+  `--force`, this is a no-op (the run is already complete). With
+  `--force`, see below.
+
+## `--force` writes a compliance row
+
+When `--force` is set, the command writes an entry to `audit_log` with
+`idempotency_override=true` documenting that the re-run was forced. This
+preserves the audit trail for the QI committee. Do not bypass this by
+editing the run-state files directly.
+
+## Idempotency at the run level
+
+Concurrent invocations on the same `run_id` are serialized via
+`store.acquire_run_lock`. Two parallel CLI processes cannot both pass
+the "already complete" guard and execute ingest twice. Concurrent
+audits of *different* inputs run in parallel without contention.
+
+## Phase 1.5 (preview)
+
+When the LLM analysis leg is wired, this command will additionally:
+
+- Build the evidence bundle, de-identify it, and submit the LLM_REVIEW
+  rows to the Anthropic Batch API.
+- Run the six fail-closed quote-grounding layers on every LLM response.
+- Write one `AuditRow` per audited order to the audit store, with
+  `rule_classification` and `final_classification` set.
+
+Batch progress is tracked in a `batch_runs` row per audited order
+(`pending` → `submitted` → `partial` → `complete`; `failed` is
+terminal). Crashes mid-batch resume automatically on the next run.
+
+## Safety boundaries
+
+- The command reads HOSxP exports only. Output is written under
+  `$BBA_DATA_DIR/audit/<run_id>/`. HOSxP tables are never touched.
+- The command runs after the fact and stays silent. It does not send
+  real-time alerts to clinicians. This is quality improvement (QI), not
+  Software as a Medical Device (SaMD).
+- A completed `run_id` cannot be silently overwritten. Re-runs of the
+  same input always produce the same result in the same place. The
+  invariant lives in the run-state store and stays that way.

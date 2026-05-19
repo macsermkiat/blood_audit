@@ -1,0 +1,67 @@
+---
+title: Testing
+description: How to run unit, integration, and testcontainers Postgres tests.
+---
+
+## Quality gates (local)
+
+A clean working tree should pass:
+
+```bash
+uv sync
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src                # Success on src/
+uv run mypy tests              # 212 errors expected (advisory)
+uv run pytest -q
+```
+
+Expected pytest output without Docker: ~1789 pass / ~49 skip / 0 errors.
+With Docker running, the testcontainers-postgres tests exercise instead
+of skipping: ~1832 pass / ~6 skip.
+
+## Why `mypy tests` has 212 errors
+
+Type-helper sloppiness in test fixtures: `float` passed where
+`int | None` is expected, raw `str` where `Literal[...]` is expected.
+None can mask a real bug in `src/`. CI annotates as a warning, not a
+failure. Cleanup is tracked as a separate ticket — do not bundle it
+into unrelated PRs.
+
+## Docker-dependent tests must auto-skip
+
+Pattern used throughout `tests/unit/test_audit_pipeline_postgres.py`:
+
+```python
+import pytest
+pytest.importorskip("testcontainers.postgres")
+pytest.importorskip("docker")
+
+# Then wrap container __enter__ in try/except → pytest.skip(...)
+```
+
+This guarantees that contributors without Docker can still run the full
+suite without spurious failures.
+
+## Anthropic tests are cassette-backed
+
+Live API calls are rejected by `src/bba/audit_pipeline/cost_guard.py`.
+Cassettes live under `tests/unit/cassettes/`. Never check in a cassette
+that was recorded against real PHI.
+
+## mypy strict is config-driven
+
+`pyproject.toml` enables `strict = true` under `[tool.mypy]`. Do **not**
+pass `--strict` on the CLI — the config is the contract. For per-module
+exceptions, add a `[[tool.mypy.overrides]]` block.
+
+## CI surface
+
+`.github/workflows/ci.yml` runs four jobs on push to `main` and on every
+PR:
+
+- `ruff (lint + format)` — strict.
+- `mypy (src strict, tests warn)` — `mypy src` blocks; `mypy tests`
+  is `continue-on-error: true` and surfaces a `::warning::` annotation.
+- `pytest (with docker)` — full suite including testcontainers.
+- `ci` — aggregator status check; point branch-protection at this one.

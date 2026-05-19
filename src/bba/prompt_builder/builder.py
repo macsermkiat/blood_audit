@@ -68,9 +68,7 @@ def build_prompt(request: PromptBuildRequest) -> PromptBuildResult:
         PromptBlock(role="system", text=system_text, cache_marker=True)
     ]
     if has_few_shot:
-        blocks.append(
-            PromptBlock(role="user", text=few_shot_text, cache_marker=True)
-        )
+        blocks.append(PromptBlock(role="user", text=few_shot_text, cache_marker=True))
     blocks.append(
         PromptBlock(
             role="user",

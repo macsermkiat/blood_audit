@@ -1,0 +1,84 @@
+---
+title: รันออดิทครั้งแรก
+description: รัน bba ingest และ bba audit ครบจบจากข้อมูลส่งออก HOSxP
+---
+
+import CliCommandCard from "../../../../components/CliCommandCard.astro";
+
+เอกสารนี้พาเดิน happy path ตั้งแต่ข้อมูลส่งออกจาก HOSxP เข้าไป
+จนได้ snapshot ที่เป็น DuckDB + Parquet ภายใต้
+`$BBA_DATA_DIR/audit/<run_id>/` แบบ idempotent
+
+:::note[ขอบเขต Phase 1]
+ใน Phase 1, `bba audit` ทำเฉพาะ **ส่วน ingest** ของ pipeline
+แถว classification (`APPROPRIATE`, `INAPPROPRIATE`, `NEEDS_REVIEW`, ฯลฯ)
+ยังไม่ถูกเขียนโดยคำสั่งนี้ ส่วน LLM analysis จะเชื่อมต่อใน Phase 1.5
+ดูรายละเอียดที่ [audit command](/blood_audit/en/operators/audit-command/)
+(เอกสารภาษาอังกฤษ)
+:::
+
+## 1. Ingest ชุดข้อมูล
+
+<CliCommandCard
+  command="bba ingest INPUT_CSV --schema-version v1"
+  summary="ตรวจสอบไฟล์ CSV HOSxP, hash inputs, และเขียน DuckDB + Parquet snapshot ลง $BBA_DATA_DIR"
+  flags={[
+    { name: "INPUT_CSV", description: "เส้นทางของ CSV หลักจาก HOSxP", required: true },
+    { name: "--schema-version v1", description: "schema fingerprint ที่จะบันทึกพร้อม snapshot" },
+  ]}
+  envVars={["BBA_DATA_DIR"]}
+  example={`uv run bba ingest /var/data/exports/PHI_xxx_001.csv --schema-version v1`}
+/>
+
+เมื่อ ingest สำเร็จจะพิมพ์ `run_id` ซึ่งเป็นรหัสไม่ซ้ำกันของการรวม
+input bundle, schema version, และ code version จดค่านี้ไว้ — ทุกคำสั่ง
+ถัดไปจะใช้ค่านี้เพื่อค้นหา snapshot ที่ถูกต้อง
+
+เบื้องหลัง `run_id` คือ `sha256(input_csv_hash + schema_fingerprint +
+code_version)` คุณไม่ต้องคำนวณเอง CLI ทำให้
+
+## 2. รัน audit (Phase 1: ส่วน ingest)
+
+<CliCommandCard
+  command="bba audit --input INPUT_CSV"
+  summary="Phase 1: แปลงไฟล์ CSV HOSxP เป็น DuckDB + Parquet ภายใต้ $BBA_DATA_DIR/audit/<run_id>/ และบันทึก completion marker"
+  flags={[
+    { name: "--input INPUT_CSV", description: "เส้นทาง CSV เดียวกับที่ใช้ตอน ingest" },
+    { name: "--run-id RUN_ID", description: "ใช้ run_id ที่เคยรันสำเร็จแล้ว (no-op ยกเว้นใส่ --force)" },
+    { name: "--force", description: "ข้าม idempotency จะเพิ่มแถว compliance ลง audit_log พร้อม idempotency_override=true" },
+  ]}
+  envVars={["BBA_DATA_DIR"]}
+  example={`uv run bba audit --input /var/data/exports/PHI_xxx_001.csv`}
+/>
+
+คำสั่งนี้เป็นแบบ **idempotent** การรันซ้ำด้วย CSV เดิมจะไม่ทำอะไรใหม่
+ยกเว้นใส่ `--force` แถว completion ใน `audit_log` จะบันทึกทุก ๆ
+forced re-run
+
+## 3. ตรวจสอบ snapshot
+
+Subcommand 4 ตัวที่ใช้ดูผลลัพธ์หลัง audit (`evaluate`, `report`,
+`serve-dashboard`, `sentinel`) จะ raise `CliError` ใน Phase 1 — ดู
+[Integration seams](/blood_audit/en/operators/integration-seams/) (เอกสารภาษาอังกฤษ)
+
+ตอนนี้สิ่งที่ตรวจสอบได้ดีที่สุดคือ snapshot ที่ materialize แล้ว:
+
+```bash
+# ตรวจว่ามี directory ของ run_id และครบสมบูรณ์
+ls -la "$BBA_DATA_DIR/audit/<RUN_ID>/"
+ls "$BBA_DATA_DIR/audit_runs/<RUN_ID>/"
+
+# ดู HOSxP tables ผ่าน DuckDB
+duckdb "$BBA_DATA_DIR/audit/<RUN_ID>/ingest.duckdb" \
+  "SELECT table_name FROM information_schema.tables;"
+```
+
+## สิ่งที่จะเห็นใน Phase 1.5
+
+เมื่อ LLM analysis เชื่อมต่อแล้ว `bba audit` จะเขียน `AuditRow`
+1 แถวต่อคำสั่งให้เลือดที่ตรวจสอบ ลงใน audit store เพิ่มเติม
+คอลัมน์ `final_classification` จะมีค่าเป็น 1 ใน `APPROPRIATE`,
+`INAPPROPRIATE`, `NEEDS_REVIEW`, `INSUFFICIENT_EVIDENCE`, หรือ
+`POTENTIALLY_INAPPROPRIATE` ส่วน `LLM_REVIEW` เป็นแนวคิดการ routing
+(ไม่ใช่ค่าที่บันทึก) ถ้า quote-grounding ล้มเหลวจะกลายเป็น
+`final_classification = NEEDS_REVIEW` พร้อม `review_reason` ที่ระบุ

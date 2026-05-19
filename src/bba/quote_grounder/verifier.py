@@ -137,9 +137,7 @@ def _evaluate(
     return VerdictReason.PASS
 
 
-def _lab_grounded(
-    cited_tuple: LabTuple | None, quote: str, source: str
-) -> bool:
+def _lab_grounded(cited_tuple: LabTuple | None, quote: str, source: str) -> bool:
     """Verify lab-citation tuple integrity across quote and source.
 
     Two checks:

@@ -9,8 +9,9 @@ Scope: Phase 1 of the KCMH RBC transfusion audit pipeline. PRD: [issue #1].
 Sections are added per ticket as each module merges to `main`. Currently
 covered: `#3 ingest`, `#4 audit_orders`, `#5 hb_lookup`, `#6 vitals_extractor`,
 `#16 evidence_bundle_builder`, `#17 deid_redactor`, `#18 quote_grounder`,
-`#19 audit_store`, `#25 review_actions`, `#26 dashboard`,
-`#28 report_generator`.
+`#19 audit_store`, `#21 prompt_builder`, `#22 llm_client`,
+`#23 confidence_calibrator`, `#24 audit_pipeline`, `#25 review_actions`,
+`#26 dashboard`, `#27 monitoring`, `#28 report_generator`, `#29 cli`.
 
 ## Ingest concepts (#3)
 
@@ -302,6 +303,325 @@ Quality annotations on a `VitalsResult`: `vitals_post_order`,
 Downstream consumers (#8 deterministic_classifier; #16
 evidence_bundle_builder) read these to gate rule branches and to prioritize
 human review.
+
+## Cohort-detector concepts (#7)
+
+### Cohort label
+
+Seven-member `StrEnum` naming the deterministic cohort outcome:
+`CARDIAC_SURGERY`, `ORTHO_CARDIAC`, `ESRD_EPO`, `MTP`,
+`HEME_MALIGNANCY_ACTIVE`, `DEFAULT`, `UNKNOWN`.
+`bba.cohort_detector.models.CohortLabel`. Snake-case `value`s
+(`"cohort_unknown"`, `"esrd_epo"`, …) are the contract for downstream
+classifier dispatch and dashboard joins; the enum names are private.
+
+### Cohort assignment
+
+Pure-function output: `(label, threshold, evidence_code, evidence_name)`.
+`bba.cohort_detector.models.CohortAssignment`. Frozen Pydantic v2 model
+consumed directly by `bba.deterministic_classifier` (#8); never
+re-interpreted between assignment and decision.
+
+### Cohort threshold (numeric)
+
+The Hb decision threshold in g/dL, `float | None`. **Numeric, never
+enum** — the classifier compares it against the audit-time Hb without
+any string-to-number step in the hot path. `MTP`,
+`HEME_MALIGNANCY_ACTIVE`, and `UNKNOWN` carry `threshold=None` because
+they are not threshold-driven (auto-bypass, T2-supportive, NEEDS_REVIEW).
+The single source of truth is `bba.cohort_detector.rules.COHORT_THRESHOLDS`;
+adding a `CohortLabel` without a threshold-map entry is a test failure.
+
+### Cohort precedence
+
+Top wins: `UNKNOWN` → `MTP` → `ORTHO_CARDIAC` → `CARDIAC_SURGERY` →
+`ESRD_EPO` → `HEME_MALIGNANCY_ACTIVE` → `DEFAULT`. UNKNOWN runs first
+(before MTP) so a missing procedure join does not silently auto-bypass
+to APPROPRIATE: a human must verify the apparent MTP context.
+`bba.cohort_detector.detector.assign_cohort`.
+
+### Procedure data unavailable
+
+`CohortInputs.procedure_events` is `tuple | None`. **`None` means "the
+IPTSUMOPRT join was skipped / data unavailable"** and produces
+`UNKNOWN`. **`()` means "the patient had no operative events"** and
+falls through to other cohort signals (clean negative). The distinction
+is load-bearing — collapsing it would silently apply `DEFAULT 7.0` to
+patients whose surgical history is unknown (PRD §5 + Round 2 N1 + user
+constraint: NEVER silent 7.0).
+
+### Cardiac-surgery cohort
+
+Threshold 7.5 g/dL. Triggers when an operative event with `or_flag=True`
+and an ICD-9-CM Vol 3 code matching `CARDIAC_SURGERY_CODE_PREFIXES`
+(`36xx` PTCA / stents / CABG, `38xx` aortic resection, `39xx`
+aorta-iliac-femoral bypass) occurred within 30 days of the audit anchor.
+`CARDIAC_SURGERY_EXCLUDED_CODES = {"894", "3796"}` carves out cardiac
+stress test and pacemaker pulse generator as defense-in-depth — non-OR
+items must not trigger surgical recovery thresholds.
+
+### Ortho-cardiac cohort
+
+Threshold 8.0 g/dL. Requires both an orthopedic operative event
+(`or_flag=True` + `ORTHO_SURGERY_CODE_PREFIXES` `78xx`/`79xx`/`81xx`
+within 30 days) **AND** an ICD-10 cardiac-history diagnosis
+(`I20`–`I25`, `I50`). Checked before plain `CARDIAC_SURGERY` because
+its higher threshold dominates when both signals are present. Plain
+ortho without cardiac history falls through to `DEFAULT` — ortho
+alone is not its own cohort.
+
+### ESRD-EPO cohort
+
+Threshold 8.0 g/dL. Round 2 fix N1: requires **both** an ICD-10 ESRD
+code (`N18.5` / `N18.6`) **AND** a dialysis-context medication active
+within `DIALYSIS_LOOKBACK` (14 days). Either signal alone falls
+through to `DEFAULT`. Dialysis keywords (`heparin`, `sevelamer`,
+`cinacalcet`) are scoped by the co-required ESRD diagnosis, so a
+non-ESRD patient on heparin for DVT prophylaxis is not at risk of
+misclassification.
+
+### MTP auto-bypass
+
+`label=MTP`, `threshold=None`. Two arms over a closed-closed
+`[anchor − 1 h, anchor]` window:
+
+- **Cluster:** total `rbc_units` across all orders in the window
+  ≥ `MTP_RBC_UNIT_THRESHOLD` (4).
+- **Co-order:** FFP and platelets co-ordered evidence appears anywhere
+  in the window (`any(co_ordered_with_ffp)` AND
+  `any(co_ordered_with_platelets)`). Either flag pair on a single
+  order or split across separate orders inside the window counts.
+
+`bba.cohort_detector.rules.detect_mtp_pattern`. Auto-APPROPRIATE
+bypass routing is the downstream effect; the detector itself just
+labels the cohort.
+
+### Heme-malignancy active cohort
+
+`label=HEME_MALIGNANCY_ACTIVE`, `threshold=None` (T2-supportive, not
+hard-threshold). Round 2 fix N3: requires an ICD-10 heme-malignancy
+diagnosis (`C8x`/`C9x`), a chemo medication active within
+`CHEMO_LOOKBACK` (30 days), **and** a measured ANC strictly less than
+`ANC_NEUTROPENIA_THRESHOLD` (500 cells/µL). Missing ANC (`None`) is
+**not** neutropenic — positive evidence is required, not absence.
+
+### Allow-list seed (clinical sign-off pending)
+
+Every constant in `bba.cohort_detector.rules`
+(`CARDIAC_SURGERY_CODE_PREFIXES`, `ORTHO_SURGERY_CODE_PREFIXES`,
+`CARDIAC_HISTORY_ICD10_PREFIXES`, `ESRD_ICD10_CODES`,
+`HEME_MALIGNANCY_ICD10_PREFIXES`, `DIALYSIS_MED_KEYWORDS`,
+`CHEMO_MED_KEYWORDS`) is a Phase-1 SEED awaiting clinical sign-off
+before production. Tests in `TestAllowListSeeds` surface the seeds
+verbatim so the clinical-review PR can diff them line by line.
+
+### Medication recency window
+
+`DIALYSIS_LOOKBACK = 14d`, `CHEMO_LOOKBACK = 30d`. The window check
+lives inside `find_dialysis_med` and `find_chemo_med` so all callers
+are scoped consistently — pre-filtering by the orchestrator would
+risk silent inconsistency. A med outside the window does not count
+as active even if it matches a keyword (a long-completed chemo
+regimen does not perpetually flag heme-active).
+
+### ICD-10 strict-case contract
+
+The cohort matchers are **case-sensitive and whitespace-strict**,
+mirroring `bba.audit_orders`. Lowercase `"i25.10"`, padded
+`" I25.10 "`, and full-width digits do not match. Loosening the
+matcher would also loosen drift detection at ingest (codes that
+arrive in unexpected shapes are a data-quality problem to fix
+upstream, not paper over downstream and silently broaden the
+cohort allow-lists). `TestIcd10StrictCaseContract` pins the rule.
+
+## Deterministic-classifier concepts (#8)
+
+### Classifier inputs
+
+Per-audit composition of upstream module outputs: `hb_result`
+(`HbLookupResult` from #5), `cohort_assignment` (`CohortAssignment`
+from #7), `order_datetime`, `procedure_proximity_hours` (hours from
+most-recent operative event to the order anchor, `None` if no event),
+and `crystalloid_liters_prior_4h` (4 h totaling from MED.csv).
+`bba.deterministic_classifier.models.ClassifierInputs`. Frozen
+Pydantic v2 — the classifier is pure, never mutates its input.
+
+### Classifier result
+
+Frozen output of `classify`: `(classification, bypass_reason,
+cohort_threshold, rationale)`.
+`bba.deterministic_classifier.models.ClassifierResult`.
+`classification` is the canonical `bba.audit_store.Classification`
+Literal (no module-local enum). `cohort_threshold` echoes the
+threshold actually applied so the audit row is reproducible without
+re-running the cohort detector. `rationale` is a short slug naming
+which rule fired (`"hb_lt_threshold"`, `"bypass_hemodilution"`,
+`"single_low_hb_no_trend"`, …); free-form prose belongs to the LLM
+stage, not here.
+
+### Bypass reason
+
+Five-member `StrEnum` identifying which deterministic bypass fired:
+`DELTA_HB`, `PERI_PROCEDURAL_6H`, `MTP`, `HEMODILUTION_FLAGGED`,
+`NONE`. `bba.deterministic_classifier.models.BypassReason`. Structured
+enum, not a free string — each path sets exactly one member; non-bypass
+classifications carry `NONE`. The audit row persists this verbatim so
+dashboards can group by reason without re-deriving from `rationale`.
+
+### Classification precedence
+
+Eight-step composition in `bba.deterministic_classifier.classify`
+(top wins): (1) Hb missing → `INSUFFICIENT_EVIDENCE`; (2) cohort
+`MTP` → `APPROPRIATE`/`MTP`; (3) cohort `UNKNOWN` → `NEEDS_REVIEW`;
+(4) procedure ≤ 6 h → `APPROPRIATE`/`PERI_PROCEDURAL_6H`;
+(5) delta-Hb fired → `APPROPRIATE`/`DELTA_HB`; (6) hemodilution
+(Hb < threshold ∧ ≥ 2 L crystalloid) → `NEEDS_REVIEW`/
+`HEMODILUTION_FLAGGED`; (7) single-low-Hb-no-trend (Hb < threshold ∧
+`needs_review_single_low_hb`) → `NEEDS_REVIEW`/`NONE`; (8) plain
+Hb-tier: `< threshold` → `APPROPRIATE`, `[threshold, 10)` →
+`NEEDS_REVIEW`, `≥ 10` → `POTENTIALLY_INAPPROPRIATE`.
+
+### INAPPROPRIATE never deterministic
+
+The engine **never** emits `INAPPROPRIATE` — that label requires
+positive-evidence reasoning only the LLM stage performs (Round 1 B2).
+Documentation absence cannot produce `INAPPROPRIATE` at this layer;
+the worst Hb-tier output is `POTENTIALLY_INAPPROPRIATE` and the LLM
+may downgrade later. Pinned by `TestB2InvariantProperty`, a hypothesis
+sweep over the full [2.0, 25.0] g/dL Hb range × every bypass-flag
+combination — a future refactor that quietly adds an INAPPROPRIATE
+path fails the property check.
+
+### POTENTIALLY_INAPPROPRIATE tier (canonical)
+
+`bba.audit_store.Classification` extended in #8 to include
+`POTENTIALLY_INAPPROPRIATE`, so the deterministic engine returns the
+Hb ≥ 10 tier directly without a string round-trip. Single canonical
+Literal across `audit_store`, `deterministic_classifier`,
+`prompt_builder`, and `llm_client`; no module-local variants
+(user constraint: one enum, one source of truth).
+
+### Cohort UNKNOWN routing
+
+`label=UNKNOWN`, `threshold=None` → `NEEDS_REVIEW`/`NONE`. Refuses
+to silently default to `DEFAULT_THRESHOLD=7.0` when procedure data
+was missing upstream (Round 2 fix N1 + user constraint: NEVER silent
+7.0). Hb missing still wins over UNKNOWN — no current Hb means no
+anchor for any interpretation. `TestCohortUnknownRoutesToNeedsReview`.
+
+### Non-threshold cohort fallthrough
+
+After the bypass chain, a `threshold=None` cohort surviving steps 1-5
+(in practice, only `HEME_MALIGNANCY_ACTIVE` — `MTP` and `UNKNOWN`
+exited earlier) routes to `NEEDS_REVIEW`/`NONE` with
+`rationale="cohort_non_threshold"`. The T2-supportive heme cohort
+is not Hb-tier-driven; the LLM stage handles its context
+interpretation. Surfacing as `NEEDS_REVIEW` rather than passing
+through plain Hb tiers avoids a meaningless `APPROPRIATE` for a
+patient whose anemia interpretation depends entirely on the
+clinical narrative.
+
+### Hemodilution carve-out
+
+Inside the sub-threshold branch (Hb < `cohort_threshold`), if
+`crystalloid_liters_prior_4h ≥ 2.0` (Round 1 B5), classification is
+`NEEDS_REVIEW` with `bypass_reason=HEMODILUTION_FLAGGED` instead of
+auto-APPROPRIATE. Scoped to the would-be auto-APPROPRIATE branch
+only — never promotes a gray-zone or high-Hb result. Threshold lives
+on the classifier module as `HEMODILUTION_CRYSTALLOID_LITERS = 2.0`.
+
+### Single-low-Hb-no-trend carve-out
+
+After the hemodilution check, if `hb_result.needs_review_single_low_hb`
+is set (upstream contract: isolated Hb < 8 g/dL with no prior 24 h
+observation), classification is `NEEDS_REVIEW`/`NONE` with
+`rationale="single_low_hb_no_trend"`. PR #52 Codex P1: a lone
+unconfirmed low value cannot be treated as confirmed anemia. The
+MTP / peri-procedural / delta-Hb bypasses still win above this check
+because each is itself a positive-evidence anchor that supersedes
+the "no trend" concern.
+
+### Peri-procedural bypass window
+
+`PERI_PROCEDURAL_WINDOW_HOURS = 6.0`. A procedure with
+`procedure_proximity_hours ≤ 6.0` auto-bypasses to `APPROPRIATE`
+with `bypass_reason=PERI_PROCEDURAL_6H`. Boundary is inclusive per
+PRD §6 ("within 6 h"). Proximity is the elapsed hours from the
+most-recent operative event to the order anchor — distinct from
+"no event" (`None`); future-dated events are filtered upstream by
+the orchestrator before reaching the classifier.
+
+### Delta-Hb bypass on missing Hb
+
+When `hb_result.value_g_dl is None`, the classifier returns
+`INSUFFICIENT_EVIDENCE` **before** checking
+`hb_result.delta_hb_bypass`. A stale upstream "bypass" flag set
+together with a missing Hb is a structural inconsistency; the
+classifier prefers the "no Hb" fact over honoring the orphan flag.
+`TestBypassPathways::test_delta_hb_bypass_does_not_fire_when_hb_missing`
+pins this.
+
+### Monotonicity in Hb
+
+For the same cohort + same evidence with no bypass active, increasing
+Hb never moves classification toward more-appropriate. Ordering:
+`APPROPRIATE` < `NEEDS_REVIEW` < `POTENTIALLY_INAPPROPRIATE`.
+Hypothesis property test (`TestMonotonicityProperty`) sweeps thresholds
+{7.0, 7.5, 8.0} and Hb pairs across tier boundaries. A regression
+that, say, downgraded high-Hb to `NEEDS_REVIEW` based on a normal-but-
+suspicious heuristic would fail the property check.
+
+### Crystalloid totaling helper
+
+`bba.deterministic_classifier.crystalloid.total_crystalloid_liters`.
+Thin sum-and-window utility: filter events to
+`(order_datetime − 4 h, order_datetime]`, parse the dose suffix
+(`mL`/`cc`/`L`, case-insensitive), sum in liters. Future-dated events
+and unparseable rows contribute 0.0. Drug-name → "is crystalloid?"
+classification lives upstream in the MED-table reader; this helper
+trusts that `med_events` are already crystalloid-only.
+
+### Infusion-rate exclusion
+
+The dose regex uses `\b(?!\s*/)` after the unit so
+`"NSS 500 mL/h"`, `"D5W 200 cc/hour"`, `"RLS 1 L/hr"`, and
+`"500 mL / h"` are all rejected. `\b` alone matched the L→/ boundary
+(`/` is non-alphanumeric), which counted a rate as a delivered bolus
+and could push a 4 h total over the 2 L hemodilution threshold —
+flipping a sub-threshold Hb from APPROPRIATE to NEEDS_REVIEW
+incorrectly. PR #52 Codex P2.
+
+### Pure function contract
+
+`classify(inputs) -> result` is pure: same input always yields the
+same result, no module-global state, no mutation of `inputs`, never
+raises on a well-formed `ClassifierInputs` (invalid types fail at
+the Pydantic boundary, not inside `classify`). This is load-bearing
+for the audit row's reproducibility metadata — re-running the
+classifier with persisted inputs must reproduce the persisted
+classification byte-for-byte.
+
+### Deferred review (post-merge)
+
+Items intentionally **not** in scope for #8, documented here so a
+future reader does not re-litigate:
+
+* **AN-join validation against real `IPTSUMOPRT.csv`** — the
+  classifier composes upstream module outputs by reference. Real
+  re-encrypted ANs arrive next week; smoke-testing the full join
+  against `data/encrypted/IPTSUMOPRT.csv` lives with the orchestrator
+  (#24, audit_pipeline), not here.
+* **Crystalloid drug-name classification** — `total_crystalloid_liters`
+  trusts that `med_events` are already filtered to crystalloid drugs
+  upstream. The MED-table reader (an orchestrator concern) owns the
+  drug-name allow-list; tightening it here would duplicate logic and
+  invite drift.
+* **`needs_review_single_low_hb` propagation to the LLM stage** —
+  the deterministic engine routes to `NEEDS_REVIEW` and stops. The
+  LLM stage receives the rationale slug `"single_low_hb_no_trend"`
+  and may decide whether the note narrative provides the missing
+  trend evidence. Wiring that branch into the prompt selector is a
+  separate ticket (#21 prompt_builder follow-up).
 
 ## Deid-redactor concepts (#17)
 
@@ -1412,13 +1732,1188 @@ deferred to follow-up work, not merge blockers:
   in the contract surface as a placeholder rather than a live
   signal.
 
+## Prompt-builder concepts (#21)
+
+### Task mode
+
+The two LLM-eligible audit branches the prompt builder dispatches on:
+`HB_7_10_REVIEW` (gray-zone Hb 7-10 g/dL — the LLM searches the ±24-h
+note window for Tier-1 indications and Tier-2 supportive context) and
+`HB_GT_10_OVERRIDE` (Hb > 10 g/dL pre-classified `POTENTIALLY_INAPPROPRIATE`
+by the deterministic engine — the LLM looks for Tier-1 override
+conditions that would justify the order). `bba.prompt_builder.TaskMode`
+(Literal) and `TASK_MODES` (runtime frozenset). Adding a third branch
+is a Phase-2 contract change. Each mode has its own system-prompt
+template; the templates differ in their mode-discriminating phrasing
+so a downstream test can distinguish the two without parsing.
+
+### Cohort threshold
+
+The hemoglobin threshold (in g/dL) the deterministic engine assigns
+to a cohort, passed to the LLM as a **hard numeric input** — never
+re-derived (PRD §"Cohort detection is deterministic, not LLM-judged").
+Exactly three values: `7.0` (default), `7.5` (cardiac surgery), `8.0`
+(ortho+cardiac comorbidity / ESRD on EPO). `ALLOWED_COHORT_THRESHOLDS`
+is the frozen set; `CohortThreshold` is the Pydantic-validated type;
+the system prompt renders the value as a single-decimal numeric literal
+(`"7.0"` / `"7.5"` / `"8.0"`) so the LLM sees the same string for the
+same cohort across audit rows.
+
+### Evidence chunk
+
+The prompt builder's input unit: `EvidenceChunk(evidence_id, source,
+text)`, where `evidence_id` is the stable bundle ID (`E1`, `E2`, ...)
+preserved through `bba.evidence_bundle_builder` and
+`bba.deid_redactor`, and `text` is the **post-redaction** content
+treated as opaque (the prompt builder never re-redacts). Empty /
+whitespace-only `text` is rejected at the model boundary so a blank
+chunk cannot smuggle past the `EMPTY_EVIDENCE` routing into the LLM.
+
+### Evidence envelope
+
+Every redacted evidence chunk wraps in `<evidence id="E1"
+untrusted="true">...</evidence>` (PRD §38). The `untrusted="true"`
+attribute is a fixed signal — every chunk has crossed the deid
+boundary and must be treated as adversarial regardless of source.
+Wrapping is **byte-identity preserving**: NFC-normalize only, no XML
+escape. Clinical text routinely contains `<`, `>`, `&` in comparisons
+(`Hb < 8`, `SBP > 90`, `K&Na panel`); escaping them would make the
+LLM see a different byte sequence than the redacted source text that
+`bba.quote_grounder` verifies citations against, silently failing
+all grounding for affected chunks. `bba.prompt_builder.wrap_evidence`
++ `wrap_evidence_chunks`.
+
+### Envelope-escape attack
+
+A chunk whose content embeds literal `</evidence>` or `<evidence ...>`
+tokens, intended to break out of the wrapper's boundary and start a
+nested envelope the LLM might trust. Defense lives in the injection
+scanner (`ENVELOPE_ESCAPE` category, two patterns:
+`envelope_close_tag_v1`, `envelope_open_tag_v1`), not the wrapper —
+the wrapper preserves byte identity for legitimate citations and
+relies on the scanner to route adversarial content to `NEEDS_REVIEW`
+before assembly.
+
+### Injection scanner
+
+Pre-LLM regex-based detector for adversarial content in evidence
+chunks. NFC-normalized, case-insensitive for ASCII. The shipped
+catalog is `INJECTION_PATTERNS`, 24 patterns across 8 categories:
+`IMPERATIVE_VERB_EN` (5), `FAKE_GUIDELINE` (5),
+`SYSTEM_PROMPT_EXFIL` (3), `ROLE_PRETEND` (3), `IMPERATIVE_VERB_TH`
+(3), `JAILBREAK_TH` (2), `JAILBREAK_EN` (1), `ENVELOPE_ESCAPE` (2).
+`MIN_REQUIRED_INJECTION_PATTERNS = 20` is the contract floor (issue
+#21 AC). `scan_injection` runs on one chunk's text; `scan_chunks`
+aggregates over a chunk sequence into an `InjectionVerdict`.
+
+### Injection match
+
+One detected hit: `InjectionMatch(category, pattern_id, evidence_id,
+span_text, start, end)`. The full record participates in the
+`prompt_hash` envelope — swapping `evidence_id` / `span_text` /
+offsets between two otherwise-identical results yields different
+hashes, preserving the audit-chain replay invariant for
+reviewer-visible injection evidence.
+
+### Injection verdict
+
+The aggregate verdict over all chunks: `InjectionVerdict(flagged,
+matches)`. `flagged` is `True` iff `matches` is non-empty — the two
+fields exist together so callers can short-circuit on the boolean
+without unpacking, and a model validator rejects any desync.
+`PromptBuildResult` additionally enforces that
+`injection_verdict.flagged` agrees with `INJECTION_DETECTED`
+membership in `needs_review_reasons`; reconstructing the result with
+the two desynced is rejected even when the hash is recomputed.
+
+### Fabricated-version criteria
+
+The fake-guideline patterns flag only **fabricated** version
+references — minor versions with >=2 trailing nines (e.g. `99.99`,
+`17.999`), a leading 200+ digit (`200..`), or 3+ minor digits.
+Applies to both English (`fake_pr_guideline_v1`) and Thai
+(`fake_thai_pr_v1`) patterns. The real KCMH `PR 17.2` and AABB
+`PR 17.2`-style legitimate references stay below the threshold and
+do not false-flag in either language.
+
+### Few-shot example + few-shot block
+
+A committee-approved exemplar: `FewShotExample(name, user_payload,
+assistant_output)`. The block is the LAST cacheable region of the
+prompt — Anthropic prompt-cache marker boundary — so its byte
+stability across audit rows underwrites cache-hit rate. Input order
+is preserved (the committee ranks examples). NFC-normalized, no
+trailing newline, `"\n\n"` between-example separator.
+`bba.prompt_builder.build_few_shot_block`.
+
+### Prompt block + cache marker
+
+The unit of the assembled prompt: `PromptBlock(role, text,
+cache_marker)`. Roles are `"system"` or `"user"`; the builder never
+emits assistant blocks (few-shot examples land inside the leading
+user block). `cache_marker=True` is the Anthropic cache-breakpoint
+signal at the END of that block. The builder emits TWO cache markers
+when few-shot is present (system end + few-shot end — partial-prefix
+hits for system-alone vs system+few-shot) and ONE when no few-shot
+examples are supplied. The trailing per-row user-payload block is
+NEVER cacheable (changes per audit row).
+
+### Prompt build request
+
+`PromptBuildRequest(task_mode, cohort_threshold, evidence_chunks,
+few_shot_examples)`. Frozen Pydantic; rejects duplicate
+`evidence_id` values across `evidence_chunks` at the model boundary —
+downstream `bba.quote_grounder` treats non-unique `cited_id` as
+`CITED_ID_NOT_FOUND`, so duplicates would silently fail every
+legitimate citation against that ID.
+
+### Prompt build result
+
+`PromptBuildResult(blocks, task_mode, cohort_threshold,
+injection_verdict, route_to_needs_review, needs_review_reasons,
+prompt_hash)`. Frozen; the model validator recomputes
+`compute_prompt_hash(envelope)` at construction and rejects any
+mismatch, mirroring the `EvidenceBundle.bundle_hash` and
+`RedactionResult.redaction_hash` audit-chain invariants. Two
+internal-consistency validators also fire: `route_to_needs_review`
+must be the OR of `needs_review_reasons`, and
+`injection_verdict.flagged` must agree with `INJECTION_DETECTED`
+membership in `needs_review_reasons`.
+
+### Needs-review reason
+
+`NeedsReviewReason` enum carrying the routing tag the audit pipeline
+(#24) reads into the row-level `review_reason` field:
+`INJECTION_DETECTED` (one or more scanner hits across the chunks),
+`EMPTY_EVIDENCE` (zero chunks supplied). OR-of-reasons routing —
+multiple reasons may co-fire and all are persisted on
+`PromptBuildResult.needs_review_reasons`.
+
+### Prompt hash
+
+`sha256(canonical_serialize(envelope).encode("utf-8")).hexdigest()` —
+the byte-stable hash for an assembled prompt, mirroring
+`EvidenceBundle.bundle_hash` and `RedactionResult.redaction_hash`.
+The canonical envelope locks 6 fields (`blocks`, `task_mode`,
+`cohort_threshold`, `injection_matches` with FULL match records,
+`route_to_needs_review`, `needs_review_reasons`); any change to any
+field — including a single match's `evidence_id` / `span_text` /
+offsets — changes the hash.
+`bba.prompt_builder.canonical.compute_prompt_hash`.
+
+### Deferred review (post-merge)
+
+Codex review went through 4 in-session rounds plus a GitHub Codex
+bot review on PR #43; every finding addressed before merge. Items
+intentionally **not** in scope and documented here so a future
+reader does not re-litigate:
+
+* **Medical-NLI gate on prompt content** — the prompt builder does
+  not invoke the optional medical-NLI entailment gate that
+  `bba.quote_grounder` Layer 7 supports; the gate is a verifier
+  concern, not an assembly concern. The prompt builder hands a
+  byte-identical envelope to the LLM and downstream verification
+  runs the NLI gate when configured.
+* **Adversarial pattern catalog growth** — the shipped 25-pattern
+  catalog clears the AC floor of 20 across all required categories;
+  expansion against a future hand-labeled adversarial corpus is a
+  follow-up ticket. The catalog structure (`InjectionPattern`
+  records keyed by stable `pattern_id`) was designed so additions
+  do not perturb the existing pattern_id namespace.
+* **Anthropic Messages-API translation** — the prompt builder emits
+  abstract `PromptBlock(role, text, cache_marker)` segments; the LLM
+  client (#22) translates these into the Anthropic Messages API
+  shape at its boundary. Keeping the translation in `bba.llm_client`
+  isolates the prompt builder from SDK-version drift.
+
+## LLM-client concepts (#22)
+
+### Snapshot-pinned model ID
+
+The exact Anthropic model string with its `-YYYYMMDD` snapshot suffix
+(e.g. `claude-sonnet-4-6-20251018`, `claude-opus-4-7-20251030`). The two
+allowed values live behind `SONNET_MODEL_ID` and `OPUS_MODEL_ID` in
+`bba.llm_client.models`; the runtime allowlist is
+`ALLOWED_MODELS = frozenset({SONNET_MODEL_ID, OPUS_MODEL_ID})`. A
+floating alias (`claude-sonnet-4-6` without the date) is rejected at
+`LlmClientConfig` construction. PRD §"Anthropic silent point release":
+the snapshot suffix forces a code change for every model upgrade so
+the quarterly golden-set drift probe has a stable anchor.
+
+### Custom-ID assertion
+
+The Anthropic Batch API returns one result per submitted `custom_id`,
+not in submission order. `bba.llm_client.custom_id.assert_custom_ids_match`
+is the only place the contract `custom_id == audit_id` is checked.
+Mismatches (missing, extra, duplicate) raise `CustomIdMismatchError`
+naming the offending IDs and abort the batch before any per-row work.
+The function returns a `{audit_id: BatchSubmissionResult}` mapping so
+downstream code never positional-zips — a positional zip would silently
+swap audit rows under partial failure.
+
+### Fail-closed parser
+
+`bba.llm_client.parser.parse_structured_response` accepts any
+`BatchSubmissionResult` and returns a `ParseOutcome`. It NEVER raises.
+Every failure mode lands as `parse_failure=True` with a structured
+`ParseFailureReason`:
+
+* `MALFORMED_JSON` — tool-use `input` arrived as a string that fails
+  `json.loads`.
+* `SCHEMA_MISMATCH` — JSON parses but is missing required keys or has
+  wrong types per `LlmClassificationResponse`.
+* `CLASSIFICATION_OUT_OF_SET` — the four-label set is the only
+  permitted classification; anything else is a fail-closed exit.
+* `EMPTY_RESPONSE` — no `content` array, or empty array. Includes the
+  Anthropic Batch API's `errored`/`canceled`/`expired` row types, which
+  the transport synthesizes into a content-empty envelope.
+* `TOOL_USE_MISSING` — content exists but contains no `tool_use` block.
+
+A raise inside the parser would lose the audit chain — the caller's
+persistence layer would never see the failure, the row would be
+quarantined without a record, and the PRD §"reproducibility = we
+have the original answer" invariant would break.
+
+### Parse outcome
+
+Frozen result of one parser invocation. The fail-closed contract is
+enforced by a model validator: `parsed is None` iff `parse_failure is
+True` iff `parse_failure_reason is not None`. The complementary state
+(parsed set + no failure reason) is also enforced. Callers cannot
+forge an inconsistent `ParseOutcome`.
+
+### Retry → escalation policy
+
+`bba.llm_client.escalation.run_with_escalation` runs one audit row
+through up to `MAX_SONNET_ATTEMPTS = 2` Sonnet calls, then escalates
+to Opus 4.7 iff every Sonnet attempt produced `parse_failure=True`.
+PRD §13 cap of two Sonnet retries is structural: `LlmClientConfig`'s
+`max_sonnet_attempts` field is bounded `ge=2, le=MAX_SONNET_ATTEMPTS`.
+The policy is pure-control-flow over `ParseOutcome`; the HTTP
+boundary is the injected `AnthropicTransport`. `should_escalate(outcomes,
+config)` is the introspectable predicate — used by tests and the
+orchestrator alike.
+
+### Escalation log
+
+`EscalationLog` is the per-row record persisted on
+`LlmClientResult.escalation`. Fields: `sonnet_attempts` (0–2),
+`sonnet_parse_failures` (tuple of reasons, one per attempt),
+`escalated_to_opus` (bool), `opus_parse_failure` (reason or None).
+A model validator rejects inconsistent state: `escalated_to_opus=True`
+requires the full Sonnet budget exhausted; `opus_parse_failure` is
+None unless Opus actually ran.
+
+### Disagreement verdict
+
+`DisagreementVerdict` records the outcome of comparing a Sonnet and
+an Opus classification. Surfaces only when both sides produced a
+parseable response. Fields: `sonnet_classification`,
+`opus_classification`, `agreed`, `routed_to_needs_review`. A model
+validator rejects routing/agreement state desync — `agreed=True
+xor routed_to_needs_review=True` whenever both sides exist. When one
+side is None (the typical escalation case: Sonnet failed parse twice,
+Opus succeeded) the verdict carries `agreed=False, routed_to_needs_review=False`
+and the orchestrator records the Opus answer without a NEEDS_REVIEW
+gate.
+
+### Cross-check Opus
+
+Opt-in flag `LlmClientConfig.cross_check_with_opus = False` (default
+off). When True, every successful Sonnet attempt is shadow-followed
+by an Opus call; the two classifications are compared via
+`detect_disagreement`. Off by default because routine Opus shadow is
+a ~5x cost regression; PRD §13 reserves Opus for failure-driven
+escalation. Tests `TestDisagreementDetection::test_cross_check_*`
+pin both the agreement (record Sonnet, persist both calls) and
+disagreement (NEEDS_REVIEW with `review_reason="disagreement"`) paths.
+
+### Opus cross-check parse failure
+
+When `cross_check_with_opus=True` is enabled and Opus's shadow call
+returns malformed output, the quality gate has degraded — the row
+cannot be cross-checked. Distinct review reason:
+`review_reason="opus_cross_check_parse_failure"`. Both calls (Sonnet
++ Opus) are still persisted; the row routes to NEEDS_REVIEW so a
+human reviewer knows this is NOT a model disagreement but a degraded
+gate.
+
+### Anthropic transport (Protocol)
+
+`AnthropicTransport` is a `typing.Protocol` exposing one method:
+`submit_batch(model, requests, prompt_cache_enabled) -> RawBatchResponse`.
+The whole pipeline speaks to the Protocol, never to a concrete client.
+Two implementations: `AnthropicBatchTransport` (production, lazy-
+imports the `anthropic` SDK) and `CassetteTransport` (test-time,
+loads a recorded JSON cassette). The Protocol is the seam that lets
+unit tests run offline.
+
+### Cassette transport
+
+`bba.llm_client.cassette.CassetteTransport` is a Betamax/VCR-style
+recorder/replayer over a JSON file. The cassette format is a single
+`{"interactions": [...]}` array; each interaction is keyed on
+`(model, sorted_tuple(custom_ids))`. A cassette miss raises `KeyError`
+loudly — silently substituting a default response would let a
+regression in submission shape slip past CI. `load_cassette(path)`
+returns `tuple[CassetteInteraction, ...]`.
+
+### Production Anthropic batch transport
+
+`bba.llm_client.transport.AnthropicBatchTransport` is the SDK-backed
+production implementation. Lazy-imports `anthropic` from inside
+`submit_batch` so importing `bba.llm_client` in offline / CI contexts
+does not require the SDK extra. Constructor validates
+`ANTHROPIC_API_KEY` at instantiation (empty string treated as
+missing) so a misconfigured deployment fails loud at startup, not
+deep inside the SDK on first call. `MAX_OUTPUT_TOKENS = 4096`
+constant sizes the structured-output budget.
+
+### Anthropic request builder
+
+`bba.llm_client.transport.build_anthropic_request(request, *, model,
+prompt_cache_enabled)` translates one abstract `BatchSubmissionRequest`
+into the Anthropic Messages-API payload. The translation:
+
+* Splits `PromptBlock`s by `role` into the `system` array and the
+  user `messages[0].content` array.
+* On every `PromptBlock` with `cache_marker=True`, sets
+  `cache_control={"type": "ephemeral"}` on the corresponding payload
+  element — the Anthropic prompt-cache breakpoint marker.
+* Forces `tool_choice` on the `classify_transfusion_order` tool with
+  an `input_schema` that restricts `classification` to the four-label
+  enum (defense in depth alongside the post-hoc parser check).
+
+### Batch result type discriminator
+
+Anthropic Batch result entries carry a `type` discriminator —
+`succeeded`, `errored`, `canceled`, or `expired`. Only `succeeded`
+entries expose `result.message`; the other three expose `result.error`
+(or nothing). `_result_from_batch_entry` branches on the type and
+synthesizes a content-empty envelope (`raw_response_json["content"]
+= []`, `stop_reason = "batch_error"`) for non-succeeded entries with
+the error detail preserved under `_batch_error`. The parser then
+routes the row to `EMPTY_RESPONSE` → NEEDS_REVIEW. PRD §"Anthropic
+API outage mid-batch": chain of custody must hold; an `AttributeError`
+on `entry.result.message` would silently lose the row.
+
+### Deterministic call_id
+
+`LlmCall.call_id` is derived from STABLE inputs only:
+`call-<audit_id>-<attempt_index>-<sha256(run_id|audit_id|model_id|attempt_index|sha256(canonical_request_json))[:16]>`.
+Notably excludes `request_timestamp`. A re-run with identical inputs
+produces an identical `call_id` so the `audit_store` append-only
+contract holds — re-running with the same `(audit_id, run_id,
+code_version)` is a no-op, not a duplicate append.
+
+### Response-headers persistence
+
+`bba.audit_store.LlmCall` has no dedicated `response_headers` column,
+but PRD §"reproducibility" requires the `anthropic-version` header to
+survive persistence. `client._call_from_result` folds the headers
+into `LlmCall.response_json` under the key `__bba_response_headers__`
+(double-underscore namespaced). The writer raises
+`BatchSubmissionError` if Anthropic ever ships that exact top-level
+key, so a future SDK change cannot silently overwrite headers with
+vendor data.
+
+### Frozen JSON payloads (cross-module)
+
+`BatchSubmissionResult.raw_response_json`, `request_json`,
+`response_headers`, and `extended_thinking_blocks` use the
+`FrozenJsonDict` / `FrozenJsonList` types re-exported from
+`bba.audit_store.models`. Every nested dict/list is wrapped in
+`MappingProxyType` / `tuple` so a downstream caller cannot patch the
+response between parse and persist. Mutation raises `TypeError` at
+the boundary.
+
+### LLM client result
+
+`LlmClientResult` is the top-level per-row output of `process_batch`.
+Model-validator invariants:
+
+* `parse_failure=True` forces `response is None`,
+  `final_classification == "NEEDS_REVIEW"`, and `needs_review=True`.
+* `needs_review=True` requires a non-None `review_reason`.
+* Every `LlmCall` in `persisted_calls` must share the result's
+  `(audit_id, run_id)` — same constraint the `audit_store.write`
+  contract enforces, surfaced earlier so the bug is loud.
+
+### Deferred review (post-merge)
+
+Codex review ran for 4 in-session rounds before PASS. Items
+intentionally **not** in scope so a future reader does not
+re-litigate:
+
+* **Transport-level retries on rate-limit / 5xx** — the v1 cut covers
+  parse-failure retries via the Sonnet→Opus escalation policy, not
+  network transients. `AnthropicBatchTransport.submit_batch` raises
+  `AnthropicAPIError` on any non-recoverable failure; rate-limit
+  backoff is a follow-up ticket.
+* **Full SDK-backed integration test** — the unit suite uses
+  `CassetteTransport` and a monkeypatched fake `anthropic` module
+  (`_FakeBatchEntry`, `_build_fake_anthropic_sdk`). The live SDK
+  round-trip lands in `bba.audit_pipeline` (#24) per PRD §"Testing
+  Decisions" ("`bba.llm_client` — smoke tests + golden-path E2E").
+* **Prompt-cache marker recording in cassettes** — cassettes are
+  keyed on `(model, sorted(custom_ids))` only, not on
+  `prompt_cache_enabled`. The cache flag is validated at the
+  `build_anthropic_request` boundary
+  (`TestAnthropicRequestCacheControlTranslation`), not at the
+  cassette replay layer.
+
+## Confidence-calibrator concepts (#23)
+
+### Calibrated confidence
+
+A probability in `[0.0, 1.0]` produced by feeding the raw LLM-reported
+confidence through the fitted isotonic curve. This is the value the
+audit pipeline compares against `REVIEW_CONFIDENCE_THRESHOLD = 0.7`
+to gate `NEEDS_REVIEW`. PRD §14 / user-story #40: the deployed
+threshold must reflect empirical P(correct), not the model's
+self-reported number — every calibration step exists to make that
+substitution defensible.
+
+### Raw LLM confidence
+
+The number Sonnet/Opus emits inside its structured-output tool call
+(`LlmClassificationResponse.confidence`) before any calibration. The
+calibrator's training set is `(raw_confidence, gold_label)` pairs
+drawn from the held-out evaluation split; predicting on a new raw
+confidence yields a calibrated probability.
+
+### Isotonic calibrator
+
+`bba.confidence_calibrator.IsotonicCalibrator` — stateful wrapper
+around an `IsotonicFit`. `fit(scores, labels)` runs PAV and stores
+the curve; `predict(scores)` interpolates and clips. The instance
+starts unfitted; calling `predict` or accessing `fit_result` before
+`fit` raises `CalibratorNotFittedError` so a missing calibration
+step surfaces immediately instead of silently returning the identity
+mapping or zero.
+
+### Refit overwrites
+
+Successive `fit` calls overwrite the prior curve — monthly
+recalibration semantics. PRD §14 "Monthly recalibration check via
+ECE on held-out 200": when ECE on the holdout drifts past the
+operator's tolerance, the recalibration job calls `fit` again on
+the freshest training-split outputs and the new curve replaces
+the old one.
+
+### Pool-adjacent violators (PAV)
+
+The standard algorithm behind `pav_fit`. Sort by score, treat each
+point as a unit-weight block with `mean_y = label`, scan left-to-
+right; whenever a block's `mean_y` exceeds its right neighbor's,
+merge the two by weighted average and re-check leftward. The
+single-pass stack implementation in `isotonic.py` is O(n log n)
+including the sort; duplicate `scores` are merged by weighted
+average before PAV runs, matching `sklearn.isotonic.IsotonicRegression`.
+
+### Isotonic fit
+
+Frozen dataclass `IsotonicFit` storing the materialized curve as
+`x_thresholds` (strictly increasing) and `y_values` (non-decreasing,
+each in `[0.0, 1.0]`), plus `n_training` for monthly recalibration
+audit. Each PAV block contributes two threshold points
+`(left_x, mean_y)`, `(right_x, mean_y)` so the piecewise-constant
+shape is preserved; linear interpolation between blocks happens at
+`predict` time, not at fit time.
+
+### Boundary clipping
+
+A `predict` input below `min(x_thresholds)` clips to `y_values[0]`,
+above `max(x_thresholds)` clips to `y_values[-1]`. Isotonic regression
+is undefined outside the fitted range; extrapolating could produce
+calibrated probabilities outside `[0.0, 1.0]` and silently break the
+0.7 gate. Clip is the explicit choice over extrapolation or raising.
+
+### Sklearn reference pinning
+
+The audit container has no scikit-learn runtime dependency (mirrors
+`bba.eval_harness.intervals` which references scipy without
+importing it). `tests/unit/test_confidence_calibrator.py` pins the
+`SKLEARN_REF_SCORES` / `SKLEARN_REF_LABELS` / `SKLEARN_REF_PRED`
+vectors computed offline against
+`sklearn.isotonic.IsotonicRegression(out_of_bounds='clip')`. A drift
+in `pav_fit` semantics breaks the reference test, not a runtime
+import.
+
+### Expected Calibration Error (ECE)
+
+Guo, Pleiss, Sun, Weinberger (2017) eq. (3): the count-weighted sum
+of `|mean_confidence_in_bin - accuracy_in_bin|` over equal-width
+bins. `bba.confidence_calibrator.compute_ece` returns an `EceResult`
+with the scalar plus a per-bin `BinStats` tuple so the reliability
+diagram can render every interval. The ECE_REF in the test suite
+is a hand-derivable 4-sample / 2-bin example yielding `ECE = 0.275`.
+
+### Closed-right last bin
+
+Bin edges are `[i/n_bins, (i+1)/n_bins)` half-open except the final
+bin, which closes on the right so a prediction at exactly `1.0`
+lands in the last bin rather than overflowing. Implemented as
+`min(int(p * n_bins), n_bins - 1)` — concise enough to be the only
+place the convention lives, audited by
+`test_probability_at_one_lands_in_last_bin`.
+
+### Empty bin contributes zero weight (ECE)
+
+A bin with `count == 0` carries `mean_confidence = 0.0` and
+`accuracy = 0.0` in the returned `BinStats` and contributes zero
+weight to the weighted ECE sum. Matches the Guo et al. convention
+and is asserted by `test_empty_bins_contribute_zero_weight` — the
+alternative (treating empty bins as a 0-vs-0 gap of zero, or
+skipping them entirely) would produce the same scalar ECE but a
+different `BinStats` shape, which the reliability renderer relies on.
+
+### Reliability diagram (SVG)
+
+`generate_reliability_diagram(probs, labels, out_path, n_bins,
+title)` writes an SVG calibration plot to `out_path` (default
+target: `docs/eval/`). SVG rather than PNG so the audit container
+has no `matplotlib` runtime dependency (on-prem KCMH deployment
+runs with `TRANSFORMERS_OFFLINE=1`); SVG renders natively in
+browsers, GitHub markdown, and the reviewer dashboard.
+
+### Empty bin skipped (renderer)
+
+The reliability renderer emits one `<circle class="reliability-bin"/>`
+per **non-empty** bin only. An empty bin's `accuracy` is by
+construction `0.0` (see *empty bin contributes zero weight*); emitting
+a marker for it would falsely paint a zero-accuracy point on the
+diagram and mislead the transfusion committee's drift review. Note
+the subtle asymmetry with ECE: the empty bin still appears in
+`EceResult.bins` so the operator can introspect the empty interval,
+but it is invisible on the rendered plot.
+
+### XML-escaped title
+
+The caller-supplied `title` parameter is passed through
+`xml.sax.saxutils.escape` before interpolation into the SVG
+`<title>` element. A title containing `&` / `<` / `>` would
+otherwise either malform the XML or inject markup. Numeric fields
+(ECE value, coordinates) are formatted internally and cannot
+contain unsafe characters; escaping there would be noise.
+
+### Validate-before-IO
+
+`generate_reliability_diagram` delegates input validation to
+`compute_ece`, which raises `InvalidCalibrationDataError` before any
+`Path.mkdir` or `write_text` runs. PRD §"reproducibility" anti-
+pattern: a half-written or stale diagram on disk after a failed
+recalibration job would mislead the operator who sees a fresh
+mtime. Asserted by `test_invalid_inputs_raise_before_writing`.
+
+### Agreement-based confidence
+
+PRD §14 / user-story #40 alternative to isotonic regression: run
+Sonnet three times with reshuffled few-shot ordering; confidence =
+fraction of runs that agree on the majority classification.
+`bba.confidence_calibrator.agreement_confidence` is the pure-Python
+piece that consumes the three classification strings and returns an
+`AgreementResult`. The actual prompt reshuffle and LLM dispatch are
+out of scope (they live in `bba.prompt_builder` / `bba.llm_client`);
+this module handles seed generation and vote tabulation only.
+
+### Shuffle seeds (deterministic)
+
+`shuffle_seeds(base_seed, n_runs=3)` returns a tuple of `n_runs`
+integer seeds derived from `int.from_bytes(sha256(f"{base_seed}:
+{i}").digest()[:4], "big")`. Same `base_seed` + same `n_runs`
+yields the same tuple, every time, forever — the cornerstone of
+audit-row reproducibility for the agreement path. SHA-256 mixing
+(not `base_seed + i`) so a small change in `base_seed` does not
+produce three near-correlated shufflings. Negative `base_seed` or
+`n_runs < 1` raises `InvalidCalibrationDataError`.
+
+### First-seen tie-breaking
+
+When `agreement_confidence` receives a 1-1-1 three-way split, the
+classification appearing first in the input wins. Audited by
+`test_three_way_tie_resolves_to_first_seen`. The choice is
+deterministic so a tie does not race the dict-ordering or sort-
+stability internals; PRD §14 "deterministic seed control" is a
+contract that extends to tie-breaking, not just to the seed
+generator itself.
+
+### REVIEW_CONFIDENCE_THRESHOLD
+
+`REVIEW_CONFIDENCE_THRESHOLD = 0.7` — the deployed gate from PRD §14.
+A calibrated confidence below this routes the audit row to
+`NEEDS_REVIEW`. The constant lives in
+`bba.confidence_calibrator.models` so the downstream pipeline reads
+the value from one place; the calibrator itself does not apply the
+threshold (it produces the probability, the audit-pipeline gate
+applies the comparison).
+
+### ECE_RECAL_HOLDOUT_SIZE
+
+`ECE_RECAL_HOLDOUT_SIZE = 200` — the row count of the held-out
+sample the monthly recalibration job evaluates ECE on. The
+calibrator does not run the recalibration job itself; the constant
+is exposed so the scheduling module (`bba.monitoring`, #29) and
+this module agree on the sample size.
+
+### Calibrator-not-fitted fail-loud
+
+Calling `predict` or accessing `fit_result` on an unfitted
+`IsotonicCalibrator` raises `CalibratorNotFittedError` (descended
+from `ConfidenceCalibratorError`). The silent alternatives
+(returning the identity, returning all-zero, raising `AttributeError`
+deep inside numpy) would all mask a deployment that skipped
+calibration entirely. PRD §"reproducibility = we have the original
+answer": the audit row's calibrated confidence must trace to a
+specific fit invocation.
+
+### Deferred review (post-merge)
+
+Codex review ran for 2 in-session rounds (NEEDS-CHANGES → fixes →
+PASS). Items intentionally **not** in scope so a future reader does
+not re-litigate:
+
+* **`docs/eval/` path enforcement on the renderer** — codex flagged
+  the renderer for not enforcing the output directory. Not adopted:
+  the renderer is a generic SVG writer; path choice is the caller's,
+  matching every other "write artifact" function in the repo
+  (`bba.report_generator.generator`, `bba.report_generator.csv_writer`).
+  Adding a path guard would couple the renderer to a directory
+  convention beyond the ticket's plain reading.
+* **Live SDK integration for the agreement-based path** — this
+  module handles seed generation + vote tabulation only. Wiring
+  the three reshuffled Sonnet calls into the audit pipeline lives
+  in `bba.audit_pipeline` (#24), not here.
+* **Monthly recalibration scheduler** — `ECE_RECAL_HOLDOUT_SIZE`
+  is the contract anchor, not the scheduler. The "compute ECE on
+  200 → refit if drifted" job lives in `bba.monitoring` (#29).
+* **Confidence-interval / Platt-scaling alternative** — PRD §14
+  mentions "Platt scaling" as an alternative to isotonic; the v1
+  cut implements isotonic only because the held-out 200 is large
+  enough to fit a non-parametric curve without overfitting. Platt
+  is a follow-up ticket if the empirical reliability diagram
+  shows over-fitting.
+
+## Audit-pipeline concepts (#24)
+
+### Pipeline row context
+
+`bba.audit_pipeline.PipelineRowContext` — frozen pydantic model bundling
+the upstream-derived inputs the orchestrator needs to audit one RBC order:
+:class:`AuditOrder`, :class:`HbLookupResult`, :class:`VitalsResult`,
+:class:`CohortAssignment`, procedure proximity, crystalloid totals,
+de-identified `hn_hash` / `an_hash`, prior-RBC counts, redacted evidence
+chunks, and reproducibility metadata (`redactor_version`,
+`redactor_model_sha`, `policy_version`, `prompt_hash`,
+`evidence_bundle_hash`). The pipeline NEVER fabricates any of these —
+the caller assembles a context from upstream module outputs and the
+orchestrator composes deterministic_classifier / prompt_builder /
+llm_client / audit_store on top.
+
+### Batch run
+
+`bba.audit_pipeline.BatchRun` — one row in the Postgres `batch_runs`
+table. Identifies one Anthropic Batch API submission (multiple
+`audit_id`s per row) and the five-state machine the pipeline transitions
+it through. `batch_id` is locally generated and stable across re-runs;
+`anthropic_batch_id` is set only at the `SUBMITTED` transition so a
+crash between local-create and Anthropic-submit is recoverable.
+
+### Batch run state
+
+`bba.audit_pipeline.BatchRunState` — the five-state machine: `PENDING →
+SUBMITTED → PARTIAL → COMPLETE` with `FAILED` as a sink. `COMPLETE` and
+`FAILED` are terminal. Transitions go through
+`bba.audit_pipeline.state_machine.transition`, which validates against
+`VALID_TRANSITIONS` and rejects illegal moves with
+`BatchStateTransitionError`. `PENDING → SUBMITTED` requires the caller
+to supply `anthropic_batch_id`; any transition to `FAILED` requires
+`error_message`.
+
+### Split-phase submission
+
+The Anthropic transport boundary exposes `submit_batch_only(...)` (creates
+the remote batch, returns the `batch_id` immediately) and
+`fetch_batch_results(batch_id, ...)` (polls until completion) as separate
+methods so the orchestrator can persist `SUBMITTED + anthropic_batch_id`
+to `batch_runs` BEFORE waiting for results. A SIGTERM during the polling
+window now leaves a recoverable `SUBMITTED` row whose `batch_id` the
+resume reconciler can pick up — without the split, an atomic
+submit-then-poll call could orphan a created-but-never-recorded
+Anthropic batch. `submit_batch(...)` remains as a backward-compatible
+convenience wrapper.
+
+### Row-level checkpoint
+
+The contract that every audit pipeline crash leaves the system in a
+state the resume reconciler can interpret. `bba.audit_pipeline.run_pipeline`
+writes the `batch_runs` row at four distinct moments: `PENDING` (before
+Anthropic submit), `SUBMITTED` (immediately after `submit_batch_only`
+returns), then `COMPLETE` or `FAILED` once the response is persisted /
+the row exhausts retries. PRD §15 calls this out explicitly so the
+operator never has to manually re-derive batch state from logs.
+
+### Resume reconciler
+
+`bba.audit_pipeline.resume_on_startup` — the load-bearing primitive for
+SIGTERM safety. On boot it walks every non-terminal `batch_runs` row
+and handles three failure-window classes:
+
+1. **PENDING with no `anthropic_batch_id`** — local-create succeeded,
+   Anthropic was never asked. Transitioned to `FAILED` with an
+   operator-visible `error_message`.
+2. **SUBMITTED / PARTIAL with cached llm_calls** — orphan-call case
+   (phase 1 of `audit_store.write` landed, phase 2 didn't). Each orphan
+   is re-emitted through `apply_batch_results` using the cached
+   `LlmCall.response_json` payload (PRD §10 makes that byte-exact).
+3. **SUBMITTED / PARTIAL with NO cached llm_calls** — Anthropic-polling
+   crash. When `transport` + `llm_config` are supplied, the reconciler
+   calls `fetch_batch_results(anthropic_batch_id, ...)` to retrieve the
+   in-flight response, applies it via `apply_batch_results`, and
+   transitions the row to `COMPLETE`.
+
+The reconciler is itself idempotent — a second pass produces zero new
+writes (audit_store's `WriteResult.skipped_idempotent` rejects the
+duplicate).
+
+### Winning attempt rule
+
+`bba.audit_pipeline.select_winning_attempt` — given a sequence of
+verified attempts for one `audit_id`, returns the one with the latest
+`attempt_id` whose `verifier_pass=True`. Returns `None` when no attempt
+passes verifier; the caller then routes the row to `NEEDS_REVIEW` with
+`review_reason="hallucination_suspect"`. Wired through
+`apply_batch_results` so the rule applies to retry / Sonnet→Opus
+escalation chains without the orchestrator re-implementing it.
+
+### Verifier callable
+
+`bba.audit_pipeline.replay.Verifier` — the `(BatchSubmissionResult,
+PipelineRowContext) -> bool` callable the orchestrator passes to
+`apply_batch_results` to decide whether each attempt grounds. Phase-1
+default (`default_verifier`) returns `True`; production wires
+`bba.quote_grounder.verify_citations` once that integration lands. Tests
+inject stubs that always reject to exercise the hallucination-suspect
+branch.
+
+### Apply batch results
+
+`bba.audit_pipeline.apply_batch_results` — translates a
+`RawBatchResponse` into committed `AuditRow` + `LlmCall` pairs via
+`audit_store.write`. Idempotent on `(audit_id, run_id, code_version)`;
+applying the same response twice writes zero new rows. Required kwargs
+include a `Mapping[audit_id, PipelineRowContext]` so every persisted
+row's clinical and reproducibility fields come from caller-supplied
+data — no fabrication. Missing context for any `custom_id` raises
+`KeyError` rather than silently filling defaults.
+
+### Parse failure reason
+
+A typed slug persisted on `AuditRow.review_reason` when the LLM's
+structured-output payload drifts from the schema:
+`empty_response` (no content), `tool_use_missing` (first block isn't
+`tool_use`), `schema_mismatch` (input isn't a mapping or
+classification isn't a string), `classification_out_of_set` (value
+outside the Classification Literal). Operators can distinguish
+clinical `NEEDS_REVIEW` from API drift without re-reading the raw
+Anthropic payload.
+
+### Cost guard
+
+`bba.audit_pipeline.assert_test_safe_transport` — refuses the live
+`AnthropicBatchTransport` when called from a test context, raising
+`LiveAnthropicApiError`. The class-identity check is on
+`isinstance(transport, AnthropicBatchTransport)`, so a wrapper that
+inherits from the live class is still considered live. Tests inject
+`CassetteTransport`; production callers skip the guard.
+
+### In-memory batch-run store
+
+`bba.audit_pipeline.InMemoryBatchRunStore` — dict-backed test
+implementation of the `BatchRunStore` Protocol. Single-process, not
+thread-safe. Used by every unit test and the property test.
+
+### Postgres batch-run store
+
+`bba.audit_pipeline.PostgresBatchRunStore` — production
+`BatchRunStore` backed by psycopg v3 + a connection pool. Lazy-opens
+so tests can construct against an unmigrated DB and verify the
+migration / connection failure modes. Schema installed by alembic
+migration `a1c2e3f4b5d6_audit_pipeline_batch_runs.py`; DB-level CHECK
+constraints mirror the pydantic invariants so a raw-SQL caller that
+bypasses the model layer still cannot persist a contradictory row.
+A partial UNIQUE index on `(run_id, anthropic_batch_id) WHERE NOT NULL`
+prevents two batches from sharing an Anthropic batch_id within one run.
+
+### Deterministic-final routing
+
+Contexts whose `bba.deterministic_classifier.classify` result is
+`APPROPRIATE`, `INSUFFICIENT_EVIDENCE`, or `INAPPROPRIATE` skip the LLM
+entirely — the orchestrator writes the audit row directly with a
+`model_id="deterministic"` marker LLM call (the audit_store's
+transactional-ordering invariant rejects rows without a paired
+`LlmCall`). `POTENTIALLY_INAPPROPRIATE` / `NEEDS_REVIEW` route through
+the LLM stage where the cassette / production transport supplies the
+response.
+
+### Deferred review (post-merge)
+
+Two-round Codex review on PR #54 (NEEDS-CHANGES → fixes → PASS), with
+items intentionally **not** in scope so a future reader doesn't
+re-litigate:
+
+* **Live Anthropic polling in the reconciler beyond cached responses**
+  — Phase-1 reconciler polls `fetch_batch_results` once per
+  SUBMITTED/PARTIAL row that has no cached llm_calls. Cross-batch
+  catch-up (multiple in-flight batches, exponential-backoff polling,
+  webhook delivery) is a follow-up ticket (`bba.monitoring` #29 or a
+  dedicated `bba.batch_poller`).
+* **Concurrent pipeline workers** — `PostgresBatchRunStore` is
+  thread-safe via the connection pool, but the orchestrator runs
+  single-threaded in v1. Multi-worker batching is out of scope until
+  the DuckDB single-writer constraint (PRD §10) is lifted.
+* **Resume polling failure backoff** — transient Anthropic errors
+  leave the `batch_runs` row in its current state for the next resume
+  to retry. Explicit retry-budget tracking + dead-letter routing is a
+  follow-up.
+* **Full integration with `bba.quote_grounder`** — the verifier
+  callable is a Protocol; the Phase-1 default returns `True`. Wiring
+  `verify_citations` into the verifier hook is the next ticket's job.
+
+## Monitoring concepts (#27)
+
+### Weekly reviewer sample
+
+50–75 audit rows drawn deterministically each ISO week for human
+clinical review. `bba.monitoring.draw_weekly_reviewer_sample(audit_rows,
+*, week_iso, sample_size, seed)` returns a `WeeklyReviewerSample`
+whose `audit_ids` are stable across processes, machines, and Python
+restarts: the RNG seed is derived from `sha256("week_iso|sample_size|
+seed")[:8]`, not from `hash()` (which is `PYTHONHASHSEED`-dependent).
+"Same week → same audit_ids" is the historical-audit invariant the
+operator relies on to re-derive a past sample from the manifest alone.
+
+### Sentinel set / sentinel manifest
+
+A fixed 200-case cohort (default seed=42, exported as
+`SENTINEL_SET_SEED`) constructed once per deployment via
+`build_sentinel_manifest(audit_rows, size, seed)` and re-run weekly
+through `bba.audit_pipeline` to verify model output is stable
+week-over-week. The persisted `SentinelManifest` (size + seed +
+`audit_ids` tuple + `built_at`) is the contract the weekly κ comparison
+joins against.
+
+### Intra-model κ alarm
+
+`evaluate_sentinel_run(*, manifest, previous, current, kappa_threshold=0.90)`
+pairs the last week's `final_classification` map against this week's
+and computes Cohen's κ + Gwet's AC1 — imported from
+`bba.eval_harness.agreement`, NOT re-implemented. `alarm_fired=True`
+when `cohen_kappa < kappa_threshold`. Empty `previous` (no prior week)
+raises `InsufficientHistoryError`; a fully-disjoint previous/current
+also raises (nothing to pair).
+
+### Wald SPRT
+
+Wald's Sequential Probability Ratio Test for binomial drift, in
+`bba.monitoring.drift_sprt`. The two hypotheses are H0 = `rate ==
+p_null` (long-run baseline) and H1 = `rate == p_alt` (operator-chosen
+minimum detectable shift). The cumulative log-likelihood ratio
+increments by `log(p_alt/p_null)` on a success and
+`log((1-p_alt)/(1-p_null))` on a failure; the verdict is computed
+against the Wald bounds.
+
+### Wald bounds (A, B)
+
+`wald_bounds(*, alpha, beta) → (lower, upper)` where
+`upper = log((1-beta)/alpha)` and `lower = log(beta/(1-alpha))`.
+Symmetric in α/β: when `alpha == beta`, `upper == -lower`. Both rates
+MUST be in `(0, 1)` open interval — boundary values would push the
+bounds to ±∞ and are rejected by the `SprtConfig` validator at
+construction time.
+
+### Drift signal
+
+The named binomial rate the SPRT watches. Two literals in Phase 1:
+`quote_grounding_failure_rate` (`verifier_pass=False`) and
+`needs_review_rate` (`needs_human_review=True`). The signal is carried
+on `SprtConfig.signal` and surfaces as `SprtState.signal` so an alarm
+record can identify which rate tripped.
+
+### SPRT verdict / cycle reset
+
+`SprtState.verdict ∈ {"continue", "reject_null", "accept_null"}`.
+`run_sprt_on_window(observations, config)` walks the iterable through a
+monitor: on `reject_null` it returns immediately (alarm fires); on
+`accept_null` it resets the monitor and continues (a single
+accept-null crossing under H0 is expected, not an alarm); at end of
+window it returns the terminal state. `n_observations` on the returned
+state is the TOTAL observations consumed across cycles, not the count
+in the final cycle.
+
+### Min-N gate
+
+`SprtConfig.min_n` (default `SPRT_DEFAULT_MIN_N = 30`). The monitor
+returns `verdict="continue"` until at least `min_n` observations have
+been processed, even if log_lr has crossed a bound. Prevents
+single-observation alarms when the random walk happens to start with a
+long success run.
+
+### ARL₀
+
+Average run length under H0 — the expected number of observations
+between false alarms. PRD §18 sets the target at ≥ 500 (≈1 false
+alarm/year at expected throughput). The empirical regression check
+computes `total_observations / max(n_false_alarms, 1)` over 50 null
+streams × 2000 obs; the zero-alarm case is treated as right-censored
+(`ARL₀ > total_observations`) rather than reported as a concrete
+estimate.
+
+### Golden-set drift probe
+
+A fixed 100-row cohort re-run quarterly through `bba.audit_pipeline`
+against the same Anthropic snapshot ID.
+`evaluate_golden_set_drift(*, baseline, current, ...)` pairs entries
+by `audit_id` and emits independent classification drift
+(`classification_changed_pct > 0.05`) and indication drift
+(`indications_changed_pct > 0.10`) alarms. Indication comparison is
+set-based — reordering is NOT a change. Any `audit_id` missing from
+either side raises `GoldenSetMismatchError` (the golden set itself was
+edited; the comparison contract is broken).
+
+### Monitoring alarm
+
+Append-only record raised by one of the three alarm-emitting monitors
+(SPRT, sentinel-κ, golden-set drift). The `AlarmKind` literal tags the
+source; `signal` (nullable) names the SPRT signal for `drift_sprt`
+alarms; `detail` is a free-form `Mapping[str, str|int|float|bool]` of
+monitor-specific fields. Weekly reviewer-sample draws are NOT alarms
+(no deviation signal) — they persist via `persist_sample_manifest`
+instead.
+
+### Alerting stub (Phase 1)
+
+Two passive channels: a stdlib `logging.WARNING` event on the
+`bba.monitoring.alarms` logger carrying structured `extra` fields
+(`monitoring_alarm_kind`, `monitoring_alarm_signal`,
+`monitoring_alarm_detail`) for log-aggregation tools, and an
+append-only row in the in-memory `MonitoringStore`. Slack / email /
+paging integration and a Postgres-backed store are explicit Phase 1.5
+follow-ups. The boundary is structurally enforced by
+`TestNoSlackEmailPagingImport` (no `slack_sdk` / `smtplib` /
+`pagerduty` / `opsgenie` / `twilio` imports anywhere in the package).
+
+### MonitoringStore
+
+In-memory append-only store for `monitoring_alarms` rows and weekly
+sample manifests. Construct with `MonitoringConfig(dsn, app_name)` —
+both fields are carried for Phase 1.5 substitutability (Postgres swap)
+but ignored by the in-memory implementation. `persist_sample_manifest`
+is idempotent on `(week_iso, sample_size, seed)`: first write wins,
+later writes are silently no-op so cron retries don't multiply rows.
+Lock-guarded for multi-threaded write safety; the
+`TestMonitoringStoreConcurrentWrites` regression uses a
+`threading.Barrier` to force contention.
+
+### Operational, not clinical
+
+`bba.monitoring` reads pipeline artifacts (`audit_results`, `llm_calls`
+via `bba.audit_store`) and statistical helpers (κ / AC1 via
+`bba.eval_harness.agreement`); it does NOT import any clinical-logic
+module (`hb_lookup`, `vitals_extractor`, `cohort_detector`,
+`deterministic_classifier`, `quote_grounder`, `prompt_builder`,
+`evidence_bundle_builder`, `deid_redactor`). The structural import
+gates (`TestNoClinicalImports`, `TestNoSchedulerImports`,
+`TestNoLiveAnthropicInDriftProbe`) prevent accidental coupling. Cron
+scheduling itself is `#29 cli`'s job; the monitoring module exposes
+callables only.
+
+## CLI concepts (#29)
+
+### bba root group
+
+The `click.Group` named `bba`, declared at `bba.cli.main.cli`. Six
+subcommands attach to it: `ingest`, `audit`, `evaluate`, `report`,
+`serve-dashboard`, `sentinel`. The group callback installs the
+PHI-scrubbing `sys.excepthook` before any subcommand body runs, so a
+crash anywhere downstream produces a redacted traceback instead of
+leaking PHI to the operator log.
+
+### Thin-glue rule
+
+Every subcommand body is a ≤ 20-statement wrapper over an
+already-tested module entrypoint. If a subcommand grows business
+logic, the right move is to push the logic down to the module and
+re-export. The body-statement budget is enforced by
+`TestMainModuleIsThin` against the AST of each callback (decorators
+and docstrings excluded).
+
+### CLI run_id
+
+The 16-char hex prefix of `bba.ingest.RunIdentity`'s 64-char digest,
+computed over **every HOSxP-named CSV in `input_csv.parent`** plus the
+schema fingerprint plus `code_version()` (the package version from
+`importlib.metadata`). Living at `bba.cli.identity.compute_run_id`.
+
+Bundle-aware by construction: hashing only the operator's `--input`
+file would make `bba audit` blind to sibling-table edits — a freshly-
+exported `Diagnosis.csv` next to an unchanged `BDVST.csv` would
+otherwise yield the same run_id as the prior audit and the idempotency
+guard would no-op against stale results. The CLI's run_id and the
+ingest module's `RunIdentity.run_id` therefore share the same
+construction (the CLI just truncates to 16 chars for grep-friendly
+logs); they cannot drift.
+
+### Audit run store
+
+A narrow Protocol at `bba.cli.store_protocol.AuditRunStore` (six
+operations: `run_complete`, `run_count`, `record_row`,
+`mark_run_complete`, `record_idempotency_override`,
+`audit_log_entries`, `acquire_run_lock`). Phase 1 ships the
+file-backed implementation `bba.cli.audit_run_store.FileBackedAuditRunStore`
+rooted at `$BBA_DATA_DIR/audit_runs/`. A future Postgres-backed
+adapter (covered by `bba.audit_store`'s extension ticket) can
+implement the same Protocol and swap in via
+`bba.cli.main._get_audit_run_store` without touching the CLI surface.
+
+### Run lock
+
+An exclusive `fcntl.flock(LOCK_EX)` on
+`$BBA_DATA_DIR/audit_runs/run_<run_id>.lock`, exposed by
+`AuditRunStore.acquire_run_lock(run_id)` as a context manager.
+`bba_audit` wraps the check-then-act sequence
+(`run_complete` → run pipeline → `mark_run_complete`) in this lock so
+two concurrent CLI invocations on the same input cannot both pass the
+guard and double-execute. The lock is per-`run_id`; concurrent audits
+of *different* inputs run in parallel. Crash safety is OS-provided:
+a crashed process releases its kernel-held flock automatically, so a
+retry after a crash does not stall.
+
+### Idempotency override
+
+A `--force` flag on `bba audit` that causes the subcommand to skip the
+`run_complete` no-op branch and re-execute the pipeline. Each
+invocation under `--force` writes one row to the file-backed audit log
+naming the run_id, the override reason, and the wall-clock timestamp.
+The override is a compliance surface — durability is enforced by
+writing through `os.write(fd, line)` on an `O_APPEND`-opened file
+descriptor (POSIX-atomic up to `PIPE_BUF`) followed by `os.fsync(fd)`.
+
+### audit_log.jsonl
+
+The on-disk JSONL stream of idempotency-override events under
+`$BBA_DATA_DIR/audit_runs/audit_log.jsonl`. One JSON object per
+override invocation with the schema `{run_id, idempotency_override:
+true, reason, ts}`. Append-only by construction; blank lines are
+skipped on read so an editor's trailing newline never trips JSON
+parsing.
+
+### PHI scrubber
+
+The `bba.cli.phi_scrubber.scrub_traceback` function plus the
+`install_excepthook` installer. Walks the traceback frame chain and,
+for each frame: replaces PHI-named locals (whose name matches the
+prefix regex `bundle|patient|note|hn|an|encounter`, case-insensitive)
+with `<REDACTED:type=<typename> len=<N>>`, then regex-sweeps every
+remaining string value against `PHI_REGEXES` and replaces each match
+with `<REDACTED:phi>`. The scrubbed traceback is emitted through the
+structlog-to-stdlib bridge in `bba.cli._logging` so `caplog`, file
+handlers, and any SIEM forwarder all see the same redacted JSON
+event.
+
+### PHI_REGEXES
+
+The single-source-of-truth tuple of PHI patterns at
+`bba.deid_redactor.PHI_REGEXES`. Three patterns: HN/AN-shaped digit
+runs (7–10 digits), Western honorific + capitalised name tokens
+(`Mr Smith`), and Thai honorific + the trailing Thai- or Latin-script
+name span. The third matches the **full** name span — not just the
+honorific — because `pattern.sub("<REDACTED:phi>", text)` would
+otherwise leave the patient's given+family name in the operator log.
+
+`bba.cli.phi_scrubber.PHI_REGEXES` re-exports this tuple unchanged so
+the redactor and the traceback scrubber cannot drift.
+
+### Phase 1 ingest leg
+
+The Phase 1 deliverable for `bba audit`: call
+`bba.ingest.ingest(IngestConfig(...))` against `input_csv.parent` and
+record one `phase1_ingest_<table>` row marker per validated HOSxP
+table from `IngestResult.tables_written`. The LLM-driven analysis leg
+(deterministic classifier → evidence bundle → de-id → prompt → batch
+submit → quote ground → calibrate → audit_store write) requires a
+context-builder composition over `audit_orders` /
+`deterministic_classifier` / `evidence_bundle_builder` /
+`deid_redactor` / `prompt_builder` that `bba.audit_pipeline`'s contract
+explicitly delegates to its caller. When that orchestration facade
+lands, the `_run_audit_pipeline` seam delegates to it.
+
+### Zero-table guard
+
+The defensive check in `_run_audit_pipeline` that raises `CliError` if
+`IngestResult.tables_written` is empty. Real ingest raises
+`IncompleteInputError` before returning an empty tuple, but the guard
+remains so a future ingest revision cannot silently mark a run
+complete with zero row markers — keeping `run_complete=True` and
+`run_count==0` an impossible state.
+
+### Integration-contract CliError
+
+The pattern used by the four subcommands (`evaluate`, `report`,
+`serve-dashboard`, `sentinel`) whose underlying module does not yet
+expose a single-call facade matching the CLI's flag surface. Each
+body validates inputs via Pydantic, emits a structured `<sub>.start`
+log, and raises `CliError` naming the integration seam (e.g.
+`bba.cli.main.bba_evaluate`) and the underlying module's currently
+exposed primitives. The error is not a TODO — it's the CLI's
+"fail loud at the integration boundary" contract from PRD §20, and is
+the regression guard that keeps the subcommands' bodies thin until
+the underlying facades land.
+
+### Excepthook + faulthandler sidecar
+
+`install_excepthook(faulthandler_sidecar=...)` installs both
+`sys.excepthook` (which scrubs Python-level exceptions via
+`scrub_traceback` and emits the result through structlog) and an
+optional `faulthandler` redirect to `$BBA_DATA_DIR/logs/faulthandler.sidecar`.
+The sidecar covers hard interpreter crashes (e.g. SIGSEGV in a C
+extension) that bypass `sys.excepthook`; the sidecar is scrubbed on
+read, not on write — the write path is too hot to traverse frames.
+
+### Env-var allow-list
+
+The CLI reads exactly three environment variables: `BBA_DATA_DIR` (the
+audit data root), `BBA_DB_URL` (Postgres DSN for the future
+audit_store adapter), and `ANTHROPIC_API_KEY` (the live transport's
+credential). `TestEnvVarSurfaceIsTight` is a static regression guard
+that scans `src/bba/cli/` for any other `os.environ[...]` /
+`os.getenv(...)` literal and fails CI if it grows.
+
+### Sentinel cadence flag
+
+A mutually-exclusive `--weekly | --quarterly` pair on `bba sentinel`
+implemented as two `is_flag=True` booleans plus an explicit XOR check.
+The click `flag_value` shortcut silently last-wins on conflict, so
+two booleans + a body-level guard are the only way to reject "both
+flags supplied" as a usage error.
+
+### Structlog stdlib bridge
+
+`bba.cli._logging.get_logger("bba.cli")` returns a
+`structlog.stdlib.BoundLogger` configured (once per process) with the
+JSON renderer chained through `structlog.stdlib.LoggerFactory`. Every
+CLI log event renders to a JSON line and is handed to
+`logging.getLogger("bba.cli")`, so `caplog` /
+`logging.handlers.RotatingFileHandler` / SIEM forwarders all consume
+the same stream without extra adapters.
+
 ## Vocabulary not in this file
 
 Domain terms used in the broader project but defined elsewhere (PRD issue
 body, or future Phase-1 modules):
 
-* `cohort_threshold`, `MTP`, `T1.MTP`,
-  `hallucination_suspect`, etc. — see the PRD (issue #1) for definitions.
+* `MTP`, `T1.MTP`, `hallucination_suspect`, etc. — see the PRD
+  (issue #1) for definitions.
 
 Add a concept here when a module exposes it as part of its interface. Update
 when a concept's shape changes; remove when it leaves the codebase.
