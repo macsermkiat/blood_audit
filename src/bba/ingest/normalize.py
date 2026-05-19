@@ -187,6 +187,13 @@ def _row_positions(
     return tuple(first_index[col] for col in kept_header)
 
 
+RAGGED_ROW_WARNING_KEY: str = "__row__"
+"""Sentinel ``column_name`` used in :attr:`NormalizedRow.parse_warnings` for
+row-level warnings (e.g., a ragged row) that are not tied to any single
+column. Real column warnings (such as INDATE parse failures) use the
+column's own name so consumers can route them by column."""
+
+
 def normalize_row(
     table: CSVTable,
     raw_row: Sequence[str],
@@ -203,8 +210,37 @@ def normalize_row(
     ``positions`` is the output of :func:`_row_positions` for the same
     ``(table, raw_header, kept_header)``; caller computes it once per
     table and passes it in to avoid recomputing on every row.
+
+    **Ragged rows.** A raw row that has fewer cells than
+    ``max(positions) + 1`` (e.g., a truncated export line) is *not* a
+    fatal error: missing cells are filled with ``""`` and a row-level
+    warning is attached under :data:`RAGGED_ROW_WARNING_KEY`. The
+    strict-parser philosophy (PRD §1 fix E35) prefers surfacing the
+    issue over crashing the entire ingest. Downstream year-filter and
+    date-parse rules then run on the filled row — if year-filter drops
+    it (because the date cell was the missing one), the warning is
+    lost; the ``rows_filtered`` count in
+    :func:`bba.ingest.pipeline._drain_normalize_rows` still records the
+    drop indirectly.
     """
-    cells: list[str] = [raw_row[i] for i in positions]
+    cells: list[str] = []
+    ragged_columns: list[str] = []
+    for col_name, idx in zip(kept_header, positions, strict=True):
+        if idx < len(raw_row):
+            cells.append(raw_row[idx])
+        else:
+            cells.append("")
+            ragged_columns.append(col_name)
+
+    warnings: list[tuple[str, str]] = []
+    if ragged_columns:
+        warnings.append(
+            (
+                RAGGED_ROW_WARNING_KEY,
+                f"ragged row: {len(raw_row)} cells, "
+                f"missing {len(ragged_columns)} for columns {ragged_columns}",
+            )
+        )
 
     year_col = _YEAR_FILTER_COLUMN.get(table)
     if year_col is not None:
@@ -212,7 +248,6 @@ def normalize_row(
         if not cells[idx].startswith(f"{cohort_year}-"):
             return None
 
-    warnings: list[tuple[str, str]] = []
     parse_col = _DATE_PARSE_COLUMN.get(table)
     if parse_col is not None:
         idx = kept_header.index(parse_col)
@@ -256,6 +291,7 @@ __all__ = (
     "COHORT_YEAR",
     "NormalizedHeader",
     "NormalizedRow",
+    "RAGGED_ROW_WARNING_KEY",
     "normalize_header",
     "normalize_row",
     "normalize_rows",

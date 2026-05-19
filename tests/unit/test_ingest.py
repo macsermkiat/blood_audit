@@ -38,6 +38,7 @@ from bba.ingest.schemas import (
 )
 from bba.ingest.date_parser import parse_iptsumoprt_date
 from bba.ingest.normalize import (
+    RAGGED_ROW_WARNING_KEY,
     _row_positions,
     normalize_header,
     normalize_row,
@@ -721,6 +722,67 @@ class TestIPDADMPROGRESSPositionalDedupeAlignment:
         assert d["OBJECTIVE"] == "obj text"
         assert d["ASSESSMENT"] == "asmnt text"
         assert d["PLAN"] == "plan text"
+
+
+class TestNormalizeRowRaggedRow:
+    """A truncated CSV row (fewer cells than the header declares) must not
+    crash the ingest. Missing cells are filled with empty string and a
+    row-level parse warning is attached under :data:`RAGGED_ROW_WARNING_KEY`
+    so the strict-parser philosophy (warn rather than drop the run) holds
+    even on malformed exports."""
+
+    def test_ragged_row_fills_missing_with_empty(self) -> None:
+        kept = list(get_schema("BDVST").columns)
+        positions = _row_positions("BDVST", kept, kept)
+        # Build a row that's missing the last 3 cells.
+        raw_row = ["v0", "v1", "v2"] + ["" for _ in range(len(kept) - 6)]
+        # Length is len(kept) - 3 → last 3 columns are missing.
+        assert len(raw_row) == len(kept) - 3
+        result = normalize_row("BDVST", raw_row, positions, kept)
+        assert result is not None
+        # Output is full-width: the missing trailing cells filled with "".
+        assert len(result.cells) == len(kept)
+        # Tail three are empty.
+        assert result.cells[-3:] == ("", "", "")
+        # A row-level warning fires under the sentinel key.
+        assert any(col == RAGGED_ROW_WARNING_KEY for col, _ in result.parse_warnings), (
+            f"no ragged-row warning in {result.parse_warnings!r}"
+        )
+
+    def test_ragged_row_warning_names_missing_columns(self) -> None:
+        kept = list(get_schema("BDVST").columns)
+        positions = _row_positions("BDVST", kept, kept)
+        raw_row = ["v0", "v1", "v2"]  # only 3 cells; missing everything else
+        result = normalize_row("BDVST", raw_row, positions, kept)
+        assert result is not None
+        warnings = dict(result.parse_warnings)
+        assert RAGGED_ROW_WARNING_KEY in warnings
+        msg = warnings[RAGGED_ROW_WARNING_KEY]
+        # Message names at least one missing column so an operator can
+        # locate the export defect.
+        missing_col = kept[-1]  # last column is definitely missing
+        assert missing_col in msg, f"expected {missing_col!r} in warning: {msg!r}"
+
+    def test_ragged_row_does_not_raise_index_error(self) -> None:
+        # The blocker Codex flagged: raw_row[i] for i out of range used to
+        # raise IndexError. This test pins the controlled-error behavior.
+        kept = list(get_schema("BDVST").columns)
+        positions = _row_positions("BDVST", kept, kept)
+        # Pathological: empty row, positions reference cells 0..N-1.
+        result = normalize_row("BDVST", [], positions, kept)
+        assert result is not None  # no crash; row preserved with all "" cells
+
+    def test_ragged_row_year_filter_still_drops_when_date_missing(self) -> None:
+        # If the year-filter column happens to be one of the missing
+        # cells, the empty fill ("") fails the startswith check and the
+        # row is dropped — the ragged warning is lost in that case
+        # (acceptable trade-off documented in normalize_row).
+        kept = list(get_schema("IPDADMPROGRESS").columns)
+        positions = _row_positions("IPDADMPROGRESS", kept, kept)
+        # Cells stop short of the PROGDATE column.
+        progdate_idx = kept.index("PROGDATE")
+        raw_row = ["v"] * progdate_idx  # cell 0..progdate_idx-1 present
+        assert normalize_row("IPDADMPROGRESS", raw_row, positions, kept) is None
 
 
 class TestNormalizeRowsStream:
