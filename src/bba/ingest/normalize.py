@@ -77,10 +77,14 @@ COHORT_YEAR: int = 2025
 # cohort year. The HOSxP standard format is ``"2025-05-19 00:00:00.000"``,
 # but real exports can also carry a UTF-8 BOM on the first cell and/or
 # leading whitespace. The match pattern strips both, then requires
-# **exactly 4** leading digits followed by a non-digit (or end of string)
-# so a clobbered cell like ``"20259-..."`` does not silently pass as the
-# cohort year. See issue #63 (Codex P2.A.3).
-_YEAR_FILTER_RE: re.Pattern[str] = re.compile(r"^[﻿\s]*(\d{4})(?:\D|$)")
+# **exactly 4** leading digits followed by a literal hyphen (the HOSxP
+# date separator) so malformed cells are dropped along with wrong-year
+# rows. Two classes of false-positive this catches:
+#   - clobbered 5-digit year prefix: ``"20259-..."``
+#   - wrong separator: ``"2025X05-19"`` / ``"2025/05/19"``
+# See issue #63 (Codex P2.A.3, plus the GitHub Codex P2 follow-up that
+# tightened the separator check on PR #65).
+_YEAR_FILTER_RE: re.Pattern[str] = re.compile(r"^[﻿\s]*(\d{4})-")
 _YEAR_FILTER_COLUMN: dict[CSVTable, str] = {
     "IPDADMPROGRESS": "PROGDATE",
     "IPDNRFOCUSDT": "PROGRESSDATE",

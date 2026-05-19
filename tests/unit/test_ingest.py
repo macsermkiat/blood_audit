@@ -869,12 +869,23 @@ class TestYearFilterRobustness:
     def test_clobbered_prefix_rejected(self) -> None:
         # "20259-..." used to pass the old startswith("2025-") check
         # silently. The regex now requires exactly 4 leading digits
-        # followed by a non-digit, so 5-digit prefixes are correctly
+        # followed by a hyphen, so 5-digit prefixes are correctly
         # rejected.
         row, positions, kept = self._row_with_progdate("20259-05-19 00:00:00.000")
         assert normalize_row("IPDADMPROGRESS", row, positions, kept) is None, (
             "5-digit year prefix must NOT pass as 2025"
         )
+
+    def test_wrong_separator_rejected(self) -> None:
+        # HOSxP date separator is strictly "-". A malformed cell like
+        # "2025X05-19" or "2025/05/19" begins with the cohort year but is
+        # not a real HOSxP date; the year-filter must drop it rather
+        # than count it as in-cohort. GitHub Codex P2 follow-up on PR #65.
+        for bad in ("2025X05-19 00:00:00.000", "2025/05/19 00:00:00.000"):
+            row, positions, kept = self._row_with_progdate(bad)
+            assert normalize_row("IPDADMPROGRESS", row, positions, kept) is None, (
+                f"non-hyphen separator must drop: {bad!r}"
+            )
 
     def test_non_year_prefix_rejected(self) -> None:
         # Non-digit prefix should reject cleanly.
