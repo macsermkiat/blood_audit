@@ -134,7 +134,8 @@ The encrypted bundle at `data/encrypted/` contains **12 CSV files**. Each maps 1
 - Support / fallback source for operation lookup when IPTSUMOPRT is incomplete.
 - File uses Title-Case column names (`Hn`, `Incdate`, `Inctime`, `An`, etc.) — normalize must uppercase before validate_header.
 - `INCDATE` is English-locale date-only text (e.g. `"January 9, 2025"`) — normalize parses it to ISO 8601.
-- Pilot operation lookup treats non-cancelled rows in `INCGRP` 110 / 111 as procedure evidence for peri-procedural proximity.
+- Pilot operation lookup treats non-cancelled rows in `INCGRP` 110 / 111 as procedure evidence for peri-procedural proximity only. `INCPT` charge / income codes are not ICD-9-CM procedure codes and must not drive deterministic cardiac / orthopedic cohort matching unless a future explicit ICD9 mapping is added.
+- The LLM pilot prompt includes nearby `INCPT` rows with group/name context so operation type can be judged from descriptions rather than numeric charge-code prefixes.
 
 ### ICD9CM — 3 cols (procedure code dictionary)
 

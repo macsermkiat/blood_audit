@@ -387,6 +387,10 @@ class TestCardiacRequiresOrFlag:
         assert is_cardiac_surgery_code("3601", or_flag=False) is False
         assert is_cardiac_surgery_code("3601", or_flag=True) is True
 
+    def test_incpt_namespaced_charge_code_does_not_trigger_cardiac(self) -> None:
+        assert is_cardiac_surgery_code("INCPT:3601", or_flag=True) is False
+        assert is_ortho_surgery_code("INCPT:8151", or_flag=True) is False
+
 
 class TestIcd10StrictCaseContract:
     """Codex review HIGH-3: ICD-10 matching is intentionally

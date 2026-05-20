@@ -271,8 +271,11 @@ def _build_op_events(
         group = (r.get("INCGRP") or "").strip()
         out.append(
             OperativeEvent(
-                icd9=code,
-                or_flag=True,
+                # INCPT carries charge/income codes, not ICD-9-CM procedure
+                # codes. Keep it in the operation-timing stream, but make it
+                # ineligible for ICD-9 prefix cohort rules.
+                icd9=f"INCPT:{code}",
+                or_flag=False,
                 operative_datetime=dt,
                 name=f"INCPT charge group {group}" if group else "INCPT charge",
             )

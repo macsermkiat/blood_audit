@@ -353,8 +353,11 @@ def _op_events(
         group = (r.get("INCGRP") or "").strip()
         out.append(
             OperativeEvent(
-                icd9=code,
-                or_flag=True,
+                # INCPT carries charge/income codes, not ICD-9-CM procedure
+                # codes. Keep it in the operation-timing stream, but make it
+                # ineligible for ICD-9 prefix cohort rules.
+                icd9=f"INCPT:{code}",
+                or_flag=False,
                 operative_datetime=dt,
                 name=f"INCPT charge group {group}" if group else "INCPT charge",
             )
@@ -503,6 +506,61 @@ def _render_payload(source: str, payload: dict[str, Any]) -> str:
         drug = payload.get("drug", "")
         return f"Med at {ts}: {drug}"
     return json.dumps(payload, sort_keys=True)
+
+
+def _incpt_evidence_chunks(
+    incpt: list[dict[str, str]],
+    *,
+    an: str,
+    anchor: datetime,
+    window_start: datetime,
+    window_end: datetime,
+    start_eid: int,
+) -> tuple[tuple[EvidenceChunk, ...], int]:
+    """Render INCPT operation-charge rows for LLM judgment by description.
+
+    INCPT codes are charge/income codes, not ICD-9-CM procedure codes. These
+    chunks intentionally ask the LLM to judge operation type from names and
+    descriptions, while deterministic cohort detection ignores the codes.
+    """
+    chunks: list[EvidenceChunk] = []
+    next_eid = start_eid
+    for r in incpt:
+        if r.get("AN") != an:
+            continue
+        if (r.get("CANCELDATE") or "").strip():
+            continue
+        incgrp = (r.get("INCGRP") or "").strip()
+        if incgrp not in INCPT_OPERATION_GROUPS:
+            continue
+        dt = _combine(
+            _parse_hosxp_date(str(r.get("INCDATE") or "")),
+            _parse_time(str(r.get("INCTIME") or "")),
+        )
+        if dt is None or not (window_start <= dt < window_end):
+            continue
+        income = (r.get("INCOME") or "").strip()
+        ordercode = (r.get("ORDERCODE") or "").strip()
+        group_name = (r.get("INCGRP → NAME") or "").strip()
+        hours = (dt - anchor).total_seconds() / 3600.0
+        text = (
+            f"INCPT operation/procedure charge at {dt.isoformat()}: "
+            f"INCGRP={incgrp}"
+            f"{(' ' + group_name) if group_name else ''}; "
+            f"INCOME={income or '(blank)'}; ORDERCODE={ordercode or '(blank)'}. "
+            "INCPT codes are charge codes, not ICD-9-CM; judge operation type "
+            "from the group/name/description, not from numeric code prefixes. "
+            f"[{hours:+.1f}h vs order]"
+        )
+        chunks.append(
+            EvidenceChunk(
+                evidence_id=f"E{next_eid}",
+                source="INCPT",
+                text=text,
+            )
+        )
+        next_eid += 1
+    return tuple(chunks), next_eid
 
 
 def _build_inputs():
@@ -805,8 +863,18 @@ def main() -> None:
                 )
             )
 
+        next_eid = 801
+        incpt_chunks, next_eid = _incpt_evidence_chunks(
+            incpt,
+            an=order.an,
+            anchor=order.order_datetime,
+            window_start=notes_lo,
+            window_end=notes_hi,
+            start_eid=next_eid,
+        )
+        chunks.extend(incpt_chunks)
+
         # Append CBC chunks (Plt / WBC / Neutrophils) in the ±1d window.
-        next_eid = 901
         for r in lab:
             if r.get("AN") != order.an:
                 continue
@@ -871,11 +939,12 @@ def main() -> None:
         ]
         chunks.append(
             EvidenceChunk(
-                evidence_id="E999",
+                evidence_id=f"E{next_eid}",
                 source="Analysis_Hint",
                 text="\n".join(guidance_lines),
             )
         )
+        next_eid += 1
 
         if not chunks:
             print(f"  WARN: empty chunks for {order.reqno}; skipping LLM submit")
