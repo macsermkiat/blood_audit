@@ -173,8 +173,18 @@ def main() -> None:
         "IPDADMPROGRESS.csv", "IPDADMPROGRESS.csv", lambda r: r.get("AN") in sample_ans
     )
     _filter("IPDNRFOCUSDT.csv", "IPDNRFOCUSDT.csv", lambda r: r.get("AN") in sample_ans)
-    # IPTSUMOPRT uses Title-Case column "An"
-    _filter("IPTSUMOPRT.csv", "IPTSUMOPRT.csv", lambda r: r.get("An") in sample_ans)
+    # Procedure-family exports have arrived as both Title-Case and ALL-CAPS.
+    _filter(
+        "IPTSUMOPRT.csv",
+        "IPTSUMOPRT.csv",
+        lambda r: (r.get("An") or r.get("AN")) in sample_ans,
+    )
+    if (SRC / "INCPT.csv").exists():
+        _filter(
+            "INCPT.csv",
+            "INCPT.csv",
+            lambda r: (r.get("An") or r.get("AN")) in sample_ans,
+        )
 
     _copy("BDTYPE.csv", "BDTYPE.csv")
     _copy("BDVSTST.csv", "BDVSTST.csv")

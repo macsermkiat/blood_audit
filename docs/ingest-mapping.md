@@ -1,6 +1,6 @@
 # Ingest mapping — encrypted HOSxP bundle → `bba.ingest` schemas
 
-**Status:** locked 2026-05-19. 11 tables mapped 1:1. The previous "schema gap" blocker (memory `bloodbank_ingest_schema_gap.md`, 2026-05-17) is resolved.
+**Status:** locked 2026-05-20. 12 tables mapped 1:1. The previous "schema gap" blocker (memory `bloodbank_ingest_schema_gap.md`, 2026-05-17) is resolved.
 
 This document is the authoritative reference for what the ingest pipeline reads from `data/encrypted/`. It captures three things:
 
@@ -14,7 +14,7 @@ The companion code lives in `src/bba/ingest/schemas.py` (`_REGISTRY_V1`). Changi
 
 ## Bundle contents
 
-The encrypted bundle at `data/encrypted/` contains **11 CSV files**. Each maps 1:1 to a schema entry by file stem.
+The encrypted bundle at `data/encrypted/` contains **12 CSV files**. Each maps 1:1 to a schema entry by file stem.
 
 | File | Schema key | Source |
 |---|---|---|
@@ -28,6 +28,7 @@ The encrypted bundle at `data/encrypted/` contains **11 CSV files**. Each maps 1
 | `IPDADMPROGRESS.csv` | `IPDADMPROGRESS` | direct HOSxP export (large; needs deid) |
 | `IPDNRFOCUSDT.csv` | `IPDNRFOCUSDT` | direct HOSxP export (large; needs deid) |
 | `IPTSUMOPRT.csv` | `IPTSUMOPRT` | direct HOSxP export (procedure encounters) |
+| `INCPT.csv` | `INCPT` | direct HOSxP export (procedure / operation charges) |
 | `ICD9CM.csv` | `ICD9CM` | HOSxP procedure code dictionary |
 
 **Dropped from the schema:** `UnUSE_Patient_Background` — the bundle's file with that name is an obstetric/delivery record table, not patient demographics. The real `PT` (patient registration) table is not in the bundle. Audit removes `age_years` and `sex` from `AuditOrder` to compensate; pediatric and obstetric exclusions adapt accordingly (see *Downstream impacts*).
@@ -126,6 +127,15 @@ The encrypted bundle at `data/encrypted/` contains **11 CSV files**. Each maps 1
 - `INDATE` is **Excel-locale-formatted** in the file (e.g. `"June 7, 2025, 12:00 AM"`) — needs a dedicated parser (`parse_iptsumoprt_date`) to convert to ISO 8601 before validate_header.
 - Audit-relevant signal: procedure start moment is the time anchor for "acute blood loss" override. End time (`OUTDATE`/`OUTTIME`) and OR-only flag (`Orflag`) are **not** declared; audit treats all procedures equally.
 
+### INCPT — 8 cols (procedure / operation charges)
+
+`HN` (NOT NULL), `AN` (NOT NULL), `INCDATE`, `INCTIME`, `ORDERCODE`, `INCOME`, `CANCELDATE`, `INCGRP`.
+
+- Support / fallback source for operation lookup when IPTSUMOPRT is incomplete.
+- File uses Title-Case column names (`Hn`, `Incdate`, `Inctime`, `An`, etc.) — normalize must uppercase before validate_header.
+- `INCDATE` is English-locale date-only text (e.g. `"January 9, 2025"`) — normalize parses it to ISO 8601.
+- Pilot operation lookup treats non-cancelled rows in `INCGRP` 110 / 111 as procedure evidence for peri-procedural proximity.
+
 ### ICD9CM — 3 cols (procedure code dictionary)
 
 `ICD9CM` (NOT NULL), `NAME`, `ORFLAG`.
@@ -144,10 +154,11 @@ The normalize layer runs **before** `validate_header` and produces a DataFrame w
 
 | Table | Rule |
 |---|---|
-| **all 11** | Project the CSV to the schema's declared columns; log the names of all dropped columns to the run audit. |
+| **all 12** | Project the CSV to the schema's declared columns; log the names of all dropped columns to the run audit. |
 | `IPDADMPROGRESS` | Read positionally (not by header name); drop duplicate `HN` (position 30) and `AN` (position 3); then project. Also filter `PROGDATE` to the 2025 cohort year. |
 | `IPDNRFOCUSDT` | Filter `PROGRESSDATE` to 2025. |
 | `IPTSUMOPRT` | Case-normalize column names to ALL-CAPS (`An` → `AN`, `Icd9cm` → `ICD9CM`, `Indate` → `INDATE`, `Intime` → `INTIME`) *before* projection. Parse `INDATE` values via `parse_iptsumoprt_date` to ISO 8601. |
+| `INCPT` | Case-normalize column names to ALL-CAPS (`Hn` → `HN`, `An` → `AN`, `Incdate` → `INCDATE`, `Inctime` → `INCTIME`) *before* projection. Parse `INCDATE` values via `parse_kcmh_english_date` to ISO 8601. |
 | `ICD9CM` | Case-normalize column names to ALL-CAPS. |
 
 ---

@@ -2,7 +2,7 @@
 
 Public entry point: :func:`ingest`. Per PRD §1:
 
-* discover the 11 HOSxP CSVs in ``config.input_dir`` by file stem (per the
+* discover the 12 HOSxP CSVs in ``config.input_dir`` by file stem (per the
   2026-05-19 schema lock; see ``docs/ingest-mapping.md``);
 * fail loud (:class:`IncompleteInputError`) if the input dir is missing or
   any canonical CSV is absent;
@@ -213,7 +213,7 @@ def ingest(config: IngestConfig) -> IngestResult:
         stem = csv_path.stem
         if stem not in known_tables:
             # Unknown filename — skip silently; the canonical set is exactly
-            # the 11 HOSxP tables and operators may stage extra artefacts.
+            # the 12 HOSxP tables and operators may stage extra artefacts.
             continue
         table = stem
         raw_header = _read_csv_header(csv_path)

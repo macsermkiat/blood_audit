@@ -153,6 +153,10 @@ def parse_iptsumoprt_date(raw: Any) -> date | None:
     try:
         return datetime.strptime(s, "%B %d, %Y, %I:%M %p").date()
     except ValueError:
+        pass
+    try:
+        return datetime.strptime(s, "%B %d, %Y").date()
+    except ValueError:
         return None
 
 
@@ -270,6 +274,14 @@ def _short(s: str, n: int = 16) -> str:
     return s[:n] + "..." if len(s) > n else s
 
 
+def _field(row: dict[str, str], *names: str) -> str:
+    for name in names:
+        value = row.get(name)
+        if value is not None:
+            return value
+    return ""
+
+
 def main() -> None:
     if not BUNDLE.exists():
         sys.exit(f"bundle not found: {BUNDLE} (run sample_bundle.py first)")
@@ -278,6 +290,13 @@ def main() -> None:
 
     def _read(name: str) -> list[dict[str, str]]:
         with (BUNDLE / name).open(encoding="utf-8", newline="") as fh:
+            return list(csv.DictReader(fh))
+
+    def _read_optional(name: str) -> list[dict[str, str]]:
+        path = BUNDLE / name
+        if not path.exists():
+            return []
+        with path.open(encoding="utf-8", newline="") as fh:
             return list(csv.DictReader(fh))
 
     bdvst = _read("BDVST.csv")
@@ -290,6 +309,7 @@ def main() -> None:
     bdvstst_dict_rows = _read("BDVSTST.csv")
     progress = _read("IPDADMPROGRESS.csv")
     focus = _read("IPDNRFOCUSDT.csv")
+    incpt = _read_optional("INCPT.csv")
 
     icd9_dict = {
         (r.get("Icd9cm") or "").strip().replace(".", ""): (r.get("Name") or "").strip()
@@ -421,21 +441,49 @@ def main() -> None:
 
         proc_rows: list[dict[str, str]] = []
         for r in iptsumoprt:
-            if r.get("An") != an:
+            if _field(r, "An", "AN") != an:
                 continue
-            pdate = parse_iptsumoprt_date(r.get("Indate"))
+            pdate = parse_iptsumoprt_date(_field(r, "Indate", "INDATE"))
             if not _in_proc_window(pdate):
                 continue
-            code = (r.get("Icd9cm") or "").strip().replace(".", "")
+            code = _field(r, "Icd9cm", "ICD9CM").strip().replace(".", "")
             proc_rows.append(
                 {
+                    "Source": "IPTSUMOPRT",
                     "ICD9CM": code,
                     "Name": icd9_dict.get(code, ""),
-                    "INDATE": r.get("Indate") or "",
-                    "INTIME": fmt_time(r.get("Intime")),
-                    "OUTDATE": r.get("Outdate") or "",
-                    "OUTTIME": fmt_time(r.get("Outtime")),
-                    "ORFLAG": r.get("Orflag") or "",
+                    "INDATE": _field(r, "Indate", "INDATE"),
+                    "INTIME": fmt_time(_field(r, "Intime", "INTIME")),
+                    "OUTDATE": _field(r, "Outdate", "OUTDATE"),
+                    "OUTTIME": fmt_time(_field(r, "Outtime", "OUTTIME")),
+                    "ORFLAG": _field(r, "Orflag", "ORFLAG"),
+                    "INCOME": "",
+                    "INCGRP": "",
+                }
+            )
+        for r in incpt:
+            if _field(r, "An", "AN") != an:
+                continue
+            if _field(r, "Canceldate", "CANCELDATE").strip():
+                continue
+            incgrp = _field(r, "Incgrp", "INCGRP").strip()
+            if incgrp not in {"110", "111"}:
+                continue
+            pdate = parse_iptsumoprt_date(_field(r, "Incdate", "INCDATE"))
+            if not _in_proc_window(pdate):
+                continue
+            proc_rows.append(
+                {
+                    "Source": "INCPT",
+                    "ICD9CM": "",
+                    "Name": _field(r, "Incgrp → Name", "INCGRP → NAME").strip(),
+                    "INDATE": _field(r, "Incdate", "INCDATE"),
+                    "INTIME": fmt_time(_field(r, "Inctime", "INCTIME")),
+                    "OUTDATE": "",
+                    "OUTTIME": "",
+                    "ORFLAG": "",
+                    "INCOME": _field(r, "Income", "INCOME").strip(),
+                    "INCGRP": incgrp,
                 }
             )
 
@@ -698,14 +746,25 @@ def main() -> None:
             else "(no anchor)"
         )
         parts.append(
-            f"<details open><summary>Procedures — IPTSUMOPRT "
+            f"<details open><summary>Procedures — IPTSUMOPRT + INCPT "
             f"({len(proc_rows)} rows, AN-scoped, ±1 week window "
             f"{proc_window_str})</summary>"
         )
         parts.append(
             render_table(
                 proc_rows,
-                ["ICD9CM", "Name", "INDATE", "INTIME", "OUTDATE", "OUTTIME", "ORFLAG"],
+                [
+                    "Source",
+                    "ICD9CM",
+                    "INCOME",
+                    "Name",
+                    "INDATE",
+                    "INTIME",
+                    "OUTDATE",
+                    "OUTTIME",
+                    "ORFLAG",
+                    "INCGRP",
+                ],
             )
         )
         parts.append("</details>")

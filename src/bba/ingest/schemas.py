@@ -1,4 +1,4 @@
-"""Pandera schemas (version v1) for the 11 HOSxP CSV tables.
+"""Pandera schemas (version v1) for the 12 HOSxP CSV tables.
 
 The schemas are the authoritative description of expected columns. Their joint
 sha256 fingerprint feeds into ``run_id``, so a silent schema bump (forgetting
@@ -160,6 +160,18 @@ _REGISTRY_V1: Mapping[CSVTable, DataFrameSchema] = {
             "INTIME": _str(),
         }
     ),
+    "INCPT": DataFrameSchema(
+        {
+            "HN": _str(nullable=False),
+            "AN": _str(nullable=False),
+            "INCDATE": _str(),
+            "INCTIME": _str(),
+            "ORDERCODE": _str(),
+            "INCOME": _str(),
+            "CANCELDATE": _str(),
+            "INCGRP": _str(),
+        }
+    ),
     "ICD9CM": DataFrameSchema(
         {
             "ICD9CM": _str(nullable=False),
@@ -179,7 +191,7 @@ def get_schema(table: CSVTable) -> DataFrameSchema:
 
 
 def all_tables() -> tuple[CSVTable, ...]:
-    """Return the canonical tuple of all 11 required CSV tables.
+    """Return the canonical tuple of all 12 required CSV tables.
 
     The order matches the :data:`bba.ingest.models.CSVTable` literal so callers
     can rely on a stable iteration order across releases.
