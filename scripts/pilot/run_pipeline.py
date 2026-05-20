@@ -58,6 +58,22 @@ CRYSTALLOID_KEYWORDS = (
     "d5w", "d5/w", "d5s", "d5%", "5% dextrose",
 )
 
+# Stable schema for report.csv. Used both for writing per-case rows and
+# for emitting an empty header-only file when every sampled case was
+# excluded — build_review.py then reads zero rows instead of crashing
+# on a missing file (Codex review P2 on PR #67).
+REPORT_FIELDNAMES = [
+    "reqno", "an", "order_datetime_utc", "anchor_imputed",
+    "products_ordered", "diagnosis_codes_n",
+    "hb_value_g_dl", "hb_freshness", "hb_source",
+    "hb_delta_bypass", "hb_needs_review_single_low",
+    "cohort_label", "cohort_threshold",
+    "cohort_evidence_code", "cohort_evidence_name",
+    "procedure_proximity_hours", "crystalloid_liters_prior_4h",
+    "anc_value",
+    "classification", "rationale", "bypass_reason",
+]
+
 csv.field_size_limit(sys.maxsize)
 
 
@@ -373,12 +389,15 @@ def main() -> None:
         })
 
     out_csv = WORK / "report.csv"
-    if rows:
-        with out_csv.open("w", encoding="utf-8", newline="") as fh:
-            w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
-            w.writeheader()
-            w.writerows(rows)
-        print(f"\nFull report written to {out_csv}")
+    # Always write — even an all-excluded sample needs a valid (header-
+    # only) report.csv so build_review.py can open it. Stable fieldnames
+    # also keep the schema consistent across runs (one column won't
+    # disappear if every case happens to have e.g. anc_value=None).
+    with out_csv.open("w", encoding="utf-8", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=REPORT_FIELDNAMES)
+        w.writeheader()
+        w.writerows(rows)
+    print(f"\nFull report written to {out_csv} ({len(rows)} rows)")
 
     print("\nClassification summary:")
     counts: dict[str, int] = {}
