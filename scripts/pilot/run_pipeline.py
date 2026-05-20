@@ -14,6 +14,7 @@ Environment variables:
 * ``BBA_PILOT_WORK_DIR`` — directory containing the ``bundle/``
   subdirectory written by ``sample_bundle.py`` (default: ``/tmp/bba_mini``).
 """
+
 from __future__ import annotations
 
 import csv
@@ -29,7 +30,6 @@ from bba.audit_orders import (
     build_audit_orders,
 )
 from bba.cohort_detector import (
-    BloodOrderEvent,
     CohortInputs,
     MedEvent,
     OperativeEvent,
@@ -52,10 +52,22 @@ ANC_CODE = "290093"
 CODE_VERSION = "pilot-mini"
 
 CRYSTALLOID_KEYWORDS = (
-    "nss", "0.9% nacl", "0.9 nacl", "0.9%nacl", "normal saline",
-    "rls", "ringer", "lactated ringer", "lrs",
-    "plasmalyte", "plasma-lyte",
-    "d5w", "d5/w", "d5s", "d5%", "5% dextrose",
+    "nss",
+    "0.9% nacl",
+    "0.9 nacl",
+    "0.9%nacl",
+    "normal saline",
+    "rls",
+    "ringer",
+    "lactated ringer",
+    "lrs",
+    "plasmalyte",
+    "plasma-lyte",
+    "d5w",
+    "d5/w",
+    "d5s",
+    "d5%",
+    "5% dextrose",
 )
 
 # Stable schema for report.csv. Used both for writing per-case rows and
@@ -63,15 +75,27 @@ CRYSTALLOID_KEYWORDS = (
 # excluded — build_review.py then reads zero rows instead of crashing
 # on a missing file (Codex review P2 on PR #67).
 REPORT_FIELDNAMES = [
-    "reqno", "an", "order_datetime_utc", "anchor_imputed",
-    "products_ordered", "diagnosis_codes_n",
-    "hb_value_g_dl", "hb_freshness", "hb_source",
-    "hb_delta_bypass", "hb_needs_review_single_low",
-    "cohort_label", "cohort_threshold",
-    "cohort_evidence_code", "cohort_evidence_name",
-    "procedure_proximity_hours", "crystalloid_liters_prior_4h",
+    "reqno",
+    "an",
+    "order_datetime_utc",
+    "anchor_imputed",
+    "products_ordered",
+    "diagnosis_codes_n",
+    "hb_value_g_dl",
+    "hb_freshness",
+    "hb_source",
+    "hb_delta_bypass",
+    "hb_needs_review_single_low",
+    "cohort_label",
+    "cohort_threshold",
+    "cohort_evidence_code",
+    "cohort_evidence_name",
+    "procedure_proximity_hours",
+    "crystalloid_liters_prior_4h",
     "anc_value",
-    "classification", "rationale", "bypass_reason",
+    "classification",
+    "rationale",
+    "bypass_reason",
 ]
 
 csv.field_size_limit(sys.maxsize)
@@ -132,15 +156,20 @@ def _build_hb_observations(
         v = parse_hb_value(r.get("RESULT"))
         if v is None:
             continue
-        dt = _combine(_parse_hosxp_date(r.get("LVSTDATE") or ""),
-                       _parse_time(r.get("LVSTTIME") or ""))
+        dt = _combine(
+            _parse_hosxp_date(r.get("LVSTDATE") or ""),
+            _parse_time(r.get("LVSTTIME") or ""),
+        )
         if dt is None:
             continue
-        obs.append(HbObservation(
-            value_g_dl=v, datetime_utc=dt,
-            source="HEMATOLOGY" if labexm == HB_HEM_CODE else "POCT",
-            item_no=i,
-        ))
+        obs.append(
+            HbObservation(
+                value_g_dl=v,
+                datetime_utc=dt,
+                source="HEMATOLOGY" if labexm == HB_HEM_CODE else "POCT",
+                item_no=i,
+            )
+        )
     return obs
 
 
@@ -158,8 +187,10 @@ def _latest_anc(
             v = float(raw)
         except ValueError:
             continue
-        dt = _combine(_parse_hosxp_date(r.get("LVSTDATE") or ""),
-                       _parse_time(r.get("LVSTTIME") or ""))
+        dt = _combine(
+            _parse_hosxp_date(r.get("LVSTDATE") or ""),
+            _parse_time(r.get("LVSTTIME") or ""),
+        )
         if dt is None or dt > anchor:
             continue
         if best is None or dt > best[0]:
@@ -187,38 +218,43 @@ def _build_op_events(
             except ValueError:
                 continue
         time_raw = str(r.get("INTIME") or "").strip()
-        t = _parse_time(time_raw) or ParsedTimeOfDay(
-            hour=0, minute=0, second=0
-        )
+        t = _parse_time(time_raw) or ParsedTimeOfDay(hour=0, minute=0, second=0)
         dt = _combine(d, t)
         if dt is None:
             continue
         meta = icd9_dict.get(icd9, {})
-        out.append(OperativeEvent(
-            icd9=icd9,
-            or_flag=(meta.get("ORFLAG") or "").strip() == "1",
-            operative_datetime=dt,
-            name=(meta.get("NAME") or "").strip() or None,
-        ))
+        out.append(
+            OperativeEvent(
+                icd9=icd9,
+                or_flag=(meta.get("ORFLAG") or "").strip() == "1",
+                operative_datetime=dt,
+                name=(meta.get("NAME") or "").strip() or None,
+            )
+        )
     return tuple(out)
 
 
-def _build_med_events(
-    med_rows: list[dict[str, str]], an: str
-) -> tuple[MedEvent, ...]:
+def _build_med_events(med_rows: list[dict[str, str]], an: str) -> tuple[MedEvent, ...]:
     out: list[MedEvent] = []
     for r in med_rows:
         if r.get("AN") != an:
             continue
-        drug = " ".join(filter(None, [
-            (r.get("NAME_MEDITEM") or "").strip(),
-            (r.get("NAME_GENERIC") or "").strip(),
-            (r.get("STRENGTH") or "").strip(),
-            (r.get("STRENGTHUNIT") or "").strip(),
-            (r.get("MEDUSEQTY") or "").strip(),
-        ]))
-        dt = _combine(_parse_hosxp_date(r.get("PRSCDATE") or ""),
-                       _parse_time(r.get("PRSCTIME") or ""))
+        drug = " ".join(
+            filter(
+                None,
+                [
+                    (r.get("NAME_MEDITEM") or "").strip(),
+                    (r.get("NAME_GENERIC") or "").strip(),
+                    (r.get("STRENGTH") or "").strip(),
+                    (r.get("STRENGTHUNIT") or "").strip(),
+                    (r.get("MEDUSEQTY") or "").strip(),
+                ],
+            )
+        )
+        dt = _combine(
+            _parse_hosxp_date(r.get("PRSCDATE") or ""),
+            _parse_time(r.get("PRSCTIME") or ""),
+        )
         if dt is None or not drug:
             continue
         out.append(MedEvent(drug=drug, timestamp=dt))
@@ -233,6 +269,7 @@ def _is_crystalloid(name: str) -> bool:
 def _normalize_iptsumoprt(raw: list[dict[str, str]]) -> list[dict[str, str]]:
     """Mirror the ingest normalize: uppercase column names + parse INDATE."""
     from bba.ingest.date_parser import parse_iptsumoprt_date
+
     out: list[dict[str, str]] = []
     for r in raw:
         upper = {k.upper(): v for k, v in r.items()}
@@ -281,36 +318,44 @@ def main() -> None:
         hn = r["HN"]
         reqno = r["REQNO"]
         an = (r.get("AN") or "").strip() or None
-        inputs.append(BloodOrderInput(
-            hn=hn,
-            an=an,
-            reqno=reqno,
-            bdvstst=(r.get("BDVSTST") or "").strip(),
-            reqtype=(r.get("REQTYPE") or "").strip(),
-            canceldate=(r.get("CANCELDATE") or "").strip() or None,
-            req_date=_parse_hosxp_date(r.get("REQDATE") or ""),
-            req_time=_parse_time(r.get("REQTIME") or ""),
-            bdvst_date=_parse_hosxp_date(r.get("BDVSTDATE") or ""),
-            bdvst_time=_parse_time(r.get("BDVSTTIME") or ""),
-            products=tuple(products_by_reqno.get(reqno, [])),
-            diagnosis_codes=_icd_codes(*(diag_by_an.get(an or "", [])
-                                          + [r.get("ICD10")])),
-        ))
+        inputs.append(
+            BloodOrderInput(
+                hn=hn,
+                an=an,
+                reqno=reqno,
+                bdvstst=(r.get("BDVSTST") or "").strip(),
+                reqtype=(r.get("REQTYPE") or "").strip(),
+                canceldate=(r.get("CANCELDATE") or "").strip() or None,
+                req_date=_parse_hosxp_date(r.get("REQDATE") or ""),
+                req_time=_parse_time(r.get("REQTIME") or ""),
+                bdvst_date=_parse_hosxp_date(r.get("BDVSTDATE") or ""),
+                bdvst_time=_parse_time(r.get("BDVSTTIME") or ""),
+                products=tuple(products_by_reqno.get(reqno, [])),
+                diagnosis_codes=_icd_codes(
+                    *(diag_by_an.get(an or "", []) + [r.get("ICD10")])
+                ),
+            )
+        )
 
     filter_result = build_audit_orders(
-        inputs, AuditOrdersConfig(code_version=CODE_VERSION),
+        inputs,
+        AuditOrdersConfig(code_version=CODE_VERSION),
     )
 
-    print(f"\naudit_orders: included={len(filter_result.included)} "
-          f"excluded={len(filter_result.excluded)}")
+    print(
+        f"\naudit_orders: included={len(filter_result.included)} "
+        f"excluded={len(filter_result.excluded)}"
+    )
     if filter_result.excluded:
         print("excluded:")
         for ex in filter_result.excluded:
             print(f"  reqno={ex.reqno} reason={ex.reason} detail={ex.detail}")
 
     print("\n" + "=" * 100)
-    print(f"{'reqno':<10} {'an':<22} {'cohort':<24} {'hb':<6} {'fresh':<14} "
-          f"{'thr':<5} {'classification':<26} {'rationale'}")
+    print(
+        f"{'reqno':<10} {'an':<22} {'cohort':<24} {'hb':<6} {'fresh':<14} "
+        f"{'thr':<5} {'classification':<26} {'rationale'}"
+    )
     print("=" * 100)
 
     rows: list[dict[str, Any]] = []
@@ -325,68 +370,78 @@ def main() -> None:
         )
         anc = _latest_anc(lab, order.an, order.order_datetime)
 
-        cohort = assign_cohort(CohortInputs(
-            audit_id=order.audit_id,
-            hn=order.hn,
-            an=order.an,
-            order_datetime=order.order_datetime,
-            procedure_events=op_events,
-            diagnosis_codes=order.diagnosis_codes,
-            med_events=med_events,
-            blood_orders=(),
-            anc_value=anc,
-        ))
+        cohort = assign_cohort(
+            CohortInputs(
+                audit_id=order.audit_id,
+                hn=order.hn,
+                an=order.an,
+                order_datetime=order.order_datetime,
+                procedure_events=op_events,
+                diagnosis_codes=order.diagnosis_codes,
+                med_events=med_events,
+                blood_orders=(),
+                anc_value=anc,
+            )
+        )
 
         prior_ops = [
             o for o in op_events if o.operative_datetime <= order.order_datetime
         ]
         proximity_h = (
-            (order.order_datetime - max(prior_ops,
-                                          key=lambda o: o.operative_datetime
-                                          ).operative_datetime).total_seconds() / 3600.0
-            if prior_ops else None
+            (
+                order.order_datetime
+                - max(prior_ops, key=lambda o: o.operative_datetime).operative_datetime
+            ).total_seconds()
+            / 3600.0
+            if prior_ops
+            else None
         )
 
-        clf = classify(ClassifierInputs(
-            audit_id=order.audit_id,
-            hb_result=hb,
-            cohort_assignment=cohort,
-            order_datetime=order.order_datetime,
-            procedure_proximity_hours=proximity_h,
-            crystalloid_liters_prior_4h=crystalloid_liters,
-        ))
+        clf = classify(
+            ClassifierInputs(
+                audit_id=order.audit_id,
+                hb_result=hb,
+                cohort_assignment=cohort,
+                order_datetime=order.order_datetime,
+                procedure_proximity_hours=proximity_h,
+                crystalloid_liters_prior_4h=crystalloid_liters,
+            )
+        )
 
         hb_disp = f"{hb.value_g_dl:.1f}" if hb.value_g_dl is not None else "----"
-        thr_disp = (f"{cohort.threshold:.1f}"
-                     if cohort.threshold is not None else "n/a")
-        print(f"{order.reqno:<10} {order.an[:20]:<22} "
-              f"{cohort.label.value:<24} "
-              f"{hb_disp:<6} {hb.freshness:<14} {thr_disp:<5} "
-              f"{clf.classification:<26} {clf.rationale}")
+        thr_disp = f"{cohort.threshold:.1f}" if cohort.threshold is not None else "n/a"
+        print(
+            f"{order.reqno:<10} {order.an[:20]:<22} "
+            f"{cohort.label.value:<24} "
+            f"{hb_disp:<6} {hb.freshness:<14} {thr_disp:<5} "
+            f"{clf.classification:<26} {clf.rationale}"
+        )
 
-        rows.append({
-            "reqno": order.reqno,
-            "an": order.an,
-            "order_datetime_utc": order.order_datetime.isoformat(),
-            "anchor_imputed": order.anchor_imputed,
-            "products_ordered": "|".join(order.products_ordered),
-            "diagnosis_codes_n": len(order.diagnosis_codes),
-            "hb_value_g_dl": hb.value_g_dl,
-            "hb_freshness": hb.freshness,
-            "hb_source": hb.source,
-            "hb_delta_bypass": hb.delta_hb_bypass,
-            "hb_needs_review_single_low": hb.needs_review_single_low_hb,
-            "cohort_label": cohort.label.value,
-            "cohort_threshold": cohort.threshold,
-            "cohort_evidence_code": cohort.evidence_code,
-            "cohort_evidence_name": cohort.evidence_name,
-            "procedure_proximity_hours": proximity_h,
-            "crystalloid_liters_prior_4h": crystalloid_liters,
-            "anc_value": anc,
-            "classification": clf.classification,
-            "rationale": clf.rationale,
-            "bypass_reason": clf.bypass_reason.value,
-        })
+        rows.append(
+            {
+                "reqno": order.reqno,
+                "an": order.an,
+                "order_datetime_utc": order.order_datetime.isoformat(),
+                "anchor_imputed": order.anchor_imputed,
+                "products_ordered": "|".join(order.products_ordered),
+                "diagnosis_codes_n": len(order.diagnosis_codes),
+                "hb_value_g_dl": hb.value_g_dl,
+                "hb_freshness": hb.freshness,
+                "hb_source": hb.source,
+                "hb_delta_bypass": hb.delta_hb_bypass,
+                "hb_needs_review_single_low": hb.needs_review_single_low_hb,
+                "cohort_label": cohort.label.value,
+                "cohort_threshold": cohort.threshold,
+                "cohort_evidence_code": cohort.evidence_code,
+                "cohort_evidence_name": cohort.evidence_name,
+                "procedure_proximity_hours": proximity_h,
+                "crystalloid_liters_prior_4h": crystalloid_liters,
+                "anc_value": anc,
+                "classification": clf.classification,
+                "rationale": clf.rationale,
+                "bypass_reason": clf.bypass_reason.value,
+            }
+        )
 
     out_csv = WORK / "report.csv"
     # Always write — even an all-excluded sample needs a valid (header-
@@ -407,12 +462,15 @@ def main() -> None:
         print(f"  {k:<26} {counts[k]}")
 
     routed_to_llm = sum(
-        1 for r in rows
+        1
+        for r in rows
         if r["classification"] in {"POTENTIALLY_INAPPROPRIATE", "NEEDS_REVIEW"}
     )
     if routed_to_llm:
-        print(f"\n{routed_to_llm} case(s) would route to the LLM_REVIEW leg. "
-              "Run scripts/pilot/run_llm_leg.py to submit them.")
+        print(
+            f"\n{routed_to_llm} case(s) would route to the LLM_REVIEW leg. "
+            "Run scripts/pilot/run_llm_leg.py to submit them."
+        )
 
 
 if __name__ == "__main__":

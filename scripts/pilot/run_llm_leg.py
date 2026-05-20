@@ -35,6 +35,7 @@ Environment variables:
   ``pilot-mini``). Bump to force re-run; the store is idempotent on
   (run_id, audit_id).
 """
+
 from __future__ import annotations
 
 import csv
@@ -109,10 +110,22 @@ WINDOW_NOTES_DAYS_BEFORE = 1
 WINDOW_NOTES_DAYS_AFTER = 0
 
 CRYSTALLOID_KEYWORDS = (
-    "nss", "0.9% nacl", "0.9 nacl", "0.9%nacl", "normal saline",
-    "rls", "ringer", "lactated ringer", "lrs",
-    "plasmalyte", "plasma-lyte",
-    "d5w", "d5/w", "d5s", "d5%", "5% dextrose",
+    "nss",
+    "0.9% nacl",
+    "0.9 nacl",
+    "0.9%nacl",
+    "normal saline",
+    "rls",
+    "ringer",
+    "lactated ringer",
+    "lrs",
+    "plasmalyte",
+    "plasma-lyte",
+    "d5w",
+    "d5/w",
+    "d5s",
+    "d5%",
+    "5% dextrose",
 )
 
 csv.field_size_limit(sys.maxsize)
@@ -221,15 +234,20 @@ def _hb_observations(lab: list[dict[str, str]], an: str) -> list[HbObservation]:
         v = parse_hb_value(r.get("RESULT"))
         if v is None:
             continue
-        dt = _combine(_parse_hosxp_date(r.get("LVSTDATE") or ""),
-                       _parse_time(r.get("LVSTTIME") or ""))
+        dt = _combine(
+            _parse_hosxp_date(r.get("LVSTDATE") or ""),
+            _parse_time(r.get("LVSTTIME") or ""),
+        )
         if dt is None:
             continue
-        obs.append(HbObservation(
-            value_g_dl=v, datetime_utc=dt,
-            source="HEMATOLOGY" if labexm == HB_HEM_CODE else "POCT",
-            item_no=i,
-        ))
+        obs.append(
+            HbObservation(
+                value_g_dl=v,
+                datetime_utc=dt,
+                source="HEMATOLOGY" if labexm == HB_HEM_CODE else "POCT",
+                item_no=i,
+            )
+        )
     return obs
 
 
@@ -238,15 +256,22 @@ def _med_events(med: list[dict[str, str]], an: str) -> tuple[MedEvent, ...]:
     for r in med:
         if r.get("AN") != an:
             continue
-        drug = " ".join(filter(None, [
-            (r.get("NAME_MEDITEM") or "").strip(),
-            (r.get("NAME_GENERIC") or "").strip(),
-            (r.get("STRENGTH") or "").strip(),
-            (r.get("STRENGTHUNIT") or "").strip(),
-            (r.get("MEDUSEQTY") or "").strip(),
-        ]))
-        dt = _combine(_parse_hosxp_date(r.get("PRSCDATE") or ""),
-                       _parse_time(r.get("PRSCTIME") or ""))
+        drug = " ".join(
+            filter(
+                None,
+                [
+                    (r.get("NAME_MEDITEM") or "").strip(),
+                    (r.get("NAME_GENERIC") or "").strip(),
+                    (r.get("STRENGTH") or "").strip(),
+                    (r.get("STRENGTHUNIT") or "").strip(),
+                    (r.get("MEDUSEQTY") or "").strip(),
+                ],
+            )
+        )
+        dt = _combine(
+            _parse_hosxp_date(r.get("PRSCDATE") or ""),
+            _parse_time(r.get("PRSCTIME") or ""),
+        )
         if dt is None or not drug:
             continue
         out.append(MedEvent(drug=drug, timestamp=dt))
@@ -272,22 +297,29 @@ def _op_events(
             except ValueError:
                 continue
         t = _parse_time(str(r.get("INTIME") or "")) or ParsedTimeOfDay(
-            hour=0, minute=0, second=0,
+            hour=0,
+            minute=0,
+            second=0,
         )
         dt = _combine(d, t)
         if dt is None:
             continue
         meta = icd9_dict.get(icd9, {})
-        out.append(OperativeEvent(
-            icd9=icd9, or_flag=(meta.get("ORFLAG") or "") == "1",
-            operative_datetime=dt,
-            name=(meta.get("NAME") or "").strip() or None,
-        ))
+        out.append(
+            OperativeEvent(
+                icd9=icd9,
+                or_flag=(meta.get("ORFLAG") or "") == "1",
+                operative_datetime=dt,
+                name=(meta.get("NAME") or "").strip() or None,
+            )
+        )
     return tuple(out)
 
 
 def _latest_anc(
-    lab: list[dict[str, str]], an: str, anchor: datetime,
+    lab: list[dict[str, str]],
+    an: str,
+    anchor: datetime,
 ) -> int | None:
     best: tuple[datetime, int] | None = None
     for r in lab:
@@ -299,8 +331,10 @@ def _latest_anc(
             v = float((r.get("RESULT") or "").strip())
         except ValueError:
             continue
-        dt = _combine(_parse_hosxp_date(r.get("LVSTDATE") or ""),
-                       _parse_time(r.get("LVSTTIME") or ""))
+        dt = _combine(
+            _parse_hosxp_date(r.get("LVSTDATE") or ""),
+            _parse_time(r.get("LVSTTIME") or ""),
+        )
         if dt is None or dt > anchor:
             continue
         if best is None or dt > best[0]:
@@ -323,28 +357,45 @@ def _vitals_notes_for(
     for r in progress:
         if r.get("AN") != an:
             continue
-        dt = _combine(_parse_hosxp_date(r.get("PROGDATE") or ""),
-                       ParsedTimeOfDay(hour=0, minute=0, second=0))
+        dt = _combine(
+            _parse_hosxp_date(r.get("PROGDATE") or ""),
+            ParsedTimeOfDay(hour=0, minute=0, second=0),
+        )
         text = (r.get("OBJECTIVE") or "").strip()
         if dt is None or not text:
             continue
-        out.append(VitalsNote(
-            timestamp=dt, text=text, source="IPDADMPROGRESS",
-        ))
+        out.append(
+            VitalsNote(
+                timestamp=dt,
+                text=text,
+                source="IPDADMPROGRESS",
+            )
+        )
     for r in focus:
         if r.get("AN") != an:
             continue
-        dt = _combine(_parse_hosxp_date(r.get("PROGRESSDATE") or ""),
-                       _parse_time(r.get("PROGRESSTIME") or ""))
-        text = " ".join(filter(None, [
-            (r.get("ACTION") or "").strip(),
-            (r.get("RESPONSE") or "").strip(),
-        ]))
+        dt = _combine(
+            _parse_hosxp_date(r.get("PROGRESSDATE") or ""),
+            _parse_time(r.get("PROGRESSTIME") or ""),
+        )
+        text = " ".join(
+            filter(
+                None,
+                [
+                    (r.get("ACTION") or "").strip(),
+                    (r.get("RESPONSE") or "").strip(),
+                ],
+            )
+        )
         if dt is None or not text:
             continue
-        out.append(VitalsNote(
-            timestamp=dt, text=text, source="IPDNRFOCUSDT",
-        ))
+        out.append(
+            VitalsNote(
+                timestamp=dt,
+                text=text,
+                source="IPDNRFOCUSDT",
+            )
+        )
     return tuple(out)
 
 
@@ -355,6 +406,7 @@ def _is_crystalloid(name: str) -> bool:
 
 def _normalize_iptsumoprt(raw: list[dict[str, str]]) -> list[dict[str, str]]:
     from bba.ingest.date_parser import parse_iptsumoprt_date
+
     out: list[dict[str, str]] = []
     for r in raw:
         upper = {k.upper(): v for k, v in r.items()}
@@ -380,8 +432,11 @@ def _render_payload(source: str, payload: dict[str, Any]) -> str:
         return f"Hb {val} g/dL ({src}) at {ts}"
     if source == "Vitals":
         ts = payload.get("timestamp", "")
-        bits = [f"{k.upper()}={v}" for k in ("sbp", "dbp", "hr", "rr", "bt")
-                if (v := payload.get(k)) is not None]
+        bits = [
+            f"{k.upper()}={v}"
+            for k in ("sbp", "dbp", "hr", "rr", "bt")
+            if (v := payload.get(k)) is not None
+        ]
         return f"Vitals at {ts}: " + ", ".join(bits)
     if source == "Med":
         ts = payload.get("timestamp", "")
@@ -432,24 +487,26 @@ def _build_inputs():
         hn = r["HN"]
         reqno = r["REQNO"]
         an = (r.get("AN") or "").strip() or None
-        inputs.append(BloodOrderInput(
-            hn=hn,
-            an=an,
-            reqno=reqno,
-            bdvstst=(r.get("BDVSTST") or "").strip(),
-            reqtype=(r.get("REQTYPE") or "").strip(),
-            canceldate=(r.get("CANCELDATE") or "").strip() or None,
-            req_date=_parse_hosxp_date(r.get("REQDATE") or ""),
-            req_time=_parse_time(r.get("REQTIME") or ""),
-            bdvst_date=_parse_hosxp_date(r.get("BDVSTDATE") or ""),
-            bdvst_time=_parse_time(r.get("BDVSTTIME") or ""),
-            products=tuple(products_by_reqno.get(reqno, [])),
-            diagnosis_codes=_icd_codes(*(diag_by_an.get(an or "", [])
-                                          + [r.get("ICD10")])),
-        ))
+        inputs.append(
+            BloodOrderInput(
+                hn=hn,
+                an=an,
+                reqno=reqno,
+                bdvstst=(r.get("BDVSTST") or "").strip(),
+                reqtype=(r.get("REQTYPE") or "").strip(),
+                canceldate=(r.get("CANCELDATE") or "").strip() or None,
+                req_date=_parse_hosxp_date(r.get("REQDATE") or ""),
+                req_time=_parse_time(r.get("REQTIME") or ""),
+                bdvst_date=_parse_hosxp_date(r.get("BDVSTDATE") or ""),
+                bdvst_time=_parse_time(r.get("BDVSTTIME") or ""),
+                products=tuple(products_by_reqno.get(reqno, [])),
+                diagnosis_codes=_icd_codes(
+                    *(diag_by_an.get(an or "", []) + [r.get("ICD10")])
+                ),
+            )
+        )
 
-    return (inputs, lab, med, iptsumoprt, icd9_dict, progress, focus,
-            diag_name_by_code)
+    return (inputs, lab, med, iptsumoprt, icd9_dict, progress, focus, diag_name_by_code)
 
 
 def main() -> None:
@@ -460,8 +517,9 @@ def main() -> None:
         sys.exit(f"bundle not found: {BUNDLE} (run sample_bundle.py first)")
 
     AUDIT_STORE_ROOT.mkdir(parents=True, exist_ok=True)
-    (inputs, lab, med, iptsumoprt, icd9_dict, progress, focus,
-     diag_name_by_code) = _build_inputs()
+    (inputs, lab, med, iptsumoprt, icd9_dict, progress, focus, diag_name_by_code) = (
+        _build_inputs()
+    )
 
     fr = build_audit_orders(inputs, AuditOrdersConfig(code_version=CODE_VERSION))
     print(f"audit_orders: included={len(fr.included)} excluded={len(fr.excluded)}")
@@ -475,25 +533,31 @@ def main() -> None:
         op_events = _op_events(iptsumoprt, icd9_dict, order.an)
         med_events = _med_events(med, order.an)
         anc = _latest_anc(lab, order.an, order.order_datetime)
-        cohort = assign_cohort(CohortInputs(
-            audit_id=order.audit_id,
-            hn=order.hn,
-            an=order.an,
-            order_datetime=order.order_datetime,
-            procedure_events=op_events,
-            diagnosis_codes=order.diagnosis_codes,
-            med_events=med_events,
-            blood_orders=(),
-            anc_value=anc,
-        ))
+        cohort = assign_cohort(
+            CohortInputs(
+                audit_id=order.audit_id,
+                hn=order.hn,
+                an=order.an,
+                order_datetime=order.order_datetime,
+                procedure_events=op_events,
+                diagnosis_codes=order.diagnosis_codes,
+                med_events=med_events,
+                blood_orders=(),
+                anc_value=anc,
+            )
+        )
 
-        prior_ops = [o for o in op_events
-                      if o.operative_datetime <= order.order_datetime]
+        prior_ops = [
+            o for o in op_events if o.operative_datetime <= order.order_datetime
+        ]
         proximity_h = (
-            (order.order_datetime
-             - max(prior_ops, key=lambda o: o.operative_datetime
-                    ).operative_datetime).total_seconds() / 3600.0
-            if prior_ops else None
+            (
+                order.order_datetime
+                - max(prior_ops, key=lambda o: o.operative_datetime).operative_datetime
+            ).total_seconds()
+            / 3600.0
+            if prior_ops
+            else None
         )
 
         crystalloid_events = tuple(m for m in med_events if _is_crystalloid(m.drug))
@@ -501,8 +565,9 @@ def main() -> None:
             crystalloid_events, order.order_datetime
         )
 
-        vitals_notes = _vitals_notes_for(progress, focus, order.an,
-                                          order.order_datetime)
+        vitals_notes = _vitals_notes_for(
+            progress, focus, order.an, order.order_datetime
+        )
         vitals = extract_vitals(anchor=order.order_datetime, notes=vitals_notes)
 
         # Calendar-day window in the source-data timezone, not a rolling
@@ -514,28 +579,34 @@ def main() -> None:
         order_date_local = order.order_datetime.astimezone(local_tz).date()
         notes_lo = datetime.combine(
             order_date_local - timedelta(days=WINDOW_NOTES_DAYS_BEFORE),
-            _time.min, tzinfo=local_tz,
+            _time.min,
+            tzinfo=local_tz,
         ).astimezone(timezone.utc)
         notes_hi = datetime.combine(
             order_date_local + timedelta(days=WINDOW_NOTES_DAYS_AFTER + 1),
-            _time.min, tzinfo=local_tz,
+            _time.min,
+            tzinfo=local_tz,
         ).astimezone(timezone.utc)
         hb_lo = order.order_datetime - timedelta(days=WINDOW_HB_DAYS)
 
         diagnoses: tuple[DiagnosisRecord, ...] = tuple(
-            DiagnosisRecord(icd10=code,
-                            description=diag_name_by_code.get(code))
+            DiagnosisRecord(icd10=code, description=diag_name_by_code.get(code))
             for code in dict.fromkeys(order.diagnosis_codes)
         )
         hb_for_bundle = tuple(
-            HbRecord(timestamp=o.datetime_utc, value_g_dl=o.value_g_dl,
-                     source=o.source, item_no=o.item_no)
+            HbRecord(
+                timestamp=o.datetime_utc,
+                value_g_dl=o.value_g_dl,
+                source=o.source,
+                item_no=o.item_no,
+            )
             for o in hb_obs
             if hb_lo <= o.datetime_utc <= order.order_datetime
         )
         meds_in_window = sorted(
             [m for m in med_events if notes_lo <= m.timestamp < notes_hi],
-            key=lambda m: m.timestamp, reverse=True,
+            key=lambda m: m.timestamp,
+            reverse=True,
         )
         meds_for_bundle = tuple(
             MedRecord(timestamp=m.timestamp, drug=m.drug) for m in meds_in_window
@@ -554,30 +625,37 @@ def main() -> None:
             }
             v_src = src_map.get(vitals.source.value)
             if v_src is not None:
-                vital_records = (VitalsRecord(
-                    timestamp=vitals.note_timestamp,
-                    source=cast(Any, v_src),
-                    sbp=vitals.vitals.sbp, dbp=vitals.vitals.dbp,
-                    hr=vitals.vitals.hr, rr=vitals.vitals.rr,
-                    bt=vitals.vitals.bt,
-                ),)
+                vital_records = (
+                    VitalsRecord(
+                        timestamp=vitals.note_timestamp,
+                        source=cast(Any, v_src),
+                        sbp=vitals.vitals.sbp,
+                        dbp=vitals.vitals.dbp,
+                        hr=vitals.vitals.hr,
+                        rr=vitals.vitals.rr,
+                        bt=vitals.vitals.bt,
+                    ),
+                )
 
         hn_hash = _hash(order.hn)
         an_hash = _hash(order.an)
 
-        bundle = build_evidence_bundle(inputs=EvidenceInputs(
-            anchor=OrderAnchor(
-                order_datetime=order.order_datetime,
-                hn_hash=hn_hash, an_hash=an_hash,
-                products=order.products_ordered,
-            ),
-            diagnoses=diagnoses,
-            progress_notes=(),  # PHI-safety
-            focus_notes=(),     # PHI-safety
-            meds=meds_for_bundle,
-            hb_history=hb_for_bundle,
-            vitals=vital_records,
-        ))
+        bundle = build_evidence_bundle(
+            inputs=EvidenceInputs(
+                anchor=OrderAnchor(
+                    order_datetime=order.order_datetime,
+                    hn_hash=hn_hash,
+                    an_hash=an_hash,
+                    products=order.products_ordered,
+                ),
+                diagnoses=diagnoses,
+                progress_notes=(),  # PHI-safety
+                focus_notes=(),  # PHI-safety
+                meds=meds_for_bundle,
+                hb_history=hb_for_bundle,
+                vitals=vital_records,
+            )
+        )
 
         # Hb chunks get extra annotations so the LLM can weight closest +
         # lowest values: each Hb item is tagged with hours-before-anchor
@@ -595,16 +673,21 @@ def main() -> None:
         min24_id: str | None = None
         min48_id: str | None = None
         if hb_payloads:
-            pre = [(i, v, t) for i, v, t in hb_payloads
-                    if t <= order.order_datetime]
+            pre = [(i, v, t) for i, v, t in hb_payloads if t <= order.order_datetime]
             if pre:
                 closest_id = max(pre, key=lambda x: x[2])[0]
-                w24 = [x for x in pre
-                        if (order.order_datetime - x[2]) <= timedelta(hours=24)]
+                w24 = [
+                    x
+                    for x in pre
+                    if (order.order_datetime - x[2]) <= timedelta(hours=24)
+                ]
                 if w24:
                     min24_id = min(w24, key=lambda x: x[1])[0]
-                w48 = [x for x in pre
-                        if (order.order_datetime - x[2]) <= timedelta(hours=48)]
+                w48 = [
+                    x
+                    for x in pre
+                    if (order.order_datetime - x[2]) <= timedelta(hours=48)
+                ]
                 if w48:
                     min48_id = min(w48, key=lambda x: x[1])[0]
 
@@ -615,8 +698,9 @@ def main() -> None:
                 continue
             if item.id in (closest_id, min24_id, min48_id):
                 ts = item.timestamp_utc
-                hrs = ((order.order_datetime - ts).total_seconds() / 3600.0
-                        if ts else None)
+                hrs = (
+                    (order.order_datetime - ts).total_seconds() / 3600.0 if ts else None
+                )
                 flags: list[str] = []
                 if item.id == closest_id:
                     flags.append("closest pre-order Hb")
@@ -629,13 +713,18 @@ def main() -> None:
                 text = f"{text}  [{'; '.join(flags)}]"
             elif item.source == "Lab" and "value_g_dl" in dict(item.payload):
                 ts = item.timestamp_utc
-                hrs = ((order.order_datetime - ts).total_seconds() / 3600.0
-                        if ts else None)
+                hrs = (
+                    (order.order_datetime - ts).total_seconds() / 3600.0 if ts else None
+                )
                 if hrs is not None:
                     text = f"{text}  [{hrs:.1f}h before order]"
-            chunks.append(EvidenceChunk(
-                evidence_id=item.id, source=item.source, text=text,
-            ))
+            chunks.append(
+                EvidenceChunk(
+                    evidence_id=item.id,
+                    source=item.source,
+                    text=text,
+                )
+            )
 
         # Append CBC chunks (Plt / WBC / Neutrophils) in the ±1d window.
         next_eid = 901
@@ -643,11 +732,17 @@ def main() -> None:
             if r.get("AN") != order.an:
                 continue
             code = (r.get("LABEXM") or "").strip()
-            if code not in {PLT_CODE, *WBC_CODES, NEUTROPHIL_ABS_CODE,
-                              NEUTROPHIL_PCT_CODE}:
+            if code not in {
+                PLT_CODE,
+                *WBC_CODES,
+                NEUTROPHIL_ABS_CODE,
+                NEUTROPHIL_PCT_CODE,
+            }:
                 continue
-            dt = _combine(_parse_hosxp_date(r.get("LVSTDATE") or ""),
-                           _parse_time(r.get("LVSTTIME") or ""))
+            dt = _combine(
+                _parse_hosxp_date(r.get("LVSTDATE") or ""),
+                _parse_time(r.get("LVSTTIME") or ""),
+            )
             if dt is None or not (notes_lo <= dt < notes_hi):
                 continue
             value = (r.get("RESULT") or "").strip()
@@ -658,12 +753,18 @@ def main() -> None:
             lo = (r.get("MINNRM") or "").strip()
             hi = (r.get("MAXNRM") or "").strip()
             hrs = (order.order_datetime - dt).total_seconds() / 3600.0
-            text = (f"{name} {value}{(' ' + unit) if unit else ''} at "
-                     f"{dt.isoformat()}  [ref {lo}-{hi}; "
-                     f"{hrs:+.1f}h vs order]")
-            chunks.append(EvidenceChunk(
-                evidence_id=f"E{next_eid}", source="Lab", text=text,
-            ))
+            text = (
+                f"{name} {value}{(' ' + unit) if unit else ''} at "
+                f"{dt.isoformat()}  [ref {lo}-{hi}; "
+                f"{hrs:+.1f}h vs order]"
+            )
+            chunks.append(
+                EvidenceChunk(
+                    evidence_id=f"E{next_eid}",
+                    source="Lab",
+                    text=text,
+                )
+            )
             next_eid += 1
 
         guidance_lines = [
@@ -689,45 +790,53 @@ def main() -> None:
             "- Do not silently drop sub-threshold Hb values from the reasoning;",
             "  ignoring them is the failure mode this policy exists to prevent.",
         ]
-        chunks.append(EvidenceChunk(
-            evidence_id="E999",
-            source="Analysis_Hint",
-            text="\n".join(guidance_lines),
-        ))
+        chunks.append(
+            EvidenceChunk(
+                evidence_id="E999",
+                source="Analysis_Hint",
+                text="\n".join(guidance_lines),
+            )
+        )
 
         if not chunks:
             print(f"  WARN: empty chunks for {order.reqno}; skipping LLM submit")
             continue
 
-        contexts.append(PipelineRowContext(
-            order=order,
-            hb_result=hb,
-            vitals_result=vitals,
-            cohort_assignment=cohort,
-            procedure_proximity_hours=proximity_h,
-            crystalloid_liters_prior_4h=crystalloid_liters,
-            hn_hash=hn_hash, an_hash=an_hash,
-            prior_rbc_units_24h=0, prior_rbc_units_7d=0,
-            redactor_version="structured-only-no-text-deid-0.0",
-            redactor_model_sha="0" * 64,
-            policy_version="KCMH-PR17.2 / AABB-2023 (pilot)",
-            prompt_hash="0" * 64,
-            evidence_bundle_hash=bundle.bundle_hash,
-            evidence_chunks=tuple(chunks),
-        ))
+        contexts.append(
+            PipelineRowContext(
+                order=order,
+                hb_result=hb,
+                vitals_result=vitals,
+                cohort_assignment=cohort,
+                procedure_proximity_hours=proximity_h,
+                crystalloid_liters_prior_4h=crystalloid_liters,
+                hn_hash=hn_hash,
+                an_hash=an_hash,
+                prior_rbc_units_24h=0,
+                prior_rbc_units_7d=0,
+                redactor_version="structured-only-no-text-deid-0.0",
+                redactor_model_sha="0" * 64,
+                policy_version="KCMH-PR17.2 / AABB-2023 (pilot)",
+                prompt_hash="0" * 64,
+                evidence_bundle_hash=bundle.bundle_hash,
+                evidence_chunks=tuple(chunks),
+            )
+        )
 
     DETERMINISTIC_FINAL = {"APPROPRIATE", "INSUFFICIENT_EVIDENCE", "INAPPROPRIATE"}
     classifier_results: dict[str, Any] = {}
     llm_contexts: list[PipelineRowContext] = []
     for ctx in contexts:
-        cres = classify(ClassifierInputs(
-            audit_id=ctx.order.audit_id,
-            hb_result=ctx.hb_result,
-            cohort_assignment=ctx.cohort_assignment,
-            order_datetime=ctx.order.order_datetime,
-            procedure_proximity_hours=ctx.procedure_proximity_hours,
-            crystalloid_liters_prior_4h=ctx.crystalloid_liters_prior_4h,
-        ))
+        cres = classify(
+            ClassifierInputs(
+                audit_id=ctx.order.audit_id,
+                hb_result=ctx.hb_result,
+                cohort_assignment=ctx.cohort_assignment,
+                order_datetime=ctx.order.order_datetime,
+                procedure_proximity_hours=ctx.procedure_proximity_hours,
+                crystalloid_liters_prior_4h=ctx.crystalloid_liters_prior_4h,
+            )
+        )
         classifier_results[ctx.order.audit_id] = cres
         if cres.classification not in DETERMINISTIC_FINAL:
             llm_contexts.append(ctx)
@@ -738,41 +847,60 @@ def main() -> None:
 
     submissions: list[BatchSubmissionRequest] = []
     for ctx in llm_contexts:
-        threshold = (ctx.cohort_assignment.threshold
-                     if ctx.cohort_assignment.threshold is not None else 7.0)
-        prompt = build_prompt(PromptBuildRequest(
-            task_mode="HB_7_10_REVIEW",
-            cohort_threshold=threshold,
-            evidence_chunks=ctx.evidence_chunks,
-            few_shot_examples=(),
-        ))
-        submissions.append(BatchSubmissionRequest(
-            audit_id=ctx.order.audit_id,
-            run_id=RUN_ID,
-            task_mode="HB_7_10_REVIEW",
-            prompt=prompt,
-        ))
+        threshold = (
+            ctx.cohort_assignment.threshold
+            if ctx.cohort_assignment.threshold is not None
+            else 7.0
+        )
+        prompt = build_prompt(
+            PromptBuildRequest(
+                task_mode="HB_7_10_REVIEW",
+                cohort_threshold=threshold,
+                evidence_chunks=ctx.evidence_chunks,
+                few_shot_examples=(),
+            )
+        )
+        submissions.append(
+            BatchSubmissionRequest(
+                audit_id=ctx.order.audit_id,
+                run_id=RUN_ID,
+                task_mode="HB_7_10_REVIEW",
+                prompt=prompt,
+            )
+        )
 
     transport = RealAnthropicTransport(
-        api_key=api_key, poll_interval_seconds=20.0, max_wait_seconds=3600.0,
+        api_key=api_key,
+        poll_interval_seconds=20.0,
+        max_wait_seconds=3600.0,
     )
-    print(f"\nSubmitting batch of {len(submissions)} requests to "
-          f"Anthropic (model={MODEL_ID})...")
+    print(
+        f"\nSubmitting batch of {len(submissions)} requests to "
+        f"Anthropic (model={MODEL_ID})..."
+    )
     t0 = time.time()
     batch_id = transport.submit_batch_only(
-        model=MODEL_ID, requests=submissions, prompt_cache_enabled=True,
+        model=MODEL_ID,
+        requests=submissions,
+        prompt_cache_enabled=True,
     )
     print(f"  batch_id = {batch_id}")
     print("  polling (this can take a while)...")
     response = transport.fetch_batch_results(
-        batch_id, model=MODEL_ID, requests=submissions, prompt_cache_enabled=True,
+        batch_id,
+        model=MODEL_ID,
+        requests=submissions,
+        prompt_cache_enabled=True,
     )
     elapsed = time.time() - t0
     print(f"  batch complete in {elapsed:.1f}s; {len(response.results)} results")
 
-    audit_store = AuditStore(AuditStoreConfig(
-        root_dir=AUDIT_STORE_ROOT, code_version=CODE_VERSION,
-    ))
+    audit_store = AuditStore(
+        AuditStoreConfig(
+            root_dir=AUDIT_STORE_ROOT,
+            code_version=CODE_VERSION,
+        )
+    )
     context_map = {ctx.order.audit_id: ctx for ctx in llm_contexts}
     write_summary = apply_batch_results(
         response,
@@ -786,49 +914,60 @@ def main() -> None:
     print("\n" + "=" * 120)
     rows = list(audit_store.read_audit_results(run_id=RUN_ID))
     rows_by_id = {r.audit_id: r for r in rows}
-    print(f"{'reqno':<10} {'det.verdict':<26} {'final':<26} "
-          f"{'conf':<6} {'review_reason':<22} {'reasoning_en (head)'}")
+    print(
+        f"{'reqno':<10} {'det.verdict':<26} {'final':<26} "
+        f"{'conf':<6} {'review_reason':<22} {'reasoning_en (head)'}"
+    )
     print("=" * 120)
     for ctx in llm_contexts:
         det = classifier_results[ctx.order.audit_id]
         r = rows_by_id.get(ctx.order.audit_id)
-        reasoning = (r.reasoning_summary_en[:60] if r and r.reasoning_summary_en
-                     else "")
+        reasoning = r.reasoning_summary_en[:60] if r and r.reasoning_summary_en else ""
         final = r.final_classification if r else "(no row)"
         conf = f"{r.confidence:.2f}" if r else "—"
         rr = (r.review_reason or "—") if r else "—"
-        print(f"{ctx.order.reqno:<10} {det.classification:<26} "
-              f"{final:<26} {conf:<6} {rr[:20]:<22} {reasoning}")
+        print(
+            f"{ctx.order.reqno:<10} {det.classification:<26} "
+            f"{final:<26} {conf:<6} {rr[:20]:<22} {reasoning}"
+        )
 
     report = []
     for ctx in llm_contexts:
         det = classifier_results[ctx.order.audit_id]
         r = rows_by_id.get(ctx.order.audit_id)
-        report.append({
-            "reqno": ctx.order.reqno,
-            "audit_id": ctx.order.audit_id,
-            "deterministic": {
-                "classification": det.classification,
-                "rationale": det.rationale,
-                "cohort": ctx.cohort_assignment.label.value,
-                "threshold": ctx.cohort_assignment.threshold,
-                "hb": ctx.hb_result.value_g_dl,
-            },
-            "llm_final": ({
-                "rule_classification": r.rule_classification,
-                "final_classification": r.final_classification,
-                "model": r.model_id,
-                "indications": [dict(d) for d in r.indications_json],
-                "negative_evidence": [dict(d) for d in r.negative_evidence_json],
-                "reasoning_en": r.reasoning_summary_en,
-                "reasoning_th": r.reasoning_summary_thai,
-                "confidence": r.confidence,
-                "review_reason": r.review_reason,
-                "needs_human_review": r.needs_human_review,
-                "verifier_pass": r.verifier_pass,
-                "escalated_to_opus": r.escalated_to_opus,
-            } if r else None),
-        })
+        report.append(
+            {
+                "reqno": ctx.order.reqno,
+                "audit_id": ctx.order.audit_id,
+                "deterministic": {
+                    "classification": det.classification,
+                    "rationale": det.rationale,
+                    "cohort": ctx.cohort_assignment.label.value,
+                    "threshold": ctx.cohort_assignment.threshold,
+                    "hb": ctx.hb_result.value_g_dl,
+                },
+                "llm_final": (
+                    {
+                        "rule_classification": r.rule_classification,
+                        "final_classification": r.final_classification,
+                        "model": r.model_id,
+                        "indications": [dict(d) for d in r.indications_json],
+                        "negative_evidence": [
+                            dict(d) for d in r.negative_evidence_json
+                        ],
+                        "reasoning_en": r.reasoning_summary_en,
+                        "reasoning_th": r.reasoning_summary_thai,
+                        "confidence": r.confidence,
+                        "review_reason": r.review_reason,
+                        "needs_human_review": r.needs_human_review,
+                        "verifier_pass": r.verifier_pass,
+                        "escalated_to_opus": r.escalated_to_opus,
+                    }
+                    if r
+                    else None
+                ),
+            }
+        )
     out = WORK / "llm_report.json"
     out.write_text(json.dumps(report, indent=2, ensure_ascii=False))
     print(f"\nFull JSON report: {out}")

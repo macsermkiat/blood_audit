@@ -20,6 +20,7 @@ Environment variables:
   root). Missing-file is OK; the HTML falls back to the bundle's
   ``NAME_ICD10`` column for any codes that appear there.
 """
+
 from __future__ import annotations
 
 import csv
@@ -40,7 +41,10 @@ OUT = WORK / "review.html"
 
 _DEFAULT_ICD10 = (
     Path(__file__).resolve().parents[2].parent
-    / "Bloodbank" / "data" / "raw" / "ICD10.csv"
+    / "Bloodbank"
+    / "data"
+    / "raw"
+    / "ICD10.csv"
 )
 ICD10_DICT_CSV = Path(os.environ.get("BBA_PILOT_ICD10_CSV", str(_DEFAULT_ICD10)))
 
@@ -52,15 +56,17 @@ WINDOW_NOTES_DAYS_AFTER = 0
 PROGRESS_FIRST_N = 3
 
 # Clinical-reviewer spec: only show CBC subset in the "All labs" section.
-CBC_LABEXM_CODES: frozenset[str] = frozenset({
-    "290095",  # Hemoglobin (HEMATOLOGY)
-    "500001",  # Hemoglobin (POCT)
-    "290078",  # Platelets
-    "290136",  # WBC
-    "120015",  # WBC (alt source)
-    "290092",  # Neutrophils %
-    "290093",  # Neutrophils # (ANC)
-})
+CBC_LABEXM_CODES: frozenset[str] = frozenset(
+    {
+        "290095",  # Hemoglobin (HEMATOLOGY)
+        "500001",  # Hemoglobin (POCT)
+        "290078",  # Platelets
+        "290136",  # WBC
+        "120015",  # WBC (alt source)
+        "290092",  # Neutrophils %
+        "290093",  # Neutrophils # (ANC)
+    }
+)
 
 # REQTYPE dictionary per docs/ingest-mapping.md.
 REQTYPE_LABELS: dict[str, str] = {
@@ -174,14 +180,24 @@ def _trim_med_row(r: dict[str, str]) -> dict[str, str]:
     return {
         "PRSCDATE": (r.get("PRSCDATE") or "").split(" ")[0],
         "PRSCTIME": fmt_time(r.get("PRSCTIME")),
-        "DRUG": " ".join(filter(None, [
-            (r.get("NAME_MEDITEM") or "").strip(),
-            (r.get("NAME_GENERIC") or "").strip(),
-        ])),
-        "STRENGTH": " ".join(filter(None, [
-            (r.get("STRENGTH") or "").strip(),
-            (r.get("STRENGTHUNIT") or "").strip(),
-        ])),
+        "DRUG": " ".join(
+            filter(
+                None,
+                [
+                    (r.get("NAME_MEDITEM") or "").strip(),
+                    (r.get("NAME_GENERIC") or "").strip(),
+                ],
+            )
+        ),
+        "STRENGTH": " ".join(
+            filter(
+                None,
+                [
+                    (r.get("STRENGTH") or "").strip(),
+                    (r.get("STRENGTHUNIT") or "").strip(),
+                ],
+            )
+        ),
         "DOSE": (r.get("MEDUSEQTY") or "").strip(),
     }
 
@@ -236,9 +252,11 @@ def render_indications(items: list[dict[str, Any]]) -> str:
             f"<td>{esc(it.get('quote', ''))}</td>"
             "</tr>"
         )
-    return ("<table class='ind'><thead><tr><th>Indication</th>"
-            "<th>Source IDs</th><th>Conf</th><th>Quote</th></tr></thead>"
-            f"<tbody>{''.join(rows)}</tbody></table>")
+    return (
+        "<table class='ind'><thead><tr><th>Indication</th>"
+        "<th>Source IDs</th><th>Conf</th><th>Quote</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table>"
+    )
 
 
 def render_negative(items: list[dict[str, Any]]) -> str:
@@ -293,7 +311,11 @@ def main() -> None:
     det_rows = list(csv.DictReader(DET_REPORT.open(encoding="utf-8")))
     det_by_reqno = {r["reqno"]: r for r in det_rows}
 
-    llm_report = json.loads(LLM_REPORT.read_text(encoding="utf-8")) if LLM_REPORT.exists() else []
+    llm_report = (
+        json.loads(LLM_REPORT.read_text(encoding="utf-8"))
+        if LLM_REPORT.exists()
+        else []
+    )
     llm_by_reqno = {r["reqno"]: r for r in llm_report}
 
     manifest_rows = list(csv.DictReader(MANIFEST.open(encoding="utf-8")))
@@ -313,8 +335,12 @@ def main() -> None:
         anchor_d = parse_hosxp_date(bdv.get("REQDATE")) or parse_hosxp_date(
             bdv.get("BDVSTDATE")
         )
-        notes_lo = (anchor_d - timedelta(days=WINDOW_NOTES_DAYS_BEFORE)) if anchor_d else None
-        notes_hi = (anchor_d + timedelta(days=WINDOW_NOTES_DAYS_AFTER)) if anchor_d else None
+        notes_lo = (
+            (anchor_d - timedelta(days=WINDOW_NOTES_DAYS_BEFORE)) if anchor_d else None
+        )
+        notes_hi = (
+            (anchor_d + timedelta(days=WINDOW_NOTES_DAYS_AFTER)) if anchor_d else None
+        )
         proc_lo = (anchor_d - timedelta(days=WINDOW_PROC_DAYS)) if anchor_d else None
         proc_hi = (anchor_d + timedelta(days=WINDOW_PROC_DAYS)) if anchor_d else None
         hb_lo = (anchor_d - timedelta(days=WINDOW_HB_DAYS)) if anchor_d else None
@@ -326,8 +352,12 @@ def main() -> None:
             return d is None or proc_lo is None or (proc_lo <= d <= proc_hi)
 
         def _in_hb_window(d: date | None) -> bool:
-            return (d is not None and hb_lo is not None and anchor_d is not None
-                    and hb_lo <= d <= anchor_d)
+            return (
+                d is not None
+                and hb_lo is not None
+                and anchor_d is not None
+                and hb_lo <= d <= anchor_d
+            )
 
         line_items = [r for r in bdvstdt if r.get("REQNO") == reqno]
 
@@ -347,15 +377,16 @@ def main() -> None:
                 "ICD10WHO": r.get("ICD10WHO") or "",
             }
             prev = diag_by_code.get(code)
-            if prev is None or _TYPE_RANK.get(row["Type"], 9) < _TYPE_RANK.get(prev["Type"], 9):
+            if prev is None or _TYPE_RANK.get(row["Type"], 9) < _TYPE_RANK.get(
+                prev["Type"], 9
+            ):
                 diag_by_code[code] = row
         diag_rows = list(diag_by_code.values())
-        diag_rows.sort(
-            key=lambda d: (d["Type"] != "Principal Diagnosis", d["ICD10"])
-        )
+        diag_rows.sort(key=lambda d: (d["Type"] != "Principal Diagnosis", d["ICD10"]))
 
         hb_rows = [
-            _hb_row(r) for r in lab
+            _hb_row(r)
+            for r in lab
             if r.get("AN") == an
             and (r.get("LABEXM") or "").strip() in {"290095", "500001"}
             and _in_hb_window(parse_hosxp_date(r.get("LVSTDATE")))
@@ -363,14 +394,17 @@ def main() -> None:
         hb_rows.sort(key=lambda r: r["datetime"], reverse=True)
 
         anc_rows = [
-            _hb_row(r) for r in lab
-            if r.get("AN") == an and (r.get("LABEXM") or "").strip() == "290093"
+            _hb_row(r)
+            for r in lab
+            if r.get("AN") == an
+            and (r.get("LABEXM") or "").strip() == "290093"
             and _in_notes_window(parse_hosxp_date(r.get("LVSTDATE")))
         ]
         anc_rows.sort(key=lambda r: r["datetime"], reverse=True)
 
         cbc_rows = [
-            _lab_row(r) for r in lab
+            _lab_row(r)
+            for r in lab
             if r.get("AN") == an
             and (r.get("LABEXM") or "").strip() in CBC_LABEXM_CODES
             and _in_notes_window(parse_hosxp_date(r.get("LVSTDATE")))
@@ -378,7 +412,8 @@ def main() -> None:
         cbc_rows.sort(key=lambda r: r["datetime"], reverse=True)
 
         med_rows = [
-            _trim_med_row(r) for r in med
+            _trim_med_row(r)
+            for r in med
             if r.get("AN") == an
             and _in_notes_window(parse_hosxp_date(r.get("PRSCDATE")))
         ]
@@ -392,22 +427,25 @@ def main() -> None:
             if not _in_proc_window(pdate):
                 continue
             code = (r.get("Icd9cm") or "").strip().replace(".", "")
-            proc_rows.append({
-                "ICD9CM": code,
-                "Name": icd9_dict.get(code, ""),
-                "INDATE": r.get("Indate") or "",
-                "INTIME": fmt_time(r.get("Intime")),
-                "OUTDATE": r.get("Outdate") or "",
-                "OUTTIME": fmt_time(r.get("Outtime")),
-                "ORFLAG": r.get("Orflag") or "",
-            })
+            proc_rows.append(
+                {
+                    "ICD9CM": code,
+                    "Name": icd9_dict.get(code, ""),
+                    "INDATE": r.get("Indate") or "",
+                    "INTIME": fmt_time(r.get("Intime")),
+                    "OUTDATE": r.get("Outdate") or "",
+                    "OUTTIME": fmt_time(r.get("Outtime")),
+                    "ORFLAG": r.get("Orflag") or "",
+                }
+            )
 
         # Progress notes: first N of AN + window. Dedup by (date, item).
         an_progress = [r for r in progress if r.get("AN") == an]
         an_progress.sort(key=lambda r: r.get("PROGDATE") or "")
         first_n = an_progress[:PROGRESS_FIRST_N]
         near_anchor = [
-            r for r in an_progress
+            r
+            for r in an_progress
             if _in_notes_window(parse_hosxp_date(r.get("PROGDATE")))
         ]
         seen: set[tuple[str, str]] = set()
@@ -421,7 +459,8 @@ def main() -> None:
         prog_notes.sort(key=lambda r: r.get("PROGDATE") or "")
 
         focus_notes = [
-            r for r in focus
+            r
+            for r in focus
             if r.get("AN") == an
             and _in_notes_window(parse_hosxp_date(r.get("PROGRESSDATE")))
         ]
@@ -443,17 +482,19 @@ def main() -> None:
         else:
             llm_final = llm_final_obj.get("final_classification") or "—"
 
-        summary_rows.append({
-            "#": str(i),
-            "REQNO": reqno,
-            "HN": _short(hn),
-            "AN": _short(an),
-            "Hb": det.get("hb_value_g_dl", "") or "—",
-            "Cohort": det.get("cohort_label", "") or "—",
-            "Threshold": det.get("cohort_threshold", "") or "—",
-            "Deterministic": det_class or "EXCLUDED",
-            "LLM": llm_final or "—",
-        })
+        summary_rows.append(
+            {
+                "#": str(i),
+                "REQNO": reqno,
+                "HN": _short(hn),
+                "AN": _short(an),
+                "Hb": det.get("hb_value_g_dl", "") or "—",
+                "Cohort": det.get("cohort_label", "") or "—",
+                "Threshold": det.get("cohort_threshold", "") or "—",
+                "Deterministic": det_class or "EXCLUDED",
+                "LLM": llm_final or "—",
+            }
+        )
 
         admission_date = (bdv.get("BDVSTDATE") or "").split(" ")[0] or "—"
         for d in diag_rows:
@@ -479,12 +520,18 @@ def main() -> None:
         parts.append("<div class='verdict'>")
         parts.append("<div class='vbox det'>")
         parts.append("<h3>Deterministic verdict</h3>")
-        parts.append(f"<div class='cls cls-{esc(det_class).lower()}'>"
-                      f"{esc(det_class or 'EXCLUDED')}</div>")
-        parts.append(f"<div class='rationale'>rationale: <code>"
-                      f"{esc(det.get('rationale') or '—')}</code></div>")
-        parts.append(f"<div class='rationale'>bypass: <code>"
-                      f"{esc(det.get('bypass_reason') or 'none')}</code></div>")
+        parts.append(
+            f"<div class='cls cls-{esc(det_class).lower()}'>"
+            f"{esc(det_class or 'EXCLUDED')}</div>"
+        )
+        parts.append(
+            f"<div class='rationale'>rationale: <code>"
+            f"{esc(det.get('rationale') or '—')}</code></div>"
+        )
+        parts.append(
+            f"<div class='rationale'>bypass: <code>"
+            f"{esc(det.get('bypass_reason') or 'none')}</code></div>"
+        )
         parts.append("</div>")
 
         parts.append("<div class='vbox llm'>")
@@ -498,9 +545,11 @@ def main() -> None:
             fc = llm_block["final_classification"]
             conf = llm_block["confidence"]
             model = llm_block.get("model", "")
-            parts.append(f"<div class='cls cls-{esc(fc).lower()}'>"
-                          f"{esc(fc)} <span class='conf'>(conf {conf:.2f}; "
-                          f"{esc(model)})</span></div>")
+            parts.append(
+                f"<div class='cls cls-{esc(fc).lower()}'>"
+                f"{esc(fc)} <span class='conf'>(conf {conf:.2f}; "
+                f"{esc(model)})</span></div>"
+            )
             parts.append("<h4>Indications</h4>")
             parts.append(render_indications(llm_block["indications"]))
             parts.append("<h4>Negative evidence</h4>")
@@ -512,10 +561,14 @@ def main() -> None:
             parts.append(f"<p>{esc(llm_block['reasoning_th'])}</p>")
             parts.append("</details>")
         elif llm:
-            parts.append("<p class='empty'>(LLM submission recorded but final "
-                          "verdict missing — batch row dropped or unparsable)</p>")
+            parts.append(
+                "<p class='empty'>(LLM submission recorded but final "
+                "verdict missing — batch row dropped or unparsable)</p>"
+            )
         else:
-            parts.append("<p class='empty'>(deterministic-final; LLM leg not invoked)</p>")
+            parts.append(
+                "<p class='empty'>(deterministic-final; LLM leg not invoked)</p>"
+            )
         parts.append("</div>")
         parts.append("</div>")
 
@@ -524,32 +577,57 @@ def main() -> None:
 
         order_icd10 = (bdv.get("ICD10") or "").strip()
         order_icd10_name = icd10_dict.get(order_icd10, "")
-        order_icd10_disp = (f"{order_icd10} — {order_icd10_name}"
-                             if order_icd10 and order_icd10_name else order_icd10)
+        order_icd10_disp = (
+            f"{order_icd10} — {order_icd10_name}"
+            if order_icd10 and order_icd10_name
+            else order_icd10
+        )
 
         parts.append("<details open><summary>Order — BDVST + BDVSTDT</summary>")
-        parts.append(render_table([{
-            "REQNO": bdv.get("REQNO", ""),
-            "REQDATE": (bdv.get("REQDATE") or "").split(" ")[0],
-            "REQTIME": fmt_time(bdv.get("REQTIME")),
-            "BDVSTDATE": (bdv.get("BDVSTDATE") or "").split(" ")[0],
-            "BDVSTTIME": fmt_time(bdv.get("BDVSTTIME")),
-            "BDVSTSTATUS": fmt_status(bdv.get("BDVSTST"), bdvstst_dict),
-            "REQTYPE": fmt_reqtype(bdv.get("REQTYPE")),
-            "ICD10 (order reason)": order_icd10_disp,
-            "DIAGNOSIS (order reason text)": bdv.get("DIAGNOSIS", ""),
-        }], ["REQNO", "REQDATE", "REQTIME", "BDVSTDATE", "BDVSTTIME",
-             "BDVSTSTATUS", "REQTYPE",
-             "ICD10 (order reason)", "DIAGNOSIS (order reason text)"]))
+        parts.append(
+            render_table(
+                [
+                    {
+                        "REQNO": bdv.get("REQNO", ""),
+                        "REQDATE": (bdv.get("REQDATE") or "").split(" ")[0],
+                        "REQTIME": fmt_time(bdv.get("REQTIME")),
+                        "BDVSTDATE": (bdv.get("BDVSTDATE") or "").split(" ")[0],
+                        "BDVSTTIME": fmt_time(bdv.get("BDVSTTIME")),
+                        "BDVSTSTATUS": fmt_status(bdv.get("BDVSTST"), bdvstst_dict),
+                        "REQTYPE": fmt_reqtype(bdv.get("REQTYPE")),
+                        "ICD10 (order reason)": order_icd10_disp,
+                        "DIAGNOSIS (order reason text)": bdv.get("DIAGNOSIS", ""),
+                    }
+                ],
+                [
+                    "REQNO",
+                    "REQDATE",
+                    "REQTIME",
+                    "BDVSTDATE",
+                    "BDVSTTIME",
+                    "BDVSTSTATUS",
+                    "REQTYPE",
+                    "ICD10 (order reason)",
+                    "DIAGNOSIS (order reason text)",
+                ],
+            )
+        )
         parts.append("<p><b>Line items (BDVSTDT):</b></p>")
-        parts.append(render_table([{
-            "BDTYPE (product)": r.get("BDTYPE", ""),
-            "ITEMNO": r.get("ITEMNO", ""),
-            "UNITAMT": r.get("UNITAMT", ""),
-            "USEDATE": (r.get("USEDATE") or "").split(" ")[0],
-            "USETIME": fmt_time(r.get("USETIME")),
-        } for r in line_items],
-            ["BDTYPE (product)", "ITEMNO", "UNITAMT", "USEDATE", "USETIME"]))
+        parts.append(
+            render_table(
+                [
+                    {
+                        "BDTYPE (product)": r.get("BDTYPE", ""),
+                        "ITEMNO": r.get("ITEMNO", ""),
+                        "UNITAMT": r.get("UNITAMT", ""),
+                        "USEDATE": (r.get("USEDATE") or "").split(" ")[0],
+                        "USETIME": fmt_time(r.get("USETIME")),
+                    }
+                    for r in line_items
+                ],
+                ["BDTYPE (product)", "ITEMNO", "UNITAMT", "USEDATE", "USETIME"],
+            )
+        )
         parts.append("</details>")
 
         parts.append(
@@ -562,26 +640,32 @@ def main() -> None:
             "to <code>00:00.0</code> in every row). The Admission date column "
             "is the order's admission date as a temporal proxy.</p>"
         )
-        parts.append(render_table(diag_rows,
-                                    ["ICD10", "Description", "Type",
-                                     "Admission date", "ICD10WHO"]))
+        parts.append(
+            render_table(
+                diag_rows,
+                ["ICD10", "Description", "Type", "Admission date", "ICD10WHO"],
+            )
+        )
         parts.append("</details>")
 
         hb_window_str = (
             f"{hb_lo.isoformat()} … {anchor_date}"
-            if hb_lo and anchor_date else "(no anchor)"
+            if hb_lo and anchor_date
+            else "(no anchor)"
         )
         parts.append(
             f"<details open><summary>Hb history ({len(hb_rows)} rows, "
             f"7-day pre-order window {hb_window_str})</summary>"
         )
-        parts.append(render_table(hb_rows,
-                                    ["datetime", "test", "value", "min", "max", "unit"]))
+        parts.append(
+            render_table(hb_rows, ["datetime", "test", "value", "min", "max", "unit"])
+        )
         parts.append("</details>")
 
         window_str = (
             f"{notes_lo.isoformat()} … {notes_hi.isoformat()}"
-            if notes_lo and notes_hi else "(no anchor)"
+            if notes_lo and notes_hi
+            else "(no anchor)"
         )
         if anc_rows:
             parts.append(
@@ -589,40 +673,50 @@ def main() -> None:
                 f"(infection / neutropenia / heme-malignancy signal) "
                 f"({len(anc_rows)} rows, window {window_str})</summary>"
             )
-            parts.append(render_table(anc_rows,
-                                        ["datetime", "test", "value", "min", "max", "unit"]))
+            parts.append(
+                render_table(
+                    anc_rows, ["datetime", "test", "value", "min", "max", "unit"]
+                )
+            )
             parts.append("</details>")
 
         parts.append(
             f"<details><summary>CBC — Hb/Plt/WBC/Neutrophils "
             f"({len(cbc_rows)} rows, window {window_str})</summary>"
         )
-        parts.append(render_table(cbc_rows,
-                                    ["datetime", "group", "test", "code",
-                                     "value", "min", "max", "unit"]))
+        parts.append(
+            render_table(
+                cbc_rows,
+                ["datetime", "group", "test", "code", "value", "min", "max", "unit"],
+            )
+        )
         parts.append("</details>")
 
         proc_window_str = (
             f"{proc_lo.isoformat()} … {proc_hi.isoformat()}"
-            if proc_lo and proc_hi else "(no anchor)"
+            if proc_lo and proc_hi
+            else "(no anchor)"
         )
         parts.append(
             f"<details open><summary>Procedures — IPTSUMOPRT "
             f"({len(proc_rows)} rows, AN-scoped, ±1 week window "
             f"{proc_window_str})</summary>"
         )
-        parts.append(render_table(proc_rows,
-                                    ["ICD9CM", "Name", "INDATE", "INTIME",
-                                     "OUTDATE", "OUTTIME", "ORFLAG"]))
+        parts.append(
+            render_table(
+                proc_rows,
+                ["ICD9CM", "Name", "INDATE", "INTIME", "OUTDATE", "OUTTIME", "ORFLAG"],
+            )
+        )
         parts.append("</details>")
 
         parts.append(
             f"<details><summary>Meds ({len(med_rows)} rows, "
             f"window {window_str})</summary>"
         )
-        parts.append(render_table(med_rows,
-                                    ["PRSCDATE", "PRSCTIME", "DRUG",
-                                     "STRENGTH", "DOSE"]))
+        parts.append(
+            render_table(med_rows, ["PRSCDATE", "PRSCTIME", "DRUG", "STRENGTH", "DOSE"])
+        )
         parts.append("</details>")
 
         parts.append(
@@ -660,8 +754,7 @@ def main() -> None:
                     parts.append(f"<pre><b>A:</b>\n{esc(asmt)}</pre>")
                 if plan:
                     parts.append(f"<pre><b>P:</b>\n{esc(plan)}</pre>")
-                if not (progdesc or proglist or dentdct
-                        or subj or obj or asmt or plan):
+                if not (progdesc or proglist or dentdct or subj or obj or asmt or plan):
                     parts.append("<p class='empty'>(empty row)</p>")
                 parts.append("</div>")
         else:
@@ -700,9 +793,10 @@ def main() -> None:
         parts.append("</section>")
         case_html_parts.append("\n".join(parts))
 
-    summary_html = render_table(summary_rows,
-        ["#", "REQNO", "HN", "AN", "Hb", "Cohort", "Threshold",
-         "Deterministic", "LLM"])
+    summary_html = render_table(
+        summary_rows,
+        ["#", "REQNO", "HN", "AN", "Hb", "Cohort", "Threshold", "Deterministic", "LLM"],
+    )
 
     css = """
     :root { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;

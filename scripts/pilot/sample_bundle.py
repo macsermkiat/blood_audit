@@ -22,6 +22,7 @@ Environment variables:
 * ``BBA_PILOT_SAMPLE_N`` — number of orders to sample (default: 10).
 * ``BBA_PILOT_SAMPLE_SEED`` — RNG seed (default: 20260519).
 """
+
 from __future__ import annotations
 
 import csv
@@ -30,10 +31,17 @@ import random
 import sys
 from pathlib import Path
 
-SRC = Path(os.environ.get(
-    "BBA_PILOT_RAW_DIR",
-    str(Path(__file__).resolve().parents[2].parent / "Bloodbank" / "data" / "encrypted"),
-))
+SRC = Path(
+    os.environ.get(
+        "BBA_PILOT_RAW_DIR",
+        str(
+            Path(__file__).resolve().parents[2].parent
+            / "Bloodbank"
+            / "data"
+            / "encrypted"
+        ),
+    )
+)
 WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
 DST = WORK / "bundle"
 N = int(os.environ.get("BBA_PILOT_SAMPLE_N", "10"))
@@ -46,12 +54,29 @@ csv.field_size_limit(sys.maxsize)
 
 
 BDVST_COLS = [
-    "HN", "REQNO", "AN", "BDVSTST", "REQTYPE", "CANCELDATE",
-    "REQDATE", "REQTIME", "BDVSTDATE", "BDVSTTIME", "ICD10", "DIAGNOSIS",
+    "HN",
+    "REQNO",
+    "AN",
+    "BDVSTST",
+    "REQTYPE",
+    "CANCELDATE",
+    "REQDATE",
+    "REQTIME",
+    "BDVSTDATE",
+    "BDVSTTIME",
+    "ICD10",
+    "DIAGNOSIS",
 ]
 BDVSTDT_COLS = [
-    "REQNO", "HN", "BDVSTDATE", "BDVSTTIME", "USEDATE", "USETIME",
-    "BDTYPE", "ITEMNO", "UNITAMT",
+    "REQNO",
+    "HN",
+    "BDVSTDATE",
+    "BDVSTTIME",
+    "USEDATE",
+    "USETIME",
+    "BDTYPE",
+    "ITEMNO",
+    "UNITAMT",
 ]
 
 
@@ -62,9 +87,7 @@ def _filter(src_name: str, dst_name: str, predicate, *, cols=None) -> int:
         in_header = reader.fieldnames or []
         out_header = cols if cols is not None else in_header
         with (DST / dst_name).open("w", encoding="utf-8", newline="") as fout:
-            writer = csv.DictWriter(
-                fout, fieldnames=out_header, extrasaction="ignore"
-            )
+            writer = csv.DictWriter(fout, fieldnames=out_header, extrasaction="ignore")
             writer.writeheader()
             for row in reader:
                 n_in += 1
@@ -77,8 +100,10 @@ def _filter(src_name: str, dst_name: str, predicate, *, cols=None) -> int:
 
 def _copy(src_name: str, dst_name: str) -> int:
     n = 0
-    with (SRC / src_name).open(encoding="utf-8", newline="") as fin, \
-            (DST / dst_name).open("w", encoding="utf-8", newline="") as fout:
+    with (
+        (SRC / src_name).open(encoding="utf-8", newline="") as fin,
+        (DST / dst_name).open("w", encoding="utf-8", newline="") as fout,
+    ):
         for line in fin:
             fout.write(line)
             n += 1
@@ -132,21 +157,24 @@ def main() -> None:
         print(" ", s)
 
     print("\nWriting mini bundle:")
-    _filter("BDVST.csv", "BDVST.csv",
-            lambda r: r["REQNO"] in sample_reqnos, cols=BDVST_COLS)
-    _filter("BDVSTDT.csv", "BDVSTDT.csv",
-            lambda r: r["REQNO"] in sample_reqnos, cols=BDVSTDT_COLS)
-    _filter("Diagnosis.csv", "Diagnosis.csv",
-            lambda r: r.get("AN") in sample_ans)
+    _filter(
+        "BDVST.csv", "BDVST.csv", lambda r: r["REQNO"] in sample_reqnos, cols=BDVST_COLS
+    )
+    _filter(
+        "BDVSTDT.csv",
+        "BDVSTDT.csv",
+        lambda r: r["REQNO"] in sample_reqnos,
+        cols=BDVSTDT_COLS,
+    )
+    _filter("Diagnosis.csv", "Diagnosis.csv", lambda r: r.get("AN") in sample_ans)
     _filter("Lab.csv", "Lab.csv", lambda r: r.get("AN") in sample_ans)
     _filter("Med.csv", "Med.csv", lambda r: r.get("AN") in sample_ans)
-    _filter("IPDADMPROGRESS.csv", "IPDADMPROGRESS.csv",
-            lambda r: r.get("AN") in sample_ans)
-    _filter("IPDNRFOCUSDT.csv", "IPDNRFOCUSDT.csv",
-            lambda r: r.get("AN") in sample_ans)
+    _filter(
+        "IPDADMPROGRESS.csv", "IPDADMPROGRESS.csv", lambda r: r.get("AN") in sample_ans
+    )
+    _filter("IPDNRFOCUSDT.csv", "IPDNRFOCUSDT.csv", lambda r: r.get("AN") in sample_ans)
     # IPTSUMOPRT uses Title-Case column "An"
-    _filter("IPTSUMOPRT.csv", "IPTSUMOPRT.csv",
-            lambda r: r.get("An") in sample_ans)
+    _filter("IPTSUMOPRT.csv", "IPTSUMOPRT.csv", lambda r: r.get("An") in sample_ans)
 
     _copy("BDTYPE.csv", "BDTYPE.csv")
     _copy("BDVSTST.csv", "BDVSTST.csv")
