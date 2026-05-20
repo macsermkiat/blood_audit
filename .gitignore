@@ -37,6 +37,11 @@ data/raw/
 *.csv
 !tests/fixtures/**/*.csv
 
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
 # Claude Code — per-machine overrides (project-tracked settings.json IS committed)
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
