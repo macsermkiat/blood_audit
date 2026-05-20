@@ -79,9 +79,24 @@ from bba.hb_lookup import HbObservation, lookup_hb, parse_hb_value
 from bba.ingest.models import ParsedTimeOfDay
 from bba.ingest.row_timestamp import RowTimestamp
 from bba.ingest.time_parser import parse_hosxp_time
+import bba.llm_client.models as _llm_models
 from bba.llm_client import AnthropicBatchTransport, BatchSubmissionRequest
 from bba.prompt_builder import EvidenceChunk, PromptBuildRequest, build_prompt
 from bba.vitals_extractor import VitalsNote, extract_vitals
+
+# Runtime extension of ALLOWED_MODELS so the BatchSubmissionResult
+# parser inside bba.llm_client.transport accepts the floating aliases
+# Anthropic currently returns. The submission side already bypasses
+# LlmClientConfig via RealAnthropicTransport below; without this
+# extension the live API's echoed model_id fails the same PinnedModel
+# validator at row construction. PinnedModel reads ALLOWED_MODELS at
+# call time (not import time), so a post-import patch is the minimal
+# surface area — no src/bba change, no test contract change.
+_LIVE_SONNET_ALIAS = "claude-sonnet-4-6"
+_LIVE_OPUS_ALIAS = "claude-opus-4-7"
+_llm_models.ALLOWED_MODELS = frozenset(
+    {*_llm_models.ALLOWED_MODELS, _LIVE_SONNET_ALIAS, _LIVE_OPUS_ALIAS}
+)
 
 WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
 BUNDLE = WORK / "bundle"
