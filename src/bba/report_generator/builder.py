@@ -18,7 +18,6 @@ inject lambdas.
 from __future__ import annotations
 
 import hashlib
-from collections import Counter
 from collections.abc import Callable, Sequence
 from datetime import date, datetime
 from pathlib import Path
@@ -153,27 +152,30 @@ def build_report_inputs(
     ``physician_id``\\s observed in the run (sorted, deduplicated). Pass
     an explicit tuple to restrict (e.g., committee-only run).
 
-    The read deliberately does **not** filter by ``code_version``:
-    :func:`bba.cli.identity.compute_run_id` already includes the active
-    code_version in its hash, so a ``run_id`` normally pins to one
-    committed version by construction — scoping the read to the
-    *running binary's* ``code_version`` would make a run committed
-    under an older version invisible after an upgrade (Codex P1 review
-    on PR #71). The rarer case where a user passes ``--run-id``
-    explicitly to re-commit under a new version is caught
-    *structurally* by :func:`_assert_no_cross_version_duplicates`: a
-    duplicated ``audit_id`` in the returned row set is the direct
-    symptom of a cross-version mix, and is caught regardless of
-    whether the version bump changed any footer field.
+    The read uses :meth:`AuditStore.read_run_records` so each row's
+    ``code_version_slug`` is visible. The builder does **not** filter
+    by the running binary's ``code_version`` —
+    :func:`bba.cli.identity.compute_run_id` already namespaces
+    ``run_id`` by version in the normal flow, so historical runs remain
+    readable after an upgrade. The rarer ``--run-id``-override
+    re-commit case (which can land rows from multiple code_versions
+    at the same ``run_id``) is caught directly by inspecting the slug
+    set: if more than one distinct slug is present,
+    :class:`MixedRunMetadataError` is raised. This catches both the
+    **overlapping** case (same ``audit_id`` committed twice) AND the
+    **disjoint** case (each version committed a non-overlapping audit
+    set), which a duplicate-id heuristic would miss (Codex P1 review
+    on PR #71).
     """
-    rows = audit_store.read_audit_results(run_id=run_id)
-    if not rows:
+    records = audit_store.read_run_records(run_id=run_id)
+    if not records:
         raise EmptyInputError(
             f"audit_store has no committed AuditRow for run_id={run_id!r}; "
             "the run either has not completed or its commit markers are "
             "missing — investigate before shipping an empty report"
         )
-    _assert_no_cross_version_duplicates(rows, run_id)
+    _assert_single_code_version(records, run_id)
+    rows = tuple(row for row, _slug in records)
 
     footer = _reconstruct_footer(rows)
     monthly_rows = tuple(
@@ -228,38 +230,35 @@ asserting cross-row equality would fail every multi-row run. The
 """
 
 
-def _assert_no_cross_version_duplicates(rows: Sequence[AuditRow], run_id: str) -> None:
-    """Raise :class:`MixedRunMetadataError` if any ``audit_id`` appears
-    more than once in ``rows``.
+def _assert_single_code_version(
+    records: Sequence[tuple[AuditRow, str]], run_id: str
+) -> None:
+    """Raise :class:`MixedRunMetadataError` if ``records`` span more
+    than one ``code_version_slug``.
 
-    :meth:`AuditStore.read_audit_results` returns rows from every
-    committed ``code_version`` for the given ``run_id``. In the normal
-    flow this is harmless because :func:`compute_run_id` already
-    namespaces ``run_id`` by code_version, so each ``(audit_id,
-    run_id)`` lands in exactly one parquet. The dangerous case is a
-    ``--run-id``-override re-commit under a new code_version: the
-    store now holds two rows at the same ``(audit_id, run_id)``.
-
-    The footer-equality check (:func:`_reconstruct_footer`) catches
-    this *only* when the version bump altered one of the five pinned
-    fields. A cosmetic bug-fix release that leaves
-    ``policy_version`` / ``model_id`` / ``prompt_hash`` /
-    ``redactor_version`` / ``redactor_model_sha`` untouched would
-    pass the equality check, and every audit_id would be double-
-    counted in the aggregator output (Codex P1 review on PR #71).
-    Detecting the duplication directly closes that hole regardless
-    of whether the footer fields drifted.
-    """
-    counter = Counter(row.audit_id for row in rows)
-    duplicates = sorted(audit_id for audit_id, n in counter.items() if n > 1)
-    if duplicates:
+    Reading via :meth:`AuditStore.read_run_records` gives the builder
+    direct visibility into each row's committed version. A single
+    ``run_id`` mapping to multiple slugs means the audit_store holds a
+    cross-version mix — either an **overlapping** set (the same
+    ``audit_id`` committed under two versions) or a **disjoint** set
+    (each version committed different audit_ids under a shared
+    ``--run-id`` override). Both shapes corrupt the report:
+    overlapping ones inflate per-order counts, disjoint ones merge
+    semantically-incompatible runs into one aggregate. Inspecting the
+    slug set directly catches both shapes regardless of whether any
+    footer field drifted, which a duplicate-id heuristic alone cannot
+    do (Codex P1 review on PR #71)."""
+    distinct_slugs = sorted({slug for _row, slug in records})
+    if len(distinct_slugs) > 1:
         raise MixedRunMetadataError(
-            f"audit_store returned duplicate audit_id values for "
-            f"run_id={run_id!r}: {duplicates}; this typically means the "
-            "same (audit_id, run_id) was committed under more than one "
-            "code_version (a --run-id override re-run). Scope the read "
-            "to a specific code_version via the audit_store directly, or "
-            "let compute_run_id namespace run_id by version naturally."
+            f"audit_store returned AuditRows from multiple code_version "
+            f"slugs for run_id={run_id!r}: {distinct_slugs}; this means "
+            "the same run_id was committed under more than one "
+            "code_version (a --run-id override re-run). Refusing to "
+            "render a report that would merge incompatible runs. "
+            "Re-derive the run with a version-namespaced run_id (let "
+            "compute_run_id pick it) or scope the read to one version "
+            "via the audit_store directly."
         )
 
 

@@ -1219,7 +1219,7 @@ class TestBbaReportWiring:
 
         monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
         empty_store = MagicMock(name="empty_audit_store")
-        empty_store.read_audit_results.return_value = ()
+        empty_store.read_run_records.return_value = ()
 
         with (
             patch("bba.cli.main._get_audit_store", return_value=empty_store),

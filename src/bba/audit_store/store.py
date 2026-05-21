@@ -136,6 +136,41 @@ class AuditStore:
             rows.append(AuditRow.model_validate_json(entry["payload"]))
         return tuple(rows)
 
+    def read_run_records(self, run_id: str) -> tuple[tuple[AuditRow, str], ...]:
+        """Read every committed ``(AuditRow, code_version_slug)`` for
+        ``run_id``.
+
+        Same marker-gating and ``run_id`` filtering as
+        :meth:`read_audit_results`, but exposes each row's
+        ``code_version_slug`` so downstream callers (the monthly
+        report builder, eval harness migrators) can detect a
+        multi-version commit set deterministically — rather than
+        inferring it from per-row footer drift, which can miss a
+        cosmetic version bump.
+
+        The dangerous case the slug visibility prevents: a
+        ``--run-id``-override re-commit under a new ``code_version``
+        with **disjoint** ``audit_id`` sets across the two versions
+        (e.g., re-run with changed input scope). A duplicate-id
+        heuristic does not catch this because no audit_id repeats;
+        only the slug set reveals the multi-version membership.
+
+        Returns an empty tuple if no rows match. Order matches the
+        underlying parquet glob, which is sorted by filename for
+        reproducibility."""
+        if not self._audit_dir.exists():
+            return ()
+        records: list[tuple[AuditRow, str]] = []
+        for path in sorted(self._audit_dir.glob("*.parquet")):
+            entry = _read_single_record(path)
+            if entry["run_id"] != run_id:
+                continue
+            if not self._marker_for_parquet(path).exists():
+                continue
+            row = AuditRow.model_validate_json(entry["payload"])
+            records.append((row, entry["code_version_slug"]))
+        return tuple(records)
+
     def read_llm_calls(
         self,
         run_id: str | None = None,

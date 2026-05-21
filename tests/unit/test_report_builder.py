@@ -76,17 +76,36 @@ def _row(
     return AuditRow.model_validate(base)
 
 
-def _store_returning(*rows: AuditRow, code_version: str = "v0.1.0+test") -> MagicMock:
+def _store_returning(
+    *rows: AuditRow,
+    code_version_slug: str = "slug-v0-1-0",
+    code_version: str = "v0.1.0+test",
+) -> MagicMock:
     """Return a MagicMock that quacks like :class:`AuditStore` for the
-    builder's only call (``read_audit_results(run_id=...)``).
+    builder's two calls.
 
-    ``config.code_version`` is set explicitly even though the builder no
-    longer reads it (see :class:`TestReadDoesNotFilterByBinaryCodeVersion`):
-    keeping the field configured documents the audit_store's contract
-    surface and lets a future reviewer search-and-find the rationale."""
+    The builder reads via :meth:`AuditStore.read_run_records`, which
+    returns ``(AuditRow, code_version_slug)`` tuples — every row in
+    the helper output gets paired with the supplied ``code_version_slug``
+    (single-version, the normal case). For multi-version test setups
+    use :func:`_store_with_slugged_records` directly."""
     store = MagicMock(name="audit_store")
     store.config.code_version = code_version
-    store.read_audit_results.return_value = rows
+    store.read_run_records.return_value = tuple(
+        (row, code_version_slug) for row in rows
+    )
+    return store
+
+
+def _store_with_slugged_records(
+    *records: tuple[AuditRow, str],
+) -> MagicMock:
+    """Return a MagicMock whose ``read_run_records`` returns the
+    supplied ``(row, slug)`` pairs verbatim. Use for multi-version
+    fixtures where different rows carry different slugs."""
+    store = MagicMock(name="audit_store")
+    store.config.code_version = "v0.1.0+test"
+    store.read_run_records.return_value = tuple(records)
     return store
 
 
@@ -209,23 +228,19 @@ class TestRunLevelFieldsAreEqualityChecked:
         assert field in str(excinfo.value)
 
 
-class TestReadDoesNotFilterByBinaryCodeVersion:
-    """The builder must NOT scope the audit_store read to the running
-    binary's ``code_version``. :func:`compute_run_id` already includes
-    code_version in its hash (so a ``run_id`` normally pins to one
-    committed version by construction), and pinning the read to the
-    *current* binary's version would make a run committed under an
-    older version invisible after an upgrade (Codex P1 review on PR #71).
+class TestReadUsesReadRunRecords:
+    """The builder reads via :meth:`AuditStore.read_run_records` so it
+    has direct visibility into each row's committed ``code_version_slug``.
+    This is the API surface that lets :func:`_assert_single_code_version`
+    catch a multi-version run regardless of audit_id overlap (Codex P1
+    review on PR #71). Historical-run readability is preserved because
+    the read does not filter on the running binary's ``code_version``."""
 
-    The real safety net for the rare cross-version-mix case is
-    :func:`_reconstruct_footer`'s equality check on the five "pinned per
-    run" fields, exercised by :class:`TestRunLevelFieldsAreEqualityChecked`."""
-
-    def test_read_is_called_without_code_version(self, tmp_path: Path) -> None:
-        """The read must omit ``code_version`` so a historical run
-        committed under an earlier package version remains readable
-        after an upgrade."""
-        store = _store_returning(_row(audit_id="a1"), code_version="v0.2.0+current")
+    def test_read_run_records_called_with_run_id_only(self, tmp_path: Path) -> None:
+        """The read must take just ``run_id`` — no ``code_version``
+        kwarg — so a historical run committed under an earlier
+        package version remains readable after an upgrade."""
+        store = _store_returning(_row(audit_id="a1"))
         build_report_inputs(
             run_id="run-aaa",
             audit_store=store,
@@ -233,54 +248,80 @@ class TestReadDoesNotFilterByBinaryCodeVersion:
             ward_resolver=lambda _r: "ward-1",
             physician_resolver=lambda _r: "phys-1",
         )
-        store.read_audit_results.assert_called_once_with(run_id="run-aaa")
-        _args, kwargs = store.read_audit_results.call_args
+        store.read_run_records.assert_called_once_with(run_id="run-aaa")
+        # Explicit negative assertion preserved from the previous test
+        # iteration: scoping to the binary's code_version was the
+        # earlier wrong fix that hid historical runs after upgrade.
+        _args, kwargs = store.read_run_records.call_args
         assert "code_version" not in kwargs, (
             "filtering by the binary's code_version would hide historical "
-            "runs after a package upgrade"
+            "runs after a package upgrade — read_run_records must be called "
+            "with run_id only"
         )
 
 
-class TestCrossVersionDuplicateIsRejected:
-    """The audit_store may legitimately hold two rows at the same
-    ``(audit_id, run_id)`` when a user re-commits under ``--run-id``
-    on a new code_version. The footer-equality check covers this only
-    when the bump altered one of the five pinned fields — a cosmetic
-    release would slip through and the aggregator would double-count
-    every order. The builder must catch the duplication directly
+class TestRejectMultiVersionRunRows:
+    """The audit_store layer permits the same ``run_id`` to carry rows
+    from more than one ``code_version_slug`` when a user re-commits
+    under ``--run-id``. The builder must refuse this shape outright —
+    both the **overlapping** case (same ``audit_id`` committed twice,
+    inflating per-order counts) and the **disjoint** case (different
+    audit_id sets per version, silently merging incompatible runs)
     (Codex P1 review on PR #71)."""
 
-    def test_duplicate_audit_id_raises_mixed_run_metadata_error(
+    def test_overlapping_audit_ids_across_two_slugs_raises(
         self, tmp_path: Path
     ) -> None:
-        """Two rows with the same ``audit_id`` (e.g., one from each
-        code_version of a ``--run-id`` re-commit) must fail loud even
-        when every footer field matches — the footer-equality check
-        alone would silently accept the doubled set."""
-        rows = (
-            _row(audit_id="a1"),
-            _row(audit_id="a1"),  # same audit_id — the cross-version duplicate
-        )
+        """Same ``audit_id`` committed under two slugs (the
+        ``--run-id`` override re-commit) — the classic
+        double-counted aggregator case."""
+        row_v1 = _row(audit_id="a1")
+        row_v2 = _row(audit_id="a1")
         with pytest.raises(MixedRunMetadataError) as excinfo:
             build_report_inputs(
                 run_id="run-aaa",
-                audit_store=_store_returning(*rows),
+                audit_store=_store_with_slugged_records(
+                    (row_v1, "slug-v1"),
+                    (row_v2, "slug-v2"),
+                ),
                 output_dir=tmp_path,
                 ward_resolver=lambda _r: "ward-1",
                 physician_resolver=lambda _r: "phys-1",
             )
         msg = str(excinfo.value)
-        assert "a1" in msg
-        assert "code_version" in msg
+        assert "slug-v1" in msg
+        assert "slug-v2" in msg
 
-    def test_distinct_audit_ids_do_not_raise(self, tmp_path: Path) -> None:
-        """Sanity check: the duplicate-detector must not false-positive
-        on a normal multi-row run where every audit_id is distinct."""
-        rows = (
-            _row(audit_id="a1"),
-            _row(audit_id="a2"),
-            _row(audit_id="a3"),
-        )
+    def test_disjoint_audit_ids_across_two_slugs_raises(self, tmp_path: Path) -> None:
+        """**Disjoint** audit_id sets across two slugs (the
+        ``--run-id`` override re-commit with changed input scope).
+        A duplicate-id heuristic would miss this — no audit_id
+        repeats — but the slug set still reveals the cross-version
+        membership and the builder must refuse the merge."""
+        row_v1_a = _row(audit_id="a1")
+        row_v1_b = _row(audit_id="a2")
+        row_v2_c = _row(audit_id="a3")
+        with pytest.raises(MixedRunMetadataError) as excinfo:
+            build_report_inputs(
+                run_id="run-aaa",
+                audit_store=_store_with_slugged_records(
+                    (row_v1_a, "slug-v1"),
+                    (row_v1_b, "slug-v1"),
+                    (row_v2_c, "slug-v2"),
+                ),
+                output_dir=tmp_path,
+                ward_resolver=lambda _r: "ward-1",
+                physician_resolver=lambda _r: "phys-1",
+            )
+        msg = str(excinfo.value)
+        assert "slug-v1" in msg
+        assert "slug-v2" in msg
+
+    def test_single_slug_multi_row_run_does_not_raise(self, tmp_path: Path) -> None:
+        """Sanity check: the multi-version detector must not
+        false-positive on a normal multi-row run from a single
+        ``code_version``."""
+        rows = (_row(audit_id="a1"), _row(audit_id="a2"), _row(audit_id="a3"))
         inputs = build_report_inputs(
             run_id="run-aaa",
             audit_store=_store_returning(*rows),
