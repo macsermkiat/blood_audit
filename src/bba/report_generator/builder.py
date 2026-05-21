@@ -152,19 +152,23 @@ def build_report_inputs(
     ``physician_id``\\s observed in the run (sorted, deduplicated). Pass
     an explicit tuple to restrict (e.g., committee-only run).
 
-    The read is scoped to ``audit_store.config.code_version``: per
-    :meth:`AuditStore.read_audit_results`, omitting ``code_version``
-    returns rows from every committed version, so a ``run_id`` reused
-    across versioned reruns would silently mix datasets (or trip
-    :class:`MixedRunMetadataError` from cross-version footer drift).
-    Pinning to the configured version makes the read deterministic and
-    matches what the CLI's audit_store was instantiated for (Codex P2
-    review on PR #71).
+    The read deliberately does **not** filter by ``code_version``.
+    :func:`bba.cli.identity.compute_run_id` already includes the active
+    code_version in its hash, so a ``run_id`` normally pins to exactly
+    one committed version by construction — scoping the read to the
+    *running binary's* ``code_version`` would make a run committed
+    under an older version invisible after an upgrade (Codex P1 review
+    on PR #71). The audit_store layer permits the rarer case where a
+    user passes ``--run-id`` explicitly to re-commit under a new
+    version; in that case the cross-version mix is caught by
+    :func:`_reconstruct_footer`'s five "pinned per run" equality
+    checks (``policy_version`` / ``model_id`` / ``prompt_hash`` /
+    ``redactor_version`` / ``redactor_model_sha``) — these
+    near-universally differ across code_versions, so a true mix
+    trips :class:`MixedRunMetadataError` rather than silently
+    rendering a corrupt report.
     """
-    rows = audit_store.read_audit_results(
-        run_id=run_id,
-        code_version=audit_store.config.code_version,
-    )
+    rows = audit_store.read_audit_results(run_id=run_id)
     if not rows:
         raise EmptyInputError(
             f"audit_store has no committed AuditRow for run_id={run_id!r}; "

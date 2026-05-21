@@ -78,11 +78,12 @@ def _row(
 
 def _store_returning(*rows: AuditRow, code_version: str = "v0.1.0+test") -> MagicMock:
     """Return a MagicMock that quacks like :class:`AuditStore` for the
-    builder's only call (``read_audit_results(run_id=..., code_version=...)``).
+    builder's only call (``read_audit_results(run_id=...)``).
 
-    ``config.code_version`` is set explicitly because the builder passes
-    it through to scope the read to a single committed version (see
-    :class:`TestReadIsScopedToStoreCodeVersion`)."""
+    ``config.code_version`` is set explicitly even though the builder no
+    longer reads it (see :class:`TestReadDoesNotFilterByBinaryCodeVersion`):
+    keeping the field configured documents the audit_store's contract
+    surface and lets a future reviewer search-and-find the rationale."""
     store = MagicMock(name="audit_store")
     store.config.code_version = code_version
     store.read_audit_results.return_value = rows
@@ -208,16 +209,23 @@ class TestRunLevelFieldsAreEqualityChecked:
         assert field in str(excinfo.value)
 
 
-class TestReadIsScopedToStoreCodeVersion:
-    """:meth:`AuditStore.read_audit_results` returns rows from *every*
-    committed ``code_version`` when its ``code_version`` filter is
-    omitted (per its own docstring). A ``run_id`` reused across versioned
-    reruns would therefore silently mix datasets — the builder must
-    scope the read to the store's configured version (Codex P2 review
-    on PR #71)."""
+class TestReadDoesNotFilterByBinaryCodeVersion:
+    """The builder must NOT scope the audit_store read to the running
+    binary's ``code_version``. :func:`compute_run_id` already includes
+    code_version in its hash (so a ``run_id`` normally pins to one
+    committed version by construction), and pinning the read to the
+    *current* binary's version would make a run committed under an
+    older version invisible after an upgrade (Codex P1 review on PR #71).
 
-    def test_read_passes_store_code_version(self, tmp_path: Path) -> None:
-        store = _store_returning(_row(audit_id="a1"), code_version="v0.2.0+pinned")
+    The real safety net for the rare cross-version-mix case is
+    :func:`_reconstruct_footer`'s equality check on the five "pinned per
+    run" fields, exercised by :class:`TestRunLevelFieldsAreEqualityChecked`."""
+
+    def test_read_is_called_without_code_version(self, tmp_path: Path) -> None:
+        """The read must omit ``code_version`` so a historical run
+        committed under an earlier package version remains readable
+        after an upgrade."""
+        store = _store_returning(_row(audit_id="a1"), code_version="v0.2.0+current")
         build_report_inputs(
             run_id="run-aaa",
             audit_store=store,
@@ -225,6 +233,9 @@ class TestReadIsScopedToStoreCodeVersion:
             ward_resolver=lambda _r: "ward-1",
             physician_resolver=lambda _r: "phys-1",
         )
-        store.read_audit_results.assert_called_once_with(
-            run_id="run-aaa", code_version="v0.2.0+pinned"
+        store.read_audit_results.assert_called_once_with(run_id="run-aaa")
+        _args, kwargs = store.read_audit_results.call_args
+        assert "code_version" not in kwargs, (
+            "filtering by the binary's code_version would hide historical "
+            "runs after a package upgrade"
         )
