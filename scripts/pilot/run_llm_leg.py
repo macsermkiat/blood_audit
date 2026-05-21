@@ -533,10 +533,12 @@ def _incpt_evidence_chunks(
         incgrp = (r.get("INCGRP") or "").strip()
         if incgrp not in INCPT_OPERATION_GROUPS:
             continue
-        dt = _combine(
-            _parse_hosxp_date(str(r.get("INCDATE") or "")),
-            _parse_time(str(r.get("INCTIME") or "")),
+        t = _parse_time(str(r.get("INCTIME") or "")) or ParsedTimeOfDay(
+            hour=0,
+            minute=0,
+            second=0,
         )
+        dt = _combine(_parse_hosxp_date(str(r.get("INCDATE") or "")), t)
         if dt is None or not (window_start <= dt < window_end):
             continue
         income = (r.get("INCOME") or "").strip()
