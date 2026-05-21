@@ -17,6 +17,7 @@ inject lambdas.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Sequence
 from datetime import date, datetime
 from pathlib import Path
@@ -189,27 +190,43 @@ def build_report_inputs(
 # ---------------------------------------------------------------------------
 
 
-_FOOTER_FIELDS: tuple[str, ...] = (
+_FOOTER_EQUALITY_FIELDS: tuple[str, ...] = (
     "policy_version",
     "model_id",
     "redactor_version",
     "redactor_model_sha",
     "prompt_hash",
-    "evidence_bundle_hash",
 )
+"""Footer fields that MUST agree across every audit row in the run.
+
+These are the truly run-level reproducibility stamps: the deterministic
+classifier's policy version, the LLM model ID, the redactor version /
+model SHA, and the system-prompt hash. :class:`PipelineRowContext`
+documents them as "pinned per run".
+
+:attr:`AuditRow.evidence_bundle_hash` is deliberately omitted: it is a
+**per-row** value (each row's evidence bundle has its own SHA — see
+:class:`bba.evidence_bundle_builder.builder.EvidenceBundle`), so
+asserting cross-row equality would fail every multi-row run. The
+:class:`ReportFooter` field of the same name is derived via
+:func:`_aggregate_evidence_bundle_hash` instead.
+"""
 
 
 def _reconstruct_footer(rows: Sequence[AuditRow]) -> ReportFooter:
-    """Build the :class:`ReportFooter` by asserting every row agrees.
+    """Build the :class:`ReportFooter` from the run's audit rows.
 
-    A run is one ``(code_version, policy_version, prompt_hash, ...)``
-    bucket by construction; rows disagreeing on any footer field signal
-    a corrupt run (e.g., two runs accidentally sharing a ``run_id``).
-    Raise :class:`MixedRunMetadataError` rather than silently picking
-    the first row's values.
+    The five :data:`_FOOTER_EQUALITY_FIELDS` are required to be identical
+    across every row (a single run produces a single reproducibility
+    stamp); disagreement raises :class:`MixedRunMetadataError`.
+
+    The footer's ``evidence_bundle_hash`` field is derived from the
+    per-row hashes via :func:`_aggregate_evidence_bundle_hash` rather
+    than equality-checked, because each audit row carries its own
+    bundle-specific SHA by design (Codex review on PR #71).
     """
     pivot = rows[0]
-    expected = {field: getattr(pivot, field) for field in _FOOTER_FIELDS}
+    expected = {field: getattr(pivot, field) for field in _FOOTER_EQUALITY_FIELDS}
     for row in rows[1:]:
         for field, value in expected.items():
             actual = getattr(row, field)
@@ -221,12 +238,38 @@ def _reconstruct_footer(rows: Sequence[AuditRow]) -> ReportFooter:
                     "a single run must produce a single reproducibility "
                     "footer — investigate the audit_store contents"
                 )
+    expected["evidence_bundle_hash"] = _aggregate_evidence_bundle_hash(rows)
     try:
         return ReportFooter(**expected)
     except ValueError as exc:  # pragma: no cover - defensive
         raise FooterStampError(
             f"unable to reconstruct ReportFooter from run rows: {exc}"
         ) from exc
+
+
+def _aggregate_evidence_bundle_hash(rows: Sequence[AuditRow]) -> str:
+    """Return a deterministic per-run digest of the rows' bundle hashes.
+
+    Each :class:`AuditRow` carries its own ``evidence_bundle_hash`` (the
+    SHA of that row's specific evidence bundle), so there is no single
+    "schema hash" available from the audit_store today. To still stamp
+    the footer with a reproducible per-run identifier, we hash the
+    sorted set of ``(audit_id, evidence_bundle_hash)`` pairs — sorted so
+    the aggregate is order-independent, paired with ``audit_id`` so it
+    is deterministically derivable from the audit_store's contents.
+
+    A future refactor that lands a true canonical-schema hash (e.g.,
+    via :mod:`bba.evidence_bundle_builder`) should replace this with the
+    schema-level value; the call site is single-sourced here."""
+    hasher = hashlib.sha256()
+    for audit_id, bundle_hash in sorted(
+        (row.audit_id, row.evidence_bundle_hash) for row in rows
+    ):
+        hasher.update(audit_id.encode("utf-8"))
+        hasher.update(b"\x00")
+        hasher.update(bundle_hash.encode("utf-8"))
+        hasher.update(b"\x00")
+    return hasher.hexdigest()
 
 
 def _project_row(
