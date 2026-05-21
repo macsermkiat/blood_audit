@@ -239,3 +239,53 @@ class TestReadDoesNotFilterByBinaryCodeVersion:
             "filtering by the binary's code_version would hide historical "
             "runs after a package upgrade"
         )
+
+
+class TestCrossVersionDuplicateIsRejected:
+    """The audit_store may legitimately hold two rows at the same
+    ``(audit_id, run_id)`` when a user re-commits under ``--run-id``
+    on a new code_version. The footer-equality check covers this only
+    when the bump altered one of the five pinned fields — a cosmetic
+    release would slip through and the aggregator would double-count
+    every order. The builder must catch the duplication directly
+    (Codex P1 review on PR #71)."""
+
+    def test_duplicate_audit_id_raises_mixed_run_metadata_error(
+        self, tmp_path: Path
+    ) -> None:
+        """Two rows with the same ``audit_id`` (e.g., one from each
+        code_version of a ``--run-id`` re-commit) must fail loud even
+        when every footer field matches — the footer-equality check
+        alone would silently accept the doubled set."""
+        rows = (
+            _row(audit_id="a1"),
+            _row(audit_id="a1"),  # same audit_id — the cross-version duplicate
+        )
+        with pytest.raises(MixedRunMetadataError) as excinfo:
+            build_report_inputs(
+                run_id="run-aaa",
+                audit_store=_store_returning(*rows),
+                output_dir=tmp_path,
+                ward_resolver=lambda _r: "ward-1",
+                physician_resolver=lambda _r: "phys-1",
+            )
+        msg = str(excinfo.value)
+        assert "a1" in msg
+        assert "code_version" in msg
+
+    def test_distinct_audit_ids_do_not_raise(self, tmp_path: Path) -> None:
+        """Sanity check: the duplicate-detector must not false-positive
+        on a normal multi-row run where every audit_id is distinct."""
+        rows = (
+            _row(audit_id="a1"),
+            _row(audit_id="a2"),
+            _row(audit_id="a3"),
+        )
+        inputs = build_report_inputs(
+            run_id="run-aaa",
+            audit_store=_store_returning(*rows),
+            output_dir=tmp_path,
+            ward_resolver=lambda _r: "ward-1",
+            physician_resolver=lambda _r: "phys-1",
+        )
+        assert len(inputs.rows) == 3

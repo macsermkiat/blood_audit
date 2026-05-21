@@ -18,6 +18,7 @@ inject lambdas.
 from __future__ import annotations
 
 import hashlib
+from collections import Counter
 from collections.abc import Callable, Sequence
 from datetime import date, datetime
 from pathlib import Path
@@ -152,21 +153,18 @@ def build_report_inputs(
     ``physician_id``\\s observed in the run (sorted, deduplicated). Pass
     an explicit tuple to restrict (e.g., committee-only run).
 
-    The read deliberately does **not** filter by ``code_version``.
+    The read deliberately does **not** filter by ``code_version``:
     :func:`bba.cli.identity.compute_run_id` already includes the active
-    code_version in its hash, so a ``run_id`` normally pins to exactly
-    one committed version by construction — scoping the read to the
+    code_version in its hash, so a ``run_id`` normally pins to one
+    committed version by construction — scoping the read to the
     *running binary's* ``code_version`` would make a run committed
     under an older version invisible after an upgrade (Codex P1 review
-    on PR #71). The audit_store layer permits the rarer case where a
-    user passes ``--run-id`` explicitly to re-commit under a new
-    version; in that case the cross-version mix is caught by
-    :func:`_reconstruct_footer`'s five "pinned per run" equality
-    checks (``policy_version`` / ``model_id`` / ``prompt_hash`` /
-    ``redactor_version`` / ``redactor_model_sha``) — these
-    near-universally differ across code_versions, so a true mix
-    trips :class:`MixedRunMetadataError` rather than silently
-    rendering a corrupt report.
+    on PR #71). The rarer case where a user passes ``--run-id``
+    explicitly to re-commit under a new version is caught
+    *structurally* by :func:`_assert_no_cross_version_duplicates`: a
+    duplicated ``audit_id`` in the returned row set is the direct
+    symptom of a cross-version mix, and is caught regardless of
+    whether the version bump changed any footer field.
     """
     rows = audit_store.read_audit_results(run_id=run_id)
     if not rows:
@@ -175,6 +173,7 @@ def build_report_inputs(
             "the run either has not completed or its commit markers are "
             "missing — investigate before shipping an empty report"
         )
+    _assert_no_cross_version_duplicates(rows, run_id)
 
     footer = _reconstruct_footer(rows)
     monthly_rows = tuple(
@@ -227,6 +226,41 @@ asserting cross-row equality would fail every multi-row run. The
 :class:`ReportFooter` field of the same name is derived via
 :func:`_aggregate_evidence_bundle_hash` instead.
 """
+
+
+def _assert_no_cross_version_duplicates(rows: Sequence[AuditRow], run_id: str) -> None:
+    """Raise :class:`MixedRunMetadataError` if any ``audit_id`` appears
+    more than once in ``rows``.
+
+    :meth:`AuditStore.read_audit_results` returns rows from every
+    committed ``code_version`` for the given ``run_id``. In the normal
+    flow this is harmless because :func:`compute_run_id` already
+    namespaces ``run_id`` by code_version, so each ``(audit_id,
+    run_id)`` lands in exactly one parquet. The dangerous case is a
+    ``--run-id``-override re-commit under a new code_version: the
+    store now holds two rows at the same ``(audit_id, run_id)``.
+
+    The footer-equality check (:func:`_reconstruct_footer`) catches
+    this *only* when the version bump altered one of the five pinned
+    fields. A cosmetic bug-fix release that leaves
+    ``policy_version`` / ``model_id`` / ``prompt_hash`` /
+    ``redactor_version`` / ``redactor_model_sha`` untouched would
+    pass the equality check, and every audit_id would be double-
+    counted in the aggregator output (Codex P1 review on PR #71).
+    Detecting the duplication directly closes that hole regardless
+    of whether the footer fields drifted.
+    """
+    counter = Counter(row.audit_id for row in rows)
+    duplicates = sorted(audit_id for audit_id, n in counter.items() if n > 1)
+    if duplicates:
+        raise MixedRunMetadataError(
+            f"audit_store returned duplicate audit_id values for "
+            f"run_id={run_id!r}: {duplicates}; this typically means the "
+            "same (audit_id, run_id) was committed under more than one "
+            "code_version (a --run-id override re-run). Scope the read "
+            "to a specific code_version via the audit_store directly, or "
+            "let compute_run_id namespace run_id by version naturally."
+        )
 
 
 def _reconstruct_footer(rows: Sequence[AuditRow]) -> ReportFooter:
