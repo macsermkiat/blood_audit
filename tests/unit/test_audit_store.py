@@ -237,6 +237,51 @@ class TestAuditRowRoundTrip:
 
         assert {r.audit_id for r in only_r1} == {"a1"}
 
+    def test_read_run_records_returns_row_slug_pairs(self, store: AuditStore) -> None:
+        """read_run_records pairs each AuditRow with its code_version_slug
+        so downstream callers (the monthly report builder) can detect
+        multi-version commit sets without inferring from footer drift."""
+        store.write(
+            _row(audit_id="a1", run_id="r1"),
+            [_call(call_id="c1", audit_id="a1", run_id="r1")],
+        )
+
+        records = store.read_run_records(run_id="r1")
+
+        assert len(records) == 1
+        row, slug = records[0]
+        assert row.audit_id == "a1"
+        assert isinstance(slug, str) and slug
+
+    def test_read_run_records_surfaces_multiple_code_versions(
+        self, tmp_path: Path
+    ) -> None:
+        """Two stores at the same root_dir but different code_versions
+        can commit at the same (audit_id, run_id) (audit_store's
+        documented contract). read_run_records must surface BOTH slugs
+        so the caller can refuse the merge."""
+        root = tmp_path / "store"
+        store_v1 = AuditStore(AuditStoreConfig(root_dir=root, code_version="v0.1.0"))
+        store_v2 = AuditStore(AuditStoreConfig(root_dir=root, code_version="v0.2.0"))
+
+        store_v1.write(
+            _row(audit_id="a1", run_id="r1"),
+            [_call(call_id="c1", audit_id="a1", run_id="r1")],
+        )
+        store_v2.write(
+            _row(audit_id="a1", run_id="r1"),
+            [_call(call_id="c1", audit_id="a1", run_id="r1")],
+        )
+
+        # Either store sees both versions — the dataset directory is shared.
+        records = store_v1.read_run_records(run_id="r1")
+        slugs = {slug for _row, slug in records}
+
+        assert len(slugs) == 2, f"expected 2 distinct slugs, got {slugs}"
+
+    def test_read_run_records_empty_for_unknown_run_id(self, store: AuditStore) -> None:
+        assert store.read_run_records(run_id="never-committed") == ()
+
 
 class TestLlmCallRoundTrip:
     """LlmCall round-trip must preserve extended_thinking_blocks verbatim."""

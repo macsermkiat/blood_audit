@@ -339,6 +339,28 @@ class TestCommandInputModels:
         with pytest.raises(ValidationError):
             ReportCommandInput(run_id="abc", format="docx")  # type: ignore[arg-type]
 
+    @pytest.mark.parametrize(
+        "unsafe_run_id",
+        [
+            "../../tmp/pwn",
+            "foo/bar",
+            "foo\\bar",
+            "..",
+            ".",
+            "foo bar",
+            "foo;ls",
+            "",
+        ],
+    )
+    def test_report_input_rejects_unsafe_run_id(self, unsafe_run_id: str) -> None:
+        """``run_id`` is interpolated into ``$BBA_DATA_DIR/reports/<run_id>``
+        without normalization; the model's :data:`SafeRunId` validator
+        rejects anything that would let a write escape the data
+        directory or smuggle shell-special characters into a filesystem
+        path (Codex P1 review on PR #71)."""
+        with pytest.raises(ValidationError):
+            ReportCommandInput(run_id=unsafe_run_id)
+
     def test_serve_dashboard_port_range_low(self) -> None:
         with pytest.raises(ValidationError):
             ServeDashboardInput(port=0)
@@ -1071,19 +1093,20 @@ class TestBbaIngestWiring:
 
 
 class TestUnwiredSubcommandsFailLoud:
-    """The four subcommands whose underlying module does not yet expose
+    """The three subcommands whose underlying module does not yet expose
     a single-call facade fail loud with :class:`CliError` rather than
     fabricating defaults. Verifies the contract phrasing names the
-    integration seam."""
+    integration seam.
+
+    Note: ``bba report`` graduated out of this list once
+    :mod:`bba.report_generator.builder` landed — its remaining loud-fail
+    surface is the per-resolver injection seam, covered by
+    :class:`TestBbaReportResolverSeamsFailLoud`."""
 
     @pytest.mark.parametrize(
         ("argv", "expected_seam"),
         [
             (["evaluate", "--run-id", "abc"], "bba.cli.main.bba_evaluate"),
-            (
-                ["report", "--run-id", "abc", "--format", "pdf"],
-                "bba.cli.main.bba_report",
-            ),
             (
                 ["serve-dashboard", "--port", "8765"],
                 "bba.cli.main.bba_serve_dashboard",
@@ -1101,6 +1124,146 @@ class TestUnwiredSubcommandsFailLoud:
         assert result.exit_code != 0
         assert isinstance(result.exception, CliError), result.exception
         assert expected_seam in str(result.exception), result.exception
+
+
+class TestBbaReportResolverSeamsFailLoud:
+    """``bba report`` requires ward + physician attribution resolvers.
+    The HOSxP ingest-side procedure-table export is the M0/M1 blocker,
+    so the production resolvers are not yet plumbed; both seam getters
+    raise :class:`CliError` naming ``bba.cli.main.bba_report``. The
+    end-to-end ``bba report`` invocation therefore still fails loud (as
+    it did before wiring) — only the line of failure has moved."""
+
+    def test_report_without_ward_resolver_fails_loud(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
+        with patch("bba.cli.main._get_audit_store", return_value=MagicMock()):
+            result = runner.invoke(cli, ["report", "--run-id", "abc"])
+        assert result.exit_code != 0
+        assert isinstance(result.exception, CliError), result.exception
+        assert "bba.cli.main.bba_report" in str(result.exception), result.exception
+        assert "WardAttributionResolver" in str(result.exception)
+
+
+class TestBbaReportWiring:
+    """``bba report`` reads :class:`AuditRow`\\s from the configured
+    :class:`~bba.audit_store.AuditStore`, projects them via the injected
+    ward / physician resolvers, and feeds the resulting
+    :class:`~bba.report_generator.ReportInputs` to
+    :func:`bba.report_generator.generate_monthly_report`. The CLI body
+    stays thin glue (the projection logic lives in
+    :mod:`bba.report_generator.builder`); these tests lock the wiring
+    contract — not the builder's correctness."""
+
+    def test_report_happy_path_invokes_generator_with_built_inputs(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Wired end-to-end: each injection seam supplies a sentinel,
+        :func:`build_report_inputs` is called with those sentinels and
+        the run-scoped output_dir, and its return value flows into
+        :func:`generate_monthly_report`."""
+        monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
+
+        sentinel_store = MagicMock(name="audit_store")
+        sentinel_ward = MagicMock(name="ward_resolver")
+        sentinel_physician = MagicMock(name="physician_resolver")
+        sentinel_inputs = MagicMock(name="report_inputs")
+        sentinel_artifacts = MagicMock(name="report_artifacts")
+        sentinel_artifacts.pdf_path = tmp_path / "reports" / "r1" / "out.pdf"
+        sentinel_artifacts.csv_paths = {"hospital_trend": "p"}
+        sentinel_artifacts.physician_own_view_csv_paths = {}
+
+        with (
+            patch("bba.cli.main._get_audit_store", return_value=sentinel_store),
+            patch("bba.cli.main._get_ward_resolver", return_value=sentinel_ward),
+            patch(
+                "bba.cli.main._get_physician_resolver", return_value=sentinel_physician
+            ),
+            patch(
+                "bba.cli.main.build_report_inputs", return_value=sentinel_inputs
+            ) as mock_build,
+            patch(
+                "bba.cli.main.generate_monthly_report", return_value=sentinel_artifacts
+            ) as mock_generate,
+        ):
+            result = runner.invoke(cli, ["report", "--run-id", "r1", "--format", "pdf"])
+
+        assert result.exit_code == 0, result.output
+        mock_build.assert_called_once()
+        kwargs = mock_build.call_args.kwargs
+        assert kwargs["run_id"] == "r1"
+        assert kwargs["audit_store"] is sentinel_store
+        assert kwargs["ward_resolver"] is sentinel_ward
+        assert kwargs["physician_resolver"] is sentinel_physician
+        assert kwargs["output_dir"] == tmp_path / "reports" / "r1"
+        mock_generate.assert_called_once_with(sentinel_inputs)
+
+    def test_report_fails_loud_on_empty_audit_store(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An audit_store with no committed rows for the requested
+        ``run_id`` must fail loud — the report builder raises
+        :class:`bba.report_generator.EmptyInputError` rather than
+        silently emitting an empty PDF."""
+        from bba.report_generator import EmptyInputError
+
+        monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
+        empty_store = MagicMock(name="empty_audit_store")
+        empty_store.read_run_records.return_value = ()
+
+        with (
+            patch("bba.cli.main._get_audit_store", return_value=empty_store),
+            patch("bba.cli.main._get_ward_resolver", return_value=lambda _r: "w"),
+            patch(
+                "bba.cli.main._get_physician_resolver",
+                return_value=lambda _r: "p",
+            ),
+        ):
+            result = runner.invoke(cli, ["report", "--run-id", "missing"])
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, EmptyInputError), result.exception
+        assert "missing" in str(result.exception)
+
+    def test_report_without_data_dir_env_fails_loud(
+        self,
+        runner: CliRunner,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No ``BBA_DATA_DIR`` → :class:`CliError` from
+        :func:`_resolve_data_dir`. Symmetric with the ingest contract."""
+        monkeypatch.delenv("BBA_DATA_DIR", raising=False)
+        result = runner.invoke(cli, ["report", "--run-id", "r1"])
+        assert result.exit_code != 0
+        assert "BBA_DATA_DIR" in str(result.exception)
+
+    def test_report_rejects_path_traversal_run_id(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A ``--run-id`` like ``../../tmp/pwn`` must be rejected by the
+        :class:`ReportCommandInput` validator BEFORE the CLI body
+        interpolates the value into ``$BBA_DATA_DIR/reports/<run_id>``.
+        Defends the CLI's filesystem boundary against path traversal
+        (Codex P1 review on PR #71)."""
+        monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
+        result = runner.invoke(cli, ["report", "--run-id", "../../tmp/pwn"])
+        assert result.exit_code != 0
+        # No filesystem side effect: the validator rejected the input
+        # before generate_monthly_report could mkdir anywhere.
+        assert not (tmp_path / "reports").exists()
 
 
 class TestSentinelRequiresCadenceFlag:

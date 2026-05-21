@@ -50,6 +50,13 @@ from bba.cli.models import (
 )
 from bba.cli.store_protocol import AuditRunStore
 from bba.ingest import IngestConfig, IngestResult, ingest, schema_fingerprint
+from bba.audit_store import AuditStore, AuditStoreConfig
+from bba.report_generator import (
+    PhysicianAttributionResolver,
+    WardAttributionResolver,
+    build_report_inputs,
+    generate_monthly_report,
+)
 
 
 _log = get_logger()
@@ -229,20 +236,35 @@ def bba_evaluate(run_id: str) -> None:
     show_default=True,
 )
 def bba_report(run_id: str, report_format: str) -> None:
-    """Render a monthly report (html / pdf / json) from a finished run."""
+    """Render a monthly report (html / pdf / json) from a finished run.
+
+    The on-disk artifacts (committee CSVs + per-physician CSVs + PDF)
+    are produced unconditionally; ``--format`` is captured as run
+    metadata in the structured log and is reserved for a future
+    stdout-shaping pass (see ``bba.cli.main.bba_report`` follow-up)."""
     inputs = ReportCommandInput(
         run_id=run_id,
         format=cast(ReportFormat, report_format),
     )
     _log.info("report.start", run_id=inputs.run_id, format=inputs.format)
-    raise CliError(
-        f"report run_id={inputs.run_id} format={inputs.format}: "
-        "bba.report_generator.generate_monthly_report(inputs: ReportInputs) "
-        "requires a fully-built ReportInputs (month / rows / footer / "
-        "output_dir) sourced from the audit_store. The CLI's hand-off seam "
-        "is bba.cli.main.bba_report; production wiring queries the store "
-        "by run_id and constructs the inputs."
+    output_dir = _resolve_data_dir() / "reports" / inputs.run_id
+    report_inputs = build_report_inputs(
+        run_id=inputs.run_id,
+        audit_store=_get_audit_store(),
+        output_dir=output_dir,
+        ward_resolver=_get_ward_resolver(),
+        physician_resolver=_get_physician_resolver(),
     )
+    artifacts = generate_monthly_report(report_inputs)
+    _log.info(
+        "report.complete",
+        run_id=inputs.run_id,
+        format=inputs.format,
+        pdf_path=str(artifacts.pdf_path),
+        committee_csv_count=len(artifacts.csv_paths),
+        physician_csv_count=len(artifacts.physician_own_view_csv_paths),
+    )
+    click.echo(str(artifacts.pdf_path))
 
 
 @click.command(name="serve-dashboard")
@@ -295,6 +317,56 @@ def bba_sentinel(weekly: bool, quarterly: bool) -> None:
 # ---------------------------------------------------------------------------
 # Injection seam — tests monkeypatch this resolver to inject a fake store.
 # ---------------------------------------------------------------------------
+
+
+def _get_audit_store() -> AuditStore:
+    """Resolve the :class:`~bba.audit_store.AuditStore` rooted at
+    ``$BBA_DATA_DIR/audit/<code_version>``.
+
+    Tests monkeypatch this seam via
+    ``patch("bba.cli.main._get_audit_store", ...)`` to inject a
+    pre-populated in-memory store; production callers use the
+    on-disk Parquet layout the audit_store ships with."""
+    config = AuditStoreConfig(
+        root_dir=_resolve_data_dir() / "audit_store",
+        code_version=code_version(),
+    )
+    return AuditStore(config)
+
+
+def _get_ward_resolver() -> WardAttributionResolver:
+    """Resolve the production
+    :class:`~bba.report_generator.WardAttributionResolver`.
+
+    Phase 1's HOSxP ingest-side procedure-table export is still pending
+    (M0/M1 blocker per the design notes), so the production resolver is
+    not yet plumbed; this seam fails loud naming
+    ``bba.cli.main.bba_report`` so the CLI keeps its "no fabricated
+    defaults" promise. Tests inject a fake via
+    ``patch("bba.cli.main._get_ward_resolver", ...)``."""
+    raise CliError(
+        "bba.cli.main.bba_report cannot resolve a WardAttributionResolver: "
+        "the HOSxP ingest store does not yet expose a ward-attribution "
+        "table (M0/M1 blocker). Plumb the production resolver in "
+        "bba.cli.main._get_ward_resolver when the table is available; "
+        "until then, monkeypatch the seam in tests."
+    )
+
+
+def _get_physician_resolver() -> PhysicianAttributionResolver:
+    """Resolve the production
+    :class:`~bba.report_generator.PhysicianAttributionResolver`.
+
+    Symmetric with :func:`_get_ward_resolver` — same M0/M1 blocker, same
+    loud-failure contract, same injection seam."""
+    raise CliError(
+        "bba.cli.main.bba_report cannot resolve a "
+        "PhysicianAttributionResolver: the HOSxP ingest store does not "
+        "yet expose a physician-attribution table (M0/M1 blocker). Plumb "
+        "the production resolver in bba.cli.main._get_physician_resolver "
+        "when the table is available; until then, monkeypatch the seam "
+        "in tests."
+    )
 
 
 def _get_audit_run_store() -> AuditRunStore:

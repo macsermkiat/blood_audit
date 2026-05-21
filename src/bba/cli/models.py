@@ -12,10 +12,11 @@ mirrors that list one-to-one.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 from typing_extensions import Self
 
 
@@ -29,6 +30,50 @@ ReportFormat = Literal["html", "pdf", "json"]
 
 SentinelCadence = Literal["weekly", "quarterly"]
 """``bba sentinel`` cadence flag — exactly one must be selected."""
+
+
+_SAFE_RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _validate_safe_run_id(value: str) -> str:
+    """Reject ``run_id`` values that would be unsafe to interpolate into
+    a filesystem path component.
+
+    The CLI composes ``$BBA_DATA_DIR/reports/<run_id>`` (and analogous
+    paths) by raw interpolation. An upstream string containing ``/``,
+    ``\\``, or a path-traversal segment would let writes escape the
+    intended dataset directory. Mirrors the defense at
+    :data:`bba.audit_store.models.SafeId` /
+    :data:`bba.report_generator.models.SafeFsId`; defined locally so
+    :mod:`bba.cli.models` does not transitively import either heavy
+    dependency (pyarrow / duckdb).
+
+    Allow-list: non-empty, ``[A-Za-z0-9._-]+``, not exactly ``.`` or
+    ``..``. The 16-char hex ``run_id`` produced by :func:`compute_run_id`
+    satisfies this pattern, so production runs are unaffected."""
+    if not value:
+        raise ValueError("run_id must not be empty")
+    if not _SAFE_RUN_ID_PATTERN.match(value):
+        raise ValueError(
+            f"run_id must match [A-Za-z0-9._-]+ to be a safe filesystem "
+            f"path component (got {value!r}); path-traversal segments "
+            "and special characters are rejected so report artifacts "
+            "stay inside BBA_DATA_DIR/reports"
+        )
+    if value in {".", ".."}:
+        raise ValueError(f"run_id must not be a path-traversal segment (got {value!r})")
+    return value
+
+
+SafeRunId = Annotated[str, AfterValidator(_validate_safe_run_id)]
+"""A ``str`` constrained to a filesystem-safe ``run_id`` shape.
+
+Use on every CLI-input ``run_id`` field that flows into a filesystem
+path. Adopted by :class:`ReportCommandInput`; symmetric tightening for
+:class:`AuditCommandInput` / :class:`EvaluateCommandInput` is a
+follow-up tracked outside this PR (those flows also interpolate
+``run_id`` into paths but were not flagged by the Codex review on
+PR #71)."""
 
 
 class _FrozenModel(BaseModel):
@@ -80,9 +125,14 @@ class EvaluateCommandInput(_FrozenModel):
 
 
 class ReportCommandInput(_FrozenModel):
-    """Inputs for ``bba report --run-id ... --format html|pdf|json``."""
+    """Inputs for ``bba report --run-id ... --format html|pdf|json``.
 
-    run_id: str = Field(min_length=1)
+    ``run_id`` is constrained to :data:`SafeRunId` because the CLI
+    interpolates it into ``$BBA_DATA_DIR/reports/<run_id>``; a value
+    like ``../../tmp/pwn`` would otherwise let report artifacts escape
+    the data directory (Codex P1 review on PR #71)."""
+
+    run_id: SafeRunId
     format: ReportFormat = "html"
 
 
