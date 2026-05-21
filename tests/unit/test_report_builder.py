@@ -76,10 +76,15 @@ def _row(
     return AuditRow.model_validate(base)
 
 
-def _store_returning(*rows: AuditRow) -> MagicMock:
+def _store_returning(*rows: AuditRow, code_version: str = "v0.1.0+test") -> MagicMock:
     """Return a MagicMock that quacks like :class:`AuditStore` for the
-    builder's only call (``read_audit_results(run_id=...)``)."""
+    builder's only call (``read_audit_results(run_id=..., code_version=...)``).
+
+    ``config.code_version`` is set explicitly because the builder passes
+    it through to scope the read to a single committed version (see
+    :class:`TestReadIsScopedToStoreCodeVersion`)."""
     store = MagicMock(name="audit_store")
+    store.config.code_version = code_version
     store.read_audit_results.return_value = rows
     return store
 
@@ -201,3 +206,25 @@ class TestRunLevelFieldsAreEqualityChecked:
                 physician_resolver=lambda _r: "phys-1",
             )
         assert field in str(excinfo.value)
+
+
+class TestReadIsScopedToStoreCodeVersion:
+    """:meth:`AuditStore.read_audit_results` returns rows from *every*
+    committed ``code_version`` when its ``code_version`` filter is
+    omitted (per its own docstring). A ``run_id`` reused across versioned
+    reruns would therefore silently mix datasets — the builder must
+    scope the read to the store's configured version (Codex P2 review
+    on PR #71)."""
+
+    def test_read_passes_store_code_version(self, tmp_path: Path) -> None:
+        store = _store_returning(_row(audit_id="a1"), code_version="v0.2.0+pinned")
+        build_report_inputs(
+            run_id="run-aaa",
+            audit_store=store,
+            output_dir=tmp_path,
+            ward_resolver=lambda _r: "ward-1",
+            physician_resolver=lambda _r: "phys-1",
+        )
+        store.read_audit_results.assert_called_once_with(
+            run_id="run-aaa", code_version="v0.2.0+pinned"
+        )

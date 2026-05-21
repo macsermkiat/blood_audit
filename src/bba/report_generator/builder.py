@@ -151,8 +151,20 @@ def build_report_inputs(
     ``physician_ids_for_own_view`` defaults to the set of distinct
     ``physician_id``\\s observed in the run (sorted, deduplicated). Pass
     an explicit tuple to restrict (e.g., committee-only run).
+
+    The read is scoped to ``audit_store.config.code_version``: per
+    :meth:`AuditStore.read_audit_results`, omitting ``code_version``
+    returns rows from every committed version, so a ``run_id`` reused
+    across versioned reruns would silently mix datasets (or trip
+    :class:`MixedRunMetadataError` from cross-version footer drift).
+    Pinning to the configured version makes the read deterministic and
+    matches what the CLI's audit_store was instantiated for (Codex P2
+    review on PR #71).
     """
-    rows = audit_store.read_audit_results(run_id=run_id)
+    rows = audit_store.read_audit_results(
+        run_id=run_id,
+        code_version=audit_store.config.code_version,
+    )
     if not rows:
         raise EmptyInputError(
             f"audit_store has no committed AuditRow for run_id={run_id!r}; "
