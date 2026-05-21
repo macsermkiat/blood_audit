@@ -339,6 +339,28 @@ class TestCommandInputModels:
         with pytest.raises(ValidationError):
             ReportCommandInput(run_id="abc", format="docx")  # type: ignore[arg-type]
 
+    @pytest.mark.parametrize(
+        "unsafe_run_id",
+        [
+            "../../tmp/pwn",
+            "foo/bar",
+            "foo\\bar",
+            "..",
+            ".",
+            "foo bar",
+            "foo;ls",
+            "",
+        ],
+    )
+    def test_report_input_rejects_unsafe_run_id(self, unsafe_run_id: str) -> None:
+        """``run_id`` is interpolated into ``$BBA_DATA_DIR/reports/<run_id>``
+        without normalization; the model's :data:`SafeRunId` validator
+        rejects anything that would let a write escape the data
+        directory or smuggle shell-special characters into a filesystem
+        path (Codex P1 review on PR #71)."""
+        with pytest.raises(ValidationError):
+            ReportCommandInput(run_id=unsafe_run_id)
+
     def test_serve_dashboard_port_range_low(self) -> None:
         with pytest.raises(ValidationError):
             ServeDashboardInput(port=0)
@@ -1224,6 +1246,24 @@ class TestBbaReportWiring:
         result = runner.invoke(cli, ["report", "--run-id", "r1"])
         assert result.exit_code != 0
         assert "BBA_DATA_DIR" in str(result.exception)
+
+    def test_report_rejects_path_traversal_run_id(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A ``--run-id`` like ``../../tmp/pwn`` must be rejected by the
+        :class:`ReportCommandInput` validator BEFORE the CLI body
+        interpolates the value into ``$BBA_DATA_DIR/reports/<run_id>``.
+        Defends the CLI's filesystem boundary against path traversal
+        (Codex P1 review on PR #71)."""
+        monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
+        result = runner.invoke(cli, ["report", "--run-id", "../../tmp/pwn"])
+        assert result.exit_code != 0
+        # No filesystem side effect: the validator rejected the input
+        # before generate_monthly_report could mkdir anywhere.
+        assert not (tmp_path / "reports").exists()
 
 
 class TestSentinelRequiresCadenceFlag:
