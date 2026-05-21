@@ -38,8 +38,7 @@ def _row(
         "hn_hash": "hn-sha256-aaa",
         "an_hash": "an-sha256-bbb",
         "reqno": "REQ-12345",
-        "order_datetime": order_datetime
-        or datetime(2026, 5, 1, 8, 30, 0, tzinfo=UTC),
+        "order_datetime": order_datetime or datetime(2026, 5, 1, 8, 30, 0, tzinfo=UTC),
         "products_ordered": ("LPRC",),
         "hb_value": 6.8,
         "hb_datetime": datetime(2026, 5, 1, 7, 0, 0, tzinfo=UTC),
@@ -115,9 +114,7 @@ class TestEvidenceBundleHashIsPerRow:
         )
         assert len(inputs.rows) == 2
 
-    def test_footer_bundle_hash_is_deterministic_per_run(
-        self, tmp_path: Path
-    ) -> None:
+    def test_footer_bundle_hash_is_deterministic_per_run(self, tmp_path: Path) -> None:
         """The footer's ``evidence_bundle_hash`` is a stable per-run
         digest (sha256 over the sorted ``(audit_id, bundle_hash)``
         pairs), so two invocations on the same audit_store yield the
@@ -166,8 +163,7 @@ class TestEvidenceBundleHashIsPerRow:
             physician_resolver=lambda _r: "phys-1",
         )
         assert (
-            forward.footer.evidence_bundle_hash
-            == reversed_.footer.evidence_bundle_hash
+            forward.footer.evidence_bundle_hash == reversed_.footer.evidence_bundle_hash
         )
 
 
