@@ -2,7 +2,7 @@
 
 The bundle's CSVs do not match the audit's pandera schemas one-to-one: they
 are wider than the schema (extra columns the audit ignores), some use
-Title-Case naming (``IPTSUMOPRT``, ``ICD9CM``), and one carries duplicate
+Title-Case naming (``IPTSUMOPRT``, ``INCPT``, ``ICD9CM``), and one carries duplicate
 column names (``IPDADMPROGRESS`` has two ``HN`` and two ``AN`` columns —
 positions 1 + 30 and 2 + 3 respectively).
 
@@ -15,8 +15,8 @@ dropped extras to the run audit, and pass the projected header to
 
 **Header pass** — :func:`normalize_header`. Applies in fixed order:
 
-1. **Case-normalize** (IPTSUMOPRT, ICD9CM only): uppercase all column
-   names so ``An`` / ``Icd9cm`` / ``Indate`` line up with the
+1. **Case-normalize** (IPTSUMOPRT, INCPT, ICD9CM only): uppercase all column
+   names so ``An`` / ``Hn`` / ``Icd9cm`` / ``Indate`` line up with the
    ALL-CAPS schema declarations.
 2. **Dedupe**: drop columns whose name already appeared earlier in the
    (post-case-normalize) header. First occurrence wins.
@@ -34,9 +34,9 @@ clears the projected header, before any Parquet write:
 2. **Year-filter** (IPDADMPROGRESS, IPDNRFOCUSDT only): drop rows whose
    date column does not match :data:`COHORT_YEAR`. Saves ~7% of the
    2.7M / 16.9M raw rows from reaching the Parquet writer.
-3. **Date-parse** (IPTSUMOPRT only): convert the ``INDATE`` cell from
-   Excel-locale long form (``"June 7, 2025, 12:00 AM"``) to ISO
-   ``YYYY-MM-DD`` via :func:`bba.ingest.parse_iptsumoprt_date`. Failures
+3. **Date-parse** (procedure-family tables): convert ``IPTSUMOPRT.INDATE``
+   / ``INCPT.INCDATE`` from English-locale form to ISO ``YYYY-MM-DD`` via
+   :func:`bba.ingest.parse_kcmh_english_date`. Failures
    produce a ``parse_warning`` carried on the row (mirrors
    :func:`bba.ingest.parse_hosxp_time` semantics; the row is **not**
    dropped on parse failure — PRD §1 fix E35).
@@ -49,7 +49,7 @@ import re
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 
-from bba.ingest.date_parser import parse_iptsumoprt_date
+from bba.ingest.date_parser import parse_kcmh_english_date
 from bba.ingest.models import CSVTable
 from bba.ingest.schemas import get_schema
 
@@ -57,11 +57,12 @@ logger = logging.getLogger(__name__)
 
 
 # Tables whose CSV headers use Title-Case naming and must be uppercased
-# before any drift detection. The other 9 tables already use ALL-CAPS in
+# before any drift detection. The other tables already use ALL-CAPS in
 # the bundle's exports and need no case-normalization.
 _CASE_NORMALIZE_TABLES: frozenset[CSVTable] = frozenset(
     {
         "IPTSUMOPRT",
+        "INCPT",
         "ICD9CM",
     }
 )
@@ -91,11 +92,12 @@ _YEAR_FILTER_COLUMN: dict[CSVTable, str] = {
 }
 
 # Date-parse rule: replace the cell with the ISO-8601 form of the parsed
-# date. Today only IPTSUMOPRT.INDATE needs this (Excel-locale long form);
-# all other date columns in the bundle use the HOSxP standard format and
-# are passed through unchanged.
+# date. Procedure-family exports use English-locale date strings here; all
+# other date columns in the bundle use the HOSxP standard format and are
+# passed through unchanged.
 _DATE_PARSE_COLUMN: dict[CSVTable, str] = {
     "IPTSUMOPRT": "INDATE",
+    "INCPT": "INCDATE",
 }
 
 # Rule-order guard: no table currently has both year-filter and date-parse
@@ -280,7 +282,7 @@ def normalize_row(
     parse_col = _DATE_PARSE_COLUMN.get(table)
     if parse_col is not None:
         idx = kept_header.index(parse_col)
-        parsed = parse_iptsumoprt_date(cells[idx])
+        parsed = parse_kcmh_english_date(cells[idx])
         if parsed.value is None:
             assert parsed.parse_warning is not None  # invariant on DateParseResult
             warnings.append((parse_col, parsed.parse_warning))

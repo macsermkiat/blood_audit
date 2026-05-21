@@ -39,6 +39,7 @@ from bba.deterministic_classifier import classify
 from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import ClassifierInputs
 from bba.hb_lookup import HbObservation, lookup_hb, parse_hb_value
+from bba.ingest.date_parser import parse_kcmh_english_date
 from bba.ingest.models import ParsedTimeOfDay
 from bba.ingest.row_timestamp import RowTimestamp
 from bba.ingest.time_parser import parse_hosxp_time
@@ -50,6 +51,7 @@ HB_HEM_CODE = "290095"
 HB_POCT_CODE = "500001"
 ANC_CODE = "290093"
 CODE_VERSION = "pilot-mini"
+INCPT_OPERATION_GROUPS = {"110", "111"}
 
 CRYSTALLOID_KEYWORDS = (
     "nss",
@@ -103,6 +105,14 @@ csv.field_size_limit(sys.maxsize)
 
 def _read_csv(name: str) -> list[dict[str, str]]:
     with (BUNDLE / name).open(encoding="utf-8", newline="") as fh:
+        return list(csv.DictReader(fh))
+
+
+def _read_optional_csv(name: str) -> list[dict[str, str]]:
+    path = BUNDLE / name
+    if not path.exists():
+        return []
+    with path.open(encoding="utf-8", newline="") as fh:
         return list(csv.DictReader(fh))
 
 
@@ -200,6 +210,7 @@ def _latest_anc(
 
 def _build_op_events(
     iptsumoprt: list[dict[str, str]],
+    incpt: list[dict[str, str]],
     icd9_dict: dict[str, dict[str, str]],
     an: str,
 ) -> tuple[OperativeEvent, ...]:
@@ -229,6 +240,43 @@ def _build_op_events(
                 or_flag=(meta.get("ORFLAG") or "").strip() == "1",
                 operative_datetime=dt,
                 name=(meta.get("NAME") or "").strip() or None,
+            )
+        )
+    for r in incpt:
+        if r.get("AN") != an:
+            continue
+        if (r.get("CANCELDATE") or "").strip():
+            continue
+        if (r.get("INCGRP") or "").strip() not in INCPT_OPERATION_GROUPS:
+            continue
+        code = (r.get("INCOME") or r.get("ORDERCODE") or "").strip()
+        source_code = code or "UNMAPPED"
+        incdate = r.get("INCDATE")
+        if isinstance(incdate, date):
+            d = incdate
+        else:
+            try:
+                d = date.fromisoformat(str(incdate or "")[:10])
+            except ValueError:
+                continue
+        t = _parse_time(str(r.get("INCTIME") or "")) or ParsedTimeOfDay(
+            hour=0,
+            minute=0,
+            second=0,
+        )
+        dt = _combine(d, t)
+        if dt is None:
+            continue
+        group = (r.get("INCGRP") or "").strip()
+        out.append(
+            OperativeEvent(
+                # INCPT carries charge/income codes, not ICD-9-CM procedure
+                # codes. Keep it in the operation-timing stream, but make it
+                # ineligible for ICD-9 prefix cohort rules.
+                icd9=f"INCPT:{source_code}",
+                or_flag=False,
+                operative_datetime=dt,
+                name=f"INCPT charge group {group}" if group else "INCPT charge",
             )
         )
     return tuple(out)
@@ -282,6 +330,20 @@ def _normalize_iptsumoprt(raw: list[dict[str, str]]) -> list[dict[str, str]]:
     return out
 
 
+def _normalize_incpt(raw: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Normalize INCPT column names and date cells for operation lookup."""
+    out: list[dict[str, str]] = []
+    for r in raw:
+        upper = {k.upper(): v for k, v in r.items()}
+        incdate_raw = upper.get("INCDATE", "")
+        if incdate_raw:
+            parsed = parse_kcmh_english_date(incdate_raw)
+            if parsed.value is not None:
+                upper["INCDATE"] = parsed.value.isoformat()
+        out.append(upper)
+    return out
+
+
 def main() -> None:
     if not BUNDLE.exists():
         sys.exit(f"bundle not found: {BUNDLE} (run sample_bundle.py first)")
@@ -292,6 +354,7 @@ def main() -> None:
     lab = _read_csv("Lab.csv")
     med = _read_csv("Med.csv")
     iptsumoprt = _normalize_iptsumoprt(_read_csv("IPTSUMOPRT.csv"))
+    incpt = _normalize_incpt(_read_optional_csv("INCPT.csv"))
     icd9 = _read_csv("ICD9CM.csv")
     icd9_dict = {
         (r.get("Icd9cm") or "").strip().replace(".", ""): {
@@ -362,7 +425,7 @@ def main() -> None:
     for order in filter_result.included:
         hb_obs = _build_hb_observations(lab, order.an)
         hb = lookup_hb(observations=hb_obs, anchor_utc=order.order_datetime)
-        op_events = _build_op_events(iptsumoprt, icd9_dict, order.an)
+        op_events = _build_op_events(iptsumoprt, incpt, icd9_dict, order.an)
         med_events = _build_med_events(med, order.an)
         crystalloid_events = tuple(m for m in med_events if _is_crystalloid(m.drug))
         crystalloid_liters = total_crystalloid_liters(

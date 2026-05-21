@@ -387,6 +387,10 @@ class TestCardiacRequiresOrFlag:
         assert is_cardiac_surgery_code("3601", or_flag=False) is False
         assert is_cardiac_surgery_code("3601", or_flag=True) is True
 
+    def test_incpt_namespaced_charge_code_does_not_trigger_cardiac(self) -> None:
+        assert is_cardiac_surgery_code("INCPT:3601", or_flag=True) is False
+        assert is_ortho_surgery_code("INCPT:8151", or_flag=True) is False
+
 
 class TestIcd10StrictCaseContract:
     """Codex review HIGH-3: ICD-10 matching is intentionally
@@ -1193,7 +1197,7 @@ class TestAllowListSeeds:
 
 
 class TestBundledIngestSchemas:
-    """IPTSUMOPRT and ICD9CM are registered and accessible via get_schema."""
+    """Procedure tables are registered and accessible via get_schema."""
 
     def test_iptsumoprt_in_csvtable_literal(self) -> None:
         from bba.ingest.models import CSVTable
@@ -1205,6 +1209,11 @@ class TestBundledIngestSchemas:
 
         assert "ICD9CM" in get_args(CSVTable)
 
+    def test_incpt_in_csvtable_literal(self) -> None:
+        from bba.ingest.models import CSVTable
+
+        assert "INCPT" in get_args(CSVTable)
+
     def test_iptsumoprt_schema_registered(self) -> None:
         from bba.ingest.schemas import get_schema
 
@@ -1215,6 +1224,12 @@ class TestBundledIngestSchemas:
         from bba.ingest.schemas import get_schema
 
         schema = get_schema("ICD9CM")
+        assert schema is not None
+
+    def test_incpt_schema_registered(self) -> None:
+        from bba.ingest.schemas import get_schema
+
+        schema = get_schema("INCPT")
         assert schema is not None
 
     def test_orflag_join_path_intact(self) -> None:
@@ -1244,6 +1259,7 @@ class TestBundledIngestSchemas:
 
         names = set(all_tables())
         assert "IPTSUMOPRT" in names
+        assert "INCPT" in names
         assert "ICD9CM" in names
 
 

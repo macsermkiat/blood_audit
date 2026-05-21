@@ -36,7 +36,7 @@ from bba.ingest.schemas import (
     schema_fingerprint,
     validate_header,
 )
-from bba.ingest.date_parser import parse_iptsumoprt_date
+from bba.ingest.date_parser import parse_iptsumoprt_date, parse_kcmh_english_date
 from bba.ingest.normalize import (
     RAGGED_ROW_WARNING_KEY,
     _row_positions,
@@ -58,6 +58,7 @@ REQUIRED_TABLES: tuple[CSVTable, ...] = (
     "IPDADMPROGRESS",
     "IPDNRFOCUSDT",
     "IPTSUMOPRT",
+    "INCPT",
     "ICD9CM",
 )
 
@@ -287,6 +288,12 @@ class TestIPTSUMOPRTDateParserHappyPath:
         assert r.value is not None
         assert (r.value.year, r.value.month, r.value.day) == (2025, 2, 3)
 
+    def test_date_only_form(self) -> None:
+        r = parse_kcmh_english_date("January 9, 2025")
+        assert r.parse_warning is None
+        assert r.value is not None
+        assert (r.value.year, r.value.month, r.value.day) == (2025, 1, 9)
+
 
 class TestIPTSUMOPRTDateParserRejectsUnrecognizedFormats:
     """Strict invariant (mirrors PRD §1 fix E35): unrecognized formats produce a
@@ -392,7 +399,7 @@ class TestNormalizeHeaderProjection:
 
 
 class TestNormalizeHeaderCaseNormalize:
-    """IPTSUMOPRT and ICD9CM exports use Title-Case; normalize uppercases
+    """Procedure-family exports use Title-Case; normalize uppercases
     before projection so they line up with ALL-CAPS schema declarations."""
 
     def test_iptsumoprt_title_case_uppercased(self) -> None:
@@ -416,8 +423,33 @@ class TestNormalizeHeaderCaseNormalize:
         assert "THAINAME" in r.dropped
         assert "FIRSTSTF" in r.dropped
 
+    def test_incpt_title_case_uppercased(self) -> None:
+        title_case = [
+            "Hn",
+            "Incdate",
+            "Inctime",
+            "Ordercode",
+            "Income",
+            "An",
+            "Canceldate",
+            "Incgrp",
+            "Incgrp → Name",
+        ]
+        r = normalize_header("INCPT", title_case)
+        assert set(r.header) == {
+            "HN",
+            "AN",
+            "INCDATE",
+            "INCTIME",
+            "ORDERCODE",
+            "INCOME",
+            "CANCELDATE",
+            "INCGRP",
+        }
+        assert "INCGRP → NAME" in r.dropped
+
     def test_non_procedure_table_keeps_case_as_is(self) -> None:
-        # Only IPTSUMOPRT and ICD9CM are case-normalized. Other tables that
+        # Only procedure-family tables are case-normalized. Other tables that
         # somehow arrive with mixed-case columns would correctly fail the
         # projection (mixed-case names are not in the declared set).
         r = normalize_header("BDVST", ["hn", "REQNO"])
@@ -481,6 +513,21 @@ class TestRowPositions:
         positions = _row_positions("IPTSUMOPRT", raw, kept)
         # AN→0, ICD9CM→3, INDATE→4, INTIME→5
         assert positions == (0, 3, 4, 5)
+
+    def test_incpt_title_case_resolves_to_raw_positions(self) -> None:
+        raw = [
+            "Hn",
+            "Incdate",
+            "Inctime",
+            "Ordercode",
+            "Income",
+            "An",
+            "Canceldate",
+            "Incgrp",
+        ]
+        kept = ["HN", "AN", "INCDATE", "INCTIME", "ORDERCODE", "INCOME", "INCGRP"]
+        positions = _row_positions("INCPT", raw, kept)
+        assert positions == (0, 5, 1, 2, 3, 4, 7)
 
     def test_ipdadmprogress_duplicates_resolve_to_first_position(self) -> None:
         # Real file shape (abbreviated): HN at 0, AN at 1, duplicate AN
@@ -635,6 +682,16 @@ class TestNormalizeRowDateParse:
         assert result is not None
         assert result.parse_warnings == ()
         assert result.cells[kept.index("INDATE")] == "2025-06-07"
+
+    def test_incpt_incdate_date_only_replaced_with_iso(self) -> None:
+        kept = list(get_schema("INCPT").columns)
+        positions = _row_positions("INCPT", kept, kept)
+        row = ["" for _ in kept]
+        row[kept.index("INCDATE")] = "January 9, 2025"
+        result = normalize_row("INCPT", row, positions, kept)
+        assert result is not None
+        assert result.parse_warnings == ()
+        assert result.cells[kept.index("INCDATE")] == "2025-01-09"
 
     def test_indate_unparseable_yields_warning_but_keeps_row(self) -> None:
         row, positions, kept = self._iptsumoprt_row("not-a-date")
@@ -951,12 +1008,12 @@ class TestEmptyCSVNoLog:
 
 
 class TestFixtureDrainSmoke:
-    """Issue #63: explicit smoke test that the 11 single-empty-row fixture
+    """Issue #63: explicit smoke test that the 12 single-empty-row fixture
     tables drain cleanly through ``ingest()``. The existing partition /
     idempotency tests don't assert this, so a fixture-vs-drain regression
     would pass silently. This test pins the contract."""
 
-    def test_all_11_tables_drain_without_crashing(
+    def test_all_12_tables_drain_without_crashing(
         self,
         tmp_path: Path,
         complete_hosxp_dir: Path,
@@ -968,10 +1025,10 @@ class TestFixtureDrainSmoke:
         )
         # Must not raise. The fixture's single empty row exercises every
         # per-table rule branch with degenerate inputs (empty PROGDATE
-        # year-filter-drops, empty INDATE parse-warns, all other tables
+        # year-filter-drops, empty procedure dates parse-warn, all other tables
         # pass through), and the row-pipeline must handle each cleanly.
         result = ingest(cfg)
-        assert len(result.tables_written) == 11
+        assert len(result.tables_written) == 12
         assert result.skipped_idempotent is False
 
 
@@ -1246,7 +1303,7 @@ class TestPipelineDrainsRows:
 
 
 # =============================================================================
-# AC: All 11 CSVs ingestable — pandera schemas registered for every table
+# AC: All 12 CSVs ingestable — pandera schemas registered for every table
 # =============================================================================
 
 
@@ -1263,11 +1320,11 @@ class TestSchemaCoverage:
         # Adding a table without bumping the schema version would change the
         # fingerprint and produce a new run_id — but we still want a hard
         # tripwire so a contributor cannot register an extra one silently.
-        # Canonical set (2026-05-19 schema lock): 11 tables — see
+        # Canonical set: 12 tables — see
         # docs/ingest-mapping.md. UnUSE_Patient_Background dropped because
         # the bundle's file with that name is obstetric records, not patient
         # demographics; audit no longer needs per-row age/sex.
-        assert len(all_tables()) == 11
+        assert len(all_tables()) == 12
 
 
 # =============================================================================
