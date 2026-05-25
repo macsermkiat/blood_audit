@@ -371,9 +371,7 @@ def main() -> None:
     use_dt_by_reqno: dict[str, str] = {}
     for r in bdvstdt:
         reqno = r["REQNO"]
-        products_by_reqno.setdefault(reqno, []).append(
-            (r.get("BDTYPE") or "").strip()
-        )
+        products_by_reqno.setdefault(reqno, []).append((r.get("BDTYPE") or "").strip())
         use_date = (r.get("USEDATE") or "").strip().split(" ")[0]
         use_time_raw = (r.get("USETIME") or "").strip()
         if use_date and use_time_raw:
@@ -526,7 +524,9 @@ def main() -> None:
     # Append excluded cases as sparse rows so build_review.py can surface
     # the exclusion reason (e.g. "obstetric") instead of showing "—".
     for ex in filter_result.excluded:
-        rows.append({"reqno": ex.reqno, "classification": "excluded", "rationale": ex.reason})
+        rows.append(
+            {"reqno": ex.reqno, "classification": "excluded", "rationale": ex.reason}
+        )
 
     out_csv = WORK / "report.csv"
     # Always write — even an all-excluded sample needs a valid (header-
