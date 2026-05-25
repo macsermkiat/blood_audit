@@ -42,13 +42,18 @@ const { title = "At a glance", items } = Astro.props;
   .at-a-glance__grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+    grid-auto-rows: 1fr;
+    align-items: stretch;
     gap: 0.625rem;
     margin: 0;
   }
 
   .at-a-glance__item {
     display: grid;
+    align-content: start;
     gap: 0.35rem;
+    min-width: 0;
+    height: 100%;
     min-height: 5.25rem;
     padding: 0.875rem;
     border: 1px solid var(--sl-color-gray-5);
@@ -94,6 +99,7 @@ const { title = "At a glance", items } = Astro.props;
     letter-spacing: 0.04em;
     line-height: 1.25;
     text-transform: uppercase;
+    overflow-wrap: anywhere;
   }
 
   .at-a-glance__item dd {
@@ -102,5 +108,8 @@ const { title = "At a glance", items } = Astro.props;
     font-size: 0.95rem;
     font-weight: 650;
     line-height: 1.45;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 </style>
