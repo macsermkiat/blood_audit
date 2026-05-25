@@ -3,9 +3,20 @@ title: De-identification
 description: How the deid_redactor protects PHI before any cross-container hop.
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
 `bba.deid_redactor` runs between `evidence_bundle_builder` and
 `prompt_builder`. It is non-optional. No audit row reaches the LLM without
 passing through this stage.
+
+<AtAGlance
+  items={[
+    { label: "Input", value: "Unredacted evidence bundle inside the audit container." },
+    { label: "Output", value: "Redacted bundle plus review flags when confidence is low." },
+    { label: "Protected fields", value: "HN, AN, REQNO, names, DOB, dates, and age ≥90.", tone: "ok" },
+    { label: "Log safety", value: "sys.excepthook scrubs PHI-shaped traceback content.", tone: "warn" },
+  ]}
+/>
 
 ## What it redacts
 
@@ -16,6 +27,12 @@ passing through this stage.
 - Identifying age components for patients ≥ 90 (replaced with
   "≥ 90 years").
 - Specific dates within free-text notes (replaced with relative offsets).
+
+## What happens if redaction is uncertain
+
+The redactor can mark a bundle as needing review rather than pretending a
+low-confidence redaction is safe. Downstream stages should treat those
+review reasons as part of the audit trail; they are not optional warnings.
 
 ## Where the patterns live
 

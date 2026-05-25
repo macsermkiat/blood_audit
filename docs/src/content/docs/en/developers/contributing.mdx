@@ -3,6 +3,17 @@ title: Contributing
 description: Repository conventions, branch naming, and the ralph-loop ticket workflow.
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
+<AtAGlance
+  items={[
+    { label: "Branch", value: "Use feat/, fix/, docs/, chore/, test/, ci/, etc." },
+    { label: "Merge style", value: "Use gh pr merge --merge; keep merge commits.", tone: "ok" },
+    { label: "Required docs", value: "Update docs/CONTEXT.md for new public concepts." },
+    { label: "Review", value: "Run Codex review before closing the ticket.", tone: "warn" },
+  ]}
+/>
+
 ## Branch naming
 
 Use one of: `feat/`, `fix/`, `refactor/`, `docs/`, `chore/`, `perf/`, `test/`, `ci/`.

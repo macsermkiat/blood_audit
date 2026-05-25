@@ -3,11 +3,21 @@ title: Environment variables
 description: The three environment variables blood_audit requires before any audit can run.
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
 import EnvVarChecklist from "../../../../components/EnvVarChecklist.astro";
 
 blood_audit enforces a strict 3-variable contract for the full
 deployment. Missing or malformed values fail fast with `CliError` — they
 never silently degrade.
+
+<AtAGlance
+  items={[
+    { label: "Phase 1 required", value: "BBA_DATA_DIR only.", tone: "ok" },
+    { label: "Phase 1.5 required", value: "BBA_DB_URL and ANTHROPIC_API_KEY when analysis is wired." },
+    { label: "Secret handling", value: "Never paste ANTHROPIC_API_KEY into issues, screenshots, or logs.", tone: "warn" },
+    { label: "Driver rule", value: "Postgres URLs must use postgresql+psycopg://." },
+  ]}
+/>
 
 <EnvVarChecklist />
 

@@ -3,9 +3,20 @@ title: นี่คืออะไร
 description: ระบบออดิทย้อนหลังของการให้เลือดแดงเข้มข้นที่ KCMH ไม่ใช่ CDS ณ จุดดูแล
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
 import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
 
 <QiNotSamdBanner />
+
+<AtAGlance
+  title="สรุปสั้น"
+  items={[
+    { label: "ผู้ใช้", value: "คณะกรรมการ QI, blood bank, และทีม IT" },
+    { label: "เวลาใช้งาน", value: "หลังให้เลือดเสร็จแล้ว ไม่ใช่ clinical decision support", tone: "warn" },
+    { label: "หลักฐาน", value: "HOSxP order, Lab Hb, ICD, procedure, MED, notes" },
+    { label: "ผลที่ไม่ชัด", value: "ส่งเป็น NEEDS_REVIEW เพื่อให้คนทบทวน", tone: "ok" },
+  ]}
+/>
 
 ## สรุปในย่อหน้าเดียว
 
@@ -17,10 +28,12 @@ classification: `APPROPRIATE`, `INAPPROPRIATE`, `NEEDS_REVIEW`,
 การตัดสินใจอ้างอิงตามแนวทางภายในของ KCMH คือ PR 17.2 (Procedure
 Revision 17.2) และมาตรฐาน AABB 2023 (Association for the Advancement of
 Blood &amp; Biotherapies) ใช้นโยบายฮีโมโกลบิน (Hb) แบบ 3-ชั้น
-พร้อมเกณฑ์เฉพาะกลุ่มผู้ป่วย และกลไก override สำหรับภาวะเสียเลือดเฉียบพลัน
+พร้อมเกณฑ์เฉพาะกลุ่มผู้ป่วย และ bypass ที่ต้องมีหลักฐานรองรับ
 
-แถวที่ deterministic classifier ส่งไปยัง LLM (Tier 3, Hb > 10 g/dL)
-จะผ่าน quote-grounding แบบ fail-closed 6 ชั้น "LLM_REVIEW" เป็นเพียง
+แถวที่ deterministic classifier ส่งไปยัง LLM จะผ่าน quote-grounding
+แบบ fail-closed 6 ชั้น เส้นทางนี้รวมกรณีบริบทไม่ชัด, Hb อยู่ใน gray zone,
+Hb สูง, หรือมี safety flag ที่ไม่ควรตัดสินจากค่า Hb อย่างเดียว
+"LLM_REVIEW" เป็นเพียง
 แนวคิดการ routing ภายใน pipeline ไม่ใช่ classification ที่บันทึก
 ถ้า grounding ล้มเหลว ผลจะเป็น `final_classification = NEEDS_REVIEW`
 พร้อม `review_reason` ที่ระบุเหตุผล เพื่อให้คนทบทวนต่อ
@@ -55,8 +68,9 @@ Schema ของรายงานอยู่ที่ [`docs/report-schema.md`
 
 ## การรับประกันป้องกัน hallucination
 
-สำหรับแถวที่ deterministic classifier ส่งไปยัง `LLM_REVIEW`
-(Tier 3, Hb > 10 g/dL) เหตุผลทางคลินิกของ LLM จะถูกกรองด้วย
+สำหรับแถวที่ deterministic classifier ส่งไปยัง LLM review
+เหตุผลทางคลินิกของ LLM จะถูกกรองด้วย
 [6 quote-grounding layers แบบ fail-closed](/blood_audit/en/developers/quote-grounding/) (เอกสารภาษาอังกฤษ)
-ถ้า grounding ล้มเหลว แถวจะถูกส่งไปยัง `hallucination_suspect`
-ไม่ใช่แถวผลลัพธ์
+ถ้า grounding ล้มเหลว ระบบจะเก็บ `final_classification = NEEDS_REVIEW`
+พร้อม `review_reason = "hallucination_suspect"` ไม่ใช่เผยแพร่เป็น
+`APPROPRIATE` หรือ `INAPPROPRIATE`

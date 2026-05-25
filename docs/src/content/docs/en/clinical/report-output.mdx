@@ -3,11 +3,22 @@ title: Report output
 description: What the QI committee sees — six CSV sections plus a PDF summary.
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
 The audit pipeline produces a monthly report whose authoritative schema
 lives in
 [`docs/report-schema.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/report-schema.md).
 A summary appears below; for the column-by-column contract, see the
 source file.
+
+<AtAGlance
+  items={[
+    { label: "Output set", value: "Six committee CSV sections, per-physician own-view CSVs, and one PDF." },
+    { label: "Privacy", value: "Physician own-view files are split one physician per file.", tone: "ok" },
+    { label: "Reproducible", value: "Every row/page carries policy, model, redactor, prompt, and evidence hashes." },
+    { label: "CLI status", value: "bba report is an integration seam until deployment wires ReportInputs.", tone: "warn" },
+  ]}
+/>
 
 ## Six CSV sections (plus per-physician files and a PDF)
 

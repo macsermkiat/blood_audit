@@ -3,9 +3,19 @@ title: Operator overview
 description: What blood_audit is, what you need to run it, and what success looks like.
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
 import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
 
 <QiNotSamdBanner variant="compact" />
+
+<AtAGlance
+  items={[
+    { label: "Operator role", value: "Install, configure env vars, run ingest/audit, hand off the dataset." },
+    { label: "Required today", value: "Python/uv, BBA_DATA_DIR, writable storage, HOSxP export bundle.", tone: "ok" },
+    { label: "Phase 1.5", value: "Postgres and Anthropic Batch API are needed when classification is wired." },
+    { label: "Safety", value: "No live clinician alerts; all PHI leaves only after de-identification.", tone: "warn" },
+  ]}
+/>
 
 ## Who this section is for
 
@@ -37,16 +47,17 @@ want to know why they fail today.
 
 1. `bba ingest <csv>` validates the bundle, computes a content hash, and
    writes a Parquet snapshot under `$BBA_DATA_DIR`.
-2. `bba audit --input <csv>` classifies every (HN, REQNO) transfusion row,
-   writes a row per transfusion to Postgres (`audit_store`), and appends a
-   compliance entry to `audit_log`.
+2. `bba audit --input <csv>` currently materializes the same bundle under
+   `$BBA_DATA_DIR/audit/<run_id>/` and appends run-state/compliance markers.
+   In Phase 1.5 it also writes one classified `AuditRow` per transfusion.
 3. Re-running the same input is a no-op unless you pass `--force`
    (run-level idempotency — see [Pitfall 13](/blood_audit/en/operators/troubleshooting/#run-level-idempotency)).
 
 ## What to expect
 
-- The deterministic classifier handles roughly the majority of rows; LLM_REVIEW
-  rows go to the Anthropic Batch API and may take minutes to complete.
+- The deterministic classifier handles rows first. `NEEDS_REVIEW` and
+  `POTENTIALLY_INAPPROPRIATE` rows go to the LLM route in Phase 1.5 and
+  may take minutes to complete.
 - Hard exclusions filter out non-RBC products, age < 15, and orders without
   pre-transfusion Hb.
 - All PHI is de-identified before any data leaves the audit container.

@@ -3,6 +3,17 @@ title: Testing
 description: How to run unit, integration, and testcontainers Postgres tests.
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
+<AtAGlance
+  items={[
+    { label: "Blocking gates", value: "ruff, ruff format, mypy src, pytest.", tone: "ok" },
+    { label: "Advisory gate", value: "mypy tests is allowed to warn until test helper debt is paid.", tone: "warn" },
+    { label: "Docker", value: "Postgres tests auto-skip when Docker/testcontainers is unavailable." },
+    { label: "LLM tests", value: "Cassette-backed only; cost guard blocks live API calls." },
+  ]}
+/>
+
 ## Quality gates (local)
 
 A clean working tree should pass:

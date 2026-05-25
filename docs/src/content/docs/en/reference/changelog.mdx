@@ -3,6 +3,17 @@ title: Changelog
 description: Phase 1 is feature-complete. The v0.1.0 tag and authoritative release notes live on GitHub.
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
+<AtAGlance
+  items={[
+    { label: "Current version", value: "0.1.0 in pyproject.toml.", tone: "ok" },
+    { label: "Release notes", value: "GitHub Releases becomes canonical after tag." },
+    { label: "Phase 1", value: "Modules are feature-complete; deployment wiring remains." },
+    { label: "Not included", value: "Pilot validation, production wiring, and Phase B re-encryption.", tone: "warn" },
+  ]}
+/>
+
 ## Status
 
 Phase 1 is feature-complete: 20 modules under `bba.*` merged to `main`,

@@ -3,9 +3,19 @@ title: Pipeline stages
 description: What each of the 12 stages reads, writes, and guarantees.
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
 import PipelineDiagram from "../../../../components/PipelineDiagram.astro";
 
 <PipelineDiagram />
+
+<AtAGlance
+  items={[
+    { label: "Stage 1", value: "Ingest runs from the CLI today.", tone: "ok" },
+    { label: "Stages 2-12", value: "Implemented as modules; CLI orchestration lands in Phase 1.5.", tone: "warn" },
+    { label: "Data handoff", value: "Each stage produces typed Pydantic objects or persisted store rows." },
+    { label: "Failure mode", value: "Validation, de-id, grounding, and persistence all fail loud." },
+  ]}
+/>
 
 :::note[What runs today via `bba audit`]
 In Phase 1, `bba audit` wraps **stage 1 only** (ingest). Stages 2–12 are
@@ -33,7 +43,8 @@ Resolves the per-order anchor datetime.
 ### 3. `bba.hb_lookup`
 
 For each surviving order, finds the most recent pre-transfusion Hb result
-in the Lab table within a configurable window.
+in the Lab table within a 7-day lookback, prefers HEMATOLOGY over POCT,
+and computes delta-Hb windows for acute-blood-loss evidence.
 
 ### 4. `bba.vitals_extractor`
 
@@ -55,7 +66,8 @@ for the full rule.
 ### 7. `bba.evidence_bundle_builder`
 
 Builds the unredacted evidence bundle for the LLM context window: lab
-values, vitals, anchor notes, cohort, ICD codes.
+values, vitals, anchor notes, medications, cohort evidence, ICD codes,
+and procedure timing.
 
 ### 8. `bba.deid_redactor`
 
@@ -88,9 +100,9 @@ model boundary; nested JSON fields are deeply frozen. See
 [Audit store](/blood_audit/en/developers/audit-store/) for the
 classification literals and the Phase 1 vs 1.5 split.
 
-## State machine for LLM_REVIEW rows
+## State machine for LLM-route rows
 
-Each LLM_REVIEW row carries a `batch_runs` state:
+Each row routed to the LLM carries a `batch_runs` state:
 
 ```text
 pending → submitted → partial → complete

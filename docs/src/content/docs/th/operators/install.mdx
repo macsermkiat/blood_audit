@@ -3,6 +3,18 @@ title: ติดตั้ง
 description: ติดตั้ง blood_audit ด้วย uv และตรวจสอบ CLI
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
+<AtAGlance
+  title="สรุปการติดตั้ง"
+  items={[
+    { label: "เป้าหมาย", value: "สร้าง environment ที่ reproducible จาก uv.lock" },
+    { label: "ต้องมี", value: "Python 3.13+ และ uv 0.9.24+", tone: "ok" },
+    { label: "ห้าม", value: "อย่าตั้ง UV_LOCKED=1 พร้อม uv sync --frozen", tone: "warn" },
+    { label: "ตรวจสอบ", value: "uv run bba --help ต้องเห็น subcommand 6 ตัว" },
+  ]}
+/>
+
 ## สิ่งที่ต้องมี
 
 | สิ่งที่ต้องมี | เวอร์ชัน |

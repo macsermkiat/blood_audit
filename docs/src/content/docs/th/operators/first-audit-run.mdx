@@ -3,11 +3,22 @@ title: รันออดิทครั้งแรก
 description: รัน bba ingest และ bba audit ครบจบจากข้อมูลส่งออก HOSxP
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
 import CliCommandCard from "../../../../components/CliCommandCard.astro";
 
 เอกสารนี้พาเดิน happy path ตั้งแต่ข้อมูลส่งออกจาก HOSxP เข้าไป
 จนได้ snapshot ที่เป็น DuckDB + Parquet ภายใต้
 `$BBA_DATA_DIR/audit/<run_id>/` แบบ idempotent
+
+<AtAGlance
+  title="สิ่งที่จะได้"
+  items={[
+    { label: "ข้อมูลเข้า", value: "CSV หนึ่งไฟล์ที่อยู่ใน bundle จาก HOSxP" },
+    { label: "เขียนออก", value: "$BBA_DATA_DIR/audit/<run_id>/ พร้อม parquet/ และ ingest.duckdb", tone: "ok" },
+    { label: "รันซ้ำ", value: "input เดิม + code เดิม = run_id เดิม และ no-op" },
+    { label: "ตรวจสอบ", value: "ใช้ DuckDB ดู tables และ row counts หลังรัน" },
+  ]}
+/>
 
 :::note[ขอบเขต Phase 1]
 ใน Phase 1, `bba audit` ทำเฉพาะ **ส่วน ingest** ของ pipeline
@@ -71,6 +82,10 @@ ls "$BBA_DATA_DIR/audit_runs/<RUN_ID>/"
 # ดู HOSxP tables ผ่าน DuckDB
 duckdb "$BBA_DATA_DIR/audit/<RUN_ID>/ingest.duckdb" \
   "SELECT table_name FROM information_schema.tables;"
+
+# นับจำนวนแถวของ table สำคัญ
+duckdb "$BBA_DATA_DIR/audit/<RUN_ID>/ingest.duckdb" \
+  "SELECT COUNT(*) FROM Lab;"
 ```
 
 ## สิ่งที่จะเห็นใน Phase 1.5

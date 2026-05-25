@@ -3,10 +3,21 @@ title: Environment variables
 description: ตัวแปรสภาพแวดล้อม 3 ตัวที่ blood_audit ต้องใช้ก่อนรันออดิทได้
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
 import EnvVarChecklist from "../../../../components/EnvVarChecklist.astro";
 
 blood_audit บังคับใช้สัญญา 3-ตัวแปรอย่างเคร่งครัด ถ้าค่าหายหรือผิดรูปแบบ
 จะ fail fast ด้วย `CliError` ตอนเริ่มโปรแกรม จะไม่ทำงานต่อแบบเงียบ ๆ
+
+<AtAGlance
+  title="สรุป env vars"
+  items={[
+    { label: "จำเป็นใน Phase 1", value: "BBA_DATA_DIR เท่านั้น", tone: "ok" },
+    { label: "จำเป็นใน Phase 1.5", value: "BBA_DB_URL และ ANTHROPIC_API_KEY" },
+    { label: "ความลับ", value: "ห้าม paste ANTHROPIC_API_KEY ลง issue หรือ screenshot", tone: "warn" },
+    { label: "Postgres", value: "ต้องใช้ postgresql+psycopg:// ไม่ใช่ postgresql:// แบบเปล่า" },
+  ]}
+/>
 
 <EnvVarChecklist />
 

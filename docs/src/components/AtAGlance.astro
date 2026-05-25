@@ -1,0 +1,106 @@
+---
+interface Item {
+  label: string;
+  value: string;
+  tone?: "neutral" | "ok" | "warn" | "err";
+}
+
+interface Props {
+  title?: string;
+  items: Item[];
+}
+
+const { title = "At a glance", items } = Astro.props;
+---
+
+<aside class="at-a-glance" aria-label={title}>
+  <p class="at-a-glance__title">{title}</p>
+  <dl class="at-a-glance__grid">
+    {items.map((item) => (
+      <div class="at-a-glance__item" data-tone={item.tone ?? "neutral"}>
+        <dt>{item.label}</dt>
+        <dd>{item.value}</dd>
+      </div>
+    ))}
+  </dl>
+</aside>
+
+<style>
+  .at-a-glance {
+    margin: 1.25rem 0 1.5rem;
+  }
+
+  .at-a-glance__title {
+    margin: 0 0 0.5rem;
+    color: var(--sl-color-gray-2);
+    font-size: 0.75rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .at-a-glance__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+    gap: 0.625rem;
+    margin: 0;
+  }
+
+  .at-a-glance__item {
+    display: grid;
+    gap: 0.35rem;
+    min-height: 5.25rem;
+    padding: 0.875rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    background: var(--sl-color-bg-nav);
+  }
+
+  .at-a-glance__item[data-tone="ok"] {
+    border-color: oklch(72% 0.10 150);
+    background: oklch(96% 0.025 150);
+  }
+
+  .at-a-glance__item[data-tone="warn"] {
+    border-color: oklch(72% 0.11 70);
+    background: oklch(96% 0.035 70);
+  }
+
+  .at-a-glance__item[data-tone="err"] {
+    border-color: oklch(70% 0.13 28);
+    background: oklch(96% 0.035 28);
+  }
+
+  :root[data-theme="dark"] .at-a-glance__item[data-tone="ok"] {
+    border-color: oklch(55% 0.12 150);
+    background: oklch(24% 0.045 150);
+  }
+
+  :root[data-theme="dark"] .at-a-glance__item[data-tone="warn"] {
+    border-color: oklch(56% 0.12 70);
+    background: oklch(25% 0.05 70);
+  }
+
+  :root[data-theme="dark"] .at-a-glance__item[data-tone="err"] {
+    border-color: oklch(56% 0.13 28);
+    background: oklch(25% 0.055 28);
+  }
+
+  .at-a-glance__item dt {
+    margin: 0;
+    color: var(--sl-color-gray-3);
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    line-height: 1.25;
+    text-transform: uppercase;
+  }
+
+  .at-a-glance__item dd {
+    margin: 0;
+    color: var(--sl-color-white);
+    font-size: 0.95rem;
+    font-weight: 650;
+    line-height: 1.45;
+  }
+</style>

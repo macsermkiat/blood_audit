@@ -3,6 +3,8 @@ title: Audit store
 description: How the audit store persists AuditRow + LlmCall, and how run-level idempotency is enforced.
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
 `bba.audit_store` is the persistence boundary for audit results.
 Two record types are persisted immutably:
 
@@ -16,6 +18,15 @@ Both models are `frozen=True` Pydantic; nested JSON fields use
 `FrozenJsonList` / `FrozenJsonDict` so post-construction mutation raises
 `TypeError`. Datetimes are tz-aware UTC at the model boundary; naive
 datetimes are rejected.
+
+<AtAGlance
+  items={[
+    { label: "Persists", value: "AuditRow and LlmCall records." },
+    { label: "Invariant", value: "Rows are immutable, tz-aware UTC, and SafeId-keyed.", tone: "ok" },
+    { label: "Idempotency", value: "Duplicate (audit_id, run_id, code_version) writes no-op." },
+    { label: "Phase 1", value: "CLI writes ingest snapshots; AuditRow path is wired in Phase 1.5.", tone: "warn" },
+  ]}
+/>
 
 ## Stored `Classification` literals
 

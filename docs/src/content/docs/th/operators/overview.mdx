@@ -3,9 +3,20 @@ title: ภาพรวมสำหรับผู้ดูแลระบบ
 description: blood_audit คืออะไร สิ่งที่ต้องเตรียม และผลลัพธ์ที่ถือว่าสำเร็จ
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
 import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
 
 <QiNotSamdBanner variant="compact" />
+
+<AtAGlance
+  title="สรุปสำหรับผู้ดูแล"
+  items={[
+    { label: "งานหลัก", value: "ติดตั้ง ตั้งค่า env รัน ingest/audit ส่ง dataset" },
+    { label: "ต้องมีวันนี้", value: "Python/uv, BBA_DATA_DIR, storage ที่เขียนได้, HOSxP export", tone: "ok" },
+    { label: "Phase 1.5", value: "Postgres และ Anthropic Batch API ใช้เมื่อเชื่อม analysis แล้ว" },
+    { label: "ความปลอดภัย", value: "ไม่มี real-time alert และ PHI ต้อง de-identify ก่อนออกจาก container", tone: "warn" },
+  ]}
+/>
 
 ## เอกสารส่วนนี้สำหรับใคร
 
@@ -33,15 +44,17 @@ import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
 ## ผลลัพธ์เมื่อรันสำเร็จ
 
 1. `bba ingest <csv>` ตรวจสอบชุดข้อมูล คำนวณ hash และเขียน Parquet snapshot ลง `$BBA_DATA_DIR`
-2. `bba audit --input <csv>` จัดประเภททุกแถวการให้เลือด `(HN, REQNO)`
-   เขียนผลลง Postgres (`audit_store`) และเพิ่มแถว compliance ใน `audit_log`
+2. `bba audit --input <csv>` ใน Phase 1 จะ materialize snapshot ภายใต้
+   `$BBA_DATA_DIR/audit/<run_id>/` และบันทึก run-state/compliance marker
+   ส่วนการเขียน `AuditRow` ลง Postgres จะเชื่อมใน Phase 1.5
 3. การรันซ้ำด้วย input เดิมจะไม่ทำอะไรใหม่ ยกเว้นใส่ `--force`
    (รายละเอียดดู [Run-level idempotency](/blood_audit/en/operators/troubleshooting/#run-level-idempotency))
 
 ## สิ่งที่คาดหวังได้
 
-- Deterministic classifier จัดการแถวส่วนใหญ่ ส่วนแถว LLM_REVIEW
-  จะส่งไปยัง Anthropic Batch API ซึ่งอาจใช้เวลาหลายนาทีกว่าจะเสร็จ
+- Deterministic classifier จะทำงานก่อนเสมอ เมื่อ Phase 1.5 เชื่อมแล้ว
+  แถว `NEEDS_REVIEW` และ `POTENTIALLY_INAPPROPRIATE` จะเข้าสู่ LLM route
+  ซึ่งอาจใช้เวลาหลายนาทีกว่าจะเสร็จ
 - มี hard exclusions สำหรับผลิตภัณฑ์ที่ไม่ใช่ RBC ผู้ป่วยอายุ < 15 ปี
   และคำสั่งที่ไม่มี pre-transfusion Hb
 - PHI ทั้งหมดจะถูก de-identify ก่อนที่ข้อมูลใด ๆ จะออกจาก audit container

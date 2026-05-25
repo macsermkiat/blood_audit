@@ -3,6 +3,7 @@ title: Quote grounding (6 layers)
 description: Six fail-closed layers between an LLM citation and a published audit row.
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
 import QuoteGroundingLayers from "../../../../components/QuoteGroundingLayers.astro";
 
 When the deterministic classifier routes a row to LLM review, the LLM
@@ -10,6 +11,15 @@ emits a clinical reasoning summary along with quoted evidence from the
 de-identified bundle. Every quote passes through six mandatory
 fail-closed layers; a seventh medical-NLI semantic-entailment layer is
 opt-in.
+
+<AtAGlance
+  items={[
+    { label: "Input", value: "LLM citation + evidence_id + de-identified evidence bundle." },
+    { label: "Mandatory", value: "Six deterministic quote checks always run.", tone: "ok" },
+    { label: "Optional", value: "Medical-NLI runs only when deployment passes an NLI gate." },
+    { label: "Failure", value: "Any failed mandatory layer becomes NEEDS_REVIEW / hallucination_suspect.", tone: "warn" },
+  ]}
+/>
 
 <QuoteGroundingLayers />
 

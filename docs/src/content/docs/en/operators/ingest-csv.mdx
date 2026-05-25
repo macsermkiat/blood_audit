@@ -3,39 +3,52 @@ title: Ingest CSV
 description: Expected shape of the HOSxP export bundle and what bba ingest does with it.
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
 `bba ingest` is the entry point for every audit. It validates, hashes, and
 materializes the input bundle into a DuckDB + Parquet snapshot under
 `$BBA_DATA_DIR`.
 
+<AtAGlance
+  items={[
+    { label: "Bundle size", value: "11 canonical HOSxP CSV tables.", tone: "ok" },
+    { label: "Validation", value: "Headers must match schema v1; unknown or missing required columns fail." },
+    { label: "Output", value: "One Parquet file per table plus ingest.duckdb views." },
+    { label: "PHI rule", value: "Use PHI_xxx placeholders in docs and issues, never real HN/AN.", tone: "warn" },
+  ]}
+/>
+
 ## Expected tables
 
-The HOSxP export bundle contains roughly 10 tables. The audit pipeline
-reads, at minimum:
+The HOSxP export bundle contains 11 canonical tables:
 
-- **Transfusion order header** — HN (hospital number), REQNO (request
-  number), product code, and request datetime. The audit only keeps
-  red blood cell (RBC) orders. Other blood products are filtered out:
-  LPRC (leukocyte-poor red cells), LDPRC (leukocyte-depleted red cells),
-  and SDR (saline-diluted red cells).
-- **Lab** — pre-transfusion hemoglobin (Hb) results, keyed by HN and
-  timestamp.
-- **MED / progress notes** — free-text source for vital signs and
-  acute-blood-loss indicators.
-- **Operative table** — procedure code and timestamp. Used to detect
-  cardiac-surgery / ortho-cardiac cohorts, peri-procedural timing, and
-  pre-op crossmatch timing.
-- **ICD-10 / ICD-9-CM** — diagnosis and procedure code reference.
+| Table | Used for |
+| --- | --- |
+| `BDVST` | Transfusion order header: HN, AN, REQNO, product, request datetime. |
+| `BDVSTDT` | Order detail rows and product/unit-level context. |
+| `BDTYPE` | Blood-product reference. |
+| `BDVSTST` | Transfusion-status reference. |
+| `Diagnosis` | ICD-10 diagnosis evidence for exclusions and cohorts. |
+| `Lab` | Hb, ANC, and other lab evidence. |
+| `Med` | Medication evidence: dialysis meds, chemo meds, crystalloid volume. |
+| `IPDADMPROGRESS` | Progress-note evidence for the LLM bundle. |
+| `IPDNRFOCUSDT` | Nursing-note evidence for the LLM bundle. |
+| `IPTSUMOPRT` | Operative events and procedure timestamps. |
+| `ICD9CM` | Procedure-code dictionary and OR/non-OR flag. |
 
 The exact column contract is defined in `src/bba/ingest/`.
 
 ## What ingest writes
 
-For each successful run:
+For each successful `bba ingest` run:
 
-- A DuckDB database under `$BBA_DATA_DIR/duckdb/<run_id>.duckdb`.
-- Parquet snapshots under `$BBA_DATA_DIR/parquet/<run_id>/`.
+- Parquet snapshots under `$BBA_DATA_DIR/ingest/v1/<run_id>/parquet/`.
+- A DuckDB database at `$BBA_DATA_DIR/ingest/v1/<run_id>/ingest.duckdb`.
 - A completion marker; absence of this marker means the run is incomplete
   and a re-ingest will start fresh.
+
+For `bba audit --input ...` in Phase 1, the same ingest snapshot shape is
+written under `$BBA_DATA_DIR/audit/<run_id>/`.
 
 ## run_id derivation
 

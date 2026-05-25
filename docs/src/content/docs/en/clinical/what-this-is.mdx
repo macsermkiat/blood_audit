@@ -3,9 +3,19 @@ title: What this is
 description: A post-hoc audit pipeline for KCMH RBC transfusions. Not point-of-care CDS.
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
 import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
 
 <QiNotSamdBanner />
+
+<AtAGlance
+  items={[
+    { label: "Audience", value: "QI committee, blood bank, and hospital IT." },
+    { label: "Timing", value: "After transfusion is complete; no bedside decision support.", tone: "warn" },
+    { label: "Evidence", value: "HOSxP orders, Lab Hb, ICD codes, procedures, meds, and notes." },
+    { label: "Human review", value: "Unclear or failed-grounding rows stay in NEEDS_REVIEW.", tone: "ok" },
+  ]}
+/>
 
 ## In one paragraph
 
@@ -17,11 +27,15 @@ records one of five stored classifications: `APPROPRIATE`,
 `POTENTIALLY_INAPPROPRIATE`. The decision follows the KCMH internal
 guideline PR 17.2 (Procedure Revision 17.2) and the AABB 2023
 (Association for the Advancement of Blood & Biotherapies) standard,
-using a 3-tier hemoglobin (Hb) policy with cohort-specific thresholds
-and an acute-blood-loss override.
+using a 3-tier hemoglobin (Hb) policy with clinical-context thresholds
+and evidence-gated bypasses. In developer docs these context buckets are
+called "cohorts"; they are per-order audit labels, not permanent patient
+groups.
 
-Rows that the deterministic classifier routes to the LLM (Tier 3,
-Hb > 10 g/dL) go through six fail-closed quote-grounding layers.
+Rows that the deterministic classifier routes to the LLM go through six
+fail-closed quote-grounding layers. This route includes unclear clinical
+contexts, gray-zone Hb rows, high-Hb rows, and safety-flag rows that should
+not be auto-classified from the Hb number alone.
 "LLM_REVIEW" is a routing concept inside the pipeline; it is not a
 stored classification. A failed grounding becomes
 `final_classification = NEEDS_REVIEW` with `review_reason` set, so a
@@ -58,8 +72,9 @@ and is summarized at [Report output](/blood_audit/en/clinical/report-output/).
 
 ## Anti-hallucination guarantees
 
-For rows that the deterministic classifier routes to `LLM_REVIEW`
-(Tier 3, Hb > 10 g/dL), the LLM's clinical reasoning is gated by
+For rows that the deterministic classifier routes to LLM review, the
+LLM's clinical reasoning is gated by
 [six fail-closed quote-grounding layers](/blood_audit/en/developers/quote-grounding/).
-A failed grounding routes the row to `hallucination_suspect`, not to a
-result row.
+A failed grounding stores `final_classification = NEEDS_REVIEW` with
+`review_reason = "hallucination_suspect"`; it is not published as an
+`APPROPRIATE` or `INAPPROPRIATE` result.

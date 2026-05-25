@@ -3,10 +3,20 @@ title: First audit run
 description: Run bba ingest and bba audit end-to-end against a HOSxP export.
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
 import CliCommandCard from "../../../../components/CliCommandCard.astro";
 
 This page walks the happy path: a HOSxP export goes in, an idempotent
 DuckDB + Parquet snapshot comes out under `$BBA_DATA_DIR/audit/<run_id>/`.
+
+<AtAGlance
+  items={[
+    { label: "Input", value: "One CSV path inside the HOSxP export bundle." },
+    { label: "Writes", value: "$BBA_DATA_DIR/audit/<run_id>/ with parquet/ and ingest.duckdb.", tone: "ok" },
+    { label: "Idempotent", value: "Same bundle + same code = same run_id; re-run is a no-op." },
+    { label: "Inspect", value: "Use DuckDB to list tables and row counts after the run." },
+  ]}
+/>
 
 :::note[Phase 1 scope]
 In Phase 1, `bba audit` runs the **ingest leg** only. Classification rows
@@ -71,6 +81,10 @@ ls "$BBA_DATA_DIR/audit_runs/<RUN_ID>/"
 # Inspect the ingested HOSxP tables via DuckDB.
 duckdb "$BBA_DATA_DIR/audit/<RUN_ID>/ingest.duckdb" \
   "SELECT table_name FROM information_schema.tables;"
+
+# Count rows in a specific canonical table.
+duckdb "$BBA_DATA_DIR/audit/<RUN_ID>/ingest.duckdb" \
+  "SELECT COUNT(*) FROM Lab;"
 ```
 
 ## What you will see in Phase 1.5

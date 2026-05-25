@@ -3,9 +3,20 @@ title: Report schema
 description: The column-by-column report contract lives in docs/report-schema.md; key shape summarized here.
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
 The authoritative report schema lives in
 [`docs/report-schema.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/report-schema.md).
 This page is a navigation aid.
+
+<AtAGlance
+  items={[
+    { label: "Canonical file", value: "docs/report-schema.md." },
+    { label: "Sections", value: "Hospital, ward, indication, cohort, pipeline health, physician own-view." },
+    { label: "Privacy", value: "Physician own-view is split per physician.", tone: "ok" },
+    { label: "Classification rule", value: "INSUFFICIENT_EVIDENCE is never folded into INAPPROPRIATE.", tone: "warn" },
+  ]}
+/>
 
 ## Section files
 

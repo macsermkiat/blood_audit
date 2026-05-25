@@ -3,12 +3,22 @@ title: Integration seams
 description: Four CLI subcommands raise CliError by design — they are deployment hand-offs, not bugs.
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
 import IntegrationSeamCard from "../../../../components/IntegrationSeamCard.astro";
 
 Four subcommands of `bba` raise `CliError` when invoked in Phase 1. This is
 **by design**: the underlying modules ship and are tested, but the CLI
 hand-off requires deployment-specific wiring (auth, stores, resolvers)
 that does not belong in Phase 1. Do not "fix" them.
+
+<AtAGlance
+  items={[
+    { label: "Pattern", value: "The module exists; the CLI adapter is intentionally missing." },
+    { label: "Reason", value: "Deployment-specific auth, PHI lookup, scheduler, or store wiring is required.", tone: "warn" },
+    { label: "Operator action", value: "Treat CliError as an expected hand-off until Phase 1.5." },
+    { label: "Do not", value: "Do not add fake defaults just to make the command run.", tone: "err" },
+  ]}
+/>
 
 <IntegrationSeamCard
   command="bba evaluate --run-id RUN_ID"

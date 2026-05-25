@@ -3,10 +3,20 @@ title: Architecture
 description: How the 20 modules under bba.* fit together.
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
 import PipelineDiagram from "../../../../components/PipelineDiagram.astro";
 import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
 
 <QiNotSamdBanner variant="compact" />
+
+<AtAGlance
+  items={[
+    { label: "Shape", value: "20 packages, 12 happy-path stages, deterministic-first." },
+    { label: "Boundary", value: "Only bba.audit_pipeline orchestrates across stage boundaries." },
+    { label: "Phase 1 CLI", value: "bba audit wires ingest only; analysis modules are implemented for Phase 1.5.", tone: "warn" },
+    { label: "Safety invariant", value: "No real-time output; de-id before LLM; quote grounding fail-closed.", tone: "ok" },
+  ]}
+/>
 
 ## The 12-stage happy path
 
@@ -46,7 +56,8 @@ The full glossary lives in [Module glossary](/blood_audit/en/reference/module-gl
 ## Invariants worth keeping
 
 1. **Deterministic-first.** The deterministic classifier is authoritative.
-   The LLM is only consulted for Tier 3 (Hb > 10 g/dL).
+   The LLM route is entered only after the deterministic classifier returns
+   `NEEDS_REVIEW` or `POTENTIALLY_INAPPROPRIATE`.
 2. **Idempotent re-runs.** `run_id = sha256(input_csv_hash +
    schema_fingerprint + code_version)`. `bba audit` is a no-op on a
    completed `run_id` unless `--force` is passed (which writes an

@@ -4,12 +4,22 @@ description: The deterministic policy that classifies every RBC transfusion orde
 ---
 
 import AlgorithmDecisionFlow from "../../../../components/AlgorithmDecisionFlow.astro";
+import AtAGlance from "../../../../components/AtAGlance.astro";
 import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
 
 The deterministic classifier is the **authoritative** decision layer for
 auto-classified rows. `APPROPRIATE` and `INSUFFICIENT_EVIDENCE` are final
 without an LLM call. `NEEDS_REVIEW` and `POTENTIALLY_INAPPROPRIATE` route
 to the LLM for positive-evidence reasoning and quote grounding.
+
+<AtAGlance
+  items={[
+    { label: "First input", value: "Current pre-transfusion Hb from Lab." },
+    { label: "Context input", value: "Cohort from ICD-9-CM, ICD-10, MED, Lab ANC, and blood-order pattern." },
+    { label: "Bypasses", value: "MTP, peri-procedural, pre-op crossmatch, and delta-Hb can stop early.", tone: "ok" },
+    { label: "Review route", value: "Unknown, non-threshold, gray-zone, high-Hb, and safety-flag rows route to review.", tone: "warn" },
+  ]}
+/>
 
 ## What "cohort" means here
 

@@ -4,6 +4,7 @@ description: Paraphrased summary of the 3-tier Hb policy applied by the audit. A
 ---
 
 import AlgorithmDecisionFlow from "../../../../components/AlgorithmDecisionFlow.astro";
+import AtAGlance from "../../../../components/AtAGlance.astro";
 import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
 
 :::caution
@@ -12,6 +13,15 @@ clinical policy is KCMH PR 17.2 and the internal 3-tier Hb specification
 (`policy/policy.md` in the internal Bloodbank policy bundle). Always
 defer to those documents in case of conflict.
 :::
+
+<AtAGlance
+  items={[
+    { label: "Plain rule", value: "Use Hb tier only after higher-priority safety and clinical-context checks." },
+    { label: "Checked data", value: "Lab Hb, ICD-10, ICD-9-CM procedures, MED, blood-order pattern." },
+    { label: "Vitals", value: "Supporting evidence only; never a standalone bypass.", tone: "warn" },
+    { label: "Review route", value: "Unknown or non-threshold contexts become NEEDS_REVIEW.", tone: "ok" },
+  ]}
+/>
 
 ## Source documents (internal)
 
@@ -32,7 +42,7 @@ defer to those documents in case of conflict.
 The plain Hb tier is not the first check. The algorithm first looks for
 high-precedence evidence:
 
-- **MTP cohort** → deterministic `APPROPRIATE`.
+- **MTP clinical context** → deterministic `APPROPRIATE`.
 - **Peri-procedural ≤ 6h before order** → deterministic `APPROPRIATE`.
 - **Pre-op crossmatch ≤ 72h after order** → deterministic `APPROPRIATE`.
 - **Delta-Hb trigger** → deterministic `APPROPRIATE` when the Hb drop meets:
@@ -41,7 +51,7 @@ high-precedence evidence:
   - ≥ 2.5 g/dL drop within 24 hours
 - **Hemodilution or isolated low Hb without trend** → `NEEDS_REVIEW`, not
   auto-appropriate.
-- **Unknown or non-threshold cohort** → `NEEDS_REVIEW`.
+- **Unknown or non-threshold clinical context** → `NEEDS_REVIEW`.
 
 Vital-sign abnormalities alone (low BP, tachycardia) do not trigger the
 bypass.

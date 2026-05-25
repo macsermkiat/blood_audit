@@ -3,6 +3,17 @@ title: Troubleshooting
 description: Common failures and how to diagnose them.
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
+<AtAGlance
+  items={[
+    { label: "First check", value: "Confirm BBA_DATA_DIR is absolute and writable." },
+    { label: "DB check", value: "Postgres DSN must include +psycopg.", tone: "warn" },
+    { label: "Known non-bug", value: "Integration-seam commands fail loud in Phase 1." },
+    { label: "Safe rerun", value: "Use --force only when you want an audit_log override row." },
+  ]}
+/>
+
 ## `CliError: BBA_DATA_DIR not set` at startup
 
 `BBA_DATA_DIR` is the only env var the Phase 1 CLI validates directly.

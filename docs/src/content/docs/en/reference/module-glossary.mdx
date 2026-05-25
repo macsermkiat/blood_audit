@@ -3,10 +3,21 @@ title: Module glossary
 description: The full module + concept glossary lives in docs/CONTEXT.md, which is the canonical term bank.
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
 The canonical module + concept glossary for `bba.*` lives in
 [`docs/CONTEXT.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/CONTEXT.md)
 in the repository. It is appended to as part of every ralph-loop ticket
 that adds a new public concept — keep it the source of truth.
+
+<AtAGlance
+  items={[
+    { label: "Canonical file", value: "docs/CONTEXT.md in GitHub." },
+    { label: "Use for", value: "Module terms, invariants, public contracts, and review notes." },
+    { label: "Update rule", value: "Append when a public concept changes.", tone: "warn" },
+    { label: "This page", value: "Navigation aid, not a duplicate copy." },
+  ]}
+/>
 
 ## Why we link out
 
@@ -22,7 +33,7 @@ Common concept slugs to search for in the glossary:
 - `run_id` — the SHA-256-derived idempotency key.
 - `schema_fingerprint` — what makes `run_id` invariant across identical
   inputs.
-- `batch_runs` — the 4-state machine for LLM_REVIEW rows.
+- `batch_runs` — the state machine for rows routed to the LLM.
 - `audit_log` — the compliance trail for every `bba audit` invocation.
 - `hallucination_suspect` — the queue that catches every grounded-quote
   failure.

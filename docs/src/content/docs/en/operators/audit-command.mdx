@@ -3,6 +3,7 @@ title: audit command
 description: Every flag of bba audit, the inputs it reads, and its idempotency contract.
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
 import CliCommandCard from "../../../../components/CliCommandCard.astro";
 
 :::caution[Phase 1 scope]
@@ -14,6 +15,15 @@ evidence bundle → de-id → prompt → batch → quote ground → audit-store
 write) is implemented as separate modules but is **wired in Phase 1.5**.
 Until then, classification rows are not yet produced by this command.
 :::
+
+<AtAGlance
+  items={[
+    { label: "Reads", value: "A CSV path inside the HOSxP export bundle." },
+    { label: "Writes now", value: "DuckDB + Parquet ingest snapshot and run-state markers.", tone: "ok" },
+    { label: "Writes later", value: "AuditRows, LlmCalls, and batch_runs in Phase 1.5." },
+    { label: "Failure style", value: "Missing env vars, schema drift, or incomplete bundles fail loud.", tone: "warn" },
+  ]}
+/>
 
 <CliCommandCard
   command="bba audit"

@@ -3,6 +3,17 @@ title: Install
 description: Install blood_audit with uv and verify the CLI.
 ---
 
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
+<AtAGlance
+  items={[
+    { label: "Goal", value: "Create a reproducible local environment from uv.lock." },
+    { label: "Do first", value: "Install Python 3.13+ and uv 0.9.24+.", tone: "ok" },
+    { label: "Do not", value: "Do not set UV_LOCKED=1 with uv sync --frozen.", tone: "warn" },
+    { label: "Success check", value: "uv run bba --help prints six subcommands." },
+  ]}
+/>
+
 ## Prerequisites
 
 | Requirement | Version |
