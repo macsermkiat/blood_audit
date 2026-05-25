@@ -11,10 +11,10 @@ import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
 <AtAGlance
   title="สรุปสำหรับผู้ดูแล"
   items={[
-    { label: "งานหลัก", value: "ติดตั้ง ตั้งค่า env รัน ingest/audit ส่ง dataset" },
-    { label: "ต้องมีวันนี้", value: "Python/uv, BBA_DATA_DIR, storage ที่เขียนได้, HOSxP export", tone: "ok" },
-    { label: "Phase 1.5", value: "Postgres และ Anthropic Batch API ใช้เมื่อเชื่อม analysis แล้ว" },
-    { label: "ความปลอดภัย", value: "ไม่มี real-time alert และ PHI ต้อง de-identify ก่อนออกจาก container", tone: "warn" },
+    { label: "งานหลัก", value: "ติดตั้ง ตั้งค่า environment รัน ingest/audit แล้วส่งชุดข้อมูลออดิท" },
+    { label: "ต้องมีวันนี้", value: "Python/uv, BBA_DATA_DIR, พื้นที่เก็บข้อมูลที่เขียนได้ และ HOSxP export", tone: "ok" },
+    { label: "Phase 1.5", value: "Postgres และ Anthropic Batch API จะใช้เมื่อเชื่อมส่วน analysis" },
+    { label: "ความปลอดภัย", value: "ไม่มี real-time alert และ PHI ต้องถูก de-identify ก่อนออกจาก container", tone: "warn" },
   ]}
 />
 
@@ -23,14 +23,14 @@ import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
 คุณกำลังดูแล blood_audit ในนามทีม KCMH IT งานของคุณมี 4 ขั้นตอน:
 
 1. ติดตั้ง package
-2. ตั้งค่า environment variables 3 ตัว
+2. ตั้งค่า environment variables ที่จำเป็น
 3. รัน `bba ingest` ตามด้วย `bba audit`
 4. ส่งชุดข้อมูลออดิทให้คณะกรรมการคุณภาพ (Quality Improvement, QI)
 
-ส่วน subcommand อีก 4 ตัว — `evaluate`, `report`, `serve-dashboard`,
-`sentinel` — จะถูกเชื่อมต่อโดยทีม deployment ในภายหลัง อยากทราบเหตุผลที่
-ทำไมตอนนี้มันถึง fail ดูได้ที่
-[Integration seams](/blood_audit/en/operators/integration-seams/) (เอกสารภาษาอังกฤษ)
+ส่วน subcommand อีก 4 ตัว คือ `evaluate`, `report`, `serve-dashboard`
+และ `sentinel` จะถูกเชื่อมต่อโดยทีม deployment ในภายหลัง หากต้องการทราบว่า
+ทำไมตอนนี้คำสั่งเหล่านี้จึง fail โดยตั้งใจ ดูได้ที่
+[Integration seams](/blood_audit/th/operators/integration-seams/)
 
 ## สิ่งที่ต้องเตรียมก่อนเริ่ม
 
@@ -39,7 +39,7 @@ import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
   ต้องใช้ DSN ที่มี driver suffix `+psycopg` (psycopg3 ไม่ใช่ psycopg2)
 - **Anthropic API key** ที่เปิดใช้งาน Batch API ได้
 - **ไดเรกทอรีข้อมูลถาวร** ที่ service user เขียนได้ (Parquet, DuckDB, run-state markers)
-- **ชุดข้อมูลส่งออกจาก HOSxP** — ดูรายละเอียดที่ [Ingest CSV](/blood_audit/en/operators/ingest-csv/) (เอกสารภาษาอังกฤษ)
+- **ชุดข้อมูลส่งออกจาก HOSxP** — ดูรายละเอียดที่ [Ingest CSV](/blood_audit/th/operators/ingest-csv/)
 
 ## ผลลัพธ์เมื่อรันสำเร็จ
 
@@ -48,15 +48,15 @@ import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
    `$BBA_DATA_DIR/audit/<run_id>/` และบันทึก run-state/compliance marker
    ส่วนการเขียน `AuditRow` ลง Postgres จะเชื่อมใน Phase 1.5
 3. การรันซ้ำด้วย input เดิมจะไม่ทำอะไรใหม่ ยกเว้นใส่ `--force`
-   (รายละเอียดดู [Run-level idempotency](/blood_audit/en/operators/troubleshooting/#run-level-idempotency))
+   (รายละเอียดดู [Run-level idempotency](/blood_audit/th/operators/troubleshooting/#run-level-idempotency))
 
 ## สิ่งที่คาดหวังได้
 
-- Deterministic classifier จะทำงานก่อนเสมอ เมื่อ Phase 1.5 เชื่อมแล้ว
-  แถว `NEEDS_REVIEW` และ `POTENTIALLY_INAPPROPRIATE` จะเข้าสู่ LLM route
+- ตัวจำแนก deterministic จะทำงานก่อนเสมอ เมื่อเชื่อม Phase 1.5 แล้ว
+  แถว `NEEDS_REVIEW` และ `POTENTIALLY_INAPPROPRIATE` จะเข้าสู่เส้นทาง LLM
   ซึ่งอาจใช้เวลาหลายนาทีกว่าจะเสร็จ
-- มี hard exclusions สำหรับผลิตภัณฑ์ที่ไม่ใช่ RBC ผู้ป่วยอายุ < 15 ปี
-  และคำสั่งที่ไม่มี pre-transfusion Hb
+- มี exclusion แบบเด็ดขาดสำหรับผลิตภัณฑ์ที่ไม่ใช่ RBC, ผู้ป่วยอายุ < 15 ปี,
+  และคำสั่งที่ไม่มี Hb ก่อนให้เลือด
 - PHI ทั้งหมดจะถูก de-identify ก่อนที่ข้อมูลใด ๆ จะออกจาก audit container
 
 ## ขั้นถัดไป

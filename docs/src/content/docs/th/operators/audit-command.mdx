@@ -1,0 +1,88 @@
+---
+title: คำสั่ง audit
+description: flag ของ bba audit, input ที่อ่าน และสัญญา idempotency
+---
+
+import AtAGlance from "../../../../components/AtAGlance.astro";
+import CliCommandCard from "../../../../components/CliCommandCard.astro";
+
+:::caution[ขอบเขต Phase 1]
+ใน Phase 1, `bba audit` ครอบเฉพาะ **ส่วน ingest** ของ pipeline
+โดยแปลงชุด CSV จาก HOSxP เป็น DuckDB + Parquet ภายใต้
+`$BBA_DATA_DIR/audit/<run_id>/` และบันทึก completion marker สำหรับ
+idempotency ส่วน LLM analysis (deterministic classifier → evidence bundle
+→ de-id → prompt → batch → quote grounding → audit-store write)
+มีโมดูลรองรับแล้ว แต่จะเชื่อมเข้ากับ CLI ใน Phase 1.5 ดังนั้นคำสั่งนี้
+ยังไม่สร้าง classification rows ใน Phase 1
+:::
+
+<AtAGlance
+  title="สรุปคำสั่ง"
+  items={[
+    { label: "อ่าน", value: "path ของ CSV ภายใน HOSxP export bundle" },
+    { label: "เขียนตอนนี้", value: "DuckDB + Parquet snapshot และ run-state markers", tone: "ok" },
+    { label: "เขียนภายหลัง", value: "AuditRows, LlmCalls และ batch_runs ใน Phase 1.5" },
+    { label: "รูปแบบ failure", value: "env var หาย, schema drift หรือ bundle ไม่ครบ จะ fail loud", tone: "warn" },
+  ]}
+/>
+
+<CliCommandCard
+  command="bba audit"
+  summary="Phase 1: ingest snapshot จาก HOSxP ด้วย run-level idempotency. Phase 1.5: เพิ่มการ classify และเขียน audit rows."
+  flags={[
+    { name: "--input INPUT_CSV", description: "path ของ CSV ใน HOSxP bundle ที่ต้องการ ingest" },
+    { name: "--run-id RUN_ID", description: "กลับไปผูกกับ run_id ที่เคย complete แล้ว; จะ no-op ยกเว้นใช้ --force" },
+    { name: "--force", description: "ข้าม idempotency ระดับ run และเขียน audit_log พร้อม idempotency_override=true" },
+  ]}
+  envVars={["BBA_DATA_DIR"]}
+  exitCodes={[
+    { code: 0, meaning: "ingest เสร็จและ mark run complete แล้ว หรือ no-op เพราะ run_id complete อยู่แล้ว" },
+    { code: 1, meaning: "CliError เช่น env var หาย หรือ ingest validation ไม่ผ่าน" },
+  ]}
+  example={`uv run bba audit --input /var/data/exports/PHI_xxx_001.csv`}
+/>
+
+อีก 4 subcommands คือ `evaluate`, `report`, `serve-dashboard` และ
+`sentinel` เป็น [integration seams](/blood_audit/th/operators/integration-seams/)
+ที่ตั้งใจให้ fail loud จนกว่าจะเชื่อม deployment จริง
+
+## ใช้ `--input` หรือ `--run-id` เมื่อไร
+
+- `--input INPUT_CSV` — ใช้เมื่อรันครั้งแรกกับ bundle นี้ ระบบจะคำนวณ
+  `run_id` จาก input hash + schema fingerprint + code version แล้ว ingest
+  และ mark run complete
+- `--run-id RUN_ID` — ใช้กลับไปอ้างถึง run ที่ complete แล้ว หากไม่ใส่
+  `--force` จะเป็น no-op เพราะ run นั้นสมบูรณ์อยู่แล้ว
+
+## `--force` ต้องมี audit trail
+
+เมื่อใช้ `--force` คำสั่งจะเขียน `audit_log` พร้อม
+`idempotency_override=true` เพื่อบอกว่ามีการบังคับรันซ้ำ ห้ามแก้ไฟล์
+run-state โดยตรงเพื่อเลี่ยงกลไกนี้ เพราะจะทำให้ audit trail ไม่ครบ
+
+## Idempotency ระดับ run
+
+ถ้ามี CLI สอง process เรียก run เดียวกันพร้อมกัน ระบบจะ serialize ผ่าน
+`store.acquire_run_lock` จึงไม่สามารถ ingest run เดียวกันซ้ำพร้อมกันได้
+แต่ audit คนละ input สามารถรันคู่ขนานได้
+
+## Phase 1.5 แบบย่อ
+
+เมื่อเชื่อม LLM analysis แล้ว คำสั่งนี้จะ:
+
+- สร้าง evidence bundle, de-identify และส่งแถวที่ต้อง review ไปยัง
+  Anthropic Batch API
+- ตรวจคำตอบ LLM ทุกแถวด้วย quote-grounding แบบ fail-closed 6 ชั้น
+- เขียน `AuditRow` 1 แถวต่อคำสั่งให้เลือด พร้อม `rule_classification`
+  และ `final_classification`
+
+สถานะ batch จะเก็บใน `batch_runs` ต่อคำสั่งให้เลือด
+(`pending` → `submitted` → `partial` → `complete`; `failed` เป็น terminal)
+ถ้าระบบล่มกลางทาง การรันครั้งถัดไปจะ resume ได้
+
+## ขอบเขตความปลอดภัย
+
+- อ่านเฉพาะ HOSxP export และเขียนผลภายใต้ `$BBA_DATA_DIR/audit/<run_id>/`
+  ไม่แก้ตาราง HOSxP ต้นทาง
+- ทำงานย้อนหลังและเงียบเสมอ ไม่มี real-time alert ไปยังแพทย์
+- `run_id` ที่ complete แล้วจะไม่ถูกเขียนทับแบบเงียบ ๆ

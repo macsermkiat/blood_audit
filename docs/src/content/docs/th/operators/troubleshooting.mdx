@@ -1,0 +1,58 @@
+---
+title: Troubleshooting
+description: จุดที่พบบ่อยเมื่อรัน blood_audit และวิธีแยกปัญหา
+---
+
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
+<AtAGlance
+  title="เริ่มตรวจจากตรงนี้"
+  items={[
+    { label: "เช็คแรก", value: "BBA_DATA_DIR ต้องเป็น absolute path และเขียนได้" },
+    { label: "Postgres", value: "DSN ต้องมี +psycopg เช่น postgresql+psycopg://", tone: "warn" },
+    { label: "ไม่ใช่บั๊ก", value: "integration-seam commands ตั้งใจให้ fail loud ใน Phase 1" },
+    { label: "รันซ้ำปลอดภัย", value: "ใช้ --force เฉพาะเมื่ออยากบันทึก override row ใน audit_log" },
+  ]}
+/>
+
+## `BBA_DATA_DIR` ใช้ไม่ได้
+
+ตรวจว่าเป็น absolute path, directory มีอยู่จริง และ user ที่รัน service
+เขียนได้:
+
+```bash
+echo "$BBA_DATA_DIR"
+test -d "$BBA_DATA_DIR"
+test -w "$BBA_DATA_DIR"
+```
+
+ถ้า path เป็น relative หรือเขียนไม่ได้ CLI จะหยุดตั้งแต่เริ่มด้วย
+`CliError`
+
+## Postgres DSN ผิดรูปแบบ
+
+สำหรับ Phase 1.5 ต้องใช้:
+
+```text
+postgresql+psycopg://user@host:5432/dbname
+```
+
+อย่าใช้ `postgresql://` แบบเปล่า เพราะ SQLAlchemy จะพาไปใช้ psycopg2
+ซึ่งไม่ใช่ driver ที่โครงการนี้เลือกใช้
+
+## Subcommand บางตัว fail ทันที
+
+`evaluate`, `report`, `serve-dashboard` และ `sentinel` fail โดยตั้งใจใน
+Phase 1 เพราะยังเป็น integration seams ดูรายละเอียดที่
+[Integration seams](/blood_audit/th/operators/integration-seams/)
+
+## Run-level idempotency
+
+ถ้ารัน input เดิมและ code เดิม จะได้ `run_id` เดิมและไม่เขียน snapshot ซ้ำ
+นี่เป็นพฤติกรรมที่ถูกต้อง หากต้องการบังคับรันซ้ำจริง ๆ ให้ใช้ `--force`
+เพื่อให้ระบบบันทึก audit trail ว่ามีการ override idempotency
+
+## ข้อมูลจริงห้ามลง issue
+
+เวลาเปิด issue หรือส่ง screenshot ให้ใช้ placeholder เช่น `PHI_xxx_001`
+แทน HN, AN, REQNO หรือชื่อผู้ป่วยจริงเสมอ

@@ -9,7 +9,9 @@ interface Props {
   layers?: Layer[];
 }
 
-const defaultLayers: Layer[] = [
+const isThai = Astro.url.pathname.includes("/th/");
+
+const englishLayers: Layer[] = [
   { name: "NFC normalization", purpose: "Unicode-normalize quote and source to NFC before any compare." },
   { name: "Substring match", purpose: "The quote must appear verbatim within the cited source document." },
   { name: "cited_id resolution", purpose: "The source document referenced must exist in the evidence bundle." },
@@ -24,18 +26,47 @@ const defaultLayers: Layer[] = [
   },
 ];
 
+const thaiLayers: Layer[] = [
+  { name: "NFC normalization", purpose: "ปรับ quote และ source เป็น Unicode NFC ก่อน compare ทุกครั้ง" },
+  { name: "Substring match", purpose: "quote ต้องปรากฏแบบ verbatim ภายใน source document ที่อ้าง" },
+  { name: "cited_id resolution", purpose: "source document ที่ถูกอ้างต้องมีอยู่จริงใน evidence bundle" },
+  { name: "Within-doc uniqueness", purpose: "quote ต้องพบใน document นั้นเพียงครั้งเดียว เพื่อลด ambiguity" },
+  { name: "Minimum length (≥ 25 chars)", purpose: "ตัด quote ที่สั้นหรือ generic เกินไปจน match ได้โดยบังเอิญ" },
+  { name: "Numeric-tuple agreement", purpose: "ตัวเลขทั้งหมดใน quote ต้องตรงกับ structured evidence values" },
+  {
+    name: "Medical-NLI entailment",
+    purpose:
+      "ตรวจเชิง semantic ว่า quote สนับสนุน clinical claim ของ LLM จริงหรือไม่ เป็น opt-in ตาม PRD §9 และจะรันเมื่อ caller ส่ง nli_gate ที่ไม่ใช่ null เท่านั้น",
+    optional: true,
+  },
+];
+
+const defaultLayers = isThai ? thaiLayers : englishLayers;
 const { layers = defaultLayers } = Astro.props;
 ---
 
-<section class="grounding-layers" aria-label="Quote-grounding stack: 6 mandatory layers plus an optional NLI gate">
+<section class="grounding-layers" aria-label={isThai ? "Quote-grounding stack: 6 ชั้นบังคับและ NLI gate แบบ optional" : "Quote-grounding stack: 6 mandatory layers plus an optional NLI gate"}>
   <p class="grounding-layers__intro">
-    Quote grounding is <strong>fail-closed and layered</strong>. The first six layers
-    always run; a failure on any of them sets
-    <code>final_classification = NEEDS_REVIEW</code> with
-    <code>review_reason = "hallucination_suspect"</code>, never an
-    <code>APPROPRIATE</code>/<code>INAPPROPRIATE</code> result row. None of those six
-    layers may be mocked or short-circuited in tests. The seventh layer (medical-NLI)
-    is opt-in.
+    {isThai ? (
+      <>
+        Quote grounding เป็นระบบ <strong>fail-closed และทำงานเป็นชั้น</strong>
+        โดย 6 ชั้นแรกต้องรันทุกครั้ง หากชั้นใด fail จะตั้ง
+        <code>final_classification = NEEDS_REVIEW</code> พร้อม
+        <code>review_reason = "hallucination_suspect"</code> ไม่ใช่
+        <code>APPROPRIATE</code>/<code>INAPPROPRIATE</code> และห้าม mock หรือ
+        short-circuit ชั้นเหล่านี้ใน test ส่วนชั้นที่ 7 (medical-NLI) เป็น opt-in
+      </>
+    ) : (
+      <>
+        Quote grounding is <strong>fail-closed and layered</strong>. The first six layers
+        always run; a failure on any of them sets
+        <code>final_classification = NEEDS_REVIEW</code> with
+        <code>review_reason = "hallucination_suspect"</code>, never an
+        <code>APPROPRIATE</code>/<code>INAPPROPRIATE</code> result row. None of those six
+        layers may be mocked or short-circuited in tests. The seventh layer (medical-NLI)
+        is opt-in.
+      </>
+    )}
   </p>
   <ol class="grounding-layers__list" role="list">
     {layers.map((layer, idx) => (
@@ -46,7 +77,7 @@ const { layers = defaultLayers } = Astro.props;
         <div class="grounding-layer__body">
           <div class="grounding-layer__head">
             <p class="grounding-layer__name">{layer.name}</p>
-            {layer.optional && <span class="ba-pill ba-pill--warn">opt-in</span>}
+            {layer.optional && <span class="ba-pill ba-pill--warn">{isThai ? "เปิดใช้เมื่อกำหนด" : "opt-in"}</span>}
           </div>
           <p class="grounding-layer__purpose">{layer.purpose}</p>
         </div>

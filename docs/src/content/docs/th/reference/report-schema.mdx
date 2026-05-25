@@ -1,0 +1,42 @@
+---
+title: โครงสร้างรายงาน
+description: โครงสร้างรายงาน QI และกฎ classification ที่ต้องรักษาไว้
+---
+
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
+<AtAGlance
+  title="สรุป schema"
+  items={[
+    { label: "Canonical file", value: "docs/report-schema.md" },
+    { label: "Sections", value: "hospital, ward, indication, cohort, pipeline health, physician own-view" },
+    { label: "Privacy", value: "physician own-view แยกต่อแพทย์", tone: "ok" },
+    { label: "Classification", value: "INSUFFICIENT_EVIDENCE ห้ามรวมเข้า INAPPROPRIATE", tone: "warn" },
+  ]}
+/>
+
+## Output layout
+
+```text
+report/
+  committee/
+    hospital_trend.csv
+    ward_scorecard.csv
+    indication_breakdown.csv
+    cohort_exception.csv
+    pipeline_health.csv
+  physician_own_view/
+    PHYSICIAN_SAFE_ID.csv
+  report.pdf
+```
+
+## กฎ classification
+
+`INSUFFICIENT_EVIDENCE` ต้องอยู่เป็น class แยก เพราะหมายถึงหลักฐานไม่พอ
+ไม่ใช่หลักฐานว่าการให้เลือดไม่เหมาะสม การรวมค่านี้เข้า `INAPPROPRIATE`
+จะทำให้รายงาน QI บิดความหมาย
+
+## Reproducibility fields
+
+รายงานควรมี hash ของ policy, model, redactor, prompt และ evidence bundle
+เพื่อให้ตรวจย้อนหลังได้ว่าผลลัพธ์เกิดจากข้อมูลและกฎชุดใด

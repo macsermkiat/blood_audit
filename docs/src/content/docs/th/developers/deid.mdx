@@ -1,0 +1,38 @@
+---
+title: De-identification
+description: การลบและแทน PHI ก่อนส่ง evidence bundle ออกจาก audit container
+---
+
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
+De-identification เป็น safety boundary สำคัญก่อน LLM route ข้อมูลที่ยังไม่
+redact ต้องอยู่ภายใน audit container เท่านั้น
+
+<AtAGlance
+  title="สรุป de-id"
+  items={[
+    { label: "Input", value: "evidence bundle ที่ยังไม่ redact ภายใน audit container" },
+    { label: "Output", value: "redacted bundle พร้อม review flags เมื่อ confidence ต่ำ" },
+    { label: "Protected fields", value: "HN, AN, REQNO, ชื่อ, DOB, dates และอายุ ≥90", tone: "ok" },
+    { label: "Log safety", value: "sys.excepthook scrub traceback ที่มีรูปแบบ PHI", tone: "warn" },
+  ]}
+/>
+
+## หลักการ
+
+ระบบแทน identifier ด้วย SafeId เช่น `PHI_xxx_001` เพื่อให้ยัง trace หลักฐาน
+ภายใน run ได้โดยไม่เปิดเผยข้อมูลจริง หาก redactor ไม่มั่นใจ ต้องส่งแถวไป
+review แทนการปล่อยข้อมูลออก
+
+## ข้อมูลที่ต้องป้องกัน
+
+- HN, AN, REQNO และ identifiers ของ encounter/order
+- ชื่อ นามสกุล DOB และวันที่ที่ระบุตัวตนได้
+- อายุ ≥ 90 ปี เพราะถือว่า re-identification risk สูง
+- ข้อความ free-text ใน note ที่อาจมีชื่อหรือเลขประจำตัว
+
+## Logging
+
+ห้าม log bundle ที่ยังไม่ redact และห้ามใส่ PHI จริงใน error message
+ระบบมี excepthook ช่วย scrub traceback แต่ developer ยังต้องออกแบบ log
+ให้ปลอดภัยตั้งแต่ต้น

@@ -1,0 +1,45 @@
+---
+title: ผลลัพธ์รายงาน
+description: ผลลัพธ์รายงานที่คณะกรรมการ QI จะได้รับจาก audit store
+---
+
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
+รายงานเป็นผลปลายทางสำหรับคณะกรรมการ QI ไม่ใช่ real-time dashboard
+และไม่ใช่ scorecard สำหรับลงโทษรายบุคคล
+
+<AtAGlance
+  title="สรุปผลลัพธ์"
+  items={[
+    { label: "ชุด output", value: "CSV 6 ส่วนสำหรับคณะกรรมการ, physician own-view CSV และ PDF" },
+    { label: "Privacy", value: "physician own-view แยกหนึ่งไฟล์ต่อหนึ่งแพทย์", tone: "ok" },
+    { label: "ทำซ้ำได้", value: "ทุกแถว/หน้ามี policy, model, redactor, prompt และ evidence hashes" },
+    { label: "สถานะ CLI", value: "bba report ยังเป็น integration seam จนกว่าจะเชื่อม ReportInputs", tone: "warn" },
+  ]}
+/>
+
+## ไฟล์หลัก
+
+| ไฟล์ | ผู้ใช้หลัก | ใช้ทำอะไร |
+| --- | --- | --- |
+| `hospital_trend.csv` | QI committee | ดูแนวโน้มระดับโรงพยาบาล |
+| `ward_scorecard.csv` | QI committee | ดู pattern ระดับ ward โดยไม่ใช้เป็นบทลงโทษ |
+| `indication_breakdown.csv` | QI committee | แยกตาม indication |
+| `cohort_exception.csv` | QI committee | ดูบริบททางคลินิก/threshold ที่ผิดปกติ |
+| `pipeline_health.csv` | IT + QI | ติดตาม failures, NEEDS_REVIEW และ grounding issues |
+| `physician_own_view/*.csv` | แพทย์ผู้ทบทวน | ให้แพทย์ดูเฉพาะรายการของตนเอง |
+
+## กฎ privacy
+
+Physician own-view ต้องแยกไฟล์ต่อแพทย์ ห้ามรวมเป็นไฟล์เดียวที่ทุกคนเห็นกันหมด
+รายงานสำหรับคณะกรรมการควรเป็น aggregate หรือ de-identified ตามขอบเขตที่กำหนด
+
+## Classification ที่ต้องรักษาไว้
+
+`INSUFFICIENT_EVIDENCE` ต้องไม่ถูกรวมเข้า `INAPPROPRIATE` เพราะเป็นคนละความหมาย:
+ข้อมูลไม่พอคือปัญหาเอกสาร/หลักฐาน ไม่ใช่การตัดสินว่าให้เลือดไม่เหมาะสม
+
+## Hashes เพื่อ reproducibility
+
+รายงานต้องบันทึก policy hash, model hash, redactor hash, prompt hash และ
+evidence hash เพื่อให้ย้อนกลับไปอธิบายได้ว่าผลลัพธ์ชุดนั้นเกิดจากกฎและข้อมูลชุดใด

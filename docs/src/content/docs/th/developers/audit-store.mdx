@@ -1,0 +1,37 @@
+---
+title: Audit store
+description: ตารางและ invariant สำหรับ AuditRow, LLM call และ run state
+---
+
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
+Audit store คือแหล่งเก็บผลลัพธ์หลัง pipeline ทำงานเสร็จ ใช้สำหรับรายงาน QI,
+การทบทวนย้อนหลัง และ audit trail
+
+<AtAGlance
+  title="สรุป store"
+  items={[
+    { label: "เก็บ", value: "AuditRow และ LlmCall records" },
+    { label: "Invariant", value: "rows immutable, timezone-aware UTC และ keyed ด้วย SafeId", tone: "ok" },
+    { label: "Idempotency", value: "duplicate (audit_id, run_id, code_version) ต้อง no-op" },
+    { label: "Phase 1", value: "CLI เขียน ingest snapshots; AuditRow path จะ wire ใน Phase 1.5", tone: "warn" },
+  ]}
+/>
+
+## Classification ที่เก็บจริง
+
+`final_classification` เก็บได้ 5 ค่า:
+
+- `APPROPRIATE`
+- `INAPPROPRIATE`
+- `NEEDS_REVIEW`
+- `INSUFFICIENT_EVIDENCE`
+- `POTENTIALLY_INAPPROPRIATE`
+
+`LLM_REVIEW` เป็น routing label ภายใน deterministic classifier ไม่ใช่ค่าที่เก็บ
+ส่วน `hallucination_suspect` เป็น `review_reason` ไม่ใช่ classification
+
+## Idempotency
+
+การเขียนซ้ำด้วย `(audit_id, run_id, code_version)` เดิมต้องไม่สร้างแถวซ้ำ
+เพราะ audit report ต้อง reproducible และตรวจย้อนหลังได้

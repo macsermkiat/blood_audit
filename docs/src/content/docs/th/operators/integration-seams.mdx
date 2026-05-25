@@ -1,0 +1,53 @@
+---
+title: Integration seams
+description: คำสั่งที่มีโมดูลรองรับแล้ว แต่ยังรอการเชื่อม deployment จริง
+---
+
+import AtAGlance from "../../../../components/AtAGlance.astro";
+import IntegrationSeamCard from "../../../../components/IntegrationSeamCard.astro";
+
+<AtAGlance
+  title="สรุปสั้น"
+  items={[
+    { label: "รูปแบบ", value: "โมดูลมีแล้ว แต่ CLI adapter ยังไม่เชื่อม" },
+    { label: "เหตุผล", value: "ต้องรอ auth, PHI lookup, scheduler หรือ store wiring เฉพาะ deployment", tone: "warn" },
+    { label: "สิ่งที่ operator ทำ", value: "มอง CliError เป็น hand-off ที่คาดไว้จนถึง Phase 1.5" },
+    { label: "ห้ามทำ", value: "ห้ามใส่ fake default แค่เพื่อให้คำสั่งผ่าน", tone: "err" },
+  ]}
+/>
+
+Integration seam คือจุดที่โค้ดภายในพร้อมแล้ว แต่การเรียกจาก CLI ยังต้องรอ
+ส่วนเชื่อมกับระบบจริงของ deployment เช่น database, scheduler, policy store
+หรือ key management จึงตั้งใจให้ fail loud แทนการทำงานด้วยค่า default ปลอม
+
+<IntegrationSeamCard
+  command="bba evaluate"
+  phase="Phase 1.5"
+  rationale="ต้องรู้ gold-standard cohort และ validation set ของ deployment ก่อนจึงจะประเมินได้อย่างมีความหมาย"
+/>
+
+<IntegrationSeamCard
+  command="bba report"
+  phase="Phase 1.5"
+  rationale="ต้องมี ReportInputs จาก audit store และ policy/model hash จริงก่อนสร้างรายงาน QI"
+/>
+
+<IntegrationSeamCard
+  command="bba serve-dashboard"
+  phase="Phase 1.5+"
+  rationale="ต้องเชื่อม auth, role-based access และ PHI boundary ก่อนเปิด dashboard"
+/>
+
+<IntegrationSeamCard
+  command="bba sentinel"
+  phase="Phase 1.5+"
+  rationale="ต้องเชื่อม scheduler, alert policy และ audit store จริงก่อนเฝ้าระวัง batch/run state"
+/>
+
+## สิ่งที่ไม่ควรแก้
+
+- อย่า swallow `CliError` เพื่อให้คำสั่งดูเหมือนสำเร็จ
+- อย่าเพิ่ม mock database หรือ fake API key ใน production path
+- อย่าทำ dashboard ที่อ่าน PHI โดยไม่ผ่าน auth และ de-identification boundary
+
+หากต้องการทดสอบ ให้เขียน test fixture แยกจาก production CLI path แทน

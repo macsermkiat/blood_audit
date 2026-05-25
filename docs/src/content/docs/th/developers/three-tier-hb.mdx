@@ -1,0 +1,128 @@
+---
+title: ตัวจำแนก 3-tier Hb
+description: กฎ deterministic ที่ใช้จำแนกคำสั่งให้ RBC แต่ละรายการ
+---
+
+import AlgorithmDecisionFlow from "../../../../components/AlgorithmDecisionFlow.astro";
+import AtAGlance from "../../../../components/AtAGlance.astro";
+import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
+
+ตัวจำแนก deterministic เป็นชั้นตัดสินหลักสำหรับแถวที่ auto-classify ได้
+ผล `APPROPRIATE` และ `INSUFFICIENT_EVIDENCE` ถือเป็นผลสุดท้ายโดยไม่เรียก LLM
+ส่วน `NEEDS_REVIEW` และ `POTENTIALLY_INAPPROPRIATE` จะเข้าสู่เส้นทาง LLM
+เพื่อหาหลักฐานสนับสนุนและผ่าน quote grounding
+
+<AtAGlance
+  title="สรุปตรรกะ"
+  items={[
+    { label: "ข้อมูลแรก", value: "Hb ก่อนให้เลือดจากตาราง Lab" },
+    { label: "บริบท", value: "ใช้ ICD-9-CM, ICD-10, MED, Lab ANC และ pattern ของคำสั่งเลือด" },
+    { label: "Bypass", value: "MTP, peri-procedural, pre-op crossmatch และ delta-Hb อาจหยุดก่อนได้", tone: "ok" },
+    { label: "ส่งทบทวน", value: "unknown, non-threshold, gray zone, Hb สูง และ safety flag จะส่ง review", tone: "warn" },
+  ]}
+/>
+
+## "Cohort" ในที่นี้หมายถึงอะไร
+
+ในโปรเจกต์นี้ **cohort** ไม่ได้หมายถึง cohort งานวิจัย และไม่ใช่ label ถาวร
+ของผู้ป่วย แต่หมายถึง **กลุ่มบริบททางคลินิกของคำสั่งให้เลือดหนึ่งรายการ**
+ก่อนจะนำค่า Hb ไปเทียบ threshold
+
+พูดง่าย ๆ คือระบบถามว่า: "จาก procedure, diagnosis, medication,
+pattern ของคำสั่งเลือด และข้อมูลรอบเวลานี้ คำสั่งนี้ควรใช้ Hb threshold ใด?"
+
+ผู้ป่วยคนเดียวกันอาจอยู่คนละ cohort ได้ในคนละ admission หรือคนละวัน
+ถ้าหลักฐานรอบคำสั่งเปลี่ยนไป เช่น admission หนึ่งไม่มีสัญญาณผ่าตัดและเป็น
+`DEFAULT` แต่อีก admission มี cardiac surgery จึงเป็น `CARDIAC_SURGERY`
+
+## ตัวอย่าง cohort แบบภาษาคน
+
+| Cohort | ความหมาย | หลักฐานที่ trigger | สิ่งที่ classifier ทำ |
+| --- | --- | --- | --- |
+| `DEFAULT` | ไม่มีบริบทพิเศษ เป็น restrictive-transfusion pathway ปกติ | procedure data มีให้ใช้ แต่ไม่พบหลักฐานที่ priority สูงกว่า | ใช้ threshold **7.0 g/dL** |
+| `CARDIAC_SURGERY` | อยู่ใกล้บริบทผ่าตัดหัวใจหรือหลอดเลือดใหญ่ | ICD-9-CM procedure prefix ของ cardiac/vascular OR ภายในช่วงที่กำหนด และตัด non-OR cardiac items ออก | ใช้ threshold **7.5 g/dL** |
+| `ORTHO_CARDIAC` | ผ่าตัด orthopedic ร่วมกับประวัติ cardiac | ICD-9-CM orthopedic OR + ICD-10 cardiac history เช่น I20-I25 หรือ I50 | ใช้ threshold **8.0 g/dL** |
+| `ESRD_EPO` | ESRD พร้อมหลักฐานยาในบริบท dialysis | ICD-10 ESRD + medication signal ของ dialysis context | ใช้ threshold **8.0 g/dL** |
+| `MTP` | pattern แบบ massive transfusion protocol | RBC units หลาย unit หรือ RBC + FFP + platelet ใน MTP window | bypass Hb tier และให้ `APPROPRIATE` |
+| `HEME_MALIGNANCY_ACTIVE` | active heme malignancy ที่ไม่ควรลดเหลือ threshold เดียว | ICD-10 heme malignancy + chemo med + ANC < 500 | ไม่มี numeric threshold; ส่ง `NEEDS_REVIEW` |
+| `UNKNOWN` | ข้อมูล procedure ไม่พอให้เลือก threshold อย่างปลอดภัย | procedure events unavailable ไม่ใช่แค่ไม่พบ procedure | ไม่ assume default; ส่ง `NEEDS_REVIEW` |
+
+แนวคิดสำคัญคือ **procedure data missing ไม่เหมือนกับ no procedure found**
+ถ้ามีข้อมูล procedure และไม่พบ procedure พิเศษ ระบบตกไป `DEFAULT` ได้
+แต่ถ้า join procedure ใช้ไม่ได้ ระบบให้ `UNKNOWN` เพื่อให้คนทบทวน
+
+## ตรวจอะไรในแต่ละ step
+
+Classifier ทำงานตามลำดับตายตัว rule แรกที่ match จะชนะ:
+
+| Step | คำถามที่ code ถาม | Source data | รายละเอียดสำคัญ | ผลเมื่อใช่ |
+| --- | --- | --- | --- | --- |
+| 1 | ไม่มี Hb ก่อนให้เลือดที่ใช้ได้หรือไม่ | **Lab** Hb observations | หา Hb ของผู้ป่วยเดียวกันที่เวลาเท่ากับหรือก่อน order ย้อนหลัง **7 วัน** รับเฉพาะค่า analytic-valid **2-25 g/dL** เลือก hematology Hb ก่อน POCT; timestamp เท่ากันให้ `item_no` สูงกว่า | `INSUFFICIENT_EVIDENCE` จบโดยไม่เรียก LLM |
+| 2 | pattern เหมือน MTP หรือไม่ | ประวัติคำสั่งเลือดรอบ anchor: RBC units, FFP flag, platelet flag | ดูช่วง **1 ชั่วโมงก่อน order** ถ้า RBC รวม **≥ 4 units** หรือ RBC + FFP + platelet co-order จะ trigger MTP | `APPROPRIATE` จบโดยไม่เรียก LLM |
+| 3 | ข้อมูล procedure missing หรือไม่ | availability ของ procedure-event join | ถ้า join ใช้ไม่ได้ ระบบไม่รู้แน่ว่ามี cardiac/orthopedic procedure หรือไม่ | `NEEDS_REVIEW` ส่ง LLM/คนทบทวน |
+| 4 | มี procedure ภายใน 6 ชั่วโมงก่อน order หรือไม่ | **IPTSUMOPRT** + **ICD9CM** | คำนวณ `procedure_proximity_hours`; procedure ที่เกิดก่อนหรือเท่ากับ order และอยู่ใน **≤ 6 ชั่วโมง** trigger peri-procedural bypass | `APPROPRIATE` |
+| 5 | มี upcoming procedure ภายใน 72 ชั่วโมงหลัง order หรือไม่ | **IPTSUMOPRT** + **ICD9CM** | คำนวณ `upcoming_procedure_hours`; procedure ในอนาคต **≤ 72 ชั่วโมง** เป็นหลักฐาน pre-op crossmatch/surgical preparation | `APPROPRIATE` |
+| 6 | Hb drop เร็วจนเข้า acute blood loss trigger หรือไม่ | **Lab** prior Hb observations | เทียบ current Hb กับ prior Hb สูงสุดในแต่ละ window: ลด **≥ 1.5 ใน 6h**, **≥ 2.0 ใน 12h**, หรือ **≥ 2.5 ใน 24h** | `APPROPRIATE` |
+| 7 | เป็น non-threshold cohort หรือไม่ | ผล cohort จาก ICD-10, MED, Lab ANC และ blood-order/procedure evidence | `MTP` ออกไปแล้วที่ step 2 และ `UNKNOWN` ออกที่ step 3 โดยหลักคือ active heme malignancy: heme ICD-10 + chemo med ล่าสุด + ANC < 500 | `NEEDS_REVIEW` |
+| 8 | Hb ต่ำกว่า threshold ของ cohort หรือไม่ | **Lab** current Hb + threshold ของ cohort และตรวจ **MED** crystalloid/Hb trend | โดยทั่วไป Hb ต่ำกว่า threshold จะ appropriate แต่ถ้า crystalloid ≥ 2 L ใน 4h หรือ Hb < 8 ครั้งเดียวโดยไม่มี prior Hb 24h จะไม่ auto-appropriate | ส่วนใหญ่ `APPROPRIATE`; safety flag เป็น `NEEDS_REVIEW` |
+| 9 | Hb อยู่ gray zone หรือไม่ | **Lab** current Hb + threshold | gray zone คือ **threshold ≤ Hb < 10 g/dL** deterministic layer ไม่ตัดสินสุดท้ายเอง | `NEEDS_REVIEW` |
+| 10 | Hb สูง ≥ 10 g/dL หรือไม่ | **Lab** current Hb | Hb ก่อนให้เลือดสูงเป็นสัญญาณน่ากังวล แต่ LLM อาจพบหลักฐานบวกที่บันทึกไว้ก่อนเผยแพร่ผล | `POTENTIALLY_INAPPROPRIATE` ส่ง LLM/quote grounding |
+
+## Checklist การ assign cohort
+
+ตัวตรวจ cohort ทำงานก่อน Hb tier comparison และมีลำดับของตัวเอง:
+
+| ลำดับ | Cohort ถ้า match | Data ที่ตรวจ | Rule |
+| --- | --- | --- | --- |
+| 1 | `UNKNOWN` | procedure-event join | ถ้า procedure events unavailable (`None`) ให้หยุด ห้าม assume threshold 7.0 |
+| 2 | `MTP` | blood-order events | ใน 1 ชั่วโมงก่อนหน้า: RBC units ≥ 4 หรือ RBC + FFP + platelet co-order |
+| 3 | `ORTHO_CARDIAC` | **ICD-9-CM procedure** + **ICD-10 diagnosis** | orthopedic OR procedure ภายใน 30 วันก่อน order โดยใช้ prefix **78**, **79**, **81** และ cardiac history ICD-10 prefix **I20-I25** หรือ **I50** |
+| 4 | `CARDIAC_SURGERY` | **ICD-9-CM procedure** | cardiac/large-vessel OR procedure ภายใน 30 วันก่อน order; prefix **36**, **38**, **39** และ exclude non-OR cardiac **894**, **3796** |
+| 5 | `ESRD_EPO` | **ICD-10 diagnosis** + **MED** | ESRD **N18.5** หรือ **N18.6** + dialysis-context medication ภายใน 14 วัน เช่น `heparin`, `sevelamer`, `cinacalcet` |
+| 6 | `HEME_MALIGNANCY_ACTIVE` | **ICD-10 diagnosis** + **MED** + **Lab ANC** | heme malignancy prefix **C8** หรือ **C9** + chemo med ภายใน 30 วัน + ANC < 500 cells/uL |
+| 7 | `DEFAULT` | fall-through | procedure data มีให้ใช้ แต่ไม่พบ cohort พิเศษ ใช้ threshold 7.0 |
+
+## แผนที่ source → rule
+
+- **Lab**: current Hb, prior Hb trend, delta-Hb windows, Hb freshness และ ANC
+- **ICD-9-CM procedure**: cardiac surgery, orthopedic surgery,
+  peri-procedural timing และ pre-op crossmatch timing; procedure rows มาจาก
+  `IPTSUMOPRT` ส่วน OR/non-OR และชื่อ procedure มาจาก `ICD9CM`
+- **ICD-10 diagnosis**: cardiac history, ESRD, heme malignancy
+- **MED**: dialysis-medication signal, chemotherapy-medication signal,
+  และ crystalloid volume ใน 4 ชั่วโมงก่อน order
+- **Blood-order history**: ตรวจ MTP จาก RBC-unit cluster หรือ RBC + FFP +
+  platelet co-ordering
+
+<AlgorithmDecisionFlow />
+
+<HbTierMatrix />
+
+## Precedence order
+
+กฎ Hb tier อยู่ช่วงท้ายของ classifier กฎก่อนหน้าสามารถ short-circuit ได้:
+
+1. `Hb missing` → `INSUFFICIENT_EVIDENCE`
+2. cohort `MTP` → `APPROPRIATE`
+3. cohort `UNKNOWN` → `NEEDS_REVIEW`
+4. peri-procedural anchor ≤ 6h → `APPROPRIATE`
+5. pre-op crossmatch / upcoming procedure ≤ 72h → `APPROPRIATE`
+6. delta-Hb trigger → `APPROPRIATE`
+7. non-threshold cohort → `NEEDS_REVIEW`
+8. hemodilution (Hb < threshold + crystalloid ≥ 2L/4h) → `NEEDS_REVIEW`
+9. single-low-Hb-no-trend (Hb < 8 ครั้งเดียว + ไม่มี prior Hb 24h) → `NEEDS_REVIEW`
+10. Hb-tier rule ตาม matrix
+
+## ทำไม vital signs ไม่เป็น bypass เดี่ยว
+
+KCMH PR 17.2 และ AABB 2023 ใช้ Hb เป็น published threshold
+การให้เลือดจาก vital-sign instability เป็น clinical judgment นอกขอบเขต
+deterministic ของ audit นี้ ดังนั้น vital signs เข้า evidence bundle สำหรับ LLM
+ได้ แต่ไม่เปลี่ยน deterministic classification ด้วยตัวเอง
+
+## ตำแหน่งใน code
+
+- `src/bba/deterministic_classifier/classifier.py` — rule engine และ precedence
+- `src/bba/cohort_detector/rules.py` — cohort thresholds และ predicate constants
+- `src/bba/audit_pipeline/pipeline.py` — route `NEEDS_REVIEW` และ
+  `POTENTIALLY_INAPPROPRIATE` ไปยัง LLM stage

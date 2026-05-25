@@ -1,0 +1,77 @@
+---
+title: Ingest CSV
+description: โครงสร้างชุดข้อมูล CSV จาก HOSxP และสิ่งที่ bba ingest เขียนออก
+---
+
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
+`bba ingest` คือจุดเริ่มต้นของการออดิททุกครั้ง คำสั่งนี้ตรวจ schema,
+คำนวณ hash และแปลงชุดข้อมูลเข้าเป็น snapshot แบบ DuckDB + Parquet
+ภายใต้ `$BBA_DATA_DIR`
+
+<AtAGlance
+  title="สรุปสั้น"
+  items={[
+    { label: "ขนาด bundle", value: "ใช้ตาราง CSV จาก HOSxP จำนวน 11 ตารางหลัก", tone: "ok" },
+    { label: "การตรวจ", value: "header ต้องตรงกับ schema v1; คอลัมน์ขาดหรือคอลัมน์แปลกจะ fail" },
+    { label: "ผลลัพธ์", value: "Parquet หนึ่งไฟล์ต่อหนึ่งตาราง พร้อม ingest.duckdb" },
+    { label: "กฎ PHI", value: "ในเอกสารและ issue ใช้ PHI_xxx เสมอ ห้ามใส่ HN/AN จริง", tone: "warn" },
+  ]}
+/>
+
+## ตารางที่ต้องมี
+
+ชุดข้อมูลส่งออกจาก HOSxP มีตารางหลัก 11 ตาราง:
+
+| ตาราง | ใช้ทำอะไร |
+| --- | --- |
+| `BDVST` | header ของคำสั่งเลือด: HN, AN, REQNO, ชนิดผลิตภัณฑ์, วันเวลา request |
+| `BDVSTDT` | รายละเอียดคำสั่งและบริบทระดับ unit/product |
+| `BDTYPE` | reference ของชนิดผลิตภัณฑ์เลือด |
+| `BDVSTST` | reference ของสถานะการให้เลือด |
+| `Diagnosis` | หลักฐาน ICD-10 สำหรับ exclusion และบริบททางคลินิก |
+| `Lab` | Hb, ANC และ lab อื่นที่เกี่ยวข้อง |
+| `Med` | หลักฐานยา: dialysis med, chemo med, ปริมาณ crystalloid |
+| `IPDADMPROGRESS` | progress note สำหรับ evidence bundle ของ LLM |
+| `IPDNRFOCUSDT` | nursing note สำหรับ evidence bundle ของ LLM |
+| `IPTSUMOPRT` | operative event และเวลา procedure |
+| `ICD9CM` | dictionary ของ procedure code และ flag ว่าเป็น OR/non-OR |
+
+สัญญาของคอลัมน์จริงอยู่ใน `src/bba/ingest/`
+
+## สิ่งที่ ingest เขียนออก
+
+เมื่อ `bba ingest` สำเร็จ จะได้:
+
+- Parquet snapshots ที่ `$BBA_DATA_DIR/ingest/v1/<run_id>/parquet/`
+- DuckDB database ที่ `$BBA_DATA_DIR/ingest/v1/<run_id>/ingest.duckdb`
+- completion marker เพื่อบอกว่า run นี้สมบูรณ์แล้ว ถ้า marker นี้หายไป
+  การ ingest ซ้ำจะเริ่มใหม่อย่างปลอดภัย
+
+สำหรับ `bba audit --input ...` ใน Phase 1 จะเขียน snapshot รูปแบบเดียวกัน
+ภายใต้ `$BBA_DATA_DIR/audit/<run_id>/`
+
+## การสร้าง run_id
+
+```text
+run_id = sha256(input_csv_hash + schema_fingerprint + code_version)
+```
+
+หลักสำคัญคือ input เดิม + schema เดิม + code เดิม ต้องได้ `run_id` เดิม
+เสมอ เพื่อให้การรันซ้ำไม่เขียนผลซ้ำโดยไม่ตั้งใจ
+
+## ตัวอย่าง placeholder
+
+ตัวอย่างในเอกสารนี้ใช้ placeholder เท่านั้น:
+
+```text
+HN: PHI_xxx_001
+AN: PHI_xxx_002
+REQNO: PHI_xxx_003
+```
+
+ห้ามแทนค่าด้วย HN, AN หรือ REQNO จริงในเอกสาร screenshot หรือ issue report
+
+## ขั้นถัดไป
+
+- [audit command](/blood_audit/th/operators/audit-command/) — รัน audit จาก snapshot

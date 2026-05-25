@@ -11,7 +11,9 @@ interface Props {
   tiers?: Tier[];
 }
 
-const defaultTiers: Tier[] = [
+const isThai = Astro.url.pathname.includes("/th/");
+
+const englishTiers: Tier[] = [
   {
     label: "Tier 1",
     range: "Hb < cohort threshold (7.0 default · 7.5 cardiac surgery · 8.0 selected cohorts)",
@@ -35,6 +37,31 @@ const defaultTiers: Tier[] = [
   },
 ];
 
+const thaiTiers: Tier[] = [
+  {
+    label: "Tier 1",
+    range: "Hb < threshold ของ cohort (default 7.0 · cardiac surgery 7.5 · selected cohorts 8.0)",
+    ruleOutput: "APPROPRIATE",
+    routes: "auto-classify",
+    rule: "Hb ต่ำกว่า threshold ของบริบททางคลินิก จึง auto-classify เป็น appropriate ได้ ยกเว้นมี hemodilution หรือ single-low-Hb-no-trend ที่ต้องส่ง review ก่อน",
+  },
+  {
+    label: "Tier 2",
+    range: "threshold ของ cohort ≤ Hb < 10 g/dL",
+    ruleOutput: "NEEDS_REVIEW",
+    routes: "LLM review",
+    rule: "Gray zone deterministic rule ให้ NEEDS_REVIEW และ pipeline ส่งต่อให้ LLM ช่วยอ่านหลักฐานทางคลินิก",
+  },
+  {
+    label: "Tier 3",
+    range: "Hb ≥ 10 g/dL",
+    ruleOutput: "POTENTIALLY_INAPPROPRIATE",
+    routes: "LLM review",
+    rule: "Hb ก่อนให้เลือดสูง จึง flag เป็น POTENTIALLY_INAPPROPRIATE แล้วส่ง LLM เพื่อค้นหาหลักฐานบวกที่บันทึกไว้ก่อนสรุปผล",
+  },
+];
+
+const defaultTiers = isThai ? thaiTiers : englishTiers;
 const { tiers = defaultTiers } = Astro.props;
 
 const pillClass = (c: Tier["ruleOutput"]) =>
@@ -48,16 +75,16 @@ const routesPill = (r: Tier["routes"]) =>
 const tierNumber = (label: string) => label.replace(/[^0-9]/g, "") || "—";
 ---
 
-<section class="hb-matrix" aria-label="3-tier Hb classification policy">
+<section class="hb-matrix" aria-label={isThai ? "นโยบาย classification แบบ 3-tier Hb" : "3-tier Hb classification policy"}>
   <div class="hb-matrix__table-wrap">
     <table class="hb-matrix__table">
       <thead>
         <tr>
           <th scope="col" class="hb-matrix__th-tier">Tier</th>
-          <th scope="col">Hb range</th>
-          <th scope="col">Rule output</th>
-          <th scope="col">Routing</th>
-          <th scope="col">Rule</th>
+          <th scope="col">{isThai ? "ช่วง Hb" : "Hb range"}</th>
+          <th scope="col">{isThai ? "ผลจาก rule" : "Rule output"}</th>
+          <th scope="col">{isThai ? "เส้นทาง" : "Routing"}</th>
+          <th scope="col">{isThai ? "คำอธิบาย rule" : "Rule"}</th>
         </tr>
       </thead>
       <tbody>
@@ -79,9 +106,19 @@ const tierNumber = (label: string) => label.replace(/[^0-9]/g, "") || "—";
     </table>
   </div>
   <p class="hb-matrix__note">
-    Vitals (BP, HR, urine output, temperature) are <strong>supporting evidence only</strong>.
-    They never override the Hb-based tier on their own. Deterministic bypasses require
-    structured MTP, procedure-timing, pre-op crossmatch, or delta-Hb evidence.
+    {isThai ? (
+      <>
+        Vitals (BP, HR, urine output, temperature) เป็น <strong>หลักฐานประกอบเท่านั้น</strong>
+        และไม่ override Hb tier ด้วยตัวเอง deterministic bypass ต้องมีหลักฐานแบบ structured เช่น
+        MTP, procedure timing, pre-op crossmatch หรือ delta-Hb
+      </>
+    ) : (
+      <>
+        Vitals (BP, HR, urine output, temperature) are <strong>supporting evidence only</strong>.
+        They never override the Hb-based tier on their own. Deterministic bypasses require
+        structured MTP, procedure-timing, pre-op crossmatch, or delta-Hb evidence.
+      </>
+    )}
   </p>
 </section>
 

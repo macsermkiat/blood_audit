@@ -1,0 +1,47 @@
+---
+title: Quote grounding 6 ชั้น
+description: ชั้นป้องกัน hallucination ระหว่างคำตอบ LLM กับ audit row ที่เผยแพร่
+---
+
+import AtAGlance from "../../../../components/AtAGlance.astro";
+import QuoteGroundingLayers from "../../../../components/QuoteGroundingLayers.astro";
+
+เมื่อ deterministic classifier ส่งแถวไปยัง LLM review, LLM จะสร้างเหตุผล
+ทางคลินิกพร้อม quote จาก de-identified evidence bundle ทุก quote ต้องผ่าน
+mandatory checks 6 ชั้นแบบ fail-closed ส่วน medical-NLI เป็นชั้นที่ 7
+ซึ่งเปิดใช้เฉพาะ deployment ที่ตั้งค่าไว้
+
+<AtAGlance
+  title="สรุป grounding"
+  items={[
+    { label: "Input", value: "LLM citation + evidence_id + de-identified evidence bundle" },
+    { label: "Mandatory", value: "quote checks 6 ชั้นต้องรันทุกครั้ง", tone: "ok" },
+    { label: "Optional", value: "Medical-NLI รันเมื่อ deployment ส่ง NLI gate เข้ามา" },
+    { label: "Failure", value: "mandatory layer ใด fail จะเป็น NEEDS_REVIEW / hallucination_suspect", tone: "warn" },
+  ]}
+/>
+
+<QuoteGroundingLayers />
+
+## Fail-closed หมายถึงอะไร
+
+ถ้า mandatory layer ใดตอบ false ระบบจะเก็บ
+`final_classification = NEEDS_REVIEW` และ `review_reason =
+"hallucination_suspect"` แถวนั้นจะไม่ถูก downgrade, retry ด้วยกฎที่อ่อนลง
+หรือยอมรับเป็น `APPROPRIATE` / `INAPPROPRIATE` แบบเงียบ ๆ
+
+`hallucination_suspect` เป็นค่าใน `review_reason` ไม่ใช่ classification
+จริง ค่า classification ที่เก็บได้คือ `APPROPRIATE`, `INAPPROPRIATE`,
+`NEEDS_REVIEW`, `INSUFFICIENT_EVIDENCE` และ `POTENTIALLY_INAPPROPRIATE`
+
+## Medical-NLI เป็น optional
+
+`bba.quote_grounder.verify_citation(..., nli_gate=None)` ไม่รัน NLI โดย default
+จะประเมินชั้น medical-NLI เฉพาะเมื่อ caller ส่ง `NLIEntailmentGate` เข้ามา
+
+## สิ่งที่ห้ามทำ
+
+- ห้าม mock หรือ short-circuit grounding layer ใน test
+- ห้ามเพิ่ม flag เพื่อ skip grounding
+- ห้ามลด minimum quote length 25 characters
+- ห้ามแทน medical-NLI ด้วย string check ธรรมดา

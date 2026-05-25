@@ -1,0 +1,34 @@
+---
+title: การทดสอบ
+description: test gates ที่ใช้ป้องกัน regression ใน blood_audit
+---
+
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
+<AtAGlance
+  title="สรุป test gates"
+  items={[
+    { label: "Blocking", value: "ruff, ruff format, mypy src, pytest", tone: "ok" },
+    { label: "Advisory", value: "mypy tests ยังอนุญาตให้ warn จนกว่าจะจ่าย test helper debt", tone: "warn" },
+    { label: "Docker", value: "Postgres tests auto-skip เมื่อ Docker/testcontainers ไม่พร้อม" },
+    { label: "LLM tests", value: "ใช้ cassette เท่านั้น; cost guard กัน live API calls" },
+  ]}
+/>
+
+## คำสั่งหลัก
+
+```bash
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src
+uv run pytest
+```
+
+`mypy tests` เป็น advisory ในตอนนี้ เพราะยังมี debt ใน test helpers
+แต่ `mypy src` ต้องผ่านแบบ strict
+
+## LLM และ cost guard
+
+test ที่เกี่ยวกับ LLM ต้องใช้ cassette หรือ fixture เท่านั้น ห้ามเรียก live API
+โดยไม่ตั้งใจ cost guard ใน `bba.audit_pipeline.cost_guard` จะ block
+live access ใน test context

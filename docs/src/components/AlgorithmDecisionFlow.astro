@@ -9,7 +9,9 @@ interface Step {
   otherwise: string;
 }
 
-const steps: Step[] = [
+const isThai = Astro.url.pathname.includes("/th/");
+
+const englishSteps: Step[] = [
   {
     index: "1",
     question: "No current pre-transfusion Hb?",
@@ -101,17 +103,130 @@ const steps: Step[] = [
     otherwise: "Not reachable for valid Hb",
   },
 ];
+
+const thaiSteps: Step[] = [
+  {
+    index: "1",
+    question: "ไม่มี Hb ก่อนให้เลือดที่ใช้ได้?",
+    evidence: "Lab: Hb observations, lookback 7 วัน",
+    yes: "INSUFFICIENT_EVIDENCE",
+    route: "Final",
+    tone: "warn",
+    otherwise: "ใช้ cohort และ bypass evidence ต่อ",
+  },
+  {
+    index: "2",
+    question: "เข้า pattern MTP?",
+    evidence: "Blood orders: RBC units, FFP, platelets ใน 1 ชั่วโมง",
+    yes: "APPROPRIATE",
+    route: "Final",
+    tone: "ok",
+    otherwise: "ตรวจความแน่นอนของ cohort",
+  },
+  {
+    index: "3",
+    question: "Cohort unknown?",
+    evidence: "availability ของ procedure join",
+    yes: "NEEDS_REVIEW",
+    route: "LLM",
+    tone: "warn",
+    otherwise: "ตรวจ procedural bypass",
+  },
+  {
+    index: "4",
+    question: "มี procedure ≤ 6h ก่อน order?",
+    evidence: "IPTSUMOPRT + ICD9CM procedure timing",
+    yes: "APPROPRIATE",
+    route: "Final",
+    tone: "ok",
+    otherwise: "ตรวจ pre-op crossmatch",
+  },
+  {
+    index: "5",
+    question: "มี procedure ≤ 72h หลัง order?",
+    evidence: "IPTSUMOPRT + ICD9CM upcoming procedure",
+    yes: "APPROPRIATE",
+    route: "Final",
+    tone: "ok",
+    otherwise: "ตรวจ acute Hb drop",
+  },
+  {
+    index: "6",
+    question: "Delta-Hb trigger ทำงาน?",
+    evidence: "Lab: prior Hb drop ใน 6 / 12 / 24h",
+    yes: "APPROPRIATE",
+    route: "Final",
+    tone: "ok",
+    otherwise: "ใช้ threshold ของ cohort",
+  },
+  {
+    index: "7",
+    question: "Cohort ไม่มี numeric threshold?",
+    evidence: "ICD-10 + MED + ANC สำหรับ active heme context",
+    yes: "NEEDS_REVIEW",
+    route: "LLM",
+    tone: "warn",
+    otherwise: "เทียบ Hb กับ threshold",
+  },
+  {
+    index: "8",
+    question: "Hb < threshold ของ cohort?",
+    evidence: "Lab Hb + cohort threshold + MED crystalloid check",
+    yes: "APPROPRIATE ยกเว้น hemodilution หรือ single-low-Hb-no-trend",
+    route: "Final",
+    tone: "ok",
+    otherwise: "ตรวจ gray zone",
+  },
+  {
+    index: "9",
+    question: "threshold ≤ Hb < 10?",
+    evidence: "Lab Hb + cohort threshold",
+    yes: "NEEDS_REVIEW",
+    route: "LLM",
+    tone: "warn",
+    otherwise: "เข้าสู่ high-Hb tier",
+  },
+  {
+    index: "10",
+    question: "Hb ≥ 10?",
+    evidence: "Lab Hb",
+    yes: "POTENTIALLY_INAPPROPRIATE",
+    route: "LLM",
+    tone: "err",
+    otherwise: "ไม่ควรเกิดสำหรับ Hb ที่ valid",
+  },
+];
+
+const steps = isThai ? thaiSteps : englishSteps;
+
+const routeLabel = (route: Step["route"]) => {
+  if (!isThai) return route;
+  return route === "Final" ? "จบ ไม่เรียก LLM" : "ส่ง LLM";
+};
 ---
 
 <figure class="algorithm-flow" aria-labelledby="algorithm-flow-title">
   <figcaption id="algorithm-flow-title" class="algorithm-flow__caption">
-    Deterministic classifier precedence. The first matching row wins; only
-    `NEEDS_REVIEW` and `POTENTIALLY_INAPPROPRIATE` continue to the LLM path.
+    {isThai ? (
+      <>
+        ลำดับ precedence ของ deterministic classifier: rule แรกที่ match จะชนะ
+        และมีเฉพาะ `NEEDS_REVIEW` กับ `POTENTIALLY_INAPPROPRIATE` ที่เข้าสู่เส้นทาง LLM
+      </>
+    ) : (
+      <>
+        Deterministic classifier precedence. The first matching row wins; only
+        `NEEDS_REVIEW` and `POTENTIALLY_INAPPROPRIATE` continue to the LLM path.
+      </>
+    )}
   </figcaption>
 
   <div class="algorithm-flow__start">
-    <span class="algorithm-flow__eyebrow">Inputs</span>
-    <strong>RBC order + Hb lookup + cohort + procedure timing + crystalloid window</strong>
+    <span class="algorithm-flow__eyebrow">{isThai ? "ข้อมูลเข้า" : "Inputs"}</span>
+    <strong>
+      {isThai
+        ? "RBC order + Hb lookup + cohort + procedure timing + crystalloid window"
+        : "RBC order + Hb lookup + cohort + procedure timing + crystalloid window"}
+    </strong>
   </div>
 
   <ol class="algorithm-flow__steps">
@@ -126,12 +241,12 @@ const steps: Step[] = [
         </div>
         <div class="algorithm-flow__branches">
           <div class="algorithm-flow__branch algorithm-flow__branch--yes" data-tone={step.tone}>
-            <span class="algorithm-flow__branch-label">Yes</span>
+            <span class="algorithm-flow__branch-label">{isThai ? "ใช่" : "Yes"}</span>
             <strong>{step.yes}</strong>
-            <span class="algorithm-flow__route">{step.route}</span>
+            <span class="algorithm-flow__route">{routeLabel(step.route)}</span>
           </div>
           <div class="algorithm-flow__branch algorithm-flow__branch--no">
-            <span class="algorithm-flow__branch-label">No</span>
+            <span class="algorithm-flow__branch-label">{isThai ? "ไม่ใช่" : "No"}</span>
             <span>{step.otherwise}</span>
           </div>
         </div>
@@ -140,9 +255,9 @@ const steps: Step[] = [
   </ol>
 
   <div class="algorithm-flow__footer">
-    <span class="ba-pill ba-pill--ok">Final without LLM</span>
-    <span class="ba-pill ba-pill--warn">LLM review route</span>
-    <span class="ba-pill ba-pill--err">High-Hb concern</span>
+    <span class="ba-pill ba-pill--ok">{isThai ? "จบโดยไม่เรียก LLM" : "Final without LLM"}</span>
+    <span class="ba-pill ba-pill--warn">{isThai ? "เส้นทาง LLM review" : "LLM review route"}</span>
+    <span class="ba-pill ba-pill--err">{isThai ? "Hb สูง น่ากังวล" : "High-Hb concern"}</span>
   </div>
 </figure>
 

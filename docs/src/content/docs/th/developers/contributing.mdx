@@ -1,0 +1,29 @@
+---
+title: การ contribute
+description: แนวทางทำงานกับ branch, PR และเอกสารของ blood_audit
+---
+
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
+<AtAGlance
+  title="สรุป workflow"
+  items={[
+    { label: "Branch", value: "ใช้ prefix เช่น feat/, fix/, docs/, chore/, test/, ci/" },
+    { label: "Merge", value: "ใช้ gh pr merge --merge และเก็บ merge commits", tone: "ok" },
+    { label: "Docs", value: "update docs/CONTEXT.md เมื่อ public concept เปลี่ยน" },
+    { label: "Review", value: "รัน Codex review ก่อนปิดงาน", tone: "warn" },
+  ]}
+/>
+
+## หลักการแก้ code
+
+- ทำให้เล็กและตรงประเด็น
+- ใช้ pattern เดิมของ repo ก่อนสร้าง abstraction ใหม่
+- ถ้าแตะ behavior ให้เพิ่มหรือปรับ test ตามความเสี่ยง
+- ห้าม log PHI จริง และห้ามใส่ PHI จริงใน fixture, issue หรือเอกสาร
+
+## เอกสาร
+
+เมื่อ concept ที่ผู้ใช้หรือ operator ต้องรู้เปลี่ยน ให้ update เอกสารคู่กัน
+ทั้ง docs site และ `docs/CONTEXT.md` เพื่อให้ repo มี single source สำหรับ
+handoff ระยะยาว

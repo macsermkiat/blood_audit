@@ -1,0 +1,78 @@
+---
+title: Pipeline stages
+description: 12 stage ของ blood_audit ตั้งแต่ ingest จนถึง audit store
+---
+
+import AtAGlance from "../../../../components/AtAGlance.astro";
+import PipelineDiagram from "../../../../components/PipelineDiagram.astro";
+
+<PipelineDiagram />
+
+<AtAGlance
+  title="สรุป pipeline"
+  items={[
+    { label: "Stage 1", value: "Ingest รันจาก CLI ได้แล้วใน Phase 1", tone: "ok" },
+    { label: "Stage 2-12", value: "มี module แล้ว; CLI orchestration จะมาใน Phase 1.5", tone: "warn" },
+    { label: "Data handoff", value: "แต่ละ stage ส่งต่อ typed Pydantic objects หรือ persisted rows" },
+    { label: "Failure mode", value: "validation, de-id, grounding และ persistence ต้อง fail loud" },
+  ]}
+/>
+
+## 1. `bba.ingest`
+
+อ่าน HOSxP CSV bundle, ตรวจ schema, คำนวณ hash และ materialize เป็น
+DuckDB + Parquet snapshot
+
+## 2. `bba.audit_orders`
+
+เลือกเฉพาะ RBC orders และสร้าง anchor หนึ่งรายการต่อคำสั่งให้เลือดที่ต้อง audit
+
+## 3. `bba.hb_lookup`
+
+หา pre-transfusion Hb จาก Lab ย้อนหลัง 7 วัน เลือกค่าที่ analytic-valid
+และเลือก hematology Hb ก่อน POCT เมื่อมีหลายแหล่ง
+
+## 4. `bba.vitals_extractor`
+
+ดึง vital signs เป็น evidence ประกอบสำหรับ LLM แต่ไม่ใช้เป็น deterministic bypass
+โดยลำพัง
+
+## 5. `bba.cohort_detector`
+
+assign clinical-context cohort เช่น default, cardiac surgery, ortho-cardiac,
+ESRD-EPO, MTP, active heme malignancy หรือ unknown
+
+## 6. `bba.deterministic_classifier`
+
+ใช้กฎ 3-tier Hb, bypass และ review flags เพื่อสร้าง `rule_classification`
+ผลที่ auto-classify ได้จะจบโดยไม่เรียก LLM ส่วน `NEEDS_REVIEW` และ
+`POTENTIALLY_INAPPROPRIATE` จะเข้าสู่ LLM route
+
+## 7. `bba.evidence_bundle_builder`
+
+รวม Hb, vitals, anchor notes, medication, cohort evidence, ICD codes
+และ procedure evidence ให้ LLM เห็นเฉพาะหลักฐานที่เกี่ยวข้อง
+
+## 8. `bba.deid_redactor`
+
+ลบหรือแทน PHI เช่น HN, AN, REQNO, ชื่อ, DOB, dates และอายุ ≥ 90
+ก่อนส่งออกจาก audit container
+
+## 9. `bba.prompt_builder`
+
+สร้าง prompt จาก policy paraphrase, evidence bundle และ expected JSON schema
+
+## 10. `bba.llm_client`
+
+ส่ง batch ไปยัง LLM provider และติดตาม state ผ่าน `batch_runs`
+
+## 11. `bba.quote_grounder`
+
+ตรวจทุก quote ของ LLM ด้วย 6 mandatory layers ถ้าชั้นใด fail จะเก็บ
+`final_classification = NEEDS_REVIEW` พร้อม `review_reason =
+"hallucination_suspect"`
+
+## 12. `bba.audit_store`
+
+เขียน `AuditRow`, `LlmCall`, run state และ audit log โดยรักษา idempotency
+และ timestamp แบบ timezone-aware UTC

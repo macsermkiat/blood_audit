@@ -1,0 +1,67 @@
+---
+title: สรุป policy
+description: สรุปเชิงปฏิบัติของนโยบาย 3-tier Hb ที่ระบบใช้ โดยเอกสารภายในยังเป็นแหล่งอ้างอิงหลัก
+---
+
+import AlgorithmDecisionFlow from "../../../../components/AlgorithmDecisionFlow.astro";
+import AtAGlance from "../../../../components/AtAGlance.astro";
+import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
+
+:::caution
+ข้อความนี้เป็น **สรุปเชิงปฏิบัติแบบ paraphrase** เท่านั้น เอกสารที่มีอำนาจ
+สูงสุดคือ KCMH PR 17.2 และ internal 3-tier Hb specification
+(`policy/policy.md` ใน policy bundle ภายใน) หากขัดกัน ให้ยึดเอกสารภายใน
+:::
+
+<AtAGlance
+  title="สรุปสั้น"
+  items={[
+    { label: "กฎหลัก", value: "ใช้ Hb tier หลังตรวจ safety และบริบททางคลินิกที่สำคัญกว่าแล้วเท่านั้น" },
+    { label: "ข้อมูลที่ตรวจ", value: "Lab Hb, ICD-10, ICD-9-CM procedure, MED และ pattern ของคำสั่งเลือด" },
+    { label: "Vital signs", value: "ใช้เป็นหลักฐานประกอบเท่านั้น ไม่ใช่ bypass เดี่ยว", tone: "warn" },
+    { label: "ส่งทบทวน", value: "บริบท unknown หรือไม่มี numeric threshold จะเป็น NEEDS_REVIEW", tone: "ok" },
+  ]}
+/>
+
+## เอกสารต้นทาง
+
+- KCMH PR 17.2 — guideline ภายในสำหรับการให้ RBC
+- AABB 2023 — restrictive-transfusion guidance ระดับนานาชาติ
+- KCMH internal 3-tier Hb specification (`policy/policy.md`)
+
+## กฎ 3-tier
+
+<HbTierMatrix />
+
+## Decision flow
+
+<AlgorithmDecisionFlow />
+
+## Bypass และ review paths
+
+ระบบไม่ได้เริ่มจาก Hb tier ทันที แต่จะตรวจหลักฐานที่มี priority สูงก่อน:
+
+- **บริบท MTP** → `APPROPRIATE` แบบ deterministic
+- **Peri-procedural ≤ 6 ชั่วโมงก่อน order** → `APPROPRIATE`
+- **Pre-op crossmatch ≤ 72 ชั่วโมงหลัง order** → `APPROPRIATE`
+- **Delta-Hb trigger** → `APPROPRIATE` เมื่อ Hb drop เข้าเงื่อนไข:
+  - ลดลง ≥ 1.5 g/dL ภายใน 6 ชั่วโมง
+  - ลดลง ≥ 2.0 g/dL ภายใน 12 ชั่วโมง
+  - ลดลง ≥ 2.5 g/dL ภายใน 24 ชั่วโมง
+- **Hemodilution หรือ Hb ต่ำครั้งเดียวโดยไม่มี trend** → `NEEDS_REVIEW`
+  ไม่ auto-appropriate
+- **Unknown หรือ non-threshold clinical context** → `NEEDS_REVIEW`
+
+Vital signs เช่น hypotension หรือ tachycardia ไม่ทำให้เกิด bypass ด้วยตัวเอง
+
+## Exclusions
+
+- ผู้ป่วยเด็กอายุ < 15 ปี เพราะใช้นโยบายคนละชุด
+- ผลิตภัณฑ์ที่ไม่ใช่ RBC เช่น LPRC, LDPRC, SDR
+- คำสั่งที่ไม่มี Hb ก่อนให้เลือด
+- ICD-10 conditions ที่อยู่นอก scope ตาม PR 17.2
+
+## ทำไมจึง paraphrase
+
+PR 17.2 เป็นเอกสารภายในของโรงพยาบาล เว็บสาธารณะนี้จึงสรุปกฎเชิงปฏิบัติ
+โดยไม่คัดลอกต้นฉบับ โค้ด audit ยึดตาม specification ภายในเสมอ

@@ -15,7 +15,9 @@ interface Props {
   highlightStage?: string;
 }
 
-const groups: StageGroup[] = [
+const isThai = Astro.url.pathname.includes("/th/");
+
+const englishGroups: StageGroup[] = [
   {
     legLabel: "Data preparation",
     legSubtitle: "Stage 1 runs today via bba audit; stages 2-5 wire in Phase 1.5",
@@ -42,12 +44,40 @@ const groups: StageGroup[] = [
   },
 ];
 
+const thaiGroups: StageGroup[] = [
+  {
+    legLabel: "เตรียมข้อมูล",
+    legSubtitle: "Stage 1 รันผ่าน bba audit ได้แล้ว; stage 2-5 จะเชื่อมใน Phase 1.5",
+    stages: [
+      { slug: "ingest", label: "Ingest", module: "bba.ingest" },
+      { slug: "audit_orders", label: "คำสั่งที่ audit", module: "bba.audit_orders" },
+      { slug: "hb_lookup", label: "หา Hb", module: "bba.hb_lookup" },
+      { slug: "vitals_extractor", label: "Vital signs", module: "bba.vitals_extractor" },
+      { slug: "cohort_detector", label: "บริบททางคลินิก", module: "bba.cohort_detector" },
+    ],
+  },
+  {
+    legLabel: "วิเคราะห์",
+    legSubtitle: "มี modules แล้ว; CLI wiring จะมาใน Phase 1.5",
+    stages: [
+      { slug: "deterministic_classifier", label: "จำแนกแบบ deterministic", module: "bba.deterministic_classifier" },
+      { slug: "evidence_bundle_builder", label: "รวม evidence bundle", module: "bba.evidence_bundle_builder" },
+      { slug: "deid_redactor", label: "De-identify", module: "bba.deid_redactor" },
+      { slug: "prompt_builder", label: "สร้าง prompt", module: "bba.prompt_builder" },
+      { slug: "llm_client", label: "LLM batch", module: "bba.llm_client" },
+      { slug: "quote_grounder", label: "Quote grounding", module: "bba.quote_grounder" },
+      { slug: "audit_store", label: "Audit store", module: "bba.audit_store" },
+    ],
+  },
+];
+
+const groups = isThai ? thaiGroups : englishGroups;
 const { highlightStage } = Astro.props;
 
 let globalIndex = 0;
 ---
 
-<figure class="pipeline" aria-label="blood_audit pipeline — 12 stages across 2 legs">
+<figure class="pipeline" aria-label={isThai ? "blood_audit pipeline — 12 ขั้นตอนใน 2 ส่วน" : "blood_audit pipeline — 12 stages across 2 legs"}>
   {groups.map((group, gIdx) => (
     <section class="pipeline__leg" data-leg={gIdx === 0 ? "ingest" : "analysis"}>
       <header class="pipeline__leg-header">
@@ -74,11 +104,22 @@ let globalIndex = 0;
     </section>
   ))}
   <figcaption class="pipeline__caption">
-    Twelve happy-path stages. Each stage is an importable subpackage under
-    <code>src/bba/</code>. In Phase 1, <code>bba audit</code> wires
-    <code>bba.ingest</code> only; stages 2-12 are implemented modules wired
-    into the CLI in Phase 1.5. Run-level idempotency is enforced at
-    <code>audit_store</code>.
+    {isThai ? (
+      <>
+        Pipeline มี 12 happy-path stages แต่ละ stage เป็น subpackage ใต้
+        <code>src/bba/</code>. ใน Phase 1, <code>bba audit</code> เชื่อมเฉพาะ
+        <code>bba.ingest</code>; stage 2-12 มี modules แล้วและจะเชื่อมเข้า CLI
+        ใน Phase 1.5. Run-level idempotency บังคับใช้ที่ <code>audit_store</code>.
+      </>
+    ) : (
+      <>
+        Twelve happy-path stages. Each stage is an importable subpackage under
+        <code>src/bba/</code>. In Phase 1, <code>bba audit</code> wires
+        <code>bba.ingest</code> only; stages 2-12 are implemented modules wired
+        into the CLI in Phase 1.5. Run-level idempotency is enforced at
+        <code>audit_store</code>.
+      </>
+    )}
   </figcaption>
 </figure>
 

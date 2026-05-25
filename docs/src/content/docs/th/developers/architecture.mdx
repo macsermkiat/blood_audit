@@ -1,0 +1,46 @@
+---
+title: สถาปัตยกรรม
+description: ภาพรวมสถาปัตยกรรมของ blood_audit และขอบเขตของแต่ละ package
+---
+
+import AtAGlance from "../../../../components/AtAGlance.astro";
+import PipelineDiagram from "../../../../components/PipelineDiagram.astro";
+
+<AtAGlance
+  title="สรุปสถาปัตยกรรม"
+  items={[
+    { label: "โครงสร้าง", value: "20 packages, 12 happy-path stages, deterministic-first" },
+    { label: "ขอบเขต", value: "มีเพียง bba.audit_pipeline ที่ orchestrate ข้าม stage" },
+    { label: "Phase 1 CLI", value: "bba audit เชื่อม ingest ก่อน; analysis modules จะ wire ใน Phase 1.5", tone: "warn" },
+    { label: "Safety invariant", value: "ไม่มี real-time output; de-id ก่อน LLM; quote grounding fail-closed", tone: "ok" },
+  ]}
+/>
+
+<PipelineDiagram />
+
+## แนวคิดหลัก
+
+ระบบแยกเป็น stage ชัดเจน แต่ละ stage รับข้อมูล typed object หรือ snapshot
+จาก stage ก่อนหน้า แล้วส่งต่อผลลัพธ์ที่ตรวจสอบได้ จุดที่รวมหลาย stage เข้าด้วยกัน
+ควรอยู่ใน `bba.audit_pipeline` เท่านั้น เพื่อให้ boundary ของโมดูลอื่นยังเล็ก
+และทดสอบได้ง่าย
+
+## กลุ่ม package สำคัญ
+
+| Package | หน้าที่ |
+| --- | --- |
+| `bba.ingest` | ตรวจ CSV schema, hash input และเขียน DuckDB/Parquet snapshot |
+| `bba.audit_orders` | แปลงคำสั่งเลือดให้เป็น audit anchor ต่อ RBC order |
+| `bba.hb_lookup` | หา Hb ก่อนให้เลือดและ prior Hb trend |
+| `bba.cohort_detector` | assign clinical-context cohort เช่น default, cardiac surgery, ESRD-EPO, MTP, unknown |
+| `bba.deterministic_classifier` | ใช้กฎ 3-tier Hb และ bypass/review rules |
+| `bba.evidence_bundle_builder` | รวมหลักฐานสำหรับแถวที่ต้องเข้า LLM route |
+| `bba.deid_redactor` | de-identify bundle ก่อนออกจาก container |
+| `bba.quote_grounder` | ตรวจ citation ของ LLM แบบ fail-closed |
+| `bba.audit_store` | เขียน AuditRow, LlmCall และ batch/run state |
+
+## เส้นทาง failure
+
+Validation, de-identification, quote grounding และ persistence ต้อง fail loud
+ห้าม silently pass เพราะ output ของระบบนี้ถูกใช้ในการออดิท QI หากไม่แน่ใจ
+ให้ส่ง `NEEDS_REVIEW` แทนการ auto-classify
