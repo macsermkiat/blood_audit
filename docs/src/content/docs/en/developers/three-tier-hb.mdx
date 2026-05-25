@@ -11,6 +11,47 @@ auto-classified rows. `APPROPRIATE` and `INSUFFICIENT_EVIDENCE` are final
 without an LLM call. `NEEDS_REVIEW` and `POTENTIALLY_INAPPROPRIATE` route
 to the LLM for positive-evidence reasoning and quote grounding.
 
+## What "cohort" means here
+
+In this project, a **cohort** is the clinical-context bucket assigned to
+one transfusion order before the Hb number is interpreted.
+
+It is not a research cohort and it is not a permanent patient label. It is
+a deterministic rule output for one audit row: "given the procedures,
+diagnoses, medications, blood-order pattern, and available data around this
+order, which Hb threshold should the audit use?"
+
+The same patient could theoretically land in different cohorts on different
+admissions or different transfusion dates if the surrounding evidence changes.
+For example, a patient with no current surgery signal might be `DEFAULT` on
+one admission, but `CARDIAC_SURGERY` after a later cardiac operation.
+
+The cohort matters because the audit does **not** use one Hb threshold for
+everyone:
+
+- Some orders use a numeric Hb threshold, such as 7.0, 7.5, or 8.0 g/dL.
+- Some orders do not have a numeric threshold because the context is special,
+  such as MTP or active heme malignancy.
+- Some orders are routed to review because the required data is missing or
+  the context should not be reduced to one number.
+
+## Cohort examples in plain language
+
+| Cohort | What it means | What data triggers it | What the classifier does |
+| --- | --- | --- | --- |
+| `DEFAULT` | No special cohort rule matched. This is the ordinary restrictive-transfusion pathway. | Procedure data is available, but no higher-priority cohort evidence matched. | Uses Hb threshold **7.0 g/dL**. Hb below 7.0 can be `APPROPRIATE`; Hb 7.0-10 routes to review; Hb ≥10 is high-Hb concern. |
+| `CARDIAC_SURGERY` | The order is near a recent cardiac / large-vessel operative context. | Recent operating-room procedure with cardiac / major vascular ICD-9-CM procedure-code prefixes, with non-OR cardiac items excluded. | Uses Hb threshold **7.5 g/dL**. |
+| `ORTHO_CARDIAC` | Orthopedic surgery plus cardiac history. This has a higher threshold than default. | Orthopedic operative procedure plus cardiac-history ICD-10 evidence such as ischemic heart disease or heart failure. | Uses Hb threshold **8.0 g/dL**. |
+| `ESRD_EPO` | End-stage renal disease context with dialysis-medication evidence. | ESRD ICD-10 diagnosis plus a dialysis-context medication signal. Both are required. | Uses Hb threshold **8.0 g/dL**. |
+| `MTP` | Massive transfusion protocol pattern. This is not judged by the Hb threshold. | RBC-unit cluster pattern, or RBC + FFP + platelet co-ordering pattern in the MTP window. | Bypasses the Hb tier and returns `APPROPRIATE`. |
+| `HEME_MALIGNANCY_ACTIVE` | Active hematologic malignancy context where one numeric threshold is not enough. | Heme-malignancy ICD-10 signal plus recent chemotherapy medication plus neutropenia. | Does **not** use a numeric threshold. Routes to `NEEDS_REVIEW` / LLM context review. |
+| `UNKNOWN` | The audit does not have enough procedure data to safely choose a threshold. | Procedure events are unavailable, not merely empty. | Does **not** silently assume 7.0. Routes to `NEEDS_REVIEW`. |
+
+The key safety idea: **missing procedure data is different from no procedure
+found**. If procedure data is available and empty, the detector can fall
+through to `DEFAULT`. If procedure data is unavailable, the detector returns
+`UNKNOWN` so a human can review the order.
+
 <AlgorithmDecisionFlow />
 
 <HbTierMatrix />
@@ -60,7 +101,7 @@ to review instead:
 Vital signs (low BP, high HR) are **supporting evidence only**. They
 never trigger a bypass on their own and never override the Hb tier.
 
-## Cohort thresholds
+## Threshold summary
 
 | Cohort | Hb threshold for `APPROPRIATE` | Notes |
 | --- | --- | --- |
