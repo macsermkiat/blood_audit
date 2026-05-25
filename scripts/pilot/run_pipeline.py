@@ -137,6 +137,19 @@ def _parse_time(raw: str | None) -> ParsedTimeOfDay | None:
     return parse_hosxp_time(stripped).value
 
 
+def _fmt_hosxp_time(raw: str | None) -> str:
+    """Render HOSxP integer-like time cells as HH:MM:SS."""
+    if raw is None:
+        return ""
+    stripped = str(raw).strip()
+    if not stripped:
+        return ""
+    if stripped.isdigit() and 1 <= len(stripped) <= 6:
+        padded = stripped.zfill(6)
+        return f"{padded[:2]}:{padded[2:4]}:{padded[4:6]}"
+    return stripped
+
+
 def _combine(d: date | None, t: ParsedTimeOfDay | None) -> datetime | None:
     if d is None or t is None:
         return None
@@ -422,11 +435,7 @@ def main() -> None:
         use_date = (r.get("USEDATE") or "").strip().split(" ")[0]
         use_time_raw = (r.get("USETIME") or "").strip()
         if use_date and use_time_raw:
-            use_time = (
-                f"{use_time_raw[:2]}:{use_time_raw[2:4]}:{use_time_raw[4:6]}"
-                if len(use_time_raw) == 6
-                else use_time_raw
-            )
+            use_time = _fmt_hosxp_time(use_time_raw)
             candidate = f"{use_date} {use_time}"
             if reqno not in use_dt_by_reqno or candidate < use_dt_by_reqno[reqno]:
                 use_dt_by_reqno[reqno] = candidate

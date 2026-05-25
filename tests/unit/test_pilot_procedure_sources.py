@@ -123,3 +123,10 @@ def test_incpt_without_optract_mapping_keeps_timing_fallback() -> None:
     assert len(events) == 1
     assert events[0].icd9 == "INCPT:AS061"
     assert events[0].or_flag is False
+
+
+def test_transfusion_issue_time_zero_pads_hosxp_time() -> None:
+    mod = _load_run_pipeline()
+
+    assert mod._fmt_hosxp_time("80000") == "08:00:00"
+    assert mod._fmt_hosxp_time("123456") == "12:34:56"
