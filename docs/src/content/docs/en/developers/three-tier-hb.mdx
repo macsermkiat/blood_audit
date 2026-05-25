@@ -52,6 +52,52 @@ found**. If procedure data is available and empty, the detector can fall
 through to `DEFAULT`. If procedure data is unavailable, the detector returns
 `UNKNOWN` so a human can review the order.
 
+## Exact data checked by step
+
+The classifier runs in a fixed order. The first matching rule wins. This is
+the operational checklist the audit follows for one RBC order:
+
+| Step | Question the code asks | Source data checked | Important details | Output if yes |
+| --- | --- | --- | --- | --- |
+| 1 | Is there no usable pre-transfusion Hb? | **Lab** table Hb observations. | The Hb lookup searches Hb results for the same patient at or before the order time. It only accepts analytic-valid Hb values in **2-25 g/dL**. It looks back **7 days**. Hematology Hb is preferred over POCT when available. If two rows have the same timestamp, the higher Lab `item_no` wins. | `INSUFFICIENT_EVIDENCE`, final without LLM. |
+| 2 | Does the order look like massive transfusion protocol (MTP)? | Blood-order history around the anchor: RBC units, FFP co-order flag, platelet co-order flag. | The detector checks the **1-hour window before the order**. MTP fires if RBC units total **≥ 4** in that window, or if RBC + FFP + platelets are co-ordered in the window. | `APPROPRIATE`, final without LLM. |
+| 3 | Is procedure data missing? | Procedure-event join availability. | This is not the same as "no procedure found." If the procedure join is unavailable, the audit cannot safely know whether cardiac/orthopedic procedure rules apply. | `NEEDS_REVIEW`, routed to LLM/human review. |
+| 4 | Is there a procedure within 6 hours before the order? | **IPTSUMOPRT** procedure rows joined to **ICD9CM** procedure dictionary. | The pipeline computes `procedure_proximity_hours` from operative procedure timing. A procedure at or before the order and within **≤ 6 hours** triggers the peri-procedural bypass. | `APPROPRIATE`, final without LLM. |
+| 5 | Is there an upcoming procedure within 72 hours after the order? | **IPTSUMOPRT** + **ICD9CM** upcoming operative procedure timing. | The pipeline computes `upcoming_procedure_hours`. A future operative event within **≤ 72 hours** is treated as pre-op crossmatch / surgical-preparation evidence. | `APPROPRIATE`, final without LLM. |
+| 6 | Did Hb drop fast enough to suggest acute blood loss? | **Lab** prior Hb observations. | The current Hb is compared with the highest prior Hb in each window. Any one trigger is enough: drop **≥ 1.5 g/dL in 6h**, **≥ 2.0 in 12h**, or **≥ 2.5 in 24h**. | `APPROPRIATE`, final without LLM. |
+| 7 | Is this a non-threshold cohort? | Cohort result from ICD-10, MED, Lab ANC, and blood-order/procedure evidence. | `MTP` already exited at step 2 and `UNKNOWN` exited at step 3. In practice this catches active heme malignancy: heme ICD-10 + recent chemo med + ANC < 500. | `NEEDS_REVIEW`, routed to LLM/human review. |
+| 8 | Is Hb below the cohort threshold? | **Lab** current Hb plus cohort threshold. Also checks **MED** crystalloid volume and Hb trend. | If Hb is below threshold, the row is usually appropriate. Two safety checks can stop auto-appropriate: **≥ 2 L crystalloid in prior 4h** means possible hemodilution; isolated Hb < 8 with no prior 24h Hb means no trend. | Usually `APPROPRIATE`; hemodilution or single-low-Hb-no-trend gives `NEEDS_REVIEW`. |
+| 9 | Is Hb in the gray zone? | **Lab** current Hb plus cohort threshold. | Gray zone means **cohort threshold ≤ Hb < 10 g/dL**. The deterministic layer does not make the final clinical call here. | `NEEDS_REVIEW`, routed to LLM/human review. |
+| 10 | Is Hb high, ≥ 10 g/dL? | **Lab** current Hb. | High pre-transfusion Hb is flagged as concerning, but the LLM can look for documented positive evidence before final publication. | `POTENTIALLY_INAPPROPRIATE`, routed to LLM/quote grounding. |
+
+## Cohort assignment checklist
+
+The cohort detector runs before the Hb tier comparison. It uses a separate
+fixed order:
+
+| Cohort check order | Cohort if matched | Data checked | Exact rule |
+| --- | --- | --- | --- |
+| 1 | `UNKNOWN` | Procedure-event join | If procedure events are unavailable (`None`), stop. Do not apply the default 7.0 threshold. |
+| 2 | `MTP` | Blood-order events | In the prior 1 hour: total RBC units ≥ 4, or RBC + FFP + platelets co-ordered. |
+| 3 | `ORTHO_CARDIAC` | **ICD-9-CM procedure** + **ICD-10 diagnosis** | Orthopedic OR procedure within 30 days before the order, using ICD-9-CM procedure prefixes **78**, **79**, or **81**, and cardiac-history ICD-10 prefix **I20-I25** or **I50**. Threshold 8.0. |
+| 4 | `CARDIAC_SURGERY` | **ICD-9-CM procedure** | Cardiac / large-vessel OR procedure within 30 days before the order. ICD-9-CM procedure prefixes **36**, **38**, or **39**. Non-OR cardiac items **894** and **3796** are excluded. Threshold 7.5. |
+| 5 | `ESRD_EPO` | **ICD-10 diagnosis** + **MED** drug text | ESRD diagnosis **N18.5** or **N18.6** plus recent dialysis-context medication within 14 days. Medication keywords include `heparin`, `sevelamer`, `cinacalcet`. Threshold 8.0. |
+| 6 | `HEME_MALIGNANCY_ACTIVE` | **ICD-10 diagnosis** + **MED** drug text + **Lab ANC** | Heme malignancy ICD-10 prefix **C8** or **C9**, plus recent chemo medication within 30 days, plus ANC < 500 cells/uL. No numeric threshold; route to review. |
+| 7 | `DEFAULT` | Fall-through after all above checks | Procedure data is available, but no special cohort matched. Threshold 7.0. |
+
+## Source-to-rule map
+
+- **Lab**: current Hb, prior Hb trend, delta-Hb windows, Hb freshness, ANC for
+  active heme-malignancy context.
+- **ICD-9-CM procedure codes**: cardiac surgery, orthopedic surgery,
+  peri-procedural timing, pre-op crossmatch timing. Procedure rows come from
+  `IPTSUMOPRT`; OR/non-OR status and procedure names come from `ICD9CM`.
+- **ICD-10 diagnosis codes**: cardiac history, ESRD, heme malignancy.
+- **MED**: dialysis-medication signals, chemotherapy-medication signals,
+  and crystalloid volume in the 4 hours before the order.
+- **Blood-order history**: MTP detection from RBC-unit clustering or
+  RBC + FFP + platelet co-ordering.
+
 <AlgorithmDecisionFlow />
 
 <HbTierMatrix />

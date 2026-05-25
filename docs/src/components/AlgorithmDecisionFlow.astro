@@ -2,6 +2,7 @@
 interface Step {
   index: string;
   question: string;
+  evidence: string;
   yes: string;
   route: "Final" | "LLM";
   tone: "ok" | "warn" | "err";
@@ -12,6 +13,7 @@ const steps: Step[] = [
   {
     index: "1",
     question: "No current pre-transfusion Hb?",
+    evidence: "Lab: Hb observations, 7-day lookback",
     yes: "INSUFFICIENT_EVIDENCE",
     route: "Final",
     tone: "warn",
@@ -20,6 +22,7 @@ const steps: Step[] = [
   {
     index: "2",
     question: "Massive-transfusion-protocol cohort?",
+    evidence: "Blood orders: RBC units, FFP, platelets in 1 h",
     yes: "APPROPRIATE",
     route: "Final",
     tone: "ok",
@@ -28,6 +31,7 @@ const steps: Step[] = [
   {
     index: "3",
     question: "Cohort unknown?",
+    evidence: "Procedure join availability",
     yes: "NEEDS_REVIEW",
     route: "LLM",
     tone: "warn",
@@ -36,6 +40,7 @@ const steps: Step[] = [
   {
     index: "4",
     question: "Procedure <= 6 h before order?",
+    evidence: "IPTSUMOPRT + ICD9CM procedure timing",
     yes: "APPROPRIATE",
     route: "Final",
     tone: "ok",
@@ -44,6 +49,7 @@ const steps: Step[] = [
   {
     index: "5",
     question: "Procedure <= 72 h after order?",
+    evidence: "IPTSUMOPRT + ICD9CM upcoming procedure",
     yes: "APPROPRIATE",
     route: "Final",
     tone: "ok",
@@ -52,6 +58,7 @@ const steps: Step[] = [
   {
     index: "6",
     question: "Delta-Hb trigger fired?",
+    evidence: "Lab: prior Hb drop in 6 / 12 / 24 h",
     yes: "APPROPRIATE",
     route: "Final",
     tone: "ok",
@@ -60,6 +67,7 @@ const steps: Step[] = [
   {
     index: "7",
     question: "No numeric threshold for cohort?",
+    evidence: "ICD-10 + MED + ANC for active heme context",
     yes: "NEEDS_REVIEW",
     route: "LLM",
     tone: "warn",
@@ -68,6 +76,7 @@ const steps: Step[] = [
   {
     index: "8",
     question: "Hb < cohort threshold?",
+    evidence: "Lab Hb + cohort threshold + MED crystalloid check",
     yes: "APPROPRIATE unless hemodilution or single-low-Hb-no-trend",
     route: "Final",
     tone: "ok",
@@ -76,6 +85,7 @@ const steps: Step[] = [
   {
     index: "9",
     question: "Threshold <= Hb < 10?",
+    evidence: "Lab Hb + cohort threshold",
     yes: "NEEDS_REVIEW",
     route: "LLM",
     tone: "warn",
@@ -84,6 +94,7 @@ const steps: Step[] = [
   {
     index: "10",
     question: "Hb >= 10?",
+    evidence: "Lab Hb",
     yes: "POTENTIALLY_INAPPROPRIATE",
     route: "LLM",
     tone: "err",
@@ -108,7 +119,10 @@ const steps: Step[] = [
       <li class="algorithm-flow__step">
         <div class="algorithm-flow__node">
           <span class="algorithm-flow__index">{step.index}</span>
-          <span class="algorithm-flow__question">{step.question}</span>
+          <span class="algorithm-flow__node-copy">
+            <span class="algorithm-flow__question">{step.question}</span>
+            <span class="algorithm-flow__evidence">{step.evidence}</span>
+          </span>
         </div>
         <div class="algorithm-flow__branches">
           <div class="algorithm-flow__branch algorithm-flow__branch--yes" data-tone={step.tone}>
@@ -225,6 +239,17 @@ const steps: Step[] = [
   .algorithm-flow__question {
     color: var(--sl-color-white);
     font-weight: 700;
+    line-height: 1.35;
+  }
+
+  .algorithm-flow__node-copy {
+    display: grid;
+    gap: 0.25rem;
+  }
+
+  .algorithm-flow__evidence {
+    color: var(--sl-color-gray-3);
+    font-size: 0.78rem;
     line-height: 1.35;
   }
 
