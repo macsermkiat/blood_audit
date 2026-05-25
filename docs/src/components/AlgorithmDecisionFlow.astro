@@ -1,0 +1,312 @@
+---
+interface Step {
+  index: string;
+  question: string;
+  yes: string;
+  route: "Final" | "LLM";
+  tone: "ok" | "warn" | "err";
+  otherwise: string;
+}
+
+const steps: Step[] = [
+  {
+    index: "1",
+    question: "No current pre-transfusion Hb?",
+    yes: "INSUFFICIENT_EVIDENCE",
+    route: "Final",
+    tone: "warn",
+    otherwise: "Use cohort and bypass evidence",
+  },
+  {
+    index: "2",
+    question: "Massive-transfusion-protocol cohort?",
+    yes: "APPROPRIATE",
+    route: "Final",
+    tone: "ok",
+    otherwise: "Check cohort certainty",
+  },
+  {
+    index: "3",
+    question: "Cohort unknown?",
+    yes: "NEEDS_REVIEW",
+    route: "LLM",
+    tone: "warn",
+    otherwise: "Check procedural bypasses",
+  },
+  {
+    index: "4",
+    question: "Procedure <= 6 h before order?",
+    yes: "APPROPRIATE",
+    route: "Final",
+    tone: "ok",
+    otherwise: "Check pre-op crossmatch",
+  },
+  {
+    index: "5",
+    question: "Procedure <= 72 h after order?",
+    yes: "APPROPRIATE",
+    route: "Final",
+    tone: "ok",
+    otherwise: "Check acute Hb drop",
+  },
+  {
+    index: "6",
+    question: "Delta-Hb trigger fired?",
+    yes: "APPROPRIATE",
+    route: "Final",
+    tone: "ok",
+    otherwise: "Apply cohort threshold",
+  },
+  {
+    index: "7",
+    question: "No numeric threshold for cohort?",
+    yes: "NEEDS_REVIEW",
+    route: "LLM",
+    tone: "warn",
+    otherwise: "Compare Hb to threshold",
+  },
+  {
+    index: "8",
+    question: "Hb < cohort threshold?",
+    yes: "APPROPRIATE unless hemodilution or single-low-Hb-no-trend",
+    route: "Final",
+    tone: "ok",
+    otherwise: "Check gray zone",
+  },
+  {
+    index: "9",
+    question: "Threshold <= Hb < 10?",
+    yes: "NEEDS_REVIEW",
+    route: "LLM",
+    tone: "warn",
+    otherwise: "High-Hb tier",
+  },
+  {
+    index: "10",
+    question: "Hb >= 10?",
+    yes: "POTENTIALLY_INAPPROPRIATE",
+    route: "LLM",
+    tone: "err",
+    otherwise: "Not reachable for valid Hb",
+  },
+];
+---
+
+<figure class="algorithm-flow" aria-labelledby="algorithm-flow-title">
+  <figcaption id="algorithm-flow-title" class="algorithm-flow__caption">
+    Deterministic classifier precedence. The first matching row wins; only
+    `NEEDS_REVIEW` and `POTENTIALLY_INAPPROPRIATE` continue to the LLM path.
+  </figcaption>
+
+  <div class="algorithm-flow__start">
+    <span class="algorithm-flow__eyebrow">Inputs</span>
+    <strong>RBC order + Hb lookup + cohort + procedure timing + crystalloid window</strong>
+  </div>
+
+  <ol class="algorithm-flow__steps">
+    {steps.map((step) => (
+      <li class="algorithm-flow__step">
+        <div class="algorithm-flow__node">
+          <span class="algorithm-flow__index">{step.index}</span>
+          <span class="algorithm-flow__question">{step.question}</span>
+        </div>
+        <div class="algorithm-flow__branches">
+          <div class="algorithm-flow__branch algorithm-flow__branch--yes" data-tone={step.tone}>
+            <span class="algorithm-flow__branch-label">Yes</span>
+            <strong>{step.yes}</strong>
+            <span class="algorithm-flow__route">{step.route}</span>
+          </div>
+          <div class="algorithm-flow__branch algorithm-flow__branch--no">
+            <span class="algorithm-flow__branch-label">No</span>
+            <span>{step.otherwise}</span>
+          </div>
+        </div>
+      </li>
+    ))}
+  </ol>
+
+  <div class="algorithm-flow__footer">
+    <span class="ba-pill ba-pill--ok">Final without LLM</span>
+    <span class="ba-pill ba-pill--warn">LLM review route</span>
+    <span class="ba-pill ba-pill--err">High-Hb concern</span>
+  </div>
+</figure>
+
+<style>
+  .algorithm-flow {
+    margin: 1.5rem 0;
+    padding: 1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    background: var(--sl-color-bg-nav);
+  }
+
+  .algorithm-flow__caption {
+    margin: 0 0 1rem;
+    color: var(--sl-color-gray-2);
+    font-size: 0.95rem;
+    line-height: 1.55;
+  }
+
+  .algorithm-flow__start {
+    display: grid;
+    gap: 0.25rem;
+    padding: 0.875rem 1rem;
+    border: 1px solid var(--sl-color-accent);
+    border-radius: 0.5rem;
+    background: var(--sl-color-accent-low);
+    color: var(--sl-color-white);
+  }
+
+  .algorithm-flow__eyebrow,
+  .algorithm-flow__branch-label,
+  .algorithm-flow__route {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    line-height: 1.35;
+    text-transform: uppercase;
+  }
+
+  .algorithm-flow__eyebrow {
+    color: var(--sl-color-accent-high);
+  }
+
+  .algorithm-flow__steps {
+    display: grid;
+    gap: 0.75rem;
+    margin: 1rem 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .algorithm-flow__step {
+    display: grid;
+    grid-template-columns: minmax(12rem, 0.9fr) minmax(16rem, 1.4fr);
+    gap: 0.75rem;
+    align-items: stretch;
+    position: relative;
+  }
+
+  .algorithm-flow__step + .algorithm-flow__step::before {
+    content: "";
+    position: absolute;
+    top: -0.75rem;
+    left: 1.25rem;
+    width: 1px;
+    height: 0.75rem;
+    background: var(--sl-color-gray-5);
+  }
+
+  .algorithm-flow__node {
+    display: grid;
+    grid-template-columns: 2rem 1fr;
+    gap: 0.625rem;
+    align-items: center;
+    min-height: 4.25rem;
+    padding: 0.75rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    background: var(--sl-color-bg);
+  }
+
+  .algorithm-flow__index {
+    display: inline-grid;
+    place-items: center;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 999px;
+    background: var(--sl-color-gray-6);
+    color: var(--sl-color-accent-high);
+    font-family: var(--ba-font-mono);
+    font-weight: 700;
+  }
+
+  .algorithm-flow__question {
+    color: var(--sl-color-white);
+    font-weight: 700;
+    line-height: 1.35;
+  }
+
+  .algorithm-flow__branches {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 0.82fr);
+    gap: 0.5rem;
+  }
+
+  .algorithm-flow__branch {
+    display: grid;
+    gap: 0.25rem;
+    min-height: 4.25rem;
+    padding: 0.75rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    background: var(--sl-color-bg);
+    color: var(--sl-color-gray-2);
+  }
+
+  .algorithm-flow__branch strong {
+    color: var(--sl-color-white);
+    font-size: 0.93rem;
+    line-height: 1.35;
+  }
+
+  .algorithm-flow__branch--yes[data-tone="ok"] {
+    border-color: oklch(70% 0.10 150);
+    background: oklch(96% 0.025 150);
+  }
+
+  .algorithm-flow__branch--yes[data-tone="warn"] {
+    border-color: oklch(72% 0.11 70);
+    background: oklch(96% 0.035 70);
+  }
+
+  .algorithm-flow__branch--yes[data-tone="err"] {
+    border-color: oklch(70% 0.13 28);
+    background: oklch(96% 0.035 28);
+  }
+
+  :root[data-theme="dark"] .algorithm-flow__branch--yes[data-tone="ok"] {
+    border-color: oklch(55% 0.12 150);
+    background: oklch(24% 0.045 150);
+  }
+
+  :root[data-theme="dark"] .algorithm-flow__branch--yes[data-tone="warn"] {
+    border-color: oklch(56% 0.12 70);
+    background: oklch(25% 0.05 70);
+  }
+
+  :root[data-theme="dark"] .algorithm-flow__branch--yes[data-tone="err"] {
+    border-color: oklch(56% 0.13 28);
+    background: oklch(25% 0.055 28);
+  }
+
+  .algorithm-flow__route {
+    color: var(--sl-color-gray-3);
+  }
+
+  .algorithm-flow__footer {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-top: 1rem;
+  }
+
+  @media (max-width: 50rem) {
+    .algorithm-flow {
+      padding: 0.75rem;
+    }
+
+    .algorithm-flow__step {
+      grid-template-columns: 1fr;
+    }
+
+    .algorithm-flow__branches {
+      grid-template-columns: 1fr;
+    }
+
+    .algorithm-flow__step + .algorithm-flow__step::before {
+      left: 1rem;
+    }
+  }
+</style>

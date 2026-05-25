@@ -42,9 +42,10 @@ around the anchor datetime. Outputs structured vitals records.
 
 ### 5. `bba.cohort_detector`
 
-Classifies each order into Surgery / ICU / Oncology / Medicine using
-procedure-code proximity, ward, and admission service. Cohort drives the
-Hb threshold in the deterministic classifier.
+Assigns the order to a deterministic cohort such as default,
+cardiac-surgery, ortho-cardiac, ESRD-EPO, MTP, active heme malignancy, or
+unknown. The cohort drives the Hb threshold or review route in the
+deterministic classifier.
 
 ### 6. `bba.deterministic_classifier`
 

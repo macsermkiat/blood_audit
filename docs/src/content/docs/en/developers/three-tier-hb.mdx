@@ -3,44 +3,74 @@ title: 3-tier Hb classifier
 description: The deterministic policy that classifies every RBC transfusion order.
 ---
 
+import AlgorithmDecisionFlow from "../../../../components/AlgorithmDecisionFlow.astro";
 import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
 
 The deterministic classifier is the **authoritative** decision layer for
-auto-classified rows. Rule output is one of three Hb-tier labels;
-**both** the `NEEDS_REVIEW` and `POTENTIALLY_INAPPROPRIATE` tiers route
-to the LLM for additional reasoning.
+auto-classified rows. `APPROPRIATE` and `INSUFFICIENT_EVIDENCE` are final
+without an LLM call. `NEEDS_REVIEW` and `POTENTIALLY_INAPPROPRIATE` route
+to the LLM for positive-evidence reasoning and quote grounding.
+
+<AlgorithmDecisionFlow />
 
 <HbTierMatrix />
 
 ## Precedence order (top wins)
 
-The Hb-tier rule is only step 8 in the classifier. Earlier checks can
+The Hb-tier rule is late in the classifier. Earlier checks can
 short-circuit the result:
 
 1. `Hb missing` → `INSUFFICIENT_EVIDENCE`
 2. Cohort `MTP` (massive transfusion protocol) → `APPROPRIATE`
 3. Cohort `UNKNOWN` → `NEEDS_REVIEW`
 4. Peri-procedural anchor ≤ 6h → `APPROPRIATE`
-5. Delta-Hb trigger → `APPROPRIATE`
-6. Hemodilution (Hb < threshold + ≥ 2L crystalloid / 4h) → `NEEDS_REVIEW`
-7. Single-low-Hb-no-trend (isolated Hb < 8 + no prior 24h Hb) → `NEEDS_REVIEW`
-8. Hb-tier rule (the matrix above)
+5. Pre-op crossmatch / upcoming procedure ≤ 72h → `APPROPRIATE`
+6. Delta-Hb trigger → `APPROPRIATE`
+7. Non-threshold cohort → `NEEDS_REVIEW`
+8. Hemodilution (Hb < threshold + ≥ 2L crystalloid / 4h) → `NEEDS_REVIEW`
+9. Single-low-Hb-no-trend (isolated Hb < 8 + no prior 24h Hb) → `NEEDS_REVIEW`
+10. Hb-tier rule (the matrix above)
 
 ## The bypass paths to `APPROPRIATE`
 
-Two bypasses can promote a sub-threshold row to `APPROPRIATE` without
-the Hb-tier rule running:
+Four bypasses can return `APPROPRIATE` before the plain Hb-tier rule:
 
-- **Peri-procedural ≤ 6h** — the order is within 6 hours of an active
+- **MTP cohort** — the massive-transfusion-protocol pattern is already
+  clinically load-bearing enough to stop the deterministic classifier.
+- **Peri-procedural ≤ 6h** — the order is within 6 hours after an active
   surgical or procedural episode.
-- **Delta-Hb trigger** (the "acute-blood-loss override") — a documented
-  delta-Hb meets one of:
+- **Pre-op crossmatch ≤ 72h** — the order is within 72 hours before an
+  upcoming operative event, consistent with surgical preparation.
+- **Delta-Hb trigger** (the acute-blood-loss override) — a documented
+  Hb drop meets one of:
   - ≥ 1.5 g/dL drop within 6 hours
   - ≥ 2.0 g/dL drop within 12 hours
   - ≥ 2.5 g/dL drop within 24 hours
 
+## Review flags before auto-appropriate
+
+Two checks can stop a would-be sub-threshold `APPROPRIATE` row and send it
+to review instead:
+
+- **Hemodilution flagged** — Hb is below threshold, but ≥ 2 L crystalloid
+  in the prior 4 hours makes the Hb value suspect.
+- **Single-low-Hb-no-trend** — an isolated Hb < 8 g/dL has no prior 24-hour
+  Hb trend to confirm the anemia pattern.
+
 Vital signs (low BP, high HR) are **supporting evidence only**. They
 never trigger a bypass on their own and never override the Hb tier.
+
+## Cohort thresholds
+
+| Cohort | Hb threshold for `APPROPRIATE` | Notes |
+| --- | --- | --- |
+| Default | < 7.0 g/dL | Fall-through threshold. |
+| Cardiac surgery | < 7.5 g/dL | Recent cardiac surgery cohort. |
+| Orthopedic + cardiac history | < 8.0 g/dL | Orthopedic procedure plus cardiac-history evidence. |
+| ESRD + dialysis-med signal | < 8.0 g/dL | ESRD diagnosis plus active dialysis-context medication. |
+| MTP | None | Bypasses directly to `APPROPRIATE`. |
+| Active heme malignancy | None | Routes to `NEEDS_REVIEW`; LLM interprets context. |
+| Unknown | None | Routes to `NEEDS_REVIEW`; the classifier refuses to assume a threshold. |
 
 ## Why vitals are not standalone
 
@@ -50,21 +80,12 @@ outside the audit's deterministic scope. Vitals enter the LLM evidence
 bundle when a row routes to the LLM; they do not change the
 deterministic classification.
 
-## Cohort thresholds (typical)
-
-| Cohort | Hb threshold for `APPROPRIATE` |
-| --- | --- |
-| ICU | < 7.0 g/dL |
-| Non-ICU (medicine, surgery, oncology) | < 8.0 g/dL |
-
-Cohort assignment comes from `bba.cohort_detector` and uses procedure-code
-proximity, ward, and admission service.
-
 ## Where this lives in code
 
 - `src/bba/deterministic_classifier/classifier.py` — the rule engine
-  with the full 8-step precedence list.
-- `src/bba/cohort_detector/` — cohort assignment.
+  with the full precedence list.
+- `src/bba/cohort_detector/rules.py` — cohort thresholds and cohort
+  predicate constants.
 - `src/bba/audit_pipeline/pipeline.py` — routes `NEEDS_REVIEW` and
   `POTENTIALLY_INAPPROPRIATE` rule outputs to the LLM stage.
 - Policy text (paraphrased above): see KCMH PR 17.2 and the internal

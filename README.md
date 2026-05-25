@@ -8,7 +8,7 @@ Full requirements: **[PRD — issue #1](https://github.com/macsermkiat/blood_aud
 
 ## What this is (and isn't)
 
-- **Is:** a post-hoc Quality Improvement pipeline. Reads finished HOSxP exports, classifies each RBC unit as `APPROPRIATE` / `LLM_REVIEW` / `POTENTIALLY_INAPPROPRIATE` against the 3-tier Hb policy with cohort-aware thresholds and an acute-blood-loss override.
+- **Is:** a post-hoc Quality Improvement pipeline. Reads finished HOSxP exports, classifies each RBC unit as `APPROPRIATE` / `NEEDS_REVIEW` / `INSUFFICIENT_EVIDENCE` / `POTENTIALLY_INAPPROPRIATE` against the 3-tier Hb policy with cohort-aware thresholds and deterministic bypasses.
 - **Is not:** a real-time clinical decision support tool. Nothing in this codebase is intended to influence a transfusion order at the point of care.
 
 ## Quickstart
@@ -37,7 +37,7 @@ No sample data ships in-repo (PHI exposure risk). The pipeline reads a HOSxP CSV
 # 1. Ingest the HOSxP CSV bundle into DuckDB + Parquet under $BBA_DATA_DIR
 uv run bba ingest /path/to/hosxp_bundle/BDVST.csv
 
-# 2. Run the audit pipeline (deterministic classifier + LLM_REVIEW + quote grounding)
+# 2. Run the audit pipeline (deterministic classifier + LLM review route + quote grounding)
 uv run bba audit --input /path/to/hosxp_bundle/BDVST.csv
 # The pipeline is run-level idempotent: re-running on the same input is a no-op.
 # Use --force to override (writes a compliance row to audit_log).
@@ -100,7 +100,7 @@ evidence_bundle_builder → deid_redactor → prompt_builder → llm_client
 ## Safety & policy notes
 
 - **No live PHI in tests.** Integration tests use mock-AN fixtures; LLM tests replay VCR cassettes from `#22`.
-- **3-tier Hb classifier is authoritative.** Vitals are supporting evidence; the acute-blood-loss override only bypasses the Hb threshold with documented delta-Hb (≥1.5/6h, ≥2/12h, ≥2.5/24h). See [`policy/policy.md`](policy/policy.md).
+- **3-tier Hb classifier is authoritative.** Vitals are supporting evidence only. Deterministic bypasses require structured MTP, procedure-timing, pre-op crossmatch, or delta-Hb evidence. See the docs page [3-tier Hb classifier](docs/src/content/docs/en/developers/three-tier-hb.mdx) for the decision-flow graphic.
 - **Quote-grounding is fail-closed.** The LLM_REVIEW leg's claims are checked against six anti-hallucination layers (NFC + substring + cited_id + within-doc uniqueness + ≥25 chars + numeric-tuple + medical-NLI). Failures route to `hallucination_suspect`, not to a result row.
 - **Run-level idempotency is enforced at the store layer.** `bba audit` cannot accidentally produce two rows for the same `(run_id, encounter_id)` pair.
 

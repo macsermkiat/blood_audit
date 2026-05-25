@@ -23,8 +23,8 @@ module orchestrates them; no other module reaches across stage boundaries.
 | `bba.audit_orders` | Per-(HN, REQNO) RBC filter; hard exclusions (age, products, ICD gates). |
 | `bba.hb_lookup` | Pre-transfusion Hb from the Lab table. |
 | `bba.vitals_extractor` | BP, HR, urine output, temperature from MED + progress notes. |
-| `bba.cohort_detector` | Surgery / ICU / oncology / medicine cohort assignment. |
-| `bba.deterministic_classifier` | 3-tier Hb engine → `APPROPRIATE`, `POTENTIALLY_INAPPROPRIATE`, `LLM_REVIEW`. |
+| `bba.cohort_detector` | Deterministic cohort assignment: default, cardiac-surgery, ortho-cardiac, ESRD-EPO, MTP, active heme malignancy, unknown. |
+| `bba.deterministic_classifier` | 3-tier Hb engine → `APPROPRIATE`, `NEEDS_REVIEW`, `INSUFFICIENT_EVIDENCE`, `POTENTIALLY_INAPPROPRIATE`. |
 | `bba.evidence_bundle_builder` | Structures evidence (unredacted) for the LLM context window. |
 | `bba.deid_redactor` | De-identifies the bundle before any data leaves the audit container. |
 | `bba.prompt_builder` | Few-shot + clinical-history system message. |

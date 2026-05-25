@@ -21,9 +21,9 @@ reads, at minimum:
   timestamp.
 - **MED / progress notes** — free-text source for vital signs and
   acute-blood-loss indicators.
-- **Operative table** — procedure code and timestamp. Used to detect the
-  patient's cohort (surgery, ICU, oncology, medicine) and to check
-  whether the transfusion happened close to a procedure.
+- **Operative table** — procedure code and timestamp. Used to detect
+  cardiac-surgery / ortho-cardiac cohorts, peri-procedural timing, and
+  pre-op crossmatch timing.
 - **ICD-10 / ICD-9-CM** — diagnosis and procedure code reference.
 
 The exact column contract is defined in `src/bba/ingest/`.

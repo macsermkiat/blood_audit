@@ -3,6 +3,7 @@ title: Policy summary
 description: Paraphrased summary of the 3-tier Hb policy applied by the audit. Authoritative text lives in the internal KCMH documents.
 ---
 
+import AlgorithmDecisionFlow from "../../../../components/AlgorithmDecisionFlow.astro";
 import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
 
 :::caution
@@ -22,20 +23,28 @@ defer to those documents in case of conflict.
 
 <HbTierMatrix />
 
-## Acute-blood-loss override
+## Decision flow
 
-The override is the only pathway that bypasses the Hb threshold and only
-when **all** of these are documented:
+<AlgorithmDecisionFlow />
 
-- A procedure-proximal anchor datetime (active surgical or procedural
-  episode).
-- A delta-Hb that meets one of:
+## Bypass and review paths
+
+The plain Hb tier is not the first check. The algorithm first looks for
+high-precedence evidence:
+
+- **MTP cohort** → deterministic `APPROPRIATE`.
+- **Peri-procedural ≤ 6h before order** → deterministic `APPROPRIATE`.
+- **Pre-op crossmatch ≤ 72h after order** → deterministic `APPROPRIATE`.
+- **Delta-Hb trigger** → deterministic `APPROPRIATE` when the Hb drop meets:
   - ≥ 1.5 g/dL drop within 6 hours
   - ≥ 2.0 g/dL drop within 12 hours
   - ≥ 2.5 g/dL drop within 24 hours
+- **Hemodilution or isolated low Hb without trend** → `NEEDS_REVIEW`, not
+  auto-appropriate.
+- **Unknown or non-threshold cohort** → `NEEDS_REVIEW`.
 
 Vital-sign abnormalities alone (low BP, tachycardia) do not trigger the
-override.
+bypass.
 
 ## Exclusions baked into the audit
 

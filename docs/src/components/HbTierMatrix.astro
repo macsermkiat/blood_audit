@@ -14,10 +14,10 @@ interface Props {
 const defaultTiers: Tier[] = [
   {
     label: "Tier 1",
-    range: "Hb < cohort threshold (e.g. < 7 g/dL ICU · < 8 g/dL non-ICU)",
+    range: "Hb < cohort threshold (7.0 default · 7.5 cardiac surgery · 8.0 selected cohorts)",
     ruleOutput: "APPROPRIATE",
     routes: "auto-classify",
-    rule: "Below cohort threshold. Auto-classified appropriate unless a higher-precedence bypass already fired (MTP cohort, peri-procedural ≤ 6h, delta-Hb trigger, hemodilution, or single-low-Hb-no-trend).",
+    rule: "Below cohort threshold. Auto-classified appropriate unless hemodilution or single-low-Hb-no-trend sends the row to review. Higher-precedence bypasses may already have stopped the classifier.",
   },
   {
     label: "Tier 2",
@@ -80,8 +80,8 @@ const tierNumber = (label: string) => label.replace(/[^0-9]/g, "") || "—";
   </div>
   <p class="hb-matrix__note">
     Vitals (BP, HR, urine output, temperature) are <strong>supporting evidence only</strong>.
-    They never override the Hb-based tier on their own. The acute-blood-loss override is
-    the only path that bypasses the Hb threshold, and only with documented delta-Hb.
+    They never override the Hb-based tier on their own. Deterministic bypasses require
+    structured MTP, procedure-timing, pre-op crossmatch, or delta-Hb evidence.
   </p>
 </section>
 
