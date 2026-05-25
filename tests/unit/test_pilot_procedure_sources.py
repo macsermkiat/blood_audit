@@ -7,9 +7,7 @@ from types import ModuleType
 
 
 def _load_run_pipeline() -> ModuleType:
-    path = (
-        Path(__file__).resolve().parents[2] / "scripts" / "pilot" / "run_pipeline.py"
-    )
+    path = Path(__file__).resolve().parents[2] / "scripts" / "pilot" / "run_pipeline.py"
     spec = importlib.util.spec_from_file_location("pilot_run_pipeline", path)
     assert spec is not None
     assert spec.loader is not None

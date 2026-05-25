@@ -612,10 +612,9 @@ def _incpt_evidence_chunks(
             )
             if c
         ]
-        optract_name = (
-            (optract.get("NAME EN") or "").strip()
-            or (optract.get("NAME") or "").strip()
-        )
+        optract_name = (optract.get("NAME EN") or "").strip() or (
+            optract.get("NAME") or ""
+        ).strip()
         group_name = (r.get("INCGRP → NAME") or "").strip()
         hours = (dt - anchor).total_seconds() / 3600.0
         text = (
