@@ -47,6 +47,8 @@ class BypassReason(StrEnum):
       a recent window (PRD §3 + Round 2 E3).
     * :attr:`PERI_PROCEDURAL_6H` — an operative procedure was performed in
       the 6 h before the order anchor.
+    * :attr:`PRE_OP_CROSSMATCH` — an operative procedure is scheduled soon
+      after the order anchor, consistent with a pre-op crossmatch.
     * :attr:`MTP` — cohort detector flagged the massive-transfusion-protocol
       cluster (≥4 RBC units in 1 h, or RBC + FFP + platelets co-ordered).
     * :attr:`HEMODILUTION_FLAGGED` — Hb is sub-threshold but ≥2 L of
@@ -59,6 +61,7 @@ class BypassReason(StrEnum):
 
     DELTA_HB = "delta_hb"
     PERI_PROCEDURAL_6H = "peri_procedural_6h"
+    PRE_OP_CROSSMATCH = "pre_op_crossmatch"
     MTP = "mtp"
     HEMODILUTION_FLAGGED = "hemodilution_flagged"
     NONE = "none"
@@ -81,6 +84,10 @@ class ClassifierInputs(BaseModel):
       ``0.0`` (procedure at the same instant). Procedures in the future
       relative to the order ARE ignored upstream (the orchestrator filters).
 
+    * ``upcoming_procedure_hours`` is the elapsed hours from the order
+      anchor to the next operative event. ``None`` means no future
+      operative event was found in the caller's lookahead window.
+
     * ``crystalloid_liters_prior_4h`` is the 4-h totaling output. ``0.0``
       means "no crystalloid in window OR data unavailable but the caller
       asserts the 4-h check is N/A". The hemodilution rule only fires
@@ -98,6 +105,7 @@ class ClassifierInputs(BaseModel):
     cohort_assignment: CohortAssignment
     order_datetime: AwareDatetime
     procedure_proximity_hours: float | None
+    upcoming_procedure_hours: float | None = None
     crystalloid_liters_prior_4h: float = Field(ge=0.0)
 
 
@@ -110,7 +118,7 @@ class ClassifierResult(BaseModel):
 
     ``bypass_reason`` is :attr:`BypassReason.NONE` whenever the result was
     produced by the plain Hb-tier rule (Hb < threshold, threshold ≤ Hb <
-    10, Hb ≥ 10, or Hb missing). Otherwise it identifies which of the four
+    10, Hb ≥ 10, or Hb missing). Otherwise it identifies which of the five
     bypass pathways fired.
 
     ``cohort_threshold`` carries the threshold actually used; ``None``
@@ -120,7 +128,8 @@ class ClassifierResult(BaseModel):
 
     ``rationale`` is a short slug identifying which rule fired
     (``"hb_lt_threshold"``, ``"hb_7_to_10"``, ``"hb_ge_10"``, ``"hb_missing"``,
-    ``"bypass_delta_hb"``, ``"bypass_peri_procedural"``, ``"bypass_mtp"``,
+    ``"bypass_delta_hb"``, ``"bypass_peri_procedural"``,
+    ``"bypass_pre_op_crossmatch"``, ``"bypass_mtp"``,
     ``"bypass_hemodilution"``, ``"cohort_unknown"``). Free-form prose
     summaries are produced by the LLM stage, not here.
     """

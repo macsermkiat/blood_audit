@@ -93,6 +93,7 @@ REPORT_FIELDNAMES = [
     "cohort_evidence_code",
     "cohort_evidence_name",
     "procedure_proximity_hours",
+    "upcoming_procedure_hours",
     "crystalloid_liters_prior_4h",
     "anc_value",
     "transfusion_datetime_local",
@@ -211,12 +212,14 @@ def _latest_anc(
 
 def _build_op_events(
     iptsumoprt: list[dict[str, str]],
+    ipddchsumoprt: list[dict[str, str]],
     incpt: list[dict[str, str]],
+    optract_dict: dict[str, dict[str, str]],
     icd9_dict: dict[str, dict[str, str]],
     an: str,
 ) -> tuple[OperativeEvent, ...]:
     out: list[OperativeEvent] = []
-    for r in iptsumoprt:
+    for r in [*iptsumoprt, *ipddchsumoprt]:
         if r.get("AN") != an:
             continue
         icd9 = (r.get("ICD9CM") or "").strip().replace(".", "")
@@ -235,12 +238,16 @@ def _build_op_events(
         if dt is None:
             continue
         meta = icd9_dict.get(icd9, {})
+        text_name = (r.get("OPRTTEXT") or "").strip()
         out.append(
             OperativeEvent(
                 icd9=icd9,
-                or_flag=(meta.get("ORFLAG") or "").strip() == "1",
+                or_flag=(
+                    (r.get("ORFLAG") or "").strip() == "1"
+                    or (meta.get("ORFLAG") or "").strip() == "1"
+                ),
                 operative_datetime=dt,
-                name=(meta.get("NAME") or "").strip() or None,
+                name=text_name or (meta.get("NAME") or "").strip() or None,
             )
         )
     for r in incpt:
@@ -252,6 +259,16 @@ def _build_op_events(
             continue
         code = (r.get("INCOME") or r.get("ORDERCODE") or "").strip()
         source_code = code or "UNMAPPED"
+        optract = optract_dict.get(source_code, {})
+        optract_codes = tuple(
+            c
+            for c in (
+                (optract.get("ICD9CM") or "").strip().replace(".", ""),
+                (optract.get("ICD9CMADD1") or "").strip().replace(".", ""),
+                (optract.get("ICD9CMADD2") or "").strip().replace(".", ""),
+            )
+            if c
+        )
         incdate = r.get("INCDATE")
         if isinstance(incdate, date):
             d = incdate
@@ -269,15 +286,33 @@ def _build_op_events(
         if dt is None:
             continue
         group = (r.get("INCGRP") or "").strip()
+        fallback_name = f"INCPT charge group {group}" if group else "INCPT charge"
+        optract_name = (
+            (optract.get("NAME EN") or "").strip()
+            or (optract.get("NAME") or "").strip()
+            or None
+        )
+        if optract_codes:
+            for optract_code in optract_codes:
+                meta = icd9_dict.get(optract_code, {})
+                out.append(
+                    OperativeEvent(
+                        icd9=optract_code,
+                        or_flag=(meta.get("ORFLAG") or "").strip() == "1",
+                        operative_datetime=dt,
+                        name=optract_name or (meta.get("NAME") or "").strip() or None,
+                    )
+                )
+            continue
         out.append(
             OperativeEvent(
-                # INCPT carries charge/income codes, not ICD-9-CM procedure
-                # codes. Keep it in the operation-timing stream, but make it
-                # ineligible for ICD-9 prefix cohort rules.
+                # INCPT without an OPRTACT ICD-9 bridge still carries useful
+                # operation timing, but remains ineligible for ICD-9 prefix
+                # cohort rules.
                 icd9=f"INCPT:{source_code}",
                 or_flag=False,
                 operative_datetime=dt,
-                name=f"INCPT charge group {group}" if group else "INCPT charge",
+                name=optract_name or fallback_name,
             )
         )
     return tuple(out)
@@ -345,6 +380,16 @@ def _normalize_incpt(raw: list[dict[str, str]]) -> list[dict[str, str]]:
     return out
 
 
+def _normalize_optract(raw: list[dict[str, str]]) -> dict[str, dict[str, str]]:
+    out: dict[str, dict[str, str]] = {}
+    for r in raw:
+        upper = {k.upper(): v for k, v in r.items()}
+        code = (upper.get("OPRTACT") or "").strip()
+        if code:
+            out[code] = upper
+    return out
+
+
 def main() -> None:
     if not BUNDLE.exists():
         sys.exit(f"bundle not found: {BUNDLE} (run sample_bundle.py first)")
@@ -355,7 +400,9 @@ def main() -> None:
     lab = _read_csv("Lab.csv")
     med = _read_csv("Med.csv")
     iptsumoprt = _normalize_iptsumoprt(_read_csv("IPTSUMOPRT.csv"))
+    ipddchsumoprt = _normalize_iptsumoprt(_read_optional_csv("IPDDCHSUMOPRT.csv"))
     incpt = _normalize_incpt(_read_optional_csv("INCPT.csv"))
+    optract_dict = _normalize_optract(_read_optional_csv("OPRTACT.csv"))
     icd9 = _read_csv("ICD9CM.csv")
     icd9_dict = {
         (r.get("Icd9cm") or "").strip().replace(".", ""): {
@@ -439,7 +486,9 @@ def main() -> None:
     for order in filter_result.included:
         hb_obs = _build_hb_observations(lab, order.an)
         hb = lookup_hb(observations=hb_obs, anchor_utc=order.order_datetime)
-        op_events = _build_op_events(iptsumoprt, incpt, icd9_dict, order.an)
+        op_events = _build_op_events(
+            iptsumoprt, ipddchsumoprt, incpt, optract_dict, icd9_dict, order.an
+        )
         med_events = _build_med_events(med, order.an)
         crystalloid_events = tuple(m for m in med_events if _is_crystalloid(m.drug))
         crystalloid_liters = total_crystalloid_liters(
@@ -473,6 +522,18 @@ def main() -> None:
             if prior_ops
             else None
         )
+        upcoming_ops = [
+            o for o in op_events if o.operative_datetime >= order.order_datetime
+        ]
+        upcoming_h = (
+            (
+                min(upcoming_ops, key=lambda o: o.operative_datetime).operative_datetime
+                - order.order_datetime
+            ).total_seconds()
+            / 3600.0
+            if upcoming_ops
+            else None
+        )
 
         clf = classify(
             ClassifierInputs(
@@ -481,6 +542,7 @@ def main() -> None:
                 cohort_assignment=cohort,
                 order_datetime=order.order_datetime,
                 procedure_proximity_hours=proximity_h,
+                upcoming_procedure_hours=upcoming_h,
                 crystalloid_liters_prior_4h=crystalloid_liters,
             )
         )
@@ -512,6 +574,7 @@ def main() -> None:
                 "cohort_evidence_code": cohort.evidence_code,
                 "cohort_evidence_name": cohort.evidence_name,
                 "procedure_proximity_hours": proximity_h,
+                "upcoming_procedure_hours": upcoming_h,
                 "crystalloid_liters_prior_4h": crystalloid_liters,
                 "anc_value": anc,
                 "transfusion_datetime_local": use_dt_by_reqno.get(order.reqno, ""),

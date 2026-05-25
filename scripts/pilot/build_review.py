@@ -305,11 +305,13 @@ def main() -> None:
     lab = _read("Lab.csv")
     med = _read("Med.csv")
     iptsumoprt = _read("IPTSUMOPRT.csv")
+    ipddchsumoprt = _read_optional("IPDDCHSUMOPRT.csv")
     icd9 = _read("ICD9CM.csv")
     bdvstst_dict_rows = _read("BDVSTST.csv")
     progress = _read("IPDADMPROGRESS.csv")
     focus = _read("IPDNRFOCUSDT.csv")
     incpt = _read_optional("INCPT.csv")
+    optract = _read_optional("OPRTACT.csv")
 
     icd9_dict = {
         (r.get("Icd9cm") or "").strip().replace(".", ""): (r.get("Name") or "").strip()
@@ -318,6 +320,11 @@ def main() -> None:
     bdvstst_dict: dict[str, str] = {
         (r.get("BDVSTST") or "").strip(): (r.get("NAME") or "").strip()
         for r in bdvstst_dict_rows
+    }
+    optract_dict = {
+        _field(r, "Oprtact", "OPRTACT").strip(): r
+        for r in optract
+        if _field(r, "Oprtact", "OPRTACT").strip()
     }
 
     icd10_dict = load_icd10_dict()
@@ -440,27 +447,33 @@ def main() -> None:
         med_rows.sort(key=lambda r: (r["PRSCDATE"], r["PRSCTIME"]), reverse=True)
 
         proc_rows: list[dict[str, str]] = []
-        for r in iptsumoprt:
-            if _field(r, "An", "AN") != an:
-                continue
-            pdate = parse_iptsumoprt_date(_field(r, "Indate", "INDATE"))
-            if not _in_proc_window(pdate):
-                continue
-            code = _field(r, "Icd9cm", "ICD9CM").strip().replace(".", "")
-            proc_rows.append(
-                {
-                    "Source": "IPTSUMOPRT",
-                    "ICD9CM": code,
-                    "Name": icd9_dict.get(code, ""),
-                    "INDATE": _field(r, "Indate", "INDATE"),
-                    "INTIME": fmt_time(_field(r, "Intime", "INTIME")),
-                    "OUTDATE": _field(r, "Outdate", "OUTDATE"),
-                    "OUTTIME": fmt_time(_field(r, "Outtime", "OUTTIME")),
-                    "ORFLAG": _field(r, "Orflag", "ORFLAG"),
-                    "INCOME": "",
-                    "INCGRP": "",
-                }
-            )
+        for source, rows in (
+            ("IPTSUMOPRT", iptsumoprt),
+            ("IPDDCHSUMOPRT", ipddchsumoprt),
+        ):
+            for r in rows:
+                if _field(r, "An", "AN") != an:
+                    continue
+                pdate = parse_iptsumoprt_date(_field(r, "Indate", "INDATE"))
+                if not _in_proc_window(pdate):
+                    continue
+                code = _field(r, "Icd9cm", "ICD9CM").strip().replace(".", "")
+                proc_text = _field(r, "Oprttext", "OPRTTEXT").strip()
+                proc_rows.append(
+                    {
+                        "Source": source,
+                        "ICD9CM": code,
+                        "OPRTACT": "",
+                        "Name": proc_text or icd9_dict.get(code, ""),
+                        "INDATE": _field(r, "Indate", "INDATE"),
+                        "INTIME": fmt_time(_field(r, "Intime", "INTIME")),
+                        "OUTDATE": _field(r, "Outdate", "OUTDATE"),
+                        "OUTTIME": fmt_time(_field(r, "Outtime", "OUTTIME")),
+                        "ORFLAG": _field(r, "Orflag", "ORFLAG"),
+                        "INCOME": "",
+                        "INCGRP": "",
+                    }
+                )
         for r in incpt:
             if _field(r, "An", "AN") != an:
                 continue
@@ -472,17 +485,35 @@ def main() -> None:
             pdate = parse_iptsumoprt_date(_field(r, "Incdate", "INCDATE"))
             if not _in_proc_window(pdate):
                 continue
+            income = _field(r, "Income", "INCOME").strip()
+            ordercode = _field(r, "Ordercode", "ORDERCODE").strip()
+            op_map = optract_dict.get(income) or optract_dict.get(ordercode) or {}
+            op_name = (
+                _field(op_map, "Name En", "NAME EN").strip()
+                or _field(op_map, "Name", "NAME").strip()
+                or _field(r, "Incgrp → Name", "INCGRP → NAME").strip()
+            )
+            op_codes = [
+                c.strip().replace(".", "")
+                for c in (
+                    _field(op_map, "Icd9cm", "ICD9CM"),
+                    _field(op_map, "Icd9cmadd1", "ICD9CMADD1"),
+                    _field(op_map, "Icd9cmadd2", "ICD9CMADD2"),
+                )
+                if c.strip()
+            ]
             proc_rows.append(
                 {
                     "Source": "INCPT",
-                    "ICD9CM": "",
-                    "Name": _field(r, "Incgrp → Name", "INCGRP → NAME").strip(),
+                    "ICD9CM": ",".join(op_codes),
+                    "OPRTACT": income or ordercode,
+                    "Name": op_name,
                     "INDATE": _field(r, "Incdate", "INCDATE"),
                     "INTIME": fmt_time(_field(r, "Inctime", "INCTIME")),
                     "OUTDATE": "",
                     "OUTTIME": "",
                     "ORFLAG": "",
-                    "INCOME": _field(r, "Income", "INCOME").strip(),
+                    "INCOME": income,
                     "INCGRP": incgrp,
                 }
             )
@@ -562,6 +593,7 @@ def main() -> None:
             f"({esc(det.get('hb_freshness') or '—')}, source {esc(det.get('hb_source') or '—')})</div>",
             f"<div><b>Cohort:</b> {esc(det.get('cohort_label') or '—')} "
             f"(threshold {esc(det.get('cohort_threshold') or 'n/a')})</div>",
+            f"<div><b>Upcoming procedure:</b> {esc(det.get('upcoming_procedure_hours') or '—')} h</div>",
             "</div>",
         ]
 
@@ -747,7 +779,7 @@ def main() -> None:
             else "(no anchor)"
         )
         parts.append(
-            f"<details open><summary>Procedures — IPTSUMOPRT + INCPT "
+            f"<details open><summary>Procedures — IPTSUMOPRT + IPDDCHSUMOPRT + INCPT "
             f"({len(proc_rows)} rows, AN-scoped, ±1 week window "
             f"{proc_window_str})</summary>"
         )
@@ -757,6 +789,7 @@ def main() -> None:
                 [
                     "Source",
                     "ICD9CM",
+                    "OPRTACT",
                     "INCOME",
                     "Name",
                     "INDATE",

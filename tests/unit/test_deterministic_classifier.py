@@ -80,6 +80,7 @@ from bba.deterministic_classifier import (
     HB_GT_10_THRESHOLD,
     HEMODILUTION_CRYSTALLOID_LITERS,
     PERI_PROCEDURAL_WINDOW_HOURS,
+    PRE_OP_CROSSMATCH_WINDOW_HOURS,
     BypassReason,
     ClassifierInputs,
     ClassifierResult,
@@ -201,6 +202,7 @@ def _inputs(
     hb: HbLookupResult,
     cohort: CohortAssignment,
     procedure_proximity_hours: float | None = None,
+    upcoming_procedure_hours: float | None = None,
     crystalloid_liters_prior_4h: float = 0.0,
 ) -> ClassifierInputs:
     return ClassifierInputs(
@@ -209,6 +211,7 @@ def _inputs(
         cohort_assignment=cohort,
         order_datetime=ORDER_DT,
         procedure_proximity_hours=procedure_proximity_hours,
+        upcoming_procedure_hours=upcoming_procedure_hours,
         crystalloid_liters_prior_4h=crystalloid_liters_prior_4h,
     )
 
@@ -333,7 +336,7 @@ class TestHbTierByCohort:
 
 
 class TestBypassPathways:
-    """Each of the four deterministic bypass pathways fires correctly."""
+    """Each deterministic bypass pathway fires correctly."""
 
     def test_mtp_cohort_bypasses_to_appropriate(self) -> None:
         """MTP cohort → APPROPRIATE with bypass_reason=MTP, regardless of
@@ -385,6 +388,43 @@ class TestBypassPathways:
         )
         assert result.classification == "APPROPRIATE"
         assert result.bypass_reason == BypassReason.PERI_PROCEDURAL_6H
+
+    def test_pre_op_crossmatch_within_72h_bypasses(self) -> None:
+        """Procedure ≤ 72 h after order → APPROPRIATE,
+        bypass_reason=PRE_OP_CROSSMATCH."""
+        result = classify(
+            _inputs(
+                hb=_hb(12.2),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                upcoming_procedure_hours=68.0,
+            )
+        )
+        assert result.classification == "APPROPRIATE"
+        assert result.bypass_reason == BypassReason.PRE_OP_CROSSMATCH
+
+    def test_pre_op_crossmatch_outside_72h_does_not_bypass(self) -> None:
+        """Procedure > 72 h after order → no pre-op bypass."""
+        result = classify(
+            _inputs(
+                hb=_hb(12.2),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                upcoming_procedure_hours=PRE_OP_CROSSMATCH_WINDOW_HOURS + 0.5,
+            )
+        )
+        assert result.classification == "POTENTIALLY_INAPPROPRIATE"
+        assert result.bypass_reason == BypassReason.NONE
+
+    def test_pre_op_crossmatch_at_exact_boundary_bypasses(self) -> None:
+        """A procedure exactly 72 h after the order is a pre-op crossmatch."""
+        result = classify(
+            _inputs(
+                hb=_hb(12.2),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                upcoming_procedure_hours=PRE_OP_CROSSMATCH_WINDOW_HOURS,
+            )
+        )
+        assert result.classification == "APPROPRIATE"
+        assert result.bypass_reason == BypassReason.PRE_OP_CROSSMATCH
 
     def test_delta_hb_bypass_fires(self) -> None:
         """Delta-Hb trigger fired → APPROPRIATE, bypass_reason=DELTA_HB."""
@@ -489,6 +529,12 @@ class TestB2InvariantProperty:
                 min_value=0.0, max_value=72.0, allow_nan=False, allow_infinity=False
             ),
         ),
+        upcoming_procedure_hours=st.one_of(
+            st.none(),
+            st.floats(
+                min_value=0.0, max_value=120.0, allow_nan=False, allow_infinity=False
+            ),
+        ),
         crystalloid_liters=st.floats(
             min_value=0.0, max_value=5.0, allow_nan=False, allow_infinity=False
         ),
@@ -499,6 +545,7 @@ class TestB2InvariantProperty:
         hb_value: float,
         threshold: float,
         procedure_proximity_hours: float | None,
+        upcoming_procedure_hours: float | None,
         crystalloid_liters: float,
         delta_bypass: bool,
     ) -> None:
@@ -507,6 +554,7 @@ class TestB2InvariantProperty:
                 hb=_hb(hb_value, delta_bypass=delta_bypass),
                 cohort=_cohort(CohortLabel.DEFAULT, threshold),
                 procedure_proximity_hours=procedure_proximity_hours,
+                upcoming_procedure_hours=upcoming_procedure_hours,
                 crystalloid_liters_prior_4h=crystalloid_liters,
             )
         )
@@ -600,6 +648,14 @@ class TestBypassReasonDistinct:
             )
         )
         # Delta-Hb
+        pre_op = classify(
+            _inputs(
+                hb=_hb(8.5),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                upcoming_procedure_hours=12.0,
+            )
+        )
+        # Delta-Hb
         delta = classify(
             _inputs(
                 hb=_hb(8.5, delta_bypass=True),
@@ -617,12 +673,14 @@ class TestBypassReasonDistinct:
         reasons = {
             mtp.bypass_reason,
             peri.bypass_reason,
+            pre_op.bypass_reason,
             delta.bypass_reason,
             hemo.bypass_reason,
         }
         assert reasons == {
             BypassReason.MTP,
             BypassReason.PERI_PROCEDURAL_6H,
+            BypassReason.PRE_OP_CROSSMATCH,
             BypassReason.DELTA_HB,
             BypassReason.HEMODILUTION_FLAGGED,
         }

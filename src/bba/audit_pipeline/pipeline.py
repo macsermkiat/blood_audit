@@ -539,6 +539,7 @@ def _classifier_inputs_for(context: PipelineRowContext) -> ClassifierInputs:
         cohort_assignment=context.cohort_assignment,
         order_datetime=context.order.order_datetime,
         procedure_proximity_hours=context.procedure_proximity_hours,
+        upcoming_procedure_hours=context.upcoming_procedure_hours,
         crystalloid_liters_prior_4h=context.crystalloid_liters_prior_4h,
     )
 

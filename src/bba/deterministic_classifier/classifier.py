@@ -1,23 +1,24 @@
 """Top-level deterministic classification entry point (issue #8).
 
 The single public function :func:`classify` is the deterministic composition
-over the Hb-tier rules + four bypass pathways. Precedence (top wins) is
+over the Hb-tier rules + five bypass pathways. Precedence (top wins) is
 specified in PRD §"Implementation Decisions §6":
 
 1. Hb missing                       → ``INSUFFICIENT_EVIDENCE`` (no bypass)
 2. Cohort ``MTP``                   → ``APPROPRIATE`` (``bypass_reason=mtp``)
 3. Cohort ``UNKNOWN``               → ``NEEDS_REVIEW`` (no bypass; user constraint #9)
 4. Bypass: peri-procedural ≤ 6 h    → ``APPROPRIATE`` (``bypass_reason=peri_procedural_6h``)
-5. Bypass: delta-Hb trigger fired   → ``APPROPRIATE`` (``bypass_reason=delta_hb``)
-6. Hemodilution: Hb < threshold AND ≥ 2 L crystalloid in 4 h
+5. Bypass: pre-op crossmatch ≤ 72 h → ``APPROPRIATE`` (``bypass_reason=pre_op_crossmatch``)
+6. Bypass: delta-Hb trigger fired   → ``APPROPRIATE`` (``bypass_reason=delta_hb``)
+7. Hemodilution: Hb < threshold AND ≥ 2 L crystalloid in 4 h
                                     → ``NEEDS_REVIEW`` (``bypass_reason=hemodilution_flagged``)
-7. Single-low-Hb-no-trend: Hb < threshold AND ``needs_review_single_low_hb``
+8. Single-low-Hb-no-trend: Hb < threshold AND ``needs_review_single_low_hb``
                                     → ``NEEDS_REVIEW`` (``bypass_reason=none``;
                                        isolated Hb < 8 with no prior 24 h
                                        observation cannot be interpreted as
                                        confirmed anemia without a trend —
                                        PR #52 Codex P1 + hb_lookup contract)
-8. Plain Hb-tier rule:
+9. Plain Hb-tier rule:
    - Hb < ``cohort_threshold``       → ``APPROPRIATE``
    - ``cohort_threshold`` ≤ Hb < 10  → ``NEEDS_REVIEW``
    - Hb ≥ 10                         → ``POTENTIALLY_INAPPROPRIATE``
@@ -53,6 +54,10 @@ is ``POTENTIALLY_INAPPROPRIATE`` (LLM may override on positive evidence)."""
 PERI_PROCEDURAL_WINDOW_HOURS: float = 6.0
 """PRD §6 peri-procedural bypass window (hours). A procedure within this
 many hours BEFORE the order anchor auto-bypasses to ``APPROPRIATE``."""
+
+PRE_OP_CROSSMATCH_WINDOW_HOURS: float = 72.0
+"""Pre-op crossmatch bypass window (hours). A procedure within this many
+hours AFTER the order anchor is treated as surgical-preparation evidence."""
 
 HEMODILUTION_CRYSTALLOID_LITERS: float = 2.0
 """PRD §6 + Round 1 B5: ≥ 2 L of crystalloid in the prior 4 h marks the
@@ -117,7 +122,18 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
             rationale="bypass_peri_procedural",
         )
 
-    # 5. Delta-Hb bypass — at least one window in the HbLookupResult
+    # 5. Pre-op crossmatch bypass — upcoming procedure within 72 h after
+    #    the order anchor. This catches blood ordered ahead of surgery.
+    upcoming = inputs.upcoming_procedure_hours
+    if upcoming is not None and upcoming <= PRE_OP_CROSSMATCH_WINDOW_HOURS:
+        return ClassifierResult(
+            classification="APPROPRIATE",
+            bypass_reason=BypassReason.PRE_OP_CROSSMATCH,
+            cohort_threshold=threshold,
+            rationale="bypass_pre_op_crossmatch",
+        )
+
+    # 6. Delta-Hb bypass — at least one window in the HbLookupResult
     #    fired its tiered threshold (PRD §3 + Round 2 E3).
     if hb.delta_hb_bypass:
         return ClassifierResult(
@@ -188,5 +204,6 @@ __all__ = (
     "HB_GT_10_THRESHOLD",
     "HEMODILUTION_CRYSTALLOID_LITERS",
     "PERI_PROCEDURAL_WINDOW_HOURS",
+    "PRE_OP_CROSSMATCH_WINDOW_HOURS",
     "classify",
 )

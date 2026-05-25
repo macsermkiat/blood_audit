@@ -141,7 +141,7 @@ class PipelineRowContext(BaseModel):
     * :class:`bba.vitals_extractor.VitalsResult` — ±6 h vitals window.
     * :class:`bba.cohort_detector.CohortAssignment` — cohort label +
       numeric threshold.
-    * Procedure proximity + crystalloid totals — derived from
+    * Procedure proximity/lookahead + crystalloid totals — derived from
       IPTSUMOPRT / MED joins, feed the bypass rules.
     * Hashed identity (``hn_hash`` / ``an_hash``) — the de-identified
       surface that persists on :class:`bba.audit_store.AuditRow`.
@@ -164,6 +164,7 @@ class PipelineRowContext(BaseModel):
     vitals_result: VitalsResult
     cohort_assignment: CohortAssignment
     procedure_proximity_hours: float | None
+    upcoming_procedure_hours: float | None = None
     crystalloid_liters_prior_4h: float = Field(ge=0.0)
 
     hn_hash: str = Field(min_length=1)

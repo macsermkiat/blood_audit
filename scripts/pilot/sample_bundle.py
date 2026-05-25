@@ -42,6 +42,7 @@ SRC = Path(
         ),
     )
 )
+RAW_SRC = SRC.parent / "raw"
 WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
 DST = WORK / "bundle"
 N = int(os.environ.get("BBA_PILOT_SAMPLE_N", "10"))
@@ -109,6 +110,23 @@ def _copy(src_name: str, dst_name: str) -> int:
             n += 1
     print(f"  {src_name:32s} -> {dst_name:24s} {n - 1:>8d} rows")
     return n - 1
+
+
+def _copy_first_available(src_names: tuple[Path, ...], dst_name: str) -> int:
+    for src_path in src_names:
+        if not src_path.exists():
+            continue
+        n = 0
+        with (
+            src_path.open(encoding="utf-8", newline="") as fin,
+            (DST / dst_name).open("w", encoding="utf-8", newline="") as fout,
+        ):
+            for line in fin:
+                fout.write(line)
+                n += 1
+        print(f"  {src_path.name:32s} -> {dst_name:24s} {n - 1:>8d} rows")
+        return n - 1
+    return 0
 
 
 def main() -> None:
@@ -179,6 +197,12 @@ def main() -> None:
         "IPTSUMOPRT.csv",
         lambda r: (r.get("An") or r.get("AN")) in sample_ans,
     )
+    if (SRC / "IPDDCHSUMOPRT.csv").exists():
+        _filter(
+            "IPDDCHSUMOPRT.csv",
+            "IPDDCHSUMOPRT.csv",
+            lambda r: (r.get("An") or r.get("AN")) in sample_ans,
+        )
     if (SRC / "INCPT.csv").exists():
         _filter(
             "INCPT.csv",
@@ -189,6 +213,10 @@ def main() -> None:
     _copy("BDTYPE.csv", "BDTYPE.csv")
     _copy("BDVSTST.csv", "BDVSTST.csv")
     _copy("ICD9CM.csv", "ICD9CM.csv")
+    _copy_first_available(
+        (SRC / "OPRTACT.csv", RAW_SRC / "OPRTACT.csv"),
+        "OPRTACT.csv",
+    )
 
     manifest = WORK / "sample_manifest.csv"
     with manifest.open("w", encoding="utf-8") as fh:
