@@ -5,8 +5,11 @@ description: What the QI committee sees — six CSV sections plus a PDF summary.
 
 import AtAGlance from "../../../../components/AtAGlance.astro";
 
-The audit pipeline produces a monthly report whose authoritative schema
-lives in
+In Phase 1 this page describes the intended report output. The `bba report`
+CLI path still depends on deployment-specific `ReportInputs` wiring before
+it can produce these artifacts end to end.
+
+The audit pipeline's monthly report schema lives in
 [`docs/report-schema.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/report-schema.md).
 A summary appears below; for the column-by-column contract, see the
 source file.

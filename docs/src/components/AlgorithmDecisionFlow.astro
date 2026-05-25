@@ -23,20 +23,20 @@ const englishSteps: Step[] = [
   },
   {
     index: "2",
-    question: "Massive-transfusion-protocol cohort?",
-    evidence: "Blood orders: RBC units, FFP, platelets in 1 h",
-    yes: "APPROPRIATE",
-    route: "Final",
-    tone: "ok",
-    otherwise: "Check cohort certainty",
-  },
-  {
-    index: "3",
     question: "Cohort unknown?",
     evidence: "Procedure join availability",
     yes: "NEEDS_REVIEW",
     route: "LLM",
     tone: "warn",
+    otherwise: "Check MTP pattern",
+  },
+  {
+    index: "3",
+    question: "Massive-transfusion-protocol cohort?",
+    evidence: "Blood orders: RBC units, FFP, platelets in 1 h",
+    yes: "APPROPRIATE",
+    route: "Final",
+    tone: "ok",
     otherwise: "Check procedural bypasses",
   },
   {
@@ -116,20 +116,20 @@ const thaiSteps: Step[] = [
   },
   {
     index: "2",
-    question: "เข้า pattern MTP?",
-    evidence: "Blood orders: RBC units, FFP, platelets ใน 1 ชั่วโมง",
-    yes: "APPROPRIATE",
-    route: "Final",
-    tone: "ok",
-    otherwise: "ตรวจความแน่นอนของ cohort",
-  },
-  {
-    index: "3",
     question: "Cohort unknown?",
     evidence: "availability ของ procedure join",
     yes: "NEEDS_REVIEW",
     route: "LLM",
     tone: "warn",
+    otherwise: "ตรวจ MTP pattern",
+  },
+  {
+    index: "3",
+    question: "เข้า pattern MTP?",
+    evidence: "Blood orders: RBC units, FFP, platelets ใน 1 ชั่วโมง",
+    yes: "APPROPRIATE",
+    route: "Final",
+    tone: "ok",
     otherwise: "ตรวจ procedural bypass",
   },
   {
@@ -224,7 +224,7 @@ const routeLabel = (route: Step["route"]) => {
     <span class="algorithm-flow__eyebrow">{isThai ? "ข้อมูลเข้า" : "Inputs"}</span>
     <strong>
       {isThai
-        ? "RBC order + Hb lookup + cohort + procedure timing + crystalloid window"
+        ? "คำสั่ง RBC + การหา Hb + cohort + เวลา procedure + crystalloid window"
         : "RBC order + Hb lookup + cohort + procedure timing + crystalloid window"}
     </strong>
   </div>

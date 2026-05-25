@@ -15,7 +15,7 @@ const defaultVars: EnvVar[] = [
     name: "BBA_DATA_DIR",
     example: "/var/lib/blood_audit/data",
     purpose:
-      "Persistent root for DuckDB + Parquet snapshots and the file-backed run-state store. Read by every CLI invocation.",
+      "Persistent root for ingest/audit run markers today and Parquet audit outputs once Phase 1.5 storage is wired. Read by every CLI invocation.",
     phase: "1",
   },
   {
@@ -34,10 +34,38 @@ const defaultVars: EnvVar[] = [
   },
 ];
 
-const { vars = defaultVars } = Astro.props;
+const isThai = Astro.url.pathname.includes("/th/");
+
+const thaiVars: EnvVar[] = [
+  {
+    name: "BBA_DATA_DIR",
+    example: "/var/lib/blood_audit/data",
+    purpose:
+      "ไดเรกทอรีหลักแบบถาวรสำหรับ run markers ของ ingest/audit ในปัจจุบัน และ Parquet audit outputs เมื่อเชื่อม storage ใน Phase 1.5 แล้ว",
+    phase: "1",
+  },
+  {
+    name: "BBA_DB_URL",
+    example: "postgresql+psycopg://bba@localhost/blood_audit",
+    purpose:
+      "Postgres DSN สำหรับ batch_runs และ review_actions ใช้ใน Phase 1.5 เมื่อเชื่อม LLM analysis; ต้องมี driver suffix +psycopg",
+    phase: "1.5",
+  },
+  {
+    name: "ANTHROPIC_API_KEY",
+    example: "sk-ant-...",
+    purpose:
+      "API key สำหรับ Batch API ของ LLM analysis ใช้ใน Phase 1.5 ไม่ได้ใช้ในส่วน ingest ของ Phase 1",
+    phase: "1.5",
+  },
+];
+
+const { vars = isThai ? thaiVars : defaultVars } = Astro.props;
 
 const phaseLabel = (phase: EnvVar["phase"]) =>
-  phase === "1" ? "required · Phase 1" : "Phase 1.5";
+  phase === "1"
+    ? isThai ? "จำเป็น · Phase 1" : "required · Phase 1"
+    : "Phase 1.5";
 
 const phasePill = (phase: EnvVar["phase"]) =>
   phase === "1" ? "ba-pill ba-pill--err" : "ba-pill ba-pill--warn";
@@ -52,7 +80,7 @@ const phasePill = (phase: EnvVar["phase"]) =>
           <span class={phasePill(v.phase)}>{phaseLabel(v.phase)}</span>
         </div>
         <p class="env-row__purpose">{v.purpose}</p>
-        <code class="env-row__example" aria-label="Example value">{v.example}</code>
+        <code class="env-row__example" aria-label={isThai ? "ค่าตัวอย่าง" : "Example value"}>{v.example}</code>
       </li>
     ))}
   </ul>

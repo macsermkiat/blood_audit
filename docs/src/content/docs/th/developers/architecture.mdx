@@ -20,7 +20,7 @@ import PipelineDiagram from "../../../../components/PipelineDiagram.astro";
 
 ## แนวคิดหลัก
 
-ระบบแยกเป็น stage ชัดเจน แต่ละ stage รับข้อมูล typed object หรือ snapshot
+ระบบแยกเป็น stage ชัดเจน แต่ละ stage รับข้อมูล typed object หรือข้อมูลที่ตรวจสอบแล้ว
 จาก stage ก่อนหน้า แล้วส่งต่อผลลัพธ์ที่ตรวจสอบได้ จุดที่รวมหลาย stage เข้าด้วยกัน
 ควรอยู่ใน `bba.audit_pipeline` เท่านั้น เพื่อให้ boundary ของโมดูลอื่นยังเล็ก
 และทดสอบได้ง่าย
@@ -29,7 +29,7 @@ import PipelineDiagram from "../../../../components/PipelineDiagram.astro";
 
 | Package | หน้าที่ |
 | --- | --- |
-| `bba.ingest` | ตรวจ CSV schema, hash input และเขียน DuckDB/Parquet snapshot |
+| `bba.ingest` | ตรวจ CSV schema, hash input, normalize rows และเขียน completion marker |
 | `bba.audit_orders` | แปลงคำสั่งเลือดให้เป็น audit anchor ต่อ RBC order |
 | `bba.hb_lookup` | หา Hb ก่อนให้เลือดและ prior Hb trend |
 | `bba.cohort_detector` | assign clinical-context cohort เช่น default, cardiac surgery, ESRD-EPO, MTP, unknown |

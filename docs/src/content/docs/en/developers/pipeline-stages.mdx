@@ -31,8 +31,8 @@ does; the CLI-level scope is documented on
 ### 1. `bba.ingest`
 
 Reads the HOSxP CSV bundle. Validates against the published schema,
-computes `input_csv_hash`, writes DuckDB + Parquet under `$BBA_DATA_DIR`,
-and emits a `run_id`. Idempotent on the file content.
+computes `input_csv_hash`, streams rows through normalization, and writes
+the run completion marker. Idempotent on the file content.
 
 ### 2. `bba.audit_orders`
 

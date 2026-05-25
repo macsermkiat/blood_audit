@@ -24,7 +24,8 @@ import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
 
 1. ติดตั้ง package
 2. ตั้งค่า environment variables ที่จำเป็น
-3. รัน `bba ingest` ตามด้วย `bba audit`
+3. รัน `bba audit --input ...`; ใช้ `bba ingest` ก่อนเฉพาะเมื่อต้องการ
+   preflight ตรวจ bundle แยกต่างหาก
 4. ส่งชุดข้อมูลออดิทให้คณะกรรมการคุณภาพ (Quality Improvement, QI)
 
 ส่วน subcommand อีก 4 ตัว คือ `evaluate`, `report`, `serve-dashboard`
@@ -34,19 +35,25 @@ import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
 
 ## สิ่งที่ต้องเตรียมก่อนเริ่ม
 
+สำหรับ Phase 1 ตอนนี้:
+
 - **Python 3.13+** พร้อม [uv](https://github.com/astral-sh/uv) เวอร์ชัน ≥ 0.9.24
-- **PostgreSQL 14+** สำหรับตาราง audit / batch-runs / review-actions
+- **ไดเรกทอรีข้อมูลถาวร** ที่ service user เขียนได้สำหรับ run-state markers
+- **ชุดข้อมูลส่งออกจาก HOSxP** — ดูรายละเอียดที่ [Ingest CSV](/blood_audit/th/operators/ingest-csv/)
+
+สำหรับ Phase 1.5 เมื่อเชื่อม analysis/reporting:
+
+- **PostgreSQL 14+** สำหรับ `batch_runs` และ review-action state
   ต้องใช้ DSN ที่มี driver suffix `+psycopg` (psycopg3 ไม่ใช่ psycopg2)
 - **Anthropic API key** ที่เปิดใช้งาน Batch API ได้
-- **ไดเรกทอรีข้อมูลถาวร** ที่ service user เขียนได้ (Parquet, DuckDB, run-state markers)
-- **ชุดข้อมูลส่งออกจาก HOSxP** — ดูรายละเอียดที่ [Ingest CSV](/blood_audit/th/operators/ingest-csv/)
 
 ## ผลลัพธ์เมื่อรันสำเร็จ
 
-1. `bba ingest <csv>` ตรวจสอบชุดข้อมูล คำนวณ hash และเขียน Parquet snapshot ลง `$BBA_DATA_DIR`
-2. `bba audit --input <csv>` ใน Phase 1 จะ materialize snapshot ภายใต้
+1. `bba ingest <csv>` ตรวจสอบชุดข้อมูล คำนวณ hash และเขียน ingest completion marker ใต้ `$BBA_DATA_DIR/ingest/v1/`
+2. `bba audit --input <csv>` ใน Phase 1 จะ validate/drain bundle ภายใต้
    `$BBA_DATA_DIR/audit/<run_id>/` และบันทึก run-state/compliance marker
-   ส่วนการเขียน `AuditRow` ลง Postgres จะเชื่อมใน Phase 1.5
+   ส่วนการเขียน `AuditRow` 1 แถวต่อคำสั่งให้เลือดที่ audit และการติดตาม
+   `batch_runs`/review state จะเชื่อมใน Phase 1.5
 3. การรันซ้ำด้วย input เดิมจะไม่ทำอะไรใหม่ ยกเว้นใส่ `--force`
    (รายละเอียดดู [Run-level idempotency](/blood_audit/th/operators/troubleshooting/#run-level-idempotency))
 
@@ -56,7 +63,8 @@ import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
   แถว `NEEDS_REVIEW` และ `POTENTIALLY_INAPPROPRIATE` จะเข้าสู่เส้นทาง LLM
   ซึ่งอาจใช้เวลาหลายนาทีกว่าจะเสร็จ
 - มี exclusion แบบเด็ดขาดสำหรับผลิตภัณฑ์ที่ไม่ใช่ RBC, ผู้ป่วยอายุ < 15 ปี,
-  และคำสั่งที่ไม่มี Hb ก่อนให้เลือด
+  และ ICD-10 conditions ที่อยู่นอก scope ส่วนคำสั่งที่ไม่มี Hb ก่อนให้เลือด
+  จะถูกเก็บเป็น `INSUFFICIENT_EVIDENCE`
 - PHI ทั้งหมดจะถูก de-identify ก่อนที่ข้อมูลใด ๆ จะออกจาก audit container
 
 ## ขั้นถัดไป

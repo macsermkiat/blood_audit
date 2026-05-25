@@ -1,28 +1,49 @@
 ---
 interface Props {
   command: string;
-  missingGlue: string;
+  missingGlue?: string;
+  phase?: string;
   rationale?: string;
 }
 
-const { command, missingGlue, rationale } = Astro.props;
+const { command, missingGlue, phase, rationale } = Astro.props;
+const isThai = Astro.url.pathname.includes("/th/");
 ---
 
 <article class="ba-card ba-card--warning seam-card">
   <header class="seam-card__head">
     <code class="seam-card__cmd">{command}</code>
-    <span class="ba-pill ba-pill--warn">integration seam</span>
+    <span class="ba-pill ba-pill--warn">{isThai ? "รอเชื่อมระบบ" : "integration seam"}</span>
   </header>
   <p class="seam-card__lede">
-    Raises <code>CliError</code> by design. The underlying module ships and is tested;
-    the CLI hand-off awaits deployment-specific glue that does not belong in Phase 1.
+    {isThai ? (
+      <>
+        คำสั่งนี้ตั้งใจให้หยุดด้วย <code>CliError</code> ใน Phase 1 แม้โมดูลภายในจะมี
+        และทดสอบแล้ว เพราะยังต้องรอส่วนเชื่อมกับระบบจริงของ deployment
+      </>
+    ) : (
+      <>
+        Raises <code>CliError</code> by design. The underlying module ships and is tested;
+        the CLI hand-off awaits deployment-specific glue that does not belong in Phase 1.
+      </>
+    )}
   </p>
   <dl class="seam-card__defs">
-    <dt>Missing glue</dt>
-    <dd>{missingGlue}</dd>
+    {phase && (
+      <>
+        <dt>{isThai ? "Phase" : "Phase"}</dt>
+        <dd>{phase}</dd>
+      </>
+    )}
+    {missingGlue && (
+      <>
+        <dt>{isThai ? "ส่วนที่ยังต้องเชื่อม" : "Missing glue"}</dt>
+        <dd>{missingGlue}</dd>
+      </>
+    )}
     {rationale && (
       <>
-        <dt>Why</dt>
+        <dt>{isThai ? "เหตุผล" : "Why"}</dt>
         <dd>{rationale}</dd>
       </>
     )}

@@ -8,8 +8,8 @@ import CliCommandCard from "../../../../components/CliCommandCard.astro";
 
 :::caution[ขอบเขต Phase 1]
 ใน Phase 1, `bba audit` ครอบเฉพาะ **ส่วน ingest** ของ pipeline
-โดยแปลงชุด CSV จาก HOSxP เป็น DuckDB + Parquet ภายใต้
-`$BBA_DATA_DIR/audit/<run_id>/` และบันทึก completion marker สำหรับ
+โดย validate ชุด CSV จาก HOSxP, stream rows ผ่าน normalization ภายใต้
+`$BBA_DATA_DIR/audit/<run_id>/` และบันทึก completion/run-state markers สำหรับ
 idempotency ส่วน LLM analysis (deterministic classifier → evidence bundle
 → de-id → prompt → batch → quote grounding → audit-store write)
 มีโมดูลรองรับแล้ว แต่จะเชื่อมเข้ากับ CLI ใน Phase 1.5 ดังนั้นคำสั่งนี้
@@ -20,15 +20,15 @@ idempotency ส่วน LLM analysis (deterministic classifier → evidence bun
   title="สรุปคำสั่ง"
   items={[
     { label: "อ่าน", value: "path ของ CSV ภายใน HOSxP export bundle" },
-    { label: "เขียนตอนนี้", value: "DuckDB + Parquet snapshot และ run-state markers", tone: "ok" },
+    { label: "เขียนตอนนี้", value: "run-state markers หลังตรวจ schema และ normalize rows สำเร็จ", tone: "ok" },
     { label: "เขียนภายหลัง", value: "AuditRows, LlmCalls และ batch_runs ใน Phase 1.5" },
-    { label: "รูปแบบ failure", value: "env var หาย, schema drift หรือ bundle ไม่ครบ จะ fail loud", tone: "warn" },
+    { label: "กรณีที่คำสั่งจะหยุดทำงาน", value: "env var หาย, schema drift หรือ bundle ไม่ครบ จะ fail loud", tone: "warn" },
   ]}
 />
 
 <CliCommandCard
   command="bba audit"
-  summary="Phase 1: ingest snapshot จาก HOSxP ด้วย run-level idempotency. Phase 1.5: เพิ่มการ classify และเขียน audit rows."
+  summary="Phase 1: validate และ drain ชุดข้อมูล HOSxP ด้วย run-level idempotency. Phase 1.5: เพิ่มการ classify และเขียน audit rows."
   flags={[
     { name: "--input INPUT_CSV", description: "path ของ CSV ใน HOSxP bundle ที่ต้องการ ingest" },
     { name: "--run-id RUN_ID", description: "กลับไปผูกกับ run_id ที่เคย complete แล้ว; จะ no-op ยกเว้นใช้ --force" },

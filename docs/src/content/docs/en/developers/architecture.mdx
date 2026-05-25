@@ -29,7 +29,7 @@ module orchestrates them; no other module reaches across stage boundaries.
 
 | Module | Role |
 | --- | --- |
-| `bba.ingest` | HOSxP CSV → DuckDB + Parquet snapshot, content-hashed `run_id`. |
+| `bba.ingest` | HOSxP CSV schema validation + row normalization drain, content-hashed `run_id`. |
 | `bba.audit_orders` | Per-(HN, REQNO) RBC filter; hard exclusions (age, products, ICD gates). |
 | `bba.hb_lookup` | Pre-transfusion Hb from the Lab table. |
 | `bba.vitals_extractor` | BP, HR, urine output, temperature from MED + progress notes. |
@@ -42,7 +42,7 @@ module orchestrates them; no other module reaches across stage boundaries.
 | `bba.quote_grounder` | 6 fail-closed anti-hallucination layers. |
 | `bba.confidence_calibrator` | Isotonic regression + ECE for multi-model ensembles. |
 | `bba.audit_pipeline` | Orchestration; resumable batch run state machine. |
-| `bba.audit_store` | Append-only Parquet + Postgres ordering; idempotency enforcement. |
+| `bba.audit_store` | Append-only Parquet records plus Postgres-backed batch/review state; idempotency enforcement. |
 | `bba.review_actions` | PHI-aware per-physician review action log. |
 | `bba.monitoring` | Sentinel κ-statistic; quarterly drift SPRT. |
 | `bba.dashboard` | FastAPI reviewer UI (integration seam). |

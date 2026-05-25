@@ -8,9 +8,9 @@ import CliCommandCard from "../../../../components/CliCommandCard.astro";
 
 :::caution[Phase 1 scope]
 In Phase 1, `bba audit` wraps the **ingest leg** of the pipeline. It
-materializes the HOSxP CSV bundle into DuckDB + Parquet under
-`$BBA_DATA_DIR/audit/<run_id>/` and records a completion marker for
-idempotency. The LLM-driven analysis leg (deterministic classifier →
+validates the HOSxP CSV bundle, streams rows through normalization under
+`$BBA_DATA_DIR/audit/<run_id>/`, and records completion/run-state markers
+for idempotency. The LLM-driven analysis leg (deterministic classifier →
 evidence bundle → de-id → prompt → batch → quote ground → audit-store
 write) is implemented as separate modules but is **wired in Phase 1.5**.
 Until then, classification rows are not yet produced by this command.
@@ -19,7 +19,7 @@ Until then, classification rows are not yet produced by this command.
 <AtAGlance
   items={[
     { label: "Reads", value: "A CSV path inside the HOSxP export bundle." },
-    { label: "Writes now", value: "DuckDB + Parquet ingest snapshot and run-state markers.", tone: "ok" },
+    { label: "Writes now", value: "Run-state markers after schema validation and row normalization.", tone: "ok" },
     { label: "Writes later", value: "AuditRows, LlmCalls, and batch_runs in Phase 1.5." },
     { label: "Failure style", value: "Missing env vars, schema drift, or incomplete bundles fail loud.", tone: "warn" },
   ]}
@@ -27,7 +27,7 @@ Until then, classification rows are not yet produced by this command.
 
 <CliCommandCard
   command="bba audit"
-  summary="Phase 1: ingest a HOSxP snapshot with idempotent run-level semantics. Phase 1.5: also classify and write audit rows."
+  summary="Phase 1: validate and drain a HOSxP bundle with idempotent run-level semantics. Phase 1.5: also classify and write audit rows."
   flags={[
     { name: "--input INPUT_CSV", description: "Path to the HOSxP CSV bundle to ingest." },
     { name: "--run-id RUN_ID", description: "Reuse a previously completed run_id (no-op unless --force)." },
@@ -85,7 +85,8 @@ terminal). Crashes mid-batch resume automatically on the next run.
 ## Safety boundaries
 
 - The command reads HOSxP exports only. Output is written under
-  `$BBA_DATA_DIR/audit/<run_id>/`. HOSxP tables are never touched.
+  `$BBA_DATA_DIR/audit/<run_id>/` and `$BBA_DATA_DIR/audit_runs/<run_id>/`.
+  HOSxP tables are never touched.
 - The command runs after the fact and stays silent. It does not send
   real-time alerts to clinicians. This is quality improvement (QI), not
   Software as a Medical Device (SaMD).

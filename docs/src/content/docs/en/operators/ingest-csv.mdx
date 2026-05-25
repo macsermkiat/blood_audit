@@ -5,22 +5,24 @@ description: Expected shape of the HOSxP export bundle and what bba ingest does 
 
 import AtAGlance from "../../../../components/AtAGlance.astro";
 
-`bba ingest` is the entry point for every audit. It validates, hashes, and
-materializes the input bundle into a DuckDB + Parquet snapshot under
-`$BBA_DATA_DIR`.
+`bba ingest` is the entry point for validating a HOSxP export bundle. In
+the current Phase 1 CLI it validates headers, hashes inputs, streams rows
+through normalization, and writes the run completion marker under
+`$BBA_DATA_DIR`. DuckDB + Parquet writers are the intended next storage
+shape, but they are not emitted by `bba ingest` yet.
 
 <AtAGlance
   items={[
-    { label: "Bundle size", value: "11 canonical HOSxP CSV tables.", tone: "ok" },
+    { label: "Bundle size", value: "12 canonical HOSxP CSV tables.", tone: "ok" },
     { label: "Validation", value: "Headers must match schema v1; unknown or missing required columns fail." },
-    { label: "Output", value: "One Parquet file per table plus ingest.duckdb views." },
+    { label: "Output today", value: "Run completion marker after schema validation and row normalization." },
     { label: "PHI rule", value: "Use PHI_xxx placeholders in docs and issues, never real HN/AN.", tone: "warn" },
   ]}
 />
 
 ## Expected tables
 
-The HOSxP export bundle contains 11 canonical tables:
+The HOSxP export bundle contains 12 canonical tables:
 
 | Table | Used for |
 | --- | --- |
@@ -34,21 +36,24 @@ The HOSxP export bundle contains 11 canonical tables:
 | `IPDADMPROGRESS` | Progress-note evidence for the LLM bundle. |
 | `IPDNRFOCUSDT` | Nursing-note evidence for the LLM bundle. |
 | `IPTSUMOPRT` | Operative events and procedure timestamps. |
+| `INCPT` | Procedure/charge-adjacent event table validated as part of schema v1. |
 | `ICD9CM` | Procedure-code dictionary and OR/non-OR flag. |
 
 The exact column contract is defined in `src/bba/ingest/`.
 
 ## What ingest writes
 
-For each successful `bba ingest` run:
+For each successful `bba ingest` run today:
 
-- Parquet snapshots under `$BBA_DATA_DIR/ingest/v1/<run_id>/parquet/`.
-- A DuckDB database at `$BBA_DATA_DIR/ingest/v1/<run_id>/ingest.duckdb`.
-- A completion marker; absence of this marker means the run is incomplete
-  and a re-ingest will start fresh.
+- `$BBA_DATA_DIR/ingest/v1/` is used as the ingest output root.
+- A `_run_<run_id>.complete` marker records that the schema validation and
+  row-normalization drain completed.
+- Absence of this marker means the run is incomplete and a re-ingest will
+  start fresh.
 
-For `bba audit --input ...` in Phase 1, the same ingest snapshot shape is
-written under `$BBA_DATA_DIR/audit/<run_id>/`.
+For `bba audit --input ...` in Phase 1, the same ingest validation/drain is
+run under `$BBA_DATA_DIR/audit/<run_id>/`, and one run-state row is recorded
+per validated HOSxP table.
 
 ## run_id derivation
 
@@ -75,4 +80,4 @@ issue reports.
 
 ## Next steps
 
-- [audit command](/blood_audit/en/operators/audit-command/) — runs against the snapshot.
+- [audit command](/blood_audit/en/operators/audit-command/) — runs the Phase 1 ingest validation/drain path.

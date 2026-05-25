@@ -4,6 +4,7 @@ interface Props {
 }
 const { variant = "default" } = Astro.props;
 const isDefault = variant === "default";
+const isThai = Astro.url.pathname.includes("/th/");
 ---
 
 <aside
@@ -15,23 +16,36 @@ const isDefault = variant === "default";
     isDefault && "ba-reveal",
   ]}
   data-variant={variant}
-  aria-label="Quality Improvement scope"
+  aria-label={isThai ? "ขอบเขต Quality Improvement" : "Quality Improvement scope"}
 >
   <div class="qi-banner__inner">
-    <span class="qi-banner__tag">scope</span>
+    <span class="qi-banner__tag">{isThai ? "ขอบเขต" : "scope"}</span>
     <p class="qi-banner__title">
-      Quality Improvement, not clinical decision support.
+      {isThai ? "ใช้เพื่อทบทวนคุณภาพ ไม่ใช่ระบบช่วยตัดสินใจรักษา ณ จุดดูแล" : "Quality Improvement, not clinical decision support."}
     </p>
     {isDefault && (
       <p class="qi-banner__body">
-        blood_audit is a <strong>post-hoc</strong> audit pipeline. It reads finished
-        HOSxP exports and classifies completed RBC transfusions for quality review.
-        It is <strong>not</strong> SaMD, does not influence transfusion orders at
-        the point of care, and has no real-time clinical decision support pathway.
+        {isThai ? (
+          <>
+            blood_audit เป็นระบบออดิทย้อนหลัง <strong>หลังการให้เลือดเสร็จสิ้นแล้ว</strong>
+            ใช้อ่านข้อมูลส่งออกจาก HOSxP และจัดประเภทการให้ RBC เพื่อทบทวนคุณภาพเท่านั้น
+            ไม่ใช่ SaMD ไม่ส่งผลต่อคำสั่งให้เลือด ณ จุดดูแล และไม่มีเส้นทางแจ้งเตือน
+            ทางคลินิกแบบ real-time
+          </>
+        ) : (
+          <>
+            blood_audit is a <strong>post-hoc</strong> audit pipeline. It reads finished
+            HOSxP exports and classifies completed RBC transfusions for quality review.
+            It is <strong>not</strong> SaMD, does not influence transfusion orders at
+            the point of care, and has no real-time clinical decision support pathway.
+          </>
+        )}
       </p>
     )}
     {!isDefault && (
-      <p class="qi-banner__body">Post-hoc audit. Not SaMD. No point-of-care alerts.</p>
+      <p class="qi-banner__body">
+        {isThai ? "ออดิทย้อนหลัง ไม่ใช่ SaMD และไม่มี alert ณ จุดดูแล" : "Post-hoc audit. Not SaMD. No point-of-care alerts."}
+      </p>
     )}
   </div>
 </aside>

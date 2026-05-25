@@ -9,14 +9,14 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
   items={[
     { label: "Current version", value: "0.1.0 in pyproject.toml.", tone: "ok" },
     { label: "Release notes", value: "GitHub Releases becomes canonical after tag." },
-    { label: "Phase 1", value: "Modules are feature-complete; deployment wiring remains." },
+    { label: "Phase 1", value: "Module-level implementation is present; production wiring and pilot validation remain." },
     { label: "Not included", value: "Pilot validation, production wiring, and Phase B re-encryption.", tone: "warn" },
   ]}
 />
 
 ## Status
 
-Phase 1 is feature-complete: 20 modules under `bba.*` merged to `main`,
+Phase 1 has module-level implementation present: 20 modules under `bba.*` merged to `main`,
 `version = "0.1.0"` in `pyproject.toml`. The `v0.1.0` tag itself is
 pending — the maintainer will trigger it explicitly with shared-state
 intent.
@@ -27,7 +27,7 @@ will live at
 
 ## What "Phase 1 feature-complete" includes
 
-- 12-stage audit pipeline (ingest → audit_store).
+- 12-stage audit pipeline modules (ingest → audit_store); CLI wiring is staged.
 - Deterministic 3-tier Hb classifier with cohort-aware thresholds.
 - Acute-blood-loss override with documented delta-Hb gates.
 - LLM_REVIEW pathway with Anthropic Batch API + Sonnet→Opus escalation.

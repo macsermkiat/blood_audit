@@ -24,7 +24,8 @@ four steps:
 
 1. Install the package.
 2. Configure three environment variables.
-3. Run `bba ingest`, then `bba audit`.
+3. Run `bba audit --input ...`; use `bba ingest` first only when you want a
+   separate validation preflight.
 4. Hand the audit dataset to the QI (Quality Improvement) committee.
 
 The other four subcommands — `evaluate`, `report`, `serve-dashboard`,
@@ -34,22 +35,26 @@ want to know why they fail today.
 
 ## What you need before starting
 
+For Phase 1 today:
+
 - **Python 3.13+** with [uv](https://github.com/astral-sh/uv) ≥ 0.9.24.
-- **PostgreSQL 14+** for the audit / batch-runs / review-actions tables.
-  The DSN must use the `+psycopg` driver suffix (psycopg3, not psycopg2).
-- **Anthropic API key** with Batch API enabled.
-- **Persistent data directory** writable by the service user (Parquet,
-  DuckDB, run-state markers).
+- **Persistent data directory** writable by the service user (run-state markers).
 - **HOSxP export bundle** — see [Ingest CSV](/blood_audit/en/operators/ingest-csv/)
   for the expected table set.
+
+For Phase 1.5 analysis/reporting:
+
+- **PostgreSQL 14+** for `batch_runs` and review-action state. The DSN must
+  use the `+psycopg` driver suffix (psycopg3, not psycopg2).
+- **Anthropic API key** with Batch API enabled.
 
 ## What a successful run produces
 
 1. `bba ingest <csv>` validates the bundle, computes a content hash, and
-   writes a Parquet snapshot under `$BBA_DATA_DIR`.
-2. `bba audit --input <csv>` currently materializes the same bundle under
+   writes an ingest completion marker under `$BBA_DATA_DIR/ingest/v1/`.
+2. `bba audit --input <csv>` currently validates/drains the same bundle under
    `$BBA_DATA_DIR/audit/<run_id>/` and appends run-state/compliance markers.
-   In Phase 1.5 it also writes one classified `AuditRow` per transfusion.
+   In Phase 1.5 it also writes one classified `AuditRow` per audited order.
 3. Re-running the same input is a no-op unless you pass `--force`
    (run-level idempotency — see [Pitfall 13](/blood_audit/en/operators/troubleshooting/#run-level-idempotency)).
 
@@ -58,8 +63,9 @@ want to know why they fail today.
 - The deterministic classifier handles rows first. `NEEDS_REVIEW` and
   `POTENTIALLY_INAPPROPRIATE` rows go to the LLM route in Phase 1.5 and
   may take minutes to complete.
-- Hard exclusions filter out non-RBC products, age < 15, and orders without
-  pre-transfusion Hb.
+- Hard exclusions filter out non-RBC products, age < 15, and out-of-scope
+  ICD-10 conditions. Orders without pre-transfusion Hb are retained as
+  `INSUFFICIENT_EVIDENCE`.
 - All PHI is de-identified before any data leaves the audit container.
 
 ## Next steps

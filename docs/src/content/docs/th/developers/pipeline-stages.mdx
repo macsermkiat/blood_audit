@@ -1,5 +1,5 @@
 ---
-title: Pipeline stages
+title: ขั้นตอน pipeline
 description: 12 stage ของ blood_audit ตั้งแต่ ingest จนถึง audit store
 ---
 
@@ -20,8 +20,8 @@ import PipelineDiagram from "../../../../components/PipelineDiagram.astro";
 
 ## 1. `bba.ingest`
 
-อ่าน HOSxP CSV bundle, ตรวจ schema, คำนวณ hash และ materialize เป็น
-DuckDB + Parquet snapshot
+อ่าน HOSxP CSV bundle, ตรวจ schema, คำนวณ hash, stream rows ผ่าน
+normalization และเขียน completion marker ของ run
 
 ## 2. `bba.audit_orders`
 

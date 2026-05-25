@@ -27,18 +27,18 @@ import QiNotSamdBanner from "../../../components/QiNotSamdBanner.astro";
     { label: "Scope", value: "Retrospective QI audit only; no point-of-care alerts.", tone: "warn" },
     { label: "Input", value: "HOSxP CSV bundle with transfusion, lab, diagnosis, procedure, medication, and note tables." },
     { label: "Core rule", value: "Deterministic 3-tier Hb classifier with clinical-context thresholds and evidence-gated bypasses." },
-    { label: "Output", value: "DuckDB + Parquet snapshots today; AuditRows/reporting in Phase 1.5." },
+    { label: "Output", value: "Phase 1 validates/drains CSV rows and records run markers; AuditRows/reporting land in Phase 1.5." },
   ]}
 />
 
 ## What blood_audit does
 
 blood_audit reads completed HOSxP exports from the hospital information
-system. It compares each red blood cell (RBC) transfusion against the
-3-tier hemoglobin (Hb) policy, then writes one audit row per
-transfusion to the audit store. The classifier checks Lab Hb, ICD-10
-diagnoses, ICD-9-CM procedures, medications, blood-order patterns, and
-procedure timing in a fixed order.
+system. When the Phase 1.5 analysis leg is wired, it compares each audited
+red blood cell (RBC) order against the 3-tier hemoglobin (Hb) policy, then
+writes one audit row per audited order to the audit store. The classifier
+checks Lab Hb, ICD-10 diagnoses, ICD-9-CM procedures, medications,
+blood-order patterns, and procedure timing in a fixed order.
 
 The final `final_classification` stored for each transfusion is one of:
 
@@ -57,9 +57,10 @@ fail-closed quote-grounding layers; a failed grounding becomes
 
 ## Phase 1 status
 
-`bba audit` today wraps the **ingest leg** of the pipeline. It
-materializes the HOSxP CSV bundle into DuckDB + Parquet under
-`$BBA_DATA_DIR/audit/<run_id>/` with idempotent run-level guarantees.
+`bba audit` today wraps the **ingest leg** of the pipeline. It validates the
+HOSxP CSV bundle, streams rows through normalization, and records run-state
+markers under `$BBA_DATA_DIR/audit/<run_id>/` and
+`$BBA_DATA_DIR/audit_runs/<run_id>/` with idempotent run-level guarantees.
 In these docs, a "cohort" means the clinical-context bucket for one audit
 row, such as default, recent cardiac surgery, ESRD with dialysis-medication
 evidence, MTP, active heme malignancy, or unknown context.

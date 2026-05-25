@@ -33,6 +33,8 @@ const slug = command
   .toLowerCase()
   .replace(/[^a-z0-9]+/g, "-")
   .replace(/^-+|-+$/g, "");
+
+const isThai = Astro.url.pathname.includes("/th/");
 ---
 
 <article class="cli-card" aria-label={`CLI command: ${slug}`}>
@@ -45,13 +47,13 @@ const slug = command
   <div class="cli-card__body">
     {flags.length > 0 && (
       <section class="cli-card__section" aria-labelledby={`${slug}-flags`}>
-        <h4 id={`${slug}-flags`} class="cli-card__heading">Flags</h4>
+        <h4 id={`${slug}-flags`} class="cli-card__heading">{isThai ? "ตัวเลือกคำสั่ง" : "Flags"}</h4>
         <dl class="cli-card__defs">
           {flags.map((f) => (
             <>
               <dt>
                 <code>{f.name}</code>
-                {f.required && <span class="ba-pill ba-pill--err">required</span>}
+                {f.required && <span class="ba-pill ba-pill--err">{isThai ? "จำเป็น" : "required"}</span>}
               </dt>
               <dd>{f.description}</dd>
             </>
@@ -62,7 +64,7 @@ const slug = command
 
     {envVars.length > 0 && (
       <section class="cli-card__section" aria-labelledby={`${slug}-envs`}>
-        <h4 id={`${slug}-envs`} class="cli-card__heading">Env vars consumed</h4>
+        <h4 id={`${slug}-envs`} class="cli-card__heading">{isThai ? "ตัวแปรแวดล้อมที่ใช้" : "Env vars consumed"}</h4>
         <ul class="cli-card__inline" role="list">
           {envVars.map((e) => <li><code>{e}</code></li>)}
         </ul>
@@ -70,7 +72,7 @@ const slug = command
     )}
 
     <section class="cli-card__section" aria-labelledby={`${slug}-exits`}>
-      <h4 id={`${slug}-exits`} class="cli-card__heading">Exit codes</h4>
+      <h4 id={`${slug}-exits`} class="cli-card__heading">{isThai ? "รหัสออกจากโปรแกรม" : "Exit codes"}</h4>
       <dl class="cli-card__defs cli-card__defs--narrow">
         {exitCodes.map((c) => (
           <>
@@ -84,7 +86,7 @@ const slug = command
 
   {example && (
     <section class="cli-card__example-wrap" aria-labelledby={`${slug}-example`}>
-      <h4 id={`${slug}-example`} class="cli-card__heading cli-card__heading--example">Example</h4>
+      <h4 id={`${slug}-example`} class="cli-card__heading cli-card__heading--example">{isThai ? "ตัวอย่าง" : "Example"}</h4>
       <pre class="cli-card__example"><span class="cli-card__prompt" aria-hidden="true">$ </span><code>{example}</code></pre>
     </section>
   )}

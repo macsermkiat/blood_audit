@@ -72,6 +72,11 @@ const pillClass = (c: Tier["ruleOutput"]) =>
 const routesPill = (r: Tier["routes"]) =>
   r === "auto-classify" ? "ba-pill ba-pill--ok" : "ba-pill ba-pill--warn";
 
+const routeText = (r: Tier["routes"]) => {
+  if (!isThai) return r;
+  return r === "auto-classify" ? "จำแนกอัตโนมัติ" : "ส่ง LLM review";
+};
+
 const tierNumber = (label: string) => label.replace(/[^0-9]/g, "") || "—";
 ---
 
@@ -98,7 +103,7 @@ const tierNumber = (label: string) => label.replace(/[^0-9]/g, "") || "—";
             </th>
             <td class="hb-matrix__range">{t.range}</td>
             <td><span class={pillClass(t.ruleOutput)}>{t.ruleOutput}</span></td>
-            <td><span class={routesPill(t.routes)}>{t.routes}</span></td>
+            <td><span class={routesPill(t.routes)}>{routeText(t.routes)}</span></td>
             <td class="hb-matrix__rule">{t.rule}</td>
           </tr>
         ))}
@@ -109,7 +114,7 @@ const tierNumber = (label: string) => label.replace(/[^0-9]/g, "") || "—";
     {isThai ? (
       <>
         Vitals (BP, HR, urine output, temperature) เป็น <strong>หลักฐานประกอบเท่านั้น</strong>
-        และไม่ override Hb tier ด้วยตัวเอง deterministic bypass ต้องมีหลักฐานแบบ structured เช่น
+        และไม่ override Hb tier ด้วยตัวเอง deterministic bypass ต้องมีหลักฐานเชิงโครงสร้าง เช่น
         MTP, procedure timing, pre-op crossmatch หรือ delta-Hb
       </>
     ) : (

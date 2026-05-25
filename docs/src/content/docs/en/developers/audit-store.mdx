@@ -24,7 +24,7 @@ datetimes are rejected.
     { label: "Persists", value: "AuditRow and LlmCall records." },
     { label: "Invariant", value: "Rows are immutable, tz-aware UTC, and SafeId-keyed.", tone: "ok" },
     { label: "Idempotency", value: "Duplicate (audit_id, run_id, code_version) writes no-op." },
-    { label: "Phase 1", value: "CLI writes ingest snapshots; AuditRow path is wired in Phase 1.5.", tone: "warn" },
+    { label: "Phase 1", value: "CLI writes ingest/run markers; AuditRow path is wired in Phase 1.5.", tone: "warn" },
   ]}
 />
 
@@ -56,11 +56,11 @@ Classification = Literal[
 
 ## Phase 1 vs Phase 1.5
 
-In Phase 1, `bba audit` ingests HOSxP into DuckDB + Parquet under
+In Phase 1, `bba audit` validates/drains the HOSxP bundle under
 `$BBA_DATA_DIR/audit/<run_id>/` and records completion markers under
-`$BBA_DATA_DIR/audit_runs/<run_id>/` via a file-backed
-`AuditRunStore`. The audit store's `AuditRow` write path is exercised
-by the module's own tests but is **not yet wired** through the CLI.
+`$BBA_DATA_DIR/audit_runs/<run_id>/` via a file-backed `AuditRunStore`.
+The audit store's `AuditRow` write path is exercised by the module's own
+tests but is **not yet wired** through the CLI.
 
 In Phase 1.5, when `bba.audit_pipeline.run_pipeline` is invoked from
 the CLI, the audit store starts persisting `AuditRow` per audited

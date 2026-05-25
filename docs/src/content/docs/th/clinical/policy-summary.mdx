@@ -37,7 +37,7 @@ import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
 
 <AlgorithmDecisionFlow />
 
-## Bypass และ review paths
+## กรณีข้ามเกณฑ์ Hb และกรณีที่ต้องส่งทบทวน
 
 ระบบไม่ได้เริ่มจาก Hb tier ทันที แต่จะตรวจหลักฐานที่มี priority สูงก่อน:
 
@@ -54,12 +54,15 @@ import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
 
 Vital signs เช่น hypotension หรือ tachycardia ไม่ทำให้เกิด bypass ด้วยตัวเอง
 
-## Exclusions
+## Exclusions และหลักฐานไม่เพียงพอ
 
 - ผู้ป่วยเด็กอายุ < 15 ปี เพราะใช้นโยบายคนละชุด
 - ผลิตภัณฑ์ที่ไม่ใช่ RBC เช่น LPRC, LDPRC, SDR
-- คำสั่งที่ไม่มี Hb ก่อนให้เลือด
 - ICD-10 conditions ที่อยู่นอก scope ตาม PR 17.2
+
+คำสั่งที่ไม่มี Hb ก่อนให้เลือด **ไม่ถูกตัดสินว่าเหมาะสมหรือไม่เหมาะสม**
+แต่จะถูกเก็บเป็น `INSUFFICIENT_EVIDENCE` เพื่อให้คณะกรรมการ QI เห็นช่องว่าง
+ของหลักฐานเอกสาร
 
 ## ทำไมจึง paraphrase
 

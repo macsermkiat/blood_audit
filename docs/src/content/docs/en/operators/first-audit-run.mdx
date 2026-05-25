@@ -6,15 +6,15 @@ description: Run bba ingest and bba audit end-to-end against a HOSxP export.
 import AtAGlance from "../../../../components/AtAGlance.astro";
 import CliCommandCard from "../../../../components/CliCommandCard.astro";
 
-This page walks the happy path: a HOSxP export goes in, an idempotent
-DuckDB + Parquet snapshot comes out under `$BBA_DATA_DIR/audit/<run_id>/`.
+This page walks the Phase 1 happy path: a HOSxP export goes in, the bundle
+is validated and row-normalized, and idempotent run markers are written.
 
 <AtAGlance
   items={[
     { label: "Input", value: "One CSV path inside the HOSxP export bundle." },
-    { label: "Writes", value: "$BBA_DATA_DIR/audit/<run_id>/ with parquet/ and ingest.duckdb.", tone: "ok" },
+    { label: "Writes", value: "$BBA_DATA_DIR/audit/<run_id>/ plus audit_runs markers.", tone: "ok" },
     { label: "Idempotent", value: "Same bundle + same code = same run_id; re-run is a no-op." },
-    { label: "Inspect", value: "Use DuckDB to list tables and row counts after the run." },
+    { label: "Inspect", value: "Check run markers and structured logs after the run." },
   ]}
 />
 
@@ -26,22 +26,22 @@ See [audit command](/blood_audit/en/operators/audit-command/) for the
 exact contract.
 :::
 
-## 1. Ingest the export bundle
+## 1. Optional: validate the export bundle
 
 <CliCommandCard
   command="bba ingest INPUT_CSV --schema-version v1"
-  summary="Validates the HOSxP CSV bundle, hashes inputs, and writes a DuckDB + Parquet snapshot under $BBA_DATA_DIR."
+  summary="Validates the HOSxP CSV bundle, hashes inputs, drains rows through normalization, and writes a completion marker under $BBA_DATA_DIR/ingest/v1."
   flags={[
     { name: "INPUT_CSV", description: "Path to the primary HOSxP export CSV.", required: true },
-    { name: "--schema-version v1", description: "Schema fingerprint to record with the snapshot." },
+    { name: "--schema-version v1", description: "Schema fingerprint to include in run_id derivation." },
   ]}
   envVars={["BBA_DATA_DIR"]}
   example={`uv run bba ingest /var/data/exports/PHI_xxx_001.csv --schema-version v1`}
 />
 
-A successful ingest prints a `run_id`. This is the unique ID for this
-combination of input bundle, schema version, and code version. Record it
-— every later command uses it to find the right snapshot.
+This step is useful when you want a separate preflight validation pass.
+For the normal Phase 1 operator path, `bba audit --input ...` below also
+runs the ingest validation/drain internally.
 
 Under the hood, the `run_id` is `sha256(input_csv_hash +
 schema_fingerprint + code_version)`. You do not need to compute it
@@ -51,7 +51,7 @@ yourself; the CLI does.
 
 <CliCommandCard
   command="bba audit --input INPUT_CSV"
-  summary="Phase 1: materializes the HOSxP CSV bundle into DuckDB + Parquet under $BBA_DATA_DIR/audit/<run_id>/ and records a completion marker."
+  summary="Phase 1: validates and drains the HOSxP CSV bundle under $BBA_DATA_DIR/audit/<run_id>/ and records completion/run-state markers."
   flags={[
     { name: "--input INPUT_CSV", description: "Same CSV path used for ingest." },
     { name: "--run-id RUN_ID", description: "Reuse an existing run_id (no-op unless --force)." },
@@ -61,30 +61,21 @@ yourself; the CLI does.
   example={`uv run bba audit --input /var/data/exports/PHI_xxx_001.csv`}
 />
 
-The command is **idempotent**. Re-running the same CSV is a no-op
-unless `--force` is passed. The completion row in `audit_log` records
-every forced re-run.
+The command is **idempotent**. Re-running the same CSV is a no-op unless
+`--force` is passed. Forced re-runs are recorded as idempotency overrides.
 
-## 3. Inspect the snapshot
+## 3. Inspect the run markers
 
 The four post-audit subcommands (`evaluate`, `report`,
 `serve-dashboard`, `sentinel`) raise `CliError` in Phase 1 — see
 [Integration seams](/blood_audit/en/operators/integration-seams/).
 
-For now, the most useful checks are on the materialized snapshot:
+For now, the most useful checks are on the run markers and logs:
 
 ```bash
-# Confirm the run_id directory exists and is complete.
+# Confirm the audit run-state directory exists.
 ls -la "$BBA_DATA_DIR/audit/<RUN_ID>/"
 ls "$BBA_DATA_DIR/audit_runs/<RUN_ID>/"
-
-# Inspect the ingested HOSxP tables via DuckDB.
-duckdb "$BBA_DATA_DIR/audit/<RUN_ID>/ingest.duckdb" \
-  "SELECT table_name FROM information_schema.tables;"
-
-# Count rows in a specific canonical table.
-duckdb "$BBA_DATA_DIR/audit/<RUN_ID>/ingest.duckdb" \
-  "SELECT COUNT(*) FROM Lab;"
 ```
 
 ## What you will see in Phase 1.5

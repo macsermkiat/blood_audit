@@ -1,5 +1,5 @@
 ---
-title: Environment variables
+title: ตัวแปรสภาพแวดล้อม
 description: ตัวแปรสภาพแวดล้อมที่ blood_audit ต้องใช้ก่อนเริ่มรันออดิท
 ---
 
@@ -29,9 +29,9 @@ blood_audit ตรวจ environment variables ตั้งแต่เริ่
 ต้องเขียนได้ ฟังก์ชัน `_resolve_data_dir()` ใน `src/bba/cli/main.py`
 จะตรวจเงื่อนไขนี้ ใช้เก็บข้อมูล:
 
-- DuckDB ingest snapshots
-- Parquet audit rows (cold storage)
-- Run-state completion markers สำหรับ idempotency
+- run markers ของ ingest และ audit ใน Phase 1
+- Parquet audit rows ใน Phase 1.5 เมื่อเปิดใช้ storage wiring
+- completion markers สำหรับ idempotency
 
 ### `BBA_DB_URL`
 

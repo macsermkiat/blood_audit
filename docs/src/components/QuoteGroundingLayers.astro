@@ -12,11 +12,11 @@ interface Props {
 const isThai = Astro.url.pathname.includes("/th/");
 
 const englishLayers: Layer[] = [
-  { name: "NFC normalization", purpose: "Unicode-normalize quote and source to NFC before any compare." },
-  { name: "Substring match", purpose: "The quote must appear verbatim within the cited source document." },
   { name: "cited_id resolution", purpose: "The source document referenced must exist in the evidence bundle." },
-  { name: "Within-doc uniqueness", purpose: "The quote must occur exactly once in the cited document. No ambiguity." },
   { name: "Minimum length (≥ 25 chars)", purpose: "Rejects trivially generic quotes that could match by chance." },
+  { name: "NFC normalization", purpose: "Unicode-normalize quote and source to NFC before text comparison." },
+  { name: "Contiguous substring match", purpose: "The quote must appear verbatim within the cited source document." },
+  { name: "Within-doc uniqueness", purpose: "The quote must occur exactly once in the cited document. No ambiguity." },
   { name: "Numeric-tuple agreement", purpose: "All numbers in the quote must match the structured evidence values." },
   {
     name: "Medical-NLI entailment",
@@ -27,11 +27,11 @@ const englishLayers: Layer[] = [
 ];
 
 const thaiLayers: Layer[] = [
-  { name: "NFC normalization", purpose: "ปรับ quote และ source เป็น Unicode NFC ก่อน compare ทุกครั้ง" },
-  { name: "Substring match", purpose: "quote ต้องปรากฏแบบ verbatim ภายใน source document ที่อ้าง" },
   { name: "cited_id resolution", purpose: "source document ที่ถูกอ้างต้องมีอยู่จริงใน evidence bundle" },
-  { name: "Within-doc uniqueness", purpose: "quote ต้องพบใน document นั้นเพียงครั้งเดียว เพื่อลด ambiguity" },
   { name: "Minimum length (≥ 25 chars)", purpose: "ตัด quote ที่สั้นหรือ generic เกินไปจน match ได้โดยบังเอิญ" },
+  { name: "NFC normalization", purpose: "ปรับ quote และ source เป็น Unicode NFC ก่อนเทียบข้อความ" },
+  { name: "Contiguous substring match", purpose: "quote ต้องปรากฏแบบ verbatim ภายใน source document ที่อ้าง" },
+  { name: "Within-doc uniqueness", purpose: "quote ต้องพบใน document นั้นเพียงครั้งเดียว เพื่อลด ambiguity" },
   { name: "Numeric-tuple agreement", purpose: "ตัวเลขทั้งหมดใน quote ต้องตรงกับ structured evidence values" },
   {
     name: "Medical-NLI entailment",
@@ -50,7 +50,8 @@ const { layers = defaultLayers } = Astro.props;
     {isThai ? (
       <>
         Quote grounding เป็นระบบ <strong>fail-closed และทำงานเป็นชั้น</strong>
-        โดย 6 ชั้นแรกต้องรันทุกครั้ง หากชั้นใด fail จะตั้ง
+        โดยก่อนเข้าชั้นแรก ระบบจะปฏิเสธ quote ว่างทันที จากนั้น 6 ชั้นหลักต้องรันทุกครั้ง
+        หากชั้นใดไม่ผ่าน จะตั้ง
         <code>final_classification = NEEDS_REVIEW</code> พร้อม
         <code>review_reason = "hallucination_suspect"</code> ไม่ใช่
         <code>APPROPRIATE</code>/<code>INAPPROPRIATE</code> และห้าม mock หรือ
@@ -58,8 +59,9 @@ const { layers = defaultLayers } = Astro.props;
       </>
     ) : (
       <>
-        Quote grounding is <strong>fail-closed and layered</strong>. The first six layers
-        always run; a failure on any of them sets
+        Quote grounding is <strong>fail-closed and layered</strong>. Before layer 1, the
+        verifier rejects empty quotes immediately. The six core layers always run; a
+        failure on any of them sets
         <code>final_classification = NEEDS_REVIEW</code> with
         <code>review_reason = "hallucination_suspect"</code>, never an
         <code>APPROPRIATE</code>/<code>INAPPROPRIATE</code> result row. None of those six

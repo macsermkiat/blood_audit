@@ -69,13 +69,13 @@ the operational checklist the audit follows for one RBC order:
 
 | Step | Question the code asks | Source data checked | Important details | Output if yes |
 | --- | --- | --- | --- | --- |
-| 1 | Is there no usable pre-transfusion Hb? | **Lab** table Hb observations. | The Hb lookup searches Hb results for the same patient at or before the order time. It only accepts analytic-valid Hb values in **2-25 g/dL**. It looks back **7 days**. Hematology Hb is preferred over POCT when available. If two rows have the same timestamp, the higher Lab `item_no` wins. | `INSUFFICIENT_EVIDENCE`, final without LLM. |
-| 2 | Does the order look like massive transfusion protocol (MTP)? | Blood-order history around the anchor: RBC units, FFP co-order flag, platelet co-order flag. | The detector checks the **1-hour window before the order**. MTP fires if RBC units total **≥ 4** in that window, or if RBC + FFP + platelets are co-ordered in the window. | `APPROPRIATE`, final without LLM. |
-| 3 | Is procedure data missing? | Procedure-event join availability. | This is not the same as "no procedure found." If the procedure join is unavailable, the audit cannot safely know whether cardiac/orthopedic procedure rules apply. | `NEEDS_REVIEW`, routed to LLM/human review. |
+| 1 | Is there no usable pre-transfusion Hb? | **Lab** table Hb observations. | The Hb lookup searches Hb results for the same patient at or before the order time. It only accepts analytic-valid Hb values in **2-25 g/dL** and looks back **less than 7 days** (`anchor - Hb time < 7 days`). Hematology Hb is preferred over POCT when available. If two rows have the same timestamp, the higher Lab `item_no` wins. | `INSUFFICIENT_EVIDENCE`, final without LLM. |
+| 2 | Is procedure data missing? | Procedure-event join availability. | This is not the same as "no procedure found." If the procedure join is unavailable, the audit cannot safely know whether cardiac/orthopedic procedure rules apply. | `NEEDS_REVIEW`, routed to LLM/human review. |
+| 3 | Does the order look like massive transfusion protocol (MTP)? | Blood-order history around the anchor: RBC units, FFP co-order flag, platelet co-order flag. | After procedure-event availability is confirmed, the detector checks the **1-hour window before the order**. MTP fires if RBC units total **≥ 4** in that window, or if RBC + FFP + platelets are co-ordered in the window. | `APPROPRIATE`, final without LLM. |
 | 4 | Is there a procedure within 6 hours before the order? | **IPTSUMOPRT** procedure rows joined to **ICD9CM** procedure dictionary. | The pipeline computes `procedure_proximity_hours` from operative procedure timing. A procedure at or before the order and within **≤ 6 hours** triggers the peri-procedural bypass. | `APPROPRIATE`, final without LLM. |
 | 5 | Is there an upcoming procedure within 72 hours after the order? | **IPTSUMOPRT** + **ICD9CM** upcoming operative procedure timing. | The pipeline computes `upcoming_procedure_hours`. A future operative event within **≤ 72 hours** is treated as pre-op crossmatch / surgical-preparation evidence. | `APPROPRIATE`, final without LLM. |
 | 6 | Did Hb drop fast enough to suggest acute blood loss? | **Lab** prior Hb observations. | The current Hb is compared with the highest prior Hb in each window. Any one trigger is enough: drop **≥ 1.5 g/dL in 6h**, **≥ 2.0 in 12h**, or **≥ 2.5 in 24h**. | `APPROPRIATE`, final without LLM. |
-| 7 | Is this a non-threshold cohort? | Cohort result from ICD-10, MED, Lab ANC, and blood-order/procedure evidence. | `MTP` already exited at step 2 and `UNKNOWN` exited at step 3. In practice this catches active heme malignancy: heme ICD-10 + recent chemo med + ANC < 500. | `NEEDS_REVIEW`, routed to LLM/human review. |
+| 7 | Is this a non-threshold cohort? | Cohort result from ICD-10, MED, Lab ANC, and blood-order/procedure evidence. | `UNKNOWN` already exited at step 2 and `MTP` exited at step 3. In practice this catches active heme malignancy: heme ICD-10 + recent chemo med + ANC < 500. | `NEEDS_REVIEW`, routed to LLM/human review. |
 | 8 | Is Hb below the cohort threshold? | **Lab** current Hb plus cohort threshold. Also checks **MED** crystalloid volume and Hb trend. | If Hb is below threshold, the row is usually appropriate. Two safety checks can stop auto-appropriate: **≥ 2 L crystalloid in prior 4h** means possible hemodilution; isolated Hb < 8 with no prior 24h Hb means no trend. | Usually `APPROPRIATE`; hemodilution or single-low-Hb-no-trend gives `NEEDS_REVIEW`. |
 | 9 | Is Hb in the gray zone? | **Lab** current Hb plus cohort threshold. | Gray zone means **cohort threshold ≤ Hb < 10 g/dL**. The deterministic layer does not make the final clinical call here. | `NEEDS_REVIEW`, routed to LLM/human review. |
 | 10 | Is Hb high, ≥ 10 g/dL? | **Lab** current Hb. | High pre-transfusion Hb is flagged as concerning, but the LLM can look for documented positive evidence before final publication. | `POTENTIALLY_INAPPROPRIATE`, routed to LLM/quote grounding. |
@@ -118,8 +118,8 @@ The Hb-tier rule is late in the classifier. Earlier checks can
 short-circuit the result:
 
 1. `Hb missing` → `INSUFFICIENT_EVIDENCE`
-2. Cohort `MTP` (massive transfusion protocol) → `APPROPRIATE`
-3. Cohort `UNKNOWN` → `NEEDS_REVIEW`
+2. Cohort `UNKNOWN` → `NEEDS_REVIEW`
+3. Cohort `MTP` (massive transfusion protocol) → `APPROPRIATE`
 4. Peri-procedural anchor ≤ 6h → `APPROPRIATE`
 5. Pre-op crossmatch / upcoming procedure ≤ 72h → `APPROPRIATE`
 6. Delta-Hb trigger → `APPROPRIATE`
@@ -173,9 +173,10 @@ never trigger a bypass on their own and never override the Hb tier.
 
 Hemoglobin is the published threshold in KCMH PR 17.2 and AABB 2023.
 Vital-sign-driven transfusion is a discretionary clinical judgment
-outside the audit's deterministic scope. Vitals enter the LLM evidence
-bundle when a row routes to the LLM; they do not change the
-deterministic classification.
+outside the audit's deterministic scope. Vitals and notes enter the LLM
+evidence bundle or human-review surface when a row routes to review, but
+only structured MTP, procedure-timing, pre-op crossmatch, or delta-Hb evidence
+can auto-bypass the Hb tier.
 
 ## Where this lives in code
 

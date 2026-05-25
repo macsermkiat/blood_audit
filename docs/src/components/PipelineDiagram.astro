@@ -58,7 +58,7 @@ const thaiGroups: StageGroup[] = [
   },
   {
     legLabel: "วิเคราะห์",
-    legSubtitle: "มี modules แล้ว; CLI wiring จะมาใน Phase 1.5",
+    legSubtitle: "มี modules แล้ว; การเชื่อมเข้ากับ CLI จะมาใน Phase 1.5",
     stages: [
       { slug: "deterministic_classifier", label: "จำแนกแบบ deterministic", module: "bba.deterministic_classifier" },
       { slug: "evidence_bundle_builder", label: "รวม evidence bundle", module: "bba.evidence_bundle_builder" },
@@ -106,10 +106,10 @@ let globalIndex = 0;
   <figcaption class="pipeline__caption">
     {isThai ? (
       <>
-        Pipeline มี 12 happy-path stages แต่ละ stage เป็น subpackage ใต้
+        Pipeline มี 12 ขั้นตอนหลัก แต่ละขั้นตอนเป็น subpackage ใต้
         <code>src/bba/</code>. ใน Phase 1, <code>bba audit</code> เชื่อมเฉพาะ
         <code>bba.ingest</code>; stage 2-12 มี modules แล้วและจะเชื่อมเข้า CLI
-        ใน Phase 1.5. Run-level idempotency บังคับใช้ที่ <code>audit_store</code>.
+        ใน Phase 1.5. Idempotency ระดับ run บังคับใช้ที่ <code>audit_store</code>.
       </>
     ) : (
       <>

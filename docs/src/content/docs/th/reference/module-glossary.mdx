@@ -6,12 +6,12 @@ description: คำศัพท์และ module สำคัญของ bloo
 import AtAGlance from "../../../../components/AtAGlance.astro";
 
 หน้านี้เป็นแผนที่นำทางแบบย่อ ไม่ได้แทน `docs/CONTEXT.md` ซึ่งเป็นไฟล์
-canonical สำหรับรายละเอียดระยะยาว
+อ้างอิงหลักสำหรับรายละเอียดระยะยาว
 
 <AtAGlance
   title="สรุปสั้น"
   items={[
-    { label: "Canonical", value: "docs/CONTEXT.md ใน GitHub" },
+    { label: "ไฟล์อ้างอิงหลัก", value: "docs/CONTEXT.md ใน GitHub" },
     { label: "ใช้เพื่อ", value: "ดู module terms, invariants, public contracts และ review notes" },
     { label: "กฎ update", value: "append เมื่อ public concept เปลี่ยน", tone: "warn" },
     { label: "หน้านี้", value: "เป็น navigation aid ไม่ใช่ duplicate copy" },
@@ -23,7 +23,7 @@ canonical สำหรับรายละเอียดระยะยาว
 - `AuditRow` — แถวผลลัพธ์หนึ่งรายการต่อคำสั่งให้เลือดที่ audit
 - `final_classification` — classification ที่เก็บและใช้ในรายงาน
 - `rule_classification` — ผลจาก deterministic classifier ก่อน LLM/finalization
-- `LLM_REVIEW` — routing label ภายใน ไม่ใช่ classification ที่เก็บ
+- `LLM_REVIEW` — label สำหรับ routing ภายใน ไม่ใช่ classification ที่เก็บ
 - `hallucination_suspect` — `review_reason` สำหรับ quote-grounding failure
 - `run_id` — hash จาก input + schema + code version เพื่อ idempotency
 - `SafeId` — placeholder ที่ใช้แทน PHI เช่น `PHI_xxx_001`
@@ -32,9 +32,9 @@ canonical สำหรับรายละเอียดระยะยาว
 
 | Module | หน้าที่ |
 | --- | --- |
-| `bba.ingest` | อ่าน HOSxP CSV และสร้าง DuckDB/Parquet snapshot |
+| `bba.ingest` | อ่าน HOSxP CSV, ตรวจ schema, normalize rows และเขียน completion marker ใน Phase 1 |
 | `bba.hb_lookup` | หา Hb ก่อนให้เลือดและ prior Hb trend |
-| `bba.cohort_detector` | assign clinical-context cohort |
+| `bba.cohort_detector` | กำหนด cohort หรือบริบททางคลินิกของคำสั่ง |
 | `bba.deterministic_classifier` | กฎ 3-tier Hb, bypass และ review flags |
 | `bba.deid_redactor` | de-identify evidence bundle |
 | `bba.quote_grounder` | ตรวจ quote ของ LLM แบบ fail-closed |

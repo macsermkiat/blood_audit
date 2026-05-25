@@ -41,8 +41,8 @@ Must be an **absolute path**. The directory must exist and be writable by
 the service user. Validated by `_resolve_data_dir()` in
 `src/bba/cli/main.py`. Holds:
 
-- DuckDB ingest snapshots
-- Parquet audit rows (cold storage)
+- Phase 1 ingest and audit run markers
+- Phase 1.5 Parquet audit rows when storage wiring is enabled
 - Run-state completion markers used by idempotency
 
 ### `BBA_DB_URL`

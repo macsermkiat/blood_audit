@@ -1,5 +1,5 @@
 ---
-title: Integration seams
+title: จุดเชื่อมต่อระบบ
 description: คำสั่งที่มีโมดูลรองรับแล้ว แต่ยังรอการเชื่อม deployment จริง
 ---
 
@@ -9,7 +9,7 @@ import IntegrationSeamCard from "../../../../components/IntegrationSeamCard.astr
 <AtAGlance
   title="สรุปสั้น"
   items={[
-    { label: "รูปแบบ", value: "โมดูลมีแล้ว แต่ CLI adapter ยังไม่เชื่อม" },
+    { label: "รูปแบบ", value: "มีโมดูลภายในแล้ว แต่ยังไม่ได้เชื่อมคำสั่ง CLI เข้ากับระบบใช้งานจริง" },
     { label: "เหตุผล", value: "ต้องรอ auth, PHI lookup, scheduler หรือ store wiring เฉพาะ deployment", tone: "warn" },
     { label: "สิ่งที่ operator ทำ", value: "มอง CliError เป็น hand-off ที่คาดไว้จนถึง Phase 1.5" },
     { label: "ห้ามทำ", value: "ห้ามใส่ fake default แค่เพื่อให้คำสั่งผ่าน", tone: "err" },

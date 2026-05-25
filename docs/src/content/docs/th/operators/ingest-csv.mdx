@@ -1,27 +1,29 @@
 ---
-title: Ingest CSV
+title: นำเข้า CSV
 description: โครงสร้างชุดข้อมูล CSV จาก HOSxP และสิ่งที่ bba ingest เขียนออก
 ---
 
 import AtAGlance from "../../../../components/AtAGlance.astro";
 
-`bba ingest` คือจุดเริ่มต้นของการออดิททุกครั้ง คำสั่งนี้ตรวจ schema,
-คำนวณ hash และแปลงชุดข้อมูลเข้าเป็น snapshot แบบ DuckDB + Parquet
-ภายใต้ `$BBA_DATA_DIR`
+`bba ingest` คือจุดเริ่มต้นสำหรับตรวจชุดข้อมูลส่งออกจาก HOSxP ใน Phase 1
+คำสั่งนี้ตรวจ header ตาม schema, คำนวณ hash, stream แถวผ่าน normalization
+และเขียน completion marker ภายใต้ `$BBA_DATA_DIR` ส่วน DuckDB + Parquet
+เป็นรูปแบบ storage ที่ตั้งใจจะเชื่อมต่อถัดไป แต่ `bba ingest` ยังไม่เขียน
+ไฟล์เหล่านั้นในปัจจุบัน
 
 <AtAGlance
   title="สรุปสั้น"
   items={[
-    { label: "ขนาด bundle", value: "ใช้ตาราง CSV จาก HOSxP จำนวน 11 ตารางหลัก", tone: "ok" },
+    { label: "ขนาด bundle", value: "ใช้ตาราง CSV จาก HOSxP จำนวน 12 ตารางหลัก", tone: "ok" },
     { label: "การตรวจ", value: "header ต้องตรงกับ schema v1; คอลัมน์ขาดหรือคอลัมน์แปลกจะ fail" },
-    { label: "ผลลัพธ์", value: "Parquet หนึ่งไฟล์ต่อหนึ่งตาราง พร้อม ingest.duckdb" },
+    { label: "ผลลัพธ์วันนี้", value: "completion marker หลังตรวจ schema และ normalize rows สำเร็จ" },
     { label: "กฎ PHI", value: "ในเอกสารและ issue ใช้ PHI_xxx เสมอ ห้ามใส่ HN/AN จริง", tone: "warn" },
   ]}
 />
 
 ## ตารางที่ต้องมี
 
-ชุดข้อมูลส่งออกจาก HOSxP มีตารางหลัก 11 ตาราง:
+ชุดข้อมูลส่งออกจาก HOSxP มีตารางหลัก 12 ตาราง:
 
 | ตาราง | ใช้ทำอะไร |
 | --- | --- |
@@ -35,21 +37,23 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
 | `IPDADMPROGRESS` | progress note สำหรับ evidence bundle ของ LLM |
 | `IPDNRFOCUSDT` | nursing note สำหรับ evidence bundle ของ LLM |
 | `IPTSUMOPRT` | operative event และเวลา procedure |
+| `INCPT` | ตาราง event ที่เกี่ยวกับ procedure/charge และถูก validate เป็นส่วนหนึ่งของ schema v1 |
 | `ICD9CM` | dictionary ของ procedure code และ flag ว่าเป็น OR/non-OR |
 
 สัญญาของคอลัมน์จริงอยู่ใน `src/bba/ingest/`
 
 ## สิ่งที่ ingest เขียนออก
 
-เมื่อ `bba ingest` สำเร็จ จะได้:
+เมื่อ `bba ingest` สำเร็จใน Phase 1 จะได้:
 
-- Parquet snapshots ที่ `$BBA_DATA_DIR/ingest/v1/<run_id>/parquet/`
-- DuckDB database ที่ `$BBA_DATA_DIR/ingest/v1/<run_id>/ingest.duckdb`
-- completion marker เพื่อบอกว่า run นี้สมบูรณ์แล้ว ถ้า marker นี้หายไป
-  การ ingest ซ้ำจะเริ่มใหม่อย่างปลอดภัย
+- `$BBA_DATA_DIR/ingest/v1/` เป็น root ของ ingest output
+- `_run_<run_id>.complete` marker เพื่อบอกว่า schema validation และ
+  row-normalization drain สำเร็จแล้ว
+- ถ้า marker นี้หายไป การ ingest ซ้ำจะเริ่มใหม่อย่างปลอดภัย
 
-สำหรับ `bba audit --input ...` ใน Phase 1 จะเขียน snapshot รูปแบบเดียวกัน
-ภายใต้ `$BBA_DATA_DIR/audit/<run_id>/`
+สำหรับ `bba audit --input ...` ใน Phase 1 จะรัน ingest validation/drain
+ภายใต้ `$BBA_DATA_DIR/audit/<run_id>/` และบันทึก run-state หนึ่งรายการต่อ
+ตาราง HOSxP ที่ validate ผ่าน
 
 ## การสร้าง run_id
 
@@ -74,4 +78,4 @@ REQNO: PHI_xxx_003
 
 ## ขั้นถัดไป
 
-- [audit command](/blood_audit/th/operators/audit-command/) — รัน audit จาก snapshot
+- [คำสั่ง audit](/blood_audit/th/operators/audit-command/) — รันเส้นทาง validate/drain ของ ingest ใน Phase 1

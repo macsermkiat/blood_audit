@@ -9,22 +9,22 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
   title="สรุป release"
   items={[
     { label: "Current version", value: "0.1.0 ใน pyproject.toml", tone: "ok" },
-    { label: "Release notes", value: "หลัง tag แล้ว GitHub Releases จะเป็น canonical" },
-    { label: "Phase 1", value: "modules feature-complete; deployment wiring ยังเหลือ" },
+    { label: "Release notes", value: "หลัง tag แล้ว GitHub Releases จะเป็นแหล่งอ้างอิงหลัก" },
+    { label: "Phase 1", value: "มี implementation ระดับ module; ยังไม่ production-wired หรือ pilot-validated" },
     { label: "ยังไม่รวม", value: "pilot validation, production wiring และ Phase B re-encryption", tone: "warn" },
   ]}
 />
 
 ## 0.1.0
 
-- Ingest HOSxP CSV เป็น DuckDB + Parquet snapshot
+- Ingest HOSxP CSV: ตรวจ schema, normalize rows และบันทึก run markers
 - Deterministic 3-tier Hb classifier พร้อม cohort-aware thresholds
 - Evidence bundle, de-id, prompt builder และ LLM batch modules
 - Quote-grounding 6 ชั้นแบบ fail-closed
 - Audit store models, idempotency และ review-action primitives
 - Docs site สำหรับ operator, developer และ clinical/QI users
 
-## ยังไม่ใช่ production deployment
+## ยังไม่ใช่ระบบ production ที่เชื่อมใช้งานจริง
 
 Phase 1 ยังไม่รวมการเชื่อม production database, scheduler, dashboard,
 pilot validation หรือ re-encryption workflow ของ Phase B
