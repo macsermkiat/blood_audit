@@ -13,7 +13,7 @@ interface Props {
 const { title = "At a glance", items } = Astro.props;
 ---
 
-<aside class="at-a-glance" aria-label={title}>
+<aside class="at-a-glance not-content" aria-label={title}>
   <p class="at-a-glance__title">{title}</p>
   <dl class="at-a-glance__grid">
     {items.map((item) => (
@@ -52,6 +52,7 @@ const { title = "At a glance", items } = Astro.props;
     display: grid;
     align-content: start;
     gap: 0.35rem;
+    margin: 0;
     min-width: 0;
     height: 100%;
     min-height: 5.25rem;
