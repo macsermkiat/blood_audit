@@ -95,6 +95,7 @@ REPORT_FIELDNAMES = [
     "procedure_proximity_hours",
     "crystalloid_liters_prior_4h",
     "anc_value",
+    "transfusion_datetime_local",
     "classification",
     "rationale",
     "bypass_reason",
@@ -365,10 +366,25 @@ def main() -> None:
     }
 
     products_by_reqno: dict[str, list[str]] = {}
+    # Earliest USEDATE+USETIME per REQNO — the moment the unit was issued
+    # from the blood bank (proxy for transfusion start; stored as local time).
+    use_dt_by_reqno: dict[str, str] = {}
     for r in bdvstdt:
-        products_by_reqno.setdefault(r["REQNO"], []).append(
+        reqno = r["REQNO"]
+        products_by_reqno.setdefault(reqno, []).append(
             (r.get("BDTYPE") or "").strip()
         )
+        use_date = (r.get("USEDATE") or "").strip().split(" ")[0]
+        use_time_raw = (r.get("USETIME") or "").strip()
+        if use_date and use_time_raw:
+            use_time = (
+                f"{use_time_raw[:2]}:{use_time_raw[2:4]}:{use_time_raw[4:6]}"
+                if len(use_time_raw) == 6
+                else use_time_raw
+            )
+            candidate = f"{use_date} {use_time}"
+            if reqno not in use_dt_by_reqno or candidate < use_dt_by_reqno[reqno]:
+                use_dt_by_reqno[reqno] = candidate
 
     diag_by_an: dict[str, list[str]] = {}
     for r in diag:
@@ -500,11 +516,17 @@ def main() -> None:
                 "procedure_proximity_hours": proximity_h,
                 "crystalloid_liters_prior_4h": crystalloid_liters,
                 "anc_value": anc,
+                "transfusion_datetime_local": use_dt_by_reqno.get(order.reqno, ""),
                 "classification": clf.classification,
                 "rationale": clf.rationale,
                 "bypass_reason": clf.bypass_reason.value,
             }
         )
+
+    # Append excluded cases as sparse rows so build_review.py can surface
+    # the exclusion reason (e.g. "obstetric") instead of showing "—".
+    for ex in filter_result.excluded:
+        rows.append({"reqno": ex.reqno, "classification": "excluded", "rationale": ex.reason})
 
     out_csv = WORK / "report.csv"
     # Always write — even an all-excluded sample needs a valid (header-
@@ -512,7 +534,7 @@ def main() -> None:
     # also keep the schema consistent across runs (one column won't
     # disappear if every case happens to have e.g. anc_value=None).
     with out_csv.open("w", encoding="utf-8", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=REPORT_FIELDNAMES)
+        w = csv.DictWriter(fh, fieldnames=REPORT_FIELDNAMES, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
     print(f"\nFull report written to {out_csv} ({len(rows)} rows)")

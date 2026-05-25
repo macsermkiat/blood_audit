@@ -556,6 +556,7 @@ def main() -> None:
             f"<div><b>HN:</b> <code>{esc(hn)}</code></div>",
             f"<div><b>AN:</b> <code>{esc(an)}</code></div>",
             f"<div><b>Order anchor:</b> {esc(anchor_date)} {esc(anchor_time)}</div>",
+            f"<div><b>Transfusion datetime (issued):</b> {esc(det.get('transfusion_datetime_local') or '—')}</div>",
             f"<div><b>Products ordered:</b> {esc(det.get('products_ordered') or '—')}</div>",
             f"<div><b>Hb @ anchor:</b> {esc(det.get('hb_value_g_dl') or '—')} g/dL "
             f"({esc(det.get('hb_freshness') or '—')}, source {esc(det.get('hb_source') or '—')})</div>",
