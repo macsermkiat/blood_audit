@@ -24,8 +24,8 @@ Acceptance-criterion → test-class map (issue #8):
     :class:`TestB2InvariantProperty` (hypothesis property over the input
     space; user constraint #6).
 
-* AC ④ "Hemodilution flag: Hb=6.5 with ≥2 L crystalloid in 4 h →
-    NEEDS_REVIEW, not APPROPRIATE"
+* AC ④ "Hemodilution flag: Hb 7.0-8.0 in a higher-threshold cohort with
+    ≥2 L crystalloid in 4 h → NEEDS_REVIEW, not APPROPRIATE"
   → :class:`TestHemodilutionFlag` (boundary at 2 L; below-window vs
     in-window crystalloid).
 
@@ -44,7 +44,8 @@ Additional contract tests:
 
 * :class:`TestCohortUnknownRoutesToNeedsReview` — user constraint #9: if
   cohort is UNKNOWN, classification MUST be NEEDS_REVIEW with
-  bypass_reason=NONE; never silently fall back to threshold=7.0.
+  bypass_reason=NONE unless the global Hb < 7.0 rule already returned
+  APPROPRIATE.
 
 * :class:`TestClassifierInputsImmutability` — frozen contract on input
   model so the classifier cannot accidentally mutate its argument.
@@ -81,6 +82,7 @@ from bba.deterministic_classifier import (
     HEMODILUTION_CRYSTALLOID_LITERS,
     PERI_PROCEDURAL_WINDOW_HOURS,
     PRE_OP_CROSSMATCH_WINDOW_HOURS,
+    UNIVERSAL_LOW_HB_APPROPRIATE_THRESHOLD,
     BypassReason,
     ClassifierInputs,
     ClassifierResult,
@@ -567,16 +569,16 @@ class TestB2InvariantProperty:
 
 
 class TestHemodilutionFlag:
-    """Hb < cohort_threshold AND ≥ 2 L crystalloid in 4 h → NEEDS_REVIEW,
-    not auto-APPROPRIATE (Round 1 B5)."""
+    """Hb < cohort_threshold AND ≥ 2 L crystalloid in 4 h → NEEDS_REVIEW
+    only after the global Hb < 7.0 rule has had first chance to classify."""
 
     def test_canonical_hemodilution_case(self) -> None:
-        """Hb=6.5 with 2.5 L crystalloid in 4 h → NEEDS_REVIEW with
-        bypass_reason=HEMODILUTION_FLAGGED (the AC #4 golden case)."""
+        """Hb=7.5 in an 8.0-threshold cohort with 2.5 L crystalloid in 4 h
+        → NEEDS_REVIEW with bypass_reason=HEMODILUTION_FLAGGED."""
         result = classify(
             _inputs(
-                hb=_hb(6.5),
-                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                hb=_hb(7.5),
+                cohort=_cohort(CohortLabel.ESRD_EPO, ESRD_EPO_THRESHOLD),
                 crystalloid_liters_prior_4h=2.5,
             )
         )
@@ -587,13 +589,26 @@ class TestHemodilutionFlag:
         """Boundary at exactly 2.0 L: ≥ 2 L means at-or-above (Round 1 B5)."""
         result = classify(
             _inputs(
-                hb=_hb(6.5),
-                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                hb=_hb(7.5),
+                cohort=_cohort(CohortLabel.ESRD_EPO, ESRD_EPO_THRESHOLD),
                 crystalloid_liters_prior_4h=HEMODILUTION_CRYSTALLOID_LITERS,
             )
         )
         assert result.bypass_reason == BypassReason.HEMODILUTION_FLAGGED
         assert result.classification == "NEEDS_REVIEW"
+
+    def test_hb_below_7_bypasses_hemodilution_review(self) -> None:
+        """Hb < 7.0 is globally APPROPRIATE before the hemodilution gate."""
+        result = classify(
+            _inputs(
+                hb=_hb(UNIVERSAL_LOW_HB_APPROPRIATE_THRESHOLD - 0.1),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                crystalloid_liters_prior_4h=2.5,
+            )
+        )
+        assert result.classification == "APPROPRIATE"
+        assert result.bypass_reason == BypassReason.NONE
+        assert result.rationale == "hb_lt_7_universal"
 
     def test_below_2l_crystalloid_does_not_flag(self) -> None:
         """< 2 L crystalloid → plain Hb-tier rule applies (APPROPRIATE
@@ -635,7 +650,7 @@ class TestBypassReasonDistinct:
         # MTP
         mtp = classify(
             _inputs(
-                hb=_hb(6.0),
+                hb=_hb(8.5),
                 cohort=_cohort(CohortLabel.MTP, None),
             )
         )
@@ -665,8 +680,8 @@ class TestBypassReasonDistinct:
         # Hemodilution
         hemo = classify(
             _inputs(
-                hb=_hb(6.5),
-                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                hb=_hb(7.5),
+                cohort=_cohort(CohortLabel.ESRD_EPO, ESRD_EPO_THRESHOLD),
                 crystalloid_liters_prior_4h=2.5,
             )
         )
@@ -768,8 +783,9 @@ class TestMonotonicityProperty:
 
 class TestSingleLowHbReviewFlag:
     """When :attr:`bba.hb_lookup.HbLookupResult.needs_review_single_low_hb`
-    is set, the deterministic engine MUST route to ``NEEDS_REVIEW`` rather
-    than auto-classifying sub-threshold Hb as ``APPROPRIATE``.
+    is set, the deterministic engine routes to ``NEEDS_REVIEW`` rather than
+    auto-classifying sub-threshold Hb as ``APPROPRIATE``, except that the
+    global Hb < 7.0 rule wins first.
 
     Upstream contract (PRD §3, hb_lookup model docstring): the flag is
     True only when the most-recent Hb is < 8 g/dL and no prior 24 h
@@ -791,18 +807,18 @@ class TestSingleLowHbReviewFlag:
         assert result.classification == "NEEDS_REVIEW"
         assert result.bypass_reason == BypassReason.NONE
 
-    def test_isolated_low_hb_default_cohort_routes_to_needs_review(self) -> None:
-        """Default-cohort case: Hb 6.5 with the flag set → NEEDS_REVIEW
-        (the lone-value-no-trend rule applies to every threshold-driven
-        cohort, not just the high-target ones)."""
+    def test_isolated_low_hb_below_7_routes_to_appropriate(self) -> None:
+        """Default-cohort case: Hb 6.5 with the flag set is still
+        APPROPRIATE because the global Hb < 7.0 rule runs first."""
         result = classify(
             _inputs(
                 hb=_hb(6.5, needs_review_single_low_hb=True),
                 cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
             )
         )
-        assert result.classification == "NEEDS_REVIEW"
+        assert result.classification == "APPROPRIATE"
         assert result.bypass_reason == BypassReason.NONE
+        assert result.rationale == "hb_lt_7_universal"
 
     def test_flag_does_not_override_mtp_bypass(self) -> None:
         """MTP is the auto-APPROPRIATE safety signal — the cluster pattern
@@ -850,19 +866,62 @@ class TestSingleLowHbReviewFlag:
 
 
 # =============================================================================
+# Global Hb < 7.0 rule — before cohort routing
+# =============================================================================
+
+
+class TestGlobalLowHbRule:
+    """Hb < 7.0 is APPROPRIATE before cohort-specific review routes."""
+
+    def test_hb_below_7_is_appropriate_for_heme_malignancy(self) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(6.7),
+                cohort=_cohort(CohortLabel.HEME_MALIGNANCY_ACTIVE, None),
+            )
+        )
+        assert result.classification == "APPROPRIATE"
+        assert result.bypass_reason == BypassReason.NONE
+        assert result.cohort_threshold is None
+        assert result.rationale == "hb_lt_7_universal"
+
+    def test_hb_at_7_does_not_use_global_rule(self) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(UNIVERSAL_LOW_HB_APPROPRIATE_THRESHOLD),
+                cohort=_cohort(CohortLabel.HEME_MALIGNANCY_ACTIVE, None),
+            )
+        )
+        assert result.classification == "NEEDS_REVIEW"
+        assert result.rationale == "cohort_non_threshold"
+
+
+# =============================================================================
 # Cohort UNKNOWN — user constraint #9
 # =============================================================================
 
 
 class TestCohortUnknownRoutesToNeedsReview:
     """User constraint #9: if cohort is UNKNOWN (procedure data missing),
-    classification MUST be NEEDS_REVIEW with bypass_reason=NONE — DO NOT
-    silently fall back to threshold=7.0."""
+    classification MUST be NEEDS_REVIEW with bypass_reason=NONE for Hb >= 7.0,
+    while Hb < 7.0 is globally APPROPRIATE before cohort routing."""
 
-    def test_unknown_cohort_with_low_hb_is_needs_review(self) -> None:
+    def test_unknown_cohort_with_hb_below_7_is_appropriate(self) -> None:
         result = classify(
             _inputs(
                 hb=_hb(6.0),
+                cohort=_cohort(CohortLabel.UNKNOWN, None),
+            )
+        )
+        assert result.classification == "APPROPRIATE"
+        assert result.bypass_reason == BypassReason.NONE
+        assert result.cohort_threshold is None
+        assert result.rationale == "hb_lt_7_universal"
+
+    def test_unknown_cohort_with_hb_at_7_is_needs_review(self) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(7.0),
                 cohort=_cohort(CohortLabel.UNKNOWN, None),
             )
         )

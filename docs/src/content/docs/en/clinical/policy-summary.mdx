@@ -16,10 +16,10 @@ defer to those documents in case of conflict.
 
 <AtAGlance
   items={[
-    { label: "Plain rule", value: "Use Hb tier only after higher-priority safety and clinical-context checks." },
+    { label: "Plain rule", value: "Hb < 7.0 g/dL is APPROPRIATE before cohort-specific review routes." },
     { label: "Checked data", value: "Lab Hb, ICD-10, ICD-9-CM procedures, MED, blood-order pattern." },
     { label: "Vitals", value: "Supporting evidence only; never a standalone bypass.", tone: "warn" },
-    { label: "Review route", value: "Unknown or non-threshold contexts become NEEDS_REVIEW.", tone: "ok" },
+    { label: "Review route", value: "Unknown or non-threshold contexts become NEEDS_REVIEW only when Hb is ≥ 7.0.", tone: "ok" },
   ]}
 />
 
@@ -39,9 +39,11 @@ defer to those documents in case of conflict.
 
 ## Bypass and review paths
 
-The plain Hb tier is not the first check. The algorithm first looks for
+The plain Hb tier is not the first check. After excluding missing Hb, the
+algorithm first applies the global low-Hb rule and then looks for other
 high-precedence evidence:
 
+- **Hb < 7.0 g/dL** → deterministic `APPROPRIATE` before cohort routing.
 - **MTP clinical context** → deterministic `APPROPRIATE`.
 - **Peri-procedural ≤ 6h before order** → deterministic `APPROPRIATE`.
 - **Pre-op crossmatch ≤ 72h after order** → deterministic `APPROPRIATE`.
@@ -49,9 +51,10 @@ high-precedence evidence:
   - ≥ 1.5 g/dL drop within 6 hours
   - ≥ 2.0 g/dL drop within 12 hours
   - ≥ 2.5 g/dL drop within 24 hours
-- **Hemodilution or isolated low Hb without trend** → `NEEDS_REVIEW`, not
-  auto-appropriate.
-- **Unknown or non-threshold clinical context** → `NEEDS_REVIEW`.
+- **Hemodilution or isolated low Hb without trend** → `NEEDS_REVIEW` only
+  after the Hb < 7.0 rule has already had first chance to classify.
+- **Unknown or non-threshold clinical context** → `NEEDS_REVIEW` when
+  Hb is ≥ 7.0.
 
 Vital-sign abnormalities alone (low BP, tachycardia) do not trigger the
 bypass.

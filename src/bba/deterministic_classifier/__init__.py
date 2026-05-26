@@ -23,6 +23,7 @@ from bba.deterministic_classifier.classifier import (
     HEMODILUTION_CRYSTALLOID_LITERS,
     PERI_PROCEDURAL_WINDOW_HOURS,
     PRE_OP_CROSSMATCH_WINDOW_HOURS,
+    UNIVERSAL_LOW_HB_APPROPRIATE_THRESHOLD,
     classify,
 )
 from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
@@ -37,6 +38,7 @@ __all__ = [
     "HEMODILUTION_CRYSTALLOID_LITERS",
     "PERI_PROCEDURAL_WINDOW_HOURS",
     "PRE_OP_CROSSMATCH_WINDOW_HOURS",
+    "UNIVERSAL_LOW_HB_APPROPRIATE_THRESHOLD",
     "BypassReason",
     "ClassifierInputs",
     "ClassifierResult",
