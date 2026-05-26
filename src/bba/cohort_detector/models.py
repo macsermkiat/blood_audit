@@ -11,9 +11,10 @@ Public-surface invariants (issue #7 acceptance criteria):
   member — when the cohort has a hard Hb threshold. ``MTP``,
   ``HEME_MALIGNANCY_ACTIVE``, and the missing-data ``UNKNOWN`` cohort
   carry ``threshold=None`` because they are not threshold-driven cohorts:
-  MTP auto-bypasses to APPROPRIATE, heme is T2-supportive (not a hard
-  number), and UNKNOWN routes to NEEDS_REVIEW. Tests assert this contract
-  explicitly so a refactor cannot quietly downgrade the type.
+	  MTP auto-bypasses to APPROPRIATE, heme is T2-supportive (not a hard
+	  number), and UNKNOWN routes to review when the deterministic classifier
+	  has not already stopped on the global Hb < 7.0 rule. Tests assert this
+	  contract explicitly so a refactor cannot quietly downgrade the type.
 
 * ``CohortInputs.procedure_events`` distinguishes "data unavailable"
   (``None``) from "patient has no operative events" (``()`` empty tuple).

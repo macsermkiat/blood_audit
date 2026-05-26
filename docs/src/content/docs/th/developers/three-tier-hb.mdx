@@ -44,8 +44,8 @@ import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
 | `ORTHO_CARDIAC` | ผ่าตัด orthopedic ร่วมกับประวัติ cardiac | ICD-9-CM orthopedic OR + ICD-10 cardiac history เช่น I20-I25 หรือ I50 | ใช้ threshold **8.0 g/dL** |
 | `ESRD_EPO` | ESRD พร้อมหลักฐานยาในบริบท dialysis | ICD-10 ESRD + medication signal ของ dialysis context | ใช้ threshold **8.0 g/dL** |
 | `MTP` | pattern แบบ massive transfusion protocol | RBC units หลาย unit หรือ RBC + FFP + platelet ใน MTP window | bypass Hb tier และให้ `APPROPRIATE` |
-| `HEME_MALIGNANCY_ACTIVE` | active heme malignancy ที่ไม่ควรลดเหลือ threshold เดียว | ICD-10 heme malignancy + chemo med + ANC < 500 | ไม่มี numeric threshold; ส่ง `NEEDS_REVIEW` |
-| `UNKNOWN` | ข้อมูล procedure ไม่พอให้เลือก threshold อย่างปลอดภัย | procedure events unavailable ไม่ใช่แค่ไม่พบ procedure | ไม่ assume default; ส่ง `NEEDS_REVIEW` |
+| `HEME_MALIGNANCY_ACTIVE` | active heme malignancy ที่ไม่ควรลดเหลือ threshold เดียว | ICD-10 heme malignancy + chemo med + ANC < 500 | Hb < 7.0 ให้ `APPROPRIATE`; ถ้า Hb ≥ 7.0 ไม่มี numeric threshold และส่ง `NEEDS_REVIEW` |
+| `UNKNOWN` | ข้อมูล procedure ไม่พอให้เลือก threshold อย่างปลอดภัย | procedure events unavailable ไม่ใช่แค่ไม่พบ procedure | Hb < 7.0 ให้ `APPROPRIATE`; ถ้า Hb ≥ 7.0 ไม่ assume default และส่ง `NEEDS_REVIEW` |
 
 แนวคิดสำคัญคือ **ข้อมูลหัตถการ "ไม่มีให้ตรวจ" ไม่เหมือนกับ "ตรวจแล้วไม่พบหัตถการ"**
 ถ้ามีข้อมูลหัตถการและไม่พบหัตถการพิเศษ ระบบตกไป `DEFAULT` ได้
@@ -59,15 +59,16 @@ import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
 | Step | คำถามที่ code ถาม | Source data | รายละเอียดสำคัญ | ผลเมื่อใช่ |
 | --- | --- | --- | --- | --- |
 | 1 | ไม่มี Hb ก่อนให้เลือดที่ใช้ได้หรือไม่ | **Lab** Hb observations | หา Hb ของผู้ป่วยเดียวกันที่เวลาเท่ากับหรือก่อน order และย้อนหลัง **น้อยกว่า 7 วัน** (`anchor - Hb time < 7 days`) รับเฉพาะค่า analytic-valid **2-25 g/dL** เลือก hematology Hb ก่อน POCT; timestamp เท่ากันให้ `item_no` สูงกว่า | `INSUFFICIENT_EVIDENCE` จบโดยไม่เรียก LLM |
-| 2 | ข้อมูล procedure missing หรือไม่ | availability ของ procedure-event join | ถ้า join ใช้ไม่ได้ ระบบไม่รู้แน่ว่ามี cardiac/orthopedic procedure หรือไม่ | `NEEDS_REVIEW` ส่ง LLM/คนทบทวน |
-| 3 | pattern เหมือน MTP หรือไม่ | ประวัติคำสั่งเลือดรอบ anchor: RBC units, FFP flag, platelet flag | หลังยืนยันว่า procedure-event join ใช้งานได้แล้ว ระบบดูช่วง **1 ชั่วโมงก่อน order** ถ้า RBC รวม **≥ 4 units** หรือ RBC + FFP + platelet co-order จะ trigger MTP | `APPROPRIATE` จบโดยไม่เรียก LLM |
-| 4 | มี procedure ภายใน 6 ชั่วโมงก่อน order หรือไม่ | **IPTSUMOPRT** + **ICD9CM** | คำนวณ `procedure_proximity_hours`; procedure ที่เกิดก่อนหรือเท่ากับ order และอยู่ใน **≤ 6 ชั่วโมง** trigger peri-procedural bypass | `APPROPRIATE` |
-| 5 | มี upcoming procedure ภายใน 72 ชั่วโมงหลัง order หรือไม่ | **IPTSUMOPRT** + **ICD9CM** | คำนวณ `upcoming_procedure_hours`; procedure ในอนาคต **≤ 72 ชั่วโมง** เป็นหลักฐาน pre-op crossmatch/surgical preparation | `APPROPRIATE` |
-| 6 | Hb drop เร็วจนเข้า acute blood loss trigger หรือไม่ | **Lab** prior Hb observations | เทียบ current Hb กับ prior Hb สูงสุดในแต่ละ window: ลด **≥ 1.5 ใน 6h**, **≥ 2.0 ใน 12h**, หรือ **≥ 2.5 ใน 24h** | `APPROPRIATE` |
-| 7 | เป็น cohort ที่ไม่มี numeric threshold หรือไม่ | ผล cohort จาก ICD-10, MED, Lab ANC และหลักฐานคำสั่งเลือด/หัตถการ | `UNKNOWN` ออกที่ step 2 และ `MTP` ออกที่ step 3 แล้ว โดยหลักคือ active heme malignancy: heme ICD-10 + chemo med ล่าสุด + ANC < 500 | `NEEDS_REVIEW` |
-| 8 | Hb ต่ำกว่า threshold ของ cohort หรือไม่ | **Lab** current Hb + threshold ของ cohort และตรวจ **MED** crystalloid/Hb trend | โดยทั่วไป Hb ต่ำกว่า threshold จะ appropriate แต่ถ้า crystalloid ≥ 2 L ใน 4h หรือ Hb < 8 ครั้งเดียวโดยไม่มี prior Hb 24h จะไม่ auto-appropriate | ส่วนใหญ่ `APPROPRIATE`; safety flag เป็น `NEEDS_REVIEW` |
-| 9 | Hb อยู่ gray zone หรือไม่ | **Lab** current Hb + threshold | gray zone คือ **threshold ≤ Hb < 10 g/dL** deterministic layer ไม่ตัดสินสุดท้ายเอง | `NEEDS_REVIEW` |
-| 10 | Hb สูง ≥ 10 g/dL หรือไม่ | **Lab** current Hb | Hb ก่อนให้เลือดสูงเป็นสัญญาณน่ากังวล แต่ LLM อาจพบหลักฐานบวกที่บันทึกไว้ก่อนเผยแพร่ผล | `POTENTIALLY_INAPPROPRIATE` ส่ง LLM/quote grounding |
+| 2 | Hb < 7.0 g/dL หรือไม่ | **Lab** current Hb | กฎ low-Hb นี้ทำงานก่อน route ตาม cohort รวมถึง `UNKNOWN`, active heme malignancy, hemodilution และ single-low-Hb-no-trend | `APPROPRIATE` จบโดยไม่เรียก LLM |
+| 3 | ข้อมูล procedure missing หรือไม่ | availability ของ procedure-event join | ถ้า join ใช้ไม่ได้และ Hb ≥ 7.0 ระบบไม่รู้แน่ว่ามี cardiac/orthopedic procedure หรือไม่ | `NEEDS_REVIEW` ส่ง LLM/คนทบทวน |
+| 4 | pattern เหมือน MTP หรือไม่ | ประวัติคำสั่งเลือดรอบ anchor: RBC units, FFP flag, platelet flag | หลังยืนยันว่า procedure-event join ใช้งานได้แล้ว ระบบดูช่วง **1 ชั่วโมงก่อน order** ถ้า RBC รวม **≥ 4 units** หรือ RBC + FFP + platelet co-order จะ trigger MTP | `APPROPRIATE` จบโดยไม่เรียก LLM |
+| 5 | มี procedure ภายใน 6 ชั่วโมงก่อน order หรือไม่ | **IPTSUMOPRT** + **ICD9CM** | คำนวณ `procedure_proximity_hours`; procedure ที่เกิดก่อนหรือเท่ากับ order และอยู่ใน **≤ 6 ชั่วโมง** trigger peri-procedural bypass | `APPROPRIATE` |
+| 6 | มี upcoming procedure ภายใน 72 ชั่วโมงหลัง order หรือไม่ | **IPTSUMOPRT** + **ICD9CM** | คำนวณ `upcoming_procedure_hours`; procedure ในอนาคต **≤ 72 ชั่วโมง** เป็นหลักฐาน pre-op crossmatch/surgical preparation | `APPROPRIATE` |
+| 7 | Hb drop เร็วจนเข้า acute blood loss trigger หรือไม่ | **Lab** prior Hb observations | เทียบ current Hb กับ prior Hb สูงสุดในแต่ละ window: ลด **≥ 1.5 ใน 6h**, **≥ 2.0 ใน 12h**, หรือ **≥ 2.5 ใน 24h** | `APPROPRIATE` |
+| 8 | เป็น cohort ที่ไม่มี numeric threshold หรือไม่ | ผล cohort จาก ICD-10, MED, Lab ANC และหลักฐานคำสั่งเลือด/หัตถการ | `UNKNOWN` ออกที่ step 3 และ `MTP` ออกที่ step 4 แล้ว โดยหลักคือ active heme malignancy ที่ Hb ≥ 7.0: heme ICD-10 + chemo med ล่าสุด + ANC < 500 | `NEEDS_REVIEW` |
+| 9 | Hb ต่ำกว่า threshold ของ cohort หรือไม่ | **Lab** current Hb + threshold ของ cohort และตรวจ **MED** crystalloid/Hb trend | สำหรับ cohort threshold สูงกว่า 7.0 ค่า Hb 7.0 ถึงต่ำกว่า threshold มัก appropriate แต่ถ้า crystalloid ≥ 2 L ใน 4h หรือ Hb < 8 ครั้งเดียวโดยไม่มี prior Hb 24h จะไม่ auto-appropriate | ส่วนใหญ่ `APPROPRIATE`; safety flag เป็น `NEEDS_REVIEW` |
+| 10 | Hb อยู่ gray zone หรือไม่ | **Lab** current Hb + threshold | gray zone คือ **threshold ≤ Hb < 10 g/dL** deterministic layer ไม่ตัดสินสุดท้ายเอง | `NEEDS_REVIEW` |
+| 11 | Hb สูง ≥ 10 g/dL หรือไม่ | **Lab** current Hb | Hb ก่อนให้เลือดสูงเป็นสัญญาณน่ากังวล แต่ LLM อาจพบหลักฐานบวกที่บันทึกไว้ก่อนเผยแพร่ผล | `POTENTIALLY_INAPPROPRIATE` ส่ง LLM/quote grounding |
 
 ## Checklist การ assign cohort
 
@@ -101,18 +102,20 @@ import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
 
 ## Precedence order
 
-กฎ Hb tier อยู่ช่วงท้ายของ classifier กฎก่อนหน้าสามารถ short-circuit ได้:
+กฎ Hb tier ตาม cohort อยู่ช่วงท้ายของ classifier แต่กฎ Hb < 7.0 เป็นกฎต้นทาง
+และกฎอื่นหลังจากนั้นยัง short-circuit ได้:
 
 1. `Hb missing` → `INSUFFICIENT_EVIDENCE`
-2. cohort `UNKNOWN` → `NEEDS_REVIEW`
-3. cohort `MTP` → `APPROPRIATE`
-4. peri-procedural anchor ≤ 6h → `APPROPRIATE`
-5. pre-op crossmatch / upcoming procedure ≤ 72h → `APPROPRIATE`
-6. delta-Hb trigger → `APPROPRIATE`
-7. non-threshold cohort → `NEEDS_REVIEW`
-8. hemodilution (Hb < threshold + crystalloid ≥ 2L/4h) → `NEEDS_REVIEW`
-9. single-low-Hb-no-trend (Hb < 8 ครั้งเดียว + ไม่มี prior Hb 24h) → `NEEDS_REVIEW`
-10. Hb-tier rule ตาม matrix
+2. Hb < 7.0 g/dL → `APPROPRIATE`
+3. cohort `UNKNOWN` → `NEEDS_REVIEW`
+4. cohort `MTP` → `APPROPRIATE`
+5. peri-procedural anchor ≤ 6h → `APPROPRIATE`
+6. pre-op crossmatch / upcoming procedure ≤ 72h → `APPROPRIATE`
+7. delta-Hb trigger → `APPROPRIATE`
+8. non-threshold cohort → `NEEDS_REVIEW`
+9. hemodilution (Hb < threshold + crystalloid ≥ 2L/4h) → `NEEDS_REVIEW`
+10. single-low-Hb-no-trend (Hb < 8 ครั้งเดียว + ไม่มี prior Hb 24h) → `NEEDS_REVIEW`
+11. Hb-tier rule ตาม matrix
 
 ## ทำไม vital signs ไม่เป็น bypass เดี่ยว
 

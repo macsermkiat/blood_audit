@@ -16,10 +16,10 @@ const isThai = Astro.url.pathname.includes("/th/");
 const englishTiers: Tier[] = [
   {
     label: "Tier 1",
-    range: "Hb < cohort threshold (7.0 default · 7.5 cardiac surgery · 8.0 selected cohorts)",
+    range: "Hb < 7.0 globally, or 7.0 ≤ Hb < cohort threshold for higher-threshold cohorts",
     ruleOutput: "APPROPRIATE",
     routes: "auto-classify",
-    rule: "Below cohort threshold. Auto-classified appropriate unless hemodilution or single-low-Hb-no-trend sends the row to review. Higher-precedence bypasses may already have stopped the classifier.",
+    rule: "Hb < 7.0 is always auto-classified appropriate before cohort routing. For higher-threshold cohorts, Hb 7.0 up to the cohort threshold is appropriate unless hemodilution or single-low-Hb-no-trend sends the row to review.",
   },
   {
     label: "Tier 2",
@@ -40,10 +40,10 @@ const englishTiers: Tier[] = [
 const thaiTiers: Tier[] = [
   {
     label: "Tier 1",
-    range: "Hb < threshold ของ cohort (default 7.0 · cardiac surgery 7.5 · selected cohorts 8.0)",
+    range: "Hb < 7.0 ทุก cohort หรือ 7.0 ≤ Hb < threshold สำหรับ cohort ที่ threshold สูงกว่า",
     ruleOutput: "APPROPRIATE",
     routes: "auto-classify",
-    rule: "Hb ต่ำกว่า threshold ของบริบททางคลินิก จึง auto-classify เป็น appropriate ได้ ยกเว้นมี hemodilution หรือ single-low-Hb-no-trend ที่ต้องส่ง review ก่อน",
+    rule: "Hb < 7.0 ให้ appropriate ก่อนดู cohort เสมอ ส่วน cohort ที่ threshold สูงกว่า ถ้า Hb 7.0 ถึงต่ำกว่า threshold จะ appropriate ได้ ยกเว้นมี hemodilution หรือ single-low-Hb-no-trend",
   },
   {
     label: "Tier 2",

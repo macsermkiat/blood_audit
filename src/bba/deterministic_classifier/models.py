@@ -51,10 +51,11 @@ class BypassReason(StrEnum):
       after the order anchor, consistent with a pre-op crossmatch.
     * :attr:`MTP` — cohort detector flagged the massive-transfusion-protocol
       cluster (≥4 RBC units in 1 h, or RBC + FFP + platelets co-ordered).
-    * :attr:`HEMODILUTION_FLAGGED` — Hb is sub-threshold but ≥2 L of
-      crystalloid in the prior 4 h marks the reading as hemodilution-
-      suspect; route to :data:`bba.audit_store.Classification` ``NEEDS_REVIEW``
-      rather than auto-APPROPRIATE (Round 1 B5).
+    * :attr:`HEMODILUTION_FLAGGED` — after the global Hb < 7.0 rule, Hb is
+      still sub-threshold but ≥2 L of crystalloid in the prior 4 h marks the
+      reading as hemodilution-suspect; route to
+      :data:`bba.audit_store.Classification` ``NEEDS_REVIEW`` rather than
+      auto-APPROPRIATE (Round 1 B5).
     * :attr:`NONE` — no bypass fired; classification reflects the plain
       Hb-tier rule.
     """
@@ -127,8 +128,9 @@ class ClassifierResult(BaseModel):
     from "no threshold meaningful for this cohort".
 
     ``rationale`` is a short slug identifying which rule fired
-    (``"hb_lt_threshold"``, ``"hb_7_to_10"``, ``"hb_ge_10"``, ``"hb_missing"``,
-    ``"bypass_delta_hb"``, ``"bypass_peri_procedural"``,
+    (``"hb_lt_7_universal"``, ``"hb_lt_threshold"``, ``"hb_7_to_10"``,
+    ``"hb_ge_10"``, ``"hb_missing"``, ``"bypass_delta_hb"``,
+    ``"bypass_peri_procedural"``,
     ``"bypass_pre_op_crossmatch"``, ``"bypass_mtp"``,
     ``"bypass_hemodilution"``, ``"cohort_unknown"``). Free-form prose
     summaries are produced by the LLM stage, not here.

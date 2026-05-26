@@ -455,8 +455,8 @@ cohort_threshold, rationale)`.
 Literal (no module-local enum). `cohort_threshold` echoes the
 threshold actually applied so the audit row is reproducible without
 re-running the cohort detector. `rationale` is a short slug naming
-which rule fired (`"hb_lt_threshold"`, `"bypass_hemodilution"`,
-`"single_low_hb_no_trend"`, …); free-form prose belongs to the LLM
+which rule fired (`"hb_lt_7_universal"`, `"hb_lt_threshold"`,
+`"bypass_hemodilution"`, `"single_low_hb_no_trend"`, …); free-form prose belongs to the LLM
 stage, not here.
 
 ### Bypass reason
@@ -470,16 +470,19 @@ dashboards can group by reason without re-deriving from `rationale`.
 
 ### Classification precedence
 
-Eight-step composition in `bba.deterministic_classifier.classify`
-(top wins): (1) Hb missing → `INSUFFICIENT_EVIDENCE`; (2) cohort
-`MTP` → `APPROPRIATE`/`MTP`; (3) cohort `UNKNOWN` → `NEEDS_REVIEW`;
-(4) procedure ≤ 6 h → `APPROPRIATE`/`PERI_PROCEDURAL_6H`;
-(5) delta-Hb fired → `APPROPRIATE`/`DELTA_HB`; (6) hemodilution
-(Hb < threshold ∧ ≥ 2 L crystalloid) → `NEEDS_REVIEW`/
-`HEMODILUTION_FLAGGED`; (7) single-low-Hb-no-trend (Hb < threshold ∧
-`needs_review_single_low_hb`) → `NEEDS_REVIEW`/`NONE`; (8) plain
-Hb-tier: `< threshold` → `APPROPRIATE`, `[threshold, 10)` →
-`NEEDS_REVIEW`, `≥ 10` → `POTENTIALLY_INAPPROPRIATE`.
+Eleven-step composition in `bba.deterministic_classifier.classify`
+(top wins): (1) Hb missing → `INSUFFICIENT_EVIDENCE`; (2) Hb < 7.0 →
+`APPROPRIATE`/`NONE`; (3) cohort `MTP` → `APPROPRIATE`/`MTP`;
+(4) cohort `UNKNOWN` → `NEEDS_REVIEW`; (5) procedure ≤ 6 h →
+`APPROPRIATE`/`PERI_PROCEDURAL_6H`; (6) upcoming procedure ≤ 72 h →
+`APPROPRIATE`/`PRE_OP_CROSSMATCH`; (7) delta-Hb fired →
+`APPROPRIATE`/`DELTA_HB`; (8) non-threshold cohort →
+`NEEDS_REVIEW`; (9) hemodilution (Hb < threshold ∧ ≥ 2 L crystalloid)
+→ `NEEDS_REVIEW`/`HEMODILUTION_FLAGGED`; (10)
+single-low-Hb-no-trend (Hb < threshold ∧ `needs_review_single_low_hb`)
+→ `NEEDS_REVIEW`/`NONE`; (11) plain Hb-tier: `< threshold` →
+`APPROPRIATE`, `[threshold, 10)` → `NEEDS_REVIEW`, `≥ 10` →
+`POTENTIALLY_INAPPROPRIATE`.
 
 ### INAPPROPRIATE never deterministic
 
@@ -503,27 +506,28 @@ Literal across `audit_store`, `deterministic_classifier`,
 
 ### Cohort UNKNOWN routing
 
-`label=UNKNOWN`, `threshold=None` → `NEEDS_REVIEW`/`NONE`. Refuses
-to silently default to `DEFAULT_THRESHOLD=7.0` when procedure data
-was missing upstream (Round 2 fix N1 + user constraint: NEVER silent
-7.0). Hb missing still wins over UNKNOWN — no current Hb means no
-anchor for any interpretation. `TestCohortUnknownRoutesToNeedsReview`.
+`label=UNKNOWN`, `threshold=None` → `NEEDS_REVIEW`/`NONE` when Hb is
+≥ 7.0. Hb < 7.0 now stops earlier as `APPROPRIATE`. For the remaining
+UNKNOWN cases, the classifier refuses to silently default to
+`DEFAULT_THRESHOLD=7.0` when procedure data was missing upstream. Hb
+missing still wins over UNKNOWN — no current Hb means no anchor for any
+interpretation. `TestCohortUnknownRoutesToNeedsReview`.
 
 ### Non-threshold cohort fallthrough
 
-After the bypass chain, a `threshold=None` cohort surviving steps 1-5
-(in practice, only `HEME_MALIGNANCY_ACTIVE` — `MTP` and `UNKNOWN`
-exited earlier) routes to `NEEDS_REVIEW`/`NONE` with
+After the global Hb < 7.0 rule and bypass chain, a `threshold=None`
+cohort surviving the earlier steps (in practice, Hb ≥ 7.0
+`HEME_MALIGNANCY_ACTIVE` — `MTP` and `UNKNOWN` exited earlier) routes
+to `NEEDS_REVIEW`/`NONE` with
 `rationale="cohort_non_threshold"`. The T2-supportive heme cohort
 is not Hb-tier-driven; the LLM stage handles its context
-interpretation. Surfacing as `NEEDS_REVIEW` rather than passing
-through plain Hb tiers avoids a meaningless `APPROPRIATE` for a
-patient whose anemia interpretation depends entirely on the
-clinical narrative.
+interpretation for Hb ≥ 7.0. Hb < 7.0 is globally `APPROPRIATE`
+before this cohort branch.
 
 ### Hemodilution carve-out
 
-Inside the sub-threshold branch (Hb < `cohort_threshold`), if
+After the global Hb < 7.0 rule, inside the remaining sub-threshold branch
+(Hb < `cohort_threshold`), if
 `crystalloid_liters_prior_4h ≥ 2.0` (Round 1 B5), classification is
 `NEEDS_REVIEW` with `bypass_reason=HEMODILUTION_FLAGGED` instead of
 auto-APPROPRIATE. Scoped to the would-be auto-APPROPRIATE branch
@@ -532,9 +536,10 @@ on the classifier module as `HEMODILUTION_CRYSTALLOID_LITERS = 2.0`.
 
 ### Single-low-Hb-no-trend carve-out
 
-After the hemodilution check, if `hb_result.needs_review_single_low_hb`
-is set (upstream contract: isolated Hb < 8 g/dL with no prior 24 h
-observation), classification is `NEEDS_REVIEW`/`NONE` with
+After the global Hb < 7.0 rule and the hemodilution check, if
+`hb_result.needs_review_single_low_hb` is set (upstream contract:
+isolated Hb < 8 g/dL with no prior 24 h observation), classification is
+`NEEDS_REVIEW`/`NONE` with
 `rationale="single_low_hb_no_trend"`. PR #52 Codex P1: a lone
 unconfirmed low value cannot be treated as confirmed anemia. The
 MTP / peri-procedural / delta-Hb bypasses still win above this check

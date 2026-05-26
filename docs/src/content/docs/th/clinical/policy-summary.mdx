@@ -16,10 +16,10 @@ import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
 <AtAGlance
   title="สรุปสั้น"
   items={[
-    { label: "กฎหลัก", value: "ใช้ Hb tier หลังตรวจ safety และบริบททางคลินิกที่สำคัญกว่าแล้วเท่านั้น" },
+    { label: "กฎหลัก", value: "Hb < 7.0 g/dL ให้ APPROPRIATE ก่อน route ตาม cohort" },
     { label: "ข้อมูลที่ตรวจ", value: "Lab Hb, ICD-10, ICD-9-CM procedure, MED และ pattern ของคำสั่งเลือด" },
     { label: "Vital signs", value: "ใช้เป็นหลักฐานประกอบเท่านั้น ไม่ใช่ bypass เดี่ยว", tone: "warn" },
-    { label: "ส่งทบทวน", value: "บริบท unknown หรือไม่มี numeric threshold จะเป็น NEEDS_REVIEW", tone: "ok" },
+    { label: "ส่งทบทวน", value: "บริบท unknown หรือไม่มี numeric threshold จะเป็น NEEDS_REVIEW เมื่อ Hb ≥ 7.0", tone: "ok" },
   ]}
 />
 
@@ -39,8 +39,10 @@ import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
 
 ## กรณีข้ามเกณฑ์ Hb และกรณีที่ต้องส่งทบทวน
 
-ระบบไม่ได้เริ่มจาก Hb tier ทันที แต่จะตรวจหลักฐานที่มี priority สูงก่อน:
+หลังตัดกรณีไม่มี Hb ออกแล้ว ระบบให้ Hb < 7.0 เป็นกฎแรกก่อน route ตาม
+cohort จากนั้นจึงตรวจหลักฐาน priority สูงอื่น:
 
+- **Hb < 7.0 g/dL** → `APPROPRIATE` แบบ deterministic ก่อนดู cohort
 - **บริบท MTP** → `APPROPRIATE` แบบ deterministic
 - **Peri-procedural ≤ 6 ชั่วโมงก่อน order** → `APPROPRIATE`
 - **Pre-op crossmatch ≤ 72 ชั่วโมงหลัง order** → `APPROPRIATE`
@@ -49,8 +51,9 @@ import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
   - ลดลง ≥ 2.0 g/dL ภายใน 12 ชั่วโมง
   - ลดลง ≥ 2.5 g/dL ภายใน 24 ชั่วโมง
 - **Hemodilution หรือ Hb ต่ำครั้งเดียวโดยไม่มี trend** → `NEEDS_REVIEW`
-  ไม่ auto-appropriate
-- **Unknown หรือ non-threshold clinical context** → `NEEDS_REVIEW`
+  เฉพาะหลังจากกฎ Hb < 7.0 ได้ตรวจแล้ว
+- **Unknown หรือ non-threshold clinical context** → `NEEDS_REVIEW` เมื่อ
+  Hb ≥ 7.0
 
 Vital signs เช่น hypotension หรือ tachycardia ไม่ทำให้เกิด bypass ด้วยตัวเอง
 

@@ -17,7 +17,7 @@ to the LLM for positive-evidence reasoning and quote grounding.
     { label: "First input", value: "Current pre-transfusion Hb from Lab." },
     { label: "Context input", value: "Cohort from ICD-9-CM, ICD-10, MED, Lab ANC, and blood-order pattern." },
     { label: "Bypasses", value: "MTP, peri-procedural, pre-op crossmatch, and delta-Hb can stop early.", tone: "ok" },
-    { label: "Review route", value: "Unknown, non-threshold, gray-zone, high-Hb, and safety-flag rows route to review.", tone: "warn" },
+    { label: "Low-Hb rule", value: "Hb < 7.0 g/dL is APPROPRIATE before cohort-specific review routes.", tone: "ok" },
   ]}
 />
 
@@ -54,8 +54,8 @@ everyone:
 | `ORTHO_CARDIAC` | Orthopedic surgery plus cardiac history. This has a higher threshold than default. | Orthopedic operative procedure plus cardiac-history ICD-10 evidence such as ischemic heart disease or heart failure. | Uses Hb threshold **8.0 g/dL**. |
 | `ESRD_EPO` | End-stage renal disease context with dialysis-medication evidence. | ESRD ICD-10 diagnosis plus a dialysis-context medication signal. Both are required. | Uses Hb threshold **8.0 g/dL**. |
 | `MTP` | Massive transfusion protocol pattern. This is not judged by the Hb threshold. | RBC-unit cluster pattern, or RBC + FFP + platelet co-ordering pattern in the MTP window. | Bypasses the Hb tier and returns `APPROPRIATE`. |
-| `HEME_MALIGNANCY_ACTIVE` | Active hematologic malignancy context where one numeric threshold is not enough. | Heme-malignancy ICD-10 signal plus recent chemotherapy medication plus neutropenia. | Does **not** use a numeric threshold. Routes to `NEEDS_REVIEW` / LLM context review. |
-| `UNKNOWN` | The audit does not have enough procedure data to safely choose a threshold. | Procedure events are unavailable, not merely empty. | Does **not** silently assume 7.0. Routes to `NEEDS_REVIEW`. |
+| `HEME_MALIGNANCY_ACTIVE` | Active hematologic malignancy context where one numeric threshold is not enough. | Heme-malignancy ICD-10 signal plus recent chemotherapy medication plus neutropenia. | Hb < 7.0 is `APPROPRIATE`; otherwise no numeric threshold is applied and the row routes to `NEEDS_REVIEW` / LLM context review. |
+| `UNKNOWN` | The audit does not have enough procedure data to safely choose a threshold. | Procedure events are unavailable, not merely empty. | Hb < 7.0 is `APPROPRIATE`; otherwise the classifier does not silently assume 7.0 and routes to `NEEDS_REVIEW`. |
 
 The key safety idea: **missing procedure data is different from no procedure
 found**. If procedure data is available and empty, the detector can fall
@@ -70,15 +70,16 @@ the operational checklist the audit follows for one RBC order:
 | Step | Question the code asks | Source data checked | Important details | Output if yes |
 | --- | --- | --- | --- | --- |
 | 1 | Is there no usable pre-transfusion Hb? | **Lab** table Hb observations. | The Hb lookup searches Hb results for the same patient at or before the order time. It only accepts analytic-valid Hb values in **2-25 g/dL** and looks back **less than 7 days** (`anchor - Hb time < 7 days`). Hematology Hb is preferred over POCT when available. If two rows have the same timestamp, the higher Lab `item_no` wins. | `INSUFFICIENT_EVIDENCE`, final without LLM. |
-| 2 | Is procedure data missing? | Procedure-event join availability. | This is not the same as "no procedure found." If the procedure join is unavailable, the audit cannot safely know whether cardiac/orthopedic procedure rules apply. | `NEEDS_REVIEW`, routed to LLM/human review. |
-| 3 | Does the order look like massive transfusion protocol (MTP)? | Blood-order history around the anchor: RBC units, FFP co-order flag, platelet co-order flag. | After procedure-event availability is confirmed, the detector checks the **1-hour window before the order**. MTP fires if RBC units total **≥ 4** in that window, or if RBC + FFP + platelets are co-ordered in the window. | `APPROPRIATE`, final without LLM. |
-| 4 | Is there a procedure within 6 hours before the order? | **IPTSUMOPRT** procedure rows joined to **ICD9CM** procedure dictionary. | The pipeline computes `procedure_proximity_hours` from operative procedure timing. A procedure at or before the order and within **≤ 6 hours** triggers the peri-procedural bypass. | `APPROPRIATE`, final without LLM. |
-| 5 | Is there an upcoming procedure within 72 hours after the order? | **IPTSUMOPRT** + **ICD9CM** upcoming operative procedure timing. | The pipeline computes `upcoming_procedure_hours`. A future operative event within **≤ 72 hours** is treated as pre-op crossmatch / surgical-preparation evidence. | `APPROPRIATE`, final without LLM. |
-| 6 | Did Hb drop fast enough to suggest acute blood loss? | **Lab** prior Hb observations. | The current Hb is compared with the highest prior Hb in each window. Any one trigger is enough: drop **≥ 1.5 g/dL in 6h**, **≥ 2.0 in 12h**, or **≥ 2.5 in 24h**. | `APPROPRIATE`, final without LLM. |
-| 7 | Is this a non-threshold cohort? | Cohort result from ICD-10, MED, Lab ANC, and blood-order/procedure evidence. | `UNKNOWN` already exited at step 2 and `MTP` exited at step 3. In practice this catches active heme malignancy: heme ICD-10 + recent chemo med + ANC < 500. | `NEEDS_REVIEW`, routed to LLM/human review. |
-| 8 | Is Hb below the cohort threshold? | **Lab** current Hb plus cohort threshold. Also checks **MED** crystalloid volume and Hb trend. | If Hb is below threshold, the row is usually appropriate. Two safety checks can stop auto-appropriate: **≥ 2 L crystalloid in prior 4h** means possible hemodilution; isolated Hb < 8 with no prior 24h Hb means no trend. | Usually `APPROPRIATE`; hemodilution or single-low-Hb-no-trend gives `NEEDS_REVIEW`. |
-| 9 | Is Hb in the gray zone? | **Lab** current Hb plus cohort threshold. | Gray zone means **cohort threshold ≤ Hb < 10 g/dL**. The deterministic layer does not make the final clinical call here. | `NEEDS_REVIEW`, routed to LLM/human review. |
-| 10 | Is Hb high, ≥ 10 g/dL? | **Lab** current Hb. | High pre-transfusion Hb is flagged as concerning, but the LLM can look for documented positive evidence before final publication. | `POTENTIALLY_INAPPROPRIATE`, routed to LLM/quote grounding. |
+| 2 | Is Hb < 7.0 g/dL? | **Lab** current Hb. | This global low-Hb rule runs before cohort-specific review routes, including `UNKNOWN`, active heme malignancy, hemodilution, and single-low-Hb-no-trend. | `APPROPRIATE`, final without LLM. |
+| 3 | Is procedure data missing? | Procedure-event join availability. | This is not the same as "no procedure found." If the procedure join is unavailable and Hb is ≥ 7.0, the audit cannot safely know whether cardiac/orthopedic procedure rules apply. | `NEEDS_REVIEW`, routed to LLM/human review. |
+| 4 | Does the order look like massive transfusion protocol (MTP)? | Blood-order history around the anchor: RBC units, FFP co-order flag, platelet co-order flag. | After procedure-event availability is confirmed, the detector checks the **1-hour window before the order**. MTP fires if RBC units total **≥ 4** in that window, or if RBC + FFP + platelets are co-ordered in the window. | `APPROPRIATE`, final without LLM. |
+| 5 | Is there a procedure within 6 hours before the order? | **IPTSUMOPRT** procedure rows joined to **ICD9CM** procedure dictionary. | The pipeline computes `procedure_proximity_hours` from operative procedure timing. A procedure at or before the order and within **≤ 6 hours** triggers the peri-procedural bypass. | `APPROPRIATE`, final without LLM. |
+| 6 | Is there an upcoming procedure within 72 hours after the order? | **IPTSUMOPRT** + **ICD9CM** upcoming operative procedure timing. | The pipeline computes `upcoming_procedure_hours`. A future operative event within **≤ 72 hours** is treated as pre-op crossmatch / surgical-preparation evidence. | `APPROPRIATE`, final without LLM. |
+| 7 | Did Hb drop fast enough to suggest acute blood loss? | **Lab** prior Hb observations. | The current Hb is compared with the highest prior Hb in each window. Any one trigger is enough: drop **≥ 1.5 g/dL in 6h**, **≥ 2.0 in 12h**, or **≥ 2.5 in 24h**. | `APPROPRIATE`, final without LLM. |
+| 8 | Is this a non-threshold cohort? | Cohort result from ICD-10, MED, Lab ANC, and blood-order/procedure evidence. | `UNKNOWN` already exited at step 3 and `MTP` exited at step 4. In practice this catches Hb ≥ 7.0 active heme malignancy: heme ICD-10 + recent chemo med + ANC < 500. | `NEEDS_REVIEW`, routed to LLM/human review. |
+| 9 | Is Hb below the cohort threshold? | **Lab** current Hb plus cohort threshold. Also checks **MED** crystalloid volume and Hb trend. | For higher-threshold cohorts, Hb 7.0 up to the cohort threshold is usually appropriate. Two safety checks can stop auto-appropriate: **≥ 2 L crystalloid in prior 4h** means possible hemodilution; isolated Hb < 8 with no prior 24h Hb means no trend. | Usually `APPROPRIATE`; hemodilution or single-low-Hb-no-trend gives `NEEDS_REVIEW`. |
+| 10 | Is Hb in the gray zone? | **Lab** current Hb plus cohort threshold. | Gray zone means **cohort threshold ≤ Hb < 10 g/dL**. The deterministic layer does not make the final clinical call here. | `NEEDS_REVIEW`, routed to LLM/human review. |
+| 11 | Is Hb high, ≥ 10 g/dL? | **Lab** current Hb. | High pre-transfusion Hb is flagged as concerning, but the LLM can look for documented positive evidence before final publication. | `POTENTIALLY_INAPPROPRIATE`, routed to LLM/quote grounding. |
 
 ## Cohort assignment checklist
 
@@ -114,19 +115,20 @@ fixed order:
 
 ## Precedence order (top wins)
 
-The Hb-tier rule is late in the classifier. Earlier checks can
-short-circuit the result:
+The cohort-specific Hb-tier rule is late in the classifier. The global
+Hb < 7.0 rule is early, and later checks can still short-circuit the result:
 
 1. `Hb missing` → `INSUFFICIENT_EVIDENCE`
-2. Cohort `UNKNOWN` → `NEEDS_REVIEW`
-3. Cohort `MTP` (massive transfusion protocol) → `APPROPRIATE`
-4. Peri-procedural anchor ≤ 6h → `APPROPRIATE`
-5. Pre-op crossmatch / upcoming procedure ≤ 72h → `APPROPRIATE`
-6. Delta-Hb trigger → `APPROPRIATE`
-7. Non-threshold cohort → `NEEDS_REVIEW`
-8. Hemodilution (Hb < threshold + ≥ 2L crystalloid / 4h) → `NEEDS_REVIEW`
-9. Single-low-Hb-no-trend (isolated Hb < 8 + no prior 24h Hb) → `NEEDS_REVIEW`
-10. Hb-tier rule (the matrix above)
+2. Hb < 7.0 g/dL → `APPROPRIATE`
+3. Cohort `UNKNOWN` → `NEEDS_REVIEW`
+4. Cohort `MTP` (massive transfusion protocol) → `APPROPRIATE`
+5. Peri-procedural anchor ≤ 6h → `APPROPRIATE`
+6. Pre-op crossmatch / upcoming procedure ≤ 72h → `APPROPRIATE`
+7. Delta-Hb trigger → `APPROPRIATE`
+8. Non-threshold cohort → `NEEDS_REVIEW`
+9. Hemodilution (Hb < threshold + ≥ 2L crystalloid / 4h) → `NEEDS_REVIEW`
+10. Single-low-Hb-no-trend (isolated Hb < 8 + no prior 24h Hb) → `NEEDS_REVIEW`
+11. Hb-tier rule (the matrix above)
 
 ## The bypass paths to `APPROPRIATE`
 
@@ -146,8 +148,8 @@ Four bypasses can return `APPROPRIATE` before the plain Hb-tier rule:
 
 ## Review flags before auto-appropriate
 
-Two checks can stop a would-be sub-threshold `APPROPRIATE` row and send it
-to review instead:
+After the global Hb < 7.0 rule, two checks can stop a would-be
+sub-threshold `APPROPRIATE` row and send it to review instead:
 
 - **Hemodilution flagged** — Hb is below threshold, but ≥ 2 L crystalloid
   in the prior 4 hours makes the Hb value suspect.
@@ -166,8 +168,8 @@ never trigger a bypass on their own and never override the Hb tier.
 | Orthopedic + cardiac history | < 8.0 g/dL | Orthopedic procedure plus cardiac-history evidence. |
 | ESRD + dialysis-med signal | < 8.0 g/dL | ESRD diagnosis plus active dialysis-context medication. |
 | MTP | None | Bypasses directly to `APPROPRIATE`. |
-| Active heme malignancy | None | Routes to `NEEDS_REVIEW`; LLM interprets context. |
-| Unknown | None | Routes to `NEEDS_REVIEW`; the classifier refuses to assume a threshold. |
+| Active heme malignancy | None | Hb < 7.0 is `APPROPRIATE`; Hb ≥ 7.0 routes to `NEEDS_REVIEW`; LLM interprets context. |
+| Unknown | None | Hb < 7.0 is `APPROPRIATE`; Hb ≥ 7.0 routes to `NEEDS_REVIEW`; the classifier refuses to assume a threshold. |
 
 ## Why vitals are not standalone
 
