@@ -83,6 +83,8 @@ REPORT_FIELDNAMES = [
     "anchor_imputed",
     "products_ordered",
     "diagnosis_codes_n",
+    "hb_anchor_datetime_local",
+    "hb_anchor_reason",
     "hb_value_g_dl",
     "hb_freshness",
     "hb_source",
@@ -148,6 +150,14 @@ def _fmt_hosxp_time(raw: str | None) -> str:
         padded = stripped.zfill(6)
         return f"{padded[:2]}:{padded[2:4]}:{padded[4:6]}"
     return stripped
+
+
+def _fmt_local_datetime(date_raw: str | None, time_raw: str | None) -> str:
+    d = (date_raw or "").strip().split(" ")[0]
+    t = _fmt_hosxp_time(time_raw)
+    if d and t:
+        return f"{d} {t}"
+    return d or t or ""
 
 
 def _combine(d: date | None, t: ParsedTimeOfDay | None) -> datetime | None:
@@ -425,20 +435,66 @@ def main() -> None:
         for r in icd9
     }
 
+    bdvst_by_reqno = {r["REQNO"]: r for r in bdvst}
+
     products_by_reqno: dict[str, list[str]] = {}
-    # Earliest USEDATE+USETIME per REQNO — the moment the unit was issued
-    # from the blood bank (proxy for transfusion start; stored as local time).
+    # Best available issue/collection display per REQNO. Prefer BDVST
+    # PICKDATE/PICKTIME when exported, then BDVSTDT USEDATE/USETIME, then a
+    # date-only USEDATE marker so the review page does not hide date evidence.
     use_dt_by_reqno: dict[str, str] = {}
+    exact_issue_anchor_by_reqno: dict[str, datetime] = {}
+    # Blood-bank visit/request timestamp is not the issue time, but it is a
+    # useful fallback Hb anchor when the formal order timestamp precedes labs
+    # by only a few minutes.
+    blood_bank_anchor_by_reqno: dict[str, datetime] = {}
+    blood_bank_anchor_display_by_reqno: dict[str, str] = {}
     for r in bdvstdt:
         reqno = r["REQNO"]
         products_by_reqno.setdefault(reqno, []).append((r.get("BDTYPE") or "").strip())
+        visit_dt = _combine(
+            _parse_hosxp_date(r.get("BDVSTDATE") or ""),
+            _parse_time(r.get("BDVSTTIME") or ""),
+        )
+        if visit_dt is not None:
+            current = blood_bank_anchor_by_reqno.get(reqno)
+            if current is None or visit_dt < current:
+                blood_bank_anchor_by_reqno[reqno] = visit_dt
+                blood_bank_anchor_display_by_reqno[reqno] = _fmt_local_datetime(
+                    r.get("BDVSTDATE"), r.get("BDVSTTIME")
+                )
+
+        parent = bdvst_by_reqno.get(reqno, {})
+        pick_date = (parent.get("PICKDATE") or "").strip().split(" ")[0]
+        pick_time_raw = (parent.get("PICKTIME") or "").strip()
+        pick_dt = (
+            _combine(_parse_hosxp_date(pick_date), _parse_time(pick_time_raw))
+            if pick_date and pick_time_raw
+            else None
+        )
+        if pick_dt is not None:
+            candidate = _fmt_local_datetime(pick_date, pick_time_raw)
+            if (
+                reqno not in exact_issue_anchor_by_reqno
+                or pick_dt < exact_issue_anchor_by_reqno[reqno]
+            ):
+                exact_issue_anchor_by_reqno[reqno] = pick_dt
+                use_dt_by_reqno[reqno] = candidate
+            continue
+
         use_date = (r.get("USEDATE") or "").strip().split(" ")[0]
         use_time_raw = (r.get("USETIME") or "").strip()
         if use_date and use_time_raw:
             use_time = _fmt_hosxp_time(use_time_raw)
             candidate = f"{use_date} {use_time}"
-            if reqno not in use_dt_by_reqno or candidate < use_dt_by_reqno[reqno]:
+            use_dt = _combine(_parse_hosxp_date(use_date), _parse_time(use_time_raw))
+            if use_dt is not None and (
+                reqno not in exact_issue_anchor_by_reqno
+                or use_dt < exact_issue_anchor_by_reqno[reqno]
+            ):
+                exact_issue_anchor_by_reqno[reqno] = use_dt
                 use_dt_by_reqno[reqno] = candidate
+        elif use_date and reqno not in use_dt_by_reqno:
+            use_dt_by_reqno[reqno] = f"{use_date} (time missing)"
 
     diag_by_an: dict[str, list[str]] = {}
     for r in diag:
@@ -495,6 +551,31 @@ def main() -> None:
     for order in filter_result.included:
         hb_obs = _build_hb_observations(lab, order.an)
         hb = lookup_hb(observations=hb_obs, anchor_utc=order.order_datetime)
+        hb_anchor_display = ""
+        hb_anchor_reason = "order_datetime"
+        if hb.value_g_dl is None:
+            fallback_candidates = (
+                (
+                    exact_issue_anchor_by_reqno.get(order.reqno),
+                    use_dt_by_reqno.get(order.reqno, ""),
+                    "issue_datetime",
+                ),
+                (
+                    blood_bank_anchor_by_reqno.get(order.reqno),
+                    blood_bank_anchor_display_by_reqno.get(order.reqno, ""),
+                    "blood_bank_visit_fallback",
+                ),
+            )
+            for fallback_anchor, display, reason in fallback_candidates:
+                if fallback_anchor is None or fallback_anchor < order.order_datetime:
+                    continue
+                fallback_hb = lookup_hb(observations=hb_obs, anchor_utc=fallback_anchor)
+                if fallback_hb.value_g_dl is None:
+                    continue
+                hb = fallback_hb
+                hb_anchor_display = display
+                hb_anchor_reason = reason
+                break
         op_events = _build_op_events(
             iptsumoprt, ipddchsumoprt, incpt, optract_dict, icd9_dict, order.an
         )
@@ -573,6 +654,8 @@ def main() -> None:
                 "anchor_imputed": order.anchor_imputed,
                 "products_ordered": "|".join(order.products_ordered),
                 "diagnosis_codes_n": len(order.diagnosis_codes),
+                "hb_anchor_datetime_local": hb_anchor_display,
+                "hb_anchor_reason": hb_anchor_reason,
                 "hb_value_g_dl": hb.value_g_dl,
                 "hb_freshness": hb.freshness,
                 "hb_source": hb.source,
