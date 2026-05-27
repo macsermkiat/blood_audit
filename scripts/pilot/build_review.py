@@ -398,6 +398,14 @@ def main() -> None:
         with path.open(encoding="utf-8", newline="") as fh:
             return list(csv.DictReader(fh))
 
+    def _read_preferred_optional(*names: str) -> list[dict[str, str]]:
+        for name in names:
+            path = BUNDLE / name
+            if path.exists():
+                with path.open(encoding="utf-8", newline="") as fh:
+                    return list(csv.DictReader(fh))
+        return []
+
     bdvst = _read("BDVST.csv")
     bdvstdt = _read("BDVSTDT.csv")
     related_bdvst = _read_optional("BDVST_RELATED.csv")
@@ -411,7 +419,7 @@ def main() -> None:
     bdvstst_dict_rows = _read("BDVSTST.csv")
     progress = _read("IPDADMPROGRESS.csv")
     focus = _read("IPDNRFOCUSDT.csv")
-    incpt = _read_optional("INCPT.csv")
+    incpt = _read_preferred_optional("INCPT_OPRTACT.csv", "INCPT.csv")
     optract = _read_optional("OPRTACT.csv")
 
     icd9_dict = {
@@ -638,11 +646,26 @@ def main() -> None:
                 continue
             income = _field(r, "Income", "INCOME").strip()
             ordercode = _field(r, "Ordercode", "ORDERCODE").strip()
-            op_map = optract_dict.get(income) or optract_dict.get(ordercode) or {}
+            optract_code = _field(r, "O__Oprtact", "O__OPRTACT").strip()
+            row_op_map = {
+                "Icd9cm": _field(r, "O__Icd9cm", "O__ICD9CM").strip(),
+                "Icd9cmadd1": _field(r, "O__Icd9cmadd1", "O__ICD9CMADD1").strip(),
+                "Icd9cmadd2": _field(r, "O__Icd9cmadd2", "O__ICD9CMADD2").strip(),
+                "Name En": _field(r, "O__Name En", "O__NAME_EN", "O__NAME EN").strip(),
+                "Name": _field(r, "O__Name", "O__NAME").strip(),
+            }
+            op_map = (
+                row_op_map
+                if any(row_op_map.values())
+                else optract_dict.get(optract_code)
+                or optract_dict.get(income)
+                or optract_dict.get(ordercode)
+                or {}
+            )
             op_name = (
                 _field(op_map, "Name En", "NAME EN").strip()
                 or _field(op_map, "Name", "NAME").strip()
-                or _field(r, "Incgrp → Name", "INCGRP → NAME").strip()
+                or _field(r, "Incgrp → Name", "INCGRP → NAME", "INCGRP__NAME").strip()
             )
             op_codes = [
                 c.strip().replace(".", "")
@@ -657,7 +680,7 @@ def main() -> None:
                 {
                     "Source": "INCPT",
                     "ICD9CM": ",".join(op_codes),
-                    "OPRTACT": income or ordercode,
+                    "OPRTACT": optract_code or income or ordercode,
                     "Name": op_name,
                     "INDATE": _field(r, "Incdate", "INCDATE"),
                     "INTIME": fmt_time(_field(r, "Inctime", "INCTIME")),

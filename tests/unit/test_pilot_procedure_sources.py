@@ -99,6 +99,37 @@ def test_incpt_uses_optract_icd9cm_bridge_when_available() -> None:
     assert events[0].name == "Removal of internal fixation device, radius and ulna"
 
 
+def test_joined_incpt_optract_row_uses_row_level_icd9cm() -> None:
+    mod = _load_run_pipeline()
+
+    events = mod._build_op_events(
+        [],
+        [],
+        [
+            {
+                "AN": "PHI_case",
+                "INCGRP": "111",
+                "INCOME": "P1141",
+                "O__OPRTACT": "P1141",
+                "O__ICD9CM": "7863",
+                "O__NAME EN": "Removal of internal fixation device, radius and ulna",
+                "INCDATE": "2025-11-20 00:00:00.000",
+                "INCTIME": "090000",
+                "CANCELDATE": "",
+            }
+        ],
+        {},
+        {"7863": {"NAME": "Removal of implanted device", "ORFLAG": "1"}},
+        "PHI_case",
+    )
+
+    assert len(events) == 1
+    assert events[0].icd9 == "7863"
+    assert events[0].or_flag is True
+    assert events[0].operative_datetime == datetime(2025, 11, 20, 2, tzinfo=UTC)
+    assert events[0].name == "Removal of internal fixation device, radius and ulna"
+
+
 def test_incpt_without_optract_mapping_keeps_timing_fallback() -> None:
     mod = _load_run_pipeline()
 
