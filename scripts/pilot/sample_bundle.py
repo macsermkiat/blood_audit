@@ -231,11 +231,29 @@ def main() -> None:
             "IPDDCHSUMOPRT.csv",
             lambda r: (r.get("An") or r.get("AN")) in sample_ans,
         )
-    if (SRC / "INCPT.csv").exists():
+    if (SRC / "INCPT_OPRTACT.csv").exists():
+        _filter(
+            "INCPT_OPRTACT.csv",
+            "INCPT_OPRTACT.csv",
+            lambda r: (
+                (
+                    (r.get("Hn") or r.get("HN") or ""),
+                    (r.get("An") or r.get("AN") or ""),
+                )
+                in sample_pairs
+            ),
+        )
+    elif (SRC / "INCPT.csv").exists():
         _filter(
             "INCPT.csv",
             "INCPT.csv",
-            lambda r: (r.get("An") or r.get("AN")) in sample_ans,
+            lambda r: (
+                (
+                    (r.get("Hn") or r.get("HN") or ""),
+                    (r.get("An") or r.get("AN") or ""),
+                )
+                in sample_pairs
+            ),
         )
 
     _copy("BDTYPE.csv", "BDTYPE.csv")

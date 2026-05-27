@@ -207,6 +207,15 @@ def _read_optional_csv(name: str) -> list[dict[str, str]]:
         return list(csv.DictReader(fh))
 
 
+def _read_preferred_optional_csv(*names: str) -> list[dict[str, str]]:
+    for name in names:
+        path = BUNDLE / name
+        if path.exists():
+            with path.open(encoding="utf-8", newline="") as fh:
+                return list(csv.DictReader(fh))
+    return []
+
+
 def _parse_hosxp_date(raw: str) -> date | None:
     if not raw:
         return None
@@ -352,9 +361,22 @@ def _op_events(
             continue
         if (r.get("INCGRP") or "").strip() not in INCPT_OPERATION_GROUPS:
             continue
-        code = (r.get("INCOME") or r.get("ORDERCODE") or "").strip()
+        code = (
+            r.get("O__OPRTACT") or r.get("INCOME") or r.get("ORDERCODE") or ""
+        ).strip()
         source_code = code or "UNMAPPED"
-        optract = optract_dict.get(source_code, {})
+        row_optract = {
+            "ICD9CM": (r.get("O__ICD9CM") or "").strip(),
+            "ICD9CMADD1": (r.get("O__ICD9CMADD1") or "").strip(),
+            "ICD9CMADD2": (r.get("O__ICD9CMADD2") or "").strip(),
+            "NAME EN": (r.get("O__NAME_EN") or r.get("O__NAME EN") or "").strip(),
+            "NAME": (r.get("O__NAME") or "").strip(),
+        }
+        optract = (
+            row_optract
+            if any(row_optract.values())
+            else optract_dict.get(source_code, {})
+        )
         optract_codes = tuple(
             c
             for c in (
@@ -602,7 +624,22 @@ def _incpt_evidence_chunks(
             continue
         income = (r.get("INCOME") or "").strip()
         ordercode = (r.get("ORDERCODE") or "").strip()
-        optract = optract_dict.get(income) or optract_dict.get(ordercode) or {}
+        optract_code = (r.get("O__OPRTACT") or "").strip()
+        row_optract = {
+            "ICD9CM": (r.get("O__ICD9CM") or "").strip(),
+            "ICD9CMADD1": (r.get("O__ICD9CMADD1") or "").strip(),
+            "ICD9CMADD2": (r.get("O__ICD9CMADD2") or "").strip(),
+            "NAME EN": (r.get("O__NAME_EN") or r.get("O__NAME EN") or "").strip(),
+            "NAME": (r.get("O__NAME") or "").strip(),
+        }
+        optract = (
+            row_optract
+            if any(row_optract.values())
+            else optract_dict.get(optract_code)
+            or optract_dict.get(income)
+            or optract_dict.get(ordercode)
+            or {}
+        )
         optract_codes = [
             c
             for c in (
@@ -615,7 +652,7 @@ def _incpt_evidence_chunks(
         optract_name = (optract.get("NAME EN") or "").strip() or (
             optract.get("NAME") or ""
         ).strip()
-        group_name = (r.get("INCGRP → NAME") or "").strip()
+        group_name = (r.get("INCGRP → NAME") or r.get("INCGRP__NAME") or "").strip()
         hours = (dt - anchor).total_seconds() / 3600.0
         text = (
             f"INCPT operation/procedure charge at {dt.isoformat()}: "
@@ -650,7 +687,9 @@ def _build_inputs():
     focus = _read_csv("IPDNRFOCUSDT.csv")
     iptsumoprt = _normalize_iptsumoprt(_read_csv("IPTSUMOPRT.csv"))
     ipddchsumoprt = _normalize_iptsumoprt(_read_optional_csv("IPDDCHSUMOPRT.csv"))
-    incpt = _normalize_incpt(_read_optional_csv("INCPT.csv"))
+    incpt = _normalize_incpt(
+        _read_preferred_optional_csv("INCPT_OPRTACT.csv", "INCPT.csv")
+    )
     optract_dict = _normalize_optract(_read_optional_csv("OPRTACT.csv"))
     icd9 = _read_csv("ICD9CM.csv")
 
