@@ -9,7 +9,10 @@ Strategy:
 2. Random-sample N (HN, REQNO) keys (seed configurable so reruns are
    reproducible).
 3. Project each table to rows that match the sampled keys, into
-   ``$BBA_PILOT_WORK_DIR/bundle/``.
+   ``$BBA_PILOT_WORK_DIR/bundle/``. Blood-bank order tables keep only
+   sampled REQNOs so pipeline outputs remain manifest-scoped; review-only
+   sidecar tables carry same-admission rows for related platelet/FFP/PRC
+   requests under neighboring REQNOs.
 4. Carry the dictionaries (BDVSTST, BDTYPE, ICD9CM) whole — they are
    small and the audit pipeline needs them for lookups.
 5. Write the sample manifest alongside the bundle for traceability.
@@ -65,6 +68,8 @@ BDVST_COLS = [
     "REQTIME",
     "BDVSTDATE",
     "BDVSTTIME",
+    "PICKDATE",
+    "PICKTIME",
     "ICD10",
     "DIAGNOSIS",
 ]
@@ -169,19 +174,42 @@ def main() -> None:
     rng = random.Random(SEED)
     sample = rng.sample(candidates, N)
     sample_reqnos = {r for _, r, _ in sample}
+    sample_pairs = {(h, a) for h, _, a in sample}
     sample_ans = {a for _, _, a in sample}
+    related_reqnos = set(sample_reqnos)
+    with (SRC / "BDVST.csv").open(encoding="utf-8", newline="") as fh:
+        for row in csv.DictReader(fh):
+            hn = (row.get("HN") or "").strip()
+            an = (row.get("AN") or "").strip()
+            if (hn, an) in sample_pairs:
+                related_reqnos.add(row["REQNO"])
     print("\nSampled (HN, REQNO, AN):")
     for s in sample:
         print(" ", s)
 
     print("\nWriting mini bundle:")
     _filter(
-        "BDVST.csv", "BDVST.csv", lambda r: r["REQNO"] in sample_reqnos, cols=BDVST_COLS
+        "BDVST.csv",
+        "BDVST.csv",
+        lambda r: r["REQNO"] in sample_reqnos,
+        cols=BDVST_COLS,
     )
     _filter(
         "BDVSTDT.csv",
         "BDVSTDT.csv",
         lambda r: r["REQNO"] in sample_reqnos,
+        cols=BDVSTDT_COLS,
+    )
+    _filter(
+        "BDVST.csv",
+        "BDVST_RELATED.csv",
+        lambda r: r["REQNO"] in related_reqnos,
+        cols=BDVST_COLS,
+    )
+    _filter(
+        "BDVSTDT.csv",
+        "BDVSTDT_RELATED.csv",
+        lambda r: r["REQNO"] in related_reqnos,
         cols=BDVSTDT_COLS,
     )
     _filter("Diagnosis.csv", "Diagnosis.csv", lambda r: r.get("AN") in sample_ans)

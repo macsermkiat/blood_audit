@@ -27,10 +27,12 @@ import csv
 import html
 import json
 import os
+import re
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
 BUNDLE = WORK / "bundle"
@@ -38,6 +40,7 @@ LLM_REPORT = WORK / "llm_report.json"
 DET_REPORT = WORK / "report.csv"
 MANIFEST = WORK / "sample_manifest.csv"
 OUT = WORK / "review.html"
+TZ_LOCAL = ZoneInfo("Asia/Bangkok")
 
 _DEFAULT_ICD10 = (
     Path(__file__).resolve().parents[2].parent
@@ -53,6 +56,7 @@ WINDOW_PROC_DAYS = 7
 WINDOW_HB_DAYS = 7
 WINDOW_NOTES_DAYS_BEFORE = 1
 WINDOW_NOTES_DAYS_AFTER = 0
+WINDOW_PERIOP_NOTES_DAYS_AFTER = 2
 PROGRESS_FIRST_N = 3
 
 # Clinical-reviewer spec: only show CBC subset in the "All labs" section.
@@ -80,6 +84,11 @@ _TYPE_RANK = {
     "Complication": 1,
     "Comorbidity": 2,
 }
+
+_EBL_RE = re.compile(
+    r"\bEBL\s*[:=]?\s*([0-9][0-9,]*(?:\.\d+)?)\s*(mL|ml|cc|L|liter|liters)\b",
+    re.IGNORECASE,
+)
 
 csv.field_size_limit(sys.maxsize)
 
@@ -138,6 +147,43 @@ def parse_hosxp_date(raw: Any) -> date | None:
         return date.fromisoformat(head)
     except ValueError:
         return None
+
+
+def parse_hosxp_datetime(date_raw: Any, time_raw: Any) -> datetime | None:
+    d = parse_hosxp_date(date_raw)
+    if d is None:
+        return None
+    t = fmt_time(time_raw)
+    if not t:
+        return None
+    try:
+        parts = [int(part) for part in t.split(":")]
+    except ValueError:
+        return None
+    if len(parts) == 2:
+        hh, mm = parts
+        ss = 0
+    elif len(parts) == 3:
+        hh, mm, ss = parts
+    else:
+        return None
+    try:
+        return datetime(d.year, d.month, d.day, hh, mm, ss, tzinfo=TZ_LOCAL)
+    except ValueError:
+        return None
+
+
+def parse_report_datetime(raw: Any) -> datetime | None:
+    s = str(raw or "").strip()
+    if not s or "(" in s:
+        return None
+    try:
+        parsed = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=TZ_LOCAL)
+    return parsed.astimezone(TZ_LOCAL)
 
 
 def parse_iptsumoprt_date(raw: Any) -> date | None:
@@ -230,6 +276,59 @@ def _lab_row(r: dict[str, str]) -> dict[str, str]:
     }
 
 
+def _note_snippet(text: str, start: int, end: int, radius: int = 90) -> str:
+    lo = max(0, start - radius)
+    hi = min(len(text), end + radius)
+    prefix = "..." if lo > 0 else ""
+    suffix = "..." if hi < len(text) else ""
+    return prefix + " ".join(text[lo:hi].split()) + suffix
+
+
+def _format_ebl_amount(raw: str) -> str:
+    amount = raw.replace(",", "")
+    if not amount:
+        return raw
+    if "." not in amount:
+        try:
+            return f"{int(amount):,}"
+        except ValueError:
+            return raw
+
+    whole, fraction = amount.split(".", 1)
+    fraction = fraction.rstrip("0")
+    try:
+        whole_fmt = f"{int(whole or '0'):,}"
+    except ValueError:
+        return raw
+    return whole_fmt if not fraction else f"{whole_fmt}.{fraction}"
+
+
+def _extract_ebl_rows(
+    *,
+    source: str,
+    when: str,
+    item: str,
+    text: str,
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for match in _EBL_RE.finditer(text):
+        amount = _format_ebl_amount(match.group(1))
+        rows.append(
+            {
+                "datetime": when,
+                "source": source,
+                "item": item,
+                "finding": f"EBL {amount} {match.group(2)}",
+                "quote": _note_snippet(text, match.start(), match.end()),
+            }
+        )
+    return rows
+
+
+def _finding_key(finding: str) -> str:
+    return re.sub(r"(?<=\d),(?=\d)", "", finding).lower()
+
+
 def render_table(rows: list[dict[str, Any]], cols: list[str]) -> str:
     if not rows:
         return "<p class='empty'>(no rows)</p>"
@@ -301,6 +400,8 @@ def main() -> None:
 
     bdvst = _read("BDVST.csv")
     bdvstdt = _read("BDVSTDT.csv")
+    related_bdvst = _read_optional("BDVST_RELATED.csv")
+    related_bdvstdt = _read_optional("BDVSTDT_RELATED.csv")
     diag = _read("Diagnosis.csv")
     lab = _read("Lab.csv")
     med = _read("Med.csv")
@@ -347,6 +448,11 @@ def main() -> None:
 
     manifest_rows = list(csv.DictReader(MANIFEST.open(encoding="utf-8")))
     bdvst_by_reqno = {r["REQNO"]: r for r in bdvst}
+    related_bdvst_by_reqno = {
+        **bdvst_by_reqno,
+        **{r["REQNO"]: r for r in related_bdvst},
+    }
+    related_bdvstdt_rows = related_bdvstdt or bdvstdt
 
     case_html_parts: list[str] = []
     summary_rows: list[dict[str, str]] = []
@@ -356,37 +462,80 @@ def main() -> None:
         reqno = m["REQNO"]
         an = m["AN"]
         bdv = bdvst_by_reqno.get(reqno, {})
+        det = det_by_reqno.get(reqno) or {}
 
         anchor_date = (bdv.get("REQDATE") or "").split(" ")[0]
         anchor_time = fmt_time(bdv.get("REQTIME"))
-        anchor_d = parse_hosxp_date(bdv.get("REQDATE")) or parse_hosxp_date(
-            bdv.get("BDVSTDATE")
+        anchor_dt = parse_hosxp_datetime(
+            bdv.get("REQDATE"), bdv.get("REQTIME")
+        ) or parse_hosxp_datetime(bdv.get("BDVSTDATE"), bdv.get("BDVSTTIME"))
+        anchor_d = anchor_dt.date() if anchor_dt else None
+        hb_anchor_dt = parse_report_datetime(det.get("hb_anchor_datetime_local"))
+        hb_anchor_dt = hb_anchor_dt or anchor_dt
+        hb_anchor_reason = (det.get("hb_anchor_reason") or "order_datetime").strip()
+        try:
+            upcoming_h = float(det.get("upcoming_procedure_hours") or "")
+        except ValueError:
+            upcoming_h = None
+        notes_hi_d = (
+            (anchor_d + timedelta(days=WINDOW_NOTES_DAYS_AFTER)) if anchor_d else None
+        )
+        periop_notes_hi_d = notes_hi_d
+        if anchor_dt and upcoming_h is not None and 0 <= upcoming_h <= 72:
+            periop_hi = (
+                anchor_dt
+                + timedelta(hours=upcoming_h)
+                + timedelta(days=WINDOW_PERIOP_NOTES_DAYS_AFTER)
+            ).date()
+            periop_notes_hi_d = (
+                max(periop_notes_hi_d, periop_hi) if periop_notes_hi_d else periop_hi
+            )
+        hb_lo_dt = (
+            (hb_anchor_dt - timedelta(days=WINDOW_HB_DAYS)) if hb_anchor_dt else None
         )
         notes_lo = (
             (anchor_d - timedelta(days=WINDOW_NOTES_DAYS_BEFORE)) if anchor_d else None
         )
-        notes_hi = (
-            (anchor_d + timedelta(days=WINDOW_NOTES_DAYS_AFTER)) if anchor_d else None
-        )
+        notes_hi = notes_hi_d
+        periop_notes_hi = periop_notes_hi_d
         proc_lo = (anchor_d - timedelta(days=WINDOW_PROC_DAYS)) if anchor_d else None
         proc_hi = (anchor_d + timedelta(days=WINDOW_PROC_DAYS)) if anchor_d else None
-        hb_lo = (anchor_d - timedelta(days=WINDOW_HB_DAYS)) if anchor_d else None
 
         def _in_notes_window(d: date | None) -> bool:
-            return d is not None and notes_lo is not None and notes_lo <= d <= notes_hi
+            return (
+                d is not None
+                and notes_lo is not None
+                and notes_hi is not None
+                and notes_lo <= d <= notes_hi
+            )
+
+        def _in_periop_notes_window(d: date | None) -> bool:
+            return (
+                d is not None
+                and notes_lo is not None
+                and periop_notes_hi is not None
+                and notes_lo <= d <= periop_notes_hi
+            )
 
         def _in_proc_window(d: date | None) -> bool:
             return d is None or proc_lo is None or (proc_lo <= d <= proc_hi)
 
-        def _in_hb_window(d: date | None) -> bool:
+        def _in_hb_window_dt(d: datetime | None) -> bool:
             return (
                 d is not None
-                and hb_lo is not None
-                and anchor_d is not None
-                and hb_lo <= d <= anchor_d
+                and hb_lo_dt is not None
+                and hb_anchor_dt is not None
+                and hb_lo_dt <= d <= hb_anchor_dt
             )
 
         line_items = [r for r in bdvstdt if r.get("REQNO") == reqno]
+        related_line_items = [
+            r
+            for r in related_bdvstdt_rows
+            if r.get("REQNO") != reqno
+            and r.get("HN") == hn
+            and (related_bdvst_by_reqno.get(r.get("REQNO", ""), {}).get("AN") == an)
+        ]
 
         # Diagnoses, deduped by ICD-10, type-precedence-preserving.
         diag_by_code: dict[str, dict[str, str]] = {}
@@ -416,7 +565,9 @@ def main() -> None:
             for r in lab
             if r.get("AN") == an
             and (r.get("LABEXM") or "").strip() in {"290095", "500001"}
-            and _in_hb_window(parse_hosxp_date(r.get("LVSTDATE")))
+            and _in_hb_window_dt(
+                parse_hosxp_datetime(r.get("LVSTDATE"), r.get("LVSTTIME"))
+            )
         ]
         hb_rows.sort(key=lambda r: r["datetime"], reverse=True)
 
@@ -527,6 +678,11 @@ def main() -> None:
             for r in an_progress
             if _in_notes_window(parse_hosxp_date(r.get("PROGDATE")))
         ]
+        periop_progress_notes = [
+            r
+            for r in an_progress
+            if _in_periop_notes_window(parse_hosxp_date(r.get("PROGDATE")))
+        ]
         seen: set[tuple[str, str]] = set()
         prog_notes: list[dict[str, str]] = []
         for r in first_n + near_anchor:
@@ -546,8 +702,73 @@ def main() -> None:
         focus_notes.sort(
             key=lambda r: (r.get("PROGRESSDATE") or "", r.get("PROGRESSTIME") or "")
         )
+        periop_focus_notes = [
+            r
+            for r in focus
+            if r.get("AN") == an
+            and _in_periop_notes_window(parse_hosxp_date(r.get("PROGRESSDATE")))
+        ]
+        periop_focus_notes.sort(
+            key=lambda r: (r.get("PROGRESSDATE") or "", r.get("PROGRESSTIME") or "")
+        )
 
-        det = det_by_reqno.get(reqno) or {}
+        periop_evidence: list[dict[str, str]] = []
+        seen_periop: set[tuple[str, str, str, str]] = set()
+        for n in periop_progress_notes:
+            prog_date = parse_hosxp_date(n.get("PROGDATE"))
+            if not _in_periop_notes_window(prog_date):
+                continue
+            when = (n.get("PROGDATE") or "").split(" ")[0]
+            item = n.get("ITEMNO") or ""
+            text = "\n".join(
+                part
+                for part in (
+                    n.get("PROGDESC") or "",
+                    n.get("PROGLIST") or "",
+                    n.get("SUBJECTIVE") or "",
+                    n.get("OBJECTIVE") or "",
+                    n.get("ASSESSMENT") or "",
+                    n.get("PLAN") or "",
+                )
+                if part
+            )
+            for row in _extract_ebl_rows(
+                source="IPDADMPROGRESS", when=when, item=item, text=text
+            ):
+                key = (
+                    row["source"],
+                    row["datetime"],
+                    row["item"],
+                    _finding_key(row["finding"]),
+                )
+                if key not in seen_periop:
+                    seen_periop.add(key)
+                    periop_evidence.append(row)
+        for n in periop_focus_notes:
+            when = fmt_dt(n.get("PROGRESSDATE"), n.get("PROGRESSTIME"))
+            item = n.get("ITEMNO") or ""
+            text = "\n".join(
+                part
+                for part in (
+                    n.get("FOCUS") or "",
+                    n.get("ACTION") or "",
+                    n.get("RESPONSE") or "",
+                )
+                if part
+            )
+            for row in _extract_ebl_rows(
+                source="IPDNRFOCUSDT", when=when, item=item, text=text
+            ):
+                key = (
+                    row["source"],
+                    row["datetime"],
+                    row["item"],
+                    _finding_key(row["finding"]),
+                )
+                if key not in seen_periop:
+                    seen_periop.add(key)
+                    periop_evidence.append(row)
+
         llm = llm_by_reqno.get(reqno)
         det_class = det.get("classification") or "excluded"
         # ``llm_final`` may be explicitly null when run_llm_leg.py persisted
@@ -578,6 +799,11 @@ def main() -> None:
         admission_date = (bdv.get("BDVSTDATE") or "").split(" ")[0] or "—"
         for d in diag_rows:
             d["Admission date"] = admission_date
+        ebl_summary = (
+            "; ".join(dict.fromkeys(r["finding"] for r in periop_evidence))
+            if periop_evidence
+            else "—"
+        )
 
         # ----- Section assembly -----
         parts: list[str] = [
@@ -591,9 +817,13 @@ def main() -> None:
             f"<div><b>Products ordered:</b> {esc(det.get('products_ordered') or '—')}</div>",
             f"<div><b>Hb @ anchor:</b> {esc(det.get('hb_value_g_dl') or '—')} g/dL "
             f"({esc(det.get('hb_freshness') or '—')}, source {esc(det.get('hb_source') or '—')})</div>",
+            f"<div><b>Hb lookup anchor:</b> "
+            f"{esc(det.get('hb_anchor_datetime_local') or 'order datetime')} "
+            f"({esc(det.get('hb_anchor_reason') or 'order_datetime')})</div>",
             f"<div><b>Cohort:</b> {esc(det.get('cohort_label') or '—')} "
             f"(threshold {esc(det.get('cohort_threshold') or 'n/a')})</div>",
             f"<div><b>Upcoming procedure:</b> {esc(det.get('upcoming_procedure_hours') or '—')} h</div>",
+            f"<div><b>EBL evidence:</b> {esc(ebl_summary)}</div>",
             "</div>",
         ]
 
@@ -674,6 +904,8 @@ def main() -> None:
                         "REQTIME": fmt_time(bdv.get("REQTIME")),
                         "BDVSTDATE": (bdv.get("BDVSTDATE") or "").split(" ")[0],
                         "BDVSTTIME": fmt_time(bdv.get("BDVSTTIME")),
+                        "PICKDATE": (bdv.get("PICKDATE") or "").split(" ")[0],
+                        "PICKTIME": fmt_time(bdv.get("PICKTIME")),
                         "BDVSTSTATUS": fmt_status(bdv.get("BDVSTST"), bdvstst_dict),
                         "REQTYPE": fmt_reqtype(bdv.get("REQTYPE")),
                         "ICD10 (order reason)": order_icd10_disp,
@@ -686,6 +918,8 @@ def main() -> None:
                     "REQTIME",
                     "BDVSTDATE",
                     "BDVSTTIME",
+                    "PICKDATE",
+                    "PICKTIME",
                     "BDVSTSTATUS",
                     "REQTYPE",
                     "ICD10 (order reason)",
@@ -709,6 +943,31 @@ def main() -> None:
                 ["BDTYPE (product)", "ITEMNO", "UNITAMT", "USEDATE", "USETIME"],
             )
         )
+        if related_line_items:
+            parts.append("<p><b>Related same-admission blood products:</b></p>")
+            parts.append(
+                render_table(
+                    [
+                        {
+                            "REQNO": r.get("REQNO", ""),
+                            "BDTYPE (product)": r.get("BDTYPE", ""),
+                            "ITEMNO": r.get("ITEMNO", ""),
+                            "UNITAMT": r.get("UNITAMT", ""),
+                            "USEDATE": (r.get("USEDATE") or "").split(" ")[0],
+                            "USETIME": fmt_time(r.get("USETIME")),
+                        }
+                        for r in related_line_items
+                    ],
+                    [
+                        "REQNO",
+                        "BDTYPE (product)",
+                        "ITEMNO",
+                        "UNITAMT",
+                        "USEDATE",
+                        "USETIME",
+                    ],
+                )
+            )
         parts.append("</details>")
 
         parts.append(
@@ -730,13 +989,18 @@ def main() -> None:
         parts.append("</details>")
 
         hb_window_str = (
-            f"{hb_lo.isoformat()} … {anchor_date}"
-            if hb_lo and anchor_date
+            f"{hb_lo_dt.isoformat(sep=' ')} … {hb_anchor_dt.isoformat(sep=' ')}"
+            if hb_lo_dt and hb_anchor_dt
             else "(no anchor)"
+        )
+        hb_anchor_note = (
+            f"; Hb lookup anchor: {hb_anchor_reason}"
+            if hb_anchor_reason and hb_anchor_reason != "order_datetime"
+            else ""
         )
         parts.append(
             f"<details open><summary>Hb history ({len(hb_rows)} rows, "
-            f"7-day pre-order window {hb_window_str})</summary>"
+            f"7-day pre-anchor window {hb_window_str}{hb_anchor_note})</summary>"
         )
         parts.append(
             render_table(hb_rows, ["datetime", "test", "value", "min", "max", "unit"])
@@ -746,6 +1010,11 @@ def main() -> None:
         window_str = (
             f"{notes_lo.isoformat()} … {notes_hi.isoformat()}"
             if notes_lo and notes_hi
+            else "(no anchor)"
+        )
+        periop_window_str = (
+            f"{notes_lo.isoformat()} … {periop_notes_hi.isoformat()}"
+            if notes_lo and periop_notes_hi
             else "(no anchor)"
         )
         if anc_rows:
@@ -769,6 +1038,18 @@ def main() -> None:
             render_table(
                 cbc_rows,
                 ["datetime", "group", "test", "code", "value", "min", "max", "unit"],
+            )
+        )
+        parts.append("</details>")
+
+        parts.append(
+            f"<details open><summary>Perioperative blood-loss evidence "
+            f"({len(periop_evidence)} rows, note window {periop_window_str})</summary>"
+        )
+        parts.append(
+            render_table(
+                periop_evidence,
+                ["datetime", "source", "item", "finding", "quote"],
             )
         )
         parts.append("</details>")
