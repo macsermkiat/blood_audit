@@ -334,6 +334,98 @@ FROM SUBPOPULATION sp
 WHERE i.CANCELDATE IS NULL;
 ```
 
+```sql
+/* INCPT */
+SELECT
+  "KCMH_HIS"."INCPT"."hn" AS "hn",
+  "KCMH_HIS"."INCPT"."incdate" AS "incdate",
+  "KCMH_HIS"."INCPT"."inctime" AS "inctime",
+  "KCMH_HIS"."INCPT"."ordercode" AS "ordercode",
+  "KCMH_HIS"."INCPT"."income" AS "income",
+  "KCMH_HIS"."INCPT"."an" AS "an",
+  "KCMH_HIS"."INCPT"."canceldate" AS "canceldate",
+  "KCMH_HIS"."INCPT"."incgrp" AS "incgrp",
+  "Incgrp"."name" AS "Incgrp__name",
+  "Incgrp"."incgrp" AS "Incgrp__incgrp",
+  "Oprtact - Income"."oprtact" AS "Oprtact - Income__oprtact",
+  "Oprtact - Income"."name_en" AS "Oprtact - Income__name_en",
+  "Oprtact - Income"."name" AS "Oprtact - Income__name",
+  "Oprtact - Income"."income" AS "Oprtact - Income__income",
+  "Oprtact - Income"."maxamt" AS "Oprtact - Income__maxamt",
+  "Oprtact - Income"."dftamt" AS "Oprtact - Income__dftamt",
+  "Oprtact - Income"."rfndamt" AS "Oprtact - Income__rfndamt",
+  "Oprtact - Income"."minamt" AS "Oprtact - Income__minamt",
+  "Oprtact - Income"."spclty" AS "Oprtact - Income__spclty",
+  "Oprtact - Income"."otamt" AS "Oprtact - Income__otamt",
+  "Oprtact - Income"."otrfndamt" AS "Oprtact - Income__otrfndamt",
+  "Oprtact - Income"."icd9cm" AS "Oprtact - Income__icd9cm",
+  "Oprtact - Income"."icd10tm" AS "Oprtact - Income__icd10tm",
+  "Oprtact - Income"."oprttype" AS "Oprtact - Income__oprttype",
+  "Oprtact - Income"."cost" AS "Oprtact - Income__cost",
+  "Oprtact - Income"."nhso" AS "Oprtact - Income__nhso",
+  "Oprtact - Income"."drgmx" AS "Oprtact - Income__drgmx",
+  "Oprtact - Income"."csmbs" AS "Oprtact - Income__csmbs",
+  "Oprtact - Income"."sss" AS "Oprtact - Income__sss",
+  "Oprtact - Income"."var" AS "Oprtact - Income__var",
+  "Oprtact - Income"."minvalue" AS "Oprtact - Income__minvalue",
+  "Oprtact - Income"."maxvalue" AS "Oprtact - Income__maxvalue",
+  "Oprtact - Income"."dscper" AS "Oprtact - Income__dscper",
+  "Oprtact - Income"."dscamt" AS "Oprtact - Income__dscamt",
+  "Oprtact - Income"."prfact" AS "Oprtact - Income__prfact",
+  "Oprtact - Income"."sumprfamt" AS "Oprtact - Income__sumprfamt",
+  "Oprtact - Income"."oprtgrp" AS "Oprtact - Income__oprtgrp",
+  "Oprtact - Income"."icdnum" AS "Oprtact - Income__icdnum",
+  "Oprtact - Income"."icdtype" AS "Oprtact - Income__icdtype",
+  "Oprtact - Income"."highcost" AS "Oprtact - Income__highcost",
+  "Oprtact - Income"."major" AS "Oprtact - Income__major",
+  "Oprtact - Income"."dz8" AS "Oprtact - Income__dz8",
+  "Oprtact - Income"."vac" AS "Oprtact - Income__vac",
+  "Oprtact - Income"."vcctype" AS "Oprtact - Income__vcctype",
+  "Oprtact - Income"."timemake" AS "Oprtact - Income__timemake",
+  "Oprtact - Income"."validcode" AS "Oprtact - Income__validcode",
+  "Oprtact - Income"."canceldate" AS "Oprtact - Income__canceldate",
+  "Oprtact - Income"."datasource" AS "Oprtact - Income__datasource",
+  "Oprtact - Income"."firststf" AS "Oprtact - Income__firststf",
+  "Oprtact - Income"."firstdate" AS "Oprtact - Income__firstdate",
+  "Oprtact - Income"."laststf" AS "Oprtact - Income__laststf",
+  "Oprtact - Income"."lastdate" AS "Oprtact - Income__lastdate",
+  "Oprtact - Income"."incomeold" AS "Oprtact - Income__incomeold",
+  "Oprtact - Income"."icd9cmadd1" AS "Oprtact - Income__icd9cmadd1",
+  "Oprtact - Income"."icd9cmadd2" AS "Oprtact - Income__icd9cmadd2",
+  "Oprtact - Income"."oprtactauto" AS "Oprtact - Income__oprtactauto",
+  "Oprtact - Income"."perday" AS "Oprtact - Income__perday",
+  "Oprtact - Income"."unit" AS "Oprtact - Income__unit",
+  "Oprtact - Income"."note" AS "Oprtact - Income__note",
+  "Oprtact - Income"."cancelstf" AS "Oprtact - Income__cancelstf",
+  "Oprtact - Income"."cancelnote" AS "Oprtact - Income__cancelnote",
+  "Oprtact - Income"."oprtactgrp" AS "Oprtact - Income__oprtactgrp",
+  "Oprtact - Income"."thtype" AS "Oprtact - Income__thtype",
+  "Oprtact - Income"."addper" AS "Oprtact - Income__addper",
+  "Oprtact - Income"."remflag" AS "Oprtact - Income__remflag",
+  "Oprtact - Income"."nodefchk" AS "Oprtact - Income__nodefchk"
+FROM
+  "KCMH_HIS"."INCPT"
+ 
+LEFT JOIN "KCMH_HIS"."INCGRP" AS "Incgrp" ON "KCMH_HIS"."INCPT"."incgrp" = "Incgrp"."incgrp"
+  LEFT JOIN "cleaned_ddc_internal"."OPRTACT" AS "Oprtact - Income" ON "KCMH_HIS"."INCPT"."income" = "Oprtact - Income"."oprtact"
+WHERE
+  "KCMH_HIS"."INCPT"."incgrp" BETWEEN 110
+   AND 111
+  AND (
+    "KCMH_HIS"."INCPT"."incdate" >= timestamp '2025-01-01 00:00:00.000'
+  )
+  AND (
+    "KCMH_HIS"."INCPT"."incdate" < timestamp '2026-01-01 00:00:00.000'
+  )
+  AND ("KCMH_HIS"."INCPT"."an" IS NOT NULL)
+  AND (
+    ("KCMH_HIS"."INCPT"."an" <> '')
+   
+    OR ("KCMH_HIS"."INCPT"."an" IS NULL)
+  )
+```
+
+
 ## Architecture
 
 20 modules under `src/bba/`. See **[`docs/CONTEXT.md`](docs/CONTEXT.md)** for the module glossary — every public interface, invariant, and seam is documented there. Read it before touching anything.
