@@ -78,6 +78,19 @@ REQTYPE_LABELS: dict[str, str] = {
     "H": "โรงพยาบาลอื่นขอ / other-hospital referral",
 }
 
+UNITSTAT_LABELS: dict[str, str] = {
+    "1": "จอง / reserved",
+    "2": "จ่าย / issued",
+    "3": "คืน / returned",
+    "4": "ฝากแช่ / stored",
+    "5": "ให้เลือด / transfused",
+    "6": "เปลี่ยนประเภท / changed type",
+    "7": "Incompat",
+    "8": "เก็บ / kept",
+    "9": "compat",
+    "10": "รวมถุง / pooled",
+}
+
 # Diagnosis-type precedence — best-keeps wins on duplicate ICD-10 rows.
 _TYPE_RANK = {
     "Principal Diagnosis": 0,
@@ -136,6 +149,14 @@ def fmt_status(code: Any, table: dict[str, str]) -> str:
     if not c:
         return ""
     label = table.get(c)
+    return f"{c} — {label}" if label else c
+
+
+def fmt_unitstat(code: Any) -> str:
+    c = str(code or "").strip()
+    if not c:
+        return ""
+    label = UNITSTAT_LABELS.get(c)
     return f"{c} — {label}" if label else c
 
 
@@ -381,6 +402,18 @@ def _field(row: dict[str, str], *names: str) -> str:
     return ""
 
 
+def _returned_blood_datetime(rows: list[dict[str, str]]) -> str:
+    candidates: list[str] = []
+    for r in rows:
+        returned_at = fmt_dt(
+            _field(r, "RTNDATE", "Rtndate"),
+            _field(r, "RTNTIME", "Rtntime"),
+        )
+        if returned_at:
+            candidates.append(returned_at)
+    return min(candidates) if candidates else ""
+
+
 def main() -> None:
     if not BUNDLE.exists():
         sys.exit(f"bundle not found: {BUNDLE} (run sample_bundle.py first)")
@@ -410,6 +443,7 @@ def main() -> None:
     bdvstdt = _read("BDVSTDT.csv")
     related_bdvst = _read_optional("BDVST_RELATED.csv")
     related_bdvstdt = _read_optional("BDVSTDT_RELATED.csv")
+    bdvsttrans = _read_optional("BDVSTTRANS.csv")
     diag = _read("Diagnosis.csv")
     lab = _read("Lab.csv")
     med = _read("Med.csv")
@@ -544,6 +578,36 @@ def main() -> None:
             and r.get("HN") == hn
             and (related_bdvst_by_reqno.get(r.get("REQNO", ""), {}).get("AN") == an)
         ]
+        ordered_products = {
+            (r.get("BDTYPE") or "").strip().upper()
+            for r in line_items
+            if r.get("BDTYPE")
+        }
+        trans_rows = [
+            r
+            for r in bdvsttrans
+            if (_field(r, "AN", "An") == an or _field(r, "HN", "Hn") == hn)
+            and (
+                not ordered_products
+                or _field(r, "BDTYPE", "Bdtype").strip().upper() in ordered_products
+            )
+        ]
+        trans_rows.sort(
+            key=lambda r: (
+                fmt_dt(
+                    _field(r, "PAYDATE", "Paydate"),
+                    _field(r, "PAYTIME", "Paytime"),
+                ),
+                fmt_dt(
+                    _field(r, "GIVEDATE", "Givedate"),
+                    _field(r, "GIVETIME", "Givetime"),
+                ),
+                fmt_dt(
+                    _field(r, "RTNDATE", "Rtndate"),
+                    _field(r, "RTNTIME", "Rtntime"),
+                ),
+            )
+        )
 
         # Diagnoses, deduped by ICD-10, type-precedence-preserving.
         diag_by_code: dict[str, dict[str, str]] = {}
@@ -814,6 +878,9 @@ def main() -> None:
                 "Hb": det.get("hb_value_g_dl", "") or "—",
                 "Cohort": det.get("cohort_label", "") or "—",
                 "Threshold": det.get("cohort_threshold", "") or "—",
+                "Returned": det.get("returned_blood_datetime_local")
+                or _returned_blood_datetime(trans_rows)
+                or "—",
                 "Deterministic": det_class or "EXCLUDED",
                 "LLM": llm_final or "—",
             }
@@ -829,6 +896,11 @@ def main() -> None:
         )
 
         # ----- Section assembly -----
+        returned_blood_dt = (
+            det.get("returned_blood_datetime_local")
+            or _returned_blood_datetime(trans_rows)
+            or "—"
+        )
         parts: list[str] = [
             f"<section class='case' id='case-{i}'>",
             f"<h2>Case {i} — REQNO {esc(reqno)}</h2>",
@@ -837,6 +909,7 @@ def main() -> None:
             f"<div><b>AN:</b> <code>{esc(an)}</code></div>",
             f"<div><b>Order anchor:</b> {esc(anchor_date)} {esc(anchor_time)}</div>",
             f"<div><b>Transfusion datetime (issued):</b> {esc(det.get('transfusion_datetime_local') or '—')}</div>",
+            f"<div><b>Blood return datetime:</b> {esc(returned_blood_dt)}</div>",
             f"<div><b>Products ordered:</b> {esc(det.get('products_ordered') or '—')}</div>",
             f"<div><b>Hb @ anchor:</b> {esc(det.get('hb_value_g_dl') or '—')} g/dL "
             f"({esc(det.get('hb_freshness') or '—')}, source {esc(det.get('hb_source') or '—')})</div>",
@@ -991,6 +1064,41 @@ def main() -> None:
                     ],
                 )
             )
+        parts.append("<p><b>Blood bank transactions (BDVSTTRANS):</b></p>")
+        parts.append(
+            render_table(
+                [
+                    {
+                        "BDTYPE": _field(r, "BDTYPE", "Bdtype"),
+                        "UNITSTAT": fmt_unitstat(_field(r, "UNITSTAT", "Unitstat")),
+                        "PAY datetime": fmt_dt(
+                            _field(r, "PAYDATE", "Paydate"),
+                            _field(r, "PAYTIME", "Paytime"),
+                        ),
+                        "GIVE datetime": fmt_dt(
+                            _field(r, "GIVEDATE", "Givedate"),
+                            _field(r, "GIVETIME", "Givetime"),
+                        ),
+                        "RETURN datetime": fmt_dt(
+                            _field(r, "RTNDATE", "Rtndate"),
+                            _field(r, "RTNTIME", "Rtntime"),
+                        ),
+                        "QTYUSE": _field(r, "QTYUSE", "Qtyuse"),
+                        "PAYCOMM": _field(r, "PAYCOMM", "Paycomm"),
+                    }
+                    for r in trans_rows
+                ],
+                [
+                    "BDTYPE",
+                    "UNITSTAT",
+                    "PAY datetime",
+                    "GIVE datetime",
+                    "RETURN datetime",
+                    "QTYUSE",
+                    "PAYCOMM",
+                ],
+            )
+        )
         parts.append("</details>")
 
         parts.append(
@@ -1192,7 +1300,18 @@ def main() -> None:
 
     summary_html = render_table(
         summary_rows,
-        ["#", "REQNO", "HN", "AN", "Hb", "Cohort", "Threshold", "Deterministic", "LLM"],
+        [
+            "#",
+            "REQNO",
+            "HN",
+            "AN",
+            "Hb",
+            "Cohort",
+            "Threshold",
+            "Returned",
+            "Deterministic",
+            "LLM",
+        ],
     )
 
     css = """

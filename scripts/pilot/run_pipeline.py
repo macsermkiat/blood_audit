@@ -99,6 +99,7 @@ REPORT_FIELDNAMES = [
     "crystalloid_liters_prior_4h",
     "anc_value",
     "transfusion_datetime_local",
+    "returned_blood_datetime_local",
     "classification",
     "rationale",
     "bypass_reason",
@@ -161,7 +162,8 @@ def _fmt_hosxp_time(raw: str | None) -> str:
     return stripped
 
 
-def _fmt_local_datetime(date_raw: str | None, time_raw: str | None) -> str:
+def _fmt_local_datetime(date_raw: str | None, time_raw: str | None = None) -> str:
+    """Render split HOSxP date/time cells as a local datetime string."""
     d = (date_raw or "").strip().split(" ")[0]
     t = _fmt_hosxp_time(time_raw)
     if d and t:
@@ -435,6 +437,48 @@ def _normalize_optract(raw: list[dict[str, str]]) -> dict[str, dict[str, str]]:
     return out
 
 
+def _normalize_bdvsttrans(raw: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Normalize optional BDVSTTRANS rows to uppercase keys."""
+    return [{k.upper(): v for k, v in r.items()} for r in raw]
+
+
+def _bdvsttrans_rows_for_order(
+    rows: list[dict[str, str]],
+    *,
+    hn: str,
+    an: str,
+    products_ordered: tuple[str, ...],
+) -> list[dict[str, str]]:
+    """Return likely transaction rows for this order.
+
+    BDVSTTRANS does not carry REQNO in the HOSxP dictionary, so this is an
+    admission-scoped display join: same AN/HN and ordered blood product.
+    The HTML review page still renders the raw rows so reviewers can judge
+    ambiguous multi-order admissions directly.
+    """
+    products = {p.strip().upper() for p in products_ordered}
+    out: list[dict[str, str]] = []
+    for r in rows:
+        row_an = (r.get("AN") or "").strip()
+        row_hn = (r.get("HN") or "").strip()
+        row_type = (r.get("BDTYPE") or "").strip().upper()
+        if row_type and products and row_type not in products:
+            continue
+        if row_an == an or row_hn == hn:
+            out.append(r)
+    return out
+
+
+def _earliest_return_datetime_local(rows: list[dict[str, str]]) -> str:
+    """Return earliest BDVSTTRANS return timestamp, or empty string."""
+    candidates: list[str] = []
+    for r in rows:
+        returned_at = _fmt_local_datetime(r.get("RTNDATE"), r.get("RTNTIME"))
+        if returned_at:
+            candidates.append(returned_at)
+    return min(candidates) if candidates else ""
+
+
 def main() -> None:
     if not BUNDLE.exists():
         sys.exit(f"bundle not found: {BUNDLE} (run sample_bundle.py first)")
@@ -450,6 +494,7 @@ def main() -> None:
         _read_preferred_optional_csv("INCPT_OPRTACT.csv", "INCPT.csv")
     )
     optract_dict = _normalize_optract(_read_optional_csv("OPRTACT.csv"))
+    bdvsttrans = _normalize_bdvsttrans(_read_optional_csv("BDVSTTRANS.csv"))
     icd9 = _read_csv("ICD9CM.csv")
     icd9_dict = {
         (r.get("Icd9cm") or "").strip().replace(".", ""): {
@@ -609,6 +654,12 @@ def main() -> None:
             crystalloid_events, order.order_datetime
         )
         anc = _latest_anc(lab, order.an, order.order_datetime)
+        trans_rows = _bdvsttrans_rows_for_order(
+            bdvsttrans,
+            hn=order.hn,
+            an=order.an,
+            products_ordered=order.products_ordered,
+        )
 
         cohort = assign_cohort(
             CohortInputs(
@@ -694,6 +745,9 @@ def main() -> None:
                 "crystalloid_liters_prior_4h": crystalloid_liters,
                 "anc_value": anc,
                 "transfusion_datetime_local": use_dt_by_reqno.get(order.reqno, ""),
+                "returned_blood_datetime_local": _earliest_return_datetime_local(
+                    trans_rows
+                ),
                 "classification": clf.classification,
                 "rationale": clf.rationale,
                 "bypass_reason": clf.bypass_reason.value,

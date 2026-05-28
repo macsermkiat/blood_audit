@@ -84,6 +84,22 @@ BDVSTDT_COLS = [
     "ITEMNO",
     "UNITAMT",
 ]
+BDVSTTRANS_COLS = [
+    "HN",
+    "AN",
+    "BDTYPE",
+    "GIVEDATE",
+    "GIVETIME",
+    "PAYDATE",
+    "PAYTIME",
+    "RTNDATE",
+    "RTNTIME",
+    "OFFDATE",
+    "QTYUSE",
+    "UNITSTAT",
+    "PAYOUTFLAG",
+    "PAYCOMM",
+]
 
 
 def _filter(src_name: str, dst_name: str, predicate, *, cols=None) -> int:
@@ -175,6 +191,7 @@ def main() -> None:
     sample = rng.sample(candidates, N)
     sample_reqnos = {r for _, r, _ in sample}
     sample_pairs = {(h, a) for h, _, a in sample}
+    sample_hns = {hn for hn, _, _ in sample}
     sample_ans = {a for _, _, a in sample}
     related_reqnos = set(sample_reqnos)
     with (SRC / "BDVST.csv").open(encoding="utf-8", newline="") as fh:
@@ -254,6 +271,14 @@ def main() -> None:
                 )
                 in sample_pairs
             ),
+        )
+    if (SRC / "BDVSTTRANS.csv").exists():
+        _filter(
+            "BDVSTTRANS.csv",
+            "BDVSTTRANS.csv",
+            lambda r: (r.get("AN") or r.get("An")) in sample_ans
+            or (r.get("HN") or r.get("Hn")) in sample_hns,
+            cols=BDVSTTRANS_COLS,
         )
 
     _copy("BDTYPE.csv", "BDTYPE.csv")
