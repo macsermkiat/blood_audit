@@ -160,7 +160,7 @@ _REGISTRY_V1: Mapping[CSVTable, DataFrameSchema] = {
             "INTIME": _str(),
         }
     ),
-    "INCPT": DataFrameSchema(
+    "INCPT_OPRTACT": DataFrameSchema(
         {
             "HN": _str(nullable=False),
             "AN": _str(nullable=False),
@@ -170,6 +170,22 @@ _REGISTRY_V1: Mapping[CSVTable, DataFrameSchema] = {
             "INCOME": _str(),
             "CANCELDATE": _str(),
             "INCGRP": _str(),
+            # OPRTACT side, joined on INCPT.INCOME = OPRTACT.INCOME. The
+            # ``O__`` prefix marks the right-hand table of the pre-joined
+            # export so collisions with INCPT's own columns (e.g. INCOME,
+            # CANCELDATE) stay unambiguous. ``O__ICD9CM`` is the per-
+            # operative-act procedure code that issue #69 was filed to
+            # surface — without it, IPTSUMOPRT alone silently under-
+            # detects cardiac / ortho cohorts. ``O__NAME`` / ``O__NAME_EN``
+            # carry the human-readable procedure name for LLM prompts.
+            "O__OPRTACT": _str(),
+            "O__NAME": _str(),
+            "O__NAME_EN": _str(),
+            "O__ICD9CM": _str(),
+            "O__ICD9CMADD1": _str(),
+            "O__ICD9CMADD2": _str(),
+            "O__OPRTTYPE": _str(),
+            "O__OPRTGRP": _str(),
         }
     ),
     "ICD9CM": DataFrameSchema(

@@ -58,7 +58,7 @@ REQUIRED_TABLES: tuple[CSVTable, ...] = (
     "IPDADMPROGRESS",
     "IPDNRFOCUSDT",
     "IPTSUMOPRT",
-    "INCPT",
+    "INCPT_OPRTACT",
     "ICD9CM",
 )
 
@@ -423,31 +423,6 @@ class TestNormalizeHeaderCaseNormalize:
         assert "THAINAME" in r.dropped
         assert "FIRSTSTF" in r.dropped
 
-    def test_incpt_title_case_uppercased(self) -> None:
-        title_case = [
-            "Hn",
-            "Incdate",
-            "Inctime",
-            "Ordercode",
-            "Income",
-            "An",
-            "Canceldate",
-            "Incgrp",
-            "Incgrp → Name",
-        ]
-        r = normalize_header("INCPT", title_case)
-        assert set(r.header) == {
-            "HN",
-            "AN",
-            "INCDATE",
-            "INCTIME",
-            "ORDERCODE",
-            "INCOME",
-            "CANCELDATE",
-            "INCGRP",
-        }
-        assert "INCGRP → NAME" in r.dropped
-
     def test_non_procedure_table_keeps_case_as_is(self) -> None:
         # Only procedure-family tables are case-normalized. Other tables that
         # somehow arrive with mixed-case columns would correctly fail the
@@ -513,21 +488,6 @@ class TestRowPositions:
         positions = _row_positions("IPTSUMOPRT", raw, kept)
         # AN→0, ICD9CM→3, INDATE→4, INTIME→5
         assert positions == (0, 3, 4, 5)
-
-    def test_incpt_title_case_resolves_to_raw_positions(self) -> None:
-        raw = [
-            "Hn",
-            "Incdate",
-            "Inctime",
-            "Ordercode",
-            "Income",
-            "An",
-            "Canceldate",
-            "Incgrp",
-        ]
-        kept = ["HN", "AN", "INCDATE", "INCTIME", "ORDERCODE", "INCOME", "INCGRP"]
-        positions = _row_positions("INCPT", raw, kept)
-        assert positions == (0, 5, 1, 2, 3, 4, 7)
 
     def test_ipdadmprogress_duplicates_resolve_to_first_position(self) -> None:
         # Real file shape (abbreviated): HN at 0, AN at 1, duplicate AN
@@ -682,16 +642,6 @@ class TestNormalizeRowDateParse:
         assert result is not None
         assert result.parse_warnings == ()
         assert result.cells[kept.index("INDATE")] == "2025-06-07"
-
-    def test_incpt_incdate_date_only_replaced_with_iso(self) -> None:
-        kept = list(get_schema("INCPT").columns)
-        positions = _row_positions("INCPT", kept, kept)
-        row = ["" for _ in kept]
-        row[kept.index("INCDATE")] = "January 9, 2025"
-        result = normalize_row("INCPT", row, positions, kept)
-        assert result is not None
-        assert result.parse_warnings == ()
-        assert result.cells[kept.index("INCDATE")] == "2025-01-09"
 
     def test_indate_unparseable_yields_warning_but_keeps_row(self) -> None:
         row, positions, kept = self._iptsumoprt_row("not-a-date")

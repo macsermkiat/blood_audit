@@ -28,7 +28,7 @@ The encrypted bundle at `data/encrypted/` contains **12 CSV files**. Each maps 1
 | `IPDADMPROGRESS.csv` | `IPDADMPROGRESS` | direct HOSxP export (large; needs deid) |
 | `IPDNRFOCUSDT.csv` | `IPDNRFOCUSDT` | direct HOSxP export (large; needs deid) |
 | `IPTSUMOPRT.csv` | `IPTSUMOPRT` | direct HOSxP export (procedure encounters) |
-| `INCPT.csv` | `INCPT` | direct HOSxP export (procedure / operation charges) |
+| `INCPT_OPRTACT.csv` | `INCPT_OPRTACT` | IT-joined: INCPT ⋈ OPRTACT on `Income`; supersedes the standalone INCPT export per issue #69 |
 | `ICD9CM.csv` | `ICD9CM` | HOSxP procedure code dictionary |
 
 **Dropped from the schema:** `UnUSE_Patient_Background` — the bundle's file with that name is an obstetric/delivery record table, not patient demographics. The real `PT` (patient registration) table is not in the bundle. Audit removes `age_years` and `sex` from `AuditOrder` to compensate; pediatric and obstetric exclusions adapt accordingly (see *Downstream impacts*).
@@ -127,15 +127,43 @@ The encrypted bundle at `data/encrypted/` contains **12 CSV files**. Each maps 1
 - `INDATE` is **Excel-locale-formatted** in the file (e.g. `"June 7, 2025, 12:00 AM"`) — needs a dedicated parser (`parse_iptsumoprt_date`) to convert to ISO 8601 before validate_header.
 - Audit-relevant signal: procedure start moment is the time anchor for "acute blood loss" override. End time (`OUTDATE`/`OUTTIME`) and OR-only flag (`Orflag`) are **not** declared; audit treats all procedures equally.
 
-### INCPT — 8 cols (procedure / operation charges)
+### INCPT_OPRTACT — 16 cols (procedure / operation charges, joined with OPRTACT dictionary)
 
-`HN` (NOT NULL), `AN` (NOT NULL), `INCDATE`, `INCTIME`, `ORDERCODE`, `INCOME`, `CANCELDATE`, `INCGRP`.
+INCPT side (8 cols): `HN` (NOT NULL), `AN` (NOT NULL), `INCDATE`, `INCTIME`, `ORDERCODE`, `INCOME`, `CANCELDATE`, `INCGRP`.
 
-- Support / fallback source for operation lookup when IPTSUMOPRT is incomplete.
-- File uses Title-Case column names (`Hn`, `Incdate`, `Inctime`, `An`, etc.) — normalize must uppercase before validate_header.
-- `INCDATE` is English-locale date-only text (e.g. `"January 9, 2025"`) — normalize parses it to ISO 8601.
-- Pilot operation lookup treats non-cancelled rows in `INCGRP` 110 / 111 as procedure evidence for peri-procedural proximity only. `INCPT` charge / income codes are not ICD-9-CM procedure codes and must not drive deterministic cardiac / orthopedic cohort matching unless a future explicit ICD9 mapping is added.
-- The LLM pilot prompt includes nearby `INCPT` rows with group/name context so operation type can be judged from descriptions rather than numeric charge-code prefixes.
+OPRTACT side, prefixed `O__` (8 cols): `O__OPRTACT`, `O__NAME`, `O__NAME_EN`, `O__ICD9CM`, `O__ICD9CMADD1`, `O__ICD9CMADD2`, `O__OPRTTYPE`, `O__OPRTGRP`.
+
+- IT-joined upstream: `INCPT ⋈ OPRTACT ON INCPT.Income = OPRTACT.Income`. The `O__` prefix marks the right-hand table so collisions with INCPT's own columns (`INCOME`, `CANCELDATE`) stay unambiguous.
+- **Supersedes IPTSUMOPRT for cohort detection** (issue #69). `IPTSUMOPRT` is a summary table and does not include every operation an admission underwent; `OPRTACT` is one row per operative act, with the procedure code on each row. The audit prefers `INCPT_OPRTACT` over `IPTSUMOPRT` when both exist; on collision, `OPRTACT`-side `O__ICD9CM` takes precedence (it is per-act, not per-encounter).
+- Column names already ALL-CAPS on arrival (IT normalizes upstream) — the normalize layer skips case-normalize for this table.
+- `INCDATE` already in ISO `YYYY-MM-DD HH:MM:SS.sss` form on arrival — normalize skips date-parse for this table.
+- `INCGRP` 110 / 111 (non-cancelled rows) drives peri-procedural proximity. `O__ICD9CM` drives **deterministic cardiac / orthopedic cohort matching** (cf. `bba.cohort_detector`'s `cardiac_surgery` / `ortho_cardiac` predicates and `ICD9CM.ORFLAG` for the OR-procedure gate).
+- The LLM pilot prompt includes the joined rows so the model sees operation name + ICD-9 description alongside the charge group.
+
+#### Cohort-detection join chain
+
+```
+INCPT_OPRTACT   ──(O__ICD9CM)──►   ICD9CM (master)
+  HN/AN, time,                       NAME (description), ORFLAG (OR gate)
+  per-operative-act
+```
+
+In SQL-shape (illustrative — schema is the source of truth):
+
+```sql
+SELECT
+    inc.HN, inc.AN,
+    inc.O__ICD9CM      AS icd9cm,
+    icd.NAME           AS procedure_name,
+    icd.ORFLAG         AS or_flag,
+    inc.INCDATE, inc.INCTIME,
+    inc.INCGRP
+FROM   INCPT_OPRTACT  inc
+JOIN   ICD9CM         icd  ON icd.ICD9CM = inc.O__ICD9CM
+WHERE  inc.CANCELDATE IS NULL
+  AND  inc.INCGRP IN ('110','111')
+;
+```
 
 ### ICD9CM — 3 cols (procedure code dictionary)
 
@@ -159,7 +187,7 @@ The normalize layer runs **before** `validate_header` and produces a DataFrame w
 | `IPDADMPROGRESS` | Read positionally (not by header name); drop duplicate `HN` (position 30) and `AN` (position 3); then project. Also filter `PROGDATE` to the 2025 cohort year. |
 | `IPDNRFOCUSDT` | Filter `PROGRESSDATE` to 2025. |
 | `IPTSUMOPRT` | Case-normalize column names to ALL-CAPS (`An` → `AN`, `Icd9cm` → `ICD9CM`, `Indate` → `INDATE`, `Intime` → `INTIME`) *before* projection. Parse `INDATE` values via `parse_iptsumoprt_date` to ISO 8601. |
-| `INCPT` | Case-normalize column names to ALL-CAPS (`Hn` → `HN`, `An` → `AN`, `Incdate` → `INCDATE`, `Inctime` → `INCTIME`) *before* projection. Parse `INCDATE` values via `parse_kcmh_english_date` to ISO 8601. |
+| `INCPT_OPRTACT` | **No case-normalize, no date-parse.** The IT-pre-joined export already ships ALL-CAPS column names and ISO-formatted `INCDATE` values. Issue #69. |
 | `ICD9CM` | Case-normalize column names to ALL-CAPS. |
 
 ---

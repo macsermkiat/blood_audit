@@ -2,7 +2,7 @@
 
 The bundle's CSVs do not match the audit's pandera schemas one-to-one: they
 are wider than the schema (extra columns the audit ignores), some use
-Title-Case naming (``IPTSUMOPRT``, ``INCPT``, ``ICD9CM``), and one carries duplicate
+Title-Case naming (``IPTSUMOPRT``, ``ICD9CM``), and one carries duplicate
 column names (``IPDADMPROGRESS`` has two ``HN`` and two ``AN`` columns —
 positions 1 + 30 and 2 + 3 respectively).
 
@@ -15,9 +15,10 @@ dropped extras to the run audit, and pass the projected header to
 
 **Header pass** — :func:`normalize_header`. Applies in fixed order:
 
-1. **Case-normalize** (IPTSUMOPRT, INCPT, ICD9CM only): uppercase all column
+1. **Case-normalize** (IPTSUMOPRT, ICD9CM only): uppercase all column
    names so ``An`` / ``Hn`` / ``Icd9cm`` / ``Indate`` line up with the
-   ALL-CAPS schema declarations.
+   ALL-CAPS schema declarations. ``INCPT_OPRTACT`` ships ALL-CAPS from
+   the IT join upstream and skips this step.
 2. **Dedupe**: drop columns whose name already appeared earlier in the
    (post-case-normalize) header. First occurrence wins.
 3. **Project**: keep columns the schema declares; route everything else
@@ -34,12 +35,13 @@ clears the projected header, before any Parquet write:
 2. **Year-filter** (IPDADMPROGRESS, IPDNRFOCUSDT only): drop rows whose
    date column does not match :data:`COHORT_YEAR`. Saves ~7% of the
    2.7M / 16.9M raw rows from reaching the Parquet writer.
-3. **Date-parse** (procedure-family tables): convert ``IPTSUMOPRT.INDATE``
-   / ``INCPT.INCDATE`` from English-locale form to ISO ``YYYY-MM-DD`` via
+3. **Date-parse** (IPTSUMOPRT only): convert ``IPTSUMOPRT.INDATE``
+   from English-locale form to ISO ``YYYY-MM-DD`` via
    :func:`bba.ingest.parse_kcmh_english_date`. Failures
    produce a ``parse_warning`` carried on the row (mirrors
    :func:`bba.ingest.parse_hosxp_time` semantics; the row is **not**
-   dropped on parse failure — PRD §1 fix E35).
+   dropped on parse failure — PRD §1 fix E35). ``INCPT_OPRTACT.INCDATE``
+   already ships in ISO form and is not date-parsed here.
 """
 
 from __future__ import annotations
@@ -62,10 +64,14 @@ logger = logging.getLogger(__name__)
 _CASE_NORMALIZE_TABLES: frozenset[CSVTable] = frozenset(
     {
         "IPTSUMOPRT",
-        "INCPT",
         "ICD9CM",
     }
 )
+# Note: ``INCPT_OPRTACT`` (the pre-joined INCPT ⋈ OPRTACT export from
+# the IT team — see issue #69) ships with ALL-CAPS column names and
+# ISO-8601 INCDATE values, so it is intentionally absent from both
+# this set and ``_DATE_PARSE_COLUMN``. The encrypt pipeline normalizes
+# the join upstream.
 
 
 # Per-table row-level rules. Single point of change for the cohort year so
@@ -97,7 +103,6 @@ _YEAR_FILTER_COLUMN: dict[CSVTable, str] = {
 # passed through unchanged.
 _DATE_PARSE_COLUMN: dict[CSVTable, str] = {
     "IPTSUMOPRT": "INDATE",
-    "INCPT": "INCDATE",
 }
 
 # Rule-order guard: no table currently has both year-filter and date-parse

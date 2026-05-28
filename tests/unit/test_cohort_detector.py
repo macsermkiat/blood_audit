@@ -1209,10 +1209,10 @@ class TestBundledIngestSchemas:
 
         assert "ICD9CM" in get_args(CSVTable)
 
-    def test_incpt_in_csvtable_literal(self) -> None:
+    def test_incpt_oprtact_in_csvtable_literal(self) -> None:
         from bba.ingest.models import CSVTable
 
-        assert "INCPT" in get_args(CSVTable)
+        assert "INCPT_OPRTACT" in get_args(CSVTable)
 
     def test_iptsumoprt_schema_registered(self) -> None:
         from bba.ingest.schemas import get_schema
@@ -1226,11 +1226,15 @@ class TestBundledIngestSchemas:
         schema = get_schema("ICD9CM")
         assert schema is not None
 
-    def test_incpt_schema_registered(self) -> None:
+    def test_incpt_oprtact_schema_registered(self) -> None:
         from bba.ingest.schemas import get_schema
 
-        schema = get_schema("INCPT")
+        schema = get_schema("INCPT_OPRTACT")
         assert schema is not None
+        # Issue #69 acceptance: the OPRTACT side carries the per-act
+        # ICD-9-CM procedure code that cohort_detector keys off. Without
+        # it, the join provides no cohort signal beyond INCPT alone.
+        assert "O__ICD9CM" in schema.columns
 
     def test_orflag_join_path_intact(self) -> None:
         # The cohort detector's OperativeEvent.or_flag sources from
@@ -1259,7 +1263,7 @@ class TestBundledIngestSchemas:
 
         names = set(all_tables())
         assert "IPTSUMOPRT" in names
-        assert "INCPT" in names
+        assert "INCPT_OPRTACT" in names
         assert "ICD9CM" in names
 
 

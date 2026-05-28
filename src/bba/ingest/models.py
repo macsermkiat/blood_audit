@@ -24,7 +24,7 @@ CSVTable = Literal[
     "IPDADMPROGRESS",
     "IPDNRFOCUSDT",
     "IPTSUMOPRT",
-    "INCPT",
+    "INCPT_OPRTACT",
     "ICD9CM",
 ]
 

@@ -3,9 +3,10 @@
 The HOSxP standard date format ``2025-06-07 00:00:00.000`` is handled by the
 existing pandas/Polars datetime parsers in the ingest pipeline. This module
 exists for the **English-locale forms** that appear in KCMH exports for
-the procedure-family tables (``IPTSUMOPRT.INDATE`` and ``INCPT.INCDATE``
-today; ``ICD9CM.Firstdate`` and ``Lastdate`` are dropped from the schema
-but use the same shape):
+the procedure-family tables (``IPTSUMOPRT.INDATE`` today; the legacy
+``INCPT.INCDATE`` column used the same parser before INCPT was superseded
+by the IT-pre-joined ``INCPT_OPRTACT`` table — see issue #69. ``ICD9CM.Firstdate``
+and ``Lastdate`` are dropped from the schema but use the same shape):
 
     "June 7, 2025, 12:00 AM"
     "January 1, 2014, 12:00 AM"
