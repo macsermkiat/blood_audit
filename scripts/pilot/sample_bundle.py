@@ -276,8 +276,10 @@ def main() -> None:
         _filter(
             "BDVSTTRANS.csv",
             "BDVSTTRANS.csv",
-            lambda r: (r.get("AN") or r.get("An")) in sample_ans
-            or (r.get("HN") or r.get("Hn")) in sample_hns,
+            lambda r: (
+                (r.get("AN") or r.get("An")) in sample_ans
+                or (r.get("HN") or r.get("Hn")) in sample_hns
+            ),
             cols=BDVSTTRANS_COLS,
         )
 
