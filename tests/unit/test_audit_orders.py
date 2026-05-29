@@ -12,10 +12,8 @@ The acceptance-criterion → test-class map:
   → import surface verified at module top; collection failure means the
     public API is mis-scaffolded.
 * AC ② "Golden-fixture tests per excluded subgroup"
-  → :class:`TestPediatricExclusion`, :class:`TestObstetricExclusion`,
-    :class:`TestOpdNoAnExclusion`, :class:`TestInterHospitalExclusion`,
+  → :class:`TestOpdNoAnExclusion`, :class:`TestInterHospitalExclusion`,
     :class:`TestHemoglobinopathyExclusion` (one test per code),
-    :class:`TestAihaExclusion`, :class:`TestTmaExclusion`,
     :class:`TestRefusedStatusExclusion`, :class:`TestCancelledExclusion`,
     :class:`TestNonRbcProductExclusion`.
 * AC ③ "Anchor-imputation flag emitted when REQDATE/REQTIME is null"
@@ -248,7 +246,6 @@ class TestInterHospitalExclusion:
         assert all(r.reason != "inter_hospital" for r in result.excluded)
 
 
-
 class TestHemoglobinopathyExclusion:
     """Each of D55/D56/D57/D58 gets its own fixture per issue #4 AC.
 
@@ -313,7 +310,6 @@ class TestFormerlyExcludedCohortsNowInScope:
         assert len(result.included) == 1
         assert result.included[0].reqno == "REQ-0001"
         assert result.excluded == ()
-
 
 
 # =============================================================================
@@ -911,7 +907,6 @@ class TestPerRulePredicates:
         e = check_hemoglobinopathy(_input(diagnosis_codes=(code,)))
         assert isinstance(e, ExcludedRecord)
         assert e.reason == "hemoglobinopathy"
-
 
 
 class TestHelperFunctions:
