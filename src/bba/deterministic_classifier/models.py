@@ -132,8 +132,11 @@ class ClassifierResult(BaseModel):
     ``"hb_ge_10"``, ``"hb_missing"``, ``"bypass_delta_hb"``,
     ``"bypass_peri_procedural"``,
     ``"bypass_pre_op_crossmatch"``, ``"bypass_mtp"``,
-    ``"bypass_hemodilution"``, ``"cohort_unknown"``). Free-form prose
-    summaries are produced by the LLM stage, not here.
+    ``"bypass_mtp_hb_missing"``, ``"bypass_peri_procedural_hb_missing"``,
+    ``"bypass_hemodilution"``, ``"cohort_unknown"``). The two
+    ``*_hb_missing`` slugs mark the missing-Hb positive-evidence pre-check
+    (approved with no documented Hb) so the QI committee can count them.
+    Free-form prose summaries are produced by the LLM stage, not here.
     """
 
     model_config = ConfigDict(frozen=True)

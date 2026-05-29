@@ -4,7 +4,9 @@ The single public function :func:`classify` is the deterministic composition
 over the Hb-tier rules + five bypass pathways. Precedence (top wins) is
 specified in PRD §"Implementation Decisions §6":
 
-1. Hb missing                       → ``INSUFFICIENT_EVIDENCE`` (no bypass)
+1. Hb missing                       → MTP / peri-procedural pre-check
+   (``APPROPRIATE`` on structured Hb-independent evidence), else
+   ``INSUFFICIENT_EVIDENCE``
 2. Hb < 7.0 g/dL                    → ``APPROPRIATE`` (global low-Hb rule)
 3. Cohort ``MTP``                   → ``APPROPRIATE`` (``bypass_reason=mtp``)
 4. Cohort ``UNKNOWN``               → ``NEEDS_REVIEW`` (no bypass)
@@ -26,9 +28,16 @@ specified in PRD §"Implementation Decisions §6":
 
 Precedence notes:
 
-* Hb missing precedes every other check — no signal can be interpreted
-  without an Hb anchor, including a triggered delta-Hb flag (stale upstream
-  state cannot override the structural "no current Hb" fact).
+* Hb missing runs a positive-evidence pre-check first: hard, structured,
+  Hb-independent signals (active MTP, peri-procedural ≤ 6 h) auto-classify
+  ``APPROPRIATE`` just as the Hb-present path would (SEED pending clinical
+  sign-off; rationale slugs ``bypass_mtp_hb_missing`` /
+  ``bypass_peri_procedural_hb_missing`` keep these auditable). Interpreted
+  signals (a triggered delta-Hb flag, which needs a current Hb to compute)
+  and the weaker pre-op crossmatch do NOT fire on missing Hb — stale
+  upstream state cannot override the structural "no current Hb" fact, and
+  transfusing pre-op with no Hb is what an audit should flag. With no such
+  evidence the case is ``INSUFFICIENT_EVIDENCE``.
 * Hb < 7.0 g/dL is globally ``APPROPRIATE`` before cohort-specific review
   routes. This includes UNKNOWN / non-threshold cohorts and the safety flags
   that otherwise protect the cohort-threshold branch.
@@ -87,10 +96,41 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
     cohort = inputs.cohort_assignment
     threshold = cohort.threshold
 
-    # 1. Hb missing — INSUFFICIENT_EVIDENCE precedes every other check.
-    #    A stale upstream delta-Hb flag cannot override the structural
-    #    fact that there is no current Hb to anchor any interpretation.
+    # 1. Hb missing — positive-evidence pre-check (SEED pending clinical
+    #    sign-off). Hard, structured, Hb-independent signals (active MTP,
+    #    peri-procedural ≤ 6 h) auto-classify APPROPRIATE exactly as the
+    #    Hb-present path would, preserving the canonical MTP → UNKNOWN →
+    #    peri-procedural ordering. Interpreted signals (delta-Hb, which
+    #    needs a current Hb) and the weaker pre-op crossmatch are NOT
+    #    reachable here — transfusing with no Hb is what those should flag.
     if hb.value_g_dl is None:
+        # MTP precedes everything — the cluster pattern is Hb-independent.
+        if cohort.label == CohortLabel.MTP:
+            return ClassifierResult(
+                classification="APPROPRIATE",
+                bypass_reason=BypassReason.MTP,
+                cohort_threshold=threshold,
+                rationale="bypass_mtp_hb_missing",
+            )
+        # UNKNOWN must NOT be auto-bypassed by peri-procedural — mirrors the
+        # Hb-present order (UNKNOWN precedes peri-procedural). Missing Hb +
+        # unknown context stays the dominant documentation gap.
+        if cohort.label == CohortLabel.UNKNOWN:
+            return ClassifierResult(
+                classification="INSUFFICIENT_EVIDENCE",
+                bypass_reason=BypassReason.NONE,
+                cohort_threshold=threshold,
+                rationale="hb_missing",
+            )
+        proximity = inputs.procedure_proximity_hours
+        if proximity is not None and proximity <= PERI_PROCEDURAL_WINDOW_HOURS:
+            return ClassifierResult(
+                classification="APPROPRIATE",
+                bypass_reason=BypassReason.PERI_PROCEDURAL_6H,
+                cohort_threshold=threshold,
+                rationale="bypass_peri_procedural_hb_missing",
+            )
+        # No Hb-independent positive evidence — a genuine documentation gap.
         return ClassifierResult(
             classification="INSUFFICIENT_EVIDENCE",
             bypass_reason=BypassReason.NONE,

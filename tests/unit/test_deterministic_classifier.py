@@ -317,10 +317,14 @@ class TestHbTierByCohort:
         assert result.classification == "NEEDS_REVIEW"
 
     def test_hb_missing_is_insufficient_evidence(self) -> None:
-        """Hb missing (freshness=missing) → INSUFFICIENT_EVIDENCE.
+        """Hb missing (freshness=missing), no Hb-independent positive
+        evidence → INSUFFICIENT_EVIDENCE.
 
-        Bypass paths MUST NOT fire on missing Hb — the upstream signals
-        cannot be interpreted without a numeric Hb to anchor them.
+        With a DEFAULT cohort and no MTP / peri-procedural signal there is
+        nothing to anchor a classification, so the case is a genuine
+        documentation gap. (The structured positive-evidence bypasses that
+        DO fire on missing Hb are pinned in
+        :class:`TestMissingHbPositiveEvidence`.)
         """
         result = classify(
             _inputs(
@@ -462,6 +466,100 @@ class TestBypassPathways:
         )
         assert result.classification == "INSUFFICIENT_EVIDENCE"
         assert result.bypass_reason == BypassReason.NONE
+
+
+# =============================================================================
+# Missing-Hb positive-evidence pre-check (SEED pending clinical sign-off)
+# =============================================================================
+
+
+class TestMissingHbPositiveEvidence:
+    """When the Hb is missing, hard structured Hb-independent positive
+    evidence (active MTP, peri-procedural ≤ 6 h) still auto-classifies the
+    order ``APPROPRIATE`` — mirroring the Hb-present path, where the same
+    case auto-classifies. The order is preserved (MTP → UNKNOWN → peri-
+    procedural): MTP is the dominant signal, UNKNOWN remains a genuine gap
+    that peri-procedural must not override, and only the weaker pre-op
+    crossmatch / interpreted delta-Hb signals stay excluded on missing Hb.
+
+    The distinct rationale slugs (``bypass_mtp_hb_missing`` /
+    ``bypass_peri_procedural_hb_missing``) keep these "approved with no
+    documented Hb" cases auditable for the QI committee.
+    """
+
+    def test_mtp_with_missing_hb_is_appropriate(self) -> None:
+        """Active MTP + missing Hb → APPROPRIATE (cluster pattern is
+        Hb-independent; transfuse-before-you-have-an-Hb)."""
+        result = classify(
+            _inputs(
+                hb=_hb(None),
+                cohort=_cohort(CohortLabel.MTP, None),
+            )
+        )
+        assert result.classification == "APPROPRIATE"
+        assert result.bypass_reason == BypassReason.MTP
+        assert result.rationale == "bypass_mtp_hb_missing"
+        assert result.cohort_threshold is None
+
+    def test_peri_procedural_with_missing_hb_is_appropriate(self) -> None:
+        """Procedure ≤ 6 h before order + missing Hb → APPROPRIATE
+        (fresh-out-of-surgery surgical-loss scenario)."""
+        result = classify(
+            _inputs(
+                hb=_hb(None),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                procedure_proximity_hours=4.0,
+            )
+        )
+        assert result.classification == "APPROPRIATE"
+        assert result.bypass_reason == BypassReason.PERI_PROCEDURAL_6H
+        assert result.rationale == "bypass_peri_procedural_hb_missing"
+        assert result.cohort_threshold == DEFAULT_THRESHOLD
+
+    def test_pre_op_crossmatch_only_with_missing_hb_stays_insufficient(self) -> None:
+        """Upcoming procedure (pre-op crossmatch) is deliberately NOT a
+        missing-Hb bypass — transfusing pre-op with no Hb is exactly what
+        an audit should flag, so this stays INSUFFICIENT_EVIDENCE."""
+        result = classify(
+            _inputs(
+                hb=_hb(None),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                upcoming_procedure_hours=10.0,
+            )
+        )
+        assert result.classification == "INSUFFICIENT_EVIDENCE"
+        assert result.bypass_reason == BypassReason.NONE
+        assert result.rationale == "hb_missing"
+
+    def test_mtp_precedes_peri_procedural_on_missing_hb(self) -> None:
+        """MTP + peri-procedural + missing Hb → MTP wins (the most
+        clinically load-bearing signal), preserving the Hb-present order."""
+        result = classify(
+            _inputs(
+                hb=_hb(None),
+                cohort=_cohort(CohortLabel.MTP, None),
+                procedure_proximity_hours=4.0,
+            )
+        )
+        assert result.classification == "APPROPRIATE"
+        assert result.bypass_reason == BypassReason.MTP
+        assert result.rationale == "bypass_mtp_hb_missing"
+
+    def test_unknown_cohort_peri_procedural_missing_hb_stays_insufficient(self) -> None:
+        """UNKNOWN cohort + peri-procedural + missing Hb → still
+        INSUFFICIENT_EVIDENCE. Peri-procedural MUST NOT override UNKNOWN,
+        mirroring the Hb-present order (UNKNOWN precedes peri-procedural).
+        Missing Hb + unknown context is the dominant documentation gap."""
+        result = classify(
+            _inputs(
+                hb=_hb(None),
+                cohort=_cohort(CohortLabel.UNKNOWN, None),
+                procedure_proximity_hours=4.0,
+            )
+        )
+        assert result.classification == "INSUFFICIENT_EVIDENCE"
+        assert result.bypass_reason == BypassReason.NONE
+        assert result.rationale == "hb_missing"
 
 
 # =============================================================================

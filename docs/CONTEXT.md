@@ -471,7 +471,10 @@ dashboards can group by reason without re-deriving from `rationale`.
 ### Classification precedence
 
 Eleven-step composition in `bba.deterministic_classifier.classify`
-(top wins): (1) Hb missing → `INSUFFICIENT_EVIDENCE`; (2) Hb < 7.0 →
+(top wins): (1) Hb missing → MTP / peri-procedural positive-evidence
+pre-check (`APPROPRIATE` on a structured Hb-independent signal), else
+`INSUFFICIENT_EVIDENCE` (see "Missing-Hb positive-evidence pre-check");
+(2) Hb < 7.0 →
 `APPROPRIATE`/`NONE`; (3) cohort `MTP` → `APPROPRIATE`/`MTP`;
 (4) cohort `UNKNOWN` → `NEEDS_REVIEW`; (5) procedure ≤ 6 h →
 `APPROPRIATE`/`PERI_PROCEDURAL_6H`; (6) upcoming procedure ≤ 72 h →
@@ -556,15 +559,42 @@ most-recent operative event to the order anchor — distinct from
 "no event" (`None`); future-dated events are filtered upstream by
 the orchestrator before reaching the classifier.
 
-### Delta-Hb bypass on missing Hb
+### Missing-Hb positive-evidence pre-check
 
-When `hb_result.value_g_dl is None`, the classifier returns
-`INSUFFICIENT_EVIDENCE` **before** checking
-`hb_result.delta_hb_bypass`. A stale upstream "bypass" flag set
-together with a missing Hb is a structural inconsistency; the
-classifier prefers the "no Hb" fact over honoring the orphan flag.
+**SEED pending clinical sign-off** (same status as the
+`bba.cohort_detector` allow-lists). When `hb_result.value_g_dl is None`,
+the classifier first checks for hard, structured, Hb-independent positive
+evidence and auto-classifies `APPROPRIATE` exactly as the Hb-present path
+would — closing the indefensible asymmetry where the *same* case parked as
+`INSUFFICIENT_EVIDENCE` with no Hb but auto-classified `APPROPRIATE` with
+one. Order is preserved (MTP → UNKNOWN → peri-procedural):
+
+- cohort `MTP` → `APPROPRIATE`/`MTP`, `rationale="bypass_mtp_hb_missing"`;
+- cohort `UNKNOWN` → stays `INSUFFICIENT_EVIDENCE` (peri-procedural must
+  not override UNKNOWN, mirroring the Hb-present order);
+- `procedure_proximity_hours ≤ 6.0` → `APPROPRIATE`/`PERI_PROCEDURAL_6H`,
+  `rationale="bypass_peri_procedural_hb_missing"`;
+- otherwise → `INSUFFICIENT_EVIDENCE`/`NONE`, `rationale="hb_missing"`.
+
+The distinct `*_hb_missing` rationale slugs keep these "approved with no
+documented Hb" cases auditable so the QI committee can monitor them
+(`bypass_reason` is still `MTP`/`PERI_PROCEDURAL_6H` for grouping).
+`TestMissingHbPositiveEvidence` pins all five paths.
+
+### Delta-Hb / pre-op crossmatch excluded on missing Hb
+
+The pre-check above deliberately does **not** fire delta-Hb or the pre-op
+crossmatch bypass on a missing Hb. Delta-Hb needs a current Hb to compute,
+so a stale upstream `delta_hb_bypass=True` set together with a missing Hb
+is a structural inconsistency — the classifier prefers the "no Hb" fact
+over the orphan flag. Pre-op crossmatch (`upcoming_procedure_hours`) is
+excluded because transfusing pre-op with no documented Hb is exactly what
+an audit should flag, not auto-approve; that case stays
+`INSUFFICIENT_EVIDENCE`.
 `TestBypassPathways::test_delta_hb_bypass_does_not_fire_when_hb_missing`
-pins this.
+and
+`TestMissingHbPositiveEvidence::test_pre_op_crossmatch_only_with_missing_hb_stays_insufficient`
+pin these exclusions.
 
 ### Monotonicity in Hb
 
