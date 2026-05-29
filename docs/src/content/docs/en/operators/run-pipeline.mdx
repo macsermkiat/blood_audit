@@ -1,0 +1,107 @@
+---
+title: Run the pipeline
+description: Two ways to run blood_audit — the simple pilot smoke test and the supported production CLI.
+---
+
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
+There are two ways to run the audit, depending on what you need:
+
+<AtAGlance
+  items={[
+    { label: "Path A — Pilot", value: "Watch the whole pipeline run on a tiny sample and produce an HTML for human review." },
+    { label: "Path B — Production", value: "Run the supported bba CLI against a full HOSxP export.", tone: "ok" },
+    { label: "Prereq", value: "Python ≥ 3.13, uv, and an ANTHROPIC_API_KEY for the LLM leg." },
+  ]}
+/>
+
+:::caution[Real PHI]
+Both paths read clinical data. Any file the pilot writes under
+`$BBA_PILOT_WORK_DIR` (sampled bundle, `review.html`, audit store) contains
+**real PHI** — never commit, email, or share it outside the approved review
+channel.
+:::
+
+## Path A — Simple pilot run (smoke test)
+
+The fastest way to see the full audit run end-to-end. It samples ~10 cases
+from an encrypted HOSxP bundle and walks them through four pilot scripts,
+ending in a single self-contained `review.html` for a clinician.
+
+These scripts live **outside** the `bba` package on purpose: they are
+deployment-shaped glue (a worked example of how the modules compose), not a
+supported entry point. See
+[`scripts/pilot/README.md`](https://github.com/macsermkiat/blood_audit/blob/main/scripts/pilot/README.md)
+for the full contract and tuning knobs.
+
+```bash
+# One-time, from the repo root:
+uv sync
+
+# Required for the LLM leg; all pilot outputs land in the work dir:
+export ANTHROPIC_API_KEY=sk-ant-...
+export BBA_PILOT_WORK_DIR=/tmp/bba_mini
+
+# Step 1 — sample ~10 cases from the encrypted bundle → bundle/ + manifest
+uv run python scripts/pilot/sample_bundle.py
+
+# Step 2 — deterministic classifier verdicts → report.csv
+uv run python scripts/pilot/run_pipeline.py
+
+# Step 3 — live Anthropic batch (de-id → prompt → ground → calibrate) → llm_report.json
+uv run python scripts/pilot/run_llm_leg.py
+
+# Step 4 — assemble the single-page human review → review.html
+uv run python scripts/pilot/build_review.py
+
+open "$BBA_PILOT_WORK_DIR/review.html"
+```
+
+What each step produces:
+
+| Step | Script | Output |
+|------|--------|--------|
+| 1 | `sample_bundle.py` | `bundle/` (sampled CSVs) + `sample_manifest.csv` |
+| 2 | `run_pipeline.py` | `report.csv` (per-case deterministic verdict) |
+| 3 | `run_llm_leg.py` | `llm_report.json` + `data/audit_store/` |
+| 4 | `build_review.py` | `review.html` (one page for human review) |
+
+:::note[What the LLM does and doesn't see]
+The pilot does **not** send free-text progress / focus notes to the API —
+that bundle has not been through de-identification. Only structured signals
+go out: ICD-10 diagnoses, Hb history, CBC values, meds, and vital-sign
+*numbers* extracted locally via regex. The narrative never leaves the machine.
+:::
+
+## Path B — Production run (supported CLI)
+
+Runs the wired `bba` CLI against a full 12-file HOSxP export.
+
+```bash
+export BBA_DATA_DIR=/path/to/persistent/data   # Parquet + DuckDB + run-state
+export BBA_DB_URL=postgresql://user@host/db     # audit-store + dashboard
+export ANTHROPIC_API_KEY=sk-ant-...             # LLM review leg
+
+# 1. Ingest the HOSxP CSV bundle into DuckDB + Parquet under $BBA_DATA_DIR
+uv run bba ingest /path/to/hosxp_bundle/BDVST.csv
+
+# 2. Run the audit (deterministic classifier + LLM review route + quote grounding)
+uv run bba audit --input /path/to/hosxp_bundle/BDVST.csv
+```
+
+`bba audit` is **run-level idempotent**: re-running on the same input + same
+code version is a no-op. Pass `--force` to override (writes a compliance row to
+`audit_log`). For the per-flag contract see
+[First audit run](/blood_audit/en/operators/first-audit-run/) and
+[audit command](/blood_audit/en/operators/audit-command/).
+
+## Which one should I run?
+
+- **Demoing the pipeline or sanity-checking a change end-to-end?** Path A.
+- **Auditing a real export for the QI committee?** Path B.
+
+## Next steps
+
+- [Environment variables](/blood_audit/en/operators/env-vars/) — every variable the CLI reads.
+- [Ingest CSV](/blood_audit/en/operators/ingest-csv/) — the expected 12-file bundle shape.
+- [Troubleshooting](/blood_audit/en/operators/troubleshooting/) — common failures.

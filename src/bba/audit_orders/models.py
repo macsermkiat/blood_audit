@@ -40,8 +40,6 @@ RBCProduct = Literal["LPRC", "LDPRC", "SDR"]
 # patient-demographics table). Current ingest bundles have no per-row age
 # column, so the upstream IT pre-filter (``age > 15``) handles the gate
 # exclusively and the audit pipeline never fires ``"pediatric"`` itself.
-# ``"obstetric"`` fires on ICD-10 O-codes only — no sex-gate, since sex is
-# no longer in scope either. See ``docs/ingest-mapping.md`` for context.
 ExclusionReason = Literal[
     "not_rbc_product",
     "status_not_eligible",
@@ -50,9 +48,6 @@ ExclusionReason = Literal[
     "no_an",
     "inter_hospital",
     "hemoglobinopathy",
-    "aiha",
-    "tma",
-    "obstetric",
 ]
 
 

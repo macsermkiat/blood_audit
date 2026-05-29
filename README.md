@@ -31,17 +31,54 @@ export ANTHROPIC_API_KEY=sk-ant-...             # required for the LLM_REVIEW le
 
 No sample data ships in-repo (PHI exposure risk). The pipeline reads a HOSxP CSV bundle — see [Expected input bundle](#expected-input-bundle).
 
-### End-to-end on a real bundle
+## Run the pipeline
+
+There are two ways to run, depending on what you want. Pick **A** to see the
+whole thing work end-to-end on a tiny sample; pick **B** to run the supported
+CLI on a real export. Full operator walkthrough:
+[docs site → Operators → Run the pipeline](docs/src/content/docs/en/operators/run-pipeline.mdx).
+
+### A. Simple pilot run (smoke test)
+
+The fastest way to watch the full audit run end-to-end and produce an HTML for
+human review. It samples a handful of cases from an encrypted bundle and walks
+them through the four pilot scripts. Not a supported entry point — it's a
+worked example of how the modules compose. (Details:
+[`scripts/pilot/README.md`](scripts/pilot/README.md).)
 
 ```bash
+export ANTHROPIC_API_KEY=sk-ant-...          # required for the LLM leg
+export BBA_PILOT_WORK_DIR=/tmp/bba_mini      # all outputs land here
+
+uv run python scripts/pilot/sample_bundle.py   # 1. sample ~10 cases
+uv run python scripts/pilot/run_pipeline.py     # 2. deterministic verdicts → report.csv
+uv run python scripts/pilot/run_llm_leg.py      # 3. live Anthropic batch → llm_report.json
+uv run python scripts/pilot/build_review.py     # 4. assemble review.html
+
+open "$BBA_PILOT_WORK_DIR/review.html"
+```
+
+> Outputs under `$BBA_PILOT_WORK_DIR` contain **real PHI** — never commit, email, or share them.
+
+### B. Production run (supported CLI)
+
+Runs the wired `bba` CLI against a full 12-file HOSxP export.
+
+```bash
+export BBA_DATA_DIR=/path/to/persistent/data   # Parquet + DuckDB + run-state
+export BBA_DB_URL=postgresql://user@host/db     # audit-store + dashboard
+export ANTHROPIC_API_KEY=sk-ant-...             # LLM review leg
+
 # 1. Ingest the HOSxP CSV bundle into DuckDB + Parquet under $BBA_DATA_DIR
 uv run bba ingest /path/to/hosxp_bundle/BDVST.csv
 
-# 2. Run the audit pipeline (deterministic classifier + LLM review route + quote grounding)
+# 2. Run the audit (deterministic classifier + LLM review route + quote grounding)
 uv run bba audit --input /path/to/hosxp_bundle/BDVST.csv
-# The pipeline is run-level idempotent: re-running on the same input is a no-op.
-# Use --force to override (writes a compliance row to audit_log).
 ```
+
+`bba audit` is run-level idempotent: re-running on the same input + same code
+version is a no-op. Pass `--force` to override (writes a compliance row to
+`audit_log`).
 
 ## CLI
 
@@ -71,7 +108,7 @@ MED.csv                         Medication administration record
 IPDADMPROGRESS.csv              Daily admission progress notes
 IPDNRFOCUSDT.csv                Nursing focus-charting timestamps
 IPTSUMOPRT.csv                  Operative table (Phase B — re-encrypted AN pending #2)
-INCPT.csv                       Procedure / operation charge support table
+INCPT_OPRTACT.csv               Procedure charge support (INCPT joined to OPRTACT on Income, per #69)
 ICD9CM.csv                      ICD-9-CM Vol 3 procedure code dictionary
 ```
 

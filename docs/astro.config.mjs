@@ -38,6 +38,7 @@ export default defineConfig({
             { label: "Install", translations: { th: "ติดตั้ง" }, slug: "operators/install" },
             { label: "Environment variables", translations: { th: "ตัวแปรสภาพแวดล้อม" }, slug: "operators/env-vars" },
             { label: "First audit run", translations: { th: "รันออดิทครั้งแรก" }, slug: "operators/first-audit-run" },
+            { label: "Run the pipeline", translations: { th: "รัน pipeline" }, slug: "operators/run-pipeline" },
             { label: "Ingest CSV", translations: { th: "Ingest CSV" }, slug: "operators/ingest-csv" },
             { label: "audit command", translations: { th: "คำสั่ง audit" }, slug: "operators/audit-command" },
             { label: "Integration seams", translations: { th: "จุดเชื่อมต่อระบบ" }, slug: "operators/integration-seams" },

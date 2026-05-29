@@ -354,9 +354,9 @@ def find_esrd_diagnosis(diagnosis_codes: Sequence[str]) -> str | None:
     """Return the first ICD-10 code in ``diagnosis_codes`` that is in
     :data:`ESRD_ICD10_CODES`, or None.
 
-    Exact subcategory match (boundary-safe via the same rule used for
-    audit_orders.tma): ``"N18.5"`` matches the bare code or ``"N18.5"``
-    + further subdivisions.
+    Exact subcategory match (boundary-safe via the same rule used by
+    :func:`bba.audit_orders.rules._code_matches_prefix`): ``"N18.5"``
+    matches the bare code or ``"N18.5"`` + further subdivisions.
     """
     return _first_match(diagnosis_codes, sorted(ESRD_ICD10_CODES))
 

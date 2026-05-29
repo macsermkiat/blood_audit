@@ -14,10 +14,7 @@ wins so the typed reason matches the most specific gate that fired:
 4. ``check_an_scoped``    — OPD (no AN)
 5. ``check_request_type`` — inter-hospital referral (REQTYPE != 'P')
 6. ``check_hemoglobinopathy`` — D55/D56/D57/D58
-7. ``check_aiha``         — D59.x
-8. ``check_tma``          — M31.1
-9. ``check_obstetric``    — O-chapter
-10. (anchor resolution)   — last, because anchor-unrecoverable raises
+7. (anchor resolution)   — last, because anchor-unrecoverable raises
     rather than silently drops. Age-based ``"pediatric"`` exclusion is
     not in the audit pipeline: post-schema-lock (2026-05-19) the bundle
     has no per-row age column and the upstream IT pre-filter handles
@@ -44,15 +41,12 @@ from bba.audit_orders.models import (
     FilterResult,
 )
 from bba.audit_orders.rules import (
-    check_aiha,
     check_an_scoped,
     check_cancelled,
     check_hemoglobinopathy,
-    check_obstetric,
     check_rbc_product,
     check_request_type,
     check_status,
-    check_tma,
     rbc_products_in,
 )
 
@@ -66,9 +60,6 @@ _PRE_ANCHOR_RULES: tuple[Callable[[BloodOrderInput], ExcludedRecord | None], ...
     check_an_scoped,
     check_request_type,
     check_hemoglobinopathy,
-    check_aiha,
-    check_tma,
-    check_obstetric,
 )
 
 

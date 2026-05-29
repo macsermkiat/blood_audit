@@ -1142,29 +1142,32 @@ PRD §"Output schema" identity + anchor fields: `audit_id`, `hn`, `an`,
 
 Typed `Literal` enum of the gate that rejected a record:
 `not_rbc_product`, `status_not_eligible`, `cancelled`, `no_an`,
-`inter_hospital`, `hemoglobinopathy`, `aiha`, `tma`, `obstetric`,
-`pediatric`. `ExcludedRecord.detail` carries the specific evidence (e.g.,
+`inter_hospital`, `hemoglobinopathy`, `pediatric`.
+`ExcludedRecord.detail` carries the specific evidence (e.g.,
 the ICD-10 code that triggered hemoglobinopathy) so reviewers can audit
 the rule firing without re-joining source CSVs.
 
 ### Hard-exclusion ICD-10 set
 
 Codes that block an order from the audit set regardless of other factors:
-hemoglobinopathy `D55` / `D56` / `D57` / `D58`, AIHA `D59.x`, TMA `M31.1`,
-obstetric `O`-chapter. Round 1 B1 (hemoglobinopathy hard-exclude); the
-issue #4 AC is the authoritative list. `bba.audit_orders.rules` constants
-(`HEMOGLOBINOPATHY_PREFIXES`, `AIHA_PREFIX`, `TMA_PREFIXES`,
-`OBSTETRIC_PREFIX`).
+hemoglobinopathy `D55` / `D56` / `D57` / `D58`. Round 1 B1
+(hemoglobinopathy hard-exclude); the issue #4 AC is the authoritative
+list. `bba.audit_orders.rules` constant `HEMOGLOBINOPATHY_PREFIXES`.
+AIHA (`D59.x`), TMA (`M31.1`), and obstetric (`O`-chapter) were dropped
+from the hard-exclusion set on 2026-05-29 — those cohorts are now
+in-scope and pass the filter as auditable orders.
 
 ### Boundary-aware ICD prefix match
 
 `bba.audit_orders.rules._code_matches_prefix`. A raw `startswith` would
 collapse the ICD-10 chapter boundary (e.g., `D550` would match `D55`).
 The matcher requires either exact-length match or a `"."` continuation —
-except for single-letter chapter prefixes (`"O"`), which accept digit
-continuation to form the 3-char category (`O80`, `O09.9`). Case-sensitive;
-ICD-10 is uppercase by convention and tolerating lowercase would also
-tolerate other formatting drift.
+except for single-letter chapter prefixes (e.g., `"O"`), which accept
+digit continuation to form the 3-char category (`O80`, `O09.9`). The
+single-letter branch is retained generically but currently has no caller:
+the only prefix set in use is the 3-char `HEMOGLOBINOPATHY_PREFIXES`.
+Case-sensitive; ICD-10 is uppercase by convention and tolerating lowercase
+would also tolerate other formatting drift.
 
 ### Anchor resolution
 

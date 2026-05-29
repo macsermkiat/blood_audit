@@ -38,21 +38,6 @@ ELIGIBLE_STATUS: frozenset[str] = frozenset({"4", "5"})
 # D55 in the excluded set.)
 HEMOGLOBINOPATHY_PREFIXES: frozenset[str] = frozenset({"D55", "D56", "D57", "D58"})
 
-# ICD-10 prefix for autoimmune hemolytic anemia (AIHA), hard-excluded per
-# issue #4. The ``.x`` wildcard means any D59 subcode (D59.0 / D59.1 / D59.2
-# / D59.3 / D59.4 / D59.8 / D59.9) is excluded.
-AIHA_PREFIX: str = "D59"
-
-# ICD-10 prefixes for thrombotic microangiopathy (TMA) cohorts. M31.1 is
-# thrombotic thrombocytopenic purpura (TTP). M31.0 is hypersensitivity
-# angiitis and is intentionally NOT in the set.
-TMA_PREFIXES: frozenset[str] = frozenset({"M31.1"})
-
-# ICD-10 letter for obstetric conditions (O00–O9A). One-letter prefix
-# match is sufficient: the entire O-chapter is "Pregnancy, childbirth and
-# the puerperium" and out of scope for Phase 1.
-OBSTETRIC_PREFIX: str = "O"
-
 
 def is_rbc_product(product: str) -> bool:
     """True iff ``product`` is one of the allow-listed RBC products."""
@@ -227,71 +212,16 @@ def check_hemoglobinopathy(record: BloodOrderInput) -> ExcludedRecord | None:
     )
 
 
-def check_aiha(record: BloodOrderInput) -> ExcludedRecord | None:
-    """Reject if any diagnosis code starts with :data:`AIHA_PREFIX` (``D59``).
-
-    The matched code is carried in ``ExcludedRecord.detail``.
-    """
-    match = _first_matching_code(record.diagnosis_codes, frozenset({AIHA_PREFIX}))
-    if match is None:
-        return None
-    return ExcludedRecord(
-        hn=record.hn,
-        reqno=record.reqno,
-        reason="aiha",
-        detail=match,
-    )
-
-
-def check_tma(record: BloodOrderInput) -> ExcludedRecord | None:
-    """Reject if any diagnosis code prefix matches :data:`TMA_PREFIXES`.
-
-    The matched code is carried in ``ExcludedRecord.detail``.
-    """
-    match = _first_matching_code(record.diagnosis_codes, TMA_PREFIXES)
-    if match is None:
-        return None
-    return ExcludedRecord(
-        hn=record.hn,
-        reqno=record.reqno,
-        reason="tma",
-        detail=match,
-    )
-
-
-def check_obstetric(record: BloodOrderInput) -> ExcludedRecord | None:
-    """Reject if any diagnosis code starts with :data:`OBSTETRIC_PREFIX` (``O``).
-
-    The whole ICD-10 O-chapter is out of scope per PRD §"Out of scope".
-    The matched code is carried in ``ExcludedRecord.detail``.
-    """
-    match = _first_matching_code(record.diagnosis_codes, frozenset({OBSTETRIC_PREFIX}))
-    if match is None:
-        return None
-    return ExcludedRecord(
-        hn=record.hn,
-        reqno=record.reqno,
-        reason="obstetric",
-        detail=match,
-    )
-
-
 __all__ = (
-    "AIHA_PREFIX",
     "ELIGIBLE_STATUS",
     "HEMOGLOBINOPATHY_PREFIXES",
-    "OBSTETRIC_PREFIX",
     "RBC_PRODUCTS",
-    "TMA_PREFIXES",
-    "check_aiha",
     "check_an_scoped",
     "check_cancelled",
     "check_hemoglobinopathy",
-    "check_obstetric",
     "check_rbc_product",
     "check_request_type",
     "check_status",
-    "check_tma",
     "is_rbc_product",
     "rbc_products_in",
 )

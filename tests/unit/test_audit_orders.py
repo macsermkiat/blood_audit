@@ -60,15 +60,12 @@ from bba.audit_orders import (
     UnrecoverableAnchorError,
     build_audit_id,
     build_audit_orders,
-    check_aiha,
     check_an_scoped,
     check_cancelled,
     check_hemoglobinopathy,
-    check_obstetric,
     check_rbc_product,
     check_request_type,
     check_status,
-    check_tma,
     is_rbc_product,
     rbc_products_in,
     resolve_anchor,
@@ -251,28 +248,6 @@ class TestInterHospitalExclusion:
         assert all(r.reason != "inter_hospital" for r in result.excluded)
 
 
-class TestObstetricExclusion:
-    """Any ICD-10 O-code on the admission → excluded with reason ``obstetric``."""
-
-    @pytest.mark.parametrize(
-        "code", ["O09.9", "O14.1", "O36.5", "O72.0", "O80", "O99.0"]
-    )
-    def test_obstetric_codes_excluded(
-        self, config: AuditOrdersConfig, code: str
-    ) -> None:
-        result = build_audit_orders([_input(diagnosis_codes=(code,))], config)
-        assert len(result.excluded) == 1
-        assert result.excluded[0].reason == "obstetric"
-        assert result.excluded[0].detail == code
-
-    def test_letter_O_not_in_position_zero_does_not_match(
-        self, config: AuditOrdersConfig
-    ) -> None:
-        # E.g., "AO12" is gibberish but must not pretend to be obstetric.
-        # The prefix match anchors at position 0.
-        result = build_audit_orders([_input(diagnosis_codes=("AO12.0",))], config)
-        assert all(r.reason != "obstetric" for r in result.excluded)
-
 
 class TestHemoglobinopathyExclusion:
     """Each of D55/D56/D57/D58 gets its own fixture per issue #4 AC.
@@ -314,43 +289,31 @@ class TestHemoglobinopathyExclusion:
         assert result.excluded[0].reason == "hemoglobinopathy"
 
 
-class TestAihaExclusion:
-    """``D59.x`` → AIHA hard-exclusion per issue #4 AC.
+class TestFormerlyExcludedCohortsNowInScope:
+    """AIHA / TMA / obstetric were dropped from the hard-exclusion set on
+    2026-05-29 — those cohorts are now auditable and must pass the filter.
 
-    Every published D59 subcode must match — partial taxonomy adoption
-    would silently let an autoimmune-hemolytic case into the audit set.
+    This guards the *intent* of the narrowing: an otherwise-clean order
+    carrying one of these codes lands in ``included`` (not silently
+    excluded for some other reason). Without this, the deletion could
+    regress and the partition test would still pass.
     """
 
     @pytest.mark.parametrize(
-        "code", ["D59.0", "D59.1", "D59.2", "D59.3", "D59.4", "D59.8", "D59.9"]
+        "code",
+        [
+            "D59.3",  # AIHA (autoimmune hemolytic anemia)
+            "M31.1",  # TMA (thrombotic thrombocytopenic purpura)
+            "O09.9",  # obstetric (pregnancy supervision)
+            "O80",  # obstetric (single spontaneous delivery, bare 3-char)
+        ],
     )
-    def test_d59_subcodes_excluded(self, config: AuditOrdersConfig, code: str) -> None:
+    def test_code_now_included(self, config: AuditOrdersConfig, code: str) -> None:
         result = build_audit_orders([_input(diagnosis_codes=(code,))], config)
-        assert len(result.excluded) == 1
-        assert result.excluded[0].reason == "aiha"
-        assert result.excluded[0].detail == code
+        assert len(result.included) == 1
+        assert result.included[0].reqno == "REQ-0001"
+        assert result.excluded == ()
 
-    def test_d59_bare_excluded(self, config: AuditOrdersConfig) -> None:
-        result = build_audit_orders([_input(diagnosis_codes=("D59",))], config)
-        assert len(result.excluded) == 1
-        assert result.excluded[0].reason == "aiha"
-
-
-class TestTmaExclusion:
-    """TMA cohorts (M31.1, TTP) → hard-exclusion per issue #4 AC."""
-
-    def test_m31_1_excluded(self, config: AuditOrdersConfig) -> None:
-        result = build_audit_orders([_input(diagnosis_codes=("M31.1",))], config)
-        assert len(result.excluded) == 1
-        assert result.excluded[0].reason == "tma"
-        assert result.excluded[0].detail == "M31.1"
-
-    def test_m31_0_is_not_tma(self, config: AuditOrdersConfig) -> None:
-        # M31.0 is hypersensitivity angiitis, not TMA — must NOT be excluded
-        # under the TMA rule. (Test is here to defend against an over-broad
-        # "M31" prefix match.)
-        result = build_audit_orders([_input(diagnosis_codes=("M31.0",))], config)
-        assert all(r.reason != "tma" for r in result.excluded)
 
 
 # =============================================================================
@@ -579,9 +542,6 @@ class TestPartitionInvariant:
             _input(reqno="REQ-E", canceldate="20260501"),  # cancelled
             _input(reqno="REQ-F", reqtype="H"),  # inter_hospital
             _input(reqno="REQ-H", diagnosis_codes=("D56.1",)),  # hemoglobinopathy
-            _input(reqno="REQ-I", diagnosis_codes=("D59.3",)),  # aiha
-            _input(reqno="REQ-J", diagnosis_codes=("M31.1",)),  # tma
-            _input(reqno="REQ-K", diagnosis_codes=("O80",)),  # obstetric
         ]
         result = build_audit_orders(records, config)
         seen = {o.reqno for o in result.included} | {e.reqno for e in result.excluded}
@@ -683,9 +643,9 @@ class TestPropertyPartitionAndIdentity:
                         [
                             "I50.9",  # clean
                             "D55.0",  # hemoglobinopathy
-                            "D59.3",  # AIHA
-                            "M31.1",  # TMA
-                            "O09.9",  # obstetric
+                            "D59.3",  # AIHA — now in-scope, passes filter
+                            "M31.1",  # TMA — now in-scope, passes filter
+                            "O09.9",  # obstetric — now in-scope, passes filter
                             "D550",  # malformed near-miss (must NOT match D55)
                         ]
                     ),
@@ -952,20 +912,6 @@ class TestPerRulePredicates:
         assert isinstance(e, ExcludedRecord)
         assert e.reason == "hemoglobinopathy"
 
-    def test_check_aiha_excludes(self) -> None:
-        e = check_aiha(_input(diagnosis_codes=("D59.0",)))
-        assert isinstance(e, ExcludedRecord)
-        assert e.reason == "aiha"
-
-    def test_check_tma_excludes(self) -> None:
-        e = check_tma(_input(diagnosis_codes=("M31.1",)))
-        assert isinstance(e, ExcludedRecord)
-        assert e.reason == "tma"
-
-    def test_check_obstetric_excludes(self) -> None:
-        e = check_obstetric(_input(diagnosis_codes=("O80",)))
-        assert isinstance(e, ExcludedRecord)
-        assert e.reason == "obstetric"
 
 
 class TestHelperFunctions:

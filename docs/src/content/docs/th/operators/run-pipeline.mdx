@@ -1,0 +1,106 @@
+---
+title: รัน pipeline
+description: สองวิธีรัน blood_audit — แบบ pilot อย่างง่ายเพื่อทดสอบ และแบบ production CLI ที่รองรับ
+---
+
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
+มีสองวิธีในการรันออดิท ขึ้นกับว่าคุณต้องการอะไร:
+
+<AtAGlance
+  title="สิ่งที่จะได้"
+  items={[
+    { label: "เส้นทาง A — Pilot", value: "ดู pipeline ทำงานครบจบบนตัวอย่างเล็ก ๆ และได้ HTML สำหรับให้คนตรวจ" },
+    { label: "เส้นทาง B — Production", value: "รัน bba CLI ที่รองรับ กับข้อมูลส่งออก HOSxP เต็มชุด", tone: "ok" },
+    { label: "ต้องมีก่อน", value: "Python ≥ 3.13, uv และ ANTHROPIC_API_KEY สำหรับส่วน LLM" },
+  ]}
+/>
+
+:::caution[ข้อมูล PHI จริง]
+ทั้งสองเส้นทางอ่านข้อมูลผู้ป่วยจริง ไฟล์ใด ๆ ที่ pilot เขียนใต้
+`$BBA_PILOT_WORK_DIR` (bundle ที่สุ่ม, `review.html`, audit store) มี
+**PHI จริง** ห้าม commit, ส่งอีเมล หรือแชร์นอกช่องทางตรวจที่ได้รับอนุมัติ
+:::
+
+## เส้นทาง A — รันแบบ pilot อย่างง่าย (ทดสอบ)
+
+วิธีที่เร็วที่สุดในการดู pipeline ทำงานครบจบ โดยสุ่มเคสประมาณ 10 เคส
+จาก bundle HOSxP ที่เข้ารหัส แล้วเดินผ่านสคริปต์ pilot สี่ตัว
+จบที่ไฟล์ `review.html` หน้าเดียวสำหรับแพทย์ตรวจ
+
+สคริปต์เหล่านี้อยู่ **นอก** แพ็กเกจ `bba` โดยตั้งใจ เป็น glue เชิง
+deployment (ตัวอย่างการประกอบ modules) ไม่ใช่ entry point ที่รองรับ
+ดูรายละเอียดและตัวปรับค่าได้ที่
+[`scripts/pilot/README.md`](https://github.com/macsermkiat/blood_audit/blob/main/scripts/pilot/README.md)
+
+```bash
+# ครั้งเดียว จาก root ของ repo:
+uv sync
+
+# จำเป็นสำหรับส่วน LLM; ผลลัพธ์ pilot ทั้งหมดจะอยู่ใน work dir:
+export ANTHROPIC_API_KEY=sk-ant-...
+export BBA_PILOT_WORK_DIR=/tmp/bba_mini
+
+# ขั้น 1 — สุ่มประมาณ 10 เคสจาก bundle ที่เข้ารหัส → bundle/ + manifest
+uv run python scripts/pilot/sample_bundle.py
+
+# ขั้น 2 — verdict จาก deterministic classifier → report.csv
+uv run python scripts/pilot/run_pipeline.py
+
+# ขั้น 3 — Anthropic batch จริง (de-id → prompt → ground → calibrate) → llm_report.json
+uv run python scripts/pilot/run_llm_leg.py
+
+# ขั้น 4 — ประกอบหน้า review หน้าเดียว → review.html
+uv run python scripts/pilot/build_review.py
+
+open "$BBA_PILOT_WORK_DIR/review.html"
+```
+
+ผลลัพธ์ของแต่ละขั้น:
+
+| ขั้น | สคริปต์ | ผลลัพธ์ |
+|------|--------|--------|
+| 1 | `sample_bundle.py` | `bundle/` (CSV ที่สุ่ม) + `sample_manifest.csv` |
+| 2 | `run_pipeline.py` | `report.csv` (verdict deterministic ต่อเคส) |
+| 3 | `run_llm_leg.py` | `llm_report.json` + `data/audit_store/` |
+| 4 | `build_review.py` | `review.html` (หน้าเดียวสำหรับคนตรวจ) |
+
+:::note[LLM เห็นอะไรและไม่เห็นอะไร]
+pilot **ไม่** ส่ง progress / focus notes แบบข้อความอิสระไปยัง API
+เพราะ bundle นั้นยังไม่ผ่าน de-identification ส่งออกเฉพาะสัญญาณที่เป็น
+โครงสร้าง: ICD-10, ประวัติ Hb, ค่า CBC, รายการยา และ *ตัวเลข* สัญญาณชีพ
+ที่สกัดด้วย regex ในเครื่อง ตัวเนื้อความ narrative ไม่ออกจากเครื่อง
+:::
+
+## เส้นทาง B — รันแบบ production (CLI ที่รองรับ)
+
+รัน `bba` CLI ที่ wire แล้ว กับข้อมูลส่งออก HOSxP เต็ม 12 ไฟล์
+
+```bash
+export BBA_DATA_DIR=/path/to/persistent/data   # Parquet + DuckDB + run-state
+export BBA_DB_URL=postgresql://user@host/db     # audit-store + dashboard
+export ANTHROPIC_API_KEY=sk-ant-...             # ส่วน LLM review
+
+# 1. Ingest bundle CSV ของ HOSxP เข้าสู่ DuckDB + Parquet ใต้ $BBA_DATA_DIR
+uv run bba ingest /path/to/hosxp_bundle/BDVST.csv
+
+# 2. รันออดิท (deterministic classifier + LLM review + quote grounding)
+uv run bba audit --input /path/to/hosxp_bundle/BDVST.csv
+```
+
+`bba audit` เป็น **run-level idempotent**: รันซ้ำด้วย input เดิม + code เดิม
+จะไม่เขียนซ้ำ ใช้ `--force` เพื่อ override (เขียน compliance row ลง
+`audit_log`) ดูสัญญาต่อ flag ได้ที่
+[รันออดิทครั้งแรก](/blood_audit/th/operators/first-audit-run/) และ
+[คำสั่ง audit](/blood_audit/th/operators/audit-command/)
+
+## ควรรันอันไหน?
+
+- **เดโม pipeline หรือเช็กการเปลี่ยนแปลงครบจบ?** เส้นทาง A
+- **ออดิทข้อมูลจริงสำหรับคณะกรรมการ QI?** เส้นทาง B
+
+## ขั้นถัดไป
+
+- [ตัวแปรสภาพแวดล้อม](/blood_audit/th/operators/env-vars/) — ทุกตัวแปรที่ CLI อ่าน
+- [Ingest CSV](/blood_audit/th/operators/ingest-csv/) — รูปแบบ bundle 12 ไฟล์
+- [แก้ปัญหาเบื้องต้น](/blood_audit/th/operators/troubleshooting/) — ปัญหาที่พบบ่อย

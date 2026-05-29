@@ -31,7 +31,7 @@ The encrypted bundle at `data/encrypted/` contains **12 CSV files**. Each maps 1
 | `INCPT_OPRTACT.csv` | `INCPT_OPRTACT` | IT-joined: INCPT ⋈ OPRTACT on `Income`; supersedes the standalone INCPT export per issue #69 |
 | `ICD9CM.csv` | `ICD9CM` | HOSxP procedure code dictionary |
 
-**Dropped from the schema:** `UnUSE_Patient_Background` — the bundle's file with that name is an obstetric/delivery record table, not patient demographics. The real `PT` (patient registration) table is not in the bundle. Audit removes `age_years` and `sex` from `AuditOrder` to compensate; pediatric and obstetric exclusions adapt accordingly (see *Downstream impacts*).
+**Dropped from the schema:** `UnUSE_Patient_Background` — the bundle's file with that name is an obstetric/delivery record table, not patient demographics. The real `PT` (patient registration) table is not in the bundle. Audit removes `age_years` and `sex` from `AuditOrder` to compensate; the pediatric exclusion adapts accordingly (see *Downstream impacts*).
 
 ---
 
@@ -213,7 +213,7 @@ These are intentional consequences of the locked spec. They are tracked here so 
 1. **`bba.audit_orders.models.BloodOrderInput`** — `birthdate: date | None` and `sex: str | None` are removed. The bundle has no patient demographics table (`UnUSE_Patient_Background` is obstetric records; `PT` is not exported). Cohort age-gating is fully upstream in the IT pre-filter (`age > 15`).
 2. **`bba.audit_orders.models.AuditOrder`** — `age_years: int` and `sex: str | None` are removed for the same reason.
 3. **`bba.audit_orders.models.ExclusionReason = "pediatric"`** — the enum value is preserved for back-compat (so prior runs deserialize), but the audit pipeline never fires it. Upstream IT filter (`age > 15`) handles the gate.
-4. **`bba.audit_orders.models.ExclusionReason = "obstetric"`** — fires on ICD-10 obstetric codes (O-block) only; no sex-gate. A male patient with an O-code is treated as a data-quality issue, not a false positive.
+4. **Out-of-scope ICD-10 set narrowed (2026-05-29)** — only `hemoglobinopathy` (`D55`/`D56`/`D57`/`D58`) remains a hard-exclusion `ExclusionReason`. The former `aiha` (`D59.x`), `tma` (`M31.1`), and `obstetric` (`O`-block) reasons were dropped; those cohorts are now in-scope and pass the filter as auditable orders.
 5. **`bba.audit_orders.models.AuditOrder`** — *should* gain `request_reason_icd10: str | None` and `request_reason_text: str | None` to carry `BDVST.ICD10` and `BDVST.DIAGNOSIS` (the clinician's order-level reason, distinct from admission-level `Diagnosis.csv`).
 6. **`schema_fingerprint()` changes** — `run_id` regenerates on the next ingest. Any prior on-disk `run_id` markers are orphaned (acceptable in RED phase).
 
