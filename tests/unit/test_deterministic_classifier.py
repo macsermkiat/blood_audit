@@ -444,8 +444,11 @@ class TestBypassPathways:
         assert result.bypass_reason == BypassReason.DELTA_HB
 
     def test_delta_hb_bypass_does_not_fire_when_hb_missing(self) -> None:
-        """No bypass can fire on missing Hb — fall through to
-        INSUFFICIENT_EVIDENCE."""
+        """A stale delta-Hb flag does NOT fire on missing Hb (no Hb to diff
+        against). With no Hb-independent positive evidence, the case falls
+        through to INSUFFICIENT_EVIDENCE with rationale="hb_missing" — the
+        ``hb_missing`` rationale (not ``bypass_delta_hb``) proves the orphan
+        delta flag was ignored rather than honored."""
         # Force the inconsistent case: hb=missing but delta_hb_bypass=True.
         # The classifier MUST prefer the structural "no Hb" check over
         # honoring a stale bypass flag.
@@ -466,6 +469,7 @@ class TestBypassPathways:
         )
         assert result.classification == "INSUFFICIENT_EVIDENCE"
         assert result.bypass_reason == BypassReason.NONE
+        assert result.rationale == "hb_missing"
 
 
 # =============================================================================
@@ -560,6 +564,66 @@ class TestMissingHbPositiveEvidence:
         assert result.classification == "INSUFFICIENT_EVIDENCE"
         assert result.bypass_reason == BypassReason.NONE
         assert result.rationale == "hb_missing"
+
+    def test_peri_procedural_at_boundary_with_missing_hb_is_appropriate(self) -> None:
+        """Procedure exactly at the 6 h boundary + missing Hb → APPROPRIATE
+        (``≤ 6 h`` inclusive, mirroring the Hb-present boundary test). Pins
+        the ``<=`` predicate so a ``<`` regression is caught on this path."""
+        result = classify(
+            _inputs(
+                hb=_hb(None),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                procedure_proximity_hours=PERI_PROCEDURAL_WINDOW_HOURS,
+            )
+        )
+        assert result.classification == "APPROPRIATE"
+        assert result.bypass_reason == BypassReason.PERI_PROCEDURAL_6H
+        assert result.rationale == "bypass_peri_procedural_hb_missing"
+
+    def test_peri_procedural_outside_window_with_missing_hb_stays_insufficient(
+        self,
+    ) -> None:
+        """Procedure > 6 h before order + missing Hb → INSUFFICIENT_EVIDENCE.
+        The proximity guard must reject the out-of-window case rather than
+        approve it; pins that the window check (not just presence) gates the
+        bypass."""
+        result = classify(
+            _inputs(
+                hb=_hb(None),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                procedure_proximity_hours=PERI_PROCEDURAL_WINDOW_HOURS + 0.5,
+            )
+        )
+        assert result.classification == "INSUFFICIENT_EVIDENCE"
+        assert result.bypass_reason == BypassReason.NONE
+        assert result.rationale == "hb_missing"
+
+    def test_peri_procedural_wins_over_orphan_delta_on_missing_hb(self) -> None:
+        """Missing Hb + a stale delta-Hb flag + peri-procedural proximity →
+        APPROPRIATE via the peri-procedural slug, NOT delta-Hb. Delta-Hb is
+        never reachable on missing Hb (no current Hb to diff), so the
+        rationale must be ``bypass_peri_procedural_hb_missing`` — proving the
+        positive-evidence pre-check, not the orphan flag, drove the result."""
+        # Inconsistent upstream state: hb=missing yet delta_hb_bypass=True.
+        bad_hb = HbLookupResult(
+            value_g_dl=None,
+            datetime_utc=None,
+            source=None,
+            freshness="missing",
+            delta_hb_bypass=True,
+            delta_hb_windows=_triggered_delta(),
+            needs_review_single_low_hb=False,
+        )
+        result = classify(
+            _inputs(
+                hb=bad_hb,
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                procedure_proximity_hours=4.0,
+            )
+        )
+        assert result.classification == "APPROPRIATE"
+        assert result.bypass_reason == BypassReason.PERI_PROCEDURAL_6H
+        assert result.rationale == "bypass_peri_procedural_hb_missing"
 
 
 # =============================================================================

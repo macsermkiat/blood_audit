@@ -461,9 +461,10 @@ stage, not here.
 
 ### Bypass reason
 
-Five-member `StrEnum` identifying which deterministic bypass fired:
-`DELTA_HB`, `PERI_PROCEDURAL_6H`, `MTP`, `HEMODILUTION_FLAGGED`,
-`NONE`. `bba.deterministic_classifier.models.BypassReason`. Structured
+Six-member `StrEnum` identifying which deterministic bypass fired:
+`DELTA_HB`, `PERI_PROCEDURAL_6H`, `PRE_OP_CROSSMATCH`, `MTP`,
+`HEMODILUTION_FLAGGED`, `NONE`.
+`bba.deterministic_classifier.models.BypassReason`. Structured
 enum, not a free string — each path sets exactly one member; non-bypass
 classifications carry `NONE`. The audit row persists this verbatim so
 dashboards can group by reason without re-deriving from `rationale`.
