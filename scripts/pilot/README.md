@@ -45,6 +45,7 @@ build_review.py         →  review.html    (single page for human review)
 | `BBA_PILOT_ICD10_CSV` | `../Bloodbank/data/raw/ICD10.csv` | ICD-10 master dictionary |
 | `BBA_PILOT_LLM_MODEL` | `claude-sonnet-4-6` | Anthropic model id |
 | `BBA_PILOT_RUN_ID` | `pilot-mini` | run_id stamped on audit_store rows |
+| `BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE` | `false` | Opt-in to the missing-Hb MTP / peri-procedural auto-APPROPRIATE pre-check (SEED — set `1`/`true` only after clinical sign-off) |
 | `ANTHROPIC_API_KEY` | _(required)_ | Anthropic credentials |
 | `BBA_DATA_DIR` | _(required for `bba ingest`)_ | Where ingest writes Parquet + markers |
 | `BBA_DB_URL` | _(required for `bba ingest`)_ | DB URL — placeholder is fine for ingest-only |
