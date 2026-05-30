@@ -1707,3 +1707,173 @@ def _build_adversarial_vitals_contexts() -> Sequence[PipelineRowContext]:
         )
         for i in range(2)
     )
+
+
+# =============================================================================
+# Missing-Hb positive-evidence bypass — pipeline persistence
+#
+# WHY: when the deterministic classifier fires MTP or peri-procedural
+# bypass with hb_result.value_g_dl == None, the resulting APPROPRIATE
+# verdict is deterministic-final and must flow through the persistence
+# path without the ValueError that previously guarded non-INSUFFICIENT
+# classifications from missing Hb. These tests confirm the row lands in
+# the audit store with the correct model_id and final_classification.
+# =============================================================================
+
+
+def _missing_hb_context(
+    *,
+    audit_id: str,
+    cohort_label: CohortLabel,
+    procedure_proximity_hours: float | None,
+) -> PipelineRowContext:
+    """Build a PipelineRowContext with no Hb measurement.
+
+    The caller controls cohort and procedure proximity to steer the
+    classifier into the desired Hb-independent bypass branch.
+    """
+    order = AuditOrder(
+        audit_id=audit_id,
+        hn=f"HN-{audit_id}",
+        an=f"AN-{audit_id}",
+        reqno=f"REQ-{audit_id}",
+        order_datetime=_RUN_TS,
+        anchor_imputed=False,
+        products_ordered=("LPRC",),
+        diagnosis_codes=("D62",),
+    )
+    hb_result = HbLookupResult(
+        value_g_dl=None,
+        datetime_utc=None,
+        source=None,
+        freshness="missing",
+        delta_hb_bypass=False,
+        delta_hb_windows=(
+            DeltaHbWindow(
+                window_hours=6,
+                threshold_g_dl=2.0,
+                prior_value_g_dl=None,
+                prior_datetime_utc=None,
+                drop_g_dl=None,
+                triggered=False,
+            ),
+        ),
+        needs_review_single_low_hb=False,
+    )
+    vitals = VitalsResult(
+        vitals=VitalSigns(sbp=110.0, hr=85.0, dbp=70.0, bt=37.0, rr=16.0),
+        source=SourceProvenance.IPDADMPROGRESS,
+        flags=frozenset(),
+        note_timestamp=_RUN_TS,
+    )
+    cohort = CohortAssignment(
+        label=cohort_label,
+        threshold=None,
+        evidence_code=None,
+        evidence_name=None,
+    )
+    evidence_chunks = (
+        EvidenceChunk(
+            evidence_id="E1",
+            source="IPDNRFOCUSDT",
+            text="active MTP protocol, no Hb available",
+        ),
+    )
+    return PipelineRowContext(
+        order=order,
+        hb_result=hb_result,
+        vitals_result=vitals,
+        cohort_assignment=cohort,
+        procedure_proximity_hours=procedure_proximity_hours,
+        crystalloid_liters_prior_4h=0.0,
+        hn_hash=f"hn_hash_{audit_id}",
+        an_hash=f"an_hash_{audit_id}",
+        prior_rbc_units_24h=0,
+        prior_rbc_units_7d=0,
+        redactor_version="0.4.1+test",
+        redactor_model_sha=f"redactor_sha_{audit_id}",
+        policy_version="kcmh-pr17.2-2024",
+        prompt_hash=f"prompt_hash_{audit_id}",
+        evidence_bundle_hash=f"bundle_hash_{audit_id}",
+        evidence_chunks=evidence_chunks,
+    )
+
+
+class TestMissingHbBypassPersistence:
+    """APPROPRIATE rows from Hb-independent bypasses must persist without error."""
+
+    def test_mtp_bypass_missing_hb_persists(self, tmp_path: object) -> None:
+        """MTP bypass with no Hb must produce a persisted APPROPRIATE row.
+
+        WHY: before this fix, _deterministic_audit_row raised ValueError
+        whenever classification != INSUFFICIENT_EVIDENCE and value_g_dl
+        was None, aborting the run instead of persisting the approval.
+        """
+        from pathlib import Path
+
+        from bba.audit_store import AuditStore, AuditStoreConfig
+
+        assert isinstance(tmp_path, Path)
+        audit_store = AuditStore(
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
+        )
+        ctx = _missing_hb_context(
+            audit_id="audit-mtp-missing-hb",
+            cohort_label=CohortLabel.MTP,
+            procedure_proximity_hours=None,
+        )
+        result = run_pipeline(
+            (ctx,),
+            transport=_cassette_transport(),
+            audit_store=audit_store,
+            batch_run_store=InMemoryBatchRunStore(),
+            llm_config=_llm_config(),
+            pipeline_config=_pipeline_config(),
+            run_id="run-mtp-bypass",
+        )
+        assert result.audit_ids_persisted == ("audit-mtp-missing-hb",)
+        rows = list(audit_store.read_audit_results(run_id="run-mtp-bypass"))
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.final_classification == "APPROPRIATE"
+        assert row.model_id == "deterministic"
+        assert row.hb_value == 0.0
+        assert row.hb_freshness == "missing"
+
+    def test_peri_procedural_bypass_missing_hb_persists(self, tmp_path: object) -> None:
+        """Peri-procedural bypass (≤ 6 h) with no Hb must produce a persisted
+        APPROPRIATE row.
+
+        WHY: same guard as the MTP case — peri-procedural bypass is the
+        second Hb-independent path that was broken by the strict guard.
+        """
+        from pathlib import Path
+
+        from bba.audit_store import AuditStore, AuditStoreConfig
+
+        assert isinstance(tmp_path, Path)
+        audit_store = AuditStore(
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
+        )
+        ctx = _missing_hb_context(
+            audit_id="audit-peri-proc-missing-hb",
+            cohort_label=CohortLabel.DEFAULT,
+            procedure_proximity_hours=3.0,
+        )
+        result = run_pipeline(
+            (ctx,),
+            transport=_cassette_transport(),
+            audit_store=audit_store,
+            batch_run_store=InMemoryBatchRunStore(),
+            llm_config=_llm_config(),
+            pipeline_config=_pipeline_config(),
+            run_id="run-peri-proc-bypass",
+        )
+        assert result.audit_ids_persisted == ("audit-peri-proc-missing-hb",)
+        rows = list(audit_store.read_audit_results(run_id="run-peri-proc-bypass"))
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.final_classification == "APPROPRIATE"
+        assert row.model_id == "deterministic"
+        assert row.hb_value == 0.0
+        assert row.hb_freshness == "missing"
