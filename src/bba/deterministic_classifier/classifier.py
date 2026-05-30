@@ -122,10 +122,7 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
             # dominant documentation gap.
             if cohort.label != CohortLabel.UNKNOWN:
                 proximity = inputs.procedure_proximity_hours
-                if (
-                    proximity is not None
-                    and proximity <= PERI_PROCEDURAL_WINDOW_HOURS
-                ):
+                if proximity is not None and proximity <= PERI_PROCEDURAL_WINDOW_HOURS:
                     return ClassifierResult(
                         classification="APPROPRIATE",
                         bypass_reason=BypassReason.PERI_PROCEDURAL_6H,
