@@ -206,6 +206,7 @@ def _inputs(
     procedure_proximity_hours: float | None = None,
     upcoming_procedure_hours: float | None = None,
     crystalloid_liters_prior_4h: float = 0.0,
+    enable_missing_hb_positive_evidence: bool = False,
 ) -> ClassifierInputs:
     return ClassifierInputs(
         audit_id="audit-test-0001",
@@ -215,6 +216,7 @@ def _inputs(
         procedure_proximity_hours=procedure_proximity_hours,
         upcoming_procedure_hours=upcoming_procedure_hours,
         crystalloid_liters_prior_4h=crystalloid_liters_prior_4h,
+        enable_missing_hb_positive_evidence=enable_missing_hb_positive_evidence,
     )
 
 
@@ -493,11 +495,16 @@ class TestMissingHbPositiveEvidence:
 
     def test_mtp_with_missing_hb_is_appropriate(self) -> None:
         """Active MTP + missing Hb → APPROPRIATE (cluster pattern is
-        Hb-independent; transfuse-before-you-have-an-Hb)."""
+        Hb-independent; transfuse-before-you-have-an-Hb).
+
+        Opts into the SEED policy via
+        ``enable_missing_hb_positive_evidence=True`` because the
+        bypass is gated off by default pending clinical sign-off."""
         result = classify(
             _inputs(
                 hb=_hb(None),
                 cohort=_cohort(CohortLabel.MTP, None),
+                enable_missing_hb_positive_evidence=True,
             )
         )
         assert result.classification == "APPROPRIATE"
@@ -507,12 +514,14 @@ class TestMissingHbPositiveEvidence:
 
     def test_peri_procedural_with_missing_hb_is_appropriate(self) -> None:
         """Procedure ≤ 6 h before order + missing Hb → APPROPRIATE
-        (fresh-out-of-surgery surgical-loss scenario)."""
+        (fresh-out-of-surgery surgical-loss scenario). Opts into the
+        SEED policy explicitly — see class docstring."""
         result = classify(
             _inputs(
                 hb=_hb(None),
                 cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
                 procedure_proximity_hours=4.0,
+                enable_missing_hb_positive_evidence=True,
             )
         )
         assert result.classification == "APPROPRIATE"
@@ -523,12 +532,14 @@ class TestMissingHbPositiveEvidence:
     def test_pre_op_crossmatch_only_with_missing_hb_stays_insufficient(self) -> None:
         """Upcoming procedure (pre-op crossmatch) is deliberately NOT a
         missing-Hb bypass — transfusing pre-op with no Hb is exactly what
-        an audit should flag, so this stays INSUFFICIENT_EVIDENCE."""
+        an audit should flag, so this stays INSUFFICIENT_EVIDENCE even
+        with the SEED policy enabled."""
         result = classify(
             _inputs(
                 hb=_hb(None),
                 cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
                 upcoming_procedure_hours=10.0,
+                enable_missing_hb_positive_evidence=True,
             )
         )
         assert result.classification == "INSUFFICIENT_EVIDENCE"
@@ -543,6 +554,7 @@ class TestMissingHbPositiveEvidence:
                 hb=_hb(None),
                 cohort=_cohort(CohortLabel.MTP, None),
                 procedure_proximity_hours=4.0,
+                enable_missing_hb_positive_evidence=True,
             )
         )
         assert result.classification == "APPROPRIATE"
@@ -551,14 +563,16 @@ class TestMissingHbPositiveEvidence:
 
     def test_unknown_cohort_peri_procedural_missing_hb_stays_insufficient(self) -> None:
         """UNKNOWN cohort + peri-procedural + missing Hb → still
-        INSUFFICIENT_EVIDENCE. Peri-procedural MUST NOT override UNKNOWN,
-        mirroring the Hb-present order (UNKNOWN precedes peri-procedural).
-        Missing Hb + unknown context is the dominant documentation gap."""
+        INSUFFICIENT_EVIDENCE even with the SEED policy on. Peri-procedural
+        MUST NOT override UNKNOWN, mirroring the Hb-present order
+        (UNKNOWN precedes peri-procedural). Missing Hb + unknown context
+        is the dominant documentation gap."""
         result = classify(
             _inputs(
                 hb=_hb(None),
                 cohort=_cohort(CohortLabel.UNKNOWN, None),
                 procedure_proximity_hours=4.0,
+                enable_missing_hb_positive_evidence=True,
             )
         )
         assert result.classification == "INSUFFICIENT_EVIDENCE"
@@ -574,6 +588,7 @@ class TestMissingHbPositiveEvidence:
                 hb=_hb(None),
                 cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
                 procedure_proximity_hours=PERI_PROCEDURAL_WINDOW_HOURS,
+                enable_missing_hb_positive_evidence=True,
             )
         )
         assert result.classification == "APPROPRIATE"
@@ -583,15 +598,16 @@ class TestMissingHbPositiveEvidence:
     def test_peri_procedural_outside_window_with_missing_hb_stays_insufficient(
         self,
     ) -> None:
-        """Procedure > 6 h before order + missing Hb → INSUFFICIENT_EVIDENCE.
-        The proximity guard must reject the out-of-window case rather than
-        approve it; pins that the window check (not just presence) gates the
-        bypass."""
+        """Procedure > 6 h before order + missing Hb → INSUFFICIENT_EVIDENCE
+        (even with the SEED policy on). The proximity guard must reject the
+        out-of-window case rather than approve it; pins that the window
+        check (not just presence) gates the bypass."""
         result = classify(
             _inputs(
                 hb=_hb(None),
                 cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
                 procedure_proximity_hours=PERI_PROCEDURAL_WINDOW_HOURS + 0.5,
+                enable_missing_hb_positive_evidence=True,
             )
         )
         assert result.classification == "INSUFFICIENT_EVIDENCE"
@@ -619,11 +635,51 @@ class TestMissingHbPositiveEvidence:
                 hb=bad_hb,
                 cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
                 procedure_proximity_hours=4.0,
+                enable_missing_hb_positive_evidence=True,
             )
         )
         assert result.classification == "APPROPRIATE"
         assert result.bypass_reason == BypassReason.PERI_PROCEDURAL_6H
         assert result.rationale == "bypass_peri_procedural_hb_missing"
+
+    def test_mtp_missing_hb_flag_default_off_stays_insufficient(self) -> None:
+        """SEED policy default-OFF: MTP + missing Hb returns
+        INSUFFICIENT_EVIDENCE, NOT APPROPRIATE.
+
+        WHY: the bypass is gated until clinical sign-off (Codex P1).
+        Without an explicit operator opt-in, the classifier must NOT
+        auto-approve an undocumented-Hb case purely on cohort label.
+        Pins the disabled-by-default contract; flipping the flag in
+        production requires the QI committee to sign off first.
+        """
+        result = classify(
+            _inputs(
+                hb=_hb(None),
+                cohort=_cohort(CohortLabel.MTP, None),
+                # enable_missing_hb_positive_evidence defaults to False
+            )
+        )
+        assert result.classification == "INSUFFICIENT_EVIDENCE"
+        assert result.bypass_reason == BypassReason.NONE
+        assert result.rationale == "hb_missing"
+
+    def test_peri_procedural_missing_hb_flag_default_off_stays_insufficient(
+        self,
+    ) -> None:
+        """SEED policy default-OFF: peri-procedural + missing Hb returns
+        INSUFFICIENT_EVIDENCE. Same rationale as the MTP default-off
+        test — both bypass branches must stay dark until sign-off."""
+        result = classify(
+            _inputs(
+                hb=_hb(None),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                procedure_proximity_hours=4.0,
+                # enable_missing_hb_positive_evidence defaults to False
+            )
+        )
+        assert result.classification == "INSUFFICIENT_EVIDENCE"
+        assert result.bypass_reason == BypassReason.NONE
+        assert result.rationale == "hb_missing"
 
 
 # =============================================================================

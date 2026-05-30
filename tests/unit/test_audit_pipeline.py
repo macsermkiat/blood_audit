@@ -1726,11 +1726,16 @@ def _missing_hb_context(
     audit_id: str,
     cohort_label: CohortLabel,
     procedure_proximity_hours: float | None,
+    enable_missing_hb_positive_evidence: bool = False,
 ) -> PipelineRowContext:
     """Build a PipelineRowContext with no Hb measurement.
 
     The caller controls cohort and procedure proximity to steer the
-    classifier into the desired Hb-independent bypass branch.
+    classifier into the desired Hb-independent bypass branch. The
+    ``enable_missing_hb_positive_evidence`` flag is forwarded onto the
+    context so the persistence tests can pin both the SEED-on (bypass
+    fires → APPROPRIATE) and SEED-off (bypass dark → INSUFFICIENT_EVIDENCE)
+    branches end-to-end.
     """
     order = AuditOrder(
         audit_id=audit_id,
@@ -1796,18 +1801,26 @@ def _missing_hb_context(
         prompt_hash=f"prompt_hash_{audit_id}",
         evidence_bundle_hash=f"bundle_hash_{audit_id}",
         evidence_chunks=evidence_chunks,
+        enable_missing_hb_positive_evidence=enable_missing_hb_positive_evidence,
     )
 
 
 class TestMissingHbBypassPersistence:
     """APPROPRIATE rows from Hb-independent bypasses must persist without error."""
 
-    def test_mtp_bypass_missing_hb_persists(self, tmp_path: object) -> None:
-        """MTP bypass with no Hb must produce a persisted APPROPRIATE row.
+    def test_mtp_bypass_missing_hb_persists_when_flag_enabled(
+        self, tmp_path: object
+    ) -> None:
+        """MTP bypass with no Hb produces a persisted APPROPRIATE row
+        ONLY when the SEED policy flag is on. With the flag enabled,
+        _deterministic_audit_row must accept APPROPRIATE + missing Hb
+        (the widened guard) and write the 0.0 / freshness=missing
+        sentinel row.
 
-        WHY: before this fix, _deterministic_audit_row raised ValueError
-        whenever classification != INSUFFICIENT_EVIDENCE and value_g_dl
-        was None, aborting the run instead of persisting the approval.
+        WHY: pre-flag-gating, _deterministic_audit_row raised ValueError
+        on every APPROPRIATE-with-missing-Hb row, aborting the run.
+        Post-gating, the row must still persist correctly whenever the
+        operator has signed off on the bypass (flag=True).
         """
         from pathlib import Path
 
@@ -1821,6 +1834,7 @@ class TestMissingHbBypassPersistence:
             audit_id="audit-mtp-missing-hb",
             cohort_label=CohortLabel.MTP,
             procedure_proximity_hours=None,
+            enable_missing_hb_positive_evidence=True,
         )
         result = run_pipeline(
             (ctx,),
@@ -1840,12 +1854,15 @@ class TestMissingHbBypassPersistence:
         assert row.hb_value == 0.0
         assert row.hb_freshness == "missing"
 
-    def test_peri_procedural_bypass_missing_hb_persists(self, tmp_path: object) -> None:
-        """Peri-procedural bypass (≤ 6 h) with no Hb must produce a persisted
-        APPROPRIATE row.
+    def test_peri_procedural_bypass_missing_hb_persists_when_flag_enabled(
+        self, tmp_path: object
+    ) -> None:
+        """Peri-procedural bypass (≤ 6 h) with no Hb produces a persisted
+        APPROPRIATE row when the SEED policy flag is on.
 
         WHY: same guard as the MTP case — peri-procedural bypass is the
-        second Hb-independent path that was broken by the strict guard.
+        second Hb-independent path that requires the widened persistence
+        guard once the operator has signed off (flag=True).
         """
         from pathlib import Path
 
@@ -1859,6 +1876,7 @@ class TestMissingHbBypassPersistence:
             audit_id="audit-peri-proc-missing-hb",
             cohort_label=CohortLabel.DEFAULT,
             procedure_proximity_hours=3.0,
+            enable_missing_hb_positive_evidence=True,
         )
         result = run_pipeline(
             (ctx,),
@@ -1874,6 +1892,49 @@ class TestMissingHbBypassPersistence:
         assert len(rows) == 1
         row = rows[0]
         assert row.final_classification == "APPROPRIATE"
+        assert row.model_id == "deterministic"
+        assert row.hb_value == 0.0
+        assert row.hb_freshness == "missing"
+
+    def test_mtp_missing_hb_default_off_persists_as_insufficient(
+        self, tmp_path: object
+    ) -> None:
+        """SEED policy default-OFF: MTP + missing Hb routed through the
+        full pipeline persists as INSUFFICIENT_EVIDENCE, NOT APPROPRIATE.
+
+        WHY (Codex P1): the bypass is gated until clinical sign-off.
+        End-to-end regression: without an operator opt-in on the
+        PipelineRowContext, no production run can auto-approve an
+        undocumented-Hb case via MTP cohort label alone.
+        """
+        from pathlib import Path
+
+        from bba.audit_store import AuditStore, AuditStoreConfig
+
+        assert isinstance(tmp_path, Path)
+        audit_store = AuditStore(
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
+        )
+        ctx = _missing_hb_context(
+            audit_id="audit-mtp-missing-hb-off",
+            cohort_label=CohortLabel.MTP,
+            procedure_proximity_hours=4.0,
+            # enable_missing_hb_positive_evidence defaults to False
+        )
+        result = run_pipeline(
+            (ctx,),
+            transport=_cassette_transport(),
+            audit_store=audit_store,
+            batch_run_store=InMemoryBatchRunStore(),
+            llm_config=_llm_config(),
+            pipeline_config=_pipeline_config(),
+            run_id="run-mtp-bypass-off",
+        )
+        assert result.audit_ids_persisted == ("audit-mtp-missing-hb-off",)
+        rows = list(audit_store.read_audit_results(run_id="run-mtp-bypass-off"))
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.final_classification == "INSUFFICIENT_EVIDENCE"
         assert row.model_id == "deterministic"
         assert row.hb_value == 0.0
         assert row.hb_freshness == "missing"

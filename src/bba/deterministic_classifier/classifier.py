@@ -97,40 +97,43 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
     threshold = cohort.threshold
 
     # 1. Hb missing — positive-evidence pre-check (SEED pending clinical
-    #    sign-off). Hard, structured, Hb-independent signals (active MTP,
+    #    sign-off). Gated behind ``inputs.enable_missing_hb_positive_evidence``,
+    #    which defaults to False. When OFF the original PRD spec applies
+    #    (missing Hb → INSUFFICIENT_EVIDENCE) and neither bypass fires;
+    #    when ON, hard structured Hb-independent signals (active MTP,
     #    peri-procedural ≤ 6 h) auto-classify APPROPRIATE exactly as the
     #    Hb-present path would, preserving the canonical MTP → UNKNOWN →
     #    peri-procedural ordering. Interpreted signals (delta-Hb, which
     #    needs a current Hb) and the weaker pre-op crossmatch are NOT
     #    reachable here — transfusing with no Hb is what those should flag.
     if hb.value_g_dl is None:
-        # MTP precedes everything — the cluster pattern is Hb-independent.
-        if cohort.label == CohortLabel.MTP:
-            return ClassifierResult(
-                classification="APPROPRIATE",
-                bypass_reason=BypassReason.MTP,
-                cohort_threshold=threshold,
-                rationale="bypass_mtp_hb_missing",
-            )
-        # UNKNOWN must NOT be auto-bypassed by peri-procedural — mirrors the
-        # Hb-present order (UNKNOWN precedes peri-procedural). Missing Hb +
-        # unknown context stays the dominant documentation gap.
-        if cohort.label == CohortLabel.UNKNOWN:
-            return ClassifierResult(
-                classification="INSUFFICIENT_EVIDENCE",
-                bypass_reason=BypassReason.NONE,
-                cohort_threshold=threshold,
-                rationale="hb_missing",
-            )
-        proximity = inputs.procedure_proximity_hours
-        if proximity is not None and proximity <= PERI_PROCEDURAL_WINDOW_HOURS:
-            return ClassifierResult(
-                classification="APPROPRIATE",
-                bypass_reason=BypassReason.PERI_PROCEDURAL_6H,
-                cohort_threshold=threshold,
-                rationale="bypass_peri_procedural_hb_missing",
-            )
-        # No Hb-independent positive evidence — a genuine documentation gap.
+        if inputs.enable_missing_hb_positive_evidence:
+            # MTP precedes everything — the cluster pattern is Hb-independent.
+            if cohort.label == CohortLabel.MTP:
+                return ClassifierResult(
+                    classification="APPROPRIATE",
+                    bypass_reason=BypassReason.MTP,
+                    cohort_threshold=threshold,
+                    rationale="bypass_mtp_hb_missing",
+                )
+            # UNKNOWN must NOT be auto-bypassed by peri-procedural —
+            # mirrors the Hb-present order (UNKNOWN precedes
+            # peri-procedural). Missing Hb + unknown context stays the
+            # dominant documentation gap.
+            if cohort.label != CohortLabel.UNKNOWN:
+                proximity = inputs.procedure_proximity_hours
+                if (
+                    proximity is not None
+                    and proximity <= PERI_PROCEDURAL_WINDOW_HOURS
+                ):
+                    return ClassifierResult(
+                        classification="APPROPRIATE",
+                        bypass_reason=BypassReason.PERI_PROCEDURAL_6H,
+                        cohort_threshold=threshold,
+                        rationale="bypass_peri_procedural_hb_missing",
+                    )
+        # Flag off, or flag on but no Hb-independent positive evidence —
+        # a genuine documentation gap.
         return ClassifierResult(
             classification="INSUFFICIENT_EVIDENCE",
             bypass_reason=BypassReason.NONE,

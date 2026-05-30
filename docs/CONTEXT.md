@@ -564,11 +564,26 @@ the orchestrator before reaching the classifier.
 
 **SEED pending clinical sign-off** (same status as the
 `bba.cohort_detector` allow-lists). When `hb_result.value_g_dl is None`,
-the classifier first checks for hard, structured, Hb-independent positive
-evidence and auto-classifies `APPROPRIATE` exactly as the Hb-present path
-would — closing the indefensible asymmetry where the *same* case parked as
-`INSUFFICIENT_EVIDENCE` with no Hb but auto-classified `APPROPRIATE` with
-one. Order is preserved (MTP → UNKNOWN → peri-procedural):
+the classifier optionally checks for hard, structured, Hb-independent
+positive evidence and auto-classifies `APPROPRIATE` exactly as the
+Hb-present path would — closing the indefensible asymmetry where the
+*same* case parked as `INSUFFICIENT_EVIDENCE` with no Hb but
+auto-classified `APPROPRIATE` with one.
+
+**The policy is gated behind a disabled-by-default flag**
+(`ClassifierInputs.enable_missing_hb_positive_evidence`, forwarded from
+`PipelineRowContext.enable_missing_hb_positive_evidence`). When the flag
+is `False` (the default and production state until the QI committee
+signs off), missing Hb always returns
+`INSUFFICIENT_EVIDENCE`/`NONE`/`hb_missing`, regardless of cohort or
+procedure proximity — matching the original PRD spec line in
+`scripts/create_issues.sh` ("Hb missing → INSUFFICIENT_EVIDENCE"). The
+orchestrator that builds `PipelineRowContext` is the sign-off binding
+point and must NOT set the flag `True` in production until clinical
+approval is on record.
+
+When the flag is `True`, the pre-check applies and order is preserved
+(MTP → UNKNOWN → peri-procedural):
 
 - cohort `MTP` → `APPROPRIATE`/`MTP`, `rationale="bypass_mtp_hb_missing"`;
 - cohort `UNKNOWN` → stays `INSUFFICIENT_EVIDENCE` (peri-procedural must
@@ -580,7 +595,12 @@ one. Order is preserved (MTP → UNKNOWN → peri-procedural):
 The distinct `*_hb_missing` rationale slugs keep these "approved with no
 documented Hb" cases auditable so the QI committee can monitor them
 (`bypass_reason` is still `MTP`/`PERI_PROCEDURAL_6H` for grouping).
-`TestMissingHbPositiveEvidence` pins all five paths.
+`TestMissingHbPositiveEvidence` pins all flag-on paths;
+`test_mtp_with_missing_hb_flag_default_off_stays_insufficient` and
+`test_peri_procedural_with_missing_hb_flag_default_off_stays_insufficient`
+pin the disabled-by-default contract.
+`TestMissingHbBypassPersistence` covers the end-to-end pipeline
+persistence path for both flag states.
 
 ### Delta-Hb / pre-op crossmatch excluded on missing Hb
 

@@ -545,6 +545,7 @@ def _classifier_inputs_for(context: PipelineRowContext) -> ClassifierInputs:
         procedure_proximity_hours=context.procedure_proximity_hours,
         upcoming_procedure_hours=context.upcoming_procedure_hours,
         crystalloid_liters_prior_4h=context.crystalloid_liters_prior_4h,
+        enable_missing_hb_positive_evidence=context.enable_missing_hb_positive_evidence,
     )
 
 
