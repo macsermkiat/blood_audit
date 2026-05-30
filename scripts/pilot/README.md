@@ -139,3 +139,17 @@ validation step (M8 milestone).
   this pilot are unanchored to a clinical gold standard. Treat them as
   a demonstration of the composition path, not as audit evidence
   ready for committee review.
+
+- **MTP arm is unfed.** Both pilot scripts pass `blood_orders=()` into
+  `assign_cohort`, so the MTP cluster rule (`detect_mtp_pattern`: ≥4 RBC
+  units, or RBC+FFP+platelet co-order, within a 1-h window) can never
+  fire. `BDVSTTRANS` carries no `REQNO`, so the bundle has no precise
+  per-order RBC-unit history to build `BloodOrderEvent` records from —
+  the existing join is an admission-scoped *display* join for human
+  review only. Consequently, even with
+  `BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE` enabled, true
+  active-MTP missing-Hb cases still surface as `INSUFFICIENT_EVIDENCE`
+  (correctly parked for a reviewer); only the peri-procedural bypass
+  arm fires. A reusable `BloodOrderEvent` builder over the joined
+  blood-order tables is a separate, sign-off-gated feature — no
+  production code constructs `BloodOrderEvent` today.

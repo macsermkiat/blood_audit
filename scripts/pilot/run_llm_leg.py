@@ -809,6 +809,10 @@ def main() -> None:
                 procedure_events=op_events,
                 diagnosis_codes=order.diagnosis_codes,
                 med_events=med_events,
+                # MTP cluster arm is unfed in the pilot: BDVSTTRANS has no
+                # REQNO, so there is no precise per-order RBC-unit history to
+                # build BloodOrderEvent records from. See README "MTP arm is
+                # unfed". detect_mtp_pattern therefore never fires here.
                 blood_orders=(),
                 anc_value=anc,
             )
