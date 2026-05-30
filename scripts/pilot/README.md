@@ -45,6 +45,7 @@ build_review.py         →  review.html    (single page for human review)
 | `BBA_PILOT_ICD10_CSV` | `../Bloodbank/data/raw/ICD10.csv` | ICD-10 master dictionary |
 | `BBA_PILOT_LLM_MODEL` | `claude-sonnet-4-6` | Anthropic model id |
 | `BBA_PILOT_RUN_ID` | `pilot-mini` | run_id stamped on audit_store rows |
+| `BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE` | `false` | Opt-in to the missing-Hb MTP / peri-procedural auto-APPROPRIATE pre-check (SEED — set `1`/`true` only after clinical sign-off) |
 | `ANTHROPIC_API_KEY` | _(required)_ | Anthropic credentials |
 | `BBA_DATA_DIR` | _(required for `bba ingest`)_ | Where ingest writes Parquet + markers |
 | `BBA_DB_URL` | _(required for `bba ingest`)_ | DB URL — placeholder is fine for ingest-only |
@@ -138,3 +139,17 @@ validation step (M8 milestone).
   this pilot are unanchored to a clinical gold standard. Treat them as
   a demonstration of the composition path, not as audit evidence
   ready for committee review.
+
+- **MTP arm is unfed.** Both pilot scripts pass `blood_orders=()` into
+  `assign_cohort`, so the MTP cluster rule (`detect_mtp_pattern`: ≥4 RBC
+  units, or RBC+FFP+platelet co-order, within a 1-h window) can never
+  fire. `BDVSTTRANS` carries no `REQNO`, so the bundle has no precise
+  per-order RBC-unit history to build `BloodOrderEvent` records from —
+  the existing join is an admission-scoped *display* join for human
+  review only. Consequently, even with
+  `BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE` enabled, true
+  active-MTP missing-Hb cases still surface as `INSUFFICIENT_EVIDENCE`
+  (correctly parked for a reviewer); only the peri-procedural bypass
+  arm fires. A reusable `BloodOrderEvent` builder over the joined
+  blood-order tables is a separate, sign-off-gated feature — no
+  production code constructs `BloodOrderEvent` today.

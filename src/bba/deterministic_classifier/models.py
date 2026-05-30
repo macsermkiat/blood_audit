@@ -97,6 +97,17 @@ class ClassifierInputs(BaseModel):
     * ``audit_id`` is a SafeId-shaped opaque string; this module does not
       revalidate it (the orchestrator already passed it through
       :class:`bba.audit_store.AuditRow`).
+
+    * ``enable_missing_hb_positive_evidence`` is the operator-supplied
+      kill-switch for the missing-Hb positive-evidence pre-check
+      (MTP / peri-procedural auto-APPROPRIATE on no documented Hb).
+      Defaults to ``False`` because the policy is "SEED pending clinical
+      sign-off" (see :mod:`bba.deterministic_classifier.classifier` and
+      docs/CONTEXT.md §"Missing-Hb positive-evidence pre-check"). When
+      ``False`` the classifier ignores both bypass branches and returns
+      ``INSUFFICIENT_EVIDENCE`` for missing Hb, preserving the original
+      PRD spec. Set to ``True`` per-row only after the QI committee has
+      signed off on auto-approving undocumented-Hb cases.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -108,6 +119,7 @@ class ClassifierInputs(BaseModel):
     procedure_proximity_hours: float | None
     upcoming_procedure_hours: float | None = None
     crystalloid_liters_prior_4h: float = Field(ge=0.0)
+    enable_missing_hb_positive_evidence: bool = False
 
 
 class ClassifierResult(BaseModel):
@@ -132,8 +144,11 @@ class ClassifierResult(BaseModel):
     ``"hb_ge_10"``, ``"hb_missing"``, ``"bypass_delta_hb"``,
     ``"bypass_peri_procedural"``,
     ``"bypass_pre_op_crossmatch"``, ``"bypass_mtp"``,
-    ``"bypass_hemodilution"``, ``"cohort_unknown"``). Free-form prose
-    summaries are produced by the LLM stage, not here.
+    ``"bypass_mtp_hb_missing"``, ``"bypass_peri_procedural_hb_missing"``,
+    ``"bypass_hemodilution"``, ``"cohort_unknown"``). The two
+    ``*_hb_missing`` slugs mark the missing-Hb positive-evidence pre-check
+    (approved with no documented Hb) so the QI committee can count them.
+    Free-form prose summaries are produced by the LLM stage, not here.
     """
 
     model_config = ConfigDict(frozen=True)

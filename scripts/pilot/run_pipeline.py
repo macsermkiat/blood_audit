@@ -46,6 +46,13 @@ from bba.ingest.time_parser import parse_hosxp_time
 
 WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
 BUNDLE = WORK / "bundle"
+# Operator opt-in for the missing-Hb positive-evidence pre-check (MTP /
+# peri-procedural auto-APPROPRIATE on no documented Hb). Defaults off because
+# the policy is SEED pending clinical sign-off — see ClassifierInputs and
+# docs/CONTEXT.md §"Missing-Hb positive-evidence pre-check".
+ENABLE_MISSING_HB_POSITIVE_EVIDENCE = os.environ.get(
+    "BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE", ""
+).strip().lower() in ("1", "true", "yes", "on")
 TZ_LOCAL = "Asia/Bangkok"
 HB_HEM_CODE = "290095"
 HB_POCT_CODE = "500001"
@@ -670,6 +677,10 @@ def main() -> None:
                 procedure_events=op_events,
                 diagnosis_codes=order.diagnosis_codes,
                 med_events=med_events,
+                # MTP cluster arm is unfed in the pilot: BDVSTTRANS has no
+                # REQNO, so there is no precise per-order RBC-unit history to
+                # build BloodOrderEvent records from. See README "MTP arm is
+                # unfed". detect_mtp_pattern therefore never fires here.
                 blood_orders=(),
                 anc_value=anc,
             )
@@ -709,6 +720,7 @@ def main() -> None:
                 procedure_proximity_hours=proximity_h,
                 upcoming_procedure_hours=upcoming_h,
                 crystalloid_liters_prior_4h=crystalloid_liters,
+                enable_missing_hb_positive_evidence=ENABLE_MISSING_HB_POSITIVE_EVIDENCE,
             )
         )
 

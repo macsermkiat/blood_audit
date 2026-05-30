@@ -180,6 +180,17 @@ class PipelineRowContext(BaseModel):
 
     evidence_chunks: tuple[EvidenceChunk, ...] = ()
 
+    # Operator-supplied kill-switch for the missing-Hb positive-evidence
+    # pre-check (MTP / peri-procedural auto-APPROPRIATE on no documented
+    # Hb). Defaults to False because the policy is SEED pending clinical
+    # sign-off — see :class:`bba.deterministic_classifier.ClassifierInputs`
+    # and docs/CONTEXT.md §"Missing-Hb positive-evidence pre-check".
+    # The orchestrator that builds PipelineRowContext binds this per-row
+    # from the signed-off policy; the pipeline + replay paths forward it
+    # verbatim to the classifier so resume produces the same verdict the
+    # original run did.
+    enable_missing_hb_positive_evidence: bool = False
+
 
 class AuditPipelineConfig(BaseModel):
     """Operator-supplied configuration for the pipeline orchestrator.

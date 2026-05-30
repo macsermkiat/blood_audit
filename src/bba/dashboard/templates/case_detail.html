@@ -20,7 +20,7 @@
     <h2 class="font-semibold mb-2">Order</h2>
     <dl class="grid grid-cols-2 gap-y-1 text-sm">
       <dt class="text-slate-500">order datetime</dt><dd>{{ detail.order_datetime.isoformat() }}</dd>
-      <dt class="text-slate-500">Hb at order</dt><dd>{{ "%.1f"|format(detail.hb_value) }}</dd>
+      <dt class="text-slate-500">Hb at order</dt><dd>{% if detail.hb_freshness == "missing" %}<span class="text-slate-500" title="no Hb documented">— (no Hb documented)</span>{% else %}{{ "%.1f"|format(detail.hb_value) }}{% endif %}</dd>
     </dl>
   </div>
 

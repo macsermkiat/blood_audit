@@ -49,6 +49,7 @@ from bba.audit_pipeline.state_machine import transition
 from bba.audit_pipeline.store import BatchRunStore
 from bba.audit_store import AuditRow, AuditStore, LlmCall
 from bba.deterministic_classifier import (
+    BypassReason,
     ClassifierInputs,
     ClassifierResult,
     classify,
@@ -321,20 +322,23 @@ def _deterministic_audit_row(
     """
     from bba.audit_store import AuditRow
 
-    # INSUFFICIENT_EVIDENCE legitimately has a missing Hb; the
-    # audit_store schema requires non-null floats so we use 0.0 with
-    # ``freshness == "missing"`` as the explicit "no Hb" signal (per
-    # PRD §"Output schema"). All non-INSUFFICIENT classifications must
-    # supply real Hb data — fail loud otherwise.
+    # INSUFFICIENT_EVIDENCE legitimately has a missing Hb; APPROPRIATE
+    # with an Hb-independent bypass (MTP or peri-procedural) also has a
+    # legitimately missing Hb — both use 0.0 + freshness=="missing" as
+    # the explicit "no Hb" sentinel (PRD §"Output schema"). All other
+    # non-INSUFFICIENT classifications must supply real Hb — fail loud.
+    _HB_INDEPENDENT_BYPASSES = frozenset(
+        {BypassReason.MTP, BypassReason.PERI_PROCEDURAL_6H}
+    )
     classifier = classifier_result
-    if (
-        classifier.classification != "INSUFFICIENT_EVIDENCE"
-        and context.hb_result.value_g_dl is None
+    if context.hb_result.value_g_dl is None and not (
+        classifier.classification == "INSUFFICIENT_EVIDENCE"
+        or classifier.bypass_reason in _HB_INDEPENDENT_BYPASSES
     ):
         raise ValueError(
             f"audit_id={context.order.audit_id!r}: classifier "
-            f"emitted {classifier.classification!r} but hb_result.value_g_dl "
-            "is None; the pipeline must not fabricate a numeric Hb"
+            f"emitted {classifier.classification!r} (bypass={classifier.bypass_reason!r}) "
+            "but hb_result.value_g_dl is None; the pipeline must not fabricate a numeric Hb"
         )
     return AuditRow(
         audit_id=context.order.audit_id,
@@ -541,6 +545,7 @@ def _classifier_inputs_for(context: PipelineRowContext) -> ClassifierInputs:
         procedure_proximity_hours=context.procedure_proximity_hours,
         upcoming_procedure_hours=context.upcoming_procedure_hours,
         crystalloid_liters_prior_4h=context.crystalloid_liters_prior_4h,
+        enable_missing_hb_positive_evidence=context.enable_missing_hb_positive_evidence,
     )
 
 

@@ -104,6 +104,13 @@ BUNDLE = WORK / "bundle"
 AUDIT_STORE_ROOT = WORK / "data" / "audit_store"
 RUN_ID = os.environ.get("BBA_PILOT_RUN_ID", "pilot-mini")
 MODEL_ID = os.environ.get("BBA_PILOT_LLM_MODEL", "claude-sonnet-4-6")
+# Operator opt-in for the missing-Hb positive-evidence pre-check (MTP /
+# peri-procedural auto-APPROPRIATE on no documented Hb). Defaults off because
+# the policy is SEED pending clinical sign-off — see ClassifierInputs and
+# docs/CONTEXT.md §"Missing-Hb positive-evidence pre-check".
+ENABLE_MISSING_HB_POSITIVE_EVIDENCE = os.environ.get(
+    "BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE", ""
+).strip().lower() in ("1", "true", "yes", "on")
 CODE_VERSION = "pilot-mini"
 TZ_LOCAL = "Asia/Bangkok"
 INCPT_OPERATION_GROUPS = {"110", "111"}
@@ -802,6 +809,10 @@ def main() -> None:
                 procedure_events=op_events,
                 diagnosis_codes=order.diagnosis_codes,
                 med_events=med_events,
+                # MTP cluster arm is unfed in the pilot: BDVSTTRANS has no
+                # REQNO, so there is no precise per-order RBC-unit history to
+                # build BloodOrderEvent records from. See README "MTP arm is
+                # unfed". detect_mtp_pattern therefore never fires here.
                 blood_orders=(),
                 anc_value=anc,
             )
@@ -1105,6 +1116,7 @@ def main() -> None:
                 prompt_hash="0" * 64,
                 evidence_bundle_hash=bundle.bundle_hash,
                 evidence_chunks=tuple(chunks),
+                enable_missing_hb_positive_evidence=ENABLE_MISSING_HB_POSITIVE_EVIDENCE,
             )
         )
 
@@ -1121,6 +1133,7 @@ def main() -> None:
                 procedure_proximity_hours=ctx.procedure_proximity_hours,
                 upcoming_procedure_hours=ctx.upcoming_procedure_hours,
                 crystalloid_liters_prior_4h=ctx.crystalloid_liters_prior_4h,
+                enable_missing_hb_positive_evidence=ctx.enable_missing_hb_positive_evidence,
             )
         )
         classifier_results[ctx.order.audit_id] = cres

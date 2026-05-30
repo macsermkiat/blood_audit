@@ -194,6 +194,11 @@ class QueueItem(BaseModel):
     run_id: SafeId
     order_datetime: UTCDatetime
     hb_value: float
+    # ``hb_freshness == "missing"`` marks the 0.0 sentinel emitted by the
+    # missing-Hb positive-evidence bypass (MTP / peri-procedural). Templates
+    # MUST consult this before formatting ``hb_value`` so reviewers do not
+    # see "0.0" as if it were a real measurement.
+    hb_freshness: str
     confidence: float
     final_classification: Classification
     review_reason: str | None
@@ -225,6 +230,8 @@ class CaseDetail(BaseModel):
     needs_human_review: bool
     review_reason: str | None
     hb_value: float
+    # See :class:`QueueItem.hb_freshness` — same sentinel-detection contract.
+    hb_freshness: str
     order_datetime: UTCDatetime
     unredacted: bool
     raw_hn: str | None
