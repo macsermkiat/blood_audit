@@ -15,7 +15,7 @@
     <tr class="border-t border-slate-100 hover:bg-slate-50">
       <td class="px-3 py-2"><a href="/case/{{ item.audit_id }}" class="text-indigo-600 hover:underline">{{ item.audit_id }}</a></td>
       <td class="px-3 py-2">{{ item.order_datetime.isoformat() }}</td>
-      <td class="px-3 py-2 text-right">{{ "%.1f"|format(item.hb_value) }}</td>
+      <td class="px-3 py-2 text-right">{% if item.hb_freshness == "missing" %}<span class="text-slate-400" title="no Hb documented">—</span>{% else %}{{ "%.1f"|format(item.hb_value) }}{% endif %}</td>
       <td class="px-3 py-2 text-right">{{ "%.2f"|format(item.confidence) }}</td>
       <td class="px-3 py-2">{{ item.final_classification }}</td>
       <td class="px-3 py-2">{{ item.ward_id }}</td>
