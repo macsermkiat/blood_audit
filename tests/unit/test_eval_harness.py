@@ -1369,6 +1369,14 @@ class TestOutcomeAnchoredFalsification:
 class TestPropertyWilsonContainsPoint:
     """For any (successes, trials, confidence), Wilson L ≤ point ≤ Wilson U."""
 
+    def test_zero_successes_lower_does_not_exceed_point(self) -> None:
+        # Regression: at successes == 0, p_hat is exactly 0.0 but center - margin
+        # rounds to a tiny positive epsilon (~5.5e-17), which made lower > point.
+        # The invariant must hold without relying on the Hypothesis example DB.
+        ci = wilson_ci(0, 3, confidence=0.99)
+        assert ci.point == 0.0
+        assert ci.lower <= ci.point <= ci.upper
+
     @given(
         successes=st.integers(min_value=0, max_value=500),
         trials_offset=st.integers(min_value=0, max_value=500),
