@@ -46,3 +46,4 @@ data/raw/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
 .claude/.ralph-loop.local.md
+.claude.local.md
