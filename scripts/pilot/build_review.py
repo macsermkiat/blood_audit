@@ -914,7 +914,7 @@ def main() -> None:
             f"<div><b>Hb @ anchor:</b> {esc(det.get('hb_value_g_dl') or '—')} g/dL "
             f"({esc(det.get('hb_freshness') or '—')}, source {esc(det.get('hb_source') or '—')})</div>",
             f"<div><b>Hb lookup anchor:</b> "
-            f"{esc(det.get('hb_anchor_datetime_local') or 'order datetime')} "
+            f"{esc(det.get('hb_anchor_datetime_local') or f'{anchor_date} {anchor_time}'.strip() or '—')} "
             f"({esc(det.get('hb_anchor_reason') or 'order_datetime')})</div>",
             f"<div><b>Cohort:</b> {esc(det.get('cohort_label') or '—')} "
             f"(threshold {esc(det.get('cohort_threshold') or 'n/a')})</div>",

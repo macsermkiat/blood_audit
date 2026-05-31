@@ -33,6 +33,9 @@ from bba.evidence_bundle_builder.ranking import (
     parse_soap_sections,
     split_focus_notes_5_5,
 )
+from bba.evidence_bundle_builder.salience import med_salience
+from bba.vitals_extractor.hemodynamic import scan_hemodynamics
+from bba.vitals_extractor.models import HemodynamicSummary, VasopressorMention, VitalsNote
 
 
 def _nfc(s: str) -> str:
@@ -79,33 +82,53 @@ CAP_FOCUS_BEFORE = 5
 CAP_FOCUS_AFTER = 5
 """Maximum IPDNRFOCUSDT entries at or after the order anchor."""
 
-DEFAULT_CHAR_CAP = 8000
-"""Bundle character-count proxy for the LLM token budget (issue #16 body).
+DEFAULT_CHAR_CAP = 40000
+"""Bundle character-count proxy for the LLM token budget (issue #16 / #76).
 
 A char-count proxy is used instead of a tiktoken-style estimate because the
 bundle goes to Anthropic's tokenizer (not OpenAI's) and the published Claude
-tokenization is not stable enough to depend on for a hard cap. 8 K characters
-is roughly 2 K tokens of typical Thai medical text, well inside the prompt
-budget after the system prompt + few-shot examples."""
+tokenization is not stable enough to depend on for a hard cap.
+
+Raised from the original 8 K (issue #16) to 40 K under issue #76: the old cap
+was a root cause of Case 2 / REQNO 68012352 — narrative suppression plus an
+8 K ceiling shed the vasopressor and MAP evidence the auditor needed. The
+bundle now ships the prose narrative AND a pinned, truncation-exempt
+hemodynamic summary, which needs the headroom. 40 K is PROVISIONAL: it will be
+finalized against the pilot worst-case bundle measurement (issue #76 Task #3)
+before any clinical use."""
+
+EXEMPT_FROM_DROP: frozenset[EvidenceSource] = frozenset({"Hemodynamic", "Lab"})
+"""Sources the whole-item truncation pass must NEVER drop (issue #76).
+
+These are the load-bearing decision signals: ``Lab`` (Hb) is the decision-time
+anemia value the deterministic classifier itself keys on, and ``Hemodynamic``
+is the pinned MAP/vasopressor summary that was starved in Case 2 / REQNO
+68012352. Both are bounded in count (Hb by the 7-day lookback window; the
+Hemodynamic summary is a single item), so exempting them cannot make the
+bundle grow without limit. If the exempt set plus the anchor envelope alone
+still exceeds the cap, :func:`_enforce_char_cap` fails loud rather than
+silently shedding a load-bearing signal.
+
+Invariant: ``EXEMPT_FROM_DROP`` and :data:`DROP_PRIORITY` partition the
+``EvidenceSource`` literal — disjoint, and together total."""
 
 DROP_PRIORITY: tuple[EvidenceSource, ...] = (
     "IPDADMPROGRESS",
     "IPDNRFOCUSDT",
     "Med",
     "Vitals",
-    "Lab",
     "Diagnosis",
 )
 """Whole-item drop priority for char-cap truncation: lowest-clinical-relevance
 first. ``IPDADMPROGRESS`` and ``IPDNRFOCUSDT`` are long supportive narratives
 that the LLM can audit without; ``MED`` is contextual; ``Vitals`` is the
-bedside state; ``Lab`` (Hb) is the decision-time anemia signal — losing it
-changes what the LLM is auditing; ``Diagnosis`` is the encounter context.
+bedside state; ``Diagnosis`` is the encounter context (dropped last). ``Lab``
+and ``Hemodynamic`` are absent because they are exempt (:data:`EXEMPT_FROM_DROP`).
 
 Independent of the source EMISSION order (which is fixed by the canonical-
 ID assignment); without a separate drop priority, a dense MED list would
-silently evict every Lab item before any MED item dropped — exactly inverted
-from clinical relevance."""
+silently evict every droppable item before any MED item dropped — exactly
+inverted from clinical relevance."""
 
 
 # =============================================================================
@@ -303,6 +326,73 @@ def _to_utc(ts: datetime) -> datetime:
     return ts.astimezone(UTC)
 
 
+def _lag_min(ts: datetime, anchor_dt: datetime) -> int:
+    """Signed minutes of ``ts`` relative to the order anchor (negative = before).
+
+    The Hemodynamic item carries ``timestamp_utc=None`` (it is a synthesized
+    summary, not one charted note), so the nadir/pressor proximity is encoded
+    as a relative offset instead of an absolute timestamp. Relative offsets are
+    inherently PHI-free, which is why the summary can be pinned even though the
+    underlying notes are time-stamped."""
+    return int(round((_to_utc(ts) - anchor_dt).total_seconds() / 60.0))
+
+
+def _vasopressor_entry(v: VasopressorMention, anchor_dt: datetime) -> dict[str, Any]:
+    """Fact-only dict for one vasopressor mention: agent, source, lag, dose?."""
+    entry: dict[str, Any] = {
+        "agent": v.agent,
+        "source": v.source,
+        "lag_min": _lag_min(v.at, anchor_dt),
+    }
+    if v.dose is not None:
+        entry["dose"] = v.dose
+    return entry
+
+
+def _hemodynamic_payload(
+    summary: HemodynamicSummary, anchor_dt: datetime
+) -> dict[str, Any]:
+    """Render the pinned hemodynamic summary payload (issue #76).
+
+    FACT-ONLY by contract: the MAP nadir (+ its lag and source) and the
+    vasopressor mentions, nothing else. There is deliberately no
+    'instability' / 'refractory' / 'appropriateness' field — hemodynamic
+    status is a supporting factor the LLM weighs, never a standalone verdict,
+    and the deterministic classifier has no hemodynamic gate. Caller emits
+    this only when ``summary.is_empty`` is False."""
+    payload: dict[str, Any] = {}
+    if summary.map_nadir is not None:
+        payload["map_nadir"] = summary.map_nadir
+        payload["map_nadir_source"] = summary.map_nadir_source
+        if summary.map_nadir_at is not None:
+            payload["map_nadir_lag_min"] = _lag_min(summary.map_nadir_at, anchor_dt)
+    if summary.vasopressors:
+        payload["vasopressors"] = [
+            _vasopressor_entry(v, anchor_dt) for v in summary.vasopressors
+        ]
+    return payload
+
+
+def _build_vitals_notes(
+    progress: Sequence[ProgressNote], focus: Sequence[FocusNote]
+) -> tuple[VitalsNote, ...]:
+    """Convert the SHIPPED progress + focus notes into hemodynamic-scan input.
+
+    Built from the post-window / post-cap note set that becomes the bundle's
+    narrative items, so the summary is a strict subset of evidence the LLM also
+    sees in full (issue #76 corroboration: the summary never asserts a fact
+    absent from a shipped note)."""
+    notes: list[VitalsNote] = [
+        VitalsNote(source="IPDADMPROGRESS", timestamp=_to_utc(p.timestamp), text=p.text)
+        for p in progress
+    ]
+    notes.extend(
+        VitalsNote(source="IPDNRFOCUSDT", timestamp=_to_utc(f.timestamp), text=f.text)
+        for f in focus
+    )
+    return tuple(notes)
+
+
 def _hb_sort_key(h: HbRecord) -> tuple[int, datetime, int, float]:
     """Total sort key for Hb records that mirrors :mod:`bba.hb_lookup`
     classifier semantics so the bundle never disagrees with the
@@ -414,30 +504,20 @@ def _drop_one_by_priority(
     """Drop ONE item, choosing the lowest-priority source first.
 
     Walks :data:`DROP_PRIORITY` in order; for the first source group that
-    has items, removes the LAST occurrence of that source. Lab is
-    special-cased to honor PRD §3's HEMATOLOGY > POCT preference even
-    when POCT happens to be more recent: POCT items drop before any
-    HEMATOLOGY item, regardless of timestamp. This matches the
-    deterministic :mod:`bba.hb_lookup` contract — the LLM never sees a
-    POCT-only Hb when a HEMATOLOGY value exists in the lookback.
+    has items, removes the LAST occurrence of that source. Sources in
+    :data:`EXEMPT_FROM_DROP` (``Lab``, ``Hemodynamic``) are absent from
+    ``DROP_PRIORITY`` and therefore never dropped here — the load-bearing
+    anemia and hemodynamic signals survive even under extreme cap pressure
+    (issue #76).
 
     Returns the input unchanged if no source in :data:`DROP_PRIORITY`
     has any items. The caller treats that as a terminal state and either
     accepts the over-cap bundle or raises :class:`EvidenceBundleTooLargeError`."""
     items_list = list(items)
     for source_to_drop in DROP_PRIORITY:
-        if source_to_drop == "Lab":
-            # PRD §3: drop POCT before HEMATOLOGY regardless of recency.
-            idx = _find_last_poct_lab(items_list)
-            if idx >= 0:
-                return tuple(items_list[:idx] + items_list[idx + 1 :])
-            idx = _find_last_of_source(items_list, "Lab")
-            if idx >= 0:
-                return tuple(items_list[:idx] + items_list[idx + 1 :])
-        else:
-            idx = _find_last_of_source(items_list, source_to_drop)
-            if idx >= 0:
-                return tuple(items_list[:idx] + items_list[idx + 1 :])
+        idx = _find_last_of_source(items_list, source_to_drop)
+        if idx >= 0:
+            return tuple(items_list[:idx] + items_list[idx + 1 :])
     return tuple(items_list)
 
 
@@ -446,15 +526,6 @@ def _find_last_of_source(items: Sequence[EvidenceItem], source: EvidenceSource) 
     last = -1
     for i, it in enumerate(items):
         if it.source == source:
-            last = i
-    return last
-
-
-def _find_last_poct_lab(items: Sequence[EvidenceItem]) -> int:
-    """Return last index of a Lab item whose ``lab_source == "POCT"``."""
-    last = -1
-    for i, it in enumerate(items):
-        if it.source == "Lab" and it.payload.get("lab_source") == "POCT":
             last = i
     return last
 
@@ -572,6 +643,7 @@ def _enforce_char_cap(
 
 def _assign_ids(
     *,
+    hemo_summary: HemodynamicSummary,
     diagnoses: Sequence[DiagnosisRecord],
     progress: Sequence[ProgressNote],
     focus: Sequence[FocusNote],
@@ -582,10 +654,10 @@ def _assign_ids(
 ) -> tuple[EvidenceItem, ...]:
     """Construct the items list with sequential E1...EN IDs in canonical order.
 
-    Canonical order = source order (Diagnosis, IPDADMPROGRESS, IPDNRFOCUSDT,
-    MED, Lab, Vitals) → within each source, a deterministic sort key. The
-    per-source sort keys are picked so input shuffles map to the same kept
-    set AND the same per-source emission order, satisfying the stable-IDs
+    Canonical order = source order (Hemodynamic, Diagnosis, IPDADMPROGRESS,
+    IPDNRFOCUSDT, MED, Lab, Vitals) → within each source, a deterministic sort
+    key. The per-source sort keys are picked so input shuffles map to the same
+    kept set AND the same per-source emission order, satisfying the stable-IDs
     AC (E1..EN are byte-stable across re-runs of the same input)."""
     items: list[EvidenceItem] = []
     counter = 0
@@ -594,6 +666,20 @@ def _assign_ids(
         nonlocal counter
         counter += 1
         return f"E{counter}"
+
+    # Hemodynamic summary FIRST (issue #76): a single pinned, fact-only item
+    # so the LLM reads the MAP nadir / vasopressor evidence before anything
+    # else. Emitted only when the scan found something — an empty summary
+    # adds no item (and so leaves all downstream IDs unchanged).
+    if not hemo_summary.is_empty:
+        items.append(
+            EvidenceItem(
+                id=_next_id(),
+                source="Hemodynamic",
+                timestamp_utc=None,
+                payload=_hemodynamic_payload(hemo_summary, anchor_dt),
+            )
+        )
 
     # Sort key is TOTAL — ``description is not None`` (a bool, sortable) is
     # part of the key so a record with ``description=None`` and one with
@@ -668,7 +754,15 @@ def _assign_ids(
         (m for m in meds if m.timestamp > anchor_dt),
         key=lambda x: (x.timestamp, _nfc(x.drug)),
     )
-    for m in [*pre_meds, *post_meds]:
+    # Clinical-salience is the PRIMARY emission key (issue #76): CRITICAL
+    # drugs (vasopressors, inotropes, blood products) emit before ROUTINE
+    # before MAINTENANCE (crystalloids, saline flushes, irrigation), so the
+    # tail-drop sheds maintenance fluids before a pressor under cap pressure
+    # — the exact Case 2 inversion (REQNO 68012352) this fixes. The sort is
+    # STABLE, so within a bucket the pre-before-post / newest-first-pre order
+    # above is preserved untouched. Salience is an ORDERING signal only; it
+    # never gates or weights the transfusion decision.
+    for m in sorted([*pre_meds, *post_meds], key=lambda x: med_salience(x.drug)):
         items.append(
             EvidenceItem(
                 id=_next_id(),
@@ -805,7 +899,14 @@ def build_evidence_bundle(
     vitals_in_window = _filter_vitals(inputs.vitals, anchor_dt)
     vitals = tuple(v for v in vitals_in_window if _has_any_vital_value(v))
 
+    # Scan the SHIPPED narrative (post-window/post-cap progress + focus) for
+    # the MAP nadir + vasopressor mentions (issue #76). Computing it from the
+    # same note set that becomes the bundle's items keeps the summary a strict
+    # subset of evidence the LLM also sees in full.
+    hemo_summary = scan_hemodynamics(_build_vitals_notes(progress, focus))
+
     items = _assign_ids(
+        hemo_summary=hemo_summary,
         diagnoses=inputs.diagnoses,
         progress=progress,
         focus=focus,

@@ -54,6 +54,7 @@ from bba.vitals_extractor.bounds import (
 # =============================================================================
 
 EvidenceSource = Literal[
+    "Hemodynamic",
     "Diagnosis",
     "IPDADMPROGRESS",
     "IPDNRFOCUSDT",
@@ -61,9 +62,16 @@ EvidenceSource = Literal[
     "Lab",
     "Vitals",
 ]
-"""The six per-source families a bundle can contain. The literal order matches
-the canonical emission order used to assign stable evidence IDs (E1, E2, ...)
-in :func:`bba.evidence_bundle_builder.builder.build_evidence_bundle`.
+"""The per-source families a bundle can contain. The literal order matches the
+canonical emission order used to assign stable evidence IDs (E1, E2, ...) in
+:func:`bba.evidence_bundle_builder.builder.build_evidence_bundle`.
+
+``Hemodynamic`` (issue #76) is FIRST: it is a single pinned, fact-only summary
+(MAP nadir + vasopressor mentions) synthesized from the in-window narrative,
+emitted as E1, and exempt from char-cap truncation so the evidence starved in
+Case 2 / REQNO 68012352 always reaches the LLM. It carries no appropriateness
+language and never gates the deterministic classifier — it is supporting
+evidence only.
 """
 
 

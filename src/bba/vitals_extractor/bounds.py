@@ -22,6 +22,12 @@ RR_MIN = 5
 RR_MAX = 50
 BT_MIN = 30.0
 BT_MAX = 43.0
+# MAP (mean arterial pressure). Bounds bracket the physiologic span derivable
+# from the SBP/DBP bounds above (~(SBP + 2*DBP)/3) with headroom, so a real
+# septic-shock nadir in the 40s-50s survives while an OCR misparse like
+# "MAP 8" or "MAP 250" is dropped before it can masquerade as the window nadir.
+MAP_MIN = 30
+MAP_MAX = 180
 
 
 def is_sbp_valid(value: int) -> bool:
@@ -47,3 +53,8 @@ def is_rr_valid(value: int) -> bool:
 def is_bt_valid(value: float) -> bool:
     """Return True iff ``value`` is within the inclusive BT sanity bounds (deg C)."""
     return BT_MIN <= value <= BT_MAX
+
+
+def is_map_valid(value: int) -> bool:
+    """Return True iff ``value`` is within the inclusive MAP sanity bounds (mmHg)."""
+    return MAP_MIN <= value <= MAP_MAX

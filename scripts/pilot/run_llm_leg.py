@@ -1,15 +1,22 @@
 """Submit a real Anthropic batch for the LLM-bound cases from the
 mini bundle, then write final audit rows to a file-backed audit_store.
 
-Safety: progress / focus notes are NOT shipped to the API (the
-encrypted bundle has not been through ``thai-medical-deid``). Only
-structured signals go into the evidence bundle:
+De-identification posture (issue #76): de-identification is a FIRST GATE
+run OUTSIDE this script — the pilot input is treated as already
+de-identified, so this leg does not re-run ``thai-medical-deid`` in
+process. The evidence bundle therefore now ships the narrative notes
+themselves (progress + focus), not just the regex-extracted vitals
+numbers, because Case 2 / REQNO 68012352 showed the LLM was starved of the
+MAP / vasopressor evidence that lived in the narrative. Signals shipped:
 
 * ICD-10 diagnoses (AN-scoped, deduped)
+* IPDADMPROGRESS / IPDNRFOCUSDT narrative notes (per-source windowed)
+* Hemodynamic summary (MAP nadir + vasopressor agent/dose), pinned E1,
+  synthesized fact-only from the SAME shipped notes (issue #76)
 * Hb history (7-day pre-anchor; tagged with closest / 24h-min / 48h-min)
 * Plt, WBC, Neutrophils CBC (±1 day window)
 * Meds list (±1 day window)
-* Vitals numbers extracted via regex (no narrative leaves the machine)
+* Vitals numbers extracted via regex
 
 The Hb chunks carry a guidance EvidenceChunk that instructs the LLM
 to weight closest + lowest values and to explicitly cite any
@@ -69,9 +76,11 @@ from bba.deterministic_classifier.models import ClassifierInputs
 from bba.evidence_bundle_builder import (
     DiagnosisRecord,
     EvidenceInputs,
+    FocusNote,
     HbRecord,
     MedRecord,
     OrderAnchor,
+    ProgressNote,
     VitalsRecord,
     build_evidence_bundle,
 )
@@ -128,7 +137,8 @@ NEUTROPHIL_ABS_CODE = "290093"
 #   Plt, WBC, Neut   : day-before + day-of transfusion
 #   Med              : day-before + day-of transfusion
 #   Diagnoses        : AN-scoped (no row date in schema)
-#   Free-text notes  : NEVER sent (PHI not through thai-medical-deid)
+#   Free-text notes  : shipped (de-id is a first gate run OUTSIDE this
+#                      script; builder re-windows to its own ±24h)
 WINDOW_HB_DAYS = 7
 WINDOW_NOTES_DAYS_BEFORE = 1
 WINDOW_NOTES_DAYS_AFTER = 0
@@ -569,8 +579,61 @@ def _normalize_optract(raw: list[dict[str, str]]) -> dict[str, dict[str, str]]:
     return out
 
 
+def _fmt_lag(lag_min: int) -> str:
+    """Render a signed lag-in-minutes as a phrase relative to the order anchor."""
+    if lag_min < 0:
+        return f"{abs(lag_min)} min before order"
+    if lag_min > 0:
+        return f"{lag_min} min after order"
+    return "at order time"
+
+
+def _render_hemodynamic(payload: dict[str, Any]) -> str:
+    """Render the pinned hemodynamic summary as one fact-only line (issue #76).
+
+    FACT-ONLY by contract (mirrors the builder's payload guardrail): the MAP
+    nadir with its provenance and the vasopressor agents/doses, and nothing
+    else. No 'instability' / 'refractory' / appropriateness wording — the LLM
+    weighs hemodynamic status, the summary never pre-judges it."""
+    parts: list[str] = []
+    nadir = payload.get("map_nadir")
+    if nadir is not None:
+        prov_bits = [str(payload.get("map_nadir_source") or "")]
+        lag = payload.get("map_nadir_lag_min")
+        if lag is not None:
+            prov_bits.append(_fmt_lag(int(lag)))
+        prov = ", ".join(b for b in prov_bits if b)
+        parts.append(f"MAP nadir {nadir} mmHg" + (f" ({prov})" if prov else ""))
+    for v in payload.get("vasopressors") or ():
+        seg_bits = [str(v.get("agent") or "")]
+        dose = v.get("dose")
+        if dose:
+            seg_bits.append(str(dose))
+        prov_bits = [str(v.get("source") or "")]
+        lag = v.get("lag_min")
+        if lag is not None:
+            prov_bits.append(_fmt_lag(int(lag)))
+        prov = ", ".join(b for b in prov_bits if b)
+        seg = " ".join(b for b in seg_bits if b)
+        parts.append(seg + (f" ({prov})" if prov else ""))
+    return "Hemodynamics: " + "; ".join(parts) if parts else ""
+
+
 def _render_payload(source: str, payload: dict[str, Any]) -> str:
     """Render a structured EvidenceItem payload as one line for the LLM."""
+    if source == "Hemodynamic":
+        return _render_hemodynamic(payload)
+    if source == "IPDADMPROGRESS":
+        sections = payload.get("sections") or ()
+        rendered = "; ".join(
+            f"{s.get('label', '')}: {s.get('text', '')}".strip()
+            for s in sections
+            if (s.get("text") or "").strip()
+        )
+        return f"Progress note: {rendered}" if rendered else ""
+    if source == "IPDNRFOCUSDT":
+        text = (payload.get("text") or "").strip()
+        return f"Focus note: {text}" if text else ""
     if source == "Diagnosis":
         code = payload.get("icd10", "")
         name = payload.get("description") or ""
@@ -853,6 +916,25 @@ def main() -> None:
         )
         vitals = extract_vitals(anchor=order.order_datetime, notes=vitals_notes)
 
+        # Issue #76: ship the narrative notes themselves (not just the regex
+        # numbers) so the LLM sees the MAP / vasopressor evidence that Case 2
+        # was starved of. Reusing vitals_notes keeps the bundle narrative,
+        # the hemodynamic scan input, and the shipped items the SAME note set,
+        # so the synthesized Hemodynamic summary is always a strict subset of
+        # evidence the LLM also reads in full. The builder re-windows these to
+        # its own per-source windows; PHI-safety is handled OUTSIDE this script
+        # (the pilot input is treated as already de-identified — see header).
+        progress_for_bundle = tuple(
+            ProgressNote(timestamp=n.timestamp, text=n.text)
+            for n in vitals_notes
+            if n.source == "IPDADMPROGRESS"
+        )
+        focus_for_bundle = tuple(
+            FocusNote(timestamp=n.timestamp, text=n.text)
+            for n in vitals_notes
+            if n.source == "IPDNRFOCUSDT"
+        )
+
         # Calendar-day window in the source-data timezone, not a rolling
         # 48-h slice anchored on the order's clock time. For a 14:00
         # order, the spec calls for "day-before + day-of transfusion",
@@ -932,8 +1014,8 @@ def main() -> None:
                     products=order.products_ordered,
                 ),
                 diagnoses=diagnoses,
-                progress_notes=(),  # PHI-safety
-                focus_notes=(),  # PHI-safety
+                progress_notes=progress_for_bundle,
+                focus_notes=focus_for_bundle,
                 meds=meds_for_bundle,
                 hb_history=hb_for_bundle,
                 vitals=vital_records,
@@ -1110,7 +1192,7 @@ def main() -> None:
                 an_hash=an_hash,
                 prior_rbc_units_24h=0,
                 prior_rbc_units_7d=0,
-                redactor_version="structured-only-no-text-deid-0.0",
+                redactor_version="external-deid-gate-narrative-0.1",
                 redactor_model_sha="0" * 64,
                 policy_version="KCMH-PR17.2 / AABB-2023 (pilot)",
                 prompt_hash="0" * 64,

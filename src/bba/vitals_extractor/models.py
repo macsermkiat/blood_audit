@@ -103,6 +103,54 @@ class VitalsResult(BaseModel):
     note_timestamp: datetime | None
 
 
+class VasopressorMention(BaseModel):
+    """One vasopressor/inotrope finding from the hemodynamic window scan (issue #76).
+
+    Pure fact, no interpretation: the canonical ``agent`` name, the raw ``dose``
+    phrase if one was charted alongside it (else ``None``), and the provenance
+    (``at`` = tz-aware UTC note timestamp, ``source`` = origin table). The scan
+    deduplicates by agent, so each agent appears at most once per summary.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    agent: str
+    dose: str | None
+    at: AwareDatetime
+    source: Literal["IPDADMPROGRESS", "IPDNRFOCUSDT"]
+
+
+class HemodynamicSummary(BaseModel):
+    """Fact-only hemodynamic evidence aggregated across an order's note window.
+
+    Produced by :func:`bba.vitals_extractor.hemodynamic.scan_hemodynamics` and
+    surfaced to the LLM as a pinned, truncation-exempt evidence item (issue #76,
+    Case 2 / REQNO 68012352). It records the worst charted mean arterial pressure
+    (the ``map_nadir``, the LOWEST value across the window — not the most-recent)
+    with its provenance, plus every distinct vasopressor mention.
+
+    BINDING GUARDRAIL: this model carries facts only. There is deliberately no
+    "refractory"/"escalating"/appropriateness field — hemodynamic instability is
+    a supporting factor, never a standalone transfusion verdict. Do not add such
+    a field; the deterministic classifier has no hemodynamic gate.
+
+    Every field is nullable/empty: ``map_nadir`` is ``None`` when no measured MAP
+    was found in the window, and ``vasopressors`` is empty when none were named.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    map_nadir: int | None = None
+    map_nadir_at: datetime | None = None
+    map_nadir_source: Literal["IPDADMPROGRESS", "IPDNRFOCUSDT"] | None = None
+    vasopressors: tuple[VasopressorMention, ...] = ()
+
+    @property
+    def is_empty(self) -> bool:
+        """True when the scan found neither a measured MAP nor any vasopressor."""
+        return self.map_nadir is None and not self.vasopressors
+
+
 LLMFallback = Callable[[str], VitalSigns]
 """Callable boundary for the LLM fallback step.
 

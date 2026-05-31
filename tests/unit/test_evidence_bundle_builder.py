@@ -252,7 +252,12 @@ class TestPublicSurface:
         assert CAP_PROGRESS == 8
         assert CAP_FOCUS_BEFORE == 5
         assert CAP_FOCUS_AFTER == 5
-        assert DEFAULT_CHAR_CAP == 8000
+        # Raised from the original 8K (issue #16) to 40K under issue #76:
+        # suppressing the narrative starved Case 2 of hemodynamic evidence,
+        # so the bundle now ships the prose + a pinned hemodynamic summary
+        # and needs the headroom. Provisional until the pilot worst-case
+        # measurement (issue #76 Task #3) finalizes it.
+        assert DEFAULT_CHAR_CAP == 40000
 
     def test_section_priority_is_canonical_order(self) -> None:
         # Ordering matters: this tuple is the contract for both emission
@@ -1560,12 +1565,12 @@ class TestImpossibleCharCapRaises:
             build_evidence_bundle(inputs=inputs, char_cap=10)
 
     def test_huge_anchor_field_raises_under_default_cap(self) -> None:
-        # 5K + 5K = 10K of hash chars alone, well over the 8K default cap.
+        # 25K + 25K = 50K of hash chars alone, well over the 40K default cap.
         inputs = EvidenceInputs(
             anchor=OrderAnchor(
                 order_datetime=ANCHOR_DT,
-                hn_hash="x" * 5000,
-                an_hash="y" * 5000,
+                hn_hash="x" * 25000,
+                an_hash="y" * 25000,
                 products=("LPRC",),
             )
         )
@@ -1815,14 +1820,15 @@ class TestBundleHashStability:
 class TestCharCapEnforcement:
     """The serialized bundle never exceeds the configured char_cap."""
 
-    def test_default_cap_8000_chars(self) -> None:
-        # Pump in enough content to exceed 8K characters easily.
+    def test_default_cap_40000_chars(self) -> None:
+        # Pump in enough content to exceed the 40K default cap easily so the
+        # truncation passes are actually exercised at the new ceiling.
         progress = tuple(
-            _progress(offset_hours=-h, text=f"S: {'ข' * 600}\nO: o\nA: a\nP: p")
+            _progress(offset_hours=-h, text=f"S: {'ข' * 6000}\nO: o\nA: a\nP: p")
             for h in (1, 2, 3, 4, 5, 6, 7, 8)
         )
         focus = tuple(
-            _focus(offset_hours=h, text="ก" * 600) for h in (-6, -4, -2, 1, 3, 5)
+            _focus(offset_hours=h, text="ก" * 6000) for h in (-6, -4, -2, 1, 3, 5)
         )
         bundle = build_evidence_bundle(
             inputs=EvidenceInputs(
@@ -2177,14 +2183,13 @@ class TestHbEmissionAndTruncationPriority:
         )
         assert lab_items[1].payload["lab_source"] == "POCT"
 
-    def test_corrected_hb_row_kept_over_stale_under_tight_cap(self) -> None:
-        # bba.hb_lookup._select_current resolves same-(source,timestamp)
-        # ties by max item_no — later Lab rows are corrected/amended
-        # results. The bundle must mirror that semantics under cap
-        # pressure: when only one of two same-time HEMATOLOGY rows fits,
-        # the higher item_no (corrected) survives. Otherwise the LLM
-        # would see a stale value that the deterministic classifier
-        # already overrode.
+    def test_both_same_time_hb_rows_survive_exempt_corrected_first(self) -> None:
+        # Issue #76: Lab is exempt from whole-item drop, so under cap pressure
+        # (droppable MEDs shed) BOTH same-(source,timestamp) Hb rows survive —
+        # the corrected value can never be silently dropped. Emission still
+        # mirrors hb_lookup._select_current's max-item_no tiebreak: the
+        # corrected row (item_no=2) emits BEFORE the stale one (item_no=1) so
+        # the LLM reads the value the deterministic classifier keyed on first.
         stale_hb = HbRecord(
             timestamp=ANCHOR_DT - timedelta(hours=2),
             value_g_dl=8.0,  # stale higher value
@@ -2197,32 +2202,35 @@ class TestHbEmissionAndTruncationPriority:
             source="HEMATOLOGY",
             item_no=2,  # higher item_no = later insert / correction
         )
-        anchor = OrderAnchor(
-            order_datetime=ANCHOR_DT,
-            hn_hash="x" * 200,
-            an_hash="y" * 200,
-            products=("LPRC",),
+        meds = tuple(
+            _med(offset_hours=-h, drug=f"Drug{h}-" + ("x" * 200))
+            for h in (1, 2, 3, 4, 5, 6)
         )
         bundle = build_evidence_bundle(
-            inputs=EvidenceInputs(anchor=anchor, hb_history=(stale_hb, corrected_hb)),
-            char_cap=900,
+            inputs=EvidenceInputs(
+                anchor=_anchor(), hb_history=(stale_hb, corrected_hb), meds=meds
+            ),
+            char_cap=1100,
         )
         lab_items = _items_by_source(bundle, "Lab")
-        assert len(lab_items) == 1, "Expected exactly one Hb to survive"
+        med_items = _items_by_source(bundle, "Med")
+        assert len(med_items) < 6, "cap did not force any MED drop; tighten char_cap"
+        assert len(lab_items) == 2, (
+            "an exempt Hb row was dropped under cap pressure; both the stale "
+            "and corrected rows must survive"
+        )
         assert lab_items[0].payload["item_no"] == 2, (
-            "Stale Hb (item_no=1) survived over corrected (item_no=2); "
-            "bundle does not mirror hb_lookup._select_current's "
-            "max-item_no tiebreak"
+            "stale Hb (item_no=1) emitted before corrected (item_no=2); "
+            "bundle does not mirror hb_lookup._select_current's tiebreak"
         )
         assert lab_items[0].payload["value_g_dl"] == 7.0
 
-    def test_hematology_kept_over_NEWER_poct_under_tight_cap(self) -> None:
-        # PRD §3 / bba.hb_lookup: HEMATOLOGY (LABEXM 290095) is preferred
-        # over POCT (LABEXM 500001) when ANY HEMATOLOGY result exists in
-        # the 7-day lookback — INDEPENDENT of recency. The bundle must
-        # honor this even under tight cap pressure where only one Hb
-        # fits, so the LLM never sees a POCT-only Hb history when a
-        # HEMATOLOGY value existed.
+    def test_hematology_and_newer_poct_both_survive_hema_first(self) -> None:
+        # PRD §3 / bba.hb_lookup: HEMATOLOGY (LABEXM 290095) is preferred over
+        # POCT (LABEXM 500001) regardless of recency. Under issue #76 Lab is
+        # exempt, so BOTH survive cap pressure (droppable MEDs shed first) and
+        # HEMATOLOGY still emits FIRST — the LLM reads the same primary Hb the
+        # deterministic classifier picked, even though POCT is newer.
         hb_hema = HbRecord(
             timestamp=ANCHOR_DT - timedelta(hours=6),
             value_g_dl=7.5,
@@ -2235,51 +2243,54 @@ class TestHbEmissionAndTruncationPriority:
             source="POCT",
             item_no=1,
         )
-        anchor = OrderAnchor(
-            order_datetime=ANCHOR_DT,
-            hn_hash="x" * 200,
-            an_hash="y" * 200,
-            products=("LPRC",),
+        meds = tuple(
+            _med(offset_hours=-h, drug=f"Drug{h}-" + ("x" * 200))
+            for h in (1, 2, 3, 4, 5, 6)
         )
         bundle = build_evidence_bundle(
-            inputs=EvidenceInputs(anchor=anchor, hb_history=(hb_hema, hb_poct)),
-            char_cap=850,
+            inputs=EvidenceInputs(
+                anchor=_anchor(), hb_history=(hb_hema, hb_poct), meds=meds
+            ),
+            char_cap=1100,
         )
         lab_items = _items_by_source(bundle, "Lab")
-        assert len(lab_items) == 1, "Expected exactly one Hb to survive"
+        med_items = _items_by_source(bundle, "Med")
+        assert len(med_items) < 6, "cap did not force any MED drop; tighten char_cap"
+        assert len(lab_items) == 2, "an exempt Hb row was dropped under cap pressure"
         assert lab_items[0].payload["lab_source"] == "HEMATOLOGY", (
-            "POCT (newer) survived over HEMATOLOGY (older); bundle does "
-            "not honor PRD §3 source preference under cap pressure"
+            "POCT (newer) emitted before HEMATOLOGY (older); bundle does "
+            "not honor PRD §3 source preference"
         )
 
-    def test_hematology_kept_before_poct_under_tight_cap(self) -> None:
-        # PRD §3 / bba.hb_lookup contract: HEMATOLOGY (LABEXM 290095)
-        # is preferred over POCT (LABEXM 500001). For tied
-        # timestamp/value Hb pairs, the bundle must keep HEMATOLOGY
-        # under tight cap pressure — without the source-rank tiebreak,
-        # POCT would survive (alphabetic 'POCT' > 'HEMATOLOGY' under
-        # reverse=True), inverting the source preference.
+    def test_tied_hema_and_poct_both_survive_hema_emits_first(self) -> None:
+        # PRD §3 / bba.hb_lookup contract: HEMATOLOGY is preferred over POCT.
+        # For tied timestamp/value Hb pairs, the source-rank tiebreak in
+        # _hb_sort_key emits HEMATOLOGY first (without it, alphabetic 'POCT' >
+        # 'HEMATOLOGY' under reverse=True would invert the preference). Under
+        # issue #76 both survive cap pressure (Lab exempt); the emission order
+        # is what carries the source preference now.
         hb_hema = HbRecord(
             timestamp=ANCHOR_DT, value_g_dl=7.5, source="HEMATOLOGY", item_no=1
         )
         hb_poct = HbRecord(
             timestamp=ANCHOR_DT, value_g_dl=7.5, source="POCT", item_no=1
         )
-        # Pad anchor to push the bundle near the cap so one Hb must drop.
-        anchor = OrderAnchor(
-            order_datetime=ANCHOR_DT,
-            hn_hash="x" * 200,
-            an_hash="y" * 200,
-            products=("LPRC",),
+        meds = tuple(
+            _med(offset_hours=-h, drug=f"Drug{h}-" + ("x" * 200))
+            for h in (1, 2, 3, 4, 5, 6)
         )
         bundle = build_evidence_bundle(
-            inputs=EvidenceInputs(anchor=anchor, hb_history=(hb_hema, hb_poct)),
-            char_cap=850,
+            inputs=EvidenceInputs(
+                anchor=_anchor(), hb_history=(hb_hema, hb_poct), meds=meds
+            ),
+            char_cap=1100,
         )
         lab_items = _items_by_source(bundle, "Lab")
-        assert len(lab_items) == 1, "Expected exactly one Hb to survive"
+        med_items = _items_by_source(bundle, "Med")
+        assert len(med_items) < 6, "cap did not force any MED drop; tighten char_cap"
+        assert len(lab_items) == 2, "an exempt Hb row was dropped under cap pressure"
         assert lab_items[0].payload["lab_source"] == "HEMATOLOGY", (
-            "POCT survived over HEMATOLOGY; source-rank tiebreak missing"
+            "POCT emitted before HEMATOLOGY; source-rank tiebreak missing"
         )
 
     def test_diagnosis_survives_longest_under_extreme_cap(self) -> None:
@@ -2303,29 +2314,206 @@ class TestHbEmissionAndTruncationPriority:
             "and bottommost in DROP_PRIORITY"
         )
 
-    def test_hb_truncation_preserves_most_recent_hb(self) -> None:
-        # Force whole-item tail-drop by padding the anchor near the cap.
-        # With NEWEST-FIRST emission, the most recent Hb (-1 h) survives;
-        # older labs drop first.
+    def test_all_hb_survive_exempt_most_recent_emits_first(self) -> None:
+        # Issue #76: Lab is exempt, so cap pressure (droppable MEDs shed) never
+        # drops an Hb — all four survive. NEWEST-FIRST emission still leads with
+        # the most recent (-1 h) Hb so the LLM reads the decision-time anemia
+        # signal first.
         hbs = tuple(_hb(offset_hours=-h, value=8.0) for h in (1, 24, 48, 72))
-        anchor = OrderAnchor(
-            order_datetime=ANCHOR_DT,
-            hn_hash="x" * 200,
-            an_hash="y" * 200,
-            products=("LPRC",),
+        meds = tuple(
+            _med(offset_hours=-h, drug=f"Drug{h}-" + ("x" * 200))
+            for h in (1, 2, 3, 4, 5, 6)
         )
         bundle = build_evidence_bundle(
-            inputs=EvidenceInputs(anchor=anchor, hb_history=hbs),
-            char_cap=950,
+            inputs=EvidenceInputs(anchor=_anchor(), hb_history=hbs, meds=meds),
+            char_cap=1400,
         )
         lab_items = _items_by_source(bundle, "Lab")
-        assert len(lab_items) >= 1, "at least one Hb must survive truncation"
+        med_items = _items_by_source(bundle, "Med")
+        assert len(med_items) < 6, "cap did not force any MED drop; tighten char_cap"
+        assert len(lab_items) == 4, "an exempt Hb was dropped under cap pressure"
         # The first surviving Lab item is the most recent (offset -1 h).
         first_offset = round(
             (lab_items[0].timestamp_utc - ANCHOR_DT).total_seconds() / 3600.0,
             1,  # type: ignore[operator]
         )
         assert first_offset == -1.0
+
+
+class TestMedSalienceOrdering:
+    """MED emission is salience-ranked so a pressor outlives saline under cap.
+
+    Issue #76 / Case 2 (REQNO 68012352): the char cap shed a vasopressor while
+    keeping saline/irrigation flushes because MED dropped in arrival order. The
+    salience sort makes CRITICAL drugs (pressors, inotropes, blood products)
+    emit first so the tail-drop sheds MAINTENANCE fluids first."""
+
+    def test_vasopressor_survives_saline_under_cap(self) -> None:
+        # The pressor is the OLDEST med here, so pure newest-first emission
+        # would shed it first under cap pressure. Salience must override
+        # recency: CRITICAL emits ahead of MAINTENANCE regardless of age, so
+        # the pressor survives while saline flushes drop.
+        pressor = _med(offset_hours=-8, drug="Norepinephrine 4mg/250mL")
+        salines = tuple(
+            _med(offset_hours=-h, drug=f"0.9% NSS flush {'x' * 150} #{h}")
+            for h in (1, 2, 3, 4, 5, 6, 7)
+        )
+        bundle = build_evidence_bundle(
+            inputs=EvidenceInputs(anchor=_anchor(), meds=(pressor, *salines)),
+            char_cap=1200,
+        )
+        med_items = _items_by_source(bundle, "Med")
+        survivor_drugs = [m.payload["drug"] for m in med_items]
+        assert len(med_items) < 8, (
+            "cap did not force any MED drop; choose a tighter char_cap"
+        )
+        assert any("Norepinephrine" in d for d in survivor_drugs), (
+            f"the pressor (oldest, CRITICAL) was shed while saline survived; "
+            f"survivors: {survivor_drugs}"
+        )
+
+
+class TestHemodynamicSummaryItem:
+    """The pinned, fact-only Hemodynamic E1 item (issue #76 / Case 2).
+
+    Case 2 (REQNO 68012352) shipped the LLM zero hemodynamic signal: the
+    narrative was suppressed and the MAP-nadir / vasopressor evidence never
+    reached the model. The builder now synthesizes a single pinned summary
+    item from the SHIPPED notes so that evidence leads the bundle and survives
+    truncation — without ever becoming a verdict."""
+
+    def test_hemodynamic_summary_emitted_as_first_item(self) -> None:
+        # A charted MAP nadir + a vasopressor in the shipped notes must surface
+        # as the FIRST evidence item (E1, before the diagnosis), carrying only
+        # facts: the nadir value/source and the agent/dose/source. The item is
+        # a synthesized summary, not one charted note, so timestamp_utc is None.
+        progress = (_progress(offset_hours=-2, text="O: ABP = 84/49 MAP 56"),)
+        focus = (_focus(offset_hours=-1, text="on Levophed 0.1 mcg/kg/min"),)
+        bundle = _build_minimal(progress_notes=progress, focus_notes=focus)
+        first = bundle.items[0]
+        assert first.id == "E1"
+        assert first.source == "Hemodynamic"
+        assert first.timestamp_utc is None
+        payload = first.payload
+        assert payload["map_nadir"] == 56
+        assert payload["map_nadir_source"] == "IPDADMPROGRESS"
+        vasopressors = payload["vasopressors"]
+        assert len(vasopressors) == 1
+        assert vasopressors[0]["agent"] == "norepinephrine"
+        assert vasopressors[0]["dose"] == "0.1 mcg/kg/min"
+        assert vasopressors[0]["source"] == "IPDNRFOCUSDT"
+
+    def test_hemodynamic_payload_is_fact_only(self) -> None:
+        # BINDING GUARDRAIL: hemodynamic status is a supporting factor the LLM
+        # weighs, never a standalone verdict. The payload may carry ONLY the
+        # nadir facts and the vasopressor list — no 'refractory' / 'instability'
+        # / appropriateness language that would pre-judge the transfusion.
+        progress = (_progress(offset_hours=-2, text="O: ABP = 84/49 MAP 56"),)
+        focus = (_focus(offset_hours=-1, text="on Levophed 0.1 mcg/kg/min"),)
+        bundle = _build_minimal(progress_notes=progress, focus_notes=focus)
+        hemo = next(it for it in bundle.items if it.source == "Hemodynamic")
+        allowed = {
+            "map_nadir",
+            "map_nadir_lag_min",
+            "map_nadir_source",
+            "vasopressors",
+        }
+        assert set(hemo.payload) <= allowed, (
+            f"unexpected key in fact-only hemodynamic payload: "
+            f"{set(hemo.payload) - allowed}"
+        )
+        blob = str(hemo.payload).lower()
+        for banned in ("refractory", "instability", "escalat", "appropriate", "indicat"):
+            assert banned not in blob, (
+                f"appropriateness/verdict language '{banned}' leaked into the "
+                f"fact-only hemodynamic payload"
+            )
+
+    def test_no_hemodynamic_item_when_scan_finds_nothing(self) -> None:
+        # The summary is only emitted when the scan found a measured MAP or a
+        # vasopressor. With notes that carry neither, NO Hemodynamic item is
+        # added, so every downstream evidence ID is unchanged.
+        bundle = _build_minimal(
+            progress_notes=(_progress(offset_hours=-1),),
+            focus_notes=(_focus(offset_hours=-1),),
+        )
+        assert all(it.source != "Hemodynamic" for it in bundle.items)
+
+    def test_hemodynamic_and_hb_survive_while_meds_drop_under_cap(self) -> None:
+        # Both load-bearing channels are exempt from whole-item drop: the
+        # pinned hemodynamic summary AND the Hb anemia signal must outlive a
+        # dense MED list under cap pressure. This is the Case 2 fix end-to-end
+        # — the evidence the auditor needs is never the first thing shed.
+        progress = (_progress(offset_hours=-2, text="O: ABP = 84/49 MAP 56"),)
+        focus = (_focus(offset_hours=-1, text="on Levophed 0.1 mcg/kg/min"),)
+        hbs = (_hb(offset_hours=-1, value=7.0),)
+        meds = tuple(
+            _med(offset_hours=-h, drug=f"Drug{h}-" + ("x" * 200))
+            for h in (1, 2, 3, 4, 5, 6, 7, 8)
+        )
+        bundle = build_evidence_bundle(
+            inputs=EvidenceInputs(
+                anchor=_anchor(),
+                progress_notes=progress,
+                focus_notes=focus,
+                hb_history=hbs,
+                meds=meds,
+            ),
+            char_cap=1200,
+        )
+        assert any(it.source == "Hemodynamic" for it in bundle.items), (
+            "the pinned hemodynamic summary was dropped under cap pressure"
+        )
+        assert len(_items_by_source(bundle, "Lab")) == 1, (
+            "the exempt Hb anemia signal was dropped under cap pressure"
+        )
+        assert len(_items_by_source(bundle, "Med")) < 8, (
+            "cap did not force any MED drop; tighten char_cap"
+        )
+
+    def test_exempt_only_set_exceeding_cap_fails_loud(self) -> None:
+        # Lab is exempt, so when the exempt items alone cannot fit the cap there
+        # is nothing left to shed. The builder must fail LOUD rather than ship
+        # an over-budget bundle or silently drop the anemia signal (Rule 12).
+        hbs = tuple(
+            _hb(offset_hours=-h, value=7.0 + i * 0.1)
+            for i, h in enumerate(range(1, 40))
+        )
+        with pytest.raises(EvidenceBundleTooLargeError):
+            build_evidence_bundle(
+                inputs=EvidenceInputs(anchor=_anchor(), hb_history=hbs),
+                char_cap=200,
+            )
+
+
+class TestExemptTierPartition:
+    """EXEMPT_FROM_DROP and DROP_PRIORITY must partition EvidenceSource.
+
+    Every source is classified as exactly one of droppable (in DROP_PRIORITY)
+    or exempt (in EXEMPT_FROM_DROP). If a future source is added to the
+    EvidenceSource literal but neither list, the truncation pass would either
+    silently never drop it (cap could be violated) or skip it from the priority
+    walk — this test is the canary that forces an explicit decision."""
+
+    def test_exempt_and_drop_priority_partition_evidence_source(self) -> None:
+        from typing import get_args
+
+        from bba.evidence_bundle_builder.builder import (
+            DROP_PRIORITY,
+            EXEMPT_FROM_DROP,
+        )
+        from bba.evidence_bundle_builder.models import EvidenceSource
+
+        all_sources = set(get_args(EvidenceSource))
+        droppable = set(DROP_PRIORITY)
+        exempt = set(EXEMPT_FROM_DROP)
+        assert droppable.isdisjoint(exempt), (
+            f"source is both droppable and exempt: {droppable & exempt}"
+        )
+        assert droppable | exempt == all_sources, (
+            f"EvidenceSource not partitioned; unclassified: "
+            f"{all_sources - (droppable | exempt)}"
+        )
 
 
 class TestEmptyInputs:
