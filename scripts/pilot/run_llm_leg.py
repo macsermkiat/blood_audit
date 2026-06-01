@@ -486,8 +486,14 @@ def _vitals_notes_for(
 ) -> tuple[VitalsNote, ...]:
     """Build VitalsNote list from notes for the AN.
 
-    The vitals_extractor regex only emits numbers; the underlying text
-    never leaves the local process, so PHI-bearing notes are safe here.
+    PHI safety is handled by the upstream de-identification gate (issue #76):
+    these notes — and the narrative the bundle ships from them — are treated as
+    already de-identified, so the full SOAP text is forwarded, not just numbers.
+
+    IPDADMPROGRESS carries four free-text SOAP columns (S/O/A/P); MAP and
+    vasopressor evidence can live in any of them, so all four are joined here.
+    Restricting to OBJECTIVE would starve both the LLM narrative and the
+    hemodynamic scan of assessment/plan-charted pressor support.
     """
     out: list[VitalsNote] = []
     for r in progress:
@@ -497,7 +503,17 @@ def _vitals_notes_for(
             _parse_hosxp_date(r.get("PROGDATE") or ""),
             ParsedTimeOfDay(hour=0, minute=0, second=0),
         )
-        text = (r.get("OBJECTIVE") or "").strip()
+        text = "\n".join(
+            filter(
+                None,
+                [
+                    (r.get("SUBJECTIVE") or "").strip(),
+                    (r.get("OBJECTIVE") or "").strip(),
+                    (r.get("ASSESSMENT") or "").strip(),
+                    (r.get("PLAN") or "").strip(),
+                ],
+            )
+        )
         if dt is None or not text:
             continue
         out.append(

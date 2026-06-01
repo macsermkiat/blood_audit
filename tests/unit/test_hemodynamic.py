@@ -212,6 +212,18 @@ class TestVasopressorDetection:
         assert norepi.dose is not None
         assert "0.1" in norepi.dose
 
+    def test_dose_binds_to_adjacent_agent_not_the_prior_one(self) -> None:
+        # "norepinephrine and vasopressin 0.04 units/min": the dose belongs to
+        # vasopressin only. Attributing it to norepinephrine too would fabricate
+        # a dose the chart never recorded and hand the auditor a false fact.
+        summary = scan_hemodynamics(
+            [_note("IPDNRFOCUSDT", -30, "on norepinephrine and vasopressin 0.04 units/min")]
+        )
+        norepi = next(v for v in summary.vasopressors if v.agent == "norepinephrine")
+        vaso = next(v for v in summary.vasopressors if v.agent == "vasopressin")
+        assert norepi.dose is None
+        assert vaso.dose is not None and "0.04" in vaso.dose
+
     def test_dose_is_optional(self) -> None:
         summary = scan_hemodynamics([_note("IPDNRFOCUSDT", -30, "on Levophed")])
         norepi = next(v for v in summary.vasopressors if v.agent == "norepinephrine")

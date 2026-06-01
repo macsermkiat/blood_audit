@@ -163,17 +163,24 @@ def _iter_map_measurements(text: str) -> Iterator[int]:
 
 def _iter_vasopressors(text: str) -> Iterator[tuple[str, str | None]]:
     """Yield ``(canonical_agent, dose_or_none)`` in text order of first appearance."""
-    found: list[tuple[int, str, str | None]] = []
+    matches: list[tuple[int, int, str]] = []
     for pattern, agent in _VASOPRESSOR_PATTERNS:
         for m in pattern.finditer(text):
-            found.append((m.start(), agent, _dose_after(text, m.end())))
-    found.sort(key=lambda f: f[0])
-    for _start, agent, dose in found:
-        yield agent, dose
+            matches.append((m.start(), m.end(), agent))
+    matches.sort(key=lambda f: f[0])
+    for i, (_start, end, agent) in enumerate(matches):
+        next_start = matches[i + 1][0] if i + 1 < len(matches) else len(text)
+        yield agent, _dose_after(text, end, next_start)
 
 
-def _dose_after(text: str, pos: int) -> str | None:
-    """Return the dose phrase immediately following an agent at ``pos``, if any."""
-    window = text[pos : pos + _DOSE_LOOKAHEAD]
+def _dose_after(text: str, pos: int, boundary: int) -> str | None:
+    """Return the dose phrase between ``pos`` and the next agent, if any.
+
+    The search stops at ``boundary`` (the next recognised agent's start, or end
+    of text) so a dose charted against a later drug is never attributed here:
+    "norepinephrine and vasopressin 0.04 units/min" must not fabricate a
+    norepinephrine dose.
+    """
+    window = text[pos : min(pos + _DOSE_LOOKAHEAD, boundary)]
     m = _DOSE_RE.search(window)
     return m.group(0).strip() if m else None

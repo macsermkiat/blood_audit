@@ -70,24 +70,37 @@ uv run python scripts/pilot/build_review.py          # assemble review.html
 open "$BBA_PILOT_WORK_DIR/review.html"
 ```
 
-## What the LLM sees (and doesn't)
+## What the LLM sees
 
-The pilot does **not** send free-text progress / focus notes to the
-Anthropic API. The encrypted bundle has not been through
-[`thai-medical-deid`](https://github.com/macsermkiat/thai-medical-deid)
-and still contains raw PHI in the SOAP narrative. Until that
-pre-processing step is wired into the bundle build, the LLM evidence
-payload is restricted to structured signals:
+As of issue #76 the pilot forwards the **free-text SOAP narrative**
+(IPDADMPROGRESS S/O/A/P and IPDNRFOCUSDT action/response) to the
+Anthropic API, not just regex-extracted numbers. Case 2 / REQNO
+68012352 showed the deterministic-only payload starved the LLM of the
+MAP / vasopressor evidence that lived in the prose, so the narrative now
+ships verbatim and a fact-only hemodynamic summary is synthesised from
+the same notes.
+
+> **PHI precondition — operator-owned gate.** De-identification is a
+> **first gate run OUTSIDE these scripts**. Because the narrative is now
+> sent off-machine, the bundle you point `BBA_PILOT_RAW_DIR` at MUST
+> already have passed
+> [`thai-medical-deid`](https://github.com/macsermkiat/thai-medical-deid)
+> (or an equivalent redactor). The raw encrypted HOSxP export in
+> `../Bloodbank/data/encrypted/` still contains raw PHI in the SOAP
+> columns — running `run_llm_leg.py` against it directly will send PHI
+> to Anthropic. The pilot does not re-run or verify de-identification in
+> process; that is the operator's responsibility before invoking it.
+
+The full LLM evidence payload:
 
 - ICD-10 diagnoses (AN-scoped, deduped, with ICD-10-master descriptions)
+- IPDADMPROGRESS / IPDNRFOCUSDT SOAP narrative (per-source windowed)
+- Hemodynamic summary (MAP nadir + vasopressor agent/dose), synthesised
+  fact-only from the shipped notes
 - Hb history (7-day pre-anchor; tagged closest / 24h-min / 48h-min)
 - Plt, WBC, Neutrophils CBC (±1 day window)
 - Meds list (±1 day window)
-- Vital-sign numbers extracted via regex from the notes locally
-
-A `vitals_extractor` regex pass over the PHI-bearing notes runs in the
-local process and emits only numbers (SBP, DBP, HR, RR, BT) into the
-bundle, so the narrative never leaves the machine.
+- Vital-sign numbers extracted via regex (SBP, DBP, HR, RR, BT)
 
 ## Weighting policy injected into the LLM prompt
 
