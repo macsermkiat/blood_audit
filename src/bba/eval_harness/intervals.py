@@ -134,6 +134,11 @@ def wilson_ci(
     denom = 1.0 + z2 / n
     center = (p_hat + z2 / (2.0 * n)) / denom
     margin = (z * math.sqrt(p_hat * (1.0 - p_hat) / n + z2 / (4.0 * n * n))) / denom
-    lower = max(0.0, center - margin)
-    upper = min(1.0, center + margin)
+    # The Wilson interval always contains the point estimate p_hat in exact
+    # arithmetic, but at the boundaries (successes == 0 or trials) center - margin
+    # can round to a tiny epsilon on the wrong side of p_hat (e.g. 5.5e-17 > 0.0).
+    # Clamp the bounds around p_hat so the lower <= point <= upper invariant holds
+    # for downstream consumers; this only ever corrects float noise.
+    lower = max(0.0, min(p_hat, center - margin))
+    upper = min(1.0, max(p_hat, center + margin))
     return WilsonInterval(point=p_hat, lower=lower, upper=upper, confidence=confidence)
