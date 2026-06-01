@@ -2423,7 +2423,13 @@ class TestHemodynamicSummaryItem:
             f"{set(hemo.payload) - allowed}"
         )
         blob = str(hemo.payload).lower()
-        for banned in ("refractory", "instability", "escalat", "appropriate", "indicat"):
+        for banned in (
+            "refractory",
+            "instability",
+            "escalat",
+            "appropriate",
+            "indicat",
+        ):
             assert banned not in blob, (
                 f"appropriateness/verdict language '{banned}' leaked into the "
                 f"fact-only hemodynamic payload"

@@ -100,7 +100,9 @@ class TestMapNadir:
     def test_abp_notation_does_not_block_map_detection(self) -> None:
         # The legacy BP regex is anchored on \bBP and cannot see ABP; the
         # diastolic 49 must never be misread as the MAP either.
-        summary = scan_hemodynamics([_note("IPDADMPROGRESS", -30, "ABP = 84/49 MAP 56")])
+        summary = scan_hemodynamics(
+            [_note("IPDADMPROGRESS", -30, "ABP = 84/49 MAP 56")]
+        )
         assert summary.map_nadir == 56
 
     def test_target_map_is_not_a_measurement(self) -> None:
@@ -217,7 +219,13 @@ class TestVasopressorDetection:
         # vasopressin only. Attributing it to norepinephrine too would fabricate
         # a dose the chart never recorded and hand the auditor a false fact.
         summary = scan_hemodynamics(
-            [_note("IPDNRFOCUSDT", -30, "on norepinephrine and vasopressin 0.04 units/min")]
+            [
+                _note(
+                    "IPDNRFOCUSDT",
+                    -30,
+                    "on norepinephrine and vasopressin 0.04 units/min",
+                )
+            ]
         )
         norepi = next(v for v in summary.vasopressors if v.agent == "norepinephrine")
         vaso = next(v for v in summary.vasopressors if v.agent == "vasopressin")

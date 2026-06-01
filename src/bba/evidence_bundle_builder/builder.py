@@ -35,7 +35,11 @@ from bba.evidence_bundle_builder.ranking import (
 )
 from bba.evidence_bundle_builder.salience import med_salience
 from bba.vitals_extractor.hemodynamic import scan_hemodynamics
-from bba.vitals_extractor.models import HemodynamicSummary, VasopressorMention, VitalsNote
+from bba.vitals_extractor.models import (
+    HemodynamicSummary,
+    VasopressorMention,
+    VitalsNote,
+)
 
 
 def _nfc(s: str) -> str:
