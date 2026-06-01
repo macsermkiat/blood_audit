@@ -232,6 +232,21 @@ class TestVasopressorDetection:
         assert norepi.dose is None
         assert vaso.dose is not None and "0.04" in vaso.dose
 
+    def test_hyphenated_noradrenaline_is_only_norepinephrine(self) -> None:
+        # "nor-adrenaline" / "nor adrenaline" matches the norepinephrine token
+        # AND its trailing "adrenaline" (epinephrine). The contained match must
+        # be suppressed so the same characters never fabricate a second pressor
+        # or steal its dose -- a clinical-safety guardrail like the NAD case.
+        for text in ("on nor-adrenaline drip", "on nor adrenaline drip"):
+            summary = scan_hemodynamics([_note("IPDNRFOCUSDT", -30, text)])
+            assert {v.agent for v in summary.vasopressors} == {"norepinephrine"}, text
+        dosed = scan_hemodynamics(
+            [_note("IPDNRFOCUSDT", -30, "on nor-adrenaline 0.1 mcg/kg/min")]
+        )
+        assert {v.agent for v in dosed.vasopressors} == {"norepinephrine"}
+        norepi = dosed.vasopressors[0]
+        assert norepi.dose is not None and "0.1" in norepi.dose
+
     def test_dose_is_optional(self) -> None:
         summary = scan_hemodynamics([_note("IPDNRFOCUSDT", -30, "on Levophed")])
         norepi = next(v for v in summary.vasopressors if v.agent == "norepinephrine")

@@ -163,11 +163,24 @@ def _iter_map_measurements(text: str) -> Iterator[int]:
 
 def _iter_vasopressors(text: str) -> Iterator[tuple[str, str | None]]:
     """Yield ``(canonical_agent, dose_or_none)`` in text order of first appearance."""
-    matches: list[tuple[int, int, str]] = []
+    raw: list[tuple[int, int, str]] = []
     for pattern, agent in _VASOPRESSOR_PATTERNS:
         for m in pattern.finditer(text):
-            matches.append((m.start(), m.end(), agent))
-    matches.sort(key=lambda f: f[0])
+            raw.append((m.start(), m.end(), agent))
+    # Longest-match-wins overlap suppression. A hyphenated/spaced
+    # "nor-adrenaline" matches BOTH the norepinephrine token and its trailing
+    # "adrenaline" (epinephrine); without this the same characters fabricate a
+    # second pressor and can even capture the dose. Sorting longest-first at each
+    # start and dropping any match that begins inside an already-kept span keeps
+    # only the maximal agent token.
+    raw.sort(key=lambda f: (f[0], -f[1]))
+    matches: list[tuple[int, int, str]] = []
+    covered_end = -1
+    for start, end, agent in raw:
+        if start < covered_end:
+            continue
+        matches.append((start, end, agent))
+        covered_end = end
     for i, (_start, end, agent) in enumerate(matches):
         next_start = matches[i + 1][0] if i + 1 < len(matches) else len(text)
         yield agent, _dose_after(text, end, next_start)

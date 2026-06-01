@@ -493,7 +493,10 @@ def _vitals_notes_for(
     IPDADMPROGRESS carries four free-text SOAP columns (S/O/A/P); MAP and
     vasopressor evidence can live in any of them, so all four are joined here.
     Restricting to OBJECTIVE would starve both the LLM narrative and the
-    hemodynamic scan of assessment/plan-charted pressor support.
+    hemodynamic scan of assessment/plan-charted pressor support. Each column is
+    prefixed with its SOAP label so the builder's ``parse_soap_sections`` can
+    re-split them; an unlabelled join would collapse to a single OBJECTIVE block
+    and let priority-aware truncation drop the assessment/plan with it.
     """
     out: list[VitalsNote] = []
     for r in progress:
@@ -503,17 +506,13 @@ def _vitals_notes_for(
             _parse_hosxp_date(r.get("PROGDATE") or ""),
             ParsedTimeOfDay(hour=0, minute=0, second=0),
         )
-        text = "\n".join(
-            filter(
-                None,
-                [
-                    (r.get("SUBJECTIVE") or "").strip(),
-                    (r.get("OBJECTIVE") or "").strip(),
-                    (r.get("ASSESSMENT") or "").strip(),
-                    (r.get("PLAN") or "").strip(),
-                ],
-            )
+        soap = (
+            ("Subjective", (r.get("SUBJECTIVE") or "").strip()),
+            ("Objective", (r.get("OBJECTIVE") or "").strip()),
+            ("Assessment", (r.get("ASSESSMENT") or "").strip()),
+            ("Plan", (r.get("PLAN") or "").strip()),
         )
+        text = "\n".join(f"{label}: {value}" for label, value in soap if value)
         if dt is None or not text:
             continue
         out.append(
