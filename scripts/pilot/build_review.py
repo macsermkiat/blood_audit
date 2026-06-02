@@ -160,6 +160,33 @@ def fmt_unitstat(code: Any) -> str:
     return f"{c} — {label}" if label else c
 
 
+def fmt_upcoming_procedure(raw: Any) -> str | None:
+    """Render the nearest upcoming procedure as days + hours.
+
+    Returns ``None`` when the procedure is more than 7 days ahead (not
+    clinically relevant to this order) so the caller can omit the line.
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    try:
+        hours = float(s)
+    except ValueError:
+        return esc(s)
+    if hours > 24 * 7:
+        return None
+    sign = "-" if hours < 0 else ""
+    total = abs(hours)
+    days = int(total // 24)
+    rem_h = total - days * 24
+    if days:
+        rem = round(rem_h)
+        disp = f"{days} d" if rem == 0 else f"{days} d {rem} h"
+    else:
+        disp = f"{rem_h:.1f} h"
+    return sign + disp
+
+
 def parse_hosxp_date(raw: Any) -> date | None:
     if raw is None:
         return None
@@ -388,6 +415,76 @@ def render_negative(items: list[dict[str, Any]]) -> str:
         return "<p class='empty'>(none)</p>"
     lis = "".join(f"<li>{esc(it.get('text', ''))}</li>" for it in items)
     return f"<ul>{lis}</ul>"
+
+
+def _inline_md(text: str) -> str:
+    """Escape, then apply minimal inline markdown (``**bold**``)."""
+    return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", esc(text))
+
+
+def _format_line(line: str) -> str:
+    """Format a body line: bold a leading ``LABEL:`` prefix if present,
+    then apply inline markdown."""
+    m = re.match(r"^([^:\n*]{1,70}):\s+(\S.*)$", line)
+    if m:
+        return f"<b>{_inline_md(m.group(1).strip())}:</b> {_inline_md(m.group(2).strip())}"
+    return _inline_md(line)
+
+
+def render_reasoning(text: Any) -> str:
+    """Render LLM reasoning prose as readable, structured HTML.
+
+    The model emits ``LABEL:`` / ``**markdown**`` section leads, numbered
+    and bulleted findings, and blank-line-separated paragraphs in one
+    string. Escaping it into a single ``<p>`` collapses everything into a
+    wall of text, so split it into headings, lists, and paragraphs.
+    """
+    body = str(text or "").strip()
+    if not body:
+        return "<p class='empty'>(none)</p>"
+    out: list[str] = []
+    open_tag: str | None = None  # "ol" | "ul" while a list is open
+
+    def close_list() -> None:
+        nonlocal open_tag
+        if open_tag:
+            out.append(f"</{open_tag}>")
+            open_tag = None
+
+    def open_list(tag: str) -> None:
+        nonlocal open_tag
+        if open_tag != tag:
+            close_list()
+            cls = "reasoning-list" if tag == "ol" else "reasoning-bullets"
+            out.append(f"<{tag} class='{cls}'>")
+            open_tag = tag
+
+    for block in re.split(r"\n\s*\n", body):
+        for raw in block.split("\n"):
+            line = raw.strip()
+            if not line:
+                continue
+            num = re.match(r"^\d+[.)]\s+(.*)$", line)
+            bullet = re.match(r"^([-•]|\*(?!\*))\s+(.*)$", line)
+            if num:
+                open_list("ol")
+                out.append(f"<li>{_format_line(num.group(1))}</li>")
+            elif bullet:
+                open_list("ul")
+                out.append(f"<li>{_format_line(bullet.group(2))}</li>")
+            else:
+                close_list()
+                md_hdr = re.match(r"^\*\*(.+?)\*\*:?$", line)
+                if md_hdr:
+                    out.append(
+                        f"<p class='reasoning-h'>{esc(md_hdr.group(1).rstrip(':'))}</p>"
+                    )
+                elif line.endswith(":") and len(line) <= 80:
+                    out.append(f"<p class='reasoning-h'>{esc(line[:-1])}</p>")
+                else:
+                    out.append(f"<p>{_format_line(line)}</p>")
+        close_list()
+    return f"<div class='reasoning'>{''.join(out)}</div>"
 
 
 def _short(s: str, n: int = 16) -> str:
@@ -887,8 +984,6 @@ def main() -> None:
         )
 
         admission_date = (bdv.get("BDVSTDATE") or "").split(" ")[0] or "—"
-        for d in diag_rows:
-            d["Admission date"] = admission_date
         ebl_summary = (
             "; ".join(dict.fromkeys(r["finding"] for r in periop_evidence))
             if periop_evidence
@@ -901,10 +996,8 @@ def main() -> None:
             or _returned_blood_datetime(trans_rows)
             or "—"
         )
-        parts: list[str] = [
-            f"<section class='case' id='case-{i}'>",
-            f"<h2>Case {i} — REQNO {esc(reqno)}</h2>",
-            "<div class='meta'>",
+        upcoming_disp = fmt_upcoming_procedure(det.get("upcoming_procedure_hours"))
+        meta_items = [
             f"<div><b>HN:</b> <code>{esc(hn)}</code></div>",
             f"<div><b>AN:</b> <code>{esc(an)}</code></div>",
             f"<div><b>Order anchor:</b> {esc(anchor_date)} {esc(anchor_time)}</div>",
@@ -918,8 +1011,17 @@ def main() -> None:
             f"({esc(det.get('hb_anchor_reason') or 'order_datetime')})</div>",
             f"<div><b>Cohort:</b> {esc(det.get('cohort_label') or '—')} "
             f"(threshold {esc(det.get('cohort_threshold') or 'n/a')})</div>",
-            f"<div><b>Upcoming procedure:</b> {esc(det.get('upcoming_procedure_hours') or '—')} h</div>",
-            f"<div><b>EBL evidence:</b> {esc(ebl_summary)}</div>",
+        ]
+        if upcoming_disp is not None:
+            meta_items.append(
+                f"<div><b>Upcoming procedure:</b> {upcoming_disp}</div>"
+            )
+        meta_items.append(f"<div><b>EBL evidence:</b> {esc(ebl_summary)}</div>")
+        parts: list[str] = [
+            f"<section class='case' id='case-{i}'>",
+            f"<h2>Case {i} — REQNO {esc(reqno)}</h2>",
+            "<div class='meta'>",
+            *meta_items,
             "</div>",
         ]
 
@@ -962,10 +1064,10 @@ def main() -> None:
             parts.append("<h4>Negative evidence</h4>")
             parts.append(render_negative(llm_block["negative_evidence"]))
             parts.append("<details><summary><b>Reasoning — English</b></summary>")
-            parts.append(f"<p>{esc(llm_block['reasoning_en'])}</p>")
+            parts.append(render_reasoning(llm_block["reasoning_en"]))
             parts.append("</details>")
             parts.append("<details><summary><b>Reasoning — ภาษาไทย</b></summary>")
-            parts.append(f"<p>{esc(llm_block['reasoning_th'])}</p>")
+            parts.append(render_reasoning(llm_block["reasoning_th"]))
             parts.append("</details>")
         elif llm:
             parts.append(
@@ -1029,14 +1131,13 @@ def main() -> None:
                 [
                     {
                         "BDTYPE (product)": r.get("BDTYPE", ""),
-                        "ITEMNO": r.get("ITEMNO", ""),
                         "UNITAMT": r.get("UNITAMT", ""),
                         "USEDATE": (r.get("USEDATE") or "").split(" ")[0],
                         "USETIME": fmt_time(r.get("USETIME")),
                     }
                     for r in line_items
                 ],
-                ["BDTYPE (product)", "ITEMNO", "UNITAMT", "USEDATE", "USETIME"],
+                ["BDTYPE (product)", "UNITAMT", "USEDATE", "USETIME"],
             )
         )
         if related_line_items:
@@ -1047,7 +1148,6 @@ def main() -> None:
                         {
                             "REQNO": r.get("REQNO", ""),
                             "BDTYPE (product)": r.get("BDTYPE", ""),
-                            "ITEMNO": r.get("ITEMNO", ""),
                             "UNITAMT": r.get("UNITAMT", ""),
                             "USEDATE": (r.get("USEDATE") or "").split(" ")[0],
                             "USETIME": fmt_time(r.get("USETIME")),
@@ -1057,7 +1157,6 @@ def main() -> None:
                     [
                         "REQNO",
                         "BDTYPE (product)",
-                        "ITEMNO",
                         "UNITAMT",
                         "USEDATE",
                         "USETIME",
@@ -1108,13 +1207,14 @@ def main() -> None:
         parts.append(
             "<p class='empty'>Per-row charting date is not recoverable from "
             "the source bundle (HOSxP <code>V_DATE</code> is Excel-corrupted "
-            "to <code>00:00.0</code> in every row). The Admission date column "
-            "is the order's admission date as a temporal proxy.</p>"
+            "to <code>00:00.0</code> in every row); the admission date shown "
+            "in the section title above is the order's admission date, used "
+            "as a temporal proxy.</p>"
         )
         parts.append(
             render_table(
                 diag_rows,
-                ["ICD10", "Description", "Type", "Admission date", "ICD10WHO"],
+                ["ICD10", "Description", "Type", "ICD10WHO"],
             )
         )
         parts.append("</details>")
@@ -1180,7 +1280,7 @@ def main() -> None:
         parts.append(
             render_table(
                 periop_evidence,
-                ["datetime", "source", "item", "finding", "quote"],
+                ["datetime", "source", "finding", "quote"],
             )
         )
         parts.append("</details>")
@@ -1355,6 +1455,11 @@ def main() -> None:
     pre { white-space: pre-wrap; word-wrap: break-word; font-size: 12px;
           background: #fff; padding: 6px; margin: 4px 0; border: 1px solid #eee; }
     .empty { color: #888; font-style: italic; }
+    .reasoning { font-size: 13px; }
+    .reasoning p { margin: 6px 0; }
+    .reasoning-h { font-weight: 700; color: #2a2a2a; margin: 12px 0 4px; }
+    .reasoning-list, .reasoning-bullets { margin: 6px 0; padding-left: 24px; }
+    .reasoning-list li, .reasoning-bullets li { margin: 4px 0; }
     ul li { margin: 2px 0; }
     nav { background: #fafafa; padding: 12px; border: 1px solid #ddd;
           margin-bottom: 20px; }
