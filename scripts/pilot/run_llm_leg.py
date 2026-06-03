@@ -84,15 +84,16 @@ from bba.evidence_bundle_builder import (
     VitalsRecord,
     build_evidence_bundle,
 )
-from bba.hb_lookup import HbObservation, lookup_hb, parse_hb_value
+from bba.hb_lookup import HbObservation, parse_hb_value, resolve_hb_with_fallback
 from bba.ingest.date_parser import parse_kcmh_english_date
 from bba.ingest.models import ParsedTimeOfDay
-from bba.ingest.row_timestamp import RowTimestamp
-from bba.ingest.time_parser import parse_hosxp_time
 import bba.llm_client.models as _llm_models
 from bba.llm_client import AnthropicBatchTransport, BatchSubmissionRequest
 from bba.prompt_builder import EvidenceChunk, PromptBuildRequest, build_prompt
 from bba.vitals_extractor import VitalsNote, extract_vitals
+
+from _anchor_candidates import build_anchor_candidates
+from _hosxp_dt import _combine, _parse_hosxp_date, _parse_time
 
 # Runtime extension of ALLOWED_MODELS so the BatchSubmissionResult
 # parser inside bba.llm_client.transport accepts the floating aliases
@@ -231,31 +232,6 @@ def _read_preferred_optional_csv(*names: str) -> list[dict[str, str]]:
             with path.open(encoding="utf-8", newline="") as fh:
                 return list(csv.DictReader(fh))
     return []
-
-
-def _parse_hosxp_date(raw: str) -> date | None:
-    if not raw:
-        return None
-    head = raw.split(" ", 1)[0]
-    try:
-        return date.fromisoformat(head)
-    except ValueError:
-        return None
-
-
-def _parse_time(raw: str | None) -> ParsedTimeOfDay | None:
-    if not raw:
-        return None
-    s = str(raw).strip()
-    if s.isdigit() and 1 <= len(s) <= 6:
-        s = s.zfill(6)
-    return parse_hosxp_time(s).value
-
-
-def _combine(d: date | None, t: ParsedTimeOfDay | None) -> datetime | None:
-    if d is None or t is None:
-        return None
-    return RowTimestamp.from_parts(d, t, tz=TZ_LOCAL).utc
 
 
 def _icd_codes(*raws: str | None) -> tuple[str, ...]:
@@ -792,6 +768,11 @@ def _build_inputs():
             (r.get("BDTYPE") or "").strip()
         )
 
+    bdvst_by_reqno = {r["REQNO"]: r for r in bdvst}
+    candidates_by_reqno = build_anchor_candidates(
+        bdvstdt_rows=bdvstdt, bdvst_by_reqno=bdvst_by_reqno
+    )
+
     diag_by_an: dict[str, list[str]] = {}
     diag_name_by_code: dict[str, str] = {}
     for r in diag:
@@ -839,6 +820,7 @@ def _build_inputs():
         progress,
         focus,
         diag_name_by_code,
+        candidates_by_reqno,
     )
 
 
@@ -862,6 +844,7 @@ def main() -> None:
         progress,
         focus,
         diag_name_by_code,
+        candidates_by_reqno,
     ) = _build_inputs()
 
     fr = build_audit_orders(inputs, AuditOrdersConfig(code_version=CODE_VERSION))
@@ -871,7 +854,21 @@ def main() -> None:
 
     for order in fr.included:
         hb_obs = _hb_observations(lab, order.an)
-        hb = lookup_hb(observations=hb_obs, anchor_utc=order.order_datetime)
+        hb, _hb_anchor_display, _hb_anchor_reason = resolve_hb_with_fallback(
+            observations=hb_obs,
+            order_datetime=order.order_datetime,
+            candidates=candidates_by_reqno.get(order.reqno, []),
+        )
+        # When the resolver anchored on a post-REQTIME draw (the fallback
+        # ladder), that draw is the Hb that routed this case to the LLM. Carry
+        # its timestamp so the evidence bundle's Hb upper bound includes it;
+        # otherwise the model adjudicates without the triggering value. None
+        # for the order-time path keeps the original pre-order-only window.
+        hb_bundle_anchor = (
+            hb.datetime_utc
+            if hb.datetime_utc is not None and hb.datetime_utc > order.order_datetime
+            else None
+        )
 
         op_events = _op_events(
             iptsumoprt, ipddchsumoprt, incpt, optract_dict, icd9_dict, order.an
@@ -973,6 +970,9 @@ def main() -> None:
             DiagnosisRecord(icd10=code, description=diag_name_by_code.get(code))
             for code in dict.fromkeys(order.diagnosis_codes)
         )
+        hb_hi = (
+            hb_bundle_anchor if hb_bundle_anchor is not None else order.order_datetime
+        )
         hb_for_bundle = tuple(
             HbRecord(
                 timestamp=o.datetime_utc,
@@ -981,7 +981,7 @@ def main() -> None:
                 item_no=o.item_no,
             )
             for o in hb_obs
-            if hb_lo <= o.datetime_utc <= order.order_datetime
+            if hb_lo <= o.datetime_utc <= hb_hi
         )
         meds_in_window = sorted(
             [m for m in med_events if notes_lo <= m.timestamp < notes_hi],
@@ -1027,6 +1027,7 @@ def main() -> None:
                     hn_hash=hn_hash,
                     an_hash=an_hash,
                     products=order.products_ordered,
+                    hb_anchor=hb_bundle_anchor,
                 ),
                 diagnoses=diagnoses,
                 progress_notes=progress_for_bundle,
@@ -1270,17 +1271,29 @@ def main() -> None:
         poll_interval_seconds=20.0,
         max_wait_seconds=3600.0,
     )
-    print(
-        f"\nSubmitting batch of {len(submissions)} requests to "
-        f"Anthropic (model={MODEL_ID})..."
-    )
     t0 = time.time()
-    batch_id = transport.submit_batch_only(
-        model=MODEL_ID,
-        requests=submissions,
-        prompt_cache_enabled=True,
-    )
-    print(f"  batch_id = {batch_id}")
+    # Resume path: if BBA_PILOT_BATCH_ID is set, re-attach to an already-
+    # submitted batch instead of creating a new one. The deterministic
+    # context build above is reproducible, so ``submissions`` matches the
+    # original submission set and fetch_batch_results can rebuild each
+    # result's request_json. Use this after a Ctrl+C during polling so the
+    # in-flight batch is not abandoned and re-billed.
+    resume_batch_id = os.environ.get("BBA_PILOT_BATCH_ID")
+    if resume_batch_id:
+        batch_id = resume_batch_id
+        print(f"  resuming existing batch_id = {batch_id} (skipping submit)")
+    else:
+        print(
+            f"\nSubmitting batch of {len(submissions)} requests to "
+            f"Anthropic (model={MODEL_ID})..."
+        )
+        batch_id = transport.submit_batch_only(
+            model=MODEL_ID,
+            requests=submissions,
+            prompt_cache_enabled=True,
+        )
+        print(f"  batch_id = {batch_id}")
+        print(f"  (resume with: BBA_PILOT_BATCH_ID={batch_id})")
     print("  polling (this can take a while)...")
     response = transport.fetch_batch_results(
         batch_id,

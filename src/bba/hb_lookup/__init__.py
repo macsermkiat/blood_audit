@@ -8,6 +8,7 @@ The module feeds :mod:`bba.deterministic_classifier` (#8): the
 ``delta_hb_bypass`` flag and the freshness tier directly drive Hb-tier rules.
 """
 
+from bba.hb_lookup.anchor import AnchorCandidate, resolve_hb_with_fallback
 from bba.hb_lookup.lookup import lookup_hb
 from bba.hb_lookup.models import (
     DeltaHbWindow,
@@ -19,6 +20,7 @@ from bba.hb_lookup.models import (
 from bba.hb_lookup.parse import parse_hb_value
 
 __all__ = [
+    "AnchorCandidate",
     "DeltaHbWindow",
     "HbFreshness",
     "HbLookupResult",
@@ -26,4 +28,5 @@ __all__ = [
     "HbSource",
     "lookup_hb",
     "parse_hb_value",
+    "resolve_hb_with_fallback",
 ]

@@ -38,11 +38,18 @@ from bba.cohort_detector import (
 from bba.deterministic_classifier import classify
 from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import ClassifierInputs
-from bba.hb_lookup import HbObservation, lookup_hb, parse_hb_value
+from bba.hb_lookup import HbObservation, parse_hb_value, resolve_hb_with_fallback
 from bba.ingest.date_parser import parse_kcmh_english_date
 from bba.ingest.models import ParsedTimeOfDay
-from bba.ingest.row_timestamp import RowTimestamp
-from bba.ingest.time_parser import parse_hosxp_time
+
+from _anchor_candidates import build_anchor_candidates
+from _hosxp_dt import (
+    _combine,
+    _fmt_hosxp_time,
+    _fmt_local_datetime,
+    _parse_hosxp_date,
+    _parse_time,
+)
 
 WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
 BUNDLE = WORK / "bundle"
@@ -53,7 +60,6 @@ BUNDLE = WORK / "bundle"
 ENABLE_MISSING_HB_POSITIVE_EVIDENCE = os.environ.get(
     "BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE", ""
 ).strip().lower() in ("1", "true", "yes", "on")
-TZ_LOCAL = "Asia/Bangkok"
 HB_HEM_CODE = "290095"
 HB_POCT_CODE = "500001"
 ANC_CODE = "290093"
@@ -135,53 +141,6 @@ def _read_preferred_optional_csv(*names: str) -> list[dict[str, str]]:
             with path.open(encoding="utf-8", newline="") as fh:
                 return list(csv.DictReader(fh))
     return []
-
-
-def _parse_hosxp_date(raw: str) -> date | None:
-    if not raw:
-        return None
-    head = raw.split(" ", 1)[0]
-    try:
-        return date.fromisoformat(head)
-    except ValueError:
-        return None
-
-
-def _parse_time(raw: str | None) -> ParsedTimeOfDay | None:
-    if not raw:
-        return None
-    stripped = str(raw).strip()
-    if stripped.isdigit() and 1 <= len(stripped) <= 6:
-        stripped = stripped.zfill(6)
-    return parse_hosxp_time(stripped).value
-
-
-def _fmt_hosxp_time(raw: str | None) -> str:
-    """Render HOSxP integer-like time cells as HH:MM:SS."""
-    if raw is None:
-        return ""
-    stripped = str(raw).strip()
-    if not stripped:
-        return ""
-    if stripped.isdigit() and 1 <= len(stripped) <= 6:
-        padded = stripped.zfill(6)
-        return f"{padded[:2]}:{padded[2:4]}:{padded[4:6]}"
-    return stripped
-
-
-def _fmt_local_datetime(date_raw: str | None, time_raw: str | None = None) -> str:
-    """Render split HOSxP date/time cells as a local datetime string."""
-    d = (date_raw or "").strip().split(" ")[0]
-    t = _fmt_hosxp_time(time_raw)
-    if d and t:
-        return f"{d} {t}"
-    return d or t or ""
-
-
-def _combine(d: date | None, t: ParsedTimeOfDay | None) -> datetime | None:
-    if d is None or t is None:
-        return None
-    return RowTimestamp.from_parts(d, t, tz=TZ_LOCAL).utc
 
 
 def _icd_codes(*raws: str | None) -> tuple[str, ...]:
@@ -519,25 +478,9 @@ def main() -> None:
     # date-only USEDATE marker so the review page does not hide date evidence.
     use_dt_by_reqno: dict[str, str] = {}
     exact_issue_anchor_by_reqno: dict[str, datetime] = {}
-    # Blood-bank visit/request timestamp is not the issue time, but it is a
-    # useful fallback Hb anchor when the formal order timestamp precedes labs
-    # by only a few minutes.
-    blood_bank_anchor_by_reqno: dict[str, datetime] = {}
-    blood_bank_anchor_display_by_reqno: dict[str, str] = {}
     for r in bdvstdt:
         reqno = r["REQNO"]
         products_by_reqno.setdefault(reqno, []).append((r.get("BDTYPE") or "").strip())
-        visit_dt = _combine(
-            _parse_hosxp_date(r.get("BDVSTDATE") or ""),
-            _parse_time(r.get("BDVSTTIME") or ""),
-        )
-        if visit_dt is not None:
-            current = blood_bank_anchor_by_reqno.get(reqno)
-            if current is None or visit_dt < current:
-                blood_bank_anchor_by_reqno[reqno] = visit_dt
-                blood_bank_anchor_display_by_reqno[reqno] = _fmt_local_datetime(
-                    r.get("BDVSTDATE"), r.get("BDVSTTIME")
-                )
 
         parent = bdvst_by_reqno.get(reqno, {})
         pick_date = (parent.get("PICKDATE") or "").strip().split(" ")[0]
@@ -623,35 +566,18 @@ def main() -> None:
     )
     print("=" * 100)
 
+    candidates_by_reqno = build_anchor_candidates(
+        bdvstdt_rows=bdvstdt, bdvst_by_reqno=bdvst_by_reqno
+    )
+
     rows: list[dict[str, Any]] = []
     for order in filter_result.included:
         hb_obs = _build_hb_observations(lab, order.an)
-        hb = lookup_hb(observations=hb_obs, anchor_utc=order.order_datetime)
-        hb_anchor_display = ""
-        hb_anchor_reason = "order_datetime"
-        if hb.value_g_dl is None:
-            fallback_candidates = (
-                (
-                    exact_issue_anchor_by_reqno.get(order.reqno),
-                    use_dt_by_reqno.get(order.reqno, ""),
-                    "issue_datetime",
-                ),
-                (
-                    blood_bank_anchor_by_reqno.get(order.reqno),
-                    blood_bank_anchor_display_by_reqno.get(order.reqno, ""),
-                    "blood_bank_visit_fallback",
-                ),
-            )
-            for fallback_anchor, display, reason in fallback_candidates:
-                if fallback_anchor is None or fallback_anchor < order.order_datetime:
-                    continue
-                fallback_hb = lookup_hb(observations=hb_obs, anchor_utc=fallback_anchor)
-                if fallback_hb.value_g_dl is None:
-                    continue
-                hb = fallback_hb
-                hb_anchor_display = display
-                hb_anchor_reason = reason
-                break
+        hb, hb_anchor_display, hb_anchor_reason = resolve_hb_with_fallback(
+            observations=hb_obs,
+            order_datetime=order.order_datetime,
+            candidates=candidates_by_reqno.get(order.reqno, []),
+        )
         op_events = _build_op_events(
             iptsumoprt, ipddchsumoprt, incpt, optract_dict, icd9_dict, order.an
         )

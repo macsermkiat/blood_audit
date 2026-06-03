@@ -184,6 +184,16 @@ class OrderAnchor(BaseModel):
     the bundle's JSON so the audit chain is reconstructible — the bundle
     builder does NOT use them to filter records (the caller pre-filters,
     mirroring :mod:`bba.hb_lookup`).
+
+    ``hb_anchor`` is the Hb-lookup anchor when it differs from
+    ``order_datetime``. The shared resolver (:func:`bba.hb_lookup.
+    resolve_hb_with_fallback`) can anchor the Hb on a post-order draw (a lab
+    drawn minutes after REQTIME — see ``docs/handoff-hb-anchor-unification``).
+    When that happens the triggering Hb is *after* ``order_datetime``, so the
+    default ``h.timestamp <= order_datetime`` Hb window would drop the very
+    value that routed the case to the LLM. Set ``hb_anchor`` to that draw's
+    timestamp so the bundle's Hb upper bound includes it; leave ``None`` for
+    the order-time path (the common case) to keep the original window.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -192,6 +202,7 @@ class OrderAnchor(BaseModel):
     hn_hash: str
     an_hash: str
     products: tuple[str, ...]
+    hb_anchor: UTCDatetime | None = None
 
 
 class DiagnosisRecord(BaseModel):

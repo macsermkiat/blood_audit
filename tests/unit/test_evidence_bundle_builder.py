@@ -802,6 +802,60 @@ class TestHbHistoryWindow:
         assert len(_items_by_source(bundle, "Lab")) == 1
 
 
+class TestHbFallbackAnchor:
+    """``OrderAnchor.hb_anchor`` extends the Hb upper bound to a post-order draw.
+
+    Pins the contract the divergence-fix follow-up needs (see
+    ``docs/handoff-hb-anchor-unification``): when the shared resolver anchors
+    the Hb on a draw minutes *after* REQTIME, that draw is what routed the
+    case to the LLM. Without ``hb_anchor`` the default ``<= order_datetime``
+    window drops it and the model can't cite the value that triggered review.
+    """
+
+    def _anchor_with_hb(self, *, hb_offset_hours: float) -> OrderAnchor:
+        return OrderAnchor(
+            order_datetime=ANCHOR_DT,
+            hn_hash="hn-aaa",
+            an_hash="an-bbb",
+            products=("LPRC",),
+            hb_anchor=ANCHOR_DT + timedelta(hours=hb_offset_hours),
+        )
+
+    def test_post_order_hb_kept_when_hb_anchor_set(self) -> None:
+        # The fallback-anchored draw (+5 min) is the trigger; it must appear.
+        bundle = _build_minimal(
+            anchor=self._anchor_with_hb(hb_offset_hours=5.0 / 60.0),
+            hb_history=(_hb(offset_hours=5.0 / 60.0, value=10.0),),
+        )
+        labs = _items_by_source(bundle, "Lab")
+        assert len(labs) == 1
+
+    def test_post_order_hb_still_dropped_without_hb_anchor(self) -> None:
+        # Same draw, default anchor (no override): original window applies.
+        bundle = _build_minimal(hb_history=(_hb(offset_hours=5.0 / 60.0, value=10.0),))
+        assert _items_by_source(bundle, "Lab") == ()
+
+    def test_draw_after_hb_anchor_dropped(self) -> None:
+        # hb_anchor is the upper bound, not an open door to all post-order
+        # labs: a draw later than the resolved anchor is still response-phase.
+        bundle = _build_minimal(
+            anchor=self._anchor_with_hb(hb_offset_hours=5.0 / 60.0),
+            hb_history=(_hb(offset_hours=30.0 / 60.0, value=8.0),),  # +30 min
+        )
+        assert _items_by_source(bundle, "Lab") == ()
+
+    def test_pre_order_history_still_kept_with_hb_anchor(self) -> None:
+        # Extending the upper bound must not evict legitimate prior draws.
+        bundle = _build_minimal(
+            anchor=self._anchor_with_hb(hb_offset_hours=5.0 / 60.0),
+            hb_history=(
+                _hb(offset_hours=-2.0, value=9.0, item_no=1),
+                _hb(offset_hours=5.0 / 60.0, value=10.0, item_no=2),
+            ),
+        )
+        assert len(_items_by_source(bundle, "Lab")) == 2
+
+
 class TestVitalsWindow:
     """Vitals: ``[anchor - 6 h, anchor + 6 h]`` (mirrors :mod:`bba.vitals_extractor`)."""
 

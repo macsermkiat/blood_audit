@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
 
 
 def _load_run_pipeline() -> ModuleType:
-    path = Path(__file__).resolve().parents[2] / "scripts" / "pilot" / "run_pipeline.py"
+    pilot_dir = Path(__file__).resolve().parents[2] / "scripts" / "pilot"
+    # run_pipeline.py imports its siblings (_anchor_candidates, _hosxp_dt) by
+    # bare name, which resolves via sys.path[0] when run as a script. Loading it
+    # through importlib here bypasses that, so put the pilot dir on sys.path.
+    if str(pilot_dir) not in sys.path:
+        sys.path.insert(0, str(pilot_dir))
+    path = pilot_dir / "run_pipeline.py"
     spec = importlib.util.spec_from_file_location("pilot_run_pipeline", path)
     assert spec is not None
     assert spec.loader is not None
