@@ -103,11 +103,61 @@ _EBL_RE = re.compile(
     re.IGNORECASE,
 )
 
+_RATIONALE_LABELS: dict[str, str] = {
+    "hb_lt_7_universal": "Hb < 7.0 g/dL — below the universal threshold; no bypass required",
+    "hb_lt_threshold": "Hb below the cohort-specific threshold",
+    "hb_7_to_10": "Hb 7.0–10.0 g/dL — gray zone; requires a documented clinical indication",
+    "hb_ge_10": "Hb ≥ 10.0 g/dL — above threshold; no qualifying bypass was found",
+    "hb_missing": "No Hb result in the 7-day pre-anchor window",
+    "cohort_unknown": "Patient cohort could not be determined",
+    "cohort_non_threshold": "Cohort has no fixed Hb threshold (e.g., active haematological malignancy)",
+    "bypass_mtp": "Massive Transfusion Protocol cohort — auto-classified APPROPRIATE",
+    "bypass_mtp_hb_missing": "MTP cohort with no Hb available — auto-classified APPROPRIATE",
+    "bypass_peri_procedural": "Procedure within 6 h before order — peri-procedural bypass",
+    "bypass_peri_procedural_hb_missing": "Peri-procedural bypass (Hb missing) — auto-classified APPROPRIATE",
+    "bypass_pre_op_crossmatch": "Upcoming procedure within 72 h — pre-op crossmatch bypass",
+    "bypass_delta_hb": "Rapid Hb drop (delta-Hb trigger) fired — auto-classified APPROPRIATE",
+    "bypass_hemodilution": "Haemodilution pattern flagged — Hb unreliable; sent to NEEDS_REVIEW",
+    "single_low_hb_no_trend": "Single Hb below threshold with no supporting trend — NEEDS_REVIEW",
+}
+
+_BYPASS_LABELS: dict[str, str] = {
+    "none": "No bypass pathway applied; classification is purely Hb-tier based",
+    "mtp": "Massive Transfusion Protocol — volume-based bypass, Hb thresholds suspended",
+    "peri_procedural_6h": "Peri-procedural: active procedure within the 6 h window before order",
+    "pre_op_crossmatch": "Pre-operative crossmatch: scheduled procedure within 72 h after order",
+    "delta_hb": "Delta-Hb: ≥ 2 g/dL drop in Hb in the 24 h pre-anchor window",
+    "hemodilution_flagged": "Haemodilution suspected: Hb rise after IV fluid consistent with dilution artifact",
+}
+
+
+def _code_abbr(code: str, labels: dict[str, str]) -> str:
+    """Wrap a rationale/bypass slug in <abbr> with a plain-language tooltip."""
+    label = labels.get(code)
+    if label:
+        return f"<abbr title='{esc(label)}'><code>{esc(code)}</code></abbr>"
+    return f"<code>{esc(code)}</code>"
+
+
 csv.field_size_limit(sys.maxsize)
 
 
 def esc(s: Any) -> str:
     return html.escape(str(s)) if s is not None else ""
+
+
+_CLS_DISPLAY: dict[str, str] = {
+    "APPROPRIATE": "Appropriate",
+    "NEEDS_REVIEW": "Needs review",
+    "POTENTIALLY_INAPPROPRIATE": "Potentially inappropriate",
+    "INAPPROPRIATE": "Inappropriate",
+    "INSUFFICIENT_EVIDENCE": "Insufficient evidence",
+    "EXCLUDED": "Excluded",
+}
+
+
+def _display_cls(cls: str | None) -> str:
+    return _CLS_DISPLAY.get((cls or "").upper(), cls or "Excluded")
 
 
 def fmt_time(raw: Any) -> str:
@@ -595,6 +645,7 @@ def main() -> None:
 
     case_html_parts: list[str] = []
     summary_rows: list[dict[str, str]] = []
+    case_mismatch_tags: list[str] = []
 
     for i, m in enumerate(manifest_rows, start=1):
         hn = m["HN"]
@@ -960,11 +1011,25 @@ def main() -> None:
         # would crash, so coalesce twice.
         llm_final_obj = (llm or {}).get("llm_final") or {}
         if not llm:
-            llm_final = "(deterministic-final)"
+            llm_final = "(LLM not run)"
         elif not llm_final_obj:
-            llm_final = "(missing)"
+            llm_final = "(LLM data missing)"
         else:
             llm_final = llm_final_obj.get("final_classification") or "—"
+
+        _has_llm = bool(llm and llm_final_obj)
+        if not _has_llm:
+            _nav_tag = ""
+        elif det_class.upper() == (llm_final or "").upper():
+            _nav_tag = ""
+        elif {"POTENTIALLY_INAPPROPRIATE", "APPROPRIATE"} <= {
+            det_class.upper(),
+            (llm_final or "").upper(),
+        }:
+            _nav_tag = " <b class='nav-flag nav-flag--major'>[!!]</b>"
+        else:
+            _nav_tag = " <b class='nav-flag'>[!]</b>"
+        case_mismatch_tags.append(_nav_tag)
 
         summary_rows.append(
             {
@@ -978,8 +1043,8 @@ def main() -> None:
                 "Returned": det.get("returned_blood_datetime_local")
                 or _returned_blood_datetime(trans_rows)
                 or "—",
-                "Deterministic": det_class or "EXCLUDED",
-                "LLM": llm_final or "—",
+                "Deterministic": _display_cls(det_class),
+                "LLM": _display_cls(llm_final) if llm_final else "—",
             }
         )
 
@@ -1009,7 +1074,8 @@ def main() -> None:
             f"<div><b>Hb lookup anchor:</b> "
             f"{esc(det.get('hb_anchor_datetime_local') or f'{anchor_date} {anchor_time}'.strip() or '—')} "
             f"({esc(det.get('hb_anchor_reason') or 'order_datetime')})</div>",
-            f"<div><b>Cohort:</b> {esc(det.get('cohort_label') or '—')} "
+            f"<div><b><abbr title='Patient clinical cohort used to determine the Hb threshold for this order'>Cohort</abbr>:</b> "
+            f"{esc(det.get('cohort_label') or '—')} "
             f"(threshold {esc(det.get('cohort_threshold') or 'n/a')})</div>",
         ]
         if upcoming_disp is not None:
@@ -1019,7 +1085,11 @@ def main() -> None:
         meta_items.append(f"<div><b>EBL evidence:</b> {esc(ebl_summary)}</div>")
         parts: list[str] = [
             f"<section class='case' id='case-{i}'>",
-            f"<h2>Case {i} — REQNO {esc(reqno)}</h2>",
+            "<div class='case-hd'>",
+            f"<h3>Case {i} — REQNO {esc(reqno)}</h3>",
+            f"<button class='mark-reviewed' data-case='{i}'"
+            " onclick='toggleReviewed(this)'>Mark reviewed</button>",
+            "</div>",
             "<div class='meta'>",
             *meta_items,
             "</div>",
@@ -1028,23 +1098,23 @@ def main() -> None:
         # Verdict
         parts.append("<div class='verdict'>")
         parts.append("<div class='vbox det'>")
-        parts.append("<h3>Deterministic verdict</h3>")
+        parts.append("<h4>Deterministic verdict</h4>")
         parts.append(
             f"<div class='cls cls-{esc(det_class).lower()}'>"
-            f"{esc(det_class or 'EXCLUDED')}</div>"
+            f"{esc(_display_cls(det_class))}</div>"
         )
         parts.append(
-            f"<div class='rationale'>rationale: <code>"
-            f"{esc(det.get('rationale') or '—')}</code></div>"
+            f"<div class='rationale'>rationale: "
+            f"{_code_abbr(det.get('rationale') or '—', _RATIONALE_LABELS)}</div>"
         )
         parts.append(
-            f"<div class='rationale'>bypass: <code>"
-            f"{esc(det.get('bypass_reason') or 'none')}</code></div>"
+            f"<div class='rationale'>bypass: "
+            f"{_code_abbr(det.get('bypass_reason') or 'none', _BYPASS_LABELS)}</div>"
         )
         parts.append("</div>")
 
         parts.append("<div class='vbox llm'>")
-        parts.append("<h3>LLM verdict</h3>")
+        parts.append("<h4>LLM verdict</h4>")
         # ``llm_final`` may be explicitly None when run_llm_leg.py persisted
         # a partial run (e.g. the batch row was missing). Treat that the
         # same as "no LLM row at all" so the page renders instead of
@@ -1056,33 +1126,36 @@ def main() -> None:
             model = llm_block.get("model", "")
             parts.append(
                 f"<div class='cls cls-{esc(fc).lower()}'>"
-                f"{esc(fc)} <span class='conf'>(conf {conf:.2f}; "
+                f"{esc(_display_cls(fc))} <span class='conf'>(conf {conf:.2f}; "
                 f"{esc(model)})</span></div>"
             )
-            parts.append("<h4>Indications</h4>")
+            parts.append("<h5>Indications</h5>")
             parts.append(render_indications(llm_block["indications"]))
-            parts.append("<h4>Negative evidence</h4>")
+            parts.append("<h5>Negative evidence</h5>")
             parts.append(render_negative(llm_block["negative_evidence"]))
             parts.append("<details><summary><b>Reasoning — English</b></summary>")
             parts.append(render_reasoning(llm_block["reasoning_en"]))
             parts.append("</details>")
-            parts.append("<details><summary><b>Reasoning — ภาษาไทย</b></summary>")
+            parts.append("<details lang='th'><summary><b>Reasoning — ภาษาไทย</b></summary>")
             parts.append(render_reasoning(llm_block["reasoning_th"]))
             parts.append("</details>")
         elif llm:
             parts.append(
-                "<p class='empty'>(LLM submission recorded but final "
-                "verdict missing — batch row dropped or unparsable)</p>"
+                "<p class='empty'>(LLM verdict missing — batch row dropped or unparsable)</p>"
             )
         else:
             parts.append(
-                "<p class='empty'>(deterministic-final; LLM leg not invoked)</p>"
+                "<p class='empty'>(LLM not run — deterministic verdict is final)</p>"
             )
         parts.append("</div>")
         parts.append("</div>")
 
         # Source data
-        parts.append("<h3>Source data (real rows)</h3>")
+        parts.append(
+            "<div class='src-hd'><h4>Source data (real rows)</h4>"
+            "<button class='expand-toggle'"
+            " onclick='toggleSrcDetails(this)'>Expand all</button></div>"
+        )
 
         order_icd10 = (bdv.get("ICD10") or "").strip()
         order_icd10_name = icd10_dict.get(order_icd10, "")
@@ -1092,7 +1165,7 @@ def main() -> None:
             else order_icd10
         )
 
-        parts.append("<details open><summary>Order — BDVST + BDVSTDT</summary>")
+        parts.append("<details><summary>Order — BDVST + BDVSTDT</summary>")
         parts.append(
             render_table(
                 [
@@ -1201,7 +1274,7 @@ def main() -> None:
         parts.append("</details>")
 
         parts.append(
-            f"<details open><summary>Diagnoses ({len(diag_rows)} rows, "
+            f"<details><summary>Diagnoses ({len(diag_rows)} rows, "
             f"AN-scoped, all charted on admission {admission_date})</summary>"
         )
         parts.append(
@@ -1230,7 +1303,7 @@ def main() -> None:
             else ""
         )
         parts.append(
-            f"<details open><summary>Hb history ({len(hb_rows)} rows, "
+            f"<details><summary>Hb history ({len(hb_rows)} rows, "
             f"7-day pre-anchor window {hb_window_str}{hb_anchor_note})</summary>"
         )
         parts.append(
@@ -1250,7 +1323,7 @@ def main() -> None:
         )
         if anc_rows:
             parts.append(
-                f"<details open><summary>ANC — Absolute Neutrophil Count "
+                f"<details><summary>ANC — Absolute Neutrophil Count "
                 f"(infection / neutropenia / heme-malignancy signal) "
                 f"({len(anc_rows)} rows, window {window_str})</summary>"
             )
@@ -1274,7 +1347,7 @@ def main() -> None:
         parts.append("</details>")
 
         parts.append(
-            f"<details open><summary>Perioperative blood-loss evidence "
+            f"<details><summary>Perioperative blood-loss evidence "
             f"({len(periop_evidence)} rows, note window {periop_window_str})</summary>"
         )
         parts.append(
@@ -1291,7 +1364,7 @@ def main() -> None:
             else "(no anchor)"
         )
         parts.append(
-            f"<details open><summary>Procedures — IPTSUMOPRT + IPDDCHSUMOPRT + INCPT "
+            f"<details><summary>Procedures — IPTSUMOPRT + IPDDCHSUMOPRT + INCPT "
             f"({len(proc_rows)} rows, AN-scoped, ±1 week window "
             f"{proc_window_str})</summary>"
         )
@@ -1325,7 +1398,7 @@ def main() -> None:
         parts.append("</details>")
 
         parts.append(
-            f"<details open><summary>Progress notes — IPDADMPROGRESS "
+            f"<details><summary>Progress notes — IPDADMPROGRESS "
             f"({len(prog_notes)} rows: first {PROGRESS_FIRST_N} of AN + "
             f"window {window_str})</summary>"
         )
@@ -1367,7 +1440,7 @@ def main() -> None:
         parts.append("</details>")
 
         parts.append(
-            f"<details open><summary>Nursing focus notes — IPDNRFOCUSDT "
+            f"<details><summary>Nursing focus notes — IPDNRFOCUSDT "
             f"({len(focus_notes)} rows, window {window_str})</summary>"
         )
         if focus_notes:
@@ -1383,11 +1456,11 @@ def main() -> None:
                     f"{esc(d)} {esc(t)} — item {esc(itemno)}</div>"
                 )
                 if focus_label:
-                    parts.append(f"<pre><b>focus:</b> {esc(focus_label)}</pre>")
+                    parts.append(f"<pre lang='th'><b>focus:</b> {esc(focus_label)}</pre>")
                 if action:
-                    parts.append(f"<pre><b>D/A:</b>\n{esc(action)}</pre>")
+                    parts.append(f"<pre lang='th'><b>D/A:</b>\n{esc(action)}</pre>")
                 if resp:
-                    parts.append(f"<pre><b>R:</b>\n{esc(resp)}</pre>")
+                    parts.append(f"<pre lang='th'><b>R:</b>\n{esc(resp)}</pre>")
                 if not (focus_label or action or resp):
                     parts.append("<p class='empty'>(empty row)</p>")
                 parts.append("</div>")
@@ -1415,77 +1488,421 @@ def main() -> None:
     )
 
     css = """
-    :root { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            line-height: 1.45; color: #1a1a1a; }
+    :root {
+        --s-bg:           oklch(99% 0.005 28);
+        --s-bg-raised:    oklch(97% 0.008 28);
+        --s-bg-muted:     oklch(94% 0.01  28);
+        --s-border:       oklch(90% 0.012 28);
+        --s-border-strong:oklch(80% 0.02  28);
+        --s-ink:          oklch(22% 0.015 28);
+        --s-muted:        oklch(48% 0.02  28);
+        --accent:         oklch(43% 0.18  28);
+        --ok-bg:   oklch(94% 0.04 150); --ok-fg:   oklch(34% 0.12 150);
+        --warn-bg: oklch(94% 0.05  70); --warn-fg:  oklch(40% 0.14  70);
+        --err-bg:  oklch(94% 0.05  28); --err-fg:   oklch(38% 0.16  28);
+        --neu-bg:  oklch(92% 0.005 28); --neu-fg:   oklch(35% 0.01  28);
+        --info-bg: oklch(94% 0.04 280); --info-fg:  oklch(38% 0.14 280);
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+                     'Noto Sans Thai', sans-serif;
+        line-height: 1.5;
+        color: var(--s-ink);
+        background: var(--s-bg);
+    }
     body { max-width: 1200px; margin: 0 auto; padding: 20px; }
-    h1 { border-bottom: 2px solid #333; padding-bottom: 8px; }
-    h2 { border-top: 4px solid #333; padding-top: 18px; margin-top: 36px;
-         background: #f4f4f4; padding-left: 8px; }
-    h3 { color: #2a2a2a; margin-top: 18px; }
-    .case { margin-bottom: 60px; }
+    h1 { border-bottom: 2px solid var(--accent); padding-bottom: 8px;
+         font-size: 1.953rem; font-weight: 700; }
+    h2 { font-size: 1.563rem; font-weight: 700;
+         border-bottom: 2px solid var(--s-border-strong);
+         padding-bottom: 6px; margin-top: 40px; }
+    h3 { font-size: 1.25rem; font-weight: 600; color: var(--s-ink); margin-top: 18px; }
+    h4 { font-size: 1rem; font-weight: 600; margin-top: 12px; }
+    h5 { font-size: 0.875rem; font-weight: 600; margin-top: 10px; color: var(--s-muted); }
+    .case { margin-bottom: 60px; scroll-margin-top: 60px; }
+    .case > h3 { border-bottom: 1px solid var(--s-border); padding-bottom: 4px; margin-top: 32px; }
     .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 18px;
-            background: #fafafa; padding: 12px; border-left: 4px solid #888;
-            font-size: 14px; }
-    .verdict { display: grid; grid-template-columns: 1fr 1fr; gap: 18px;
-               margin: 16px 0; }
-    .vbox { padding: 14px; border: 1px solid #ccc; border-radius: 6px; }
-    .vbox.det { background: #f8f8ff; }
-    .vbox.llm { background: #fff8f0; }
-    .cls { font-size: 18px; font-weight: 700; padding: 6px 10px; border-radius: 4px;
-           display: inline-block; margin-bottom: 8px; }
-    .cls-appropriate { background: #d8f4d8; color: #115511; }
-    .cls-inappropriate, .cls-potentially_inappropriate { background: #f8d8d8; color: #771111; }
-    .cls-needs_review { background: #fff4cc; color: #886600; }
-    .cls-insufficient_evidence { background: #e0e0e0; color: #333; }
-    .cls-excluded { background: #e8e8ff; color: #444; }
-    .conf { font-size: 12px; font-weight: normal; }
-    .rationale { font-size: 13px; color: #555; }
-    table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 13px; }
-    th, td { border: 1px solid #ddd; padding: 4px 8px; text-align: left;
+            background: var(--s-bg-raised); padding: 12px; font-size: 0.875rem;
+            border: 1px solid var(--s-border); border-radius: 4px; }
+    .verdict { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 16px 0; }
+    .vbox { padding: 14px; border: 1px solid var(--s-border); border-radius: 6px; }
+    .vbox.det { background: var(--s-bg-raised); }
+    .vbox.llm { background: var(--info-bg); border-color: oklch(80% 0.08 280); }
+    .cls { font-size: 1rem; font-weight: 700; padding: 5px 12px; border-radius: 20px;
+           display: inline-block; margin-bottom: 8px; letter-spacing: 0.02em; }
+    .cls-appropriate { background: var(--ok-bg);   color: var(--ok-fg); }
+    .cls-inappropriate,
+    .cls-potentially_inappropriate { background: var(--err-bg);  color: var(--err-fg); }
+    .cls-needs_review { background: var(--warn-bg); color: var(--warn-fg); }
+    .cls-insufficient_evidence { background: var(--neu-bg);  color: var(--neu-fg); }
+    .cls-excluded { background: var(--info-bg); color: var(--info-fg); }
+    .conf { font-size: 0.75rem; font-weight: 400; color: var(--s-muted); }
+    .rationale { font-size: 0.8125rem; color: var(--s-muted); margin-top: 4px; }
+    table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 0.8125rem; }
+    th, td { border: 1px solid var(--s-border); padding: 4px 8px; text-align: left;
              vertical-align: top; }
-    th { background: #eee; }
-    td code { font-size: 12px; }
-    table.ind td { font-size: 13px; }
-    details { margin: 8px 0; border: 1px solid #e0e0e0; border-radius: 4px;
-              padding: 6px 12px; }
-    details > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
-    .note { border-left: 3px solid #aaa; padding: 4px 10px; margin: 6px 0;
-            background: #fafafa; }
-    .note-date { font-weight: bold; color: #444; font-size: 12px; }
-    pre { white-space: pre-wrap; word-wrap: break-word; font-size: 12px;
-          background: #fff; padding: 6px; margin: 4px 0; border: 1px solid #eee; }
-    .empty { color: #888; font-style: italic; }
-    .reasoning { font-size: 13px; }
+    th { background: var(--s-bg-muted); color: var(--s-ink); font-weight: 600; }
+    td code { font-size: 0.75rem;
+              font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace; }
+    table.ind td { font-size: 0.8125rem; }
+    table.ind td:nth-child(3), table.ind td:nth-child(4) {
+        font-size: 0.75rem; color: var(--s-muted);
+        font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace; }
+
+    details { margin: 8px 0; border: 1px solid var(--s-border); border-radius: 4px;
+              padding: 6px 12px; background: var(--s-bg-raised); }
+    details > summary { cursor: pointer; font-weight: 600; padding: 4px 0;
+                        list-style: disclosure-closed; }
+    details[open] > summary { list-style: disclosure-open; }
+    .note { border: 1px solid var(--s-border); border-radius: 4px;
+            padding: 6px 10px; margin: 6px 0; background: var(--s-bg-raised); }
+    .note-date { font-weight: 700; color: var(--s-muted); font-size: 0.75rem; }
+    pre { white-space: pre-wrap; word-wrap: break-word; font-size: 0.8125rem; line-height: 1.6;
+          max-width: 80ch; background: var(--s-bg-muted); padding: 8px; margin: 4px 0;
+          border: 1px solid var(--s-border); border-radius: 4px;
+          font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace; }
+    .note pre { font-family: 'Noto Sans Thai', 'Inter', -apple-system, BlinkMacSystemFont,
+                'Segoe UI', sans-serif; line-height: 1.65; max-width: none; }
+    .empty { color: var(--s-muted); font-style: italic; }
+    .reasoning { font-size: 0.8125rem; line-height: 1.65; }
     .reasoning p { margin: 6px 0; }
-    .reasoning-h { font-weight: 700; color: #2a2a2a; margin: 12px 0 4px; }
+    .reasoning-h { font-weight: 700; color: var(--s-ink); margin: 12px 0 4px; }
     .reasoning-list, .reasoning-bullets { margin: 6px 0; padding-left: 24px; }
     .reasoning-list li, .reasoning-bullets li { margin: 4px 0; }
     ul li { margin: 2px 0; }
-    nav { background: #fafafa; padding: 12px; border: 1px solid #ddd;
-          margin-bottom: 20px; }
-    nav a { margin-right: 12px; }
+    .legend { display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+              margin: 10px 0 18px; font-size: 0.8125rem; }
+    .legend .cls { margin-bottom: 0; font-size: 0.8125rem; padding: 3px 10px; }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+    .nav-flag { font-size: 0.75rem; color: var(--warn-fg); }
+    .nav-flag--major { color: var(--err-fg); }
+    tr.verdict-mismatch > td { background: oklch(98% 0.015 70); }
+    /* Case header */
+    .case-hd { display: flex; align-items: baseline; gap: 14px; }
+    .case-hd h3 { margin: 0; }
+    .case.is-reviewed { opacity: 0.6; }
+    .case.is-reviewed .case-hd h3::after {
+        content: ' ✓'; color: var(--ok-fg); font-size: 0.875rem; font-weight: 400; }
+    /* Source data header */
+    .src-hd { display: flex; align-items: center; gap: 10px; margin-top: 16px; }
+    .src-hd h4 { margin: 0; }
+    /* Buttons */
+    button { font: inherit; cursor: pointer; border: 1px solid var(--s-border-strong);
+             border-radius: 4px; padding: 3px 10px; background: var(--s-bg-raised);
+             color: var(--s-ink); font-size: 0.8125rem; transition: background 0.12s; }
+    button:hover { background: var(--s-bg-muted); }
+    .mark-reviewed { font-size: 0.75rem; padding: 2px 8px; }
+    .case.is-reviewed .mark-reviewed { background: var(--ok-bg); color: var(--ok-fg);
+                                        border-color: oklch(70% 0.08 150); }
+    .expand-toggle { font-size: 0.75rem; padding: 2px 8px; }
+    /* Abbr tooltips on code slugs */
+    abbr[title] { text-decoration: underline dotted var(--s-muted);
+                  cursor: help; text-underline-offset: 2px; }
+    /* Nav redesign for 100-case scale */
+    nav { position: sticky; top: 0; z-index: 10; background: var(--s-bg-raised);
+          padding: 8px 14px; border: 1px solid var(--s-border);
+          border-bottom: 2px solid var(--s-border-strong); margin-bottom: 20px;
+          box-shadow: 0 2px 6px oklch(0% 0 0 / 0.04); }
+    .nav-controls { display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+                    font-size: 0.875rem; }
+    .nav-home { font-weight: 700; color: var(--accent); text-decoration: none; }
+    .nav-home:hover { text-decoration: underline; }
+    .nav-controls label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+    .nav-controls input[type=number] { width: 4.5rem; padding: 2px 6px; font: inherit;
+        font-size: 0.8125rem; border: 1px solid var(--s-border-strong); border-radius: 4px;
+        background: var(--s-bg); color: var(--s-ink); }
+    #reviewed-counter { color: var(--s-muted); font-size: 0.8125rem; margin-left: auto; }
+    details.nav-cases { border: none; padding: 0; margin: 0; background: none; }
+    details.nav-cases > summary { font-size: 0.8125rem; color: var(--s-muted);
+        cursor: pointer; padding: 2px 0; margin-top: 4px; }
+    .nav-links { display: flex; flex-wrap: wrap; gap: 4px 10px; padding: 6px 0 2px; }
+    .nav-links a { color: var(--accent); text-decoration: none; font-size: 0.8125rem; }
+    .nav-links a:hover { text-decoration: underline; }
+    .nav-links a.is-reviewed { color: var(--ok-fg); }
+    .nav-links a.is-hidden { display: none; }
+    .nav-links a.is-active { font-weight: 700; color: var(--s-ink); }
+    #filter-status { font-size: 0.75rem; color: var(--warn-fg); }
+    /* Glossary */
+    .glossary-body { column-count: 2; column-gap: 24px; font-size: 0.8125rem; }
+    .glossary-body dt { font-weight: 600; margin-top: 8px; }
+    .glossary-body dd { margin-left: 0; color: var(--s-muted); }
+    @media (max-width: 800px) { .glossary-body { column-count: 1; } }
+    /* Keyboard shortcut hint */
+    .kbd-hint { font-size: 0.75rem; color: var(--s-muted); margin-bottom: 8px; }
+    kbd { font-size: 0.75rem; background: var(--s-bg-muted); border: 1px solid var(--s-border-strong);
+          border-radius: 3px; padding: 1px 5px; font-family: inherit; }
+    @media print { nav { display: none; } details { display: block; }
+                   details > summary { display: none; } button { display: none; } }
     """
-    nav_links = " · ".join(
-        f"<a href='#case-{i + 1}'>#{i + 1} {m['REQNO']}</a>"
-        for i, m in enumerate(manifest_rows)
+    n_cases = len(manifest_rows)
+    _FLAG_TITLE = {
+        " <b class='nav-flag nav-flag--major'>[!!]</b>":
+            " <b class='nav-flag nav-flag--major' title='Major mismatch: Appropriate vs Potentially inappropriate'>[!!]</b>",
+        " <b class='nav-flag'>[!]</b>":
+            " <b class='nav-flag' title='Verdict mismatch between deterministic and LLM classifiers'>[!]</b>",
+    }
+    nav_links_items = "".join(
+        f"<a href='#case-{i + 1}' data-case='{i + 1}'>"
+        f"#{i + 1} {m['REQNO']}{_FLAG_TITLE.get(tag, tag)}</a>"
+        for i, (m, tag) in enumerate(zip(manifest_rows, case_mismatch_tags))
     )
+    n_mismatches = sum(1 for t in case_mismatch_tags if t)
     head = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KCMH RBC audit — human review</title>
 <style>{css}</style></head><body>
 <h1>KCMH RBC Transfusion Audit — Human Review</h1>
-<p>Single bundle of source data + audit verdicts for the sampled RBC orders.
-Deterministic verdict comes from the local pipeline composition; LLM
-verdict comes from a live Anthropic Batch call on a structured-only
-evidence payload (no free-text notes sent — those weren't through
-thai-medical-deid).</p>
-<nav><b>Jump to:</b> {nav_links}</nav>
-<h2 style='border-top:none; background:none; padding:0; margin-top:0;'>Summary</h2>
+<p>{n_cases} RBC transfusion orders. Deterministic: local rule-based verdict.
+LLM: Anthropic Batch classification on structured evidence only.
+{n_mismatches} verdict mismatches flagged.</p>
+<p class='kbd-hint' id='kbd-hint'>Keyboard: <kbd>j</kbd> next · <kbd>k</kbd> prev · <kbd>e</kbd> mark reviewed · <kbd>f</kbd> filter · <kbd>E</kbd> expand all · <kbd>x</kbd> expand case <button onclick='dismissKbdHint()' style='font-size:0.7rem;padding:1px 6px;margin-left:8px'>Dismiss</button></p>
+<nav>
+  <div class='nav-controls'>
+    <a href='#summary' class='nav-home'>Summary</a>
+    <label><input type='checkbox' id='filter-mismatches' onchange='filterMismatches(this)'> Mismatches only</label>
+    <span id='filter-status'></span>
+    <label>Jump: <input type='number' id='jump-input' min='1' max='{n_cases}' placeholder='#'
+      onchange='jumpToCase(this.value)' oninput='if(this.value>={n_cases})this.value={n_cases}'></label>
+    <span id='reviewed-counter'>Reviewed: 0 / {n_cases}</span>
+    <button id='reset-reviewed' onclick='resetReviewed()' style='display:none'>Reset all</button>
+  </div>
+  <details class='nav-cases'><summary>All cases ({n_cases}) — click to browse</summary>
+  <div class='nav-links' id='nav-links'>{nav_links_items}</div>
+  </details>
+</nav>
+<h2 id='summary' style='margin-top:0;'>Summary</h2>
+<div class="legend">
+  <b>Key:</b>
+  <span class="cls cls-appropriate">Appropriate</span>
+  <span class="cls cls-needs_review">Needs review</span>
+  <span class="cls cls-potentially_inappropriate">Potentially inappropriate</span>
+  <span class="cls cls-insufficient_evidence">Insufficient evidence</span>
+  <span class="cls cls-excluded">Excluded</span>
+</div>
 {summary_html}
+<details style='margin:16px 0;'><summary><b>Glossary — verdict classes and classifier codes</b></summary>
+<div class='glossary-body'>
+<dl>
+<dt>APPROPRIATE</dt><dd>Transfusion meets evidence-based indications (Hb below threshold or qualifying bypass).</dd>
+<dt>POTENTIALLY_INAPPROPRIATE</dt><dd>Hb above threshold and no qualifying bypass was identified; warrants clinician review.</dd>
+<dt>NEEDS_REVIEW</dt><dd>Classifier could not confidently classify; manual review required (e.g. haemodilution, single borderline Hb).</dd>
+<dt>INSUFFICIENT_EVIDENCE</dt><dd>LLM could not find enough structured evidence to classify.</dd>
+<dt>EXCLUDED</dt><dd>Case excluded from audit scope (e.g. paediatric, non-RBC product).</dd>
+<dt style='margin-top:14px;font-style:italic;'>Rationale codes</dt><dd></dd>
+<dt>hb_lt_7_universal</dt><dd>Hb &lt; 7.0 g/dL — below the universal threshold; no bypass required.</dd>
+<dt>hb_lt_threshold</dt><dd>Hb below the cohort-specific threshold.</dd>
+<dt>hb_7_to_10</dt><dd>Hb 7.0–10.0 g/dL — gray zone; requires a documented clinical indication.</dd>
+<dt>hb_ge_10</dt><dd>Hb ≥ 10.0 g/dL — above threshold; no qualifying bypass was found.</dd>
+<dt>hb_missing</dt><dd>No Hb result in the 7-day pre-anchor window.</dd>
+<dt>cohort_unknown</dt><dd>Patient cohort could not be determined.</dd>
+<dt>cohort_non_threshold</dt><dd>Cohort has no fixed Hb threshold (e.g. active haematological malignancy).</dd>
+<dt>bypass_mtp</dt><dd>Massive Transfusion Protocol cohort — auto-classified APPROPRIATE.</dd>
+<dt>bypass_peri_procedural</dt><dd>Procedure within 6 h before order — peri-procedural bypass.</dd>
+<dt>bypass_pre_op_crossmatch</dt><dd>Upcoming procedure within 72 h — pre-op crossmatch bypass.</dd>
+<dt>bypass_delta_hb</dt><dd>Rapid Hb drop (delta-Hb trigger) fired — auto-classified APPROPRIATE.</dd>
+<dt>bypass_hemodilution</dt><dd>Haemodilution pattern flagged — Hb unreliable; sent to NEEDS_REVIEW.</dd>
+<dt>single_low_hb_no_trend</dt><dd>Single Hb below threshold with no supporting trend — NEEDS_REVIEW.</dd>
+<dt style='margin-top:14px;font-style:italic;'>Bypass codes</dt><dd></dd>
+<dt>none</dt><dd>No bypass applied; classification is purely Hb-tier based.</dd>
+<dt>mtp</dt><dd>Massive Transfusion Protocol — volume-based bypass, Hb thresholds suspended.</dd>
+<dt>peri_procedural_6h</dt><dd>Peri-procedural: active procedure within 6 h before order.</dd>
+<dt>pre_op_crossmatch</dt><dd>Pre-operative crossmatch: scheduled procedure within 72 h after order.</dd>
+<dt>delta_hb</dt><dd>Delta-Hb: ≥ 2 g/dL drop in 24 h pre-anchor window.</dd>
+<dt>hemodilution_flagged</dt><dd>Haemodilution suspected: Hb rise after IV fluid consistent with dilution artifact.</dd>
+</dl>
+</div>
+</details>
 """
     body = "\n".join(case_html_parts)
     foot = "</body></html>"
-    OUT.write_text(head + body + foot, encoding="utf-8")
+    script = """<script>
+(function(){
+  /* ── Summary table: pill spans + mismatch row highlights ── */
+  var norm = function(s){ return s.trim().replace(/\\s+/g,'_').toLowerCase(); };
+  var sentinels = /^\\(|^—/;
+  var tbl = document.querySelector('table');
+  if (tbl) {
+    tbl.querySelectorAll('tr').forEach(function(tr){
+      var cells = tr.querySelectorAll('td');
+      if(cells.length < 10) return;
+      var detCell = cells[8];
+      var llmCell = cells[9];
+      var llmTxt = (llmCell.textContent || '').trim();
+      if(sentinels.test(llmTxt)) return;
+      var detN = norm(detCell.textContent || '');
+      var llmN = norm(llmTxt);
+      detCell.innerHTML = "<span class='cls cls-" + detN + "' style='margin-bottom:0'>"
+        + detCell.textContent + "</span>";
+      llmCell.innerHTML = "<span class='cls cls-" + llmN + "' style='margin-bottom:0'>"
+        + llmCell.textContent + "</span>";
+      if (detN !== llmN) { tr.classList.add('verdict-mismatch'); }
+    });
+  }
+
+  /* ── Mark-reviewed with localStorage persistence ── */
+  var STORE_KEY = 'bba_reviewed';
+  function loadReviewed() {
+    try { return JSON.parse(localStorage.getItem(STORE_KEY) || '[]'); }
+    catch(e) { return []; }
+  }
+  function saveReviewed(arr) {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(arr)); } catch(e){}
+  }
+  function updateCounter() {
+    var total = document.querySelectorAll('.case').length;
+    var done  = document.querySelectorAll('.case.is-reviewed').length;
+    var el = document.getElementById('reviewed-counter');
+    if (el) el.textContent = 'Reviewed: ' + done + ' / ' + total;
+  }
+  function applyReviewedState(caseNum, reviewed) {
+    var sec = document.getElementById('case-' + caseNum);
+    var navLink = document.querySelector('#nav-links a[data-case="' + caseNum + '"]');
+    if (sec) sec.classList.toggle('is-reviewed', reviewed);
+    if (navLink) navLink.classList.toggle('is-reviewed', reviewed);
+    var btn = sec ? sec.querySelector('.mark-reviewed') : null;
+    if (btn) btn.textContent = reviewed ? 'Reviewed' : 'Mark reviewed';
+  }
+  /* Restore state on load */
+  loadReviewed().forEach(function(n){ applyReviewedState(n, true); });
+  updateCounter();
+  /* Hide kbd-hint if previously dismissed */
+  try { if (localStorage.getItem('bba_kbd_dismissed')) {
+    var kh = document.getElementById('kbd-hint');
+    if (kh) kh.style.display = 'none';
+  }} catch(e){}
+  /* Show/hide reset button based on reviewed count */
+  function _syncResetBtn() {
+    var btn = document.getElementById('reset-reviewed');
+    if (btn) btn.style.display = loadReviewed().length > 0 ? '' : 'none';
+  }
+  _syncResetBtn();
+
+  window.toggleReviewed = function(btn) {
+    var caseNum = parseInt(btn.dataset.case, 10);
+    var arr = loadReviewed();
+    var idx = arr.indexOf(caseNum);
+    if (idx === -1) { arr.push(caseNum); }
+    else            { arr.splice(idx, 1); }
+    saveReviewed(arr);
+    applyReviewedState(caseNum, idx === -1);
+    updateCounter();
+    _syncResetBtn();
+  };
+  window.resetReviewed = function() {
+    saveReviewed([]);
+    document.querySelectorAll('.case').forEach(function(sec) {
+      var n = parseInt(sec.id.replace('case-', ''), 10);
+      applyReviewedState(n, false);
+    });
+    updateCounter();
+    _syncResetBtn();
+  };
+  window.dismissKbdHint = function() {
+    var kh = document.getElementById('kbd-hint');
+    if (kh) kh.style.display = 'none';
+    try { localStorage.setItem('bba_kbd_dismissed', '1'); } catch(e){}
+  };
+
+  /* ── Source data: expand / collapse all <details> in a case ── */
+  window.toggleSrcDetails = function(btn) {
+    var sec = btn.closest('.case');
+    if (!sec) return;
+    var dets = sec.querySelectorAll('details');
+    var anyOpen = Array.prototype.some.call(dets, function(d){ return d.open; });
+    dets.forEach(function(d){ d.open = !anyOpen; });
+    btn.textContent = anyOpen ? 'Expand all' : 'Collapse all';
+  };
+
+  /* ── Jump to case ── */
+  window.jumpToCase = function(val) {
+    var n = parseInt(val, 10);
+    if (!n) return;
+    var sec = document.getElementById('case-' + n);
+    if (sec) sec.scrollIntoView({behavior:'smooth', block:'start'});
+  };
+
+  /* ── Filter: mismatches only ── */
+  window.filterMismatches = function(cb) {
+    var cases = document.querySelectorAll('.case');
+    var hidden = 0;
+    cases.forEach(function(sec) {
+      var hasMismatch = sec.querySelector('.nav-flag') !== null;
+      var hide = cb.checked && !hasMismatch;
+      sec.style.display = hide ? 'none' : '';
+      if (hide) hidden++;
+    });
+    var navLinks = document.querySelectorAll('#nav-links a');
+    navLinks.forEach(function(a) {
+      var hasMismatch = a.querySelector('.nav-flag') !== null;
+      a.classList.toggle('is-hidden', cb.checked && !hasMismatch);
+    });
+    var st = document.getElementById('filter-status');
+    if (st) st.textContent = (cb.checked && hidden > 0) ? hidden + ' cases hidden' : '';
+  };
+
+  /* ── Keyboard navigation: j/k/e/f/E/x ── */
+  var caseEls = Array.prototype.slice.call(document.querySelectorAll('.case'));
+  var activeIdx = -1;
+  function findActiveByScroll() {
+    var mid = window.innerHeight / 2;
+    for (var i = caseEls.length - 1; i >= 0; i--) {
+      var r = caseEls[i].getBoundingClientRect();
+      if (r.top <= mid) return i;
+    }
+    return 0;
+  }
+  /* ── IntersectionObserver scrollspy ── */
+  var _activeNavLink = null;
+  if ('IntersectionObserver' in window) {
+    var obs = new IntersectionObserver(function(entries) {
+      entries.forEach(function(entry) {
+        var caseNum = entry.target.id.replace('case-', '');
+        var link = document.querySelector('#nav-links a[data-case="' + caseNum + '"]');
+        if (!link) return;
+        if (entry.isIntersecting) {
+          if (_activeNavLink) _activeNavLink.classList.remove('is-active');
+          link.classList.add('is-active');
+          _activeNavLink = link;
+          activeIdx = parseInt(caseNum, 10) - 1;
+        }
+      });
+    }, {threshold: 0.15});
+    caseEls.forEach(function(sec) { obs.observe(sec); });
+  }
+  document.addEventListener('keydown', function(e) {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (e.key === 'j' || e.key === 'k') {
+      if (activeIdx < 0) activeIdx = findActiveByScroll();
+      activeIdx = e.key === 'j'
+        ? Math.min(activeIdx + 1, caseEls.length - 1)
+        : Math.max(activeIdx - 1, 0);
+      caseEls[activeIdx].scrollIntoView({behavior:'smooth', block:'start'});
+    } else if (e.key === 'e') {
+      if (activeIdx < 0) activeIdx = findActiveByScroll();
+      var sec = caseEls[activeIdx];
+      if (!sec) return;
+      var btn = sec.querySelector('.mark-reviewed');
+      if (btn) window.toggleReviewed(btn);
+    } else if (e.key === 'x') {
+      if (activeIdx < 0) activeIdx = findActiveByScroll();
+      var sec2 = caseEls[activeIdx];
+      if (!sec2) return;
+      var toggleBtn = sec2.querySelector('.expand-toggle');
+      if (toggleBtn) window.toggleSrcDetails(toggleBtn);
+    } else if (e.key === 'f') {
+      var cb = document.getElementById('filter-mismatches');
+      if (cb) { cb.checked = !cb.checked; window.filterMismatches(cb); }
+    } else if (e.key === 'E') {
+      var allDets = document.querySelectorAll('.case details');
+      var anyOpen = Array.prototype.some.call(allDets, function(d){ return d.open; });
+      allDets.forEach(function(d){ d.open = !anyOpen; });
+      document.querySelectorAll('.expand-toggle').forEach(function(btn){
+        btn.textContent = anyOpen ? 'Expand all' : 'Collapse all';
+      });
+    }
+  });
+})();
+</script>"""
+    OUT.write_text(head + body + script + foot, encoding="utf-8")
     print(f"wrote {OUT}  ({OUT.stat().st_size // 1024} KB)")
 
 
