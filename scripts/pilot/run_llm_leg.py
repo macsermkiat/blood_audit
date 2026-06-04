@@ -623,10 +623,49 @@ def _render_hemodynamic(payload: dict[str, Any]) -> str:
     return "Hemodynamics: " + "; ".join(parts) if parts else ""
 
 
+def _render_periop(payload: dict[str, Any]) -> str:
+    """Render the pinned peri-operative summary as one fact-only line (Case 107).
+
+    FACT-ONLY by contract (mirrors the builder's payload guardrail): the
+    surgical-context flag, the EBL in millilitres, the intra-op-transfusion
+    flag, and the verbatim provenance snippets — nothing else. No
+    'appropriate' / 'indicated' wording; the LLM weighs peri-op context, the
+    summary never pre-judges it. The leading 'PERI-OP SIGNALS:' label makes the
+    item un-skippable — Case 107's failure was the model ignoring this very
+    evidence when it sat only in free-text prose."""
+    parts: list[str] = []
+    if payload.get("surgical_context"):
+        parts.append("surgery=YES")
+    ebl = payload.get("blood_loss_ml")
+    if ebl is not None:
+        parts.append(f"blood_loss={ebl} ml")
+    if payload.get("intraop_transfusion"):
+        parts.append("intra-op transfusion=YES")
+    if not parts:
+        return ""
+    line = "PERI-OP SIGNALS: " + ", ".join(parts)
+    quotes: list[str] = []
+    for f in payload.get("findings") or ():
+        snippet = (f.get("snippet") or "").strip()
+        if not snippet:
+            continue
+        prov_bits = [str(f.get("source") or "")]
+        lag = f.get("lag_min")
+        if lag is not None:
+            prov_bits.append(_fmt_lag(int(lag)))
+        prov = ", ".join(b for b in prov_bits if b)
+        quotes.append(f'"{snippet}"' + (f" ({prov})" if prov else ""))
+    if quotes:
+        line += " | evidence: " + "; ".join(quotes)
+    return line
+
+
 def _render_payload(source: str, payload: dict[str, Any]) -> str:
     """Render a structured EvidenceItem payload as one line for the LLM."""
     if source == "Hemodynamic":
         return _render_hemodynamic(payload)
+    if source == "Periop":
+        return _render_periop(payload)
     if source == "IPDADMPROGRESS":
         sections = payload.get("sections") or ()
         rendered = "; ".join(
@@ -1231,6 +1270,24 @@ def main() -> None:
             "- Do not silently drop sub-threshold Hb values from the reasoning;",
             "  ignoring them is the failure mode this policy exists to prevent.",
         ]
+        if any(it.source == "Periop" for it in bundle.items):
+            guidance_lines += [
+                "",
+                "PERI-OPERATIVE EVIDENCE — quote-or-deny requirement:",
+                "- A pinned 'PERI-OP SIGNALS' item is present above (surgical",
+                "  context / estimated blood loss / intra-op transfusion",
+                "  recovered from the free-text narrative).",
+                "- A surgery, EBL, or intra-op transfusion documented ONLY in a",
+                "  free-text note SATISFIES the peri-operative indication. Empty",
+                "  structured procedure rows do NOT negate it — do NOT write",
+                "  'no operative procedure documented' when the narrative shows one.",
+                "- For EACH peri-op fact in that item you MUST either quote the",
+                "  supporting snippet (naming its evidence id) in",
+                "  reasoning_summary_en AND reasoning_summary_th, OR explicitly",
+                "  state why you reject it.",
+                "- Silently ignoring the peri-op signal is the failure mode this",
+                "  requirement exists to prevent (Case 107 / REQNO 68074627).",
+            ]
         chunks.append(
             EvidenceChunk(
                 evidence_id=f"E{next_eid}",

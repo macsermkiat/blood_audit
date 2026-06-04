@@ -36,6 +36,8 @@ from bba.vitals_extractor.hemodynamic import scan_hemodynamics
 from bba.vitals_extractor.models import (
     HemodynamicSummary,
     LLMFallback,
+    PeriopFinding,
+    PeriopSummary,
     SourceProvenance,
     VasopressorMention,
     VitalSigns,
@@ -43,6 +45,7 @@ from bba.vitals_extractor.models import (
     VitalsNote,
     VitalsResult,
 )
+from bba.vitals_extractor.periop import scan_periop
 from bba.vitals_extractor.pipeline import extract_vitals
 
 __all__ = [
@@ -56,6 +59,8 @@ __all__ = [
     "MAP_MIN",
     "HemodynamicSummary",
     "LLMFallback",
+    "PeriopFinding",
+    "PeriopSummary",
     "RR_MAX",
     "RR_MIN",
     "SBP_MAX",
@@ -75,4 +80,5 @@ __all__ = [
     "is_rr_valid",
     "is_sbp_valid",
     "scan_hemodynamics",
+    "scan_periop",
 ]

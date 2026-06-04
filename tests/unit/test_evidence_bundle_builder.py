@@ -2588,6 +2588,131 @@ class TestHemodynamicSummaryItem:
             )
 
 
+class TestPeriopSummaryItem:
+    """The pinned, fact-only Periop item (Case 107 / REQNO 68074627).
+
+    Case 107 shipped the surgical context to the LLM only inside a free-text
+    post-op nursing note; with the structured procedure rows empty, the model
+    returned INSUFFICIENT_EVIDENCE and wrote 'no operative procedure
+    documented'. The builder now synthesizes a single pinned summary item from
+    the SHIPPED notes so the surgery / EBL / intra-op-transfusion signal leads
+    the bundle and survives truncation — without ever becoming a verdict."""
+
+    def test_periop_summary_emitted_after_hemodynamic(self) -> None:
+        # When both pinned summaries fire, Hemodynamic is E1 and Periop is E2
+        # (the literal/emission order). Each is a synthesized summary, not one
+        # charted note, so timestamp_utc is None.
+        progress = (_progress(offset_hours=-2, text="O: ABP = 84/49 MAP 56"),)
+        focus = (
+            _focus(offset_hours=3, text="Post-op s/p ORIF Lt femur, EBL 1500 ml"),
+        )
+        bundle = _build_minimal(progress_notes=progress, focus_notes=focus)
+        assert bundle.items[0].source == "Hemodynamic"
+        periop = bundle.items[1]
+        assert periop.id == "E2"
+        assert periop.source == "Periop"
+        assert periop.timestamp_utc is None
+        assert periop.payload["surgical_context"] is True
+        assert periop.payload["blood_loss_ml"] == 1500
+
+    def test_periop_is_first_item_when_no_hemodynamic_signal(self) -> None:
+        # The surgery the LLM ignored on Case 107 leads the bundle (E1) when no
+        # hemodynamic summary precedes it — the un-skippable position.
+        focus = (_focus(offset_hours=3, text="Post-op s/p ORIF, EBL 800 ml"),)
+        bundle = _build_minimal(focus_notes=focus)
+        first = bundle.items[0]
+        assert first.id == "E1"
+        assert first.source == "Periop"
+
+    def test_periop_payload_is_fact_only(self) -> None:
+        # BINDING GUARDRAIL: peri-op context is a supporting factor the LLM
+        # weighs, never a standalone verdict. The payload may carry ONLY the
+        # surgery/EBL/transfusion facts and their provenance snippets — no
+        # 'appropriate' / 'indicated' / 'justified' language that would
+        # pre-judge the transfusion.
+        focus = (
+            _focus(
+                offset_hours=3,
+                text="Post-op s/p ORIF Lt femur, EBL 1500 ml, intraop LPRC 2 u",
+            ),
+        )
+        bundle = _build_minimal(focus_notes=focus)
+        periop = next(it for it in bundle.items if it.source == "Periop")
+        allowed = {
+            "surgical_context",
+            "blood_loss_ml",
+            "intraop_transfusion",
+            "findings",
+        }
+        assert set(periop.payload) <= allowed, (
+            f"unexpected key in fact-only peri-op payload: "
+            f"{set(periop.payload) - allowed}"
+        )
+        blob = str(periop.payload).lower()
+        for banned in (
+            "appropriate",
+            "indicat",
+            "justified",
+            "refractory",
+            "escalat",
+        ):
+            assert banned not in blob, (
+                f"appropriateness/verdict language '{banned}' leaked into the "
+                f"fact-only peri-op payload"
+            )
+
+    def test_periop_finding_carries_snippet_source_and_lag(self) -> None:
+        # Each finding is directly citable: a verbatim snippet (a substring of a
+        # note already shipped in full), its origin table, and a PHI-free lag so
+        # the synthesized item needs no absolute timestamp.
+        focus = (
+            _focus(offset_hours=3, text="Post-op s/p ORIF Lt femur, EBL 1500 ml"),
+        )
+        bundle = _build_minimal(focus_notes=focus)
+        periop = next(it for it in bundle.items if it.source == "Periop")
+        findings = periop.payload["findings"]
+        surgery = next(f for f in findings if f["category"] == "surgery")
+        assert "ORIF" in surgery["snippet"]
+        assert surgery["source"] == "IPDNRFOCUSDT"
+        assert surgery["lag_min"] == 180  # the focus note is +3 h from the anchor
+
+    def test_no_periop_item_when_scan_finds_nothing(self) -> None:
+        # The summary is only emitted when the scan found a surgery / EBL /
+        # intra-op transfusion. With benign notes, NO Periop item is added, so
+        # every downstream evidence ID is unchanged.
+        bundle = _build_minimal(
+            progress_notes=(_progress(offset_hours=-1),),
+            focus_notes=(_focus(offset_hours=-1),),
+        )
+        assert all(it.source != "Periop" for it in bundle.items)
+
+    def test_periop_survives_while_meds_drop_under_cap(self) -> None:
+        # Periop is exempt from whole-item drop: the pinned surgical signal must
+        # outlive a dense MED list under cap pressure. This is the Case 107 fix
+        # end-to-end — the surgery evidence is never the first thing shed.
+        focus = (
+            _focus(offset_hours=3, text="Post-op s/p ORIF Lt femur, EBL 1500 ml"),
+        )
+        meds = tuple(
+            _med(offset_hours=-h, drug=f"Drug{h}-" + ("x" * 200))
+            for h in (1, 2, 3, 4, 5, 6, 7, 8)
+        )
+        bundle = build_evidence_bundle(
+            inputs=EvidenceInputs(
+                anchor=_anchor(),
+                focus_notes=focus,
+                meds=meds,
+            ),
+            char_cap=1200,
+        )
+        assert any(it.source == "Periop" for it in bundle.items), (
+            "the pinned peri-op summary was dropped under cap pressure"
+        )
+        assert len(_items_by_source(bundle, "Med")) < 8, (
+            "cap did not force any MED drop; tighten char_cap"
+        )
+
+
 class TestExemptTierPartition:
     """EXEMPT_FROM_DROP and DROP_PRIORITY must partition EvidenceSource.
 

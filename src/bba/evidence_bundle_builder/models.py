@@ -55,6 +55,7 @@ from bba.vitals_extractor.bounds import (
 
 EvidenceSource = Literal[
     "Hemodynamic",
+    "Periop",
     "Diagnosis",
     "IPDADMPROGRESS",
     "IPDNRFOCUSDT",
@@ -72,7 +73,15 @@ emitted as E1, and exempt from char-cap truncation so the evidence starved in
 Case 2 / REQNO 68012352 always reaches the LLM. It carries no appropriateness
 language and never gates the deterministic classifier — it is supporting
 evidence only.
-"""
+
+``Periop`` (Case 107 / REQNO 68074627) is SECOND, the same pinned, fact-only,
+truncation-exempt shape: surgical context, EBL (mL), and intra-op transfusion
+recovered from the free-text narrative. Case 107's LLM returned
+INSUFFICIENT_EVIDENCE because the structured procedure rows were empty and it
+trusted that absence over a post-op nursing note already in the bundle — a model
+attention miss. Pinning the signal high makes it un-skippable. Like Hemodynamic
+it carries no appropriateness language and never gates the classifier (whose
+procedure bypass keys on structured timing, not on this scan)."""
 
 
 HbSource = Literal["HEMATOLOGY", "POCT"]

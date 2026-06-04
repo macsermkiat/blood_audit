@@ -151,6 +151,63 @@ class HemodynamicSummary(BaseModel):
         return self.map_nadir is None and not self.vasopressors
 
 
+class PeriopFinding(BaseModel):
+    """One peri-operative fact from the window scan (Case 107 / REQNO 68074627).
+
+    Pure provenance, no interpretation: the ``category`` of signal, the verbatim
+    ``snippet`` it was found in, and where (``at`` = tz-aware UTC note timestamp,
+    ``source`` = origin table). The scan keeps at most one finding per category,
+    so a summary carries at most three findings.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    category: Literal["surgery", "blood_loss", "intraop_transfusion"]
+    snippet: str
+    at: AwareDatetime
+    source: Literal["IPDADMPROGRESS", "IPDNRFOCUSDT"]
+
+
+class PeriopSummary(BaseModel):
+    """Fact-only peri-operative evidence aggregated across an order's note window.
+
+    Produced by :func:`bba.vitals_extractor.periop.scan_periop` and surfaced to
+    the LLM as a pinned, truncation-exempt evidence item. It recovers the
+    surgical context the LLM missed on Case 107 / REQNO 68074627, where the
+    structured procedure rows were empty and the surgery (ORIF, EBL 1500 ml) was
+    documented only in a free-text nursing note. The model records whether a
+    surgery was charted in the prose, the worst (largest) estimated blood loss
+    normalized to millilitres, and whether a specific blood component was given
+    intra-operatively.
+
+    BINDING GUARDRAIL: this model carries facts only. There is deliberately no
+    "appropriate"/"indicated"/"justified" field — peri-operative context is a
+    supporting factor the auditor and LLM weigh, never a standalone transfusion
+    verdict, and the deterministic classifier's procedure bypass keys on
+    structured timing, not on this scan. Do not add such a field.
+
+    Every field is nullable/empty: ``blood_loss_ml`` is ``None`` when no EBL was
+    charted, the booleans default ``False``, and ``findings`` is empty when the
+    scan found nothing.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    surgical_context: bool = False
+    blood_loss_ml: int | None = None
+    intraop_transfusion: bool = False
+    findings: tuple[PeriopFinding, ...] = ()
+
+    @property
+    def is_empty(self) -> bool:
+        """True when the scan found no surgery, no EBL, and no intra-op transfusion."""
+        return (
+            not self.surgical_context
+            and self.blood_loss_ml is None
+            and not self.intraop_transfusion
+        )
+
+
 LLMFallback = Callable[[str], VitalSigns]
 """Callable boundary for the LLM fallback step.
 
