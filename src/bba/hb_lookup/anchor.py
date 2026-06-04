@@ -18,10 +18,18 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from bba.hb_lookup.lookup import lookup_hb
 from bba.hb_lookup.models import HbLookupResult, HbObservation
+
+# Blood reserved for elective surgery is crossmatched and held days before
+# it is issued/transfused. Anchoring the evidence windows on the reservation
+# REQTIME then misses the entire transfusion context (the op-day Hb drop and
+# operative notes). When the issue datetime lands this far or more after the
+# order, re-anchor the evidence windows onto it. 24h cleanly separates the
+# same-admission same-day issue (no re-anchor) from the reserve-ahead case.
+DEFAULT_REANCHOR_THRESHOLD = timedelta(hours=24)
 
 
 @dataclass(frozen=True)
@@ -70,3 +78,57 @@ def resolve_hb_with_fallback(
             return fallback, candidate.display, candidate.reason
 
     return primary, "", "order_datetime"
+
+
+@dataclass(frozen=True)
+class EvidenceAnchor:
+    """Where the per-source evidence windows should be centered.
+
+    ``anchor_utc`` is the tz-aware UTC datetime the Hb lookback, notes, CBC,
+    meds and vitals windows are computed relative to. ``reason`` is
+    ``"order_datetime"`` for the common case (windows track the order) or
+    ``"transfusion_reanchor"`` when an elective pre-reserved order was issued
+    materially later than it was reserved and the windows moved onto that
+    issue datetime. ``gap_hours`` is the issue-minus-order lag in hours (0.0
+    when not re-anchored); ``display`` is the issue anchor's local-time string
+    for the review page ("" when not re-anchored).
+    """
+
+    anchor_utc: datetime
+    reason: str
+    gap_hours: float
+    display: str
+
+
+def resolve_evidence_anchor(
+    *,
+    order_datetime: datetime,
+    candidates: Sequence[AnchorCandidate],
+    threshold: timedelta = DEFAULT_REANCHOR_THRESHOLD,
+) -> EvidenceAnchor:
+    """Pick the evidence-window anchor for one order.
+
+    The order anchor wins unless an ``issue_datetime`` candidate (PICK/USE)
+    lands ``threshold`` or more after the order — the reserve-ahead elective
+    case. Only ``issue_datetime`` candidates re-anchor: the blood-bank
+    *visit* timestamp tracks the reservation, not the transfusion, so it must
+    never move the windows. The first qualifying issue candidate wins (the
+    builder orders the issue datetime ahead of the blood-bank fallback).
+    """
+    for candidate in candidates:
+        if candidate.reason != "issue_datetime":
+            continue
+        gap = candidate.anchor_utc - order_datetime
+        if gap >= threshold:
+            return EvidenceAnchor(
+                anchor_utc=candidate.anchor_utc,
+                reason="transfusion_reanchor",
+                gap_hours=gap.total_seconds() / 3600.0,
+                display=candidate.display,
+            )
+    return EvidenceAnchor(
+        anchor_utc=order_datetime,
+        reason="order_datetime",
+        gap_hours=0.0,
+        display="",
+    )

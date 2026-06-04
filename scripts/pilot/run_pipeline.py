@@ -38,7 +38,12 @@ from bba.cohort_detector import (
 from bba.deterministic_classifier import classify
 from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import ClassifierInputs
-from bba.hb_lookup import HbObservation, parse_hb_value, resolve_hb_with_fallback
+from bba.hb_lookup import (
+    HbObservation,
+    parse_hb_value,
+    resolve_evidence_anchor,
+    resolve_hb_with_fallback,
+)
 from bba.ingest.date_parser import parse_kcmh_english_date
 from bba.ingest.models import ParsedTimeOfDay
 
@@ -94,6 +99,9 @@ REPORT_FIELDNAMES = [
     "an",
     "order_datetime_utc",
     "anchor_imputed",
+    "evidence_anchor_reason",
+    "evidence_anchor_datetime_local",
+    "reanchor_gap_hours",
     "products_ordered",
     "diagnosis_codes_n",
     "hb_anchor_datetime_local",
@@ -572,10 +580,19 @@ def main() -> None:
 
     rows: list[dict[str, Any]] = []
     for order in filter_result.included:
+        # Reserve-ahead elective orders are crossmatched days before transfusion;
+        # re-anchor the Hb lookback (and the LLM gate's evidence windows) onto
+        # the issue datetime so the op-day Hb is what the order is judged on.
+        # Cohort, procedure proximity and the classifier itself keep the REQ
+        # order anchor — those encode the order-decision context, not evidence.
+        evidence_anchor = resolve_evidence_anchor(
+            order_datetime=order.order_datetime,
+            candidates=candidates_by_reqno.get(order.reqno, []),
+        )
         hb_obs = _build_hb_observations(lab, order.an)
         hb, hb_anchor_display, hb_anchor_reason = resolve_hb_with_fallback(
             observations=hb_obs,
-            order_datetime=order.order_datetime,
+            order_datetime=evidence_anchor.anchor_utc,
             candidates=candidates_by_reqno.get(order.reqno, []),
         )
         op_events = _build_op_events(
@@ -665,6 +682,13 @@ def main() -> None:
                 "an": order.an,
                 "order_datetime_utc": order.order_datetime.isoformat(),
                 "anchor_imputed": order.anchor_imputed,
+                "evidence_anchor_reason": evidence_anchor.reason,
+                "evidence_anchor_datetime_local": evidence_anchor.display,
+                "reanchor_gap_hours": (
+                    f"{evidence_anchor.gap_hours:.1f}"
+                    if evidence_anchor.reason == "transfusion_reanchor"
+                    else ""
+                ),
                 "products_ordered": "|".join(order.products_ordered),
                 "diagnosis_codes_n": len(order.diagnosis_codes),
                 "hb_anchor_datetime_local": hb_anchor_display,

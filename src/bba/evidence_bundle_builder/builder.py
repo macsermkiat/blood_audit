@@ -883,7 +883,11 @@ def build_evidence_bundle(
     :class:`bba.audit_store.AuditRow.evidence_bundle_hash` and is what
     :mod:`bba.deid_redactor` reads to detect mid-pipeline mutation.
     """
-    anchor_dt = _to_utc(inputs.anchor.order_datetime)
+    # Per-source windows center on window_anchor (the transfusion datetime for
+    # reserve-ahead elective orders); it defaults to the order REQTIME. The
+    # order_datetime stays the audit-identity anchor and is what the envelope
+    # echoes — see OrderAnchor.window_anchor.
+    anchor_dt = _to_utc(inputs.anchor.window_anchor or inputs.anchor.order_datetime)
 
     progress = _filter_progress(inputs.progress_notes, anchor_dt)
     # Drop blank / header-only notes BEFORE the cap. Otherwise eight closer

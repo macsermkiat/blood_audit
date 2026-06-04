@@ -194,6 +194,16 @@ class OrderAnchor(BaseModel):
     value that routed the case to the LLM. Set ``hb_anchor`` to that draw's
     timestamp so the bundle's Hb upper bound includes it; leave ``None`` for
     the order-time path (the common case) to keep the original window.
+
+    ``window_anchor`` is the point every per-source window (progress, focus,
+    meds, Hb, vitals) is centered on. It defaults to ``order_datetime``. Blood
+    reserved for elective surgery is crossmatched days before it is
+    issued/transfused; for those orders the caller sets ``window_anchor`` to
+    the transfusion datetime (see :func:`bba.hb_lookup.resolve_evidence_anchor`)
+    so the bundle captures the op-day evidence instead of the reservation-day
+    window. ``order_datetime`` stays the reservation REQTIME for audit identity,
+    so ``window_anchor`` is windowing-only and is not echoed into the hashed
+    bundle envelope.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -203,6 +213,7 @@ class OrderAnchor(BaseModel):
     an_hash: str
     products: tuple[str, ...]
     hb_anchor: UTCDatetime | None = None
+    window_anchor: UTCDatetime | None = None
 
 
 class DiagnosisRecord(BaseModel):

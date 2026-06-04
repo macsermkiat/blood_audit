@@ -84,7 +84,13 @@ from bba.evidence_bundle_builder import (
     VitalsRecord,
     build_evidence_bundle,
 )
-from bba.hb_lookup import HbObservation, parse_hb_value, resolve_hb_with_fallback
+from bba.hb_lookup import (
+    EvidenceAnchor,
+    HbObservation,
+    parse_hb_value,
+    resolve_evidence_anchor,
+    resolve_hb_with_fallback,
+)
 from bba.ingest.date_parser import parse_kcmh_english_date
 from bba.ingest.models import ParsedTimeOfDay
 import bba.llm_client.models as _llm_models
@@ -143,6 +149,13 @@ NEUTROPHIL_ABS_CODE = "290093"
 WINDOW_HB_DAYS = 7
 WINDOW_NOTES_DAYS_BEFORE = 1
 WINDOW_NOTES_DAYS_AFTER = 0
+# Re-anchored reserve-ahead orders only: the transfusion plays out across the
+# op day, so the intra-op nadir and the morning-after Hb are drawn AFTER the
+# USE issue time. Extend the Hb history upper bound this many calendar days
+# past the op day so the LLM sees the full peri-transfusion trajectory, not
+# just the stale value at issue time. Non-reanchored orders keep the strict
+# pre-order upper bound (no forward extension).
+WINDOW_HB_REANCHOR_DAYS_AFTER = 1
 
 CRYSTALLOID_KEYWORDS = (
     "nss",
@@ -655,6 +668,7 @@ def _incpt_evidence_chunks(
     *,
     an: str,
     anchor: datetime,
+    anchor_label: str = "order",
     window_start: datetime,
     window_end: datetime,
     start_eid: int,
@@ -724,7 +738,7 @@ def _incpt_evidence_chunks(
             f"OPRTACT ICD9CM={','.join(optract_codes) if optract_codes else '(unmapped)'}. "
             "INCPT codes are charge codes; use OPRTACT ICD9CM when mapped, "
             "otherwise judge operation type from group/name/description. "
-            f"[{hours:+.1f}h vs order]"
+            f"[{hours:+.1f}h vs {anchor_label}]"
         )
         chunks.append(
             EvidenceChunk(
@@ -851,22 +865,47 @@ def main() -> None:
     print(f"audit_orders: included={len(fr.included)} excluded={len(fr.excluded)}")
 
     contexts: list[PipelineRowContext] = []
+    # Re-anchor provenance per order, keyed by audit_id. Kept out of the shared
+    # PipelineRowContext model so the schema is untouched; consumed only when
+    # emitting the JSON report below.
+    anchor_by_id: dict[str, EvidenceAnchor] = {}
 
     for order in fr.included:
-        hb_obs = _hb_observations(lab, order.an)
-        hb, _hb_anchor_display, _hb_anchor_reason = resolve_hb_with_fallback(
-            observations=hb_obs,
+        # Reserve-ahead elective orders are crossmatched days before they are
+        # transfused; re-anchor the evidence windows (Hb lookback, notes, CBC,
+        # meds, vitals, INCPT) onto the issue datetime so the model adjudicates
+        # the op-day context instead of the reservation-day window. Cohort and
+        # procedure proximity keep the REQ order anchor (the order-decision
+        # context). evidence_anchor == order.order_datetime when not re-anchored,
+        # so same-day orders are byte-identical to before. See
+        # bba.hb_lookup.resolve_evidence_anchor.
+        evidence_anchor = resolve_evidence_anchor(
             order_datetime=order.order_datetime,
             candidates=candidates_by_reqno.get(order.reqno, []),
         )
-        # When the resolver anchored on a post-REQTIME draw (the fallback
+        ev_anchor = evidence_anchor.anchor_utc
+        reanchored = evidence_anchor.reason == "transfusion_reanchor"
+        anchor_by_id[order.audit_id] = evidence_anchor
+        # Display noun for hours-before-anchor flags. For re-anchored orders the
+        # windows hang off the transfusion datetime, so "before order" would be
+        # off by the reservation->transfusion gap (days). Non-reanchored cases
+        # keep "order", so their evidence text is byte-identical to before.
+        anchor_label = "transfusion" if reanchored else "order"
+
+        hb_obs = _hb_observations(lab, order.an)
+        hb, _hb_anchor_display, _hb_anchor_reason = resolve_hb_with_fallback(
+            observations=hb_obs,
+            order_datetime=ev_anchor,
+            candidates=candidates_by_reqno.get(order.reqno, []),
+        )
+        # When the resolver anchored on a post-anchor draw (the fallback
         # ladder), that draw is the Hb that routed this case to the LLM. Carry
         # its timestamp so the evidence bundle's Hb upper bound includes it;
         # otherwise the model adjudicates without the triggering value. None
-        # for the order-time path keeps the original pre-order-only window.
+        # for the order-time path keeps the original pre-anchor-only window.
         hb_bundle_anchor = (
             hb.datetime_utc
-            if hb.datetime_utc is not None and hb.datetime_utc > order.order_datetime
+            if hb.datetime_utc is not None and hb.datetime_utc > ev_anchor
             else None
         )
 
@@ -924,9 +963,9 @@ def main() -> None:
         )
 
         vitals_notes = _vitals_notes_for(
-            progress, focus, order.an, order.order_datetime
+            progress, focus, order.an, ev_anchor
         )
-        vitals = extract_vitals(anchor=order.order_datetime, notes=vitals_notes)
+        vitals = extract_vitals(anchor=ev_anchor, notes=vitals_notes)
 
         # Issue #76: ship the narrative notes themselves (not just the regex
         # numbers) so the LLM sees the MAP / vasopressor evidence that Case 2
@@ -953,7 +992,7 @@ def main() -> None:
         # so the bound must be the local midnight that ends "day-of",
         # not order_datetime + 24h (which would leak into the next day).
         local_tz = ZoneInfo(TZ_LOCAL)
-        order_date_local = order.order_datetime.astimezone(local_tz).date()
+        order_date_local = ev_anchor.astimezone(local_tz).date()
         notes_lo = datetime.combine(
             order_date_local - timedelta(days=WINDOW_NOTES_DAYS_BEFORE),
             _time.min,
@@ -964,15 +1003,31 @@ def main() -> None:
             _time.min,
             tzinfo=local_tz,
         ).astimezone(timezone.utc)
-        hb_lo = order.order_datetime - timedelta(days=WINDOW_HB_DAYS)
+        hb_lo = ev_anchor - timedelta(days=WINDOW_HB_DAYS)
+        # Re-anchored reserve-ahead orders: the intra-op nadir and the
+        # morning-after Hb are drawn AFTER the USE issue time, so a strict
+        # backward upper bound (ev_anchor) hides the peri-transfusion drop the
+        # case is actually about. Widen the upper bound to the end of op-day +N
+        # so the LLM sees the full trajectory. The builder mirrors this via
+        # OrderAnchor.hb_anchor (passed below). Non-reanchored orders keep the
+        # backward-only bound, so their bundles stay byte-identical.
+        if reanchored:
+            hb_op_day_hi = datetime.combine(
+                order_date_local + timedelta(days=WINDOW_HB_REANCHOR_DAYS_AFTER + 1),
+                _time.min,
+                tzinfo=local_tz,
+            ).astimezone(timezone.utc)
+            hb_bundle_anchor = (
+                max(hb_bundle_anchor, hb_op_day_hi)
+                if hb_bundle_anchor is not None
+                else hb_op_day_hi
+            )
 
         diagnoses: tuple[DiagnosisRecord, ...] = tuple(
             DiagnosisRecord(icd10=code, description=diag_name_by_code.get(code))
             for code in dict.fromkeys(order.diagnosis_codes)
         )
-        hb_hi = (
-            hb_bundle_anchor if hb_bundle_anchor is not None else order.order_datetime
-        )
+        hb_hi = hb_bundle_anchor if hb_bundle_anchor is not None else ev_anchor
         hb_for_bundle = tuple(
             HbRecord(
                 timestamp=o.datetime_utc,
@@ -1028,6 +1083,7 @@ def main() -> None:
                     an_hash=an_hash,
                     products=order.products_ordered,
                     hb_anchor=hb_bundle_anchor,
+                    window_anchor=ev_anchor if reanchored else None,
                 ),
                 diagnoses=diagnoses,
                 progress_notes=progress_for_bundle,
@@ -1054,21 +1110,13 @@ def main() -> None:
         min24_id: str | None = None
         min48_id: str | None = None
         if hb_payloads:
-            pre = [(i, v, t) for i, v, t in hb_payloads if t <= order.order_datetime]
+            pre = [(i, v, t) for i, v, t in hb_payloads if t <= ev_anchor]
             if pre:
                 closest_id = max(pre, key=lambda x: x[2])[0]
-                w24 = [
-                    x
-                    for x in pre
-                    if (order.order_datetime - x[2]) <= timedelta(hours=24)
-                ]
+                w24 = [x for x in pre if (ev_anchor - x[2]) <= timedelta(hours=24)]
                 if w24:
                     min24_id = min(w24, key=lambda x: x[1])[0]
-                w48 = [
-                    x
-                    for x in pre
-                    if (order.order_datetime - x[2]) <= timedelta(hours=48)
-                ]
+                w48 = [x for x in pre if (ev_anchor - x[2]) <= timedelta(hours=48)]
                 if w48:
                     min48_id = min(w48, key=lambda x: x[1])[0]
 
@@ -1079,26 +1127,26 @@ def main() -> None:
                 continue
             if item.id in (closest_id, min24_id, min48_id):
                 ts = item.timestamp_utc
-                hrs = (
-                    (order.order_datetime - ts).total_seconds() / 3600.0 if ts else None
-                )
+                hrs = (ev_anchor - ts).total_seconds() / 3600.0 if ts else None
                 flags: list[str] = []
                 if item.id == closest_id:
-                    flags.append("closest pre-order Hb")
+                    flags.append(f"closest pre-{anchor_label} Hb")
                 if item.id == min24_id:
-                    flags.append("minimum in 24h pre-order")
+                    flags.append(f"minimum in 24h pre-{anchor_label}")
                 if item.id == min48_id and item.id != min24_id:
-                    flags.append("minimum in 48h pre-order")
+                    flags.append(f"minimum in 48h pre-{anchor_label}")
                 if hrs is not None:
-                    flags.append(f"{hrs:.1f}h before order")
+                    flags.append(f"{hrs:.1f}h before {anchor_label}")
                 text = f"{text}  [{'; '.join(flags)}]"
             elif item.source == "Lab" and "value_g_dl" in dict(item.payload):
                 ts = item.timestamp_utc
-                hrs = (
-                    (order.order_datetime - ts).total_seconds() / 3600.0 if ts else None
-                )
+                hrs = (ev_anchor - ts).total_seconds() / 3600.0 if ts else None
                 if hrs is not None:
-                    text = f"{text}  [{hrs:.1f}h before order]"
+                    # Re-anchored bundles include op-day draws AFTER the
+                    # transfusion (intra-op nadir, morning-after); render those
+                    # as "after" instead of a negative "before".
+                    when = "before" if hrs >= 0 else "after"
+                    text = f"{text}  [{abs(hrs):.1f}h {when} {anchor_label}]"
             chunks.append(
                 EvidenceChunk(
                     evidence_id=item.id,
@@ -1112,7 +1160,8 @@ def main() -> None:
             incpt,
             optract_dict,
             an=order.an,
-            anchor=order.order_datetime,
+            anchor=ev_anchor,
+            anchor_label=anchor_label,
             window_start=notes_lo,
             window_end=notes_hi,
             start_eid=next_eid,
@@ -1144,11 +1193,11 @@ def main() -> None:
             unit = (r.get("NRMUNIT") or "").strip()
             lo = (r.get("MINNRM") or "").strip()
             hi = (r.get("MAXNRM") or "").strip()
-            hrs = (order.order_datetime - dt).total_seconds() / 3600.0
+            hrs = (ev_anchor - dt).total_seconds() / 3600.0
             text = (
                 f"{name} {value}{(' ' + unit) if unit else ''} at "
                 f"{dt.isoformat()}  [ref {lo}-{hi}; "
-                f"{hrs:+.1f}h vs order]"
+                f"{hrs:+.1f}h vs {anchor_label}]"
             )
             chunks.append(
                 EvidenceChunk(
@@ -1344,10 +1393,20 @@ def main() -> None:
     for ctx in llm_contexts:
         det = classifier_results[ctx.order.audit_id]
         r = rows_by_id.get(ctx.order.audit_id)
+        ev = anchor_by_id.get(ctx.order.audit_id)
         report.append(
             {
                 "reqno": ctx.order.reqno,
                 "audit_id": ctx.order.audit_id,
+                "evidence_anchor": (
+                    {
+                        "reason": ev.reason,
+                        "datetime_local": ev.display,
+                        "gap_hours": round(ev.gap_hours, 1),
+                    }
+                    if ev is not None
+                    else None
+                ),
                 "deterministic": {
                     "classification": det.classification,
                     "rationale": det.rationale,

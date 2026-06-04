@@ -54,6 +54,11 @@ ICD10_DICT_CSV = Path(os.environ.get("BBA_PILOT_ICD10_CSV", str(_DEFAULT_ICD10))
 # Per-source windowing rules around the transfusion anchor.
 WINDOW_PROC_DAYS = 7
 WINDOW_HB_DAYS = 7
+# Re-anchored reserve-ahead orders only: extend the Hb history upper bound this
+# many calendar days past the op day so the human reviewer sees the same
+# intra-op nadir + morning-after draws the LLM gate sees (both drawn AFTER the
+# USE issue time). Mirrors run_llm_leg.WINDOW_HB_REANCHOR_DAYS_AFTER.
+WINDOW_HB_REANCHOR_DAYS_AFTER = 1
 WINDOW_NOTES_DAYS_BEFORE = 1
 WINDOW_NOTES_DAYS_AFTER = 1
 WINDOW_PERIOP_NOTES_DAYS_AFTER = 2
@@ -659,16 +664,33 @@ def main() -> None:
         anchor_dt = parse_hosxp_datetime(
             bdv.get("REQDATE"), bdv.get("REQTIME")
         ) or parse_hosxp_datetime(bdv.get("BDVSTDATE"), bdv.get("BDVSTTIME"))
-        anchor_d = anchor_dt.date() if anchor_dt else None
+        # Reserve-ahead elective orders re-window all evidence (Hb, notes, CBC,
+        # meds, procedures) onto the transfusion (USE) datetime; the displayed
+        # order anchor above stays REQTIME. Mirror the pipeline's re-anchor so
+        # the highlighted in-window rows match what the gate actually scored.
+        # Non-reanchored cases keep window_anchor == order anchor unchanged.
+        evidence_anchor_reason = (
+            det.get("evidence_anchor_reason") or "order_datetime"
+        ).strip()
+        reanchored = evidence_anchor_reason == "transfusion_reanchor"
+        evidence_anchor_dt = parse_report_datetime(
+            det.get("evidence_anchor_datetime_local")
+        )
+        window_anchor_dt = (
+            evidence_anchor_dt if (reanchored and evidence_anchor_dt) else anchor_dt
+        )
+        window_anchor_d = window_anchor_dt.date() if window_anchor_dt else None
         hb_anchor_dt = parse_report_datetime(det.get("hb_anchor_datetime_local"))
-        hb_anchor_dt = hb_anchor_dt or anchor_dt
+        hb_anchor_dt = hb_anchor_dt or window_anchor_dt
         hb_anchor_reason = (det.get("hb_anchor_reason") or "order_datetime").strip()
         try:
             upcoming_h = float(det.get("upcoming_procedure_hours") or "")
         except ValueError:
             upcoming_h = None
         notes_hi_d = (
-            (anchor_d + timedelta(days=WINDOW_NOTES_DAYS_AFTER)) if anchor_d else None
+            (window_anchor_d + timedelta(days=WINDOW_NOTES_DAYS_AFTER))
+            if window_anchor_d
+            else None
         )
         periop_notes_hi_d = notes_hi_d
         if anchor_dt and upcoming_h is not None and 0 <= upcoming_h <= 72:
@@ -683,13 +705,34 @@ def main() -> None:
         hb_lo_dt = (
             (hb_anchor_dt - timedelta(days=WINDOW_HB_DAYS)) if hb_anchor_dt else None
         )
+        # Hb upper bound. Re-anchored orders extend it past the USE issue time to
+        # the end of op-day +N (matching the LLM gate) so the intra-op nadir and
+        # the morning-after draw are visible in the Hb table; otherwise it is the
+        # Hb lookup anchor itself (backward-only).
+        hb_hi_dt = hb_anchor_dt
+        if reanchored and window_anchor_d is not None:
+            hb_hi_dt = datetime.combine(
+                window_anchor_d + timedelta(days=WINDOW_HB_REANCHOR_DAYS_AFTER + 1),
+                datetime.min.time(),
+                tzinfo=TZ_LOCAL,
+            )
         notes_lo = (
-            (anchor_d - timedelta(days=WINDOW_NOTES_DAYS_BEFORE)) if anchor_d else None
+            (window_anchor_d - timedelta(days=WINDOW_NOTES_DAYS_BEFORE))
+            if window_anchor_d
+            else None
         )
         notes_hi = notes_hi_d
         periop_notes_hi = periop_notes_hi_d
-        proc_lo = (anchor_d - timedelta(days=WINDOW_PROC_DAYS)) if anchor_d else None
-        proc_hi = (anchor_d + timedelta(days=WINDOW_PROC_DAYS)) if anchor_d else None
+        proc_lo = (
+            (window_anchor_d - timedelta(days=WINDOW_PROC_DAYS))
+            if window_anchor_d
+            else None
+        )
+        proc_hi = (
+            (window_anchor_d + timedelta(days=WINDOW_PROC_DAYS))
+            if window_anchor_d
+            else None
+        )
 
         def _in_notes_window(d: date | None) -> bool:
             return (
@@ -714,8 +757,8 @@ def main() -> None:
             return (
                 d is not None
                 and hb_lo_dt is not None
-                and hb_anchor_dt is not None
-                and hb_lo_dt <= d <= hb_anchor_dt
+                and hb_hi_dt is not None
+                and hb_lo_dt <= d <= hb_hi_dt
             )
 
         line_items = [r for r in bdvstdt if r.get("REQNO") == reqno]
@@ -1062,18 +1105,33 @@ def main() -> None:
             or "—"
         )
         upcoming_disp = fmt_upcoming_procedure(det.get("upcoming_procedure_hours"))
+        # The deterministic gate resolves Hb backward, so its reason stays
+        # "order_datetime" even on re-anchored orders; relabel it to match the
+        # transfusion anchor the Hb lookup datetime above actually reflects.
+        hb_lookup_reason_disp = det.get("hb_anchor_reason") or "order_datetime"
+        if reanchored and hb_lookup_reason_disp == "order_datetime":
+            hb_lookup_reason_disp = "transfusion_reanchor"
         meta_items = [
             f"<div><b>HN:</b> <code>{esc(hn)}</code></div>",
             f"<div><b>AN:</b> <code>{esc(an)}</code></div>",
             f"<div><b>Order anchor:</b> {esc(anchor_date)} {esc(anchor_time)}</div>",
             f"<div><b>Transfusion datetime (issued):</b> {esc(det.get('transfusion_datetime_local') or '—')}</div>",
+            *(
+                [
+                    "<div><b><abbr title='Blood reserved this many hours before it was issued; all evidence windows (Hb, notes, CBC, meds, procedures) below are re-anchored onto the transfusion datetime instead of the reservation order anchor'>Evidence re-anchored to transfusion</abbr>:</b> "
+                    f"{esc(det.get('evidence_anchor_datetime_local') or '—')} "
+                    f"(+{esc(det.get('reanchor_gap_hours') or '—')}h after order)</div>"
+                ]
+                if reanchored
+                else []
+            ),
             f"<div><b>Blood return datetime:</b> {esc(returned_blood_dt)}</div>",
             f"<div><b>Products ordered:</b> {esc(det.get('products_ordered') or '—')}</div>",
             f"<div><b>Hb @ anchor:</b> {esc(det.get('hb_value_g_dl') or '—')} g/dL "
             f"({esc(det.get('hb_freshness') or '—')}, source {esc(det.get('hb_source') or '—')})</div>",
             f"<div><b>Hb lookup anchor:</b> "
-            f"{esc(det.get('hb_anchor_datetime_local') or f'{anchor_date} {anchor_time}'.strip() or '—')} "
-            f"({esc(det.get('hb_anchor_reason') or 'order_datetime')})</div>",
+            f"{esc(det.get('hb_anchor_datetime_local') or (det.get('evidence_anchor_datetime_local') if reanchored else None) or f'{anchor_date} {anchor_time}'.strip() or '—')} "
+            f"({esc(hb_lookup_reason_disp)})</div>",
             f"<div><b><abbr title='Patient clinical cohort used to determine the Hb threshold for this order'>Cohort</abbr>:</b> "
             f"{esc(det.get('cohort_label') or '—')} "
             f"(threshold {esc(det.get('cohort_threshold') or 'n/a')})</div>",
@@ -1293,8 +1351,8 @@ def main() -> None:
         parts.append("</details>")
 
         hb_window_str = (
-            f"{hb_lo_dt.isoformat(sep=' ')} … {hb_anchor_dt.isoformat(sep=' ')}"
-            if hb_lo_dt and hb_anchor_dt
+            f"{hb_lo_dt.isoformat(sep=' ')} … {hb_hi_dt.isoformat(sep=' ')}"
+            if hb_lo_dt and hb_hi_dt
             else "(no anchor)"
         )
         hb_anchor_note = (

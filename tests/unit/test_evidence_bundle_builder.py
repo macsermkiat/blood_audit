@@ -856,6 +856,48 @@ class TestHbFallbackAnchor:
         assert len(_items_by_source(bundle, "Lab")) == 2
 
 
+class TestWindowAnchor:
+    """``window_anchor`` shifts every per-source window without changing identity.
+
+    Blood reserved for elective surgery is crossmatched days before it is
+    issued/transfused. ``window_anchor`` lets the caller center the evidence
+    windows on the transfusion datetime while ``order_datetime`` keeps the
+    reservation REQTIME for audit identity (see resolve_evidence_anchor)."""
+
+    _GAP_H = 120.0  # issue lands 5 days after the reservation order
+
+    def _reanchored(self) -> OrderAnchor:
+        return OrderAnchor(
+            order_datetime=ANCHOR_DT,
+            hn_hash="hn-aaa",
+            an_hash="an-bbb",
+            products=("LPRC",),
+            window_anchor=ANCHOR_DT + timedelta(hours=self._GAP_H),
+        )
+
+    def test_progress_note_at_transfusion_kept_only_when_reanchored(self) -> None:
+        note = _progress(offset_hours=self._GAP_H, text="S: intra-op blood loss\nO: Hb 10.5\nA: bleeding\nP: PRBC 1U")
+        # Default anchor: +120h is far outside the ±24h progress window.
+        assert _items_by_source(_build_minimal(progress_notes=(note,)), "IPDADMPROGRESS") == ()
+        # Re-anchored on the transfusion: the same note is now at the anchor.
+        reanchored = _build_minimal(anchor=self._reanchored(), progress_notes=(note,))
+        assert len(_items_by_source(reanchored, "IPDADMPROGRESS")) == 1
+
+    def test_hb_before_transfusion_kept_only_when_reanchored(self) -> None:
+        hb = _hb(offset_hours=self._GAP_H - 2.0, value=10.5)  # 2h before new anchor
+        assert _items_by_source(_build_minimal(hb_history=(hb,)), "Lab") == ()
+        reanchored = _build_minimal(anchor=self._reanchored(), hb_history=(hb,))
+        assert len(_items_by_source(reanchored, "Lab")) == 1
+
+    def test_window_anchor_preserves_order_datetime_identity(self) -> None:
+        # The hashed envelope must still record the reservation REQTIME so the
+        # bundle links to the audit row; window_anchor is windowing-only.
+        bundle = _build_minimal(anchor=self._reanchored())
+        envelope = json.loads(bundle.canonical_json)
+        assert envelope["anchor"]["order_datetime"] == ANCHOR_DT.isoformat()
+        assert "window_anchor" not in envelope["anchor"]
+
+
 class TestVitalsWindow:
     """Vitals: ``[anchor - 6 h, anchor + 6 h]`` (mirrors :mod:`bba.vitals_extractor`)."""
 
