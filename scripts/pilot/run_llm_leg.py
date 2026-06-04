@@ -1320,6 +1320,7 @@ def main() -> None:
                 prompt_hash="0" * 64,
                 evidence_bundle_hash=bundle.bundle_hash,
                 evidence_chunks=tuple(chunks),
+                periop_summary=bundle.periop_summary,
                 enable_missing_hb_positive_evidence=ENABLE_MISSING_HB_POSITIVE_EVIDENCE,
             )
         )

@@ -42,7 +42,7 @@ from bba.audit_store.models import SafeId, UTCDatetime
 from bba.cohort_detector import CohortAssignment
 from bba.hb_lookup import HbLookupResult
 from bba.prompt_builder import EvidenceChunk
-from bba.vitals_extractor import VitalsResult
+from bba.vitals_extractor import PeriopSummary, VitalsResult
 
 
 class BatchRunState(StrEnum):
@@ -179,6 +179,15 @@ class PipelineRowContext(BaseModel):
     evidence_bundle_hash: str = Field(min_length=1)
 
     evidence_chunks: tuple[EvidenceChunk, ...] = ()
+
+    # Deterministic peri-op signal carried through from
+    # :class:`bba.evidence_bundle_builder.EvidenceBundle.periop_summary`
+    # (Case 107). The replay contradiction guardrail reads this to detect
+    # when the LLM returns INSUFFICIENT_EVIDENCE / POTENTIALLY_INAPPROPRIATE
+    # while the bundle deterministically documents surgery / large EBL /
+    # intra-op transfusion. Defaults to None so a context built without a
+    # peri-op scan simply leaves the guardrail inert (no false escalations).
+    periop_summary: PeriopSummary | None = None
 
     # Operator-supplied kill-switch for the missing-Hb positive-evidence
     # pre-check (MTP / peri-procedural auto-APPROPRIATE on no documented

@@ -2712,6 +2712,36 @@ class TestPeriopSummaryItem:
             "cap did not force any MED drop; tighten char_cap"
         )
 
+    def test_bundle_exposes_periop_summary_handle(self) -> None:
+        # The structured summary is also returned as a non-hashed handle so a
+        # downstream deterministic guardrail (replay contradiction check) reads
+        # the same scan the LLM saw — not a re-parse of redacted prose. The
+        # handle must agree with the emitted Periop item payload (one scan,
+        # one truth) and must NOT leak into canonical_json / bundle_hash.
+        focus = (
+            _focus(offset_hours=3, text="Post-op s/p ORIF Lt femur, EBL 1500 ml"),
+        )
+        bundle = _build_minimal(focus_notes=focus)
+        assert bundle.periop_summary is not None
+        assert bundle.periop_summary.surgical_context is True
+        assert bundle.periop_summary.blood_loss_ml == 1500
+        periop_item = next(it for it in bundle.items if it.source == "Periop")
+        assert (
+            bundle.periop_summary.blood_loss_ml
+            == periop_item.payload["blood_loss_ml"]
+        )
+        assert "periop_summary" not in bundle.canonical_json
+
+    def test_bundle_periop_summary_empty_when_scan_finds_nothing(self) -> None:
+        # Benign notes → the handle is still present but empty, so the guardrail
+        # has nothing to act on (no false escalation).
+        bundle = _build_minimal(
+            progress_notes=(_progress(offset_hours=-1),),
+            focus_notes=(_focus(offset_hours=-1),),
+        )
+        assert bundle.periop_summary is not None
+        assert bundle.periop_summary.is_empty is True
+
 
 class TestExemptTierPartition:
     """EXEMPT_FROM_DROP and DROP_PRIORITY must partition EvidenceSource.

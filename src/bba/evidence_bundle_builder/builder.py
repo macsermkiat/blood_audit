@@ -1011,6 +1011,7 @@ def build_evidence_bundle(
         items=items,
         canonical_json=canonical_json,
         bundle_hash=bundle_hash(canonical_json),
+        periop_summary=periop_summary,
     )
 
 

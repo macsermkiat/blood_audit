@@ -47,6 +47,7 @@ from bba.vitals_extractor.bounds import (
     SBP_MAX,
     SBP_MIN,
 )
+from bba.vitals_extractor.models import PeriopSummary
 
 
 # =============================================================================
@@ -419,6 +420,15 @@ class EvidenceBundle(BaseModel):
     items: tuple[EvidenceItem, ...]
     canonical_json: str
     bundle_hash: str
+
+    # Deterministic peri-op signal scanned from the SAME shipped note set
+    # that becomes the bundle's items (Case 107). This is a convenience
+    # return handle for downstream deterministic guardrails (e.g. the
+    # replay contradiction check) — it is NOT serialized into
+    # ``canonical_json`` and therefore does NOT participate in
+    # ``bundle_hash``. A bundle reconstructed from stored bytes carries the
+    # default (None); the guardrail then simply has no signal to act on.
+    periop_summary: PeriopSummary | None = None
 
     @field_validator("bundle_hash")
     @classmethod
