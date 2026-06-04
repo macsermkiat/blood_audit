@@ -104,7 +104,7 @@ _TYPE_RANK = {
 }
 
 _EBL_RE = re.compile(
-    r"\bEBL\s*[:=]?\s*([0-9][0-9,]*(?:\.\d+)?)\s*(mL|ml|cc|L|liter|liters)\b",
+    r"\b(?:EBL|blood\s*loss)\s*[:=.]?\s*([0-9][0-9,]*(?:\.\d+)?)\s*(mL|ml|cc|L|liter|liters)\b",
     re.IGNORECASE,
 )
 

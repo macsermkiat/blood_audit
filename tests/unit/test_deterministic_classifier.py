@@ -1259,6 +1259,17 @@ class TestCrystalloidHelper:
         )
         assert total_crystalloid_liters(events, ORDER_DT) == pytest.approx(2.0)
 
+    def test_parses_thousands_separator(self) -> None:
+        """A dose written with a thousands separator (``"NSS 1,000 mL"``)
+        must parse as 1.0 L, not the ``"000 mL"`` tail (0 L). Undercounting
+        here can keep the 4 h total below the 2 L hemodilution trigger and
+        wrongly leave a dilutional sub-threshold Hb as APPROPRIATE."""
+        events = (
+            self._med("NSS 1,000 mL", 1.0),
+            self._med("RLS 1,500 cc", 2.0),
+        )
+        assert total_crystalloid_liters(events, ORDER_DT) == pytest.approx(2.5)
+
     def test_excludes_infusion_rate_strings(self) -> None:
         """PR #52 Codex P2: ``NSS 500 mL/h`` is an infusion RATE, not a
         delivered bolus. The parser MUST NOT sum it into the 4 h total —
