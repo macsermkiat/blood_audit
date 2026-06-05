@@ -46,6 +46,7 @@ from bba.hb_lookup import (
 )
 from bba.ingest.date_parser import parse_kcmh_english_date
 from bba.ingest.models import ParsedTimeOfDay
+from bba.vitals_extractor import scan_periop
 
 from _anchor_candidates import build_anchor_candidates
 from _hosxp_dt import (
@@ -55,6 +56,7 @@ from _hosxp_dt import (
     _parse_hosxp_date,
     _parse_time,
 )
+from _periop_notes import vitals_notes_for
 
 WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
 BUNDLE = WORK / "bundle"
@@ -462,6 +464,10 @@ def main() -> None:
     diag = _read_csv("Diagnosis.csv")
     lab = _read_csv("Lab.csv")
     med = _read_csv("Med.csv")
+    # Free-text notes feed the missing-Hb peri-op pre-pass (scan_periop).
+    # Optional so the deterministic leg still runs on a bundle without them.
+    progress = _read_optional_csv("IPDADMPROGRESS.csv")
+    focus = _read_optional_csv("IPDNRFOCUSDT.csv")
     iptsumoprt = _normalize_iptsumoprt(_read_csv("IPTSUMOPRT.csv"))
     ipddchsumoprt = _normalize_iptsumoprt(_read_optional_csv("IPDDCHSUMOPRT.csv"))
     incpt = _normalize_incpt(
@@ -654,6 +660,16 @@ def main() -> None:
             else None
         )
 
+        # Peri-op pre-pass evidence (Case 107 extractor). Scanned from the
+        # admission's free-text notes; the windowed authority for production
+        # is the bundle's periop_summary (audit_pipeline + run_llm_leg path).
+        # Here the deterministic-only leg scans the loaded notes so its
+        # missing-Hb report mirrors the same hard signals (intra-op
+        # transfusion / EBL >= PERIOP_MIN_EBL_ML) the LLM leg would see.
+        periop = scan_periop(
+            vitals_notes_for(progress, focus, order.an, evidence_anchor.anchor_utc)
+        )
+
         clf = classify(
             ClassifierInputs(
                 audit_id=order.audit_id,
@@ -664,6 +680,9 @@ def main() -> None:
                 upcoming_procedure_hours=upcoming_h,
                 crystalloid_liters_prior_4h=crystalloid_liters,
                 enable_missing_hb_positive_evidence=ENABLE_MISSING_HB_POSITIVE_EVIDENCE,
+                periop_blood_loss_ml=periop.blood_loss_ml,
+                periop_intraop_transfusion=periop.intraop_transfusion,
+                periop_surgical_context=periop.surgical_context,
             )
         )
 

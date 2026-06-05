@@ -96,10 +96,11 @@ from bba.ingest.models import ParsedTimeOfDay
 import bba.llm_client.models as _llm_models
 from bba.llm_client import AnthropicBatchTransport, BatchSubmissionRequest
 from bba.prompt_builder import EvidenceChunk, PromptBuildRequest, build_prompt
-from bba.vitals_extractor import VitalsNote, extract_vitals
+from bba.vitals_extractor import extract_vitals
 
 from _anchor_candidates import build_anchor_candidates
 from _hosxp_dt import _combine, _parse_hosxp_date, _parse_time
+from _periop_notes import vitals_notes_for
 
 # Runtime extension of ALLOWED_MODELS so the BatchSubmissionResult
 # parser inside bba.llm_client.transport accepts the floating aliases
@@ -465,78 +466,6 @@ def _latest_anc(
         if best is None or dt > best[0]:
             best = (dt, int(v))
     return None if best is None else best[1]
-
-
-def _vitals_notes_for(
-    progress: list[dict[str, str]],
-    focus: list[dict[str, str]],
-    an: str,
-    anchor: datetime,
-) -> tuple[VitalsNote, ...]:
-    """Build VitalsNote list from notes for the AN.
-
-    PHI safety is handled by the upstream de-identification gate (issue #76):
-    these notes — and the narrative the bundle ships from them — are treated as
-    already de-identified, so the full SOAP text is forwarded, not just numbers.
-
-    IPDADMPROGRESS carries four free-text SOAP columns (S/O/A/P); MAP and
-    vasopressor evidence can live in any of them, so all four are joined here.
-    Restricting to OBJECTIVE would starve both the LLM narrative and the
-    hemodynamic scan of assessment/plan-charted pressor support. Each column is
-    prefixed with its SOAP label so the builder's ``parse_soap_sections`` can
-    re-split them; an unlabelled join would collapse to a single OBJECTIVE block
-    and let priority-aware truncation drop the assessment/plan with it.
-    """
-    out: list[VitalsNote] = []
-    for r in progress:
-        if r.get("AN") != an:
-            continue
-        dt = _combine(
-            _parse_hosxp_date(r.get("PROGDATE") or ""),
-            ParsedTimeOfDay(hour=0, minute=0, second=0),
-        )
-        soap = (
-            ("Subjective", (r.get("SUBJECTIVE") or "").strip()),
-            ("Objective", (r.get("OBJECTIVE") or "").strip()),
-            ("Assessment", (r.get("ASSESSMENT") or "").strip()),
-            ("Plan", (r.get("PLAN") or "").strip()),
-        )
-        text = "\n".join(f"{label}: {value}" for label, value in soap if value)
-        if dt is None or not text:
-            continue
-        out.append(
-            VitalsNote(
-                timestamp=dt,
-                text=text,
-                source="IPDADMPROGRESS",
-            )
-        )
-    for r in focus:
-        if r.get("AN") != an:
-            continue
-        dt = _combine(
-            _parse_hosxp_date(r.get("PROGRESSDATE") or ""),
-            _parse_time(r.get("PROGRESSTIME") or ""),
-        )
-        text = " ".join(
-            filter(
-                None,
-                [
-                    (r.get("ACTION") or "").strip(),
-                    (r.get("RESPONSE") or "").strip(),
-                ],
-            )
-        )
-        if dt is None or not text:
-            continue
-        out.append(
-            VitalsNote(
-                timestamp=dt,
-                text=text,
-                source="IPDNRFOCUSDT",
-            )
-        )
-    return tuple(out)
 
 
 def _is_crystalloid(name: str) -> bool:
@@ -1001,7 +930,7 @@ def main() -> None:
             crystalloid_events, order.order_datetime
         )
 
-        vitals_notes = _vitals_notes_for(
+        vitals_notes = vitals_notes_for(
             progress, focus, order.an, ev_anchor
         )
         vitals = extract_vitals(anchor=ev_anchor, notes=vitals_notes)
@@ -1329,6 +1258,7 @@ def main() -> None:
     classifier_results: dict[str, Any] = {}
     llm_contexts: list[PipelineRowContext] = []
     for ctx in contexts:
+        periop = ctx.periop_summary
         cres = classify(
             ClassifierInputs(
                 audit_id=ctx.order.audit_id,
@@ -1339,6 +1269,9 @@ def main() -> None:
                 upcoming_procedure_hours=ctx.upcoming_procedure_hours,
                 crystalloid_liters_prior_4h=ctx.crystalloid_liters_prior_4h,
                 enable_missing_hb_positive_evidence=ctx.enable_missing_hb_positive_evidence,
+                periop_blood_loss_ml=periop.blood_loss_ml if periop else None,
+                periop_intraop_transfusion=periop.intraop_transfusion if periop else False,
+                periop_surgical_context=periop.surgical_context if periop else False,
             )
         )
         classifier_results[ctx.order.audit_id] = cres

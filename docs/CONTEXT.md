@@ -472,10 +472,11 @@ dashboards can group by reason without re-deriving from `rationale`.
 ### Classification precedence
 
 Eleven-step composition in `bba.deterministic_classifier.classify`
-(top wins): (1) Hb missing → MTP / peri-procedural positive-evidence
-pre-check (`APPROPRIATE` on a structured Hb-independent signal), else
-`INSUFFICIENT_EVIDENCE` (see "Missing-Hb positive-evidence pre-check");
-(2) Hb < 7.0 →
+(top wins): (1) Hb missing → MTP / peri-procedural / hard-peri-op-evidence
+positive-evidence pre-pass (`APPROPRIATE` on an Hb-independent signal);
+with the pre-pass flag on but no hard evidence → `NEEDS_REVIEW` (defer to
+LLM), with the flag off → `INSUFFICIENT_EVIDENCE` (see "Missing-Hb
+positive-evidence pre-check"); (2) Hb < 7.0 →
 `APPROPRIATE`/`NONE`; (3) cohort `MTP` → `APPROPRIATE`/`MTP`;
 (4) cohort `UNKNOWN` → `NEEDS_REVIEW`; (5) procedure ≤ 6 h →
 `APPROPRIATE`/`PERI_PROCEDURAL_6H`; (6) upcoming procedure ≤ 72 h →
@@ -564,57 +565,93 @@ the orchestrator before reaching the classifier.
 
 **SEED pending clinical sign-off** (same status as the
 `bba.cohort_detector` allow-lists). When `hb_result.value_g_dl is None`,
-the classifier optionally checks for hard, structured, Hb-independent
-positive evidence and auto-classifies `APPROPRIATE` exactly as the
-Hb-present path would — closing the indefensible asymmetry where the
-*same* case parked as `INSUFFICIENT_EVIDENCE` with no Hb but
-auto-classified `APPROPRIATE` with one.
+the classifier optionally runs a two-stage policy instead of dead-ending:
+it auto-classifies `APPROPRIATE` on hard, Hb-independent positive evidence
+exactly as the Hb-present path would, and **defers everything else to the
+LLM** (`NEEDS_REVIEW`/`hb_missing_defer_llm`) rather than terminating. This
+closes two gaps: the indefensible asymmetry where the *same* case parked as
+`INSUFFICIENT_EVIDENCE` with no Hb but auto-classified `APPROPRIATE` with
+one; and the dead-end where a deterministic `INSUFFICIENT_EVIDENCE` is
+terminal (`DETERMINISTIC_FINAL`) so well-documented elective/peri-op cases
+never reached the LLM (which auto-resolves the majority from the free-text
+prose + the peri-op evidence block).
+
+Window analysis (`/tmp/bba_mini`, 39 cases) confirmed the missingness is
+**real, not a lookback-window artifact** — most cases only have a
+*post-transfusion* Hb (inflated by the transfusion itself), so extending
+the Hb window is the wrong lever (it would feed the gate a hindsight value).
+The accuracy invariant therefore holds: the deterministic gate never
+decides on a (possibly post-transfusion) Hb here — there is none; op-day/
+post-op Hb may reach the LLM only as clearly-labeled *context*.
 
 **The policy is gated behind a disabled-by-default flag**
 (`ClassifierInputs.enable_missing_hb_positive_evidence`, forwarded from
 `PipelineRowContext.enable_missing_hb_positive_evidence`). When the flag
-is `False` (the default and production state until the QI committee
-signs off), missing Hb always returns
-`INSUFFICIENT_EVIDENCE`/`NONE`/`hb_missing`, regardless of cohort or
-procedure proximity — matching the original PRD spec line in
-`scripts/create_issues.sh` ("Hb missing → INSUFFICIENT_EVIDENCE"). The
-orchestrator that builds `PipelineRowContext` is the sign-off binding
-point and must NOT set the flag `True` in production until clinical
-approval is on record.
+is `False` (the default; production state until the QI committee signs off),
+missing Hb always returns `INSUFFICIENT_EVIDENCE`/`NONE`/`hb_missing`,
+regardless of cohort, procedure proximity, or peri-op evidence — matching
+the original PRD spec line in `scripts/create_issues.sh` ("Hb missing →
+INSUFFICIENT_EVIDENCE"). The orchestrator that builds `PipelineRowContext`
+is the sign-off binding point.
 
-When the flag is `True`, the pre-check applies and order is preserved
-(MTP → UNKNOWN → peri-procedural):
+When the flag is `True`, the pre-pass applies and order is preserved
+(MTP → UNKNOWN → peri-procedural → hard peri-op evidence):
 
 - cohort `MTP` → `APPROPRIATE`/`MTP`, `rationale="bypass_mtp_hb_missing"`;
-- cohort `UNKNOWN` → stays `INSUFFICIENT_EVIDENCE` (peri-procedural must
-  not override UNKNOWN, mirroring the Hb-present order);
+- cohort `UNKNOWN` → no deterministic auto-approve (peri-procedural / peri-op
+  evidence must not override UNKNOWN, mirroring the Hb-present order); defers
+  to the LLM below;
 - `procedure_proximity_hours ≤ 6.0` → `APPROPRIATE`/`PERI_PROCEDURAL_6H`,
   `rationale="bypass_peri_procedural_hb_missing"`;
-- otherwise → `INSUFFICIENT_EVIDENCE`/`NONE`, `rationale="hb_missing"`.
+- hard peri-op note evidence — a charted intra-op transfusion, or estimated
+  blood loss ≥ `PERIOP_MIN_EBL_ML` (500 mL) — → `APPROPRIATE`/`PERIOP_EVIDENCE`,
+  `rationale="bypass_periop_evidence_hb_missing"`. Soft cues (a surgery is
+  merely documented / an upcoming procedure is scheduled) deliberately do
+  NOT fire — those defer;
+- otherwise → `NEEDS_REVIEW`/`NONE`, `rationale="hb_missing_defer_llm"` (route
+  to the LLM, do not dead-end).
 
-The distinct `*_hb_missing` rationale slugs keep these "approved with no
-documented Hb" cases auditable so the QI committee can monitor them
-(`bypass_reason` is still `MTP`/`PERI_PROCEDURAL_6H` for grouping).
-`TestMissingHbPositiveEvidence` pins all flag-on paths;
-`test_mtp_with_missing_hb_flag_default_off_stays_insufficient` and
-`test_peri_procedural_with_missing_hb_flag_default_off_stays_insufficient`
-pin the disabled-by-default contract.
+The peri-op signals (`periop_blood_loss_ml`, `periop_intraop_transfusion`,
+`periop_surgical_context`) are threaded onto `ClassifierInputs` from
+`bba.vitals_extractor.periop.scan_periop` (mirroring `PeriopSummary`);
+`periop_surgical_context` is carried for traceability only and never gates a
+verdict. `PERIOP_MIN_EBL_ML` lives on the classifier module as the single
+source of truth and is re-exported as
+`bba.audit_pipeline.replay.PERIOP_GUARDRAIL_MIN_EBL_ML` (the contradiction
+guardrail's bar) so the two thresholds cannot drift.
+
+The distinct `*_hb_missing` rationale slugs keep "approved with no
+documented Hb" cases auditable for the QI committee (`bypass_reason` is
+`MTP`/`PERI_PROCEDURAL_6H`/`PERIOP_EVIDENCE` for grouping);
+`hb_missing_defer_llm` marks the LLM-deferred set.
+`TestMissingHbPositiveEvidence` + `TestMissingHbPeriopEvidenceAndDeferral`
+pin all flag-on paths; the `*_flag_default_off_*` /
+`test_hard_periop_evidence_flag_off_stays_insufficient` tests pin the
+disabled-by-default contract.
 `TestMissingHbBypassPersistence` covers the end-to-end pipeline
 persistence path for both flag states.
 
+**Pilot enablement:** set
+`BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE=1` for the pilot re-run
+(`run_pipeline.py` deterministic leg + `run_llm_leg.py` LLM leg) once
+clinical sign-off is on record. The flag stays code-default `False` for
+multicenter rollout control.
+
 ### Delta-Hb / pre-op crossmatch excluded on missing Hb
 
-The pre-check above deliberately does **not** fire delta-Hb or the pre-op
-crossmatch bypass on a missing Hb. Delta-Hb needs a current Hb to compute,
-so a stale upstream `delta_hb_bypass=True` set together with a missing Hb
-is a structural inconsistency — the classifier prefers the "no Hb" fact
-over the orphan flag. Pre-op crossmatch (`upcoming_procedure_hours`) is
-excluded because transfusing pre-op with no documented Hb is exactly what
-an audit should flag, not auto-approve; that case stays
-`INSUFFICIENT_EVIDENCE`.
+The pre-pass above deliberately does **not** auto-approve on delta-Hb or
+the pre-op crossmatch on a missing Hb. Delta-Hb needs a current Hb to
+compute, so a stale upstream `delta_hb_bypass=True` set together with a
+missing Hb is a structural inconsistency — the classifier prefers the "no
+Hb" fact over the orphan flag (and, flag-off, the case stays
+`INSUFFICIENT_EVIDENCE`). Pre-op crossmatch (`upcoming_procedure_hours`) is
+a soft "surgery is scheduled" cue: transfusing pre-op with no documented Hb
+is exactly what an audit should look at, so it is never deterministically
+auto-approved. With the pre-pass flag on it no longer dead-ends, though —
+it defers to the LLM (`NEEDS_REVIEW`/`hb_missing_defer_llm`).
 `TestBypassPathways::test_delta_hb_bypass_does_not_fire_when_hb_missing`
 and
-`TestMissingHbPositiveEvidence::test_pre_op_crossmatch_only_with_missing_hb_stays_insufficient`
+`TestMissingHbPositiveEvidence::test_pre_op_crossmatch_only_with_missing_hb_defers_to_llm`
 pin these exclusions.
 
 ### Monotonicity in Hb

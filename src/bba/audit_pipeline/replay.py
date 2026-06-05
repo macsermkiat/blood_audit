@@ -32,7 +32,7 @@ from typing import NamedTuple
 from bba.audit_pipeline.models import PipelineRowContext, PipelineRunResult
 from bba.audit_store import AuditRow, AuditStore, LlmCall
 from bba.audit_store.models import Classification
-from bba.deterministic_classifier import ClassifierResult
+from bba.deterministic_classifier import PERIOP_MIN_EBL_ML, ClassifierResult
 from bba.llm_client.models import BatchSubmissionResult, RawBatchResponse
 from bba.vitals_extractor import PeriopSummary
 
@@ -79,12 +79,13 @@ def default_verifier(
 # LLM's reasoning/indications so the reviewer sees the conflict in full.
 # =============================================================================
 
-PERIOP_GUARDRAIL_MIN_EBL_ML = 500
+PERIOP_GUARDRAIL_MIN_EBL_ML = PERIOP_MIN_EBL_ML
 """Estimated-blood-loss floor (mL) that counts as a hard peri-op signal.
 
-Mirrors the transfusion-relevant threshold used elsewhere in the pilot:
-sub-500 mL losses are routine and do not, on their own, contradict an
-"insufficient evidence" verdict."""
+Alias of :data:`bba.deterministic_classifier.PERIOP_MIN_EBL_ML` — the single
+source of truth shared with the classifier's missing-Hb auto-approve bar so
+the two thresholds cannot drift. Sub-500 mL losses are routine and do not, on
+their own, contradict an "insufficient evidence" verdict."""
 
 PERIOP_CONTRADICTION_REVIEW_REASON = "periop_signal_contradiction"
 """Typed review_reason stamped on rows escalated by this guardrail.
@@ -279,6 +280,7 @@ def _classify_from_context(context: "PipelineRowContext") -> ClassifierResult:
     the main pipeline does."""
     from bba.deterministic_classifier import ClassifierInputs, classify
 
+    periop = context.periop_summary
     return classify(
         ClassifierInputs(
             audit_id=context.order.audit_id,
@@ -289,6 +291,9 @@ def _classify_from_context(context: "PipelineRowContext") -> ClassifierResult:
             upcoming_procedure_hours=context.upcoming_procedure_hours,
             crystalloid_liters_prior_4h=context.crystalloid_liters_prior_4h,
             enable_missing_hb_positive_evidence=context.enable_missing_hb_positive_evidence,
+            periop_blood_loss_ml=periop.blood_loss_ml if periop else None,
+            periop_intraop_transfusion=periop.intraop_transfusion if periop else False,
+            periop_surgical_context=periop.surgical_context if periop else False,
         )
     )
 
