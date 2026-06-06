@@ -486,7 +486,9 @@ evidence_bundle_builder → deid_redactor → prompt_builder → llm_client
 ## Safety & policy notes
 
 - **No live PHI in tests.** Integration tests use mock-AN fixtures; LLM tests replay VCR cassettes from `#22`.
-- **3-tier Hb classifier is authoritative.** Vitals are supporting evidence only. Deterministic bypasses require structured MTP, procedure-timing, pre-op crossmatch, or delta-Hb evidence. See the docs page [3-tier Hb classifier](docs/src/content/docs/en/developers/three-tier-hb.mdx) for the decision-flow graphic.
+- **3-tier Hb classifier is authoritative.** Vitals are supporting evidence only. Deterministic bypasses require structured MTP, procedure-timing, pre-op crossmatch, delta-Hb, or hard peri-op evidence (`intraop_transfusion` or `EBL ≥ 500 mL`). See the docs page [3-tier Hb classifier](docs/src/content/docs/en/developers/three-tier-hb.mdx) for the decision-flow graphic.
+- **Missing-Hb positive-evidence pre-pass is disabled by default.** The `enable_missing_hb_positive_evidence` flag (`BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE`) is `False` until the QI committee signs off. When `False`, missing Hb always returns `INSUFFICIENT_EVIDENCE` (original PRD spec); when `True`, the pre-pass auto-approves on hard peri-op evidence and defers everything else to the LLM rather than dead-ending.
+- **Hemodynamic and peri-op summaries are supporting evidence only.** The `scan_hemodynamics` and `scan_periop` scans surface MAP/vasopressor/EBL facts as pinned, truncation-exempt evidence items. They never gate the deterministic classifier — all appropriateness weighting stays with the LLM and the auditor.
 - **Quote-grounding is fail-closed.** The LLM_REVIEW leg's claims are checked against six anti-hallucination layers (NFC + substring + cited_id + within-doc uniqueness + ≥25 chars + numeric-tuple + medical-NLI). Failures route to `hallucination_suspect`, not to a result row.
 - **Run-level idempotency is enforced at the store layer.** `bba audit` cannot accidentally produce two rows for the same `(run_id, encounter_id)` pair.
 
