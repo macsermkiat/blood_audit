@@ -2243,17 +2243,20 @@ reader does not re-litigate:
 
 ## LLM-client concepts (#22)
 
-### Snapshot-pinned model ID
+### Allow-set-pinned model ID
 
-The exact Anthropic model string with its `-YYYYMMDD` snapshot suffix
-(e.g. `claude-sonnet-4-6-20251018`, `claude-opus-4-7-20251030`). The two
-allowed values live behind `SONNET_MODEL_ID` and `OPUS_MODEL_ID` in
+The two model IDs the client may invoke are bare aliases
+(`claude-sonnet-5`, `claude-opus-4-8`) — Claude Sonnet 5 and Opus 4.8
+ship without dated snapshots, so the alias is the canonical ID. They
+live behind `SONNET_MODEL_ID` and `OPUS_MODEL_ID` in
 `bba.llm_client.models`; the runtime allowlist is
-`ALLOWED_MODELS = frozenset({SONNET_MODEL_ID, OPUS_MODEL_ID})`. A
-floating alias (`claude-sonnet-4-6` without the date) is rejected at
-`LlmClientConfig` construction. PRD §"Anthropic silent point release":
-the snapshot suffix forces a code change for every model upgrade so
-the quarterly golden-set drift probe has a stable anchor.
+`ALLOWED_MODELS = frozenset({SONNET_MODEL_ID, OPUS_MODEL_ID})`. Any
+model not in that set (e.g. `claude-sonnet-4-6`) is rejected at
+`LlmClientConfig` construction. PRD §13: the allowlist forces a code
+change (edit the constant) for every model *swap*, so the golden-set
+drift probe has a stable anchor — but because the IDs are bare aliases,
+an Anthropic point release under the same alias is no longer caught
+here.
 
 ### Custom-ID assertion
 

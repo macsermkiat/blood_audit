@@ -22,14 +22,12 @@ The Hb chunks carry a guidance EvidenceChunk that instructs the LLM
 to weight closest + lowest values and to explicitly cite any
 sub-threshold Hb that fell outside the 24h primary window.
 
-This script intentionally bypasses :class:`LlmClientConfig` (which
-enforces the ``ALLOWED_MODELS`` snapshot-pin contract) and passes the
-model id directly to the transport. Anthropic has not yet published
-date-pinned snapshots for Sonnet 4.6 / Opus 4.7 — the previously-
-pinned IDs return ``not_found_error`` on a live batch call. The pilot
-script uses the floating alias for now; when snapshot IDs are
-published, swap the constants in ``src/bba/llm_client/models.py`` and
-delete this bypass.
+This script intentionally bypasses :class:`LlmClientConfig` and passes
+the model id directly to the transport. The production allow-set
+(``ALLOWED_MODELS``) is pinned to the bare aliases the live API returns
+(``claude-sonnet-5`` / ``claude-opus-4-8``), so the echoed model_id
+validates natively at row construction — no runtime allow-set patch is
+needed here.
 
 Environment variables:
 
@@ -37,7 +35,7 @@ Environment variables:
   ``sample_bundle.py`` (default: ``/tmp/bba_mini``).
 * ``ANTHROPIC_API_KEY`` — required.
 * ``BBA_PILOT_LLM_MODEL`` — model id to use (default:
-  ``claude-sonnet-4-6``).
+  ``claude-sonnet-5``).
 * ``BBA_PILOT_RUN_ID`` — run id suffix for the audit_store (default:
   ``pilot-mini``). Bump to force re-run; the store is idempotent on
   (run_id, audit_id).
@@ -93,7 +91,6 @@ from bba.hb_lookup import (
 )
 from bba.ingest.date_parser import parse_kcmh_english_date
 from bba.ingest.models import ParsedTimeOfDay
-import bba.llm_client.models as _llm_models
 from bba.llm_client import AnthropicBatchTransport, BatchSubmissionRequest
 from bba.prompt_builder import EvidenceChunk, PromptBuildRequest, build_prompt
 from bba.vitals_extractor import extract_vitals
@@ -102,25 +99,11 @@ from _anchor_candidates import build_anchor_candidates
 from _hosxp_dt import _combine, _parse_hosxp_date, _parse_time
 from _periop_notes import vitals_notes_for
 
-# Runtime extension of ALLOWED_MODELS so the BatchSubmissionResult
-# parser inside bba.llm_client.transport accepts the floating aliases
-# Anthropic currently returns. The submission side already bypasses
-# LlmClientConfig via RealAnthropicTransport below; without this
-# extension the live API's echoed model_id fails the same PinnedModel
-# validator at row construction. PinnedModel reads ALLOWED_MODELS at
-# call time (not import time), so a post-import patch is the minimal
-# surface area — no src/bba change, no test contract change.
-_LIVE_SONNET_ALIAS = "claude-sonnet-4-6"
-_LIVE_OPUS_ALIAS = "claude-opus-4-7"
-_llm_models.ALLOWED_MODELS = frozenset(
-    {*_llm_models.ALLOWED_MODELS, _LIVE_SONNET_ALIAS, _LIVE_OPUS_ALIAS}
-)
-
 WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
 BUNDLE = WORK / "bundle"
 AUDIT_STORE_ROOT = WORK / "data" / "audit_store"
 RUN_ID = os.environ.get("BBA_PILOT_RUN_ID", "pilot-mini")
-MODEL_ID = os.environ.get("BBA_PILOT_LLM_MODEL", "claude-sonnet-4-6")
+MODEL_ID = os.environ.get("BBA_PILOT_LLM_MODEL", "claude-sonnet-5")
 # Operator opt-in for the missing-Hb positive-evidence pre-check (MTP /
 # peri-procedural auto-APPROPRIATE on no documented Hb). Defaults off because
 # the policy is SEED pending clinical sign-off — see ClassifierInputs and

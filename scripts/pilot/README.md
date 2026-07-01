@@ -43,7 +43,7 @@ build_review.py         →  review.html    (single page for human review)
 | `BBA_PILOT_SAMPLE_N` | `10` | Number of orders to sample |
 | `BBA_PILOT_SAMPLE_SEED` | `20260519` | RNG seed for reproducibility |
 | `BBA_PILOT_ICD10_CSV` | `../Bloodbank/data/raw/ICD10.csv` | ICD-10 master dictionary |
-| `BBA_PILOT_LLM_MODEL` | `claude-sonnet-4-6` | Anthropic model id |
+| `BBA_PILOT_LLM_MODEL` | `claude-sonnet-5` | Anthropic model id |
 | `BBA_PILOT_RUN_ID` | `pilot-mini` | run_id stamped on audit_store rows |
 | `BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE` | `false` | Opt-in to the missing-Hb MTP / peri-procedural auto-APPROPRIATE pre-check (SEED — set `1`/`true` only after clinical sign-off) |
 | `ANTHROPIC_API_KEY` | _(required)_ | Anthropic credentials |
@@ -121,13 +121,11 @@ validation step (M8 milestone).
 ## Known limitations & caveats
 
 - **Model-id bypass.** `run_llm_leg.py` calls `AnthropicBatchTransport`
-  directly instead of through `LlmClientConfig`, because the snapshot
-  IDs pinned in `src/bba/llm_client/models.py`
-  (`claude-sonnet-4-6-20251018`, `claude-opus-4-7-20251030`) are not
-  exposed on the live Anthropic API today — they return
-  `not_found_error`. The bypass lets the pilot use the floating alias
-  `claude-sonnet-4-6`. When Anthropic publishes date-pinned snapshots,
-  swap the constants in `bba.llm_client.models` and delete the bypass.
+  directly instead of through `LlmClientConfig`. The model ids pinned in
+  `src/bba/llm_client/models.py` (`claude-sonnet-5`, `claude-opus-4-8`)
+  are bare aliases the live Anthropic API accepts, so the echoed
+  model_id validates against `ALLOWED_MODELS` natively — no runtime
+  allow-set patch is needed.
 
 - **Cost-guard bypass.** `bba.audit_pipeline.cost_guard.assert_test_safe_transport`
   rejects `isinstance(transport, AnthropicBatchTransport)` to keep the

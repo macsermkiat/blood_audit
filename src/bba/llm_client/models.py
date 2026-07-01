@@ -3,8 +3,11 @@
 All public models are frozen. The module surface mirrors the convention
 established by :mod:`bba.prompt_builder` and :mod:`bba.audit_store`:
 
-* Snapshot-pinned model IDs in :data:`ALLOWED_MODELS` — drift detection
-  lives at the model boundary (PRD §"Anthropic silent point release").
+* Allow-set-pinned model IDs in :data:`ALLOWED_MODELS` — the client may
+  only invoke the two IDs in that set; swapping models requires a code
+  change (PRD §13). The IDs are bare aliases (Claude Sonnet 5 / Opus 4.8
+  ship without dated snapshots), so this guards model *swaps*, not
+  Anthropic point releases under the same alias.
 * Frozen Pydantic models for every persistable record so the audit
   chain's replay invariant (same inputs → same bytes → same hash) holds
   across the boundary into :mod:`bba.audit_store`.
@@ -51,17 +54,18 @@ from bba.prompt_builder.models import PromptBuildResult, TaskMode
 # =============================================================================
 
 
-SONNET_MODEL_ID: Final[str] = "claude-sonnet-4-6-20251018"
-"""Snapshot-pinned Sonnet 4.6 model ID.
+SONNET_MODEL_ID: Final[str] = "claude-sonnet-5"
+"""Primary model ID — Claude Sonnet 5.
 
-The trailing date is the Anthropic snapshot tag. A floating alias
-(``claude-sonnet-4-6``) would silently drift under Anthropic's point
-releases; the pinned ID is the only legal value so a behavior change
-forces an explicit code update + quarterly golden-set re-run."""
+Claude Sonnet 5 ships as a bare alias with no dated snapshot; the alias
+is the canonical ID (per Anthropic's Sonnet 5 model docs). The pin is
+the allow-set below, not a date suffix — bumping the model still forces
+an explicit edit to this constant + a golden-set re-run, but Anthropic
+point releases under the same alias are no longer detected here."""
 
 
-OPUS_MODEL_ID: Final[str] = "claude-opus-4-7-20251030"
-"""Snapshot-pinned Opus 4.7 model ID. Same drift-defense rationale as
+OPUS_MODEL_ID: Final[str] = "claude-opus-4-8"
+"""Escalation model ID — Claude Opus 4.8, a bare alias like
 :data:`SONNET_MODEL_ID`. Opus is the escalation target after Sonnet
 retries are exhausted (PRD §13)."""
 
@@ -69,9 +73,9 @@ retries are exhausted (PRD §13)."""
 ALLOWED_MODELS: Final[frozenset[str]] = frozenset({SONNET_MODEL_ID, OPUS_MODEL_ID})
 """The two model IDs the client is permitted to invoke.
 
-A free-form model_id would let a refactor silently bypass the snapshot-
-pin contract. The validator on :class:`LlmClientConfig` enforces
-membership in this set.
+A free-form model_id would let a refactor silently swap the model out
+from under the audit chain. The validator on :class:`LlmClientConfig`
+enforces membership in this set — that allow-list is the pin.
 """
 
 
@@ -87,10 +91,10 @@ production."""
 
 
 Model = Literal[
-    "claude-sonnet-4-6-20251018",
-    "claude-opus-4-7-20251030",
+    "claude-sonnet-5",
+    "claude-opus-4-8",
 ]
-"""Type-level alias for the two snapshot-pinned model IDs."""
+"""Type-level alias for the two allowed model IDs."""
 
 
 def _validate_model_id(value: str) -> str:
@@ -98,7 +102,7 @@ def _validate_model_id(value: str) -> str:
     if value not in ALLOWED_MODELS:
         raise ValueError(
             f"model_id {value!r} not in {sorted(ALLOWED_MODELS)} "
-            "(PRD §13: snapshot-pinned model IDs only)"
+            "(PRD §13: only the pinned allow-set is permitted)"
         )
     return value
 
