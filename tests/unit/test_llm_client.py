@@ -44,7 +44,6 @@ Cross-cutting:
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -338,39 +337,33 @@ def _config(**overrides: object) -> LlmClientConfig:
 # =============================================================================
 
 
-_SNAPSHOT_SUFFIX_RE = re.compile(r"-\d{8}$")
-
-
-class TestSnapshotPinnedModelId:
-    def test_sonnet_model_id_is_date_pinned(self) -> None:
-        # Format contract, NOT a specific date check: the model ID must
-        # end with -YYYYMMDD so the snapshot pin is structural. Updating
-        # the snapshot must require an explicit code change to the
-        # constant (not a transparent SDK upgrade).
-        assert _SNAPSHOT_SUFFIX_RE.search(SONNET_MODEL_ID) is not None
+class TestPinnedModelId:
+    def test_sonnet_model_id_is_expected_alias(self) -> None:
+        # Change-detector: the primary model is pinned to a specific bare
+        # alias. Bumping it must be an explicit edit to the constant (not
+        # a transparent SDK upgrade) followed by a golden-set re-run.
+        assert SONNET_MODEL_ID == "claude-sonnet-5"
         assert "sonnet" in SONNET_MODEL_ID
 
-    def test_opus_model_id_is_date_pinned(self) -> None:
-        assert _SNAPSHOT_SUFFIX_RE.search(OPUS_MODEL_ID) is not None
+    def test_opus_model_id_is_expected_alias(self) -> None:
+        assert OPUS_MODEL_ID == "claude-opus-4-8"
         assert "opus" in OPUS_MODEL_ID
 
-    def test_floating_alias_rejected_by_config(self) -> None:
-        # A floating alias (no date suffix) must fail config validation.
-        # This is the substantive contract — the format checks above
-        # just pin the shape; this one pins the rejection.
+    def test_unpinned_model_rejected_by_config(self) -> None:
+        # A real model that is NOT in the allow-set must fail config
+        # validation. The allow-set — not an ID format — is the pin:
+        # invoking any other model requires editing ALLOWED_MODELS.
         with pytest.raises(ValidationError) as exc_info:
             LlmClientConfig.model_validate(
                 {
-                    "sonnet_model_id": "claude-sonnet-4-6",  # floating alias
+                    "sonnet_model_id": "claude-sonnet-4-6",  # real model, not pinned
                     "opus_model_id": OPUS_MODEL_ID,
                     "max_sonnet_attempts": MAX_SONNET_ATTEMPTS,
                     "prompt_cache_enabled": True,
                     "code_version": "v1",
                 }
             )
-        assert "snapshot-pinned" in str(exc_info.value).lower() or "not in" in str(
-            exc_info.value
-        )
+        assert "not in" in str(exc_info.value).lower()
 
     def test_allowed_models_set_membership(self) -> None:
         # Every constant must round-trip through ALLOWED_MODELS so the
@@ -378,13 +371,13 @@ class TestSnapshotPinnedModelId:
         # means the validator would silently accept an unpinned ID.
         assert SONNET_MODEL_ID in ALLOWED_MODELS
         assert OPUS_MODEL_ID in ALLOWED_MODELS
-        assert "claude-sonnet-4-6" not in ALLOWED_MODELS  # floating alias rejected
+        assert "claude-sonnet-4-6" not in ALLOWED_MODELS  # a non-pinned model is absent
 
     def test_config_rejects_unpinned_model(self) -> None:
         with pytest.raises(ValidationError):
             LlmClientConfig.model_validate(
                 {
-                    "sonnet_model_id": "claude-sonnet-4-6",  # missing date
+                    "sonnet_model_id": "claude-sonnet-4-6",  # real model, not pinned
                     "opus_model_id": OPUS_MODEL_ID,
                     "max_sonnet_attempts": MAX_SONNET_ATTEMPTS,
                     "prompt_cache_enabled": True,

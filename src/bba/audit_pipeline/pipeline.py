@@ -323,12 +323,17 @@ def _deterministic_audit_row(
     from bba.audit_store import AuditRow
 
     # INSUFFICIENT_EVIDENCE legitimately has a missing Hb; APPROPRIATE
-    # with an Hb-independent bypass (MTP or peri-procedural) also has a
-    # legitimately missing Hb — both use 0.0 + freshness=="missing" as
-    # the explicit "no Hb" sentinel (PRD §"Output schema"). All other
-    # non-INSUFFICIENT classifications must supply real Hb — fail loud.
+    # with an Hb-independent bypass (MTP, peri-procedural, or hard peri-op
+    # evidence) also has a legitimately missing Hb — both use 0.0 +
+    # freshness=="missing" as the explicit "no Hb" sentinel (PRD §"Output
+    # schema"). All other non-INSUFFICIENT classifications must supply real
+    # Hb — fail loud.
     _HB_INDEPENDENT_BYPASSES = frozenset(
-        {BypassReason.MTP, BypassReason.PERI_PROCEDURAL_6H}
+        {
+            BypassReason.MTP,
+            BypassReason.PERI_PROCEDURAL_6H,
+            BypassReason.PERIOP_EVIDENCE,
+        }
     )
     classifier = classifier_result
     if context.hb_result.value_g_dl is None and not (
@@ -537,6 +542,7 @@ def _classifier_inputs_for(context: PipelineRowContext) -> ClassifierInputs:
     ``deterministic_classifier`` always runs BEFORE the LLM path
     decision.
     """
+    periop = context.periop_summary
     return ClassifierInputs(
         audit_id=context.order.audit_id,
         hb_result=context.hb_result,
@@ -546,6 +552,9 @@ def _classifier_inputs_for(context: PipelineRowContext) -> ClassifierInputs:
         upcoming_procedure_hours=context.upcoming_procedure_hours,
         crystalloid_liters_prior_4h=context.crystalloid_liters_prior_4h,
         enable_missing_hb_positive_evidence=context.enable_missing_hb_positive_evidence,
+        periop_blood_loss_ml=periop.blood_loss_ml if periop else None,
+        periop_intraop_transfusion=periop.intraop_transfusion if periop else False,
+        periop_surgical_context=periop.surgical_context if periop else False,
     )
 
 

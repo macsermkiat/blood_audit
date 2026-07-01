@@ -22,14 +22,12 @@ The Hb chunks carry a guidance EvidenceChunk that instructs the LLM
 to weight closest + lowest values and to explicitly cite any
 sub-threshold Hb that fell outside the 24h primary window.
 
-This script intentionally bypasses :class:`LlmClientConfig` (which
-enforces the ``ALLOWED_MODELS`` snapshot-pin contract) and passes the
-model id directly to the transport. Anthropic has not yet published
-date-pinned snapshots for Sonnet 4.6 / Opus 4.7 — the previously-
-pinned IDs return ``not_found_error`` on a live batch call. The pilot
-script uses the floating alias for now; when snapshot IDs are
-published, swap the constants in ``src/bba/llm_client/models.py`` and
-delete this bypass.
+This script intentionally bypasses :class:`LlmClientConfig` and passes
+the model id directly to the transport. The production allow-set
+(``ALLOWED_MODELS``) is pinned to the bare aliases the live API returns
+(``claude-sonnet-5`` / ``claude-opus-4-8``), so the echoed model_id
+validates natively at row construction — no runtime allow-set patch is
+needed here.
 
 Environment variables:
 
@@ -37,7 +35,7 @@ Environment variables:
   ``sample_bundle.py`` (default: ``/tmp/bba_mini``).
 * ``ANTHROPIC_API_KEY`` — required.
 * ``BBA_PILOT_LLM_MODEL`` — model id to use (default:
-  ``claude-sonnet-4-6``).
+  ``claude-sonnet-5``).
 * ``BBA_PILOT_RUN_ID`` — run id suffix for the audit_store (default:
   ``pilot-mini``). Bump to force re-run; the store is idempotent on
   (run_id, audit_id).
@@ -84,35 +82,28 @@ from bba.evidence_bundle_builder import (
     VitalsRecord,
     build_evidence_bundle,
 )
-from bba.hb_lookup import HbObservation, lookup_hb, parse_hb_value
+from bba.hb_lookup import (
+    EvidenceAnchor,
+    HbObservation,
+    parse_hb_value,
+    resolve_evidence_anchor,
+    resolve_hb_with_fallback,
+)
 from bba.ingest.date_parser import parse_kcmh_english_date
 from bba.ingest.models import ParsedTimeOfDay
-from bba.ingest.row_timestamp import RowTimestamp
-from bba.ingest.time_parser import parse_hosxp_time
-import bba.llm_client.models as _llm_models
 from bba.llm_client import AnthropicBatchTransport, BatchSubmissionRequest
 from bba.prompt_builder import EvidenceChunk, PromptBuildRequest, build_prompt
-from bba.vitals_extractor import VitalsNote, extract_vitals
+from bba.vitals_extractor import extract_vitals
 
-# Runtime extension of ALLOWED_MODELS so the BatchSubmissionResult
-# parser inside bba.llm_client.transport accepts the floating aliases
-# Anthropic currently returns. The submission side already bypasses
-# LlmClientConfig via RealAnthropicTransport below; without this
-# extension the live API's echoed model_id fails the same PinnedModel
-# validator at row construction. PinnedModel reads ALLOWED_MODELS at
-# call time (not import time), so a post-import patch is the minimal
-# surface area — no src/bba change, no test contract change.
-_LIVE_SONNET_ALIAS = "claude-sonnet-4-6"
-_LIVE_OPUS_ALIAS = "claude-opus-4-7"
-_llm_models.ALLOWED_MODELS = frozenset(
-    {*_llm_models.ALLOWED_MODELS, _LIVE_SONNET_ALIAS, _LIVE_OPUS_ALIAS}
-)
+from _anchor_candidates import build_anchor_candidates
+from _hosxp_dt import _combine, _parse_hosxp_date, _parse_time
+from _periop_notes import vitals_notes_for
 
 WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
 BUNDLE = WORK / "bundle"
 AUDIT_STORE_ROOT = WORK / "data" / "audit_store"
 RUN_ID = os.environ.get("BBA_PILOT_RUN_ID", "pilot-mini")
-MODEL_ID = os.environ.get("BBA_PILOT_LLM_MODEL", "claude-sonnet-4-6")
+MODEL_ID = os.environ.get("BBA_PILOT_LLM_MODEL", "claude-sonnet-5")
 # Operator opt-in for the missing-Hb positive-evidence pre-check (MTP /
 # peri-procedural auto-APPROPRIATE on no documented Hb). Defaults off because
 # the policy is SEED pending clinical sign-off — see ClassifierInputs and
@@ -142,6 +133,13 @@ NEUTROPHIL_ABS_CODE = "290093"
 WINDOW_HB_DAYS = 7
 WINDOW_NOTES_DAYS_BEFORE = 1
 WINDOW_NOTES_DAYS_AFTER = 0
+# Re-anchored reserve-ahead orders only: the transfusion plays out across the
+# op day, so the intra-op nadir and the morning-after Hb are drawn AFTER the
+# USE issue time. Extend the Hb history upper bound this many calendar days
+# past the op day so the LLM sees the full peri-transfusion trajectory, not
+# just the stale value at issue time. Non-reanchored orders keep the strict
+# pre-order upper bound (no forward extension).
+WINDOW_HB_REANCHOR_DAYS_AFTER = 1
 
 CRYSTALLOID_KEYWORDS = (
     "nss",
@@ -231,31 +229,6 @@ def _read_preferred_optional_csv(*names: str) -> list[dict[str, str]]:
             with path.open(encoding="utf-8", newline="") as fh:
                 return list(csv.DictReader(fh))
     return []
-
-
-def _parse_hosxp_date(raw: str) -> date | None:
-    if not raw:
-        return None
-    head = raw.split(" ", 1)[0]
-    try:
-        return date.fromisoformat(head)
-    except ValueError:
-        return None
-
-
-def _parse_time(raw: str | None) -> ParsedTimeOfDay | None:
-    if not raw:
-        return None
-    s = str(raw).strip()
-    if s.isdigit() and 1 <= len(s) <= 6:
-        s = s.zfill(6)
-    return parse_hosxp_time(s).value
-
-
-def _combine(d: date | None, t: ParsedTimeOfDay | None) -> datetime | None:
-    if d is None or t is None:
-        return None
-    return RowTimestamp.from_parts(d, t, tz=TZ_LOCAL).utc
 
 
 def _icd_codes(*raws: str | None) -> tuple[str, ...]:
@@ -478,78 +451,6 @@ def _latest_anc(
     return None if best is None else best[1]
 
 
-def _vitals_notes_for(
-    progress: list[dict[str, str]],
-    focus: list[dict[str, str]],
-    an: str,
-    anchor: datetime,
-) -> tuple[VitalsNote, ...]:
-    """Build VitalsNote list from notes for the AN.
-
-    PHI safety is handled by the upstream de-identification gate (issue #76):
-    these notes — and the narrative the bundle ships from them — are treated as
-    already de-identified, so the full SOAP text is forwarded, not just numbers.
-
-    IPDADMPROGRESS carries four free-text SOAP columns (S/O/A/P); MAP and
-    vasopressor evidence can live in any of them, so all four are joined here.
-    Restricting to OBJECTIVE would starve both the LLM narrative and the
-    hemodynamic scan of assessment/plan-charted pressor support. Each column is
-    prefixed with its SOAP label so the builder's ``parse_soap_sections`` can
-    re-split them; an unlabelled join would collapse to a single OBJECTIVE block
-    and let priority-aware truncation drop the assessment/plan with it.
-    """
-    out: list[VitalsNote] = []
-    for r in progress:
-        if r.get("AN") != an:
-            continue
-        dt = _combine(
-            _parse_hosxp_date(r.get("PROGDATE") or ""),
-            ParsedTimeOfDay(hour=0, minute=0, second=0),
-        )
-        soap = (
-            ("Subjective", (r.get("SUBJECTIVE") or "").strip()),
-            ("Objective", (r.get("OBJECTIVE") or "").strip()),
-            ("Assessment", (r.get("ASSESSMENT") or "").strip()),
-            ("Plan", (r.get("PLAN") or "").strip()),
-        )
-        text = "\n".join(f"{label}: {value}" for label, value in soap if value)
-        if dt is None or not text:
-            continue
-        out.append(
-            VitalsNote(
-                timestamp=dt,
-                text=text,
-                source="IPDADMPROGRESS",
-            )
-        )
-    for r in focus:
-        if r.get("AN") != an:
-            continue
-        dt = _combine(
-            _parse_hosxp_date(r.get("PROGRESSDATE") or ""),
-            _parse_time(r.get("PROGRESSTIME") or ""),
-        )
-        text = " ".join(
-            filter(
-                None,
-                [
-                    (r.get("ACTION") or "").strip(),
-                    (r.get("RESPONSE") or "").strip(),
-                ],
-            )
-        )
-        if dt is None or not text:
-            continue
-        out.append(
-            VitalsNote(
-                timestamp=dt,
-                text=text,
-                source="IPDNRFOCUSDT",
-            )
-        )
-    return tuple(out)
-
-
 def _is_crystalloid(name: str) -> bool:
     lower = name.lower()
     return any(k in lower for k in CRYSTALLOID_KEYWORDS)
@@ -634,10 +535,49 @@ def _render_hemodynamic(payload: dict[str, Any]) -> str:
     return "Hemodynamics: " + "; ".join(parts) if parts else ""
 
 
+def _render_periop(payload: dict[str, Any]) -> str:
+    """Render the pinned peri-operative summary as one fact-only line (Case 107).
+
+    FACT-ONLY by contract (mirrors the builder's payload guardrail): the
+    surgical-context flag, the EBL in millilitres, the intra-op-transfusion
+    flag, and the verbatim provenance snippets — nothing else. No
+    'appropriate' / 'indicated' wording; the LLM weighs peri-op context, the
+    summary never pre-judges it. The leading 'PERI-OP SIGNALS:' label makes the
+    item un-skippable — Case 107's failure was the model ignoring this very
+    evidence when it sat only in free-text prose."""
+    parts: list[str] = []
+    if payload.get("surgical_context"):
+        parts.append("surgery=YES")
+    ebl = payload.get("blood_loss_ml")
+    if ebl is not None:
+        parts.append(f"blood_loss={ebl} ml")
+    if payload.get("intraop_transfusion"):
+        parts.append("intra-op transfusion=YES")
+    if not parts:
+        return ""
+    line = "PERI-OP SIGNALS: " + ", ".join(parts)
+    quotes: list[str] = []
+    for f in payload.get("findings") or ():
+        snippet = (f.get("snippet") or "").strip()
+        if not snippet:
+            continue
+        prov_bits = [str(f.get("source") or "")]
+        lag = f.get("lag_min")
+        if lag is not None:
+            prov_bits.append(_fmt_lag(int(lag)))
+        prov = ", ".join(b for b in prov_bits if b)
+        quotes.append(f'"{snippet}"' + (f" ({prov})" if prov else ""))
+    if quotes:
+        line += " | evidence: " + "; ".join(quotes)
+    return line
+
+
 def _render_payload(source: str, payload: dict[str, Any]) -> str:
     """Render a structured EvidenceItem payload as one line for the LLM."""
     if source == "Hemodynamic":
         return _render_hemodynamic(payload)
+    if source == "Periop":
+        return _render_periop(payload)
     if source == "IPDADMPROGRESS":
         sections = payload.get("sections") or ()
         rendered = "; ".join(
@@ -679,6 +619,7 @@ def _incpt_evidence_chunks(
     *,
     an: str,
     anchor: datetime,
+    anchor_label: str = "order",
     window_start: datetime,
     window_end: datetime,
     start_eid: int,
@@ -748,7 +689,7 @@ def _incpt_evidence_chunks(
             f"OPRTACT ICD9CM={','.join(optract_codes) if optract_codes else '(unmapped)'}. "
             "INCPT codes are charge codes; use OPRTACT ICD9CM when mapped, "
             "otherwise judge operation type from group/name/description. "
-            f"[{hours:+.1f}h vs order]"
+            f"[{hours:+.1f}h vs {anchor_label}]"
         )
         chunks.append(
             EvidenceChunk(
@@ -791,6 +732,11 @@ def _build_inputs():
         products_by_reqno.setdefault(r["REQNO"], []).append(
             (r.get("BDTYPE") or "").strip()
         )
+
+    bdvst_by_reqno = {r["REQNO"]: r for r in bdvst}
+    candidates_by_reqno = build_anchor_candidates(
+        bdvstdt_rows=bdvstdt, bdvst_by_reqno=bdvst_by_reqno
+    )
 
     diag_by_an: dict[str, list[str]] = {}
     diag_name_by_code: dict[str, str] = {}
@@ -839,6 +785,7 @@ def _build_inputs():
         progress,
         focus,
         diag_name_by_code,
+        candidates_by_reqno,
     )
 
 
@@ -862,16 +809,56 @@ def main() -> None:
         progress,
         focus,
         diag_name_by_code,
+        candidates_by_reqno,
     ) = _build_inputs()
 
     fr = build_audit_orders(inputs, AuditOrdersConfig(code_version=CODE_VERSION))
     print(f"audit_orders: included={len(fr.included)} excluded={len(fr.excluded)}")
 
     contexts: list[PipelineRowContext] = []
+    # Re-anchor provenance per order, keyed by audit_id. Kept out of the shared
+    # PipelineRowContext model so the schema is untouched; consumed only when
+    # emitting the JSON report below.
+    anchor_by_id: dict[str, EvidenceAnchor] = {}
 
     for order in fr.included:
+        # Reserve-ahead elective orders are crossmatched days before they are
+        # transfused; re-anchor the evidence windows (Hb lookback, notes, CBC,
+        # meds, vitals, INCPT) onto the issue datetime so the model adjudicates
+        # the op-day context instead of the reservation-day window. Cohort and
+        # procedure proximity keep the REQ order anchor (the order-decision
+        # context). evidence_anchor == order.order_datetime when not re-anchored,
+        # so same-day orders are byte-identical to before. See
+        # bba.hb_lookup.resolve_evidence_anchor.
+        evidence_anchor = resolve_evidence_anchor(
+            order_datetime=order.order_datetime,
+            candidates=candidates_by_reqno.get(order.reqno, []),
+        )
+        ev_anchor = evidence_anchor.anchor_utc
+        reanchored = evidence_anchor.reason == "transfusion_reanchor"
+        anchor_by_id[order.audit_id] = evidence_anchor
+        # Display noun for hours-before-anchor flags. For re-anchored orders the
+        # windows hang off the transfusion datetime, so "before order" would be
+        # off by the reservation->transfusion gap (days). Non-reanchored cases
+        # keep "order", so their evidence text is byte-identical to before.
+        anchor_label = "transfusion" if reanchored else "order"
+
         hb_obs = _hb_observations(lab, order.an)
-        hb = lookup_hb(observations=hb_obs, anchor_utc=order.order_datetime)
+        hb, _hb_anchor_display, _hb_anchor_reason = resolve_hb_with_fallback(
+            observations=hb_obs,
+            order_datetime=ev_anchor,
+            candidates=candidates_by_reqno.get(order.reqno, []),
+        )
+        # When the resolver anchored on a post-anchor draw (the fallback
+        # ladder), that draw is the Hb that routed this case to the LLM. Carry
+        # its timestamp so the evidence bundle's Hb upper bound includes it;
+        # otherwise the model adjudicates without the triggering value. None
+        # for the order-time path keeps the original pre-anchor-only window.
+        hb_bundle_anchor = (
+            hb.datetime_utc
+            if hb.datetime_utc is not None and hb.datetime_utc > ev_anchor
+            else None
+        )
 
         op_events = _op_events(
             iptsumoprt, ipddchsumoprt, incpt, optract_dict, icd9_dict, order.an
@@ -926,10 +913,10 @@ def main() -> None:
             crystalloid_events, order.order_datetime
         )
 
-        vitals_notes = _vitals_notes_for(
-            progress, focus, order.an, order.order_datetime
+        vitals_notes = vitals_notes_for(
+            progress, focus, order.an, ev_anchor
         )
-        vitals = extract_vitals(anchor=order.order_datetime, notes=vitals_notes)
+        vitals = extract_vitals(anchor=ev_anchor, notes=vitals_notes)
 
         # Issue #76: ship the narrative notes themselves (not just the regex
         # numbers) so the LLM sees the MAP / vasopressor evidence that Case 2
@@ -956,7 +943,7 @@ def main() -> None:
         # so the bound must be the local midnight that ends "day-of",
         # not order_datetime + 24h (which would leak into the next day).
         local_tz = ZoneInfo(TZ_LOCAL)
-        order_date_local = order.order_datetime.astimezone(local_tz).date()
+        order_date_local = ev_anchor.astimezone(local_tz).date()
         notes_lo = datetime.combine(
             order_date_local - timedelta(days=WINDOW_NOTES_DAYS_BEFORE),
             _time.min,
@@ -967,12 +954,31 @@ def main() -> None:
             _time.min,
             tzinfo=local_tz,
         ).astimezone(timezone.utc)
-        hb_lo = order.order_datetime - timedelta(days=WINDOW_HB_DAYS)
+        hb_lo = ev_anchor - timedelta(days=WINDOW_HB_DAYS)
+        # Re-anchored reserve-ahead orders: the intra-op nadir and the
+        # morning-after Hb are drawn AFTER the USE issue time, so a strict
+        # backward upper bound (ev_anchor) hides the peri-transfusion drop the
+        # case is actually about. Widen the upper bound to the end of op-day +N
+        # so the LLM sees the full trajectory. The builder mirrors this via
+        # OrderAnchor.hb_anchor (passed below). Non-reanchored orders keep the
+        # backward-only bound, so their bundles stay byte-identical.
+        if reanchored:
+            hb_op_day_hi = datetime.combine(
+                order_date_local + timedelta(days=WINDOW_HB_REANCHOR_DAYS_AFTER + 1),
+                _time.min,
+                tzinfo=local_tz,
+            ).astimezone(timezone.utc)
+            hb_bundle_anchor = (
+                max(hb_bundle_anchor, hb_op_day_hi)
+                if hb_bundle_anchor is not None
+                else hb_op_day_hi
+            )
 
         diagnoses: tuple[DiagnosisRecord, ...] = tuple(
             DiagnosisRecord(icd10=code, description=diag_name_by_code.get(code))
             for code in dict.fromkeys(order.diagnosis_codes)
         )
+        hb_hi = hb_bundle_anchor if hb_bundle_anchor is not None else ev_anchor
         hb_for_bundle = tuple(
             HbRecord(
                 timestamp=o.datetime_utc,
@@ -981,7 +987,7 @@ def main() -> None:
                 item_no=o.item_no,
             )
             for o in hb_obs
-            if hb_lo <= o.datetime_utc <= order.order_datetime
+            if hb_lo <= o.datetime_utc <= hb_hi
         )
         meds_in_window = sorted(
             [m for m in med_events if notes_lo <= m.timestamp < notes_hi],
@@ -1027,6 +1033,8 @@ def main() -> None:
                     hn_hash=hn_hash,
                     an_hash=an_hash,
                     products=order.products_ordered,
+                    hb_anchor=hb_bundle_anchor,
+                    window_anchor=ev_anchor if reanchored else None,
                 ),
                 diagnoses=diagnoses,
                 progress_notes=progress_for_bundle,
@@ -1053,21 +1061,13 @@ def main() -> None:
         min24_id: str | None = None
         min48_id: str | None = None
         if hb_payloads:
-            pre = [(i, v, t) for i, v, t in hb_payloads if t <= order.order_datetime]
+            pre = [(i, v, t) for i, v, t in hb_payloads if t <= ev_anchor]
             if pre:
                 closest_id = max(pre, key=lambda x: x[2])[0]
-                w24 = [
-                    x
-                    for x in pre
-                    if (order.order_datetime - x[2]) <= timedelta(hours=24)
-                ]
+                w24 = [x for x in pre if (ev_anchor - x[2]) <= timedelta(hours=24)]
                 if w24:
                     min24_id = min(w24, key=lambda x: x[1])[0]
-                w48 = [
-                    x
-                    for x in pre
-                    if (order.order_datetime - x[2]) <= timedelta(hours=48)
-                ]
+                w48 = [x for x in pre if (ev_anchor - x[2]) <= timedelta(hours=48)]
                 if w48:
                     min48_id = min(w48, key=lambda x: x[1])[0]
 
@@ -1078,26 +1078,26 @@ def main() -> None:
                 continue
             if item.id in (closest_id, min24_id, min48_id):
                 ts = item.timestamp_utc
-                hrs = (
-                    (order.order_datetime - ts).total_seconds() / 3600.0 if ts else None
-                )
+                hrs = (ev_anchor - ts).total_seconds() / 3600.0 if ts else None
                 flags: list[str] = []
                 if item.id == closest_id:
-                    flags.append("closest pre-order Hb")
+                    flags.append(f"closest pre-{anchor_label} Hb")
                 if item.id == min24_id:
-                    flags.append("minimum in 24h pre-order")
+                    flags.append(f"minimum in 24h pre-{anchor_label}")
                 if item.id == min48_id and item.id != min24_id:
-                    flags.append("minimum in 48h pre-order")
+                    flags.append(f"minimum in 48h pre-{anchor_label}")
                 if hrs is not None:
-                    flags.append(f"{hrs:.1f}h before order")
+                    flags.append(f"{hrs:.1f}h before {anchor_label}")
                 text = f"{text}  [{'; '.join(flags)}]"
             elif item.source == "Lab" and "value_g_dl" in dict(item.payload):
                 ts = item.timestamp_utc
-                hrs = (
-                    (order.order_datetime - ts).total_seconds() / 3600.0 if ts else None
-                )
+                hrs = (ev_anchor - ts).total_seconds() / 3600.0 if ts else None
                 if hrs is not None:
-                    text = f"{text}  [{hrs:.1f}h before order]"
+                    # Re-anchored bundles include op-day draws AFTER the
+                    # transfusion (intra-op nadir, morning-after); render those
+                    # as "after" instead of a negative "before".
+                    when = "before" if hrs >= 0 else "after"
+                    text = f"{text}  [{abs(hrs):.1f}h {when} {anchor_label}]"
             chunks.append(
                 EvidenceChunk(
                     evidence_id=item.id,
@@ -1111,7 +1111,8 @@ def main() -> None:
             incpt,
             optract_dict,
             an=order.an,
-            anchor=order.order_datetime,
+            anchor=ev_anchor,
+            anchor_label=anchor_label,
             window_start=notes_lo,
             window_end=notes_hi,
             start_eid=next_eid,
@@ -1143,11 +1144,11 @@ def main() -> None:
             unit = (r.get("NRMUNIT") or "").strip()
             lo = (r.get("MINNRM") or "").strip()
             hi = (r.get("MAXNRM") or "").strip()
-            hrs = (order.order_datetime - dt).total_seconds() / 3600.0
+            hrs = (ev_anchor - dt).total_seconds() / 3600.0
             text = (
                 f"{name} {value}{(' ' + unit) if unit else ''} at "
                 f"{dt.isoformat()}  [ref {lo}-{hi}; "
-                f"{hrs:+.1f}h vs order]"
+                f"{hrs:+.1f}h vs {anchor_label}]"
             )
             chunks.append(
                 EvidenceChunk(
@@ -1181,6 +1182,24 @@ def main() -> None:
             "- Do not silently drop sub-threshold Hb values from the reasoning;",
             "  ignoring them is the failure mode this policy exists to prevent.",
         ]
+        if any(it.source == "Periop" for it in bundle.items):
+            guidance_lines += [
+                "",
+                "PERI-OPERATIVE EVIDENCE — quote-or-deny requirement:",
+                "- A pinned 'PERI-OP SIGNALS' item is present above (surgical",
+                "  context / estimated blood loss / intra-op transfusion",
+                "  recovered from the free-text narrative).",
+                "- A surgery, EBL, or intra-op transfusion documented ONLY in a",
+                "  free-text note SATISFIES the peri-operative indication. Empty",
+                "  structured procedure rows do NOT negate it — do NOT write",
+                "  'no operative procedure documented' when the narrative shows one.",
+                "- For EACH peri-op fact in that item you MUST either quote the",
+                "  supporting snippet (naming its evidence id) in",
+                "  reasoning_summary_en AND reasoning_summary_th, OR explicitly",
+                "  state why you reject it.",
+                "- Silently ignoring the peri-op signal is the failure mode this",
+                "  requirement exists to prevent (Case 107 / REQNO 68074627).",
+            ]
         chunks.append(
             EvidenceChunk(
                 evidence_id=f"E{next_eid}",
@@ -1213,6 +1232,7 @@ def main() -> None:
                 prompt_hash="0" * 64,
                 evidence_bundle_hash=bundle.bundle_hash,
                 evidence_chunks=tuple(chunks),
+                periop_summary=bundle.periop_summary,
                 enable_missing_hb_positive_evidence=ENABLE_MISSING_HB_POSITIVE_EVIDENCE,
             )
         )
@@ -1221,6 +1241,7 @@ def main() -> None:
     classifier_results: dict[str, Any] = {}
     llm_contexts: list[PipelineRowContext] = []
     for ctx in contexts:
+        periop = ctx.periop_summary
         cres = classify(
             ClassifierInputs(
                 audit_id=ctx.order.audit_id,
@@ -1231,6 +1252,9 @@ def main() -> None:
                 upcoming_procedure_hours=ctx.upcoming_procedure_hours,
                 crystalloid_liters_prior_4h=ctx.crystalloid_liters_prior_4h,
                 enable_missing_hb_positive_evidence=ctx.enable_missing_hb_positive_evidence,
+                periop_blood_loss_ml=periop.blood_loss_ml if periop else None,
+                periop_intraop_transfusion=periop.intraop_transfusion if periop else False,
+                periop_surgical_context=periop.surgical_context if periop else False,
             )
         )
         classifier_results[ctx.order.audit_id] = cres
@@ -1270,17 +1294,29 @@ def main() -> None:
         poll_interval_seconds=20.0,
         max_wait_seconds=3600.0,
     )
-    print(
-        f"\nSubmitting batch of {len(submissions)} requests to "
-        f"Anthropic (model={MODEL_ID})..."
-    )
     t0 = time.time()
-    batch_id = transport.submit_batch_only(
-        model=MODEL_ID,
-        requests=submissions,
-        prompt_cache_enabled=True,
-    )
-    print(f"  batch_id = {batch_id}")
+    # Resume path: if BBA_PILOT_BATCH_ID is set, re-attach to an already-
+    # submitted batch instead of creating a new one. The deterministic
+    # context build above is reproducible, so ``submissions`` matches the
+    # original submission set and fetch_batch_results can rebuild each
+    # result's request_json. Use this after a Ctrl+C during polling so the
+    # in-flight batch is not abandoned and re-billed.
+    resume_batch_id = os.environ.get("BBA_PILOT_BATCH_ID")
+    if resume_batch_id:
+        batch_id = resume_batch_id
+        print(f"  resuming existing batch_id = {batch_id} (skipping submit)")
+    else:
+        print(
+            f"\nSubmitting batch of {len(submissions)} requests to "
+            f"Anthropic (model={MODEL_ID})..."
+        )
+        batch_id = transport.submit_batch_only(
+            model=MODEL_ID,
+            requests=submissions,
+            prompt_cache_enabled=True,
+        )
+        print(f"  batch_id = {batch_id}")
+        print(f"  (resume with: BBA_PILOT_BATCH_ID={batch_id})")
     print("  polling (this can take a while)...")
     response = transport.fetch_batch_results(
         batch_id,
@@ -1331,10 +1367,20 @@ def main() -> None:
     for ctx in llm_contexts:
         det = classifier_results[ctx.order.audit_id]
         r = rows_by_id.get(ctx.order.audit_id)
+        ev = anchor_by_id.get(ctx.order.audit_id)
         report.append(
             {
                 "reqno": ctx.order.reqno,
                 "audit_id": ctx.order.audit_id,
+                "evidence_anchor": (
+                    {
+                        "reason": ev.reason,
+                        "datetime_local": ev.display,
+                        "gap_hours": round(ev.gap_hours, 1),
+                    }
+                    if ev is not None
+                    else None
+                ),
                 "deterministic": {
                     "classification": det.classification,
                     "rationale": det.rationale,

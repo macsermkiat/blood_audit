@@ -47,6 +47,7 @@ from bba.vitals_extractor.bounds import (
     SBP_MAX,
     SBP_MIN,
 )
+from bba.vitals_extractor.models import PeriopSummary
 
 
 # =============================================================================
@@ -55,6 +56,7 @@ from bba.vitals_extractor.bounds import (
 
 EvidenceSource = Literal[
     "Hemodynamic",
+    "Periop",
     "Diagnosis",
     "IPDADMPROGRESS",
     "IPDNRFOCUSDT",
@@ -72,7 +74,15 @@ emitted as E1, and exempt from char-cap truncation so the evidence starved in
 Case 2 / REQNO 68012352 always reaches the LLM. It carries no appropriateness
 language and never gates the deterministic classifier — it is supporting
 evidence only.
-"""
+
+``Periop`` (Case 107 / REQNO 68074627) is SECOND, the same pinned, fact-only,
+truncation-exempt shape: surgical context, EBL (mL), and intra-op transfusion
+recovered from the free-text narrative. Case 107's LLM returned
+INSUFFICIENT_EVIDENCE because the structured procedure rows were empty and it
+trusted that absence over a post-op nursing note already in the bundle — a model
+attention miss. Pinning the signal high makes it un-skippable. Like Hemodynamic
+it carries no appropriateness language and never gates the classifier (whose
+procedure bypass keys on structured timing, not on this scan)."""
 
 
 HbSource = Literal["HEMATOLOGY", "POCT"]
@@ -184,6 +194,26 @@ class OrderAnchor(BaseModel):
     the bundle's JSON so the audit chain is reconstructible — the bundle
     builder does NOT use them to filter records (the caller pre-filters,
     mirroring :mod:`bba.hb_lookup`).
+
+    ``hb_anchor`` is the Hb-lookup anchor when it differs from
+    ``order_datetime``. The shared resolver (:func:`bba.hb_lookup.
+    resolve_hb_with_fallback`) can anchor the Hb on a post-order draw (a lab
+    drawn minutes after REQTIME — see ``docs/handoff-hb-anchor-unification``).
+    When that happens the triggering Hb is *after* ``order_datetime``, so the
+    default ``h.timestamp <= order_datetime`` Hb window would drop the very
+    value that routed the case to the LLM. Set ``hb_anchor`` to that draw's
+    timestamp so the bundle's Hb upper bound includes it; leave ``None`` for
+    the order-time path (the common case) to keep the original window.
+
+    ``window_anchor`` is the point every per-source window (progress, focus,
+    meds, Hb, vitals) is centered on. It defaults to ``order_datetime``. Blood
+    reserved for elective surgery is crossmatched days before it is
+    issued/transfused; for those orders the caller sets ``window_anchor`` to
+    the transfusion datetime (see :func:`bba.hb_lookup.resolve_evidence_anchor`)
+    so the bundle captures the op-day evidence instead of the reservation-day
+    window. ``order_datetime`` stays the reservation REQTIME for audit identity,
+    so ``window_anchor`` is windowing-only and is not echoed into the hashed
+    bundle envelope.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -192,6 +222,8 @@ class OrderAnchor(BaseModel):
     hn_hash: str
     an_hash: str
     products: tuple[str, ...]
+    hb_anchor: UTCDatetime | None = None
+    window_anchor: UTCDatetime | None = None
 
 
 class DiagnosisRecord(BaseModel):
@@ -388,6 +420,15 @@ class EvidenceBundle(BaseModel):
     items: tuple[EvidenceItem, ...]
     canonical_json: str
     bundle_hash: str
+
+    # Deterministic peri-op signal scanned from the SAME shipped note set
+    # that becomes the bundle's items (Case 107). This is a convenience
+    # return handle for downstream deterministic guardrails (e.g. the
+    # replay contradiction check) — it is NOT serialized into
+    # ``canonical_json`` and therefore does NOT participate in
+    # ``bundle_hash``. A bundle reconstructed from stored bytes carries the
+    # default (None); the guardrail then simply has no signal to act on.
+    periop_summary: PeriopSummary | None = None
 
     @field_validator("bundle_hash")
     @classmethod

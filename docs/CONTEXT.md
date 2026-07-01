@@ -12,6 +12,8 @@ covered: `#3 ingest`, `#4 audit_orders`, `#5 hb_lookup`, `#6 vitals_extractor`,
 `#19 audit_store`, `#21 prompt_builder`, `#22 llm_client`,
 `#23 confidence_calibrator`, `#24 audit_pipeline`, `#25 review_actions`,
 `#26 dashboard`, `#27 monitoring`, `#28 report_generator`, `#29 cli`.
+Also covers: `#76 hemodynamic/periop evidence`, Hb-anchor unification,
+missing-Hb positive-evidence pre-pass, and clinical-salience MED ordering.
 
 ## Ingest concepts (#3)
 
@@ -117,13 +119,18 @@ ingest module's persisted output, and a structural test
 Each source family has its own time window relative to the order anchor —
 all enforced by `bba.evidence_bundle_builder.builder`:
 
+* `Hemodynamic` — **pinned, no time window** (caller pre-filters notes;
+  summary is always emitted as E1 and is exempt from whole-item truncation)
+* `Periop` — **pinned, no time window** (same pinned/exempt contract as Hemodynamic)
 * `Diagnosis` — **AN-scoped** (no time window; full ICD-10 list for the encounter)
 * `IPDADMPROGRESS` — `±24h`, cap 8 closest entries (closest-by-abs-offset)
 * `IPDNRFOCUSDT` — `±24h`, cap 10 entries via 5-before / 5-after closest-first
 * `MED` — `[-72h, +24h]` (asymmetric: drug history + post-order administration)
 * `Lab` (Hb history) — `[-7d, anchor]` strict at lower bound (matches
   `bba.hb_lookup`'s `< _LOOKBACK` so a 7-d-old Hb is invisible to the bundle
-  iff it is invisible to the deterministic classifier)
+  iff it is invisible to the deterministic classifier); upper bound is
+  `hb_anchor` when the resolver anchored the Hb on a post-order draw
+  (see `OrderAnchor.hb_anchor`), otherwise `order_datetime`
 * `Vitals` — `±6h`
 
 ### Stable evidence ID
@@ -137,16 +144,20 @@ same input — what `bba.quote_grounder` (#18) cites in LLM output, and what
 
 Outer order = the literal source order in
 `bba.evidence_bundle_builder.models.EvidenceSource`:
-`Diagnosis, IPDADMPROGRESS, IPDNRFOCUSDT, MED, Lab, Vitals`. Inner order
-within each source is tuned for **truncation safety** so cap-pressure tail-drop
-discards the least-relevant item first:
+`Hemodynamic, Periop, Diagnosis, IPDADMPROGRESS, IPDNRFOCUSDT, Med, Lab, Vitals`
+(the literal is `Med`; the rest of this doc writes `MED` as shorthand for the
+MED.csv source). Inner order within each source is tuned for **truncation safety**
+so cap-pressure tail-drop discards the least-relevant item first:
 
 * `IPDADMPROGRESS` / `Vitals` / `IPDNRFOCUSDT` — closest-to-anchor first
 * `Lab` (Hb) — HEMATOLOGY before POCT (PRD §3 source preference, regardless
   of recency); within source: newest-first; corrected (max `item_no`) before
   stale for same-(source, timestamp) ties
-* `MED` — pre-anchor (decision context) before post-anchor (treatment after);
-  within pre: newest-first; within post: closest-to-anchor first
+* `MED` — clinical salience is the **PRIMARY** key (CRITICAL → ROUTINE →
+  MAINTENANCE; see *Clinical salience* below). The sort is STABLE, so within a
+  salience bucket the underlying order is preserved: pre-anchor (decision context)
+  before post-anchor (treatment after), newest-first within pre, closest-to-anchor
+  first within post
 * `Vitals` — pre-anchor before post-anchor (matches `bba.vitals_extractor`
   contract that pre wins regardless of distance)
 * `Diagnosis` — by `(icd10, description is not None, description)`
@@ -168,14 +179,82 @@ forged or stale hash. The model also locks the envelope shape (exactly
 `{anchor, items}`, anchor must have `{order_datetime, hn_hash, an_hash,
 products}` with tz-aware UTC `order_datetime`).
 
+### EXEMPT_FROM_DROP
+
+`bba.evidence_bundle_builder.builder.EXEMPT_FROM_DROP` — a frozenset of
+`EvidenceSource` literals that the whole-item truncation pass may never shed:
+`{"Hemodynamic", "Periop", "Lab"}`. These are the load-bearing decision signals:
+`Lab` (Hb) is the decision-time anemia value the deterministic classifier keys on;
+`Hemodynamic` is the pinned MAP/vasopressor summary starved in Case 2 / REQNO
+68012352; `Periop` is the pinned surgical-context/EBL summary the LLM skimmed
+past on Case 107 / REQNO 68074627. All are bounded in count, so exempting them
+cannot make the bundle grow without limit. If the exempt set plus the anchor
+envelope alone exceeds the cap, `EvidenceBundleTooLargeError` is raised rather
+than shedding a load-bearing signal.
+
 ### Char-cap drop priority
 
 Whole-item drop order under cap pressure (lowest clinical relevance first):
-`IPDADMPROGRESS → IPDNRFOCUSDT → MED → Vitals → Lab → Diagnosis`. Within Lab,
-POCT drops before HEMATOLOGY (PRD §3 source preference). When even an
-anchor-only envelope exceeds the cap, the builder raises
+`IPDADMPROGRESS → IPDNRFOCUSDT → MED → Vitals → Diagnosis`. `Lab`,
+`Hemodynamic`, and `Periop` are absent — they are in `EXEMPT_FROM_DROP`.
+Within `Lab`, POCT drops before HEMATOLOGY (PRD §3 source preference).
+When even an anchor-only envelope exceeds the cap, the builder raises
 `EvidenceBundleTooLargeError` rather than emitting an over-budget bundle —
 the AC explicitly forbids silent over-cap.
+
+### DEFAULT_CHAR_CAP
+
+`DEFAULT_CHAR_CAP = 40_000`. Raised from the original 8 K (issue #16) to 40 K
+(issue #76): the old cap was a root cause of Case 2 / REQNO 68012352 — narrative
+suppression plus the 8 K ceiling shed the vasopressor and MAP evidence the LLM
+needed. The bundle now ships the full SOAP prose narrative **plus** the pinned
+hemodynamic and peri-op summaries, which require the headroom. 40 K is
+**provisional**: it will be finalized against the pilot worst-case bundle
+measurement before any clinical use.
+
+### Clinical salience (MED ordering)
+
+`bba.evidence_bundle_builder.salience.med_salience(drug) → SalienceBucket` —
+maps a MED `drug` string to one of three coarse buckets:
+
+* `CRITICAL (0)` — vasopressors, inotropes, blood products (drop last under
+  cap pressure). Matched by `_CRITICAL_RE` with word boundaries. Full generic
+  names only; ambiguous short tokens (`NA`, `NAD`) are deliberately absent.
+* `ROUTINE (1)` — the default; anything not recognised as critical or maintenance.
+* `MAINTENANCE (2)` — crystalloids, saline flushes, irrigation (drop first).
+
+Precedence is CRITICAL → MAINTENANCE → ROUTINE so a pressor diluted in saline
+stays CRITICAL. `SalienceBucket` is an `IntEnum`: lower value = emitted earlier =
+shed later. This is an ORDERING signal only — it never gates, classifies, or
+weights a transfusion decision. `bba.evidence_bundle_builder.salience`.
+
+### hb_anchor and window_anchor (OrderAnchor)
+
+Two optional fields on `bba.evidence_bundle_builder.models.OrderAnchor`:
+
+* `hb_anchor` — the Hb-lookup upper-bound anchor when it differs from
+  `order_datetime`. `bba.hb_lookup.resolve_hb_with_fallback` can anchor on a
+  post-order draw (a lab drawn minutes after REQTIME). Without this field the
+  default `h.timestamp <= order_datetime` filter would drop the very value that
+  routed the case to the LLM. Set to the fallback draw's timestamp on a hit;
+  `None` on the common order-time path.
+* `window_anchor` — the point every per-source window (progress, focus, meds,
+  Hb, vitals) is centred on. Defaults to `order_datetime`. For reserve-ahead
+  elective orders (blood crossmatched days before the transfusion), the caller
+  sets this to the transfusion datetime via `bba.hb_lookup.resolve_evidence_anchor`
+  so the bundle captures op-day evidence rather than reservation-day context.
+  `order_datetime` stays as the audit identity anchor; `window_anchor` is
+  windowing-only and does NOT participate in the hashed bundle envelope.
+
+### periop_summary sidecar (EvidenceBundle)
+
+`EvidenceBundle.periop_summary: PeriopSummary | None` — a convenience return
+handle carrying the `PeriopSummary` scanned from the same note set that became
+the bundle's items. Used by downstream deterministic guardrails (e.g. the
+replay contradiction check in `bba.audit_pipeline.replay`). It is **not**
+serialized into `canonical_json` and therefore does **not** participate in
+`bundle_hash`. A bundle reconstructed from stored bytes carries `None`; the
+guardrail simply has no signal to act on in that case.
 
 ### SOAP section priority
 
@@ -254,6 +333,61 @@ lowest-in-window — hindsight bias is a deliberate non-feature.
 The unit of output: chosen `HbObservation`, its `freshness`, `source`, and the
 list of `DeltaHbWindow` evaluations. `bba.hb_lookup.models.HbLookupResult`.
 
+### AnchorCandidate
+
+A fallback Hb anchor with display text and provenance for the review page.
+`bba.hb_lookup.anchor.AnchorCandidate` — frozen dataclass `(anchor_utc,
+display, reason)`. `anchor_utc` is the tz-aware UTC datetime to look the Hb
+back from; `display` is the local-time string surfaced in the review page;
+`reason` records which fallback fired (e.g. `"issue_datetime"`,
+`"blood_bank_visit_fallback"`). The pilot builds the ordered list from BDVSTDT
+issue/use rows in `scripts/pilot/_anchor_candidates.py`.
+
+### resolve_hb_with_fallback
+
+`bba.hb_lookup.anchor.resolve_hb_with_fallback(*, observations, order_datetime,
+candidates) -> (HbLookupResult, anchor_display, anchor_reason)`.
+
+The primary anchor is always `order_datetime`. On a miss, each candidate is
+tried in order; a candidate strictly **before** the order is skipped (a fallback
+may be slightly after — lab drawn minutes post-REQTIME — but never before).
+The first candidate that yields a non-missing Hb wins. If none do, the original
+order-time (missing) result is returned. Closed over the ordering rule so the
+deterministic report leg and the LLM gate leg resolve the Hb identically —
+preventing the divergence bug documented in
+`docs/handoff-hb-anchor-unification.md` (case 7 / REQNO 68066907).
+
+### DEFAULT_REANCHOR_THRESHOLD
+
+`DEFAULT_REANCHOR_THRESHOLD = timedelta(hours=24)`. Blood reserved for elective
+surgery is crossmatched and held days before it is issued. Anchoring the evidence
+windows on the reservation REQTIME then misses the entire transfusion context
+(the op-day Hb drop and operative notes). When the issue datetime lands this far
+or more after the order, `resolve_evidence_anchor` re-anchors the evidence
+windows onto the issue datetime. 24 h cleanly separates same-admission same-day
+issue (no re-anchor) from the reserve-ahead case.
+
+### EvidenceAnchor
+
+`bba.hb_lookup.anchor.EvidenceAnchor` — frozen dataclass `(anchor_utc, reason,
+gap_hours, display)` specifying where the per-source evidence windows should be
+centred. `reason` is `"order_datetime"` for the common case (windows track the
+order) or `"transfusion_reanchor"` when an elective pre-reserved order was issued
+materially later than it was reserved. `gap_hours` is the issue-minus-order lag in
+hours (0.0 when not re-anchored); `display` is the issue anchor's local-time
+string for the review page (`""` when not re-anchored).
+
+### resolve_evidence_anchor
+
+`bba.hb_lookup.anchor.resolve_evidence_anchor(*, order_datetime, candidates,
+threshold) -> EvidenceAnchor`. Picks the evidence-window anchor for one order.
+The order anchor wins unless an `"issue_datetime"` candidate lands `threshold`
+or more after the order (the reserve-ahead elective case). Only
+`"issue_datetime"` candidates re-anchor: the blood-bank *visit* timestamp tracks
+the reservation, not the transfusion, and must never move the windows. The first
+qualifying issue candidate wins (the pilot builder orders the issue datetime
+ahead of the blood-bank fallback).
+
 ## Vitals-extractor concepts (#6)
 
 ### Vitals note
@@ -303,6 +437,76 @@ Quality annotations on a `VitalsResult`: `vitals_post_order`,
 Downstream consumers (#8 deterministic_classifier; #16
 evidence_bundle_builder) read these to gate rule branches and to prioritize
 human review.
+
+### Hemodynamic scan
+
+`bba.vitals_extractor.hemodynamic.scan_hemodynamics(notes) → HemodynamicSummary`.
+A **window-wide** pass (distinct from the single-note `extract_vitals` selection)
+over every note in the window for two signals starved in Case 2 / REQNO 68012352:
+
+* **MAP nadir** — the lowest *measured* mean arterial pressure across the whole
+  window (not the most-recent reading), because shock severity is the worst
+  point, not the latest. Two notations recognised: labelled `MAP 56` (goal/target
+  phrasing excluded) and parenthesised `ABP 77/44 (56)` (kept only when the
+  bracketed value is physiologically between diastolic and systolic).
+* **Vasopressor mentions** — the canonical agent name and dose phrase (if
+  charted), deduplicated by agent, keeping the earliest mention.
+
+Pure aggregation; empty input yields an empty summary. Caller owns windowing.
+
+### VasopressorMention
+
+`bba.vitals_extractor.models.VasopressorMention` — frozen Pydantic model: the
+canonical `agent` name, the raw `dose` phrase if charted (`None` otherwise), and
+provenance (`at` = tz-aware UTC timestamp, `source` = origin table). Recognised
+agents: norepinephrine (Levophed / NE / nor-adrenaline / นอร์อะดรีนาลีน),
+epinephrine, dopamine (โดพามีน), dobutamine, vasopressin. Ambiguous abbreviations
+(`NA` = sodium, `NAD` = no acute distress) are deliberately absent.
+
+### HemodynamicSummary
+
+`bba.vitals_extractor.models.HemodynamicSummary` — fact-only, frozen Pydantic
+model. Fields: `map_nadir: int | None`, `map_nadir_at: datetime | None`,
+`map_nadir_source: Literal[...] | None`, `vasopressors: tuple[VasopressorMention, ...]`.
+`is_empty` property returns `True` when neither a MAP nor any vasopressor was
+found. **Binding guardrail**: carries facts only — no "refractory" /
+"instability" / appropriateness field. The deterministic classifier has no
+hemodynamic gate; all weighting stays with the LLM and the auditor.
+
+### Periop scan
+
+`bba.vitals_extractor.periop.scan_periop(notes) → PeriopSummary`.
+Recovers three fact-only signals from free-text notes for cases where structured
+procedure rows are absent (Case 107 / REQNO 68074627 — ORIF + EBL 1500 mL
+documented only in a nursing note, LLM wrote "no operative procedure documented"):
+
+* **Surgical context** — any surgery cue (ผ่าตัด, post-op, ORIF/CRIF, TKA/THA,
+  craniotomy, laparotomy, "to OR", "under GA/spinal", …). Boolean.
+* **Estimated blood loss** — EBL volume normalised to millilitres (litres ×1000,
+  "cc" as-is). MAX across the window kept (worst loss, not latest charted).
+* **Intra-operative transfusion** — a specific blood component (LPRC, PRBC, FFP,
+  platelets, SDP, cryo) co-located with an intra-op marker within 40 chars.
+  Generic "blood" near "intra-op" deliberately NOT matched.
+
+Pure aggregation; empty input yields an empty summary. Caller owns windowing.
+
+### PeriopFinding
+
+`bba.vitals_extractor.models.PeriopFinding` — frozen Pydantic model carrying one
+located peri-operative fact: `category` (Literal `"surgery"` | `"blood_loss"` |
+`"intraop_transfusion"`), a verbatim `snippet` (±60 chars around the match),
+`at` (tz-aware UTC timestamp), `source` (origin table). At most one finding per
+category per summary.
+
+### PeriopSummary
+
+`bba.vitals_extractor.models.PeriopSummary` — fact-only, frozen Pydantic model.
+Fields: `surgical_context: bool`, `blood_loss_ml: int | None`,
+`intraop_transfusion: bool`, `findings: tuple[PeriopFinding, ...]`.
+`is_empty` returns `True` when no surgery, no EBL, and no intra-op transfusion
+were found. **Binding guardrail**: carries facts only — the deterministic
+classifier's procedure bypass keys on structured timing, not on this scan.
+Do not add appropriateness fields.
 
 ## Cohort-detector concepts (#7)
 
@@ -472,10 +676,11 @@ dashboards can group by reason without re-deriving from `rationale`.
 ### Classification precedence
 
 Eleven-step composition in `bba.deterministic_classifier.classify`
-(top wins): (1) Hb missing → MTP / peri-procedural positive-evidence
-pre-check (`APPROPRIATE` on a structured Hb-independent signal), else
-`INSUFFICIENT_EVIDENCE` (see "Missing-Hb positive-evidence pre-check");
-(2) Hb < 7.0 →
+(top wins): (1) Hb missing → MTP / peri-procedural / hard-peri-op-evidence
+positive-evidence pre-pass (`APPROPRIATE` on an Hb-independent signal);
+with the pre-pass flag on but no hard evidence → `NEEDS_REVIEW` (defer to
+LLM), with the flag off → `INSUFFICIENT_EVIDENCE` (see "Missing-Hb
+positive-evidence pre-check"); (2) Hb < 7.0 →
 `APPROPRIATE`/`NONE`; (3) cohort `MTP` → `APPROPRIATE`/`MTP`;
 (4) cohort `UNKNOWN` → `NEEDS_REVIEW`; (5) procedure ≤ 6 h →
 `APPROPRIATE`/`PERI_PROCEDURAL_6H`; (6) upcoming procedure ≤ 72 h →
@@ -564,57 +769,93 @@ the orchestrator before reaching the classifier.
 
 **SEED pending clinical sign-off** (same status as the
 `bba.cohort_detector` allow-lists). When `hb_result.value_g_dl is None`,
-the classifier optionally checks for hard, structured, Hb-independent
-positive evidence and auto-classifies `APPROPRIATE` exactly as the
-Hb-present path would — closing the indefensible asymmetry where the
-*same* case parked as `INSUFFICIENT_EVIDENCE` with no Hb but
-auto-classified `APPROPRIATE` with one.
+the classifier optionally runs a two-stage policy instead of dead-ending:
+it auto-classifies `APPROPRIATE` on hard, Hb-independent positive evidence
+exactly as the Hb-present path would, and **defers everything else to the
+LLM** (`NEEDS_REVIEW`/`hb_missing_defer_llm`) rather than terminating. This
+closes two gaps: the indefensible asymmetry where the *same* case parked as
+`INSUFFICIENT_EVIDENCE` with no Hb but auto-classified `APPROPRIATE` with
+one; and the dead-end where a deterministic `INSUFFICIENT_EVIDENCE` is
+terminal (`DETERMINISTIC_FINAL`) so well-documented elective/peri-op cases
+never reached the LLM (which auto-resolves the majority from the free-text
+prose + the peri-op evidence block).
+
+Window analysis (`/tmp/bba_mini`, 39 cases) confirmed the missingness is
+**real, not a lookback-window artifact** — most cases only have a
+*post-transfusion* Hb (inflated by the transfusion itself), so extending
+the Hb window is the wrong lever (it would feed the gate a hindsight value).
+The accuracy invariant therefore holds: the deterministic gate never
+decides on a (possibly post-transfusion) Hb here — there is none; op-day/
+post-op Hb may reach the LLM only as clearly-labeled *context*.
 
 **The policy is gated behind a disabled-by-default flag**
 (`ClassifierInputs.enable_missing_hb_positive_evidence`, forwarded from
 `PipelineRowContext.enable_missing_hb_positive_evidence`). When the flag
-is `False` (the default and production state until the QI committee
-signs off), missing Hb always returns
-`INSUFFICIENT_EVIDENCE`/`NONE`/`hb_missing`, regardless of cohort or
-procedure proximity — matching the original PRD spec line in
-`scripts/create_issues.sh` ("Hb missing → INSUFFICIENT_EVIDENCE"). The
-orchestrator that builds `PipelineRowContext` is the sign-off binding
-point and must NOT set the flag `True` in production until clinical
-approval is on record.
+is `False` (the default; production state until the QI committee signs off),
+missing Hb always returns `INSUFFICIENT_EVIDENCE`/`NONE`/`hb_missing`,
+regardless of cohort, procedure proximity, or peri-op evidence — matching
+the original PRD spec line in `scripts/create_issues.sh` ("Hb missing →
+INSUFFICIENT_EVIDENCE"). The orchestrator that builds `PipelineRowContext`
+is the sign-off binding point.
 
-When the flag is `True`, the pre-check applies and order is preserved
-(MTP → UNKNOWN → peri-procedural):
+When the flag is `True`, the pre-pass applies and order is preserved
+(MTP → UNKNOWN → peri-procedural → hard peri-op evidence):
 
 - cohort `MTP` → `APPROPRIATE`/`MTP`, `rationale="bypass_mtp_hb_missing"`;
-- cohort `UNKNOWN` → stays `INSUFFICIENT_EVIDENCE` (peri-procedural must
-  not override UNKNOWN, mirroring the Hb-present order);
+- cohort `UNKNOWN` → no deterministic auto-approve (peri-procedural / peri-op
+  evidence must not override UNKNOWN, mirroring the Hb-present order); defers
+  to the LLM below;
 - `procedure_proximity_hours ≤ 6.0` → `APPROPRIATE`/`PERI_PROCEDURAL_6H`,
   `rationale="bypass_peri_procedural_hb_missing"`;
-- otherwise → `INSUFFICIENT_EVIDENCE`/`NONE`, `rationale="hb_missing"`.
+- hard peri-op note evidence — a charted intra-op transfusion, or estimated
+  blood loss ≥ `PERIOP_MIN_EBL_ML` (500 mL) — → `APPROPRIATE`/`PERIOP_EVIDENCE`,
+  `rationale="bypass_periop_evidence_hb_missing"`. Soft cues (a surgery is
+  merely documented / an upcoming procedure is scheduled) deliberately do
+  NOT fire — those defer;
+- otherwise → `NEEDS_REVIEW`/`NONE`, `rationale="hb_missing_defer_llm"` (route
+  to the LLM, do not dead-end).
 
-The distinct `*_hb_missing` rationale slugs keep these "approved with no
-documented Hb" cases auditable so the QI committee can monitor them
-(`bypass_reason` is still `MTP`/`PERI_PROCEDURAL_6H` for grouping).
-`TestMissingHbPositiveEvidence` pins all flag-on paths;
-`test_mtp_with_missing_hb_flag_default_off_stays_insufficient` and
-`test_peri_procedural_with_missing_hb_flag_default_off_stays_insufficient`
-pin the disabled-by-default contract.
+The peri-op signals (`periop_blood_loss_ml`, `periop_intraop_transfusion`,
+`periop_surgical_context`) are threaded onto `ClassifierInputs` from
+`bba.vitals_extractor.periop.scan_periop` (mirroring `PeriopSummary`);
+`periop_surgical_context` is carried for traceability only and never gates a
+verdict. `PERIOP_MIN_EBL_ML` lives on the classifier module as the single
+source of truth and is re-exported as
+`bba.audit_pipeline.replay.PERIOP_GUARDRAIL_MIN_EBL_ML` (the contradiction
+guardrail's bar) so the two thresholds cannot drift.
+
+The distinct `*_hb_missing` rationale slugs keep "approved with no
+documented Hb" cases auditable for the QI committee (`bypass_reason` is
+`MTP`/`PERI_PROCEDURAL_6H`/`PERIOP_EVIDENCE` for grouping);
+`hb_missing_defer_llm` marks the LLM-deferred set.
+`TestMissingHbPositiveEvidence` + `TestMissingHbPeriopEvidenceAndDeferral`
+pin all flag-on paths; the `*_flag_default_off_*` /
+`test_hard_periop_evidence_flag_off_stays_insufficient` tests pin the
+disabled-by-default contract.
 `TestMissingHbBypassPersistence` covers the end-to-end pipeline
 persistence path for both flag states.
 
+**Pilot enablement:** set
+`BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE=1` for the pilot re-run
+(`run_pipeline.py` deterministic leg + `run_llm_leg.py` LLM leg) once
+clinical sign-off is on record. The flag stays code-default `False` for
+multicenter rollout control.
+
 ### Delta-Hb / pre-op crossmatch excluded on missing Hb
 
-The pre-check above deliberately does **not** fire delta-Hb or the pre-op
-crossmatch bypass on a missing Hb. Delta-Hb needs a current Hb to compute,
-so a stale upstream `delta_hb_bypass=True` set together with a missing Hb
-is a structural inconsistency — the classifier prefers the "no Hb" fact
-over the orphan flag. Pre-op crossmatch (`upcoming_procedure_hours`) is
-excluded because transfusing pre-op with no documented Hb is exactly what
-an audit should flag, not auto-approve; that case stays
-`INSUFFICIENT_EVIDENCE`.
+The pre-pass above deliberately does **not** auto-approve on delta-Hb or
+the pre-op crossmatch on a missing Hb. Delta-Hb needs a current Hb to
+compute, so a stale upstream `delta_hb_bypass=True` set together with a
+missing Hb is a structural inconsistency — the classifier prefers the "no
+Hb" fact over the orphan flag (and, flag-off, the case stays
+`INSUFFICIENT_EVIDENCE`). Pre-op crossmatch (`upcoming_procedure_hours`) is
+a soft "surgery is scheduled" cue: transfusing pre-op with no documented Hb
+is exactly what an audit should look at, so it is never deterministically
+auto-approved. With the pre-pass flag on it no longer dead-ends, though —
+it defers to the LLM (`NEEDS_REVIEW`/`hb_missing_defer_llm`).
 `TestBypassPathways::test_delta_hb_bypass_does_not_fire_when_hb_missing`
 and
-`TestMissingHbPositiveEvidence::test_pre_op_crossmatch_only_with_missing_hb_stays_insufficient`
+`TestMissingHbPositiveEvidence::test_pre_op_crossmatch_only_with_missing_hb_defers_to_llm`
 pin these exclusions.
 
 ### Monotonicity in Hb
@@ -1069,6 +1310,13 @@ form over the normal approximation — Wilson does not leak out of `[0,1]`
 at boundary prevalences (Hb<7, Hb>10), which would be a regulator-visible
 defect. The inverse-normal quantile is the Acklam (2003) approximation
 (absolute error ≤ 1.15e-9) so scipy is not a runtime dependency.
+Bounds are clamped around the point estimate (`lower = max(0, min(p_hat,
+center - margin))`, `upper = min(1, max(p_hat, center + margin))`) to
+correct floating-point noise at the boundaries — in exact arithmetic the
+Wilson interval always contains `p_hat`, but at boundary prevalences
+(successes == 0 or successes == n) rounding can produce a tiny epsilon
+on the wrong side (e.g. `5.5e-17 > 0.0`), which would break downstream
+`lower <= point <= upper` invariants.
 
 ### Inter-rater agreement bundle
 
@@ -1586,6 +1834,14 @@ aliases), `exceptions.py` (typed `DashboardError` hierarchy),
 `templates/` (Jinja2: `base.html` + per-view templates +
 `_queue_table.html` HTMX fragment).
 
+### hb_freshness in queue and case-detail
+
+`AuditRow.hb_freshness` is now surfaced on both `QueueItem` and `CaseDetail`
+DTOs so reviewers can see the age-tier of the Hb used at decision time (one of
+`fresh`, `stale_24_72h`, `stale_3_7d`, `missing`) alongside the numeric value in
+the review queue and the case-detail view. Populated via `_audit_row_to_queue_item`
+and `_audit_row_to_case_detail` in `bba.dashboard.app`.
+
 ### Five views
 
 PRD §17 surface, exposed as five FastAPI routes:
@@ -1987,17 +2243,20 @@ reader does not re-litigate:
 
 ## LLM-client concepts (#22)
 
-### Snapshot-pinned model ID
+### Allow-set-pinned model ID
 
-The exact Anthropic model string with its `-YYYYMMDD` snapshot suffix
-(e.g. `claude-sonnet-4-6-20251018`, `claude-opus-4-7-20251030`). The two
-allowed values live behind `SONNET_MODEL_ID` and `OPUS_MODEL_ID` in
+The two model IDs the client may invoke are bare aliases
+(`claude-sonnet-5`, `claude-opus-4-8`) — Claude Sonnet 5 and Opus 4.8
+ship without dated snapshots, so the alias is the canonical ID. They
+live behind `SONNET_MODEL_ID` and `OPUS_MODEL_ID` in
 `bba.llm_client.models`; the runtime allowlist is
-`ALLOWED_MODELS = frozenset({SONNET_MODEL_ID, OPUS_MODEL_ID})`. A
-floating alias (`claude-sonnet-4-6` without the date) is rejected at
-`LlmClientConfig` construction. PRD §"Anthropic silent point release":
-the snapshot suffix forces a code change for every model upgrade so
-the quarterly golden-set drift probe has a stable anchor.
+`ALLOWED_MODELS = frozenset({SONNET_MODEL_ID, OPUS_MODEL_ID})`. Any
+model not in that set (e.g. `claude-sonnet-4-6`) is rejected at
+`LlmClientConfig` construction. PRD §13: the allowlist forces a code
+change (edit the constant) for every model *swap*, so the golden-set
+drift probe has a stable anchor — but because the IDs are bare aliases,
+an Anthropic point release under the same alias is no longer caught
+here.
 
 ### Custom-ID assertion
 

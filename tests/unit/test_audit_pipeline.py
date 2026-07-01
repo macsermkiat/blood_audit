@@ -57,8 +57,13 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from bba.audit_orders import AuditOrder
-from bba.audit_store import LlmCall
+from bba.audit_store import AuditRow, LlmCall
 from bba.audit_store.models import Classification
+from bba.audit_pipeline.replay import (
+    PERIOP_CONTRADICTION_REVIEW_REASON,
+    PERIOP_GUARDRAIL_MIN_EBL_ML,
+    periop_contradiction,
+)
 from bba.audit_pipeline import (
     VALID_TRANSITIONS,
     AuditPipelineConfig,
@@ -85,7 +90,13 @@ from bba.audit_pipeline import (
 from bba.cohort_detector import CohortAssignment, CohortLabel
 from bba.hb_lookup import DeltaHbWindow, HbLookupResult
 from bba.prompt_builder import EvidenceChunk
-from bba.vitals_extractor import SourceProvenance, VitalSigns, VitalsResult
+from bba.vitals_extractor import (
+    PeriopFinding,
+    PeriopSummary,
+    SourceProvenance,
+    VitalSigns,
+    VitalsResult,
+)
 from bba.llm_client import (
     AnthropicBatchTransport,
     AnthropicTransport,
@@ -323,6 +334,7 @@ def _row_context(
     cohort_label: CohortLabel = CohortLabel.DEFAULT,
     cohort_threshold: float | None = 7.0,
     evidence_text: str = "Hb 7.5 with symptomatic chest pain",
+    periop_summary: PeriopSummary | None = None,
 ) -> PipelineRowContext:
     """Build a PipelineRowContext whose upstream data drives the
     deterministic_classifier to produce the requested ``classification``.
@@ -427,6 +439,7 @@ def _row_context(
         prompt_hash=f"prompt_hash_{audit_id}",
         evidence_bundle_hash=f"bundle_hash_{audit_id}",
         evidence_chunks=evidence_chunks,
+        periop_summary=periop_summary,
     )
 
 
@@ -1483,6 +1496,234 @@ class TestParseFailureBranches:
         assert len(rows) == 1
         assert rows[0].final_classification == "NEEDS_REVIEW"
         assert rows[0].review_reason == expected_reason
+
+
+# =============================================================================
+# Part 2 — Peri-op contradiction guardrail (Case 107)
+#
+# WHY: the verifier only checks citation grounding; it cannot catch the model
+# discounting a documented surgery / large EBL / intra-op transfusion that the
+# bundle extracted deterministically. On Case 107 the LLM returned
+# INSUFFICIENT_EVIDENCE ("no operative procedure documented") while the bundle
+# carried a 1500 ml-blood-loss ORIF in the peri-transfusion window. These tests
+# pin that such a contradiction forces human review with a DISTINCT reason,
+# never silently lets the "insufficient" verdict stand, never blanks the LLM's
+# reasoning, and never over-escalates a committed verdict or an empty signal.
+# Each test would fail if the override (or its guard conditions) were removed.
+# =============================================================================
+
+
+def _periop_llm_response(
+    *,
+    audit_id: str,
+    classification: str,
+    indications: list[dict[str, object]] | None = None,
+    reasoning_en: str = "model rationale",
+) -> RawBatchResponse:
+    """One grounded LLM result carrying ``classification`` for ``audit_id``.
+
+    Shapes a well-formed structured-output payload so the row reaches the
+    *winner* branch of ``_build_audit_row`` (verifier passes by default) —
+    the only branch the guardrail override runs in."""
+    from bba.llm_client.models import BatchSubmissionResult
+
+    return RawBatchResponse(
+        batch_id="msgbatch_periop",
+        results=(
+            BatchSubmissionResult(
+                custom_id=audit_id,
+                model_id=SONNET_MODEL_ID,
+                raw_response_json={
+                    "id": "msg_periop",
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": "classify_audit",
+                            "input": {
+                                "classification": classification,
+                                "indications": indications or [],
+                                "negative_evidence": [],
+                                "reasoning_summary_en": reasoning_en,
+                                "reasoning_summary_th": "th",
+                            },
+                        }
+                    ],
+                    "stop_reason": "tool_use",
+                },
+                request_json={"messages": []},
+                response_headers={"anthropic-version": "2023-06-01"},
+                request_timestamp=_RUN_TS,
+                latency_ms=100,
+                anthropic_version="2023-06-01",
+                prompt_cache_id=None,
+                extended_thinking_blocks=None,
+            ),
+        ),
+    )
+
+
+def _apply_single_row(
+    ctx: PipelineRowContext,
+    response: RawBatchResponse,
+    *,
+    tmp_path: object,
+) -> AuditRow:
+    from pathlib import Path
+
+    from bba.audit_store import AuditStore, AuditStoreConfig
+
+    assert isinstance(tmp_path, Path)
+    audit_store = AuditStore(
+        AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
+    )
+    apply_batch_results(
+        response,
+        audit_store=audit_store,
+        run_id="run-periop",
+        contexts={ctx.order.audit_id: ctx},
+    )
+    rows = audit_store.read_audit_results(run_id="run-periop")
+    assert len(rows) == 1
+    return rows[0]
+
+
+class TestPeriopContradictionPredicate:
+    """Unit-level pin on the pure predicate + its constants."""
+
+    def test_surgery_alone_contradicts_insufficient_evidence(self) -> None:
+        ctx = _row_context(
+            audit_id="p-1", periop_summary=PeriopSummary(surgical_context=True)
+        )
+        assert periop_contradiction("INSUFFICIENT_EVIDENCE", ctx) is True
+
+    def test_large_ebl_alone_contradicts(self) -> None:
+        ctx = _row_context(
+            audit_id="p-2",
+            periop_summary=PeriopSummary(blood_loss_ml=PERIOP_GUARDRAIL_MIN_EBL_ML),
+        )
+        assert periop_contradiction("POTENTIALLY_INAPPROPRIATE", ctx) is True
+
+    def test_intraop_transfusion_alone_contradicts(self) -> None:
+        ctx = _row_context(
+            audit_id="p-3", periop_summary=PeriopSummary(intraop_transfusion=True)
+        )
+        assert periop_contradiction("INSUFFICIENT_EVIDENCE", ctx) is True
+
+    def test_ebl_below_floor_does_not_contradict(self) -> None:
+        # The 500 mL floor is the line between routine and transfusion-relevant
+        # loss; a sub-floor EBL must NOT override an "insufficient" verdict.
+        ctx = _row_context(
+            audit_id="p-4",
+            periop_summary=PeriopSummary(
+                blood_loss_ml=PERIOP_GUARDRAIL_MIN_EBL_ML - 1
+            ),
+        )
+        assert periop_contradiction("INSUFFICIENT_EVIDENCE", ctx) is False
+
+    def test_committed_verdicts_are_never_contradicted(self) -> None:
+        # APPROPRIATE / INAPPROPRIATE are verdicts the model reached WITH the
+        # evidence in view; the guardrail only targets non-committal shapes.
+        ctx = _row_context(
+            audit_id="p-5", periop_summary=PeriopSummary(surgical_context=True)
+        )
+        assert periop_contradiction("APPROPRIATE", ctx) is False
+        assert periop_contradiction("INAPPROPRIATE", ctx) is False
+
+    def test_absent_signal_is_inert(self) -> None:
+        ctx = _row_context(audit_id="p-6", periop_summary=None)
+        assert periop_contradiction("INSUFFICIENT_EVIDENCE", ctx) is False
+
+    def test_review_reason_distinct_from_hallucination(self) -> None:
+        assert PERIOP_CONTRADICTION_REVIEW_REASON != "hallucination_suspect"
+
+
+class TestPeriopContradictionGuardrail:
+    """Integration pin on the override inside ``apply_batch_results``."""
+
+    def test_case_107_shape_escalates_to_human_review(
+        self, tmp_path: object
+    ) -> None:
+        # Exact Case 107 shape: documented ORIF + 1500 mL EBL in a focus note,
+        # LLM still returns INSUFFICIENT_EVIDENCE.
+        summary = PeriopSummary(
+            surgical_context=True,
+            blood_loss_ml=1500,
+            intraop_transfusion=True,
+            findings=(
+                PeriopFinding(
+                    category="surgery",
+                    snippet="s/p CRIF, blood loss 1500 ml, intra-op LPRC",
+                    at=_RUN_TS,
+                    source="IPDNRFOCUSDT",
+                ),
+            ),
+        )
+        ctx = _row_context(
+            audit_id="audit-periop-107",
+            classification="POTENTIALLY_INAPPROPRIATE",
+            periop_summary=summary,
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id, classification="INSUFFICIENT_EVIDENCE"
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == PERIOP_CONTRADICTION_REVIEW_REASON
+        assert row.needs_human_review is True
+
+    def test_escalation_preserves_llm_reasoning_and_verifier_pass(
+        self, tmp_path: object
+    ) -> None:
+        # Unlike the hallucination_suspect path (which blanks reasoning), a
+        # contradiction must keep the model's words so the reviewer sees the
+        # conflict, and verifier_pass stays True (the citations DID ground).
+        ctx = _row_context(
+            audit_id="audit-periop-preserve",
+            periop_summary=PeriopSummary(blood_loss_ml=1500),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="INSUFFICIENT_EVIDENCE",
+            indications=[
+                {"text": "post-op blood loss", "confidence": 0.4, "tier": 1}
+            ],
+            reasoning_en="No structured procedure row found.",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == PERIOP_CONTRADICTION_REVIEW_REASON
+        assert row.reasoning_summary_en == "No structured procedure row found."
+        assert len(row.indications_json) == 1
+        assert row.verifier_pass is True
+
+    def test_appropriate_verdict_survives_strong_signal(
+        self, tmp_path: object
+    ) -> None:
+        ctx = _row_context(
+            audit_id="audit-periop-appropriate",
+            periop_summary=PeriopSummary(surgical_context=True, blood_loss_ml=1500),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id, classification="APPROPRIATE"
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "APPROPRIATE"
+        assert row.review_reason is None
+        assert row.needs_human_review is False
+
+    def test_no_signal_leaves_insufficient_verdict_untouched(
+        self, tmp_path: object
+    ) -> None:
+        ctx = _row_context(
+            audit_id="audit-periop-nosignal", periop_summary=None
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id, classification="INSUFFICIENT_EVIDENCE"
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INSUFFICIENT_EVIDENCE"
+        assert row.review_reason is None
 
 
 def _build_synthetic_contexts(*, n: int) -> Sequence[PipelineRowContext]:

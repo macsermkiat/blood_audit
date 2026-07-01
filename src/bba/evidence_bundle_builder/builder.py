@@ -37,9 +37,12 @@ from bba.evidence_bundle_builder.salience import med_salience
 from bba.vitals_extractor.hemodynamic import scan_hemodynamics
 from bba.vitals_extractor.models import (
     HemodynamicSummary,
+    PeriopFinding,
+    PeriopSummary,
     VasopressorMention,
     VitalsNote,
 )
+from bba.vitals_extractor.periop import scan_periop
 
 
 def _nfc(s: str) -> str:
@@ -101,17 +104,21 @@ hemodynamic summary, which needs the headroom. 40 K is PROVISIONAL: it will be
 finalized against the pilot worst-case bundle measurement (issue #76 Task #3)
 before any clinical use."""
 
-EXEMPT_FROM_DROP: frozenset[EvidenceSource] = frozenset({"Hemodynamic", "Lab"})
-"""Sources the whole-item truncation pass must NEVER drop (issue #76).
+EXEMPT_FROM_DROP: frozenset[EvidenceSource] = frozenset(
+    {"Hemodynamic", "Periop", "Lab"}
+)
+"""Sources the whole-item truncation pass must NEVER drop (issue #76, Case 107).
 
 These are the load-bearing decision signals: ``Lab`` (Hb) is the decision-time
-anemia value the deterministic classifier itself keys on, and ``Hemodynamic``
+anemia value the deterministic classifier itself keys on, ``Hemodynamic``
 is the pinned MAP/vasopressor summary that was starved in Case 2 / REQNO
-68012352. Both are bounded in count (Hb by the 7-day lookback window; the
-Hemodynamic summary is a single item), so exempting them cannot make the
-bundle grow without limit. If the exempt set plus the anchor envelope alone
-still exceeds the cap, :func:`_enforce_char_cap` fails loud rather than
-silently shedding a load-bearing signal.
+68012352, and ``Periop`` is the pinned surgical-context/EBL summary the LLM
+skimmed past on Case 107 / REQNO 68074627. All are bounded in count (Hb by the
+7-day lookback window; the Hemodynamic and Periop summaries are one item each
+with at most three findings), so exempting them cannot make the bundle grow
+without limit. If the exempt set plus the anchor envelope alone still exceeds
+the cap, :func:`_enforce_char_cap` fails loud rather than silently shedding a
+load-bearing signal.
 
 Invariant: ``EXEMPT_FROM_DROP`` and :data:`DROP_PRIORITY` partition the
 ``EvidenceSource`` literal — disjoint, and together total."""
@@ -185,7 +192,9 @@ def _filter_meds(meds: Sequence[MedRecord], anchor: datetime) -> tuple[MedRecord
     )
 
 
-def _filter_hb(hbs: Sequence[HbRecord], anchor: datetime) -> tuple[HbRecord, ...]:
+def _filter_hb(
+    hbs: Sequence[HbRecord], anchor: datetime, hb_anchor: datetime | None = None
+) -> tuple[HbRecord, ...]:
     # Hb history is pre-order only — post-order labs belong to the response
     # analysis, not the decision evidence. The lower bound is STRICT
     # (``anchor - h.timestamp < WINDOW_HB_BEFORE``) to match
@@ -193,10 +202,17 @@ def _filter_hb(hbs: Sequence[HbRecord], anchor: datetime) -> tuple[HbRecord, ...
     # an Hb at exactly 7 d old is invisible to the deterministic classifier,
     # and admitting it to the bundle would let the LLM cite evidence the
     # classifier never saw.
+    #
+    # The upper bound is ``hb_anchor`` when the resolver anchored the Hb on a
+    # post-order draw (see :class:`OrderAnchor.hb_anchor`); otherwise it is the
+    # order anchor. Without this, a fallback-anchored case would route to the
+    # LLM on an Hb the bundle then dropped, so the model could not cite the
+    # value that triggered submission.
+    upper = hb_anchor if hb_anchor is not None else anchor
     return tuple(
         h
         for h in hbs
-        if anchor - h.timestamp < WINDOW_HB_BEFORE and h.timestamp <= anchor
+        if anchor - h.timestamp < WINDOW_HB_BEFORE and h.timestamp <= upper
     )
 
 
@@ -373,6 +389,42 @@ def _hemodynamic_payload(
     if summary.vasopressors:
         payload["vasopressors"] = [
             _vasopressor_entry(v, anchor_dt) for v in summary.vasopressors
+        ]
+    return payload
+
+
+def _periop_finding_entry(f: PeriopFinding, anchor_dt: datetime) -> dict[str, Any]:
+    """Fact-only dict for one peri-op finding: category, source, lag, snippet."""
+    return {
+        "category": f.category,
+        "snippet": f.snippet,
+        "source": f.source,
+        "lag_min": _lag_min(f.at, anchor_dt),
+    }
+
+
+def _periop_payload(summary: PeriopSummary, anchor_dt: datetime) -> dict[str, Any]:
+    """Render the pinned peri-operative summary payload (Case 107 / REQNO 68074627).
+
+    FACT-ONLY by contract: the surgical-context flag, the EBL in millilitres,
+    the intra-op-transfusion flag, and the verbatim provenance snippets — nothing
+    else. There is deliberately no 'appropriate'/'indicated'/'justified' field;
+    peri-op context is a supporting factor the LLM weighs, never a standalone
+    verdict, and the deterministic classifier's procedure bypass keys on
+    structured timing, not on this scan. Each finding snippet is a substring of a
+    note already shipped in full elsewhere in the bundle, so the summary asserts
+    no fact the LLM cannot also read in context. Caller emits this only when
+    ``summary.is_empty`` is False."""
+    payload: dict[str, Any] = {}
+    if summary.surgical_context:
+        payload["surgical_context"] = True
+    if summary.blood_loss_ml is not None:
+        payload["blood_loss_ml"] = summary.blood_loss_ml
+    if summary.intraop_transfusion:
+        payload["intraop_transfusion"] = True
+    if summary.findings:
+        payload["findings"] = [
+            _periop_finding_entry(f, anchor_dt) for f in summary.findings
         ]
     return payload
 
@@ -648,6 +700,7 @@ def _enforce_char_cap(
 def _assign_ids(
     *,
     hemo_summary: HemodynamicSummary,
+    periop_summary: PeriopSummary,
     diagnoses: Sequence[DiagnosisRecord],
     progress: Sequence[ProgressNote],
     focus: Sequence[FocusNote],
@@ -682,6 +735,20 @@ def _assign_ids(
                 source="Hemodynamic",
                 timestamp_utc=None,
                 payload=_hemodynamic_payload(hemo_summary, anchor_dt),
+            )
+        )
+
+    # Peri-op summary SECOND (Case 107 / REQNO 68074627): the same pinned,
+    # fact-only shape as Hemodynamic. Emitted only when the scan found a
+    # surgery / EBL / intra-op transfusion — an empty summary adds no item and
+    # leaves all downstream IDs unchanged.
+    if not periop_summary.is_empty:
+        items.append(
+            EvidenceItem(
+                id=_next_id(),
+                source="Periop",
+                timestamp_utc=None,
+                payload=_periop_payload(periop_summary, anchor_dt),
             )
         )
 
@@ -874,7 +941,11 @@ def build_evidence_bundle(
     :class:`bba.audit_store.AuditRow.evidence_bundle_hash` and is what
     :mod:`bba.deid_redactor` reads to detect mid-pipeline mutation.
     """
-    anchor_dt = _to_utc(inputs.anchor.order_datetime)
+    # Per-source windows center on window_anchor (the transfusion datetime for
+    # reserve-ahead elective orders); it defaults to the order REQTIME. The
+    # order_datetime stays the audit-identity anchor and is what the envelope
+    # echoes — see OrderAnchor.window_anchor.
+    anchor_dt = _to_utc(inputs.anchor.window_anchor or inputs.anchor.order_datetime)
 
     progress = _filter_progress(inputs.progress_notes, anchor_dt)
     # Drop blank / header-only notes BEFORE the cap. Otherwise eight closer
@@ -897,7 +968,12 @@ def build_evidence_bundle(
     )
 
     meds = _filter_meds(inputs.meds, anchor_dt)
-    hbs = _filter_hb(inputs.hb_history, anchor_dt)
+    hb_anchor_dt = (
+        _to_utc(inputs.anchor.hb_anchor)
+        if inputs.anchor.hb_anchor is not None
+        else None
+    )
+    hbs = _filter_hb(inputs.hb_history, anchor_dt, hb_anchor_dt)
     # Drop all-null vitals (only note_source populated): no measurement to
     # cite, so the LLM would get a dead E_N reference into the bundle.
     vitals_in_window = _filter_vitals(inputs.vitals, anchor_dt)
@@ -907,10 +983,17 @@ def build_evidence_bundle(
     # the MAP nadir + vasopressor mentions (issue #76). Computing it from the
     # same note set that becomes the bundle's items keeps the summary a strict
     # subset of evidence the LLM also sees in full.
-    hemo_summary = scan_hemodynamics(_build_vitals_notes(progress, focus))
+    vitals_notes = _build_vitals_notes(progress, focus)
+    hemo_summary = scan_hemodynamics(vitals_notes)
+    # Same shipped-narrative subset feeds the peri-op scan (Case 107): the
+    # surgical context / EBL / intra-op transfusion are recovered only from
+    # notes the LLM also receives in full, so the pinned summary never asserts
+    # a fact absent from a shipped item.
+    periop_summary = scan_periop(vitals_notes)
 
     items = _assign_ids(
         hemo_summary=hemo_summary,
+        periop_summary=periop_summary,
         diagnoses=inputs.diagnoses,
         progress=progress,
         focus=focus,
@@ -928,6 +1011,7 @@ def build_evidence_bundle(
         items=items,
         canonical_json=canonical_json,
         bundle_hash=bundle_hash(canonical_json),
+        periop_summary=periop_summary,
     )
 
 

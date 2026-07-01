@@ -31,14 +31,23 @@ administrations in [order_datetime - 4 h, order_datetime]."""
 
 
 _DOSE_PATTERN = re.compile(
-    r"(\d+(?:\.\d+)?)\s*(mL|cc|L)\b(?!\s*/)",
+    r"(\d[\d,]*(?:\.\d+)?)\s*(mL|cc|L)\b(?!\s*/)",
     re.IGNORECASE,
 )
-"""Capture the last numeric dose + unit on a HOSxP drug string.
+"""Capture the first unit-bearing numeric dose on a HOSxP drug string.
 
 The grouping is intentionally permissive on whitespace and case so
 ``"NSS 1000 mL"``, ``"RLS 1 L"``, ``"D5W 500 cc"``, ``"NSS1000ML"`` all
-parse to the same numeric value.
+parse to the same numeric value. Thousands separators are tolerated
+(``"NSS 1,000 mL"`` -> 1.0 L); the comma is stripped before ``float``.
+Without ``[\\d,]`` in the group, ``"1,000 mL"`` would match only the
+``"000 mL"`` tail and silently parse as 0 L, undercounting the
+hemodilution total.
+
+First-match (not last) is deliberate: in an additive string such as
+``"D5W 1000 mL + KCl 20 mL"`` the first unit-bearing number is the
+crystalloid volume, so taking the last match would wrongly sum the
+20 mL additive instead.
 
 Infusion-rate strings (``"NSS 500 mL/h"``, ``"D5W 200 cc/hour"``,
 ``"RLS 1 L/hr"``) are excluded by the negative lookahead ``(?!\\s*/)``:
@@ -86,7 +95,7 @@ def total_crystalloid_liters(
         match = _DOSE_PATTERN.search(event.drug)
         if match is None:
             continue
-        value = float(match.group(1))
+        value = float(match.group(1).replace(",", ""))
         unit = match.group(2).lower()
         if unit in ("ml", "cc"):
             total += value / 1000.0

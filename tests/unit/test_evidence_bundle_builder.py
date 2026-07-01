@@ -802,6 +802,102 @@ class TestHbHistoryWindow:
         assert len(_items_by_source(bundle, "Lab")) == 1
 
 
+class TestHbFallbackAnchor:
+    """``OrderAnchor.hb_anchor`` extends the Hb upper bound to a post-order draw.
+
+    Pins the contract the divergence-fix follow-up needs (see
+    ``docs/handoff-hb-anchor-unification``): when the shared resolver anchors
+    the Hb on a draw minutes *after* REQTIME, that draw is what routed the
+    case to the LLM. Without ``hb_anchor`` the default ``<= order_datetime``
+    window drops it and the model can't cite the value that triggered review.
+    """
+
+    def _anchor_with_hb(self, *, hb_offset_hours: float) -> OrderAnchor:
+        return OrderAnchor(
+            order_datetime=ANCHOR_DT,
+            hn_hash="hn-aaa",
+            an_hash="an-bbb",
+            products=("LPRC",),
+            hb_anchor=ANCHOR_DT + timedelta(hours=hb_offset_hours),
+        )
+
+    def test_post_order_hb_kept_when_hb_anchor_set(self) -> None:
+        # The fallback-anchored draw (+5 min) is the trigger; it must appear.
+        bundle = _build_minimal(
+            anchor=self._anchor_with_hb(hb_offset_hours=5.0 / 60.0),
+            hb_history=(_hb(offset_hours=5.0 / 60.0, value=10.0),),
+        )
+        labs = _items_by_source(bundle, "Lab")
+        assert len(labs) == 1
+
+    def test_post_order_hb_still_dropped_without_hb_anchor(self) -> None:
+        # Same draw, default anchor (no override): original window applies.
+        bundle = _build_minimal(hb_history=(_hb(offset_hours=5.0 / 60.0, value=10.0),))
+        assert _items_by_source(bundle, "Lab") == ()
+
+    def test_draw_after_hb_anchor_dropped(self) -> None:
+        # hb_anchor is the upper bound, not an open door to all post-order
+        # labs: a draw later than the resolved anchor is still response-phase.
+        bundle = _build_minimal(
+            anchor=self._anchor_with_hb(hb_offset_hours=5.0 / 60.0),
+            hb_history=(_hb(offset_hours=30.0 / 60.0, value=8.0),),  # +30 min
+        )
+        assert _items_by_source(bundle, "Lab") == ()
+
+    def test_pre_order_history_still_kept_with_hb_anchor(self) -> None:
+        # Extending the upper bound must not evict legitimate prior draws.
+        bundle = _build_minimal(
+            anchor=self._anchor_with_hb(hb_offset_hours=5.0 / 60.0),
+            hb_history=(
+                _hb(offset_hours=-2.0, value=9.0, item_no=1),
+                _hb(offset_hours=5.0 / 60.0, value=10.0, item_no=2),
+            ),
+        )
+        assert len(_items_by_source(bundle, "Lab")) == 2
+
+
+class TestWindowAnchor:
+    """``window_anchor`` shifts every per-source window without changing identity.
+
+    Blood reserved for elective surgery is crossmatched days before it is
+    issued/transfused. ``window_anchor`` lets the caller center the evidence
+    windows on the transfusion datetime while ``order_datetime`` keeps the
+    reservation REQTIME for audit identity (see resolve_evidence_anchor)."""
+
+    _GAP_H = 120.0  # issue lands 5 days after the reservation order
+
+    def _reanchored(self) -> OrderAnchor:
+        return OrderAnchor(
+            order_datetime=ANCHOR_DT,
+            hn_hash="hn-aaa",
+            an_hash="an-bbb",
+            products=("LPRC",),
+            window_anchor=ANCHOR_DT + timedelta(hours=self._GAP_H),
+        )
+
+    def test_progress_note_at_transfusion_kept_only_when_reanchored(self) -> None:
+        note = _progress(offset_hours=self._GAP_H, text="S: intra-op blood loss\nO: Hb 10.5\nA: bleeding\nP: PRBC 1U")
+        # Default anchor: +120h is far outside the ±24h progress window.
+        assert _items_by_source(_build_minimal(progress_notes=(note,)), "IPDADMPROGRESS") == ()
+        # Re-anchored on the transfusion: the same note is now at the anchor.
+        reanchored = _build_minimal(anchor=self._reanchored(), progress_notes=(note,))
+        assert len(_items_by_source(reanchored, "IPDADMPROGRESS")) == 1
+
+    def test_hb_before_transfusion_kept_only_when_reanchored(self) -> None:
+        hb = _hb(offset_hours=self._GAP_H - 2.0, value=10.5)  # 2h before new anchor
+        assert _items_by_source(_build_minimal(hb_history=(hb,)), "Lab") == ()
+        reanchored = _build_minimal(anchor=self._reanchored(), hb_history=(hb,))
+        assert len(_items_by_source(reanchored, "Lab")) == 1
+
+    def test_window_anchor_preserves_order_datetime_identity(self) -> None:
+        # The hashed envelope must still record the reservation REQTIME so the
+        # bundle links to the audit row; window_anchor is windowing-only.
+        bundle = _build_minimal(anchor=self._reanchored())
+        envelope = json.loads(bundle.canonical_json)
+        assert envelope["anchor"]["order_datetime"] == ANCHOR_DT.isoformat()
+        assert "window_anchor" not in envelope["anchor"]
+
+
 class TestVitalsWindow:
     """Vitals: ``[anchor - 6 h, anchor + 6 h]`` (mirrors :mod:`bba.vitals_extractor`)."""
 
@@ -2490,6 +2586,161 @@ class TestHemodynamicSummaryItem:
                 inputs=EvidenceInputs(anchor=_anchor(), hb_history=hbs),
                 char_cap=200,
             )
+
+
+class TestPeriopSummaryItem:
+    """The pinned, fact-only Periop item (Case 107 / REQNO 68074627).
+
+    Case 107 shipped the surgical context to the LLM only inside a free-text
+    post-op nursing note; with the structured procedure rows empty, the model
+    returned INSUFFICIENT_EVIDENCE and wrote 'no operative procedure
+    documented'. The builder now synthesizes a single pinned summary item from
+    the SHIPPED notes so the surgery / EBL / intra-op-transfusion signal leads
+    the bundle and survives truncation — without ever becoming a verdict."""
+
+    def test_periop_summary_emitted_after_hemodynamic(self) -> None:
+        # When both pinned summaries fire, Hemodynamic is E1 and Periop is E2
+        # (the literal/emission order). Each is a synthesized summary, not one
+        # charted note, so timestamp_utc is None.
+        progress = (_progress(offset_hours=-2, text="O: ABP = 84/49 MAP 56"),)
+        focus = (
+            _focus(offset_hours=3, text="Post-op s/p ORIF Lt femur, EBL 1500 ml"),
+        )
+        bundle = _build_minimal(progress_notes=progress, focus_notes=focus)
+        assert bundle.items[0].source == "Hemodynamic"
+        periop = bundle.items[1]
+        assert periop.id == "E2"
+        assert periop.source == "Periop"
+        assert periop.timestamp_utc is None
+        assert periop.payload["surgical_context"] is True
+        assert periop.payload["blood_loss_ml"] == 1500
+
+    def test_periop_is_first_item_when_no_hemodynamic_signal(self) -> None:
+        # The surgery the LLM ignored on Case 107 leads the bundle (E1) when no
+        # hemodynamic summary precedes it — the un-skippable position.
+        focus = (_focus(offset_hours=3, text="Post-op s/p ORIF, EBL 800 ml"),)
+        bundle = _build_minimal(focus_notes=focus)
+        first = bundle.items[0]
+        assert first.id == "E1"
+        assert first.source == "Periop"
+
+    def test_periop_payload_is_fact_only(self) -> None:
+        # BINDING GUARDRAIL: peri-op context is a supporting factor the LLM
+        # weighs, never a standalone verdict. The payload may carry ONLY the
+        # surgery/EBL/transfusion facts and their provenance snippets — no
+        # 'appropriate' / 'indicated' / 'justified' language that would
+        # pre-judge the transfusion.
+        focus = (
+            _focus(
+                offset_hours=3,
+                text="Post-op s/p ORIF Lt femur, EBL 1500 ml, intraop LPRC 2 u",
+            ),
+        )
+        bundle = _build_minimal(focus_notes=focus)
+        periop = next(it for it in bundle.items if it.source == "Periop")
+        allowed = {
+            "surgical_context",
+            "blood_loss_ml",
+            "intraop_transfusion",
+            "findings",
+        }
+        assert set(periop.payload) <= allowed, (
+            f"unexpected key in fact-only peri-op payload: "
+            f"{set(periop.payload) - allowed}"
+        )
+        blob = str(periop.payload).lower()
+        for banned in (
+            "appropriate",
+            "indicat",
+            "justified",
+            "refractory",
+            "escalat",
+        ):
+            assert banned not in blob, (
+                f"appropriateness/verdict language '{banned}' leaked into the "
+                f"fact-only peri-op payload"
+            )
+
+    def test_periop_finding_carries_snippet_source_and_lag(self) -> None:
+        # Each finding is directly citable: a verbatim snippet (a substring of a
+        # note already shipped in full), its origin table, and a PHI-free lag so
+        # the synthesized item needs no absolute timestamp.
+        focus = (
+            _focus(offset_hours=3, text="Post-op s/p ORIF Lt femur, EBL 1500 ml"),
+        )
+        bundle = _build_minimal(focus_notes=focus)
+        periop = next(it for it in bundle.items if it.source == "Periop")
+        findings = periop.payload["findings"]
+        surgery = next(f for f in findings if f["category"] == "surgery")
+        assert "ORIF" in surgery["snippet"]
+        assert surgery["source"] == "IPDNRFOCUSDT"
+        assert surgery["lag_min"] == 180  # the focus note is +3 h from the anchor
+
+    def test_no_periop_item_when_scan_finds_nothing(self) -> None:
+        # The summary is only emitted when the scan found a surgery / EBL /
+        # intra-op transfusion. With benign notes, NO Periop item is added, so
+        # every downstream evidence ID is unchanged.
+        bundle = _build_minimal(
+            progress_notes=(_progress(offset_hours=-1),),
+            focus_notes=(_focus(offset_hours=-1),),
+        )
+        assert all(it.source != "Periop" for it in bundle.items)
+
+    def test_periop_survives_while_meds_drop_under_cap(self) -> None:
+        # Periop is exempt from whole-item drop: the pinned surgical signal must
+        # outlive a dense MED list under cap pressure. This is the Case 107 fix
+        # end-to-end — the surgery evidence is never the first thing shed.
+        focus = (
+            _focus(offset_hours=3, text="Post-op s/p ORIF Lt femur, EBL 1500 ml"),
+        )
+        meds = tuple(
+            _med(offset_hours=-h, drug=f"Drug{h}-" + ("x" * 200))
+            for h in (1, 2, 3, 4, 5, 6, 7, 8)
+        )
+        bundle = build_evidence_bundle(
+            inputs=EvidenceInputs(
+                anchor=_anchor(),
+                focus_notes=focus,
+                meds=meds,
+            ),
+            char_cap=1200,
+        )
+        assert any(it.source == "Periop" for it in bundle.items), (
+            "the pinned peri-op summary was dropped under cap pressure"
+        )
+        assert len(_items_by_source(bundle, "Med")) < 8, (
+            "cap did not force any MED drop; tighten char_cap"
+        )
+
+    def test_bundle_exposes_periop_summary_handle(self) -> None:
+        # The structured summary is also returned as a non-hashed handle so a
+        # downstream deterministic guardrail (replay contradiction check) reads
+        # the same scan the LLM saw — not a re-parse of redacted prose. The
+        # handle must agree with the emitted Periop item payload (one scan,
+        # one truth) and must NOT leak into canonical_json / bundle_hash.
+        focus = (
+            _focus(offset_hours=3, text="Post-op s/p ORIF Lt femur, EBL 1500 ml"),
+        )
+        bundle = _build_minimal(focus_notes=focus)
+        assert bundle.periop_summary is not None
+        assert bundle.periop_summary.surgical_context is True
+        assert bundle.periop_summary.blood_loss_ml == 1500
+        periop_item = next(it for it in bundle.items if it.source == "Periop")
+        assert (
+            bundle.periop_summary.blood_loss_ml
+            == periop_item.payload["blood_loss_ml"]
+        )
+        assert "periop_summary" not in bundle.canonical_json
+
+    def test_bundle_periop_summary_empty_when_scan_finds_nothing(self) -> None:
+        # Benign notes → the handle is still present but empty, so the guardrail
+        # has nothing to act on (no false escalation).
+        bundle = _build_minimal(
+            progress_notes=(_progress(offset_hours=-1),),
+            focus_notes=(_focus(offset_hours=-1),),
+        )
+        assert bundle.periop_summary is not None
+        assert bundle.periop_summary.is_empty is True
 
 
 class TestExemptTierPartition:

@@ -38,11 +38,25 @@ from bba.cohort_detector import (
 from bba.deterministic_classifier import classify
 from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import ClassifierInputs
-from bba.hb_lookup import HbObservation, lookup_hb, parse_hb_value
+from bba.hb_lookup import (
+    HbObservation,
+    parse_hb_value,
+    resolve_evidence_anchor,
+    resolve_hb_with_fallback,
+)
 from bba.ingest.date_parser import parse_kcmh_english_date
 from bba.ingest.models import ParsedTimeOfDay
-from bba.ingest.row_timestamp import RowTimestamp
-from bba.ingest.time_parser import parse_hosxp_time
+from bba.vitals_extractor import scan_periop
+
+from _anchor_candidates import build_anchor_candidates
+from _hosxp_dt import (
+    _combine,
+    _fmt_hosxp_time,
+    _fmt_local_datetime,
+    _parse_hosxp_date,
+    _parse_time,
+)
+from _periop_notes import vitals_notes_for
 
 WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
 BUNDLE = WORK / "bundle"
@@ -53,7 +67,6 @@ BUNDLE = WORK / "bundle"
 ENABLE_MISSING_HB_POSITIVE_EVIDENCE = os.environ.get(
     "BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE", ""
 ).strip().lower() in ("1", "true", "yes", "on")
-TZ_LOCAL = "Asia/Bangkok"
 HB_HEM_CODE = "290095"
 HB_POCT_CODE = "500001"
 ANC_CODE = "290093"
@@ -88,6 +101,9 @@ REPORT_FIELDNAMES = [
     "an",
     "order_datetime_utc",
     "anchor_imputed",
+    "evidence_anchor_reason",
+    "evidence_anchor_datetime_local",
+    "reanchor_gap_hours",
     "products_ordered",
     "diagnosis_codes_n",
     "hb_anchor_datetime_local",
@@ -135,53 +151,6 @@ def _read_preferred_optional_csv(*names: str) -> list[dict[str, str]]:
             with path.open(encoding="utf-8", newline="") as fh:
                 return list(csv.DictReader(fh))
     return []
-
-
-def _parse_hosxp_date(raw: str) -> date | None:
-    if not raw:
-        return None
-    head = raw.split(" ", 1)[0]
-    try:
-        return date.fromisoformat(head)
-    except ValueError:
-        return None
-
-
-def _parse_time(raw: str | None) -> ParsedTimeOfDay | None:
-    if not raw:
-        return None
-    stripped = str(raw).strip()
-    if stripped.isdigit() and 1 <= len(stripped) <= 6:
-        stripped = stripped.zfill(6)
-    return parse_hosxp_time(stripped).value
-
-
-def _fmt_hosxp_time(raw: str | None) -> str:
-    """Render HOSxP integer-like time cells as HH:MM:SS."""
-    if raw is None:
-        return ""
-    stripped = str(raw).strip()
-    if not stripped:
-        return ""
-    if stripped.isdigit() and 1 <= len(stripped) <= 6:
-        padded = stripped.zfill(6)
-        return f"{padded[:2]}:{padded[2:4]}:{padded[4:6]}"
-    return stripped
-
-
-def _fmt_local_datetime(date_raw: str | None, time_raw: str | None = None) -> str:
-    """Render split HOSxP date/time cells as a local datetime string."""
-    d = (date_raw or "").strip().split(" ")[0]
-    t = _fmt_hosxp_time(time_raw)
-    if d and t:
-        return f"{d} {t}"
-    return d or t or ""
-
-
-def _combine(d: date | None, t: ParsedTimeOfDay | None) -> datetime | None:
-    if d is None or t is None:
-        return None
-    return RowTimestamp.from_parts(d, t, tz=TZ_LOCAL).utc
 
 
 def _icd_codes(*raws: str | None) -> tuple[str, ...]:
@@ -495,6 +464,10 @@ def main() -> None:
     diag = _read_csv("Diagnosis.csv")
     lab = _read_csv("Lab.csv")
     med = _read_csv("Med.csv")
+    # Free-text notes feed the missing-Hb peri-op pre-pass (scan_periop).
+    # Optional so the deterministic leg still runs on a bundle without them.
+    progress = _read_optional_csv("IPDADMPROGRESS.csv")
+    focus = _read_optional_csv("IPDNRFOCUSDT.csv")
     iptsumoprt = _normalize_iptsumoprt(_read_csv("IPTSUMOPRT.csv"))
     ipddchsumoprt = _normalize_iptsumoprt(_read_optional_csv("IPDDCHSUMOPRT.csv"))
     incpt = _normalize_incpt(
@@ -519,25 +492,9 @@ def main() -> None:
     # date-only USEDATE marker so the review page does not hide date evidence.
     use_dt_by_reqno: dict[str, str] = {}
     exact_issue_anchor_by_reqno: dict[str, datetime] = {}
-    # Blood-bank visit/request timestamp is not the issue time, but it is a
-    # useful fallback Hb anchor when the formal order timestamp precedes labs
-    # by only a few minutes.
-    blood_bank_anchor_by_reqno: dict[str, datetime] = {}
-    blood_bank_anchor_display_by_reqno: dict[str, str] = {}
     for r in bdvstdt:
         reqno = r["REQNO"]
         products_by_reqno.setdefault(reqno, []).append((r.get("BDTYPE") or "").strip())
-        visit_dt = _combine(
-            _parse_hosxp_date(r.get("BDVSTDATE") or ""),
-            _parse_time(r.get("BDVSTTIME") or ""),
-        )
-        if visit_dt is not None:
-            current = blood_bank_anchor_by_reqno.get(reqno)
-            if current is None or visit_dt < current:
-                blood_bank_anchor_by_reqno[reqno] = visit_dt
-                blood_bank_anchor_display_by_reqno[reqno] = _fmt_local_datetime(
-                    r.get("BDVSTDATE"), r.get("BDVSTTIME")
-                )
 
         parent = bdvst_by_reqno.get(reqno, {})
         pick_date = (parent.get("PICKDATE") or "").strip().split(" ")[0]
@@ -623,35 +580,27 @@ def main() -> None:
     )
     print("=" * 100)
 
+    candidates_by_reqno = build_anchor_candidates(
+        bdvstdt_rows=bdvstdt, bdvst_by_reqno=bdvst_by_reqno
+    )
+
     rows: list[dict[str, Any]] = []
     for order in filter_result.included:
+        # Reserve-ahead elective orders are crossmatched days before transfusion;
+        # re-anchor the Hb lookback (and the LLM gate's evidence windows) onto
+        # the issue datetime so the op-day Hb is what the order is judged on.
+        # Cohort, procedure proximity and the classifier itself keep the REQ
+        # order anchor — those encode the order-decision context, not evidence.
+        evidence_anchor = resolve_evidence_anchor(
+            order_datetime=order.order_datetime,
+            candidates=candidates_by_reqno.get(order.reqno, []),
+        )
         hb_obs = _build_hb_observations(lab, order.an)
-        hb = lookup_hb(observations=hb_obs, anchor_utc=order.order_datetime)
-        hb_anchor_display = ""
-        hb_anchor_reason = "order_datetime"
-        if hb.value_g_dl is None:
-            fallback_candidates = (
-                (
-                    exact_issue_anchor_by_reqno.get(order.reqno),
-                    use_dt_by_reqno.get(order.reqno, ""),
-                    "issue_datetime",
-                ),
-                (
-                    blood_bank_anchor_by_reqno.get(order.reqno),
-                    blood_bank_anchor_display_by_reqno.get(order.reqno, ""),
-                    "blood_bank_visit_fallback",
-                ),
-            )
-            for fallback_anchor, display, reason in fallback_candidates:
-                if fallback_anchor is None or fallback_anchor < order.order_datetime:
-                    continue
-                fallback_hb = lookup_hb(observations=hb_obs, anchor_utc=fallback_anchor)
-                if fallback_hb.value_g_dl is None:
-                    continue
-                hb = fallback_hb
-                hb_anchor_display = display
-                hb_anchor_reason = reason
-                break
+        hb, hb_anchor_display, hb_anchor_reason = resolve_hb_with_fallback(
+            observations=hb_obs,
+            order_datetime=evidence_anchor.anchor_utc,
+            candidates=candidates_by_reqno.get(order.reqno, []),
+        )
         op_events = _build_op_events(
             iptsumoprt, ipddchsumoprt, incpt, optract_dict, icd9_dict, order.an
         )
@@ -711,6 +660,16 @@ def main() -> None:
             else None
         )
 
+        # Peri-op pre-pass evidence (Case 107 extractor). Scanned from the
+        # admission's free-text notes; the windowed authority for production
+        # is the bundle's periop_summary (audit_pipeline + run_llm_leg path).
+        # Here the deterministic-only leg scans the loaded notes so its
+        # missing-Hb report mirrors the same hard signals (intra-op
+        # transfusion / EBL >= PERIOP_MIN_EBL_ML) the LLM leg would see.
+        periop = scan_periop(
+            vitals_notes_for(progress, focus, order.an, evidence_anchor.anchor_utc)
+        )
+
         clf = classify(
             ClassifierInputs(
                 audit_id=order.audit_id,
@@ -721,6 +680,9 @@ def main() -> None:
                 upcoming_procedure_hours=upcoming_h,
                 crystalloid_liters_prior_4h=crystalloid_liters,
                 enable_missing_hb_positive_evidence=ENABLE_MISSING_HB_POSITIVE_EVIDENCE,
+                periop_blood_loss_ml=periop.blood_loss_ml,
+                periop_intraop_transfusion=periop.intraop_transfusion,
+                periop_surgical_context=periop.surgical_context,
             )
         )
 
@@ -739,6 +701,13 @@ def main() -> None:
                 "an": order.an,
                 "order_datetime_utc": order.order_datetime.isoformat(),
                 "anchor_imputed": order.anchor_imputed,
+                "evidence_anchor_reason": evidence_anchor.reason,
+                "evidence_anchor_datetime_local": evidence_anchor.display,
+                "reanchor_gap_hours": (
+                    f"{evidence_anchor.gap_hours:.1f}"
+                    if evidence_anchor.reason == "transfusion_reanchor"
+                    else ""
+                ),
                 "products_ordered": "|".join(order.products_ordered),
                 "diagnosis_codes_n": len(order.diagnosis_codes),
                 "hb_anchor_datetime_local": hb_anchor_display,

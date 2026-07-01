@@ -32,8 +32,9 @@ from typing import NamedTuple
 from bba.audit_pipeline.models import PipelineRowContext, PipelineRunResult
 from bba.audit_store import AuditRow, AuditStore, LlmCall
 from bba.audit_store.models import Classification
-from bba.deterministic_classifier import ClassifierResult
+from bba.deterministic_classifier import PERIOP_MIN_EBL_ML, ClassifierResult
 from bba.llm_client.models import BatchSubmissionResult, RawBatchResponse
+from bba.vitals_extractor import PeriopSummary
 
 
 Verifier = Callable[[BatchSubmissionResult, PipelineRowContext], bool]
@@ -56,6 +57,86 @@ def default_verifier(
     """
     _ = (result, context)
     return True
+
+
+# =============================================================================
+# Peri-op contradiction guardrail (Case 107)
+#
+# WHY: the verifier only checks that Tier-1 citations *ground* — it cannot
+# catch the model trusting an empty structured-procedure list over surgical
+# detail buried in free-text nursing notes. On Case 107 the bundle
+# deterministically documented a 1500 ml-blood-loss ORIF inside the
+# peri-transfusion window, yet the LLM returned INSUFFICIENT_EVIDENCE
+# ("no operative procedure documented"). Part 1 surfaces those facts to the
+# model; this guardrail is the deterministic backstop for when the prompt
+# signal alone still is not enough.
+#
+# A "hard" peri-op signal disagreeing with a non-committal / negative LLM
+# verdict is a CONTRADICTION, not a hallucination: the citations grounded,
+# the model just weighed them wrong. We therefore force the row to human
+# review with a DISTINCT review_reason so operators can tell it apart from
+# the verifier-rejected (hallucination_suspect) path, and we preserve the
+# LLM's reasoning/indications so the reviewer sees the conflict in full.
+# =============================================================================
+
+PERIOP_GUARDRAIL_MIN_EBL_ML = PERIOP_MIN_EBL_ML
+"""Estimated-blood-loss floor (mL) that counts as a hard peri-op signal.
+
+Alias of :data:`bba.deterministic_classifier.PERIOP_MIN_EBL_ML` — the single
+source of truth shared with the classifier's missing-Hb auto-approve bar so
+the two thresholds cannot drift. Sub-500 mL losses are routine and do not, on
+their own, contradict an "insufficient evidence" verdict."""
+
+PERIOP_CONTRADICTION_REVIEW_REASON = "periop_signal_contradiction"
+"""Typed review_reason stamped on rows escalated by this guardrail.
+
+Distinct from ``hallucination_suspect`` (verifier rejected every attempt)
+so a reviewer dashboard can triage the two failure modes separately."""
+
+_PERIOP_CONTRADICTION_CLASSES: frozenset[Classification] = frozenset(
+    {"INSUFFICIENT_EVIDENCE", "POTENTIALLY_INAPPROPRIATE"}
+)
+"""LLM verdicts that a hard peri-op signal contradicts.
+
+APPROPRIATE / INAPPROPRIATE are committed verdicts the model reached *with*
+the evidence in view; only the non-committal ("insufficient") and the
+soft-negative ("potentially inappropriate") verdicts are overridden, since
+those are exactly the shapes Case 107 produced when the model discounted a
+documented surgery."""
+
+
+def _has_hard_periop_signal(summary: PeriopSummary | None) -> bool:
+    """True iff ``summary`` carries a deterministically-extracted peri-op
+    signal strong enough to contradict an "insufficient evidence" verdict.
+
+    Any one of documented surgery (op-time), estimated blood loss at or
+    above :data:`PERIOP_GUARDRAIL_MIN_EBL_ML`, or an intra-op transfusion
+    qualifies — these are the three signals scan_periop recovers from the
+    shipped notes, and each alone is enough to warrant a human look when the
+    model said the evidence was insufficient.
+    """
+    if summary is None:
+        return False
+    if summary.surgical_context or summary.intraop_transfusion:
+        return True
+    return (
+        summary.blood_loss_ml is not None
+        and summary.blood_loss_ml >= PERIOP_GUARDRAIL_MIN_EBL_ML
+    )
+
+
+def periop_contradiction(
+    classification: Classification, context: PipelineRowContext
+) -> bool:
+    """True iff a hard peri-op signal in ``context`` contradicts the LLM's
+    ``classification`` and the row must be escalated to human review.
+
+    Deterministic and side-effect-free so the override in
+    :func:`_build_audit_row` is trivially testable and a re-application of
+    the same response reaches the same verdict (replay invariant)."""
+    if classification not in _PERIOP_CONTRADICTION_CLASSES:
+        return False
+    return _has_hard_periop_signal(context.periop_summary)
 
 
 def apply_batch_results(
@@ -199,6 +280,7 @@ def _classify_from_context(context: "PipelineRowContext") -> ClassifierResult:
     the main pipeline does."""
     from bba.deterministic_classifier import ClassifierInputs, classify
 
+    periop = context.periop_summary
     return classify(
         ClassifierInputs(
             audit_id=context.order.audit_id,
@@ -209,6 +291,9 @@ def _classify_from_context(context: "PipelineRowContext") -> ClassifierResult:
             upcoming_procedure_hours=context.upcoming_procedure_hours,
             crystalloid_liters_prior_4h=context.crystalloid_liters_prior_4h,
             enable_missing_hb_positive_evidence=context.enable_missing_hb_positive_evidence,
+            periop_blood_loss_ml=periop.blood_loss_ml if periop else None,
+            periop_intraop_transfusion=periop.intraop_transfusion if periop else False,
+            periop_surgical_context=periop.surgical_context if periop else False,
         )
     )
 
@@ -295,6 +380,14 @@ def _build_audit_row(
     negative_evidence = _negative_evidence_from_result(winning_result)
     confidence = _confidence_from_attempts(indications)
     escalated = any("opus" in record.result.model_id for record in attempts)
+    # Peri-op contradiction guardrail (Case 107): a hard deterministic
+    # peri-op signal overrides a non-committal / soft-negative LLM verdict.
+    # We rewrite the classification + review_reason but keep verifier_pass,
+    # the reasoning summaries, and the indications so the human reviewer sees
+    # exactly what the model concluded and why it is being second-guessed.
+    if periop_contradiction(final_classification, context):
+        final_classification = "NEEDS_REVIEW"
+        review_reason = PERIOP_CONTRADICTION_REVIEW_REASON
     return AuditRow(
         audit_id=context.order.audit_id,
         run_id=run_id,
@@ -598,8 +691,11 @@ def _confidence_from_attempts(
 
 
 __all__ = [
+    "PERIOP_CONTRADICTION_REVIEW_REASON",
+    "PERIOP_GUARDRAIL_MIN_EBL_ML",
     "Verifier",
     "apply_batch_results",
     "default_verifier",
+    "periop_contradiction",
     "select_winning_attempt",
 ]

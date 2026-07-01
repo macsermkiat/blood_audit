@@ -81,6 +81,7 @@ from bba.deterministic_classifier import (
     HB_GT_10_THRESHOLD,
     HEMODILUTION_CRYSTALLOID_LITERS,
     PERI_PROCEDURAL_WINDOW_HOURS,
+    PERIOP_MIN_EBL_ML,
     PRE_OP_CROSSMATCH_WINDOW_HOURS,
     UNIVERSAL_LOW_HB_APPROPRIATE_THRESHOLD,
     BypassReason,
@@ -207,6 +208,9 @@ def _inputs(
     upcoming_procedure_hours: float | None = None,
     crystalloid_liters_prior_4h: float = 0.0,
     enable_missing_hb_positive_evidence: bool = False,
+    periop_blood_loss_ml: int | None = None,
+    periop_intraop_transfusion: bool = False,
+    periop_surgical_context: bool = False,
 ) -> ClassifierInputs:
     return ClassifierInputs(
         audit_id="audit-test-0001",
@@ -217,6 +221,9 @@ def _inputs(
         upcoming_procedure_hours=upcoming_procedure_hours,
         crystalloid_liters_prior_4h=crystalloid_liters_prior_4h,
         enable_missing_hb_positive_evidence=enable_missing_hb_positive_evidence,
+        periop_blood_loss_ml=periop_blood_loss_ml,
+        periop_intraop_transfusion=periop_intraop_transfusion,
+        periop_surgical_context=periop_surgical_context,
     )
 
 
@@ -529,11 +536,14 @@ class TestMissingHbPositiveEvidence:
         assert result.rationale == "bypass_peri_procedural_hb_missing"
         assert result.cohort_threshold == DEFAULT_THRESHOLD
 
-    def test_pre_op_crossmatch_only_with_missing_hb_stays_insufficient(self) -> None:
-        """Upcoming procedure (pre-op crossmatch) is deliberately NOT a
-        missing-Hb bypass — transfusing pre-op with no Hb is exactly what
-        an audit should flag, so this stays INSUFFICIENT_EVIDENCE even
-        with the SEED policy enabled."""
+    def test_pre_op_crossmatch_only_with_missing_hb_defers_to_llm(self) -> None:
+        """Upcoming procedure (pre-op crossmatch) is a SOFT signal: it is
+        deliberately NOT a missing-Hb auto-approve bypass — transfusing
+        pre-op with no Hb is exactly what an audit should look at. With the
+        pre-pass flag ON it no longer dead-ends as INSUFFICIENT_EVIDENCE;
+        it defers to the LLM (NEEDS_REVIEW / ``hb_missing_defer_llm``), which
+        reads the prose and either grounds APPROPRIATE or floors it to a
+        human — strictly more automation than terminating here."""
         result = classify(
             _inputs(
                 hb=_hb(None),
@@ -542,9 +552,9 @@ class TestMissingHbPositiveEvidence:
                 enable_missing_hb_positive_evidence=True,
             )
         )
-        assert result.classification == "INSUFFICIENT_EVIDENCE"
+        assert result.classification == "NEEDS_REVIEW"
         assert result.bypass_reason == BypassReason.NONE
-        assert result.rationale == "hb_missing"
+        assert result.rationale == "hb_missing_defer_llm"
 
     def test_mtp_precedes_peri_procedural_on_missing_hb(self) -> None:
         """MTP + peri-procedural + missing Hb → MTP wins (the most
@@ -561,12 +571,15 @@ class TestMissingHbPositiveEvidence:
         assert result.bypass_reason == BypassReason.MTP
         assert result.rationale == "bypass_mtp_hb_missing"
 
-    def test_unknown_cohort_peri_procedural_missing_hb_stays_insufficient(self) -> None:
-        """UNKNOWN cohort + peri-procedural + missing Hb → still
-        INSUFFICIENT_EVIDENCE even with the SEED policy on. Peri-procedural
-        MUST NOT override UNKNOWN, mirroring the Hb-present order
-        (UNKNOWN precedes peri-procedural). Missing Hb + unknown context
-        is the dominant documentation gap."""
+    def test_unknown_cohort_peri_procedural_missing_hb_defers_to_llm(self) -> None:
+        """UNKNOWN cohort + peri-procedural + missing Hb → no deterministic
+        auto-approve, even with the SEED policy on. Peri-procedural MUST NOT
+        override UNKNOWN, mirroring the Hb-present order (UNKNOWN precedes
+        peri-procedural): missing Hb + unknown context is the dominant
+        documentation gap, so it is never rubber-stamped APPROPRIATE here.
+        But it no longer dead-ends — with the flag ON it defers to the LLM
+        (NEEDS_REVIEW / ``hb_missing_defer_llm``) rather than terminating as
+        INSUFFICIENT_EVIDENCE."""
         result = classify(
             _inputs(
                 hb=_hb(None),
@@ -575,9 +588,9 @@ class TestMissingHbPositiveEvidence:
                 enable_missing_hb_positive_evidence=True,
             )
         )
-        assert result.classification == "INSUFFICIENT_EVIDENCE"
+        assert result.classification == "NEEDS_REVIEW"
         assert result.bypass_reason == BypassReason.NONE
-        assert result.rationale == "hb_missing"
+        assert result.rationale == "hb_missing_defer_llm"
 
     def test_peri_procedural_at_boundary_with_missing_hb_is_appropriate(self) -> None:
         """Procedure exactly at the 6 h boundary + missing Hb → APPROPRIATE
@@ -595,13 +608,15 @@ class TestMissingHbPositiveEvidence:
         assert result.bypass_reason == BypassReason.PERI_PROCEDURAL_6H
         assert result.rationale == "bypass_peri_procedural_hb_missing"
 
-    def test_peri_procedural_outside_window_with_missing_hb_stays_insufficient(
+    def test_peri_procedural_outside_window_with_missing_hb_defers_to_llm(
         self,
     ) -> None:
-        """Procedure > 6 h before order + missing Hb → INSUFFICIENT_EVIDENCE
-        (even with the SEED policy on). The proximity guard must reject the
-        out-of-window case rather than approve it; pins that the window
-        check (not just presence) gates the bypass."""
+        """Procedure > 6 h before order + missing Hb → no peri-procedural
+        auto-approve (even with the SEED policy on). The proximity guard
+        rejects the out-of-window case, pinning that the window check (not
+        just presence) gates the bypass. With the flag ON the rejected case
+        defers to the LLM (NEEDS_REVIEW / ``hb_missing_defer_llm``) instead
+        of dead-ending as INSUFFICIENT_EVIDENCE."""
         result = classify(
             _inputs(
                 hb=_hb(None),
@@ -610,9 +625,9 @@ class TestMissingHbPositiveEvidence:
                 enable_missing_hb_positive_evidence=True,
             )
         )
-        assert result.classification == "INSUFFICIENT_EVIDENCE"
+        assert result.classification == "NEEDS_REVIEW"
         assert result.bypass_reason == BypassReason.NONE
-        assert result.rationale == "hb_missing"
+        assert result.rationale == "hb_missing_defer_llm"
 
     def test_peri_procedural_wins_over_orphan_delta_on_missing_hb(self) -> None:
         """Missing Hb + a stale delta-Hb flag + peri-procedural proximity →
@@ -680,6 +695,177 @@ class TestMissingHbPositiveEvidence:
         assert result.classification == "INSUFFICIENT_EVIDENCE"
         assert result.bypass_reason == BypassReason.NONE
         assert result.rationale == "hb_missing"
+
+
+class TestMissingHbPeriopEvidenceAndDeferral:
+    """Missing-Hb pre-pass: HARD peri-op note evidence auto-approves;
+    everything else with the flag ON defers to the LLM instead of
+    dead-ending.
+
+    WHY this is a deliberate behaviour change: a deterministic
+    INSUFFICIENT_EVIDENCE is terminal — it never reaches the LLM, so the
+    peri-op extractor + free-text prose can never auto-resolve the
+    well-documented majority. The new policy auto-approves ONLY on hard,
+    Hb-independent surgical-loss documentation (a charted intra-op
+    transfusion, or EBL ≥ :data:`PERIOP_MIN_EBL_ML`) and routes the rest
+    to the LLM (``hb_missing_defer_llm``). The accuracy invariant is
+    preserved: there is no Hb here, so the deterministic gate never decided
+    on a (possibly post-transfusion) Hb value.
+    """
+
+    def test_intraop_transfusion_with_missing_hb_is_appropriate(self) -> None:
+        """A charted intra-op transfusion is HARD evidence: the surgery gave
+        blood intra-operatively, which stands in for the absent Hb →
+        APPROPRIATE via the distinct PERIOP_EVIDENCE bypass so the QI
+        committee can count auto-approvals made with no documented Hb."""
+        result = classify(
+            _inputs(
+                hb=_hb(None),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                enable_missing_hb_positive_evidence=True,
+                periop_intraop_transfusion=True,
+            )
+        )
+        assert result.classification == "APPROPRIATE"
+        assert result.bypass_reason == BypassReason.PERIOP_EVIDENCE
+        assert result.rationale == "bypass_periop_evidence_hb_missing"
+        assert result.cohort_threshold == DEFAULT_THRESHOLD
+
+    def test_ebl_at_floor_with_missing_hb_is_appropriate(self) -> None:
+        """EBL exactly at PERIOP_MIN_EBL_ML is HARD evidence (``>=`` floor,
+        inclusive) → APPROPRIATE. Pins the boundary so a ``>`` regression is
+        caught."""
+        result = classify(
+            _inputs(
+                hb=_hb(None),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                enable_missing_hb_positive_evidence=True,
+                periop_blood_loss_ml=PERIOP_MIN_EBL_ML,
+            )
+        )
+        assert result.classification == "APPROPRIATE"
+        assert result.bypass_reason == BypassReason.PERIOP_EVIDENCE
+        assert result.rationale == "bypass_periop_evidence_hb_missing"
+
+    def test_ebl_below_floor_with_missing_hb_defers_to_llm(self) -> None:
+        """EBL just below the floor is a routine loss, NOT hard evidence; it
+        must not auto-approve. With the flag ON it defers to the LLM
+        (NEEDS_REVIEW / ``hb_missing_defer_llm``)."""
+        result = classify(
+            _inputs(
+                hb=_hb(None),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                enable_missing_hb_positive_evidence=True,
+                periop_blood_loss_ml=PERIOP_MIN_EBL_ML - 1,
+            )
+        )
+        assert result.classification == "NEEDS_REVIEW"
+        assert result.bypass_reason == BypassReason.NONE
+        assert result.rationale == "hb_missing_defer_llm"
+
+    def test_surgical_context_only_with_missing_hb_defers_to_llm(self) -> None:
+        """A merely-documented surgery (no intra-op transfusion, no large
+        EBL) is the SOFT "surgery exists" cue the design refuses to
+        rubber-stamp on missing Hb. It defers to the LLM rather than
+        auto-approving or dead-ending — surgical_context is carried for
+        traceability only, never as a verdict gate."""
+        result = classify(
+            _inputs(
+                hb=_hb(None),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                enable_missing_hb_positive_evidence=True,
+                periop_surgical_context=True,
+            )
+        )
+        assert result.classification == "NEEDS_REVIEW"
+        assert result.bypass_reason == BypassReason.NONE
+        assert result.rationale == "hb_missing_defer_llm"
+
+    def test_no_periop_evidence_with_missing_hb_defers_to_llm(self) -> None:
+        """Flag ON, no peri-op evidence at all → defer to the LLM. This is
+        the headline change: the previously-terminal INSUFFICIENT_EVIDENCE
+        case now routes to the LLM (``hb_missing_defer_llm``)."""
+        result = classify(
+            _inputs(
+                hb=_hb(None),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                enable_missing_hb_positive_evidence=True,
+            )
+        )
+        assert result.classification == "NEEDS_REVIEW"
+        assert result.bypass_reason == BypassReason.NONE
+        assert result.rationale == "hb_missing_defer_llm"
+
+    def test_hard_periop_evidence_flag_off_stays_insufficient(self) -> None:
+        """SEED policy default-OFF dominates everything: even with a charted
+        intra-op transfusion AND a large EBL, the flag-OFF path returns the
+        unchanged terminal INSUFFICIENT_EVIDENCE. Pins that the new branch is
+        fully gated behind the operator opt-in (no behaviour change until
+        sign-off)."""
+        result = classify(
+            _inputs(
+                hb=_hb(None),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                periop_intraop_transfusion=True,
+                periop_blood_loss_ml=PERIOP_MIN_EBL_ML + 1000,
+                # enable_missing_hb_positive_evidence defaults to False
+            )
+        )
+        assert result.classification == "INSUFFICIENT_EVIDENCE"
+        assert result.bypass_reason == BypassReason.NONE
+        assert result.rationale == "hb_missing"
+
+    def test_unknown_cohort_hard_periop_evidence_defers_to_llm(self) -> None:
+        """UNKNOWN cohort blocks the deterministic auto-approve even on hard
+        peri-op evidence — mirroring the peri-procedural precedence
+        (UNKNOWN + missing Hb is the dominant documentation gap, never
+        rubber-stamped). The hard-evidence UNKNOWN case is not dead-ended,
+        though: it defers to the LLM, which sees the peri-op block and can
+        ground the verdict."""
+        result = classify(
+            _inputs(
+                hb=_hb(None),
+                cohort=_cohort(CohortLabel.UNKNOWN, None),
+                enable_missing_hb_positive_evidence=True,
+                periop_intraop_transfusion=True,
+            )
+        )
+        assert result.classification == "NEEDS_REVIEW"
+        assert result.bypass_reason == BypassReason.NONE
+        assert result.rationale == "hb_missing_defer_llm"
+
+    def test_mtp_precedes_periop_evidence_on_missing_hb(self) -> None:
+        """MTP outranks hard peri-op evidence — the cluster pattern is the
+        most clinically load-bearing signal, so the rationale is
+        ``bypass_mtp_hb_missing`` not the peri-op slug."""
+        result = classify(
+            _inputs(
+                hb=_hb(None),
+                cohort=_cohort(CohortLabel.MTP, None),
+                enable_missing_hb_positive_evidence=True,
+                periop_intraop_transfusion=True,
+            )
+        )
+        assert result.classification == "APPROPRIATE"
+        assert result.bypass_reason == BypassReason.MTP
+        assert result.rationale == "bypass_mtp_hb_missing"
+
+    def test_peri_procedural_precedes_periop_evidence_on_missing_hb(self) -> None:
+        """Peri-procedural ≤ 6 h outranks hard peri-op note evidence (it is
+        the structured-timing signal checked first), so a case with both
+        fires the peri-procedural slug, proving the precedence order."""
+        result = classify(
+            _inputs(
+                hb=_hb(None),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                procedure_proximity_hours=4.0,
+                enable_missing_hb_positive_evidence=True,
+                periop_intraop_transfusion=True,
+            )
+        )
+        assert result.classification == "APPROPRIATE"
+        assert result.bypass_reason == BypassReason.PERI_PROCEDURAL_6H
+        assert result.rationale == "bypass_peri_procedural_hb_missing"
 
 
 # =============================================================================
@@ -1258,6 +1444,17 @@ class TestCrystalloidHelper:
             self._med("LRS 1 L", 2.0),
         )
         assert total_crystalloid_liters(events, ORDER_DT) == pytest.approx(2.0)
+
+    def test_parses_thousands_separator(self) -> None:
+        """A dose written with a thousands separator (``"NSS 1,000 mL"``)
+        must parse as 1.0 L, not the ``"000 mL"`` tail (0 L). Undercounting
+        here can keep the 4 h total below the 2 L hemodilution trigger and
+        wrongly leave a dilutional sub-threshold Hb as APPROPRIATE."""
+        events = (
+            self._med("NSS 1,000 mL", 1.0),
+            self._med("RLS 1,500 cc", 2.0),
+        )
+        assert total_crystalloid_liters(events, ORDER_DT) == pytest.approx(2.5)
 
     def test_excludes_infusion_rate_strings(self) -> None:
         """PR #52 Codex P2: ``NSS 500 mL/h`` is an infusion RATE, not a

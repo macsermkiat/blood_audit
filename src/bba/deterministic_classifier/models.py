@@ -49,6 +49,12 @@ class BypassReason(StrEnum):
       the 6 h before the order anchor.
     * :attr:`PRE_OP_CROSSMATCH` — an operative procedure is scheduled soon
       after the order anchor, consistent with a pre-op crossmatch.
+    * :attr:`PERIOP_EVIDENCE` — Hb is missing but a HARD peri-operative
+      signal (an intra-op transfusion, or estimated blood loss at or above
+      :data:`bba.deterministic_classifier.PERIOP_MIN_EBL_ML`) was recovered
+      from the notes. Only fires on the missing-Hb positive-evidence
+      pre-pass (gated behind ``enable_missing_hb_positive_evidence``);
+      the documented surgical haemorrhage stands in for the absent Hb.
     * :attr:`MTP` — cohort detector flagged the massive-transfusion-protocol
       cluster (≥4 RBC units in 1 h, or RBC + FFP + platelets co-ordered).
     * :attr:`HEMODILUTION_FLAGGED` — after the global Hb < 7.0 rule, Hb is
@@ -63,6 +69,7 @@ class BypassReason(StrEnum):
     DELTA_HB = "delta_hb"
     PERI_PROCEDURAL_6H = "peri_procedural_6h"
     PRE_OP_CROSSMATCH = "pre_op_crossmatch"
+    PERIOP_EVIDENCE = "periop_evidence"
     MTP = "mtp"
     HEMODILUTION_FLAGGED = "hemodilution_flagged"
     NONE = "none"
@@ -99,15 +106,36 @@ class ClassifierInputs(BaseModel):
       :class:`bba.audit_store.AuditRow`).
 
     * ``enable_missing_hb_positive_evidence`` is the operator-supplied
-      kill-switch for the missing-Hb positive-evidence pre-check
-      (MTP / peri-procedural auto-APPROPRIATE on no documented Hb).
-      Defaults to ``False`` because the policy is "SEED pending clinical
-      sign-off" (see :mod:`bba.deterministic_classifier.classifier` and
-      docs/CONTEXT.md §"Missing-Hb positive-evidence pre-check"). When
-      ``False`` the classifier ignores both bypass branches and returns
+      kill-switch for the missing-Hb positive-evidence pre-pass
+      (MTP / peri-procedural / hard peri-op evidence auto-APPROPRIATE on
+      no documented Hb, with everything else deferred to the LLM rather
+      than dead-ended). Defaults to ``False`` because the policy is "SEED
+      pending clinical sign-off" (see
+      :mod:`bba.deterministic_classifier.classifier` and docs/CONTEXT.md
+      §"Missing-Hb positive-evidence pre-check"). When ``False`` the
+      classifier ignores every missing-Hb bypass branch and returns
       ``INSUFFICIENT_EVIDENCE`` for missing Hb, preserving the original
-      PRD spec. Set to ``True`` per-row only after the QI committee has
-      signed off on auto-approving undocumented-Hb cases.
+      PRD spec. When ``True`` the missing-Hb terminal verdict becomes
+      ``NEEDS_REVIEW`` (rationale ``hb_missing_defer_llm``) so the router
+      routes the case to the LLM instead of terminating. Set to ``True``
+      per-row only after the QI committee has signed off.
+
+    * ``periop_blood_loss_ml`` / ``periop_intraop_transfusion`` /
+      ``periop_surgical_context`` are the HARD/soft peri-operative signals
+      recovered from free-text notes by
+      :func:`bba.vitals_extractor.periop.scan_periop` (mirroring the three
+      fields of :class:`bba.vitals_extractor.PeriopSummary`). They feed the
+      missing-Hb pre-pass ONLY:
+        - ``periop_intraop_transfusion`` (a charted intra-op blood
+          component) and ``periop_blood_loss_ml`` at or above
+          :data:`bba.deterministic_classifier.PERIOP_MIN_EBL_ML` are the
+          HARD signals that auto-classify ``APPROPRIATE`` on missing Hb.
+        - ``periop_surgical_context`` is carried for traceability/audit
+          only; "a surgery is documented" is the WEAK signal the design
+          deliberately refuses to rubber-stamp, so it never gates a verdict
+          (those cases defer to the LLM). ``None``/``False`` defaults leave
+          the pre-pass inert, so a caller that never ran ``scan_periop``
+          gets the unchanged Hb-present behaviour.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -120,6 +148,9 @@ class ClassifierInputs(BaseModel):
     upcoming_procedure_hours: float | None = None
     crystalloid_liters_prior_4h: float = Field(ge=0.0)
     enable_missing_hb_positive_evidence: bool = False
+    periop_blood_loss_ml: int | None = None
+    periop_intraop_transfusion: bool = False
+    periop_surgical_context: bool = False
 
 
 class ClassifierResult(BaseModel):
@@ -141,13 +172,16 @@ class ClassifierResult(BaseModel):
 
     ``rationale`` is a short slug identifying which rule fired
     (``"hb_lt_7_universal"``, ``"hb_lt_threshold"``, ``"hb_7_to_10"``,
-    ``"hb_ge_10"``, ``"hb_missing"``, ``"bypass_delta_hb"``,
-    ``"bypass_peri_procedural"``,
+    ``"hb_ge_10"``, ``"hb_missing"``, ``"hb_missing_defer_llm"``,
+    ``"bypass_delta_hb"``, ``"bypass_peri_procedural"``,
     ``"bypass_pre_op_crossmatch"``, ``"bypass_mtp"``,
     ``"bypass_mtp_hb_missing"``, ``"bypass_peri_procedural_hb_missing"``,
-    ``"bypass_hemodilution"``, ``"cohort_unknown"``). The two
-    ``*_hb_missing`` slugs mark the missing-Hb positive-evidence pre-check
-    (approved with no documented Hb) so the QI committee can count them.
+    ``"bypass_periop_evidence_hb_missing"``,
+    ``"bypass_hemodilution"``, ``"cohort_unknown"``). The
+    ``*_hb_missing`` slugs mark the missing-Hb positive-evidence pre-pass
+    (approved with no documented Hb) so the QI committee can count them;
+    ``hb_missing_defer_llm`` marks a missing-Hb case routed to the LLM
+    (no hard evidence, flag on) rather than dead-ended.
     Free-form prose summaries are produced by the LLM stage, not here.
     """
 
