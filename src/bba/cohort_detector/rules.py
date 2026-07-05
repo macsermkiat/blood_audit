@@ -42,10 +42,20 @@ ORTHO_CARDIAC_THRESHOLD: float = 8.0
 ESRD_EPO_THRESHOLD: float = 8.0
 """Hb threshold (g/dL) for the ``esrd_epo`` cohort (PRD §5 + Round 2 N1)."""
 
+CARDIOPULMONARY_COMORBIDITY_THRESHOLD: float = 7.5
+"""Hb threshold (g/dL) for the ``cardiopulmonary_comorbidity`` cohort.
+
+Restrictive-transfusion practice raises the trigger from the 7.0 default to
+7.5 for patients carrying a heart- or lung-disease comorbidity (clinician
+rule: "> 7.5 with heart/lung disease, > 7 without"). Distinct from the
+surgery-based ``cardiac_surgery`` cohort (which also uses 7.5) — this cohort
+is diagnosis-driven, not procedure-driven."""
+
 COHORT_THRESHOLDS: dict[CohortLabel, float | None] = {
     CohortLabel.CARDIAC_SURGERY: CARDIAC_SURGERY_THRESHOLD,
     CohortLabel.ORTHO_CARDIAC: ORTHO_CARDIAC_THRESHOLD,
     CohortLabel.ESRD_EPO: ESRD_EPO_THRESHOLD,
+    CohortLabel.CARDIOPULMONARY_COMORBIDITY: CARDIOPULMONARY_COMORBIDITY_THRESHOLD,
     CohortLabel.MTP: None,
     CohortLabel.HEME_MALIGNANCY_ACTIVE: None,
     CohortLabel.DEFAULT: DEFAULT_THRESHOLD,
@@ -116,6 +126,38 @@ HEME_MALIGNANCY_ICD10_PREFIXES: tuple[str, ...] = ("C8", "C9")
 * ``C8x`` — Hodgkin / non-Hodgkin lymphoma
 * ``C9x`` — leukemia, multiple myeloma, related plasma-cell neoplasms
 """
+
+CARDIOPULMONARY_COMORBIDITY_ICD10_PREFIXES: frozenset[str] = frozenset(
+    {
+        # Heart disease
+        "I11",  # hypertensive heart disease
+        "I13",  # hypertensive heart + chronic kidney disease
+        "I20",  # angina pectoris
+        "I21",  # acute myocardial infarction
+        "I22",  # subsequent MI
+        "I23",  # MI complications
+        "I24",  # other acute ischemic heart disease
+        "I25",  # chronic ischemic heart disease
+        "I42",  # cardiomyopathy
+        "I50",  # heart failure
+        # Lung disease
+        "J43",  # emphysema
+        "J44",  # COPD
+        "J45",  # asthma
+        "J47",  # bronchiectasis
+        "J84",  # other interstitial pulmonary disease
+        "J96",  # respiratory failure
+    }
+)
+"""ICD-10 heart- / lung-disease comorbidity prefixes for the 7.5 g/dL
+cardiopulmonary floor.
+
+SEED list, frozen before scoring and pending clinical sign-off (mirrors the
+freezing policy of every other allow-list here). Sourced from the ICD-10
+ischemic-heart / heart-failure / cardiomyopathy (I2x, I11/I13/I42/I50) and
+chronic lower-respiratory / respiratory-failure (J4x, J84, J96) categories,
+NOT chosen by which pilot cases it flips. Essential hypertension (I10)
+without heart involvement is deliberately excluded."""
 
 # =============================================================================
 # Medication keyword lists (substring, case-insensitive matching)
@@ -411,6 +453,21 @@ def find_heme_malignancy_diagnosis(
     return _first_match(diagnosis_codes, HEME_MALIGNANCY_ICD10_PREFIXES)
 
 
+def find_cardiopulmonary_comorbidity_diagnosis(
+    diagnosis_codes: Sequence[str],
+) -> str | None:
+    """Return the first ICD-10 code in ``diagnosis_codes`` matching
+    :data:`CARDIOPULMONARY_COMORBIDITY_ICD10_PREFIXES`, or None.
+
+    Uses the same boundary-safe prefix rule as the other diagnosis
+    predicates, so ``"I25"`` matches ``"I25.10"`` but ``"I250"`` (a
+    different category continuation) does not.
+    """
+    return _first_match(
+        diagnosis_codes, sorted(CARDIOPULMONARY_COMORBIDITY_ICD10_PREFIXES)
+    )
+
+
 def detect_mtp_pattern(
     orders: Sequence[BloodOrderEvent], anchor: datetime
 ) -> BloodOrderEvent | None:
@@ -457,6 +514,8 @@ __all__: Sequence[str] = (
     "CARDIAC_SURGERY_EXCLUDED_CODES",
     "CARDIAC_SURGERY_LOOKBACK",
     "CARDIAC_SURGERY_THRESHOLD",
+    "CARDIOPULMONARY_COMORBIDITY_ICD10_PREFIXES",
+    "CARDIOPULMONARY_COMORBIDITY_THRESHOLD",
     "CHEMO_MED_KEYWORDS",
     "COHORT_THRESHOLDS",
     "DEFAULT_THRESHOLD",
@@ -470,6 +529,7 @@ __all__: Sequence[str] = (
     "ORTHO_SURGERY_CODE_PREFIXES",
     "detect_mtp_pattern",
     "find_cardiac_history_diagnosis",
+    "find_cardiopulmonary_comorbidity_diagnosis",
     "find_chemo_med",
     "find_dialysis_med",
     "find_esrd_diagnosis",
