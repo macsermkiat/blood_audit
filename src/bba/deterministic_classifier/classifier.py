@@ -12,7 +12,10 @@ specified in PRD §"Implementation Decisions §6":
 3. Cohort ``MTP``                   → ``APPROPRIATE`` (``bypass_reason=mtp``)
 4. Cohort ``UNKNOWN``               → ``NEEDS_REVIEW`` (no bypass)
 5. Bypass: peri-procedural ≤ 6 h    → ``APPROPRIATE`` (``bypass_reason=peri_procedural_6h``)
-6. Bypass: pre-op crossmatch ≤ 72 h → ``APPROPRIATE`` (``bypass_reason=pre_op_crossmatch``)
+6. Pre-op crossmatch ≤ 72 h upcoming → ``NEEDS_REVIEW`` (``rationale=preop_defer_llm``,
+                                       ``bypass_reason=none``); a reservation is not
+                                       an indication, so it DEFERS to the LLM instead
+                                       of auto-clearing (it does not skip the LLM).
 7. Bypass: delta-Hb trigger fired   → ``APPROPRIATE`` (``bypass_reason=delta_hb``)
 8. Hemodilution: Hb < threshold AND ≥ 2 L crystalloid in 4 h
                                     → ``NEEDS_REVIEW`` (``bypass_reason=hemodilution_flagged``)
@@ -237,15 +240,23 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
             rationale="bypass_peri_procedural",
         )
 
-    # 6. Pre-op crossmatch bypass — upcoming procedure within 72 h after
-    #    the order anchor. This catches blood ordered ahead of surgery.
+    # 6. Pre-op crossmatch — upcoming procedure within 72 h after the order
+    #    anchor. This is NOT a clearing bypass: a crossmatch *reservation* is
+    #    not a transfusion *indication*, and an upcoming surgery can hide an
+    #    active problem the reservation masks (case 68080335 documented
+    #    ongoing LGIB only in the nurse note, which neither the AI nor the
+    #    human caught). So instead of auto-APPROPRIATE we DEFER to the LLM —
+    #    NEEDS_REVIEW routes to the note-reading LLM leg (it is not in the
+    #    DETERMINISTIC_FINAL set), which reads the ±72 h note window and
+    #    decides on the actual clinical picture. bypass_reason stays NONE
+    #    because no clearing bypass fired.
     upcoming = inputs.upcoming_procedure_hours
     if upcoming is not None and upcoming <= PRE_OP_CROSSMATCH_WINDOW_HOURS:
         return ClassifierResult(
-            classification="APPROPRIATE",
-            bypass_reason=BypassReason.PRE_OP_CROSSMATCH,
+            classification="NEEDS_REVIEW",
+            bypass_reason=BypassReason.NONE,
             cohort_threshold=threshold,
-            rationale="bypass_pre_op_crossmatch",
+            rationale="preop_defer_llm",
         )
 
     # 7. Delta-Hb bypass — at least one window in the HbLookupResult
