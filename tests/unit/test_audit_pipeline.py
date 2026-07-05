@@ -60,8 +60,12 @@ from bba.audit_orders import AuditOrder
 from bba.audit_store import AuditRow, LlmCall
 from bba.audit_store.models import Classification
 from bba.audit_pipeline.replay import (
+    LLM_OVERCLEAR_REVIEW_REASON,
+    LLM_OVERCLEAR_UNSTABLE_HR,
+    LLM_OVERCLEAR_UNSTABLE_SBP,
     PERIOP_CONTRADICTION_REVIEW_REASON,
     PERIOP_GUARDRAIL_MIN_EBL_ML,
+    llm_overclear_suspect,
     periop_contradiction,
 )
 from bba.audit_pipeline import (
@@ -335,6 +339,8 @@ def _row_context(
     cohort_threshold: float | None = 7.0,
     evidence_text: str = "Hb 7.5 with symptomatic chest pain",
     periop_summary: PeriopSummary | None = None,
+    sbp: float = 110.0,
+    hr: float = 85.0,
 ) -> PipelineRowContext:
     """Build a PipelineRowContext whose upstream data drives the
     deterministic_classifier to produce the requested ``classification``.
@@ -404,7 +410,7 @@ def _row_context(
         needs_review_single_low_hb=False,
     )
     vitals = VitalsResult(
-        vitals=VitalSigns(sbp=110.0, hr=85.0, dbp=70.0, bt=37.0, rr=16.0),
+        vitals=VitalSigns(sbp=sbp, hr=hr, dbp=70.0, bt=37.0, rr=16.0),
         source=vitals_source,
         flags=frozenset(),
         note_timestamp=_RUN_TS,
@@ -1636,6 +1642,169 @@ class TestPeriopContradictionPredicate:
 
     def test_review_reason_distinct_from_hallucination(self) -> None:
         assert PERIOP_CONTRADICTION_REVIEW_REASON != "hallucination_suspect"
+
+
+class TestLlmOverclearPredicate:
+    """Unit pin on the B1 symmetric upgrade-guardrail predicate.
+
+    The complementary arm of the peri-op guardrail: where
+    ``periop_contradiction`` floors an LLM that UNDER-called against a hard
+    peri-op signal, ``llm_overclear_suspect`` floors an LLM that OVER-cleared
+    — returned APPROPRIATE on a gray-zone / missing-Hb order the deterministic
+    leg withheld (NEEDS_REVIEW / INSUFFICIENT_EVIDENCE) with NO structured
+    hard signal to justify it. Cases 47 (68062324) and 100 (68069089) are the
+    motivating over-clears. Exemption is deterministic-only (B1): sub-7.0 Hb,
+    hard peri-op signal, MTP cohort, or hemodynamic instability.
+    """
+
+    def test_case_100_shape_is_overclear(self) -> None:
+        # Hb 9.4 gray-zone, default cohort, stable vitals, no peri-op: the LLM
+        # cleared it on a specialist "keep Hb > 9" target it misread as breached.
+        ctx = _row_context(audit_id="oc-1", hb_value=9.4)
+        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is True
+
+    def test_insufficient_evidence_upgrade_is_overclear(self) -> None:
+        # Case 47 shape: det INSUFFICIENT_EVIDENCE (missing structured Hb), LLM
+        # upgraded to APPROPRIATE on stale-history + soft symptomatic-anemia.
+        ctx = _row_context(audit_id="oc-2", hb_value=9.4)
+        assert (
+            llm_overclear_suspect("APPROPRIATE", "INSUFFICIENT_EVIDENCE", ctx) is True
+        )
+
+    def test_sub_seven_hb_exempts(self) -> None:
+        # A genuinely low Hb (< 7.0) is a hard signal; clearing it is not an
+        # over-clear even when a det carve-out routed it to review.
+        ctx = _row_context(audit_id="oc-3", classification="APPROPRIATE", hb_value=6.5)
+        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is False
+
+    def test_hard_periop_signal_exempts(self) -> None:
+        ctx = _row_context(
+            audit_id="oc-4",
+            hb_value=9.4,
+            periop_summary=PeriopSummary(surgical_context=True),
+        )
+        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is False
+
+    def test_mtp_cohort_exempts(self) -> None:
+        ctx = _row_context(
+            audit_id="oc-5",
+            hb_value=9.4,
+            cohort_label=CohortLabel.MTP,
+            cohort_threshold=None,
+        )
+        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is False
+
+    def test_hypotension_exempts(self) -> None:
+        ctx = _row_context(
+            audit_id="oc-6", hb_value=9.4, sbp=LLM_OVERCLEAR_UNSTABLE_SBP - 1
+        )
+        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is False
+
+    def test_tachycardia_exempts(self) -> None:
+        ctx = _row_context(
+            audit_id="oc-7", hb_value=9.4, hr=LLM_OVERCLEAR_UNSTABLE_HR + 1
+        )
+        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is False
+
+    def test_stable_vitals_at_thresholds_do_not_exempt(self) -> None:
+        # SBP == 90 and HR == 120 are the stable side of the boundary
+        # (strict < 90 / > 120), so the over-clear still fires.
+        ctx = _row_context(
+            audit_id="oc-8",
+            hb_value=9.4,
+            sbp=LLM_OVERCLEAR_UNSTABLE_SBP,
+            hr=LLM_OVERCLEAR_UNSTABLE_HR,
+        )
+        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is True
+
+    def test_non_appropriate_llm_verdict_never_fires(self) -> None:
+        ctx = _row_context(audit_id="oc-9", hb_value=9.4)
+        for verdict in (
+            "INAPPROPRIATE",
+            "INSUFFICIENT_EVIDENCE",
+            "NEEDS_REVIEW",
+            "POTENTIALLY_INAPPROPRIATE",
+        ):
+            assert llm_overclear_suspect(verdict, "NEEDS_REVIEW", ctx) is False
+
+    def test_committed_deterministic_verdict_never_fires(self) -> None:
+        # Only an LLM *upgrade* over a withholding det verdict qualifies. If the
+        # det leg already cleared (APPROPRIATE) or leaned negative on a high Hb
+        # (POTENTIALLY_INAPPROPRIATE, Hb >= 10 — handled by the HB_GT_10 prompt),
+        # there is no gray-zone upgrade for this guardrail to floor.
+        ctx = _row_context(audit_id="oc-10", hb_value=9.4)
+        assert llm_overclear_suspect("APPROPRIATE", "APPROPRIATE", ctx) is False
+        assert (
+            llm_overclear_suspect("APPROPRIATE", "POTENTIALLY_INAPPROPRIATE", ctx)
+            is False
+        )
+
+    def test_review_reason_is_distinct(self) -> None:
+        assert LLM_OVERCLEAR_REVIEW_REASON not in {
+            PERIOP_CONTRADICTION_REVIEW_REASON,
+            "hallucination_suspect",
+        }
+
+
+class TestLlmOverclearGuardrail:
+    """Integration pin on the B1 override inside ``apply_batch_results``."""
+
+    def test_case_100_overclear_floored_to_review(self, tmp_path: object) -> None:
+        ctx = _row_context(
+            audit_id="audit-oc-100", classification="NEEDS_REVIEW", hb_value=9.4
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {"name": "THAL_TARGET_HB", "confidence": 0.97, "quote": "keep Hb >9"}
+            ],
+            reasoning_en="specialist target misread",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+        assert row.needs_human_review is True
+
+    def test_overclear_preserves_llm_reasoning_and_indications(
+        self, tmp_path: object
+    ) -> None:
+        # The reviewer must see exactly what the model concluded and why it is
+        # being second-guessed, so verifier_pass, reasoning, indications, and
+        # the deterministic verdict are all preserved.
+        ctx = _row_context(
+            audit_id="audit-oc-keep", classification="NEEDS_REVIEW", hb_value=9.4
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {"name": "SYMPTOMATIC_ANEMIA", "confidence": 0.9, "quote": "pale"}
+            ],
+            reasoning_en="soft indications only",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.verifier_pass is True
+        assert row.reasoning_summary_en == "soft indications only"
+        assert len(row.indications_json) == 1
+        assert row.rule_classification == "NEEDS_REVIEW"
+
+    def test_hard_signal_backed_appropriate_not_floored(
+        self, tmp_path: object
+    ) -> None:
+        # An LLM APPROPRIATE backed by a hard peri-op signal is not an
+        # over-clear — it must survive as APPROPRIATE.
+        ctx = _row_context(
+            audit_id="audit-oc-hard",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            periop_summary=PeriopSummary(surgical_context=True, blood_loss_ml=1500),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id, classification="APPROPRIATE"
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "APPROPRIATE"
 
 
 class TestPeriopContradictionGuardrail:
