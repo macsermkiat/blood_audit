@@ -33,10 +33,15 @@ from bba.deterministic_classifier.models import (
     ClassifierInputs,
     ClassifierResult,
 )
+from bba.deterministic_classifier.procedure_filter import (
+    NON_BLOOD_PROCEDURE_ICD9,
+    is_blood_requiring_procedure,
+)
 
 __all__ = [
     "HB_GT_10_THRESHOLD",
     "HEMODILUTION_CRYSTALLOID_LITERS",
+    "NON_BLOOD_PROCEDURE_ICD9",
     "PERI_PROCEDURAL_WINDOW_HOURS",
     "PERIOP_MIN_EBL_ML",
     "PRE_OP_CROSSMATCH_WINDOW_HOURS",
@@ -45,5 +50,6 @@ __all__ = [
     "ClassifierInputs",
     "ClassifierResult",
     "classify",
+    "is_blood_requiring_procedure",
     "total_crystalloid_liters",
 ]

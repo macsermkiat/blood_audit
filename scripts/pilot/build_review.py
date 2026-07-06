@@ -120,7 +120,18 @@ _RATIONALE_LABELS: dict[str, str] = {
     "bypass_mtp_hb_missing": "MTP cohort with no Hb available — auto-classified APPROPRIATE",
     "bypass_peri_procedural": "Procedure within 6 h before order — peri-procedural bypass",
     "bypass_peri_procedural_hb_missing": "Peri-procedural bypass (Hb missing) — auto-classified APPROPRIATE",
-    "bypass_pre_op_crossmatch": "Upcoming procedure within 72 h — pre-op crossmatch bypass",
+    "preop_defer_llm": (
+        "Upcoming procedure within 72 h — routed to LLM review, not auto-cleared "
+        "(a crossmatch reservation is not a transfusion indication). Minor "
+        "procedures (perm cath, tracheostomy, lumbar puncture, thoracocentesis, "
+        "paracentesis, arthrocentesis, arterial/central line) are excluded from "
+        "this signal."
+    ),
+    "bypass_pre_op_crossmatch": (
+        "[legacy] Upcoming procedure within 72 h — auto-classified APPROPRIATE. "
+        "Superseded by preop_defer_llm (now routes to LLM review); retained so "
+        "historical reports still render."
+    ),
     "bypass_delta_hb": "Rapid Hb drop (delta-Hb trigger) fired — auto-classified APPROPRIATE",
     "bypass_hemodilution": "Haemodilution pattern flagged — Hb unreliable; sent to NEEDS_REVIEW",
     "single_low_hb_no_trend": "Single Hb below threshold with no supporting trend — NEEDS_REVIEW",
@@ -130,7 +141,11 @@ _BYPASS_LABELS: dict[str, str] = {
     "none": "No bypass pathway applied; classification is purely Hb-tier based",
     "mtp": "Massive Transfusion Protocol — volume-based bypass, Hb thresholds suspended",
     "peri_procedural_6h": "Peri-procedural: active procedure within the 6 h window before order",
-    "pre_op_crossmatch": "Pre-operative crossmatch: scheduled procedure within 72 h after order",
+    "pre_op_crossmatch": (
+        "[legacy] Pre-operative crossmatch: scheduled procedure within 72 h after "
+        "order. Superseded — pre-op orders now route to LLM review with "
+        "bypass=none; retained for historical rows."
+    ),
     "delta_hb": "Delta-Hb: ≥ 2 g/dL drop in Hb in the 24 h pre-anchor window",
     "hemodilution_flagged": "Haemodilution suspected: Hb rise after IV fluid consistent with dilution artifact",
 }
@@ -1755,7 +1770,8 @@ LLM: Anthropic Batch classification on structured evidence only.
 <dt>cohort_non_threshold</dt><dd>Cohort has no fixed Hb threshold (e.g. active haematological malignancy).</dd>
 <dt>bypass_mtp</dt><dd>Massive Transfusion Protocol cohort — auto-classified APPROPRIATE.</dd>
 <dt>bypass_peri_procedural</dt><dd>Procedure within 6 h before order — peri-procedural bypass.</dd>
-<dt>bypass_pre_op_crossmatch</dt><dd>Upcoming procedure within 72 h — pre-op crossmatch bypass.</dd>
+<dt>preop_defer_llm</dt><dd>Upcoming procedure within 72 h — routed to LLM review, not auto-cleared (a reservation is not an indication). Minor procedures (perm cath, tracheostomy, lumbar puncture, thoracocentesis, paracentesis, arthrocentesis, arterial/central line) are excluded from the peri-op signal.</dd>
+<dt>bypass_pre_op_crossmatch</dt><dd>[legacy] Upcoming procedure within 72 h — auto-classified APPROPRIATE. Superseded by preop_defer_llm; retained for historical reports.</dd>
 <dt>bypass_delta_hb</dt><dd>Rapid Hb drop (delta-Hb trigger) fired — auto-classified APPROPRIATE.</dd>
 <dt>bypass_hemodilution</dt><dd>Haemodilution pattern flagged — Hb unreliable; sent to NEEDS_REVIEW.</dd>
 <dt>single_low_hb_no_trend</dt><dd>Single Hb below threshold with no supporting trend — NEEDS_REVIEW.</dd>
@@ -1763,7 +1779,7 @@ LLM: Anthropic Batch classification on structured evidence only.
 <dt>none</dt><dd>No bypass applied; classification is purely Hb-tier based.</dd>
 <dt>mtp</dt><dd>Massive Transfusion Protocol — volume-based bypass, Hb thresholds suspended.</dd>
 <dt>peri_procedural_6h</dt><dd>Peri-procedural: active procedure within 6 h before order.</dd>
-<dt>pre_op_crossmatch</dt><dd>Pre-operative crossmatch: scheduled procedure within 72 h after order.</dd>
+<dt>pre_op_crossmatch</dt><dd>[legacy] Pre-operative crossmatch bypass — superseded; pre-op orders now route to LLM review with bypass=none.</dd>
 <dt>delta_hb</dt><dd>Delta-Hb: ≥ 2 g/dL drop in 24 h pre-anchor window.</dd>
 <dt>hemodilution_flagged</dt><dd>Haemodilution suspected: Hb rise after IV fluid consistent with dilution artifact.</dd>
 </dl>

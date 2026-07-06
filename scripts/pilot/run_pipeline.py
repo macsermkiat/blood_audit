@@ -35,7 +35,7 @@ from bba.cohort_detector import (
     OperativeEvent,
     assign_cohort,
 )
-from bba.deterministic_classifier import classify
+from bba.deterministic_classifier import classify, is_blood_requiring_procedure
 from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import ClassifierInputs
 from bba.hb_lookup import (
@@ -635,8 +635,18 @@ def main() -> None:
             )
         )
 
+        # Minor bedside / diagnostic procedures (perm cath, tracheostomy,
+        # lumbar puncture, taps, arterial/central lines) are dropped BEFORE
+        # deriving proximity — they never justify a transfusion, so they must
+        # not fire a peri-procedural / pre-op crossmatch signal. op_events
+        # stays unfiltered where it feeds assign_cohort above; the cohort
+        # allow-lists gate on OR-flag + surgical prefixes and never match
+        # these anyway.
         prior_ops = [
-            o for o in op_events if o.operative_datetime <= order.order_datetime
+            o
+            for o in op_events
+            if o.operative_datetime <= order.order_datetime
+            and is_blood_requiring_procedure(o.icd9)
         ]
         proximity_h = (
             (
@@ -648,7 +658,10 @@ def main() -> None:
             else None
         )
         upcoming_ops = [
-            o for o in op_events if o.operative_datetime >= order.order_datetime
+            o
+            for o in op_events
+            if o.operative_datetime >= order.order_datetime
+            and is_blood_requiring_procedure(o.icd9)
         ]
         upcoming_h = (
             (

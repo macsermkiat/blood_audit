@@ -20,7 +20,10 @@ Cohort precedence (top wins):
    (Round 2 fix N1: both signals required).
 6. ``HEME_MALIGNANCY_ACTIVE`` — heme malignancy diagnosis AND chemo med
    AND ANC < 500; not threshold-driven (T2-supportive).
-7. ``DEFAULT`` — fall-through; threshold 7.0.
+7. ``CARDIOPULMONARY_COMORBIDITY`` — ICD-10 heart/lung disease diagnosis
+   (no surgery/ESRD/heme signal); threshold 7.5. Diagnosis-only, so it is
+   checked after the UNKNOWN guard and never masks missing procedure data.
+8. ``DEFAULT`` — fall-through; threshold 7.0.
 """
 
 from __future__ import annotations
@@ -34,6 +37,7 @@ from bba.cohort_detector.rules import (
     COHORT_THRESHOLDS,
     detect_mtp_pattern,
     find_cardiac_history_diagnosis,
+    find_cardiopulmonary_comorbidity_diagnosis,
     find_chemo_med,
     find_dialysis_med,
     find_esrd_diagnosis,
@@ -133,6 +137,21 @@ def assign_cohort(inputs: CohortInputs) -> CohortAssignment:
             CohortLabel.HEME_MALIGNANCY_ACTIVE,
             evidence_code=heme_dx,
             evidence_name=chemo_med.drug,
+        )
+
+    # CARDIOPULMONARY_COMORBIDITY — diagnosis-only heart/lung disease, checked
+    # AFTER the surgery / ESRD / heme cohorts (each more specific or carrying a
+    # stricter threshold) and BEFORE DEFAULT. It raises the 7.0 default floor
+    # to 7.5. Reached only once procedure data was confirmed present (the
+    # UNKNOWN guard above), so a diagnosis-based match never masks the
+    # missing-procedure-data invariant.
+    cardiopulmonary_dx = find_cardiopulmonary_comorbidity_diagnosis(
+        inputs.diagnosis_codes
+    )
+    if cardiopulmonary_dx is not None:
+        return _make(
+            CohortLabel.CARDIOPULMONARY_COMORBIDITY,
+            evidence_code=cardiopulmonary_dx,
         )
 
     return _make(CohortLabel.DEFAULT)

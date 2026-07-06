@@ -32,7 +32,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 
 class CohortLabel(StrEnum):
-    """The seven cohort outcomes assignable by :func:`assign_cohort`.
+    """The eight cohort outcomes assignable by :func:`assign_cohort`.
 
     Values are ``snake_case`` and intended for direct logging and downstream
     classifier dispatch. Adding a new label must be paired with a threshold
@@ -44,6 +44,7 @@ class CohortLabel(StrEnum):
     ESRD_EPO = "esrd_epo"
     MTP = "mtp"
     HEME_MALIGNANCY_ACTIVE = "heme_malignancy_active"
+    CARDIOPULMONARY_COMORBIDITY = "cardiopulmonary_comorbidity"
     DEFAULT = "default"
     UNKNOWN = "cohort_unknown"
 
