@@ -449,6 +449,38 @@ class TestBypassPathways:
         assert result.bypass_reason == BypassReason.NONE
         assert result.rationale == "preop_defer_llm"
 
+    def test_pre_op_sub_cohort_threshold_hb_still_clears(self) -> None:
+        """A pre-op order whose Hb is below an elevated cohort floor is
+        indicated by the Hb itself and MUST clear deterministically — the
+        pre-op deferral must not preempt the cohort-threshold clear (Codex
+        P2). Otherwise the LLM re-clears the sub-threshold Hb and the
+        over-clear guardrail (which exempts only Hb < 7.0) floors it back,
+        trapping a genuinely-indicated order in review. Hb 7.5 in an ESRD
+        cohort (floor 8.0) is sub-threshold, so it clears even with an
+        upcoming procedure in-window."""
+        result = classify(
+            _inputs(
+                hb=_hb(7.5),
+                cohort=_cohort(CohortLabel.ESRD_EPO, ESRD_EPO_THRESHOLD),
+                upcoming_procedure_hours=24.0,
+            )
+        )
+        assert result.classification == "APPROPRIATE"
+        assert result.rationale == "hb_lt_threshold"
+
+    def test_pre_op_at_or_above_cohort_threshold_still_defers(self) -> None:
+        """A pre-op order at/above the cohort floor (gray zone) has no
+        Hb-driven clear, so the deferral still routes it to the LLM."""
+        result = classify(
+            _inputs(
+                hb=_hb(8.5),
+                cohort=_cohort(CohortLabel.ESRD_EPO, ESRD_EPO_THRESHOLD),
+                upcoming_procedure_hours=24.0,
+            )
+        )
+        assert result.classification == "NEEDS_REVIEW"
+        assert result.rationale == "preop_defer_llm"
+
     def test_delta_hb_bypass_fires(self) -> None:
         """Delta-Hb trigger fired → APPROPRIATE, bypass_reason=DELTA_HB."""
         result = classify(

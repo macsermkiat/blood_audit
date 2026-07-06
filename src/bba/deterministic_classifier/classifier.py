@@ -12,10 +12,13 @@ specified in PRD §"Implementation Decisions §6":
 3. Cohort ``MTP``                   → ``APPROPRIATE`` (``bypass_reason=mtp``)
 4. Cohort ``UNKNOWN``               → ``NEEDS_REVIEW`` (no bypass)
 5. Bypass: peri-procedural ≤ 6 h    → ``APPROPRIATE`` (``bypass_reason=peri_procedural_6h``)
-6. Pre-op crossmatch ≤ 72 h upcoming → ``NEEDS_REVIEW`` (``rationale=preop_defer_llm``,
+6. Pre-op crossmatch ≤ 72 h upcoming, Hb ≥ cohort floor
+                                    → ``NEEDS_REVIEW`` (``rationale=preop_defer_llm``,
                                        ``bypass_reason=none``); a reservation is not
                                        an indication, so it DEFERS to the LLM instead
-                                       of auto-clearing (it does not skip the LLM).
+                                       of auto-clearing (it does not skip the LLM). A
+                                       sub-threshold Hb is NOT deferred — it clears at
+                                       step 10 (its Hb is the indication).
 7. Bypass: delta-Hb trigger fired   → ``APPROPRIATE`` (``bypass_reason=delta_hb``)
 8. Hemodilution: Hb < threshold AND ≥ 2 L crystalloid in 4 h
                                     → ``NEEDS_REVIEW`` (``bypass_reason=hemodilution_flagged``)
@@ -250,8 +253,23 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
     #    DETERMINISTIC_FINAL set), which reads the ±72 h note window and
     #    decides on the actual clinical picture. bypass_reason stays NONE
     #    because no clearing bypass fired.
+    #
+    #    Only defer when the Hb tier would not already clear the order: a
+    #    sub-threshold Hb (below the cohort floor) is itself the indication
+    #    and must clear (APPROPRIATE, below) regardless of an upcoming
+    #    procedure. Deferring it would trap the order — the LLM re-clears the
+    #    sub-threshold Hb and the over-clear guardrail (which exempts only
+    #    Hb < 7.0) floors it back to review (Codex P2). Non-threshold cohorts
+    #    (Hb-independent) fall through to their own routing below. Hb < 7.0
+    #    already returned APPROPRIATE at step 2, so this only gates the
+    #    [cohort_floor, ...) gray-zone / high-Hb pre-op cases.
     upcoming = inputs.upcoming_procedure_hours
-    if upcoming is not None and upcoming <= PRE_OP_CROSSMATCH_WINDOW_HOURS:
+    if (
+        upcoming is not None
+        and upcoming <= PRE_OP_CROSSMATCH_WINDOW_HOURS
+        and threshold is not None
+        and hb.value_g_dl >= threshold
+    ):
         return ClassifierResult(
             classification="NEEDS_REVIEW",
             bypass_reason=BypassReason.NONE,
