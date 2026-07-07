@@ -48,6 +48,16 @@ _BASE_PREAMBLE: Final[str] = (
     "(E1, E2, ...). Do NOT paraphrase. Do NOT invent indications. If the "
     "evidence does not positively support an indication, return "
     "INSUFFICIENT_EVIDENCE — documentation absence is never INAPPROPRIATE."
+    "\n\n"
+    "OUTPUT LANGUAGE (both summary fields required). Put the rationale in "
+    "English ONLY in reasoning_summary_en, and the SAME rationale in "
+    "reasoning_summary_th. Write the Thai as natural, fluent clinical Thai — "
+    "the way a Thai transfusion-committee reviewer would actually write it, "
+    "NOT a word-for-word translation of the English. Keep standard clinical "
+    "terms and acronyms (Hb, ACS, MTP, EBL, peri-operative, gray-zone, NPO, "
+    "SBP, HR) in English, as Thai clinicians do. Do NOT mix the two languages "
+    "in one field, do NOT put the Thai text inside reasoning_summary_en, and "
+    "do NOT emit any XML or tool-call tags inside either summary."
 )
 
 

@@ -25,9 +25,10 @@ fields come from a caller-supplied :class:`PipelineRowContext`.
 from __future__ import annotations
 
 import hashlib
+import re
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
-from typing import NamedTuple
+from typing import Final, NamedTuple
 
 from bba.audit_pipeline.models import PipelineRowContext, PipelineRunResult
 from bba.audit_store import AuditRow, AuditStore, LlmCall
@@ -173,6 +174,15 @@ def periop_contradiction(
 # =============================================================================
 
 LLM_OVERCLEAR_REVIEW_REASON = "llm_overclear_suspect"
+
+EMPTY_REASONING_REVIEW_REASON = "empty_reasoning"
+"""Review-reason slug for a verdict with no reasoning in either language.
+
+WHY: pilot run 2026-07-06 contained 9 rows whose reasoning summaries
+were completely empty — one classified APPROPRIATE with
+needs_human_review=False, i.e. an unexplained automatic clear. A
+verdict the committee cannot audit is floored to NEEDS_REVIEW.
+"""
 """Typed review_reason stamped on rows floored by the B1 over-clear guardrail.
 
 Distinct from ``periop_signal_contradiction`` (the LLM under-called) and
@@ -498,11 +508,17 @@ def _build_audit_row(
     # peri-op guardrail; if that already rewrote the verdict to NEEDS_REVIEW
     # this is inert (final_classification is no longer APPROPRIATE). The LLM
     # reasoning / indications are preserved so the reviewer sees the conflict.
-    elif llm_overclear_suspect(
-        final_classification, rule_classification, context
-    ):
+    elif llm_overclear_suspect(final_classification, rule_classification, context):
         final_classification = "NEEDS_REVIEW"
         review_reason = LLM_OVERCLEAR_REVIEW_REASON
+    # Empty-reasoning guardrail: a verdict with no reasoning in either
+    # language cannot be audited by the committee. Separate `if` (not
+    # elif) so it composes with the guardrails above; an earlier, more
+    # specific review_reason is preserved.
+    if not summary_en.strip() and not summary_th.strip():
+        final_classification = "NEEDS_REVIEW"
+        if review_reason is None:
+            review_reason = EMPTY_REASONING_REVIEW_REASON
     return AuditRow(
         audit_id=context.order.audit_id,
         run_id=run_id,
@@ -765,6 +781,58 @@ def _negative_evidence_from_result(
     return tuple(item for item in ne if isinstance(item, str))
 
 
+# =============================================================================
+# Structured-output tag-leak salvage (pilot run 2026-07-06)
+#
+# WHY: on 131/165 pilot rows, claude-sonnet-5 serialized BOTH reasoning
+# summaries into the ``reasoning_summary_en`` tool field — separated by
+# fragments of its internal tool-call tag syntax — and returned an empty
+# ``reasoning_summary_th``. Observed separators, verbatim:
+#
+#   ...EN text...</reasoning_summary_en>
+#   <reasoning_summary_th">...TH text...</reasoning_summary_th>          (96x)
+#   <reasoning_summary_th>...                                            (28x)
+#   <parameter name="reasoning_summary_th">...</parameter>/</invoke>     (rest)
+#   <reasoning_summary_th name="reasoning_summary_th">...
+#
+# The split is fully deterministic, so it is code, not an LLM judgment.
+# Salvage only fires when the th field came back empty — a row that
+# parsed cleanly passes through byte-identical.
+# =============================================================================
+
+_LEAK_EN_CLOSE_RE: Final[re.Pattern[str]] = re.compile(r"</reasoning_summary_en>")
+_LEAK_TH_OPEN_RE: Final[re.Pattern[str]] = re.compile(
+    r'<(?:parameter\s+name="reasoning_summary_th"'
+    r'|reasoning_summary_th(?:\s+name="reasoning_summary_th")?"?)>'
+)
+_LEAK_TH_CLOSE_RE: Final[re.Pattern[str]] = re.compile(
+    r'</(?:parameter|invoke|reasoning_summary_th"?)>'
+)
+
+
+def split_leaked_summaries(en: str, th: str) -> tuple[str, str]:
+    """Recover (en, th) from a tag-leaked ``reasoning_summary_en`` blob.
+
+    No-op unless ``th`` is empty AND ``en`` contains the leaked
+    ``</reasoning_summary_en>`` separator. An unterminated Thai block
+    (no closing tag) is recovered to end-of-string.
+    """
+    if th.strip():
+        return (en, th)
+    en_close = _LEAK_EN_CLOSE_RE.search(en)
+    if en_close is None:
+        return (en, th)
+    clean_en = en[: en_close.start()].strip()
+    rest = en[en_close.end() :]
+    th_open = _LEAK_TH_OPEN_RE.search(rest)
+    if th_open is None:
+        return (clean_en, th)
+    tail = rest[th_open.end() :]
+    th_close = _LEAK_TH_CLOSE_RE.search(tail)
+    clean_th = (tail[: th_close.start()] if th_close else tail).strip()
+    return (clean_en, clean_th)
+
+
 def _summaries_from_result(result: BatchSubmissionResult) -> tuple[str, str]:
     """Extract (en, th) reasoning summaries from the payload."""
     content = result.raw_response_json.get("content", [])
@@ -778,7 +846,7 @@ def _summaries_from_result(result: BatchSubmissionResult) -> tuple[str, str]:
         return ("", "")
     en = input_payload.get("reasoning_summary_en", "")
     th = input_payload.get("reasoning_summary_th", "")
-    return (
+    return split_leaked_summaries(
         en if isinstance(en, str) else "",
         th if isinstance(th, str) else "",
     )
@@ -806,6 +874,7 @@ def _confidence_from_attempts(
 
 
 __all__ = [
+    "EMPTY_REASONING_REVIEW_REASON",
     "LLM_OVERCLEAR_REVIEW_REASON",
     "LLM_OVERCLEAR_UNSTABLE_HR",
     "LLM_OVERCLEAR_UNSTABLE_SBP",
@@ -817,4 +886,5 @@ __all__ = [
     "llm_overclear_suspect",
     "periop_contradiction",
     "select_winning_attempt",
+    "split_leaked_summaries",
 ]

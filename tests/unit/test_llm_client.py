@@ -1645,6 +1645,26 @@ class TestAnthropicRequestCacheControlTranslation:
             "INSUFFICIENT_EVIDENCE",
         }
 
+    def test_reasoning_fields_instruct_language_separation_and_thai_fluency(
+        self,
+    ) -> None:
+        # Pilot 2026-07-06: the model packed both languages (plus leaked
+        # tool-call tags) into reasoning_summary_en on 131/165 rows, and
+        # the Thai it did write read as a stiff word-for-word translation.
+        # The field descriptions are the model-facing contract: en is
+        # English-only, th is natural clinical Thai — not a translation.
+        request = _request(audit_id="a1")
+        payload = build_anthropic_request(
+            request, model=SONNET_MODEL_ID, prompt_cache_enabled=True
+        )
+        props = payload["tools"][0]["input_schema"]["properties"]
+        en_desc = props["reasoning_summary_en"]["description"]
+        th_desc = props["reasoning_summary_th"]["description"]
+        assert "English" in en_desc
+        assert "reasoning_summary_th" in en_desc  # points Thai to its field
+        assert "Thai" in th_desc
+        assert "translation" in th_desc  # forbids literal-translation style
+
 
 # =============================================================================
 # Production AnthropicBatchTransport — surface-level sanity checks
