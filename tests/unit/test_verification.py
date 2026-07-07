@@ -46,7 +46,9 @@ class TestBuildMatrix:
     def test_full_grid_always_emitted(self) -> None:
         # 9 cells even for a single-case run — no absent-vs-zero ambiguity.
         labels = {"r1": "APPROPRIATE"}
-        verdicts = {"r1": CaseVerdict(reqno="r1", classification="APPROPRIATE", mechanism="llm")}
+        verdicts = {
+            "r1": CaseVerdict(reqno="r1", classification="APPROPRIATE", mechanism="llm")
+        }
         matrix = build_matrix(labels, verdicts)
         assert len(matrix.cells) == 9
         assert matrix.count("appropriate", "appropriate") == 1
@@ -56,14 +58,20 @@ class TestBuildMatrix:
         # A label with no verdict (run covered a subset) is not counted, so a
         # partial run never looks complete.
         labels = {"r1": "APPROPRIATE", "r2": "INAPPROPRIATE"}
-        verdicts = {"r1": CaseVerdict(reqno="r1", classification="APPROPRIATE", mechanism="deterministic")}
+        verdicts = {
+            "r1": CaseVerdict(
+                reqno="r1", classification="APPROPRIATE", mechanism="deterministic"
+            )
+        }
         matrix = build_matrix(labels, verdicts)
         assert matrix.total == 1
 
     def test_scope_splits_by_mechanism(self) -> None:
         labels = {"d": "APPROPRIATE", "l": "INAPPROPRIATE"}
         verdicts = {
-            "d": CaseVerdict(reqno="d", classification="APPROPRIATE", mechanism="deterministic"),
+            "d": CaseVerdict(
+                reqno="d", classification="APPROPRIATE", mechanism="deterministic"
+            ),
             "l": CaseVerdict(reqno="l", classification="NEEDS_REVIEW", mechanism="llm"),
         }
         det = build_matrix(labels, verdicts, scope="deterministic")
@@ -76,7 +84,9 @@ class TestBuildMatrix:
         labels = {"a": "APPROPRIATE", "b": "INAPPROPRIATE", "c": "APPROPRIATE"}
         verdicts = {
             "a": CaseVerdict(reqno="a", classification="APPROPRIATE", mechanism="llm"),
-            "b": CaseVerdict(reqno="b", classification="INAPPROPRIATE", mechanism="llm"),
+            "b": CaseVerdict(
+                reqno="b", classification="INAPPROPRIATE", mechanism="llm"
+            ),
             "c": CaseVerdict(reqno="c", classification="NEEDS_REVIEW", mechanism="llm"),
         }
         matrix = build_matrix(labels, verdicts)
@@ -87,7 +97,9 @@ class TestBuildMatrix:
 class TestConfusionByMechanism:
     def test_returns_det_llm_all_in_order(self) -> None:
         labels = {"x": "APPROPRIATE"}
-        verdicts = {"x": CaseVerdict(reqno="x", classification="APPROPRIATE", mechanism="llm")}
+        verdicts = {
+            "x": CaseVerdict(reqno="x", classification="APPROPRIATE", mechanism="llm")
+        }
         det, llm, allm = confusion_by_mechanism(labels, verdicts)
         assert (det.scope, llm.scope, allm.scope) == ("deterministic", "llm", "all")
         assert allm.total == 1 and det.total == 0 and llm.total == 1
@@ -131,13 +143,19 @@ class TestCompareRuns:
     def test_llm_volume_delta_counts_llm_routed_cases(self) -> None:
         labels = {"a": "APPROPRIATE", "b": "INAPPROPRIATE"}
         before = {
-            "a": CaseVerdict(reqno="a", classification="APPROPRIATE", mechanism="deterministic"),
-            "b": CaseVerdict(reqno="b", classification="APPROPRIATE", mechanism="deterministic"),
+            "a": CaseVerdict(
+                reqno="a", classification="APPROPRIATE", mechanism="deterministic"
+            ),
+            "b": CaseVerdict(
+                reqno="b", classification="APPROPRIATE", mechanism="deterministic"
+            ),
         }
         after = {
             # 'a' deferred to the LLM by the pre-op fix.
             "a": CaseVerdict(reqno="a", classification="NEEDS_REVIEW", mechanism="llm"),
-            "b": CaseVerdict(reqno="b", classification="APPROPRIATE", mechanism="deterministic"),
+            "b": CaseVerdict(
+                reqno="b", classification="APPROPRIATE", mechanism="deterministic"
+            ),
         }
         comparison = compare_runs(labels, before, after)
         assert comparison.llm_volume_before == 0
@@ -146,8 +164,16 @@ class TestCompareRuns:
 
     def test_regression_is_a_correct_appropriate_flipped_away(self) -> None:
         labels = {"good": "APPROPRIATE"}
-        before = {"good": CaseVerdict(reqno="good", classification="APPROPRIATE", mechanism="deterministic")}
-        after = {"good": CaseVerdict(reqno="good", classification="NEEDS_REVIEW", mechanism="llm")}
+        before = {
+            "good": CaseVerdict(
+                reqno="good", classification="APPROPRIATE", mechanism="deterministic"
+            )
+        }
+        after = {
+            "good": CaseVerdict(
+                reqno="good", classification="NEEDS_REVIEW", mechanism="llm"
+            )
+        }
         comparison = compare_runs(labels, before, after)
         assert comparison.regressions == ("good",)
 
@@ -175,12 +201,20 @@ class TestFindRegressions:
     def test_only_appropriate_truth_can_regress(self) -> None:
         # A human-inappropriate case flipping around is never a regression.
         labels = {"x": "INAPPROPRIATE"}
-        before = {"x": CaseVerdict(reqno="x", classification="INAPPROPRIATE", mechanism="llm")}
-        after = {"x": CaseVerdict(reqno="x", classification="NEEDS_REVIEW", mechanism="llm")}
+        before = {
+            "x": CaseVerdict(reqno="x", classification="INAPPROPRIATE", mechanism="llm")
+        }
+        after = {
+            "x": CaseVerdict(reqno="x", classification="NEEDS_REVIEW", mechanism="llm")
+        }
         assert find_regressions(labels, before, after) == ()
 
     def test_requires_case_in_both_runs(self) -> None:
         labels = {"x": "APPROPRIATE"}
-        before = {"x": CaseVerdict(reqno="x", classification="APPROPRIATE", mechanism="deterministic")}
+        before = {
+            "x": CaseVerdict(
+                reqno="x", classification="APPROPRIATE", mechanism="deterministic"
+            )
+        }
         after: dict[str, CaseVerdict] = {}
         assert find_regressions(labels, before, after) == ()

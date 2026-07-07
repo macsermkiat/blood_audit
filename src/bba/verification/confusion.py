@@ -52,7 +52,9 @@ def build_matrix(
         key = (bucket_of(labels[reqno]), bucket_of(verdict.classification))
         counts[key] = counts.get(key, 0) + 1
     cells = tuple(
-        ConfusionCell(truth=truth, predicted=predicted, count=counts.get((truth, predicted), 0))
+        ConfusionCell(
+            truth=truth, predicted=predicted, count=counts.get((truth, predicted), 0)
+        )
         for truth in BUCKETS
         for predicted in BUCKETS
     )
@@ -92,9 +94,7 @@ def find_regressions(
     return tuple(regressions)
 
 
-def _llm_volume(
-    labels: Mapping[str, str], verdicts: Mapping[str, CaseVerdict]
-) -> int:
+def _llm_volume(labels: Mapping[str, str], verdicts: Mapping[str, CaseVerdict]) -> int:
     """Count of scored cases a run routed to the LLM leg."""
     return sum(
         1

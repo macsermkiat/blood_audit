@@ -497,7 +497,9 @@ def _format_line(line: str) -> str:
     then apply inline markdown."""
     m = re.match(r"^([^:\n*]{1,70}):\s+(\S.*)$", line)
     if m:
-        return f"<b>{_inline_md(m.group(1).strip())}:</b> {_inline_md(m.group(2).strip())}"
+        return (
+            f"<b>{_inline_md(m.group(1).strip())}:</b> {_inline_md(m.group(2).strip())}"
+        )
     return _inline_md(line)
 
 
@@ -1152,9 +1154,7 @@ def main() -> None:
             f"(threshold {esc(det.get('cohort_threshold') or 'n/a')})</div>",
         ]
         if upcoming_disp is not None:
-            meta_items.append(
-                f"<div><b>Upcoming procedure:</b> {upcoming_disp}</div>"
-            )
+            meta_items.append(f"<div><b>Upcoming procedure:</b> {upcoming_disp}</div>")
         meta_items.append(f"<div><b>EBL evidence:</b> {esc(ebl_summary)}</div>")
         parts: list[str] = [
             f"<section class='case' id='case-{i}'>",
@@ -1209,7 +1209,9 @@ def main() -> None:
             parts.append("<details><summary><b>Reasoning — English</b></summary>")
             parts.append(render_reasoning(llm_block["reasoning_en"]))
             parts.append("</details>")
-            parts.append("<details lang='th'><summary><b>Reasoning — ภาษาไทย</b></summary>")
+            parts.append(
+                "<details lang='th'><summary><b>Reasoning — ภาษาไทย</b></summary>"
+            )
             parts.append(render_reasoning(llm_block["reasoning_th"]))
             parts.append("</details>")
         elif llm:
@@ -1529,7 +1531,9 @@ def main() -> None:
                     f"{esc(d)} {esc(t)} — item {esc(itemno)}</div>"
                 )
                 if focus_label:
-                    parts.append(f"<pre lang='th'><b>focus:</b> {esc(focus_label)}</pre>")
+                    parts.append(
+                        f"<pre lang='th'><b>focus:</b> {esc(focus_label)}</pre>"
+                    )
                 if action:
                     parts.append(f"<pre lang='th'><b>D/A:</b>\n{esc(action)}</pre>")
                 if resp:
@@ -1707,10 +1711,8 @@ def main() -> None:
     """
     n_cases = len(manifest_rows)
     _FLAG_TITLE = {
-        " <b class='nav-flag nav-flag--major'>[!!]</b>":
-            " <b class='nav-flag nav-flag--major' title='Major mismatch: Appropriate vs Potentially inappropriate'>[!!]</b>",
-        " <b class='nav-flag'>[!]</b>":
-            " <b class='nav-flag' title='Verdict mismatch between deterministic and LLM classifiers'>[!]</b>",
+        " <b class='nav-flag nav-flag--major'>[!!]</b>": " <b class='nav-flag nav-flag--major' title='Major mismatch: Appropriate vs Potentially inappropriate'>[!!]</b>",
+        " <b class='nav-flag'>[!]</b>": " <b class='nav-flag' title='Verdict mismatch between deterministic and LLM classifiers'>[!]</b>",
     }
     nav_links_items = "".join(
         f"<a href='#case-{i + 1}' data-case='{i + 1}'>"

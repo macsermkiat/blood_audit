@@ -146,7 +146,9 @@ class RunComparison(BaseModel):
     def llm_volume_delta(self) -> int:
         return self.llm_volume_after - self.llm_volume_before
 
-    def matrix(self, run: Literal["before", "after"], scope: MatrixScope) -> ConfusionMatrix:
+    def matrix(
+        self, run: Literal["before", "after"], scope: MatrixScope
+    ) -> ConfusionMatrix:
         """Fetch one scoped matrix from either run."""
         matrices = self.before if run == "before" else self.after
         for m in matrices:

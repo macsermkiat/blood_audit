@@ -152,13 +152,17 @@ class TestIntraopTransfusion:
 
     def test_intraop_blood_loss_is_not_a_transfusion(self) -> None:
         # The marker is present but "blood loss" is not a transfused component.
-        summary = scan_periop([_note("IPDNRFOCUSDT", -30, "intra-op blood loss 1500 ml")])
+        summary = scan_periop(
+            [_note("IPDNRFOCUSDT", -30, "intra-op blood loss 1500 ml")]
+        )
         assert summary.intraop_transfusion is False
 
     def test_component_without_intraop_marker_is_not_flagged(self) -> None:
         # A ward transfusion order (no intra-op marker) is the case being
         # audited, not an intra-op event; flagging it would beg the question.
-        summary = scan_periop([_note("IPDADMPROGRESS", 120, "transfuse LPRC 1 unit on ward")])
+        summary = scan_periop(
+            [_note("IPDADMPROGRESS", 120, "transfuse LPRC 1 unit on ward")]
+        )
         assert summary.intraop_transfusion is False
 
 

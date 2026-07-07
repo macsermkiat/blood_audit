@@ -58,7 +58,9 @@ class TestDeniedProceduresAreNotBloodRequiring:
     @pytest.mark.parametrize(
         "code,name", DENIED_PROCEDURES, ids=[c for c, _ in DENIED_PROCEDURES]
     )
-    def test_denied_procedure_is_not_blood_requiring(self, code: str, name: str) -> None:
+    def test_denied_procedure_is_not_blood_requiring(
+        self, code: str, name: str
+    ) -> None:
         assert is_blood_requiring_procedure(code) is False, (
             f"{name} ({code}) must not count as a blood-requiring procedure"
         )
@@ -67,7 +69,9 @@ class TestDeniedProceduresAreNotBloodRequiring:
         "code,name", DENIED_PROCEDURES, ids=[c for c, _ in DENIED_PROCEDURES]
     )
     def test_denied_procedure_is_in_denylist(self, code: str, name: str) -> None:
-        assert code in NON_BLOOD_PROCEDURE_ICD9, f"{name} ({code}) missing from denylist"
+        assert code in NON_BLOOD_PROCEDURE_ICD9, (
+            f"{name} ({code}) missing from denylist"
+        )
 
 
 class TestBloodRequiringProcedures:

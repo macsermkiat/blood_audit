@@ -925,9 +925,7 @@ def main() -> None:
             crystalloid_events, order.order_datetime
         )
 
-        vitals_notes = vitals_notes_for(
-            progress, focus, order.an, ev_anchor
-        )
+        vitals_notes = vitals_notes_for(progress, focus, order.an, ev_anchor)
         vitals = extract_vitals(anchor=ev_anchor, notes=vitals_notes)
 
         # Issue #76: ship the narrative notes themselves (not just the regex
@@ -1265,7 +1263,9 @@ def main() -> None:
                 crystalloid_liters_prior_4h=ctx.crystalloid_liters_prior_4h,
                 enable_missing_hb_positive_evidence=ctx.enable_missing_hb_positive_evidence,
                 periop_blood_loss_ml=periop.blood_loss_ml if periop else None,
-                periop_intraop_transfusion=periop.intraop_transfusion if periop else False,
+                periop_intraop_transfusion=periop.intraop_transfusion
+                if periop
+                else False,
                 periop_surgical_context=periop.surgical_context if periop else False,
             )
         )
