@@ -73,6 +73,7 @@ from bba.cohort_detector import (
     DEFAULT_THRESHOLD,
     ESRD_EPO_THRESHOLD,
     ORTHO_CARDIAC_THRESHOLD,
+    ORTHO_SURGERY_THRESHOLD,
     CohortAssignment,
     CohortLabel,
     MedEvent,
@@ -247,6 +248,9 @@ class TestHbTierByCohort:
         [
             (CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
             (CohortLabel.CARDIAC_SURGERY, CARDIAC_SURGERY_THRESHOLD),
+            (CohortLabel.ORTHO_SURGERY, ORTHO_SURGERY_THRESHOLD),
+            # ORTHO_CARDIAC is deprecated (never emitted) but persisted rows
+            # carrying it still replay through classify().
             (CohortLabel.ORTHO_CARDIAC, ORTHO_CARDIAC_THRESHOLD),
             (CohortLabel.ESRD_EPO, ESRD_EPO_THRESHOLD),
         ],
@@ -270,6 +274,9 @@ class TestHbTierByCohort:
         [
             (CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
             (CohortLabel.CARDIAC_SURGERY, CARDIAC_SURGERY_THRESHOLD),
+            (CohortLabel.ORTHO_SURGERY, ORTHO_SURGERY_THRESHOLD),
+            # ORTHO_CARDIAC is deprecated (never emitted) but persisted rows
+            # carrying it still replay through classify().
             (CohortLabel.ORTHO_CARDIAC, ORTHO_CARDIAC_THRESHOLD),
             (CohortLabel.ESRD_EPO, ESRD_EPO_THRESHOLD),
         ],
@@ -296,6 +303,9 @@ class TestHbTierByCohort:
         [
             (CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
             (CohortLabel.CARDIAC_SURGERY, CARDIAC_SURGERY_THRESHOLD),
+            (CohortLabel.ORTHO_SURGERY, ORTHO_SURGERY_THRESHOLD),
+            # ORTHO_CARDIAC is deprecated (never emitted) but persisted rows
+            # carrying it still replay through classify().
             (CohortLabel.ORTHO_CARDIAC, ORTHO_CARDIAC_THRESHOLD),
             (CohortLabel.ESRD_EPO, ESRD_EPO_THRESHOLD),
         ],
