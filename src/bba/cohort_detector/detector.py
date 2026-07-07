@@ -20,9 +20,11 @@ Cohort precedence (top wins):
    (Round 2 fix N1: both signals required).
 6. ``HEME_MALIGNANCY_ACTIVE`` — heme malignancy diagnosis AND chemo med
    AND ANC < 500; not threshold-driven (T2-supportive).
-7. ``CARDIOPULMONARY_COMORBIDITY`` — ICD-10 heart/lung disease diagnosis
-   (no surgery/ESRD/heme signal); threshold 7.5. Diagnosis-only, so it is
+7. ``CARDIOPULMONARY_COMORBIDITY`` — ICD-10 heart-disease diagnosis
+   (no surgery/ESRD/heme signal); threshold 8.0. Diagnosis-only, so it is
    checked after the UNKNOWN guard and never masks missing procedure data.
+   (Label name retained for persisted-row compatibility; lung-disease
+   diagnoses were removed — the cohort is now heart-disease only.)
 8. ``DEFAULT`` — fall-through; threshold 7.0.
 """
 
@@ -139,12 +141,11 @@ def assign_cohort(inputs: CohortInputs) -> CohortAssignment:
             evidence_name=chemo_med.drug,
         )
 
-    # CARDIOPULMONARY_COMORBIDITY — diagnosis-only heart/lung disease, checked
-    # AFTER the surgery / ESRD / heme cohorts (each more specific or carrying a
-    # stricter threshold) and BEFORE DEFAULT. It raises the 7.0 default floor
-    # to 7.5. Reached only once procedure data was confirmed present (the
-    # UNKNOWN guard above), so a diagnosis-based match never masks the
-    # missing-procedure-data invariant.
+    # CARDIOPULMONARY_COMORBIDITY — diagnosis-only heart disease, checked
+    # AFTER the surgery / ESRD / heme cohorts (each more specific) and BEFORE
+    # DEFAULT. It raises the 7.0 default floor to 8.0. Reached only once
+    # procedure data was confirmed present (the UNKNOWN guard above), so a
+    # diagnosis-based match never masks the missing-procedure-data invariant.
     cardiopulmonary_dx = find_cardiopulmonary_comorbidity_diagnosis(
         inputs.diagnosis_codes
     )

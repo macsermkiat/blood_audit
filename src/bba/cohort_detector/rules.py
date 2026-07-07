@@ -42,14 +42,20 @@ ORTHO_CARDIAC_THRESHOLD: float = 8.0
 ESRD_EPO_THRESHOLD: float = 8.0
 """Hb threshold (g/dL) for the ``esrd_epo`` cohort (PRD §5 + Round 2 N1)."""
 
-CARDIOPULMONARY_COMORBIDITY_THRESHOLD: float = 7.5
+CARDIOPULMONARY_COMORBIDITY_THRESHOLD: float = 8.0
 """Hb threshold (g/dL) for the ``cardiopulmonary_comorbidity`` cohort.
 
 Restrictive-transfusion practice raises the trigger from the 7.0 default to
-7.5 for patients carrying a heart- or lung-disease comorbidity (clinician
-rule: "> 7.5 with heart/lung disease, > 7 without"). Distinct from the
-surgery-based ``cardiac_surgery`` cohort (which also uses 7.5) — this cohort
-is diagnosis-driven, not procedure-driven."""
+8.0 for patients carrying a heart-disease comorbidity (clinician rule:
+"> 8 with heart disease, > 7 without"). Distinct from the surgery-based
+``cardiac_surgery`` cohort (7.5) — this cohort is diagnosis-driven, not
+procedure-driven.
+
+NOTE: the ``cardiopulmonary_comorbidity`` label name is retained for
+backward compatibility with persisted rows, but lung-disease diagnoses were
+removed from the trigger set (see
+:data:`CARDIOPULMONARY_COMORBIDITY_ICD10_PREFIXES`) — the cohort is now
+heart-disease only."""
 
 COHORT_THRESHOLDS: dict[CohortLabel, float | None] = {
     CohortLabel.CARDIAC_SURGERY: CARDIAC_SURGERY_THRESHOLD,
@@ -140,24 +146,21 @@ CARDIOPULMONARY_COMORBIDITY_ICD10_PREFIXES: frozenset[str] = frozenset(
         "I25",  # chronic ischemic heart disease
         "I42",  # cardiomyopathy
         "I50",  # heart failure
-        # Lung disease
-        "J43",  # emphysema
-        "J44",  # COPD
-        "J45",  # asthma
-        "J47",  # bronchiectasis
-        "J84",  # other interstitial pulmonary disease
-        "J96",  # respiratory failure
     }
 )
-"""ICD-10 heart- / lung-disease comorbidity prefixes for the 7.5 g/dL
-cardiopulmonary floor.
+"""ICD-10 heart-disease comorbidity prefixes for the 8.0 g/dL cardiopulmonary
+floor.
 
 SEED list, frozen before scoring and pending clinical sign-off (mirrors the
 freezing policy of every other allow-list here). Sourced from the ICD-10
-ischemic-heart / heart-failure / cardiomyopathy (I2x, I11/I13/I42/I50) and
-chronic lower-respiratory / respiratory-failure (J4x, J84, J96) categories,
-NOT chosen by which pilot cases it flips. Essential hypertension (I10)
-without heart involvement is deliberately excluded."""
+ischemic-heart / heart-failure / cardiomyopathy categories (I2x, I11/I13/I42/
+I50), NOT chosen by which pilot cases it flips. Essential hypertension (I10)
+without heart involvement is deliberately excluded.
+
+Lung-disease (J-code) diagnoses were removed from this cohort: chronic
+respiratory disease alone no longer raises the floor. The label name still
+reads ``cardiopulmonary_comorbidity`` for backward compatibility with
+persisted rows, but the trigger is heart-disease only."""
 
 # =============================================================================
 # Medication keyword lists (substring, case-insensitive matching)
