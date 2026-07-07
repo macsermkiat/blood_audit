@@ -119,6 +119,13 @@ BDTYPE_FAMILY: Mapping[str, ComponentFamily] = MappingProxyType(
         "SDRFI": ComponentFamily.RED_CELL,
         "PRCF": ComponentFamily.RED_CELL,
         "LDPRC4": ComponentFamily.RED_CELL,
+        # "SDR" is the canonical RBC allow-list code in
+        # bba.audit_orders.rules.RBC_PRODUCTS. It is never issued in the raw
+        # feed (the real single-donor-red-cell products are SDRF / SDRFI), so
+        # it has no dictionary NAME to cross-check — but it MUST map to
+        # RED_CELL so an SDR order that passes the Phase 1 RBC gate is not
+        # mis-routed to UNKNOWN by this component map (Codex review, PR #84).
+        "SDR": ComponentFamily.RED_CELL,
         # Platelets (Phase 2 scope)
         "LDPPC": ComponentFamily.PLATELET,
         "LDPPCI": ComponentFamily.PLATELET,

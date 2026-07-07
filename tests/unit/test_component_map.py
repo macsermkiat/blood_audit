@@ -135,6 +135,17 @@ class TestCodeMapAgreesWithNameClassifier:
     def test_unknown_code_returns_unknown(self) -> None:
         assert component_of_code("NOTACODE") == ComponentFamily.UNKNOWN
 
+    def test_canonical_rbc_allowlist_codes_route_to_red_cell(self) -> None:
+        # Every code in the Phase 1 RBC allow-list must route to RED_CELL, so
+        # this component map never mis-routes an order the RBC gate accepts.
+        # "SDR" is the canonical code that is never issued (real products are
+        # SDRF/SDRFI) and thus has no dictionary NAME — asserted here rather
+        # than in the NAME cross-check fixture (Codex review, PR #84).
+        from bba.audit_orders.rules import RBC_PRODUCTS
+
+        for code in RBC_PRODUCTS:
+            assert component_of_code(code) == ComponentFamily.RED_CELL
+
     def test_map_is_immutable(self) -> None:
         # The shared lookup table must not be mutable at runtime (a caller
         # mutating it would silently change routing for everyone).
