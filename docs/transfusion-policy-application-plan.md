@@ -1,6 +1,9 @@
 # Applying the Chula DRAFT transfusion policies to blood_audit
 
-**Status:** PLAN — pending review + clinician sign-off
+**Status:** Phase 1 IMPLEMENTED — PR #83, deploy-gated on the two §4 clinician
+rulings (CR-H1, CR-M1). Phase 2 PLANNED (re-scoped per §8), not built.
+**Reviews:** grill + adversarial passes complete 2026-07-07 (§8); verification
+pass 2026-07-08 (§8, third subsection).
 **Author:** drafted 2026-07-07
 **Source policies:** `../Bloodbank/policy/recommendation/*.docx` (4 DRAFT guidelines,
 Chulalongkorn Hospital)
@@ -61,7 +64,11 @@ audit surface (the app audits no non-RBC component).
    says "ยังไม่สามารถเบิกจ่ายได้" / not yet reimbursable → likely not in use),
    and Cryo (narrow DIC/massive-transfusion fibrinogen edge) are out of Phase 2.
 6. **Platelet architecture = thin deterministic gate + LLM for all context.**
-7. **Extreme cutoffs:** plt < 10 → `APPROPRIATE`; plt ≥ 100 → `POTENTIALLY_INAPPROPRIATE`.
+7. **Extreme cutoffs — SUPERSEDED by §8/CR-C1, do NOT implement as written.**
+   ~~plt < 10 → `APPROPRIATE`~~; plt ≥ 100 → `POTENTIALLY_INAPPROPRIATE`.
+   The plt < 10 auto-clear was removed as a patient-safety defect (dengue-no-bleed
+   / TTP / HIT / ITP / aplastic populations withhold platelets at very low
+   counts). v1 auto-clears NOTHING — the live gate is §5.1.
 8. **Shared pipeline, component dispatch** — platelet orders are first-class
    audit units routed by component family; RBC path stays byte-identical.
 9. **Additive, component-tagged sampling** with a separate `PLATELET_SAMPLE_N`
@@ -172,37 +179,78 @@ consumptive thrombocytopenia 10k, prophylaxis-not-indicated conditions
 (aplastic anemia, chronic marrow failure, ITP, HIT, TTP), dengue, snakebite.
 These become **LLM prompt rules**, encoded with the RBC threshold rules.
 
-### 5.3 Build stages (each its own PR)
-1. **Component routing** — `BDTYPE → component family` map (red-cell / platelet
-   / ffp / cryo) from the `GRPCAUSELABCBC` / ORDERCODE grouping; dispatch seam
-   in `audit_pipeline`. RBC path defaults unchanged.
-2. **`platelet_lookup`** — mirror `hb_lookup` (LABEXM 290078, unit x10³/µL,
-   same HEMATOLOGY-source-preference contract, same trend/staleness handling).
-3. **Platelet classifier** — the §5.1 gate. Own rationale slugs
-   (`plt_lt_10_universal`, `plt_ge_100`, `plt_defer_llm`, `plt_missing`).
-4. **Schema/report** — add a `component`/`analyte` field to the classifier
-   result, store row, and report so RBC and platelet rows are distinguishable
-   and never cross-compared; platelet-count column alongside Hb.
-5. **Evidence bundle + prompt** — platelet-count trend + procedure/bleeding
-   context extraction; platelet threshold rules added to the LLM prompt
-   (incl. the "expected drop <10k in 24h" pre-emptive prophylaxis clause,
-   §8/CR-M4). A platelet over-clear guardrail hardened as the RBC B1 guardrail
-   — **with NO blanket plt<10 exemption** (§8/CR-C2: a blanket exemption would
-   let an LLM over-clear of a TTP/HIT/dengue patient at plt<10 stand). Any
-   exemption must be conditional on a documented positive indication. Also
-   needs a new `TaskMode` + platelet prompt template + bypass of the Hb-only
-   `ALLOWED_COHORT_THRESHOLDS` gate (§8/AR-H4).
-6. **Sampling** — extend `sample_bundle.py` to sample platelet-family orders as
-   a component-tagged stream; `BBA_PILOT_PLATELET_SAMPLE_N` (~100), own seed;
-   RBC sampling byte-identical.
+### 5.3 Build stages (each its own PR — REWRITTEN 2026-07-08 per §8 required revisions)
+
+**Gating prerequisite (§8/AR-M8):** the `BDTYPE → component family` map
+(red-cell / platelet / ffp / cryo, from the `GRPCAUSELABCBC` / ORDERCODE
+grouping) must exist and be verified against the bundle dictionary BEFORE any
+stage below starts. It is not an open item inside stage 1; nothing dispatches
+without it.
+
+1. **Intake + store schema foundations** (§8/AR-C1, AR-C2, AR-H6) — the seam
+   originates at `audit_orders`, NOT `audit_pipeline`: a new inclusion path
+   alongside the `RBC_PRODUCTS` allow-list (`rules.py:27`) with a widened
+   product type (the `RBCProduct` Literal rejects platelet products today).
+   Re-derive the store schema with a `component` axis: `AuditRow` is Hb-shaped
+   (required non-null `hb_value`/`hb_datetime`/`cohort_threshold`), so
+   `component` is a schema re-derive, not a field add; thread the component
+   filter through `aggregate.py` / `builder.py` / `csv_writer.py` / dashboard
+   so platelet rows never blend into RBC stats. RBC path byte-identical.
+2. **Generic lookup core** (§8/AR-H5) — extract the shared engine from
+   `hb_lookup` (source preference, freshness tiers, trend/staleness)
+   parameterized by component config; platelet config = LABEXM 290078,
+   unit ×10³/µL, its own validity range and staleness window. NOT a mirror:
+   `hb_lookup`'s [2, 25] g/dL validation (`parse.py`, `models.py`) rejects
+   every platelet count.
+3. **Platelet classifier** — the §5.1 gate. Rationale slugs: `plt_ge_100`,
+   `plt_defer_llm`, `plt_missing` (no `plt_lt_10` slug — the auto-clear is
+   removed). Includes the CR-M2 invariant test: no platelet verdict is ever
+   deterministic-final in v1 (`POTENTIALLY_INAPPROPRIATE` and `NEEDS_REVIEW`
+   both route onward). MTP interaction (§8/CR-M3, AR-M9): platelet units
+   inside an active MTP window are suppressed as independent audit units —
+   the MTP co-order stays a *signal*, never a second audit row.
+4. **Pipeline dispatch** (§8/AR-C3) — component branches in
+   `_classifier_inputs_for` / `_deterministic_audit_row` / persist /
+   submission builders, in BOTH `run_pipeline` and `replay.py` (the logic is
+   duplicated); the raise-on-Hb=None path must not trip on platelet rows.
+   Dispatch lands only after stages 1–3 exist (§8/AR-H6: stage order was
+   inverted in the original plan).
+5. **Platelet LLM subsystem** (§8/AR-H4, CR-M4, CR-C2) — new `TaskMode` +
+   platelet prompt template + bypass of the Hb-only
+   `ALLOWED_COHORT_THRESHOLDS` gate (`system_prompt.py:128`). Platelet
+   evidence bundle: count trend + procedure/bleeding context. Prompt encodes
+   the §5.2 rules incl. the "expected drop <10k in 24h" pre-emptive
+   prophylaxis clause (CR-M4). Over-clear guardrail hardened as the RBC B1
+   guardrail — **with NO blanket plt<10 exemption** (CR-C2: a blanket
+   exemption would let an LLM over-clear of a TTP/HIT/dengue patient at
+   plt<10 stand); any exemption must be conditional on a documented positive
+   indication.
+   **OPEN DECISION (verification pass 2026-07-08): B1 guardrail composition.**
+   `llm_overclear_suspect` (`replay.py:237`) floors any LLM `APPROPRIATE`
+   over a deterministic `NEEDS_REVIEW` unless a structured hard signal fires
+   — and every hard signal is RBC-shaped (Hb < 7, hard peri-op, MTP,
+   SBP/HR). Since the v1 platelet gate emits `NEEDS_REVIEW` for ALL
+   plt < 100, reusing the guardrail unchanged means v1 can never finalize
+   `APPROPRIATE` below 100k — only the plt ≥ 100 branch could clear. Before
+   this stage: either define platelet-specific structured hard signals, or
+   explicitly accept that v1's LLM leg cannot clear sub-100k counts
+   (everything lands in human review). Do not decide silently.
+6. **Sampling** — extend `sample_bundle.py` to sample platelet-family orders
+   as a component-tagged stream; `BBA_PILOT_PLATELET_SAMPLE_N` (~100), own
+   seed; RBC sampling byte-identical.
 
 ### 5.4 Open items to verify at Phase 2 kickoff
 - Platelet order **volume** in the raw data (raw `BDVSTDT` column order differs
   from the bundle projection — recount with the correct `BDTYPE` column).
+- Verify **LABEXM 290078** (platelet count, ×10³/µL) against the bundle's lab
+  dictionary before wiring the lookup config.
 - Confirm the platelet-count staleness window clinically (platelets move faster
   than Hb post-transfusion; the RBC re-anchor logic may need a tighter window).
 - Confirm `plt ≥ 100` ceiling vs the 80–100k high-bleeding-risk surgical rule
   (is 100 the right ceiling, or should 80–100 also defer?).
+- Resolve the **B1-guardrail composition decision** (§5.3 stage 5): platelet
+  hard signals vs. accept-no-sub-100k-clears — a user/clinician call, not an
+  implementation detail.
 
 ---
 
@@ -275,11 +323,43 @@ up to `audit_orders`.**
 ### Required revisions (folded in)
 - §5.1 platelet gate redesigned (CR-C1); §5.3.5 guardrail (CR-C2); Phase 1 open
   clinical questions added (CR-H1/M1).
-- **Phase 2 re-scope (TODO before Phase 2 build):** rewrite §5.3 stages as
-  `component map + audit_orders widening + store schema` → `generic lookup core`
-  → `platelet classifier` → `dispatch` → `platelet LLM subsystem` → `sampling`.
-  Promote the `BDTYPE→component` map to a prerequisite. Add MTP-platelet
-  suppression (CR-M3/AR-M9) and the platelet-final-class invariant test (CR-M2).
+- **Phase 2 re-scope: DONE 2026-07-08** — §5.3 rewritten as
+  `component map (prerequisite)` → `intake + store schema` → `generic lookup
+  core` → `platelet classifier` → `dispatch` → `platelet LLM subsystem` →
+  `sampling`, with MTP-platelet suppression (CR-M3/AR-M9) and the
+  platelet-final-class invariant test (CR-M2) folded into stage 3.
+
+### Verification pass (2026-07-08, post-implementation review)
+
+Phase 1 code verified against the plan and PR #83; Phase 2 constraints
+re-verified against current code. Findings:
+
+- **All four §8 architecture claims hold in code:** `RBC_PRODUCTS` allow-list
+  (`audit_orders/rules.py:27`); `hb_lookup` [2, 25] g/dL validation
+  (`parse.py:13-14`, `models.py:37`); `AuditRow` required non-null
+  `hb_value`/`hb_datetime`/`cohort_threshold` (`audit_store/models.py`);
+  `ALLOWED_COHORT_THRESHOLDS` raise (`system_prompt.py:128`).
+- **M1 pilot count = 0** (artifact-verified, `/tmp/bba_mini`
+  `report_oldcode.csv` vs `report.csv`): zero `cardiac_surgery →
+  ortho_surgery` moves in the 300-case sample; the dual-surgery precedence
+  question (CR-M1) has no live cases — it is a policy-only ruling. The two
+  `default → ortho_surgery` moves and 0 verdict changes were re-confirmed.
+- **NEW — B1 guardrail composition gap** (neither reviewer caught it):
+  reusing `llm_overclear_suspect` unchanged makes v1 platelet unable to
+  finalize `APPROPRIATE` below 100k. Recorded as an explicit OPEN DECISION in
+  §5.3 stage 5 and §5.4.
+- **Phase 1 test-intent gap fixed:** `test_deterministic_classifier.py`
+  threshold parametrizations covered only the deprecated `ORTHO_CARDIAC`;
+  `ORTHO_SURGERY` (the emitted label) added alongside it.
+- **Doc rot fixed:** §3.7 annotated as superseded (CR-C1); §5.3 rewritten;
+  status header updated.
+- **H1 nuance recorded:** if the clinician rules "pre-op only", the change is
+  a redesign, not a toggle — cohort detection is REQ-anchored over a
+  *backward* 30-d window, so a pre-op ortho reservation hits
+  `preop_defer_llm` with `{cohort_threshold}` = 7.0, and the restrictive
+  prompt then steers the LLM *against* the policy's 8.0 pre-op target for
+  exactly the policy's target population. Pre-op scope needs
+  `upcoming_ops`-based detection or prompt-side encoding.
 
 ### Open decisions for the user
 1. **Confirm the platelet-gate reversal** (plt<10 no longer auto-clears — reverses
