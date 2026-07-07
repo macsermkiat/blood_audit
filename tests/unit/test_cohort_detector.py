@@ -488,9 +488,7 @@ class TestCohortOrthoSurgery:
 
     def test_7805_open_reduction_yields_ortho_surgery_80(self) -> None:
         # 7805 = open reduction of fracture; no cardiac signal required.
-        result = assign_cohort(
-            _inputs(procedure_events=(_op("7805", or_flag=True),))
-        )
+        result = assign_cohort(_inputs(procedure_events=(_op("7805", or_flag=True),)))
         assert result.label == CohortLabel.ORTHO_SURGERY
         assert result.threshold == 8.0
 
