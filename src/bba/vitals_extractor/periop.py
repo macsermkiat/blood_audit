@@ -111,9 +111,7 @@ def scan_periop(notes: Sequence[VitalsNote]) -> PeriopSummary:
             if tm is not None:
                 intraop = _finding("intraop_transfusion", note, tm.start(), tm.end())
 
-    findings = tuple(
-        f for f in (surgery, loss_finding, intraop) if f is not None
-    )
+    findings = tuple(f for f in (surgery, loss_finding, intraop) if f is not None)
     return PeriopSummary(
         surgical_context=surgery is not None,
         blood_loss_ml=best_loss_ml,
@@ -122,9 +120,7 @@ def scan_periop(notes: Sequence[VitalsNote]) -> PeriopSummary:
     )
 
 
-def _finding(
-    category: str, note: VitalsNote, start: int, end: int
-) -> PeriopFinding:
+def _finding(category: str, note: VitalsNote, start: int, end: int) -> PeriopFinding:
     return PeriopFinding(
         category=category,  # type: ignore[arg-type]  # narrowed by call sites
         snippet=_snippet(note.text, start, end),

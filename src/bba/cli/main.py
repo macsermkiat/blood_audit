@@ -49,6 +49,12 @@ from bba.cli.models import (
     ServeDashboardInput,
 )
 from bba.cli.store_protocol import AuditRunStore
+from bba.attribution import (
+    load_dct_registry,
+    load_reqno_to_doctor,
+    make_physician_resolver,
+    make_ward_resolver,
+)
 from bba.ingest import IngestConfig, IngestResult, ingest, schema_fingerprint
 from bba.audit_store import AuditStore, AuditStoreConfig
 from bba.report_generator import (
@@ -68,9 +74,10 @@ _BBA_DATA_DIR_ENV: str = "BBA_DATA_DIR"
 def _resolve_data_dir() -> Path:
     """Return ``$BBA_DATA_DIR`` as a :class:`Path`.
 
-    Raises :class:`CliError` if the env var is unset. The CLI's three-
-    variable env surface (BBA_DATA_DIR, BBA_DB_URL, ANTHROPIC_API_KEY) is
-    asserted by ``TestEnvVarSurfaceIsTight``."""
+    Raises :class:`CliError` if the env var is unset. The CLI's env
+    surface (BBA_DATA_DIR, BBA_DB_URL, ANTHROPIC_API_KEY, plus the
+    attribution inputs BBA_BDVST_CSV / BBA_DCT_CSV) is asserted by
+    ``TestEnvVarSurfaceIsTight``."""
     raw = os.environ.get(_BBA_DATA_DIR_ENV)
     if raw is None or raw == "":
         raise CliError(
@@ -334,22 +341,47 @@ def _get_audit_store() -> AuditStore:
     return AuditStore(config)
 
 
+_BBA_BDVST_CSV_ENV: str = "BBA_BDVST_CSV"
+_BBA_DCT_CSV_ENV: str = "BBA_DCT_CSV"
+
+
+def _require_env_path(name: str, purpose: str) -> Path:
+    """Return the env var ``name`` as a :class:`Path`, failing loud.
+
+    The attribution seams keep the CLI's "no fabricated defaults"
+    promise: an unset variable names the seam and the expected file
+    instead of guessing a location."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        raise CliError(
+            f"bba.cli.main.bba_report cannot resolve a "
+            f"WardAttributionResolver / PhysicianAttributionResolver: "
+            f"{name} environment variable is required ({purpose}). "
+            f"The former M0/M1 attribution blocker is resolved by "
+            f"BDVST.DCTREQ -> DCT; set {_BBA_BDVST_CSV_ENV} (BDVST export "
+            f"carrying REQNO + DCTREQ) and {_BBA_DCT_CSV_ENV} (DCT.csv "
+            f"doctor registry) to enable attribution."
+        )
+    return Path(raw)
+
+
 def _get_ward_resolver() -> WardAttributionResolver:
     """Resolve the production
     :class:`~bba.report_generator.WardAttributionResolver`.
 
-    Phase 1's HOSxP ingest-side procedure-table export is still pending
-    (M0/M1 blocker per the design notes), so the production resolver is
-    not yet plumbed; this seam fails loud naming
-    ``bba.cli.main.bba_report`` so the CLI keeps its "no fabricated
-    defaults" promise. Tests inject a fake via
-    ``patch("bba.cli.main._get_ward_resolver", ...)``."""
-    raise CliError(
-        "bba.cli.main.bba_report cannot resolve a WardAttributionResolver: "
-        "the HOSxP ingest store does not yet expose a ward-attribution "
-        "table (M0/M1 blocker). Plumb the production resolver in "
-        "bba.cli.main._get_ward_resolver when the table is available; "
-        "until then, monkeypatch the seam in tests."
+    Wired via :mod:`bba.attribution`: ``REQNO`` → ``BDVST.DCTREQ`` →
+    ``DCT.csv`` ``Deptlct`` (the department stands in for the ward —
+    the HOSxP export has no separate ward table). Requires
+    ``BBA_BDVST_CSV`` and ``BBA_DCT_CSV``; unset fails loud. Tests
+    inject a fake via ``patch("bba.cli.main._get_ward_resolver", ...)``."""
+    bdvst_csv = _require_env_path(
+        _BBA_BDVST_CSV_ENV, "BDVST export with REQNO + DCTREQ columns"
+    )
+    dct_csv = _require_env_path(
+        _BBA_DCT_CSV_ENV, "DCT.csv doctor registry with Deptlct/Deptname"
+    )
+    return make_ward_resolver(
+        load_reqno_to_doctor(bdvst_csv), load_dct_registry(dct_csv)
     )
 
 
@@ -357,16 +389,13 @@ def _get_physician_resolver() -> PhysicianAttributionResolver:
     """Resolve the production
     :class:`~bba.report_generator.PhysicianAttributionResolver`.
 
-    Symmetric with :func:`_get_ward_resolver` — same M0/M1 blocker, same
-    loud-failure contract, same injection seam."""
-    raise CliError(
-        "bba.cli.main.bba_report cannot resolve a "
-        "PhysicianAttributionResolver: the HOSxP ingest store does not "
-        "yet expose a physician-attribution table (M0/M1 blocker). Plumb "
-        "the production resolver in bba.cli.main._get_physician_resolver "
-        "when the table is available; until then, monkeypatch the seam "
-        "in tests."
+    Wired via :mod:`bba.attribution`: ``REQNO`` → ``BDVST.DCTREQ``
+    (the ordering-doctor code). Requires ``BBA_BDVST_CSV``; unset fails
+    loud. Symmetric with :func:`_get_ward_resolver`."""
+    bdvst_csv = _require_env_path(
+        _BBA_BDVST_CSV_ENV, "BDVST export with REQNO + DCTREQ columns"
     )
+    return make_physician_resolver(load_reqno_to_doctor(bdvst_csv))
 
 
 def _get_audit_run_store() -> AuditRunStore:

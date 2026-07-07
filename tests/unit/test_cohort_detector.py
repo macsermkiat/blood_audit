@@ -208,10 +208,11 @@ def _order(
 
 
 class TestPublicAPI:
-    def test_cohort_label_has_seven_members(self) -> None:
+    def test_cohort_label_has_eight_members(self) -> None:
         # Adding or removing a label is a contract change that downstream
-        # classifier (#8) and dashboard (#10) rely on.
-        assert len(list(CohortLabel)) == 7
+        # classifier (#8) and dashboard (#10) rely on. The eighth member is
+        # CARDIOPULMONARY_COMORBIDITY (diagnosis-based 8.0 floor).
+        assert len(list(CohortLabel)) == 8
 
     @pytest.mark.parametrize(
         "name",
@@ -221,6 +222,7 @@ class TestPublicAPI:
             "ESRD_EPO",
             "MTP",
             "HEME_MALIGNANCY_ACTIVE",
+            "CARDIOPULMONARY_COMORBIDITY",
             "DEFAULT",
             "UNKNOWN",
         ],
@@ -249,6 +251,7 @@ class TestThresholdNumericContract:
             (CohortLabel.CARDIAC_SURGERY, 7.5),
             (CohortLabel.ORTHO_CARDIAC, 8.0),
             (CohortLabel.ESRD_EPO, 8.0),
+            (CohortLabel.CARDIOPULMONARY_COMORBIDITY, 8.0),
             (CohortLabel.DEFAULT, 7.0),
         ],
     )
@@ -481,8 +484,13 @@ class TestCohortOrthoCardiac:
         assert result.threshold == 7.0
 
     def test_cardiac_history_alone_does_not_trigger_ortho_cardiac(self) -> None:
+        # ORTHO_CARDIAC needs an ortho *procedure* too; a cardiac-history
+        # diagnosis alone must not reach it. (Absent an ortho procedure, an
+        # I25 heart-disease code now lands in CARDIOPULMONARY_COMORBIDITY,
+        # not DEFAULT — but the invariant under test is "not ORTHO_CARDIAC".)
         result = assign_cohort(_inputs(diagnosis_codes=("I25.10",)))
-        assert result.label == CohortLabel.DEFAULT
+        assert result.label != CohortLabel.ORTHO_CARDIAC
+        assert result.label == CohortLabel.CARDIOPULMONARY_COMORBIDITY
 
 
 class TestCohortEsrdEpo:
@@ -729,6 +737,80 @@ class TestCohortHemeMalignancy:
             )
         )
         assert result.label != CohortLabel.HEME_MALIGNANCY_ACTIVE
+
+
+class TestCohortCardiopulmonaryComorbidity:
+    """ICD-10 heart-disease comorbidity (no surgery/ESRD/heme) → 8.0 g/dL floor.
+
+    Restrictive-transfusion practice raises the trigger to 8.0 for patients
+    with a heart-disease comorbidity (vs 7.0 default). This is a *comorbidity*
+    signal (diagnosis-based), distinct from the surgery-based
+    ``CARDIAC_SURGERY`` cohort (7.5). The 8.0 floor flows into both the
+    deterministic classifier and the gray-zone prompt, so a heart-disease
+    patient's transfusion is judged inappropriate above 8.0 (absent a hard
+    indication) rather than above 7.0.
+
+    NOTE: the label name still reads "cardiopulmonary" for backward
+    compatibility with persisted rows, but lung-disease (J-code) diagnoses
+    were removed from the cohort — it is now heart-disease only.
+    """
+
+    def test_ischemic_heart_disease_yields_cardiopulmonary(self) -> None:
+        # I25 = chronic ischemic heart disease.
+        result = assign_cohort(_inputs(diagnosis_codes=("I25.10",)))
+        assert result.label == CohortLabel.CARDIOPULMONARY_COMORBIDITY
+        assert result.threshold == 8.0
+        assert result.evidence_code == "I25.10"
+
+    def test_heart_failure_yields_cardiopulmonary(self) -> None:
+        # I50 = heart failure.
+        result = assign_cohort(_inputs(diagnosis_codes=("I50.9",)))
+        assert result.label == CohortLabel.CARDIOPULMONARY_COMORBIDITY
+        assert result.threshold == 8.0
+
+    def test_lung_disease_no_longer_qualifies(self) -> None:
+        # J44 = COPD. Lung disease was removed from the cohort, so a pure
+        # respiratory diagnosis now falls through to DEFAULT (7.0), NOT the
+        # 8.0 heart-disease floor.
+        result = assign_cohort(_inputs(diagnosis_codes=("J44.9",)))
+        assert result.label == CohortLabel.DEFAULT
+        assert result.threshold == 7.0
+
+    def test_non_cardiopulmonary_diagnosis_stays_default(self) -> None:
+        # E11 = type 2 diabetes — not a heart disease.
+        result = assign_cohort(_inputs(diagnosis_codes=("E11.9",)))
+        assert result.label == CohortLabel.DEFAULT
+
+    def test_cardiac_surgery_takes_precedence(self) -> None:
+        # A recent cardiac operation outranks a heart-disease comorbidity;
+        # CARDIAC_SURGERY is checked first (more specific, procedure-driven),
+        # so it wins even though its 7.5 floor is lower than this cohort's 8.0.
+        result = assign_cohort(
+            _inputs(
+                procedure_events=(_op("3601", or_flag=True, name="PTCA"),),
+                diagnosis_codes=("I25.10",),
+            )
+        )
+        assert result.label == CohortLabel.CARDIAC_SURGERY
+
+    def test_esrd_takes_precedence(self) -> None:
+        # ESRD and cardiopulmonary now both carry 8.0; ESRD is checked first
+        # (more specific — dx + dialysis med), so it wins on the tie.
+        result = assign_cohort(
+            _inputs(
+                diagnosis_codes=("N18.6", "I25.10"),
+                med_events=(_med("sevelamer"),),
+            )
+        )
+        assert result.label == CohortLabel.ESRD_EPO
+
+    def test_missing_procedure_data_still_yields_unknown(self) -> None:
+        # A diagnosis-based cohort must NOT mask the UNKNOWN invariant:
+        # procedure_events=None forces UNKNOWN even with a heart-disease dx.
+        result = assign_cohort(
+            _inputs(procedure_events=None, diagnosis_codes=("I25.10",))
+        )
+        assert result.label == CohortLabel.UNKNOWN
 
 
 class TestCohortDefault:

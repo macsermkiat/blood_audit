@@ -139,8 +139,24 @@ _TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
             },
         },
         "negative_evidence": {"type": "array", "items": {"type": "string"}},
-        "reasoning_summary_en": {"type": "string"},
-        "reasoning_summary_th": {"type": "string"},
+        "reasoning_summary_en": {
+            "type": "string",
+            "description": (
+                "Reasoning summary in English ONLY. Do not include the "
+                "Thai summary or any markup tags in this field; the Thai "
+                "summary belongs in reasoning_summary_th."
+            ),
+        },
+        "reasoning_summary_th": {
+            "type": "string",
+            "description": (
+                "Reasoning summary in natural, fluent clinical Thai, as a "
+                "Thai transfusion-committee reviewer would write it - NOT "
+                "a word-for-word translation of the English summary. Keep "
+                "standard clinical terms (Hb, ACS, MTP, peri-operative, "
+                "gray-zone) in English, as Thai clinicians do."
+            ),
+        },
     },
     "required": [
         "classification",

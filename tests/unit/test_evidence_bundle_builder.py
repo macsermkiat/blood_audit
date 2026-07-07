@@ -876,9 +876,15 @@ class TestWindowAnchor:
         )
 
     def test_progress_note_at_transfusion_kept_only_when_reanchored(self) -> None:
-        note = _progress(offset_hours=self._GAP_H, text="S: intra-op blood loss\nO: Hb 10.5\nA: bleeding\nP: PRBC 1U")
+        note = _progress(
+            offset_hours=self._GAP_H,
+            text="S: intra-op blood loss\nO: Hb 10.5\nA: bleeding\nP: PRBC 1U",
+        )
         # Default anchor: +120h is far outside the ±24h progress window.
-        assert _items_by_source(_build_minimal(progress_notes=(note,)), "IPDADMPROGRESS") == ()
+        assert (
+            _items_by_source(_build_minimal(progress_notes=(note,)), "IPDADMPROGRESS")
+            == ()
+        )
         # Re-anchored on the transfusion: the same note is now at the anchor.
         reanchored = _build_minimal(anchor=self._reanchored(), progress_notes=(note,))
         assert len(_items_by_source(reanchored, "IPDADMPROGRESS")) == 1
@@ -2603,9 +2609,7 @@ class TestPeriopSummaryItem:
         # (the literal/emission order). Each is a synthesized summary, not one
         # charted note, so timestamp_utc is None.
         progress = (_progress(offset_hours=-2, text="O: ABP = 84/49 MAP 56"),)
-        focus = (
-            _focus(offset_hours=3, text="Post-op s/p ORIF Lt femur, EBL 1500 ml"),
-        )
+        focus = (_focus(offset_hours=3, text="Post-op s/p ORIF Lt femur, EBL 1500 ml"),)
         bundle = _build_minimal(progress_notes=progress, focus_notes=focus)
         assert bundle.items[0].source == "Hemodynamic"
         periop = bundle.items[1]
@@ -2665,9 +2669,7 @@ class TestPeriopSummaryItem:
         # Each finding is directly citable: a verbatim snippet (a substring of a
         # note already shipped in full), its origin table, and a PHI-free lag so
         # the synthesized item needs no absolute timestamp.
-        focus = (
-            _focus(offset_hours=3, text="Post-op s/p ORIF Lt femur, EBL 1500 ml"),
-        )
+        focus = (_focus(offset_hours=3, text="Post-op s/p ORIF Lt femur, EBL 1500 ml"),)
         bundle = _build_minimal(focus_notes=focus)
         periop = next(it for it in bundle.items if it.source == "Periop")
         findings = periop.payload["findings"]
@@ -2690,9 +2692,7 @@ class TestPeriopSummaryItem:
         # Periop is exempt from whole-item drop: the pinned surgical signal must
         # outlive a dense MED list under cap pressure. This is the Case 107 fix
         # end-to-end — the surgery evidence is never the first thing shed.
-        focus = (
-            _focus(offset_hours=3, text="Post-op s/p ORIF Lt femur, EBL 1500 ml"),
-        )
+        focus = (_focus(offset_hours=3, text="Post-op s/p ORIF Lt femur, EBL 1500 ml"),)
         meds = tuple(
             _med(offset_hours=-h, drug=f"Drug{h}-" + ("x" * 200))
             for h in (1, 2, 3, 4, 5, 6, 7, 8)
@@ -2718,17 +2718,14 @@ class TestPeriopSummaryItem:
         # the same scan the LLM saw — not a re-parse of redacted prose. The
         # handle must agree with the emitted Periop item payload (one scan,
         # one truth) and must NOT leak into canonical_json / bundle_hash.
-        focus = (
-            _focus(offset_hours=3, text="Post-op s/p ORIF Lt femur, EBL 1500 ml"),
-        )
+        focus = (_focus(offset_hours=3, text="Post-op s/p ORIF Lt femur, EBL 1500 ml"),)
         bundle = _build_minimal(focus_notes=focus)
         assert bundle.periop_summary is not None
         assert bundle.periop_summary.surgical_context is True
         assert bundle.periop_summary.blood_loss_ml == 1500
         periop_item = next(it for it in bundle.items if it.source == "Periop")
         assert (
-            bundle.periop_summary.blood_loss_ml
-            == periop_item.payload["blood_loss_ml"]
+            bundle.periop_summary.blood_loss_ml == periop_item.payload["blood_loss_ml"]
         )
         assert "periop_summary" not in bundle.canonical_json
 

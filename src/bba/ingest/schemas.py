@@ -62,6 +62,10 @@ _REGISTRY_V1: Mapping[CSVTable, DataFrameSchema] = {
             "BDVSTTIME": _str(),
             "ICD10": _str(),
             "DIAGNOSIS": _str(),
+            # Ordering-doctor code (~99.8% filled). Joined to DCT.csv
+            # for physician / department attribution (Feature 2); the
+            # export's separate DCT column is empty and stays dropped.
+            "DCTREQ": _str(),
         }
     ),
     "BDVSTDT": DataFrameSchema(

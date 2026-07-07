@@ -68,7 +68,7 @@ from bba.cohort_detector import (
     OperativeEvent,
     assign_cohort,
 )
-from bba.deterministic_classifier import classify
+from bba.deterministic_classifier import classify, is_blood_requiring_procedure
 from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import ClassifierInputs
 from bba.evidence_bundle_builder import (
@@ -883,8 +883,17 @@ def main() -> None:
             )
         )
 
+        # Minor bedside / diagnostic procedures (perm cath, tracheostomy,
+        # lumbar puncture, taps, arterial/central lines) are dropped BEFORE
+        # deriving proximity — they never justify a transfusion, so they must
+        # not fire a peri-procedural / pre-op crossmatch signal. op_events
+        # stays unfiltered where it feeds assign_cohort above; kept in sync
+        # with run_pipeline.py's deterministic leg.
         prior_ops = [
-            o for o in op_events if o.operative_datetime <= order.order_datetime
+            o
+            for o in op_events
+            if o.operative_datetime <= order.order_datetime
+            and is_blood_requiring_procedure(o.icd9)
         ]
         proximity_h = (
             (
@@ -896,7 +905,10 @@ def main() -> None:
             else None
         )
         upcoming_ops = [
-            o for o in op_events if o.operative_datetime >= order.order_datetime
+            o
+            for o in op_events
+            if o.operative_datetime >= order.order_datetime
+            and is_blood_requiring_procedure(o.icd9)
         ]
         upcoming_h = (
             (
@@ -913,9 +925,7 @@ def main() -> None:
             crystalloid_events, order.order_datetime
         )
 
-        vitals_notes = vitals_notes_for(
-            progress, focus, order.an, ev_anchor
-        )
+        vitals_notes = vitals_notes_for(progress, focus, order.an, ev_anchor)
         vitals = extract_vitals(anchor=ev_anchor, notes=vitals_notes)
 
         # Issue #76: ship the narrative notes themselves (not just the regex
@@ -1253,7 +1263,9 @@ def main() -> None:
                 crystalloid_liters_prior_4h=ctx.crystalloid_liters_prior_4h,
                 enable_missing_hb_positive_evidence=ctx.enable_missing_hb_positive_evidence,
                 periop_blood_loss_ml=periop.blood_loss_ml if periop else None,
-                periop_intraop_transfusion=periop.intraop_transfusion if periop else False,
+                periop_intraop_transfusion=periop.intraop_transfusion
+                if periop
+                else False,
                 periop_surgical_context=periop.surgical_context if periop else False,
             )
         )

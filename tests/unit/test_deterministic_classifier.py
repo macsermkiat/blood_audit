@@ -404,9 +404,13 @@ class TestBypassPathways:
         assert result.classification == "APPROPRIATE"
         assert result.bypass_reason == BypassReason.PERI_PROCEDURAL_6H
 
-    def test_pre_op_crossmatch_within_72h_bypasses(self) -> None:
-        """Procedure ≤ 72 h after order → APPROPRIATE,
-        bypass_reason=PRE_OP_CROSSMATCH."""
+    def test_pre_op_crossmatch_within_72h_defers_to_llm(self) -> None:
+        """Procedure ≤ 72 h after order → NEEDS_REVIEW (defer to LLM), NOT
+        deterministic APPROPRIATE. A crossmatch reservation is not a
+        transfusion indication — an upcoming surgery can hide an active
+        problem the reservation masks (case 68080335 / ongoing LGIB), so the
+        note-reading LLM leg must own the call. bypass_reason stays NONE:
+        this is a deferral, not a clearing bypass."""
         result = classify(
             _inputs(
                 hb=_hb(12.2),
@@ -414,11 +418,13 @@ class TestBypassPathways:
                 upcoming_procedure_hours=68.0,
             )
         )
-        assert result.classification == "APPROPRIATE"
-        assert result.bypass_reason == BypassReason.PRE_OP_CROSSMATCH
+        assert result.classification == "NEEDS_REVIEW"
+        assert result.bypass_reason == BypassReason.NONE
+        assert result.rationale == "preop_defer_llm"
 
-    def test_pre_op_crossmatch_outside_72h_does_not_bypass(self) -> None:
-        """Procedure > 72 h after order → no pre-op bypass."""
+    def test_pre_op_crossmatch_outside_72h_does_not_defer(self) -> None:
+        """Procedure > 72 h after order → no pre-op signal; falls through to
+        the plain Hb-tier rule (Hb ≥ 10 → POTENTIALLY_INAPPROPRIATE)."""
         result = classify(
             _inputs(
                 hb=_hb(12.2),
@@ -429,8 +435,9 @@ class TestBypassPathways:
         assert result.classification == "POTENTIALLY_INAPPROPRIATE"
         assert result.bypass_reason == BypassReason.NONE
 
-    def test_pre_op_crossmatch_at_exact_boundary_bypasses(self) -> None:
-        """A procedure exactly 72 h after the order is a pre-op crossmatch."""
+    def test_pre_op_crossmatch_at_exact_boundary_defers_to_llm(self) -> None:
+        """A procedure exactly 72 h after the order still defers to the LLM
+        (``≤ 72 h`` inclusive)."""
         result = classify(
             _inputs(
                 hb=_hb(12.2),
@@ -438,8 +445,41 @@ class TestBypassPathways:
                 upcoming_procedure_hours=PRE_OP_CROSSMATCH_WINDOW_HOURS,
             )
         )
+        assert result.classification == "NEEDS_REVIEW"
+        assert result.bypass_reason == BypassReason.NONE
+        assert result.rationale == "preop_defer_llm"
+
+    def test_pre_op_sub_cohort_threshold_hb_still_clears(self) -> None:
+        """A pre-op order whose Hb is below an elevated cohort floor is
+        indicated by the Hb itself and MUST clear deterministically — the
+        pre-op deferral must not preempt the cohort-threshold clear (Codex
+        P2). Otherwise the LLM re-clears the sub-threshold Hb and the
+        over-clear guardrail (which exempts only Hb < 7.0) floors it back,
+        trapping a genuinely-indicated order in review. Hb 7.5 in an ESRD
+        cohort (floor 8.0) is sub-threshold, so it clears even with an
+        upcoming procedure in-window."""
+        result = classify(
+            _inputs(
+                hb=_hb(7.5),
+                cohort=_cohort(CohortLabel.ESRD_EPO, ESRD_EPO_THRESHOLD),
+                upcoming_procedure_hours=24.0,
+            )
+        )
         assert result.classification == "APPROPRIATE"
-        assert result.bypass_reason == BypassReason.PRE_OP_CROSSMATCH
+        assert result.rationale == "hb_lt_threshold"
+
+    def test_pre_op_at_or_above_cohort_threshold_still_defers(self) -> None:
+        """A pre-op order at/above the cohort floor (gray zone) has no
+        Hb-driven clear, so the deferral still routes it to the LLM."""
+        result = classify(
+            _inputs(
+                hb=_hb(8.5),
+                cohort=_cohort(CohortLabel.ESRD_EPO, ESRD_EPO_THRESHOLD),
+                upcoming_procedure_hours=24.0,
+            )
+        )
+        assert result.classification == "NEEDS_REVIEW"
+        assert result.rationale == "preop_defer_llm"
 
     def test_delta_hb_bypass_fires(self) -> None:
         """Delta-Hb trigger fired → APPROPRIATE, bypass_reason=DELTA_HB."""
@@ -1067,14 +1107,6 @@ class TestBypassReasonDistinct:
             )
         )
         # Delta-Hb
-        pre_op = classify(
-            _inputs(
-                hb=_hb(8.5),
-                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
-                upcoming_procedure_hours=12.0,
-            )
-        )
-        # Delta-Hb
         delta = classify(
             _inputs(
                 hb=_hb(8.5, delta_bypass=True),
@@ -1089,17 +1121,18 @@ class TestBypassReasonDistinct:
                 crystalloid_liters_prior_4h=2.5,
             )
         )
+        # Pre-op crossmatch is no longer a clearing bypass — it defers to the
+        # LLM (NEEDS_REVIEW / bypass_reason NONE), so it is asserted separately
+        # in TestPreOpCrossmatchBypass, not among the distinct bypass reasons.
         reasons = {
             mtp.bypass_reason,
             peri.bypass_reason,
-            pre_op.bypass_reason,
             delta.bypass_reason,
             hemo.bypass_reason,
         }
         assert reasons == {
             BypassReason.MTP,
             BypassReason.PERI_PROCEDURAL_6H,
-            BypassReason.PRE_OP_CROSSMATCH,
             BypassReason.DELTA_HB,
             BypassReason.HEMODILUTION_FLAGGED,
         }

@@ -345,6 +345,22 @@ class TestTaskModeSwitching:
                 evidence_chunks=(_chunk(),),
             )
 
+    def test_both_modes_instruct_bilingual_output_and_thai_fluency(self) -> None:
+        # Pilot 2026-07-06: the model packed both languages plus leaked
+        # tool-call tags into reasoning_summary_en, and its Thai read as a
+        # stiff literal translation. The system prompt (shared preamble)
+        # must instruct English-only EN, natural clinical Thai (not a
+        # translation), and no tag/language mixing — in BOTH task modes.
+        for mode in TASK_MODES:
+            prompt = system_prompt_for(
+                task_mode=mode,  # type: ignore[arg-type]
+                cohort_threshold=7.0,
+            )
+            assert "reasoning_summary_en" in prompt
+            assert "reasoning_summary_th" in prompt
+            assert "English" in prompt and "Thai" in prompt
+            assert "translation" in prompt
+
     def test_each_task_mode_has_dedicated_template_in_registry(self) -> None:
         # Every declared mode must be servable. The shape of the
         # discrimination is irrelevant — failure shape is identical to

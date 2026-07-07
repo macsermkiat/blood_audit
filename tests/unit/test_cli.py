@@ -964,17 +964,30 @@ class TestNoRetryBackoffInCli:
 
 class TestEnvVarSurfaceIsTight:
     """The CLI may only read ``BBA_DATA_DIR``, ``BBA_DB_URL``,
-    ``ANTHROPIC_API_KEY`` — every other ``os.environ`` / ``os.getenv``
-    reference is forbidden."""
+    ``ANTHROPIC_API_KEY``, plus the two attribution inputs
+    ``BBA_BDVST_CSV`` / ``BBA_DCT_CSV`` (the DCTREQ → DCT resolver
+    wiring) — every other ``os.environ`` / ``os.getenv`` reference is
+    forbidden."""
 
     ALLOWED: frozenset[str] = frozenset(
-        {"BBA_DATA_DIR", "BBA_DB_URL", "ANTHROPIC_API_KEY"}
+        {
+            "BBA_DATA_DIR",
+            "BBA_DB_URL",
+            "ANTHROPIC_API_KEY",
+            "BBA_BDVST_CSV",
+            "BBA_DCT_CSV",
+        }
     )
 
     def test_no_other_env_vars_referenced_in_cli_package(self) -> None:
-        # Conservative pattern: any os.environ['X'] or os.getenv('X', ...) literal.
+        # Conservative pattern: any os.environ['X'], os.environ.get('X'),
+        # or os.getenv('X', ...) literal, plus the '"BBA_X"' string form
+        # bound to the cli.main _*_ENV constants (reads go through those
+        # constants, so the raw literal is the reliable thing to scan).
         env_lookup = re.compile(
-            r"""(?:os\.environ\[\s*['"]|os\.getenv\(\s*['"])([A-Z_][A-Z0-9_]+)""",
+            r"""(?:os\.environ\[\s*['"]|os\.environ\.get\(\s*['"]"""
+            r"""|os\.getenv\(\s*['"]|_ENV\s*(?::\s*str)?\s*=\s*['"])"""
+            r"""([A-Z_][A-Z0-9_]+)""",
         )
         leaked: dict[Path, set[str]] = {}
         for source in CLI_PACKAGE_DIR.rglob("*.py"):
@@ -1128,11 +1141,11 @@ class TestUnwiredSubcommandsFailLoud:
 
 class TestBbaReportResolverSeamsFailLoud:
     """``bba report`` requires ward + physician attribution resolvers.
-    The HOSxP ingest-side procedure-table export is the M0/M1 blocker,
-    so the production resolvers are not yet plumbed; both seam getters
-    raise :class:`CliError` naming ``bba.cli.main.bba_report``. The
-    end-to-end ``bba report`` invocation therefore still fails loud (as
-    it did before wiring) — only the line of failure has moved."""
+    The production resolvers are wired from ``BBA_BDVST_CSV`` +
+    ``BBA_DCT_CSV`` (the DCTREQ → DCT attribution chain that resolved
+    the former M0/M1 blocker); with those env vars unset the seam
+    getters raise :class:`CliError` naming ``bba.cli.main.bba_report``
+    rather than fabricating a default attribution source."""
 
     def test_report_without_ward_resolver_fails_loud(
         self,
@@ -1141,6 +1154,8 @@ class TestBbaReportResolverSeamsFailLoud:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
+        monkeypatch.delenv("BBA_BDVST_CSV", raising=False)
+        monkeypatch.delenv("BBA_DCT_CSV", raising=False)
         with patch("bba.cli.main._get_audit_store", return_value=MagicMock()):
             result = runner.invoke(cli, ["report", "--run-id", "abc"])
         assert result.exit_code != 0

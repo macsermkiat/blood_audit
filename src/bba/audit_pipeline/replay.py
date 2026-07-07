@@ -25,14 +25,20 @@ fields come from a caller-supplied :class:`PipelineRowContext`.
 from __future__ import annotations
 
 import hashlib
+import re
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
-from typing import NamedTuple
+from typing import Final, NamedTuple
 
 from bba.audit_pipeline.models import PipelineRowContext, PipelineRunResult
 from bba.audit_store import AuditRow, AuditStore, LlmCall
 from bba.audit_store.models import Classification
-from bba.deterministic_classifier import PERIOP_MIN_EBL_ML, ClassifierResult
+from bba.cohort_detector import CohortLabel
+from bba.deterministic_classifier import (
+    PERIOP_MIN_EBL_ML,
+    UNIVERSAL_LOW_HB_APPROPRIATE_THRESHOLD,
+    ClassifierResult,
+)
 from bba.llm_client.models import BatchSubmissionResult, RawBatchResponse
 from bba.vitals_extractor import PeriopSummary
 
@@ -137,6 +143,114 @@ def periop_contradiction(
     if classification not in _PERIOP_CONTRADICTION_CLASSES:
         return False
     return _has_hard_periop_signal(context.periop_summary)
+
+
+# =============================================================================
+# LLM over-clear guardrail — B1 (Cases 47 / 100)
+#
+# WHY: the peri-op guardrail above only catches the LLM UNDER-calling
+# (INSUFFICIENT_EVIDENCE / POTENTIALLY_INAPPROPRIATE) against a hard signal.
+# The 300-case pilot review showed the dominant dangerous failure is the
+# OPPOSITE: the LLM returns APPROPRIATE on a gray-zone / missing-Hb order the
+# deterministic leg deliberately WITHHELD (NEEDS_REVIEW / INSUFFICIENT_EVIDENCE),
+# resting on soft or misread indications — a stale-history epistaxis (Case 47,
+# 68062324) or a specialist "keep Hb > 9" target misread as breached at Hb 9.4
+# (Case 100, 68069089).
+#
+# This is the symmetric arm: when the LLM upgrades a withholding deterministic
+# verdict to APPROPRIATE and NO structured hard signal justifies it, floor the
+# row to human review (NEEDS_REVIEW) with a distinct review_reason. The prompt
+# recalibration teaches the model to return INAPPROPRIATE for these; this
+# guardrail is the deterministic NET for when it clears anyway. Per the locked
+# design (Path A + guardrail-as-net), the deterministic layer NEVER asserts
+# INAPPROPRIATE here — it only floors to review.
+#
+# "Hard signal" is deterministic-only (B1): a genuinely low Hb (< 7.0), a hard
+# peri-op signal, an MTP cohort, or hemodynamic instability. Bleeding /
+# symptomatic anaemia asserted only in the LLM's prose is deliberately NOT
+# trusted as an exemption — that soft prose is exactly what over-cleared these
+# cases. The measured cost (a gray-zone prose-only bleeding clear also routes
+# to review) is accepted and tracked in the verification harness.
+# =============================================================================
+
+LLM_OVERCLEAR_REVIEW_REASON = "llm_overclear_suspect"
+
+EMPTY_REASONING_REVIEW_REASON = "empty_reasoning"
+"""Review-reason slug for a verdict with no reasoning in either language.
+
+WHY: pilot run 2026-07-06 contained 9 rows whose reasoning summaries
+were completely empty — one classified APPROPRIATE with
+needs_human_review=False, i.e. an unexplained automatic clear. A
+verdict the committee cannot audit is floored to NEEDS_REVIEW.
+"""
+"""Typed review_reason stamped on rows floored by the B1 over-clear guardrail.
+
+Distinct from ``periop_signal_contradiction`` (the LLM under-called) and
+``hallucination_suspect`` (verifier rejected every attempt) so a reviewer
+dashboard can triage the three failure modes separately."""
+
+LLM_OVERCLEAR_UNSTABLE_SBP: float = 90.0
+"""Systolic BP (mmHg) strictly below which the patient is hemodynamically
+unstable — a hard signal that exempts an LLM APPROPRIATE from the over-clear
+guardrail (transfusing an unstable patient in the gray zone is defensible)."""
+
+LLM_OVERCLEAR_UNSTABLE_HR: float = 120.0
+"""Heart rate (bpm) strictly above which the patient is tachycardic /
+hemodynamically stressed — the second hard hemodynamic exemption signal."""
+
+_LLM_OVERCLEAR_DET_VERDICTS: frozenset[Classification] = frozenset(
+    {"NEEDS_REVIEW", "INSUFFICIENT_EVIDENCE"}
+)
+"""Deterministic verdicts that "withheld" a clear. Only an LLM APPROPRIATE
+that upgrades one of these is an over-clear candidate. A deterministic
+APPROPRIATE (already cleared) or POTENTIALLY_INAPPROPRIATE (Hb >= 10, handled
+by the HB_GT_10 override prompt) is out of scope for this gray-zone guardrail."""
+
+
+def _has_hard_hemodynamic_signal(context: PipelineRowContext) -> bool:
+    """True iff the ±6 h vitals show hypotension (SBP < 90) or tachycardia
+    (HR > 120) — the hemodynamic-instability arm of the hard-signal set."""
+    vitals = context.vitals_result.vitals
+    if vitals.sbp is not None and vitals.sbp < LLM_OVERCLEAR_UNSTABLE_SBP:
+        return True
+    return vitals.hr is not None and vitals.hr > LLM_OVERCLEAR_UNSTABLE_HR
+
+
+def _has_structured_hard_signal(context: PipelineRowContext) -> bool:
+    """True iff ``context`` carries a deterministic hard signal that justifies
+    an LLM APPROPRIATE in the gray zone (B1 exemption set).
+
+    Any one of: a genuinely low Hb (< 7.0 g/dL), an MTP cohort, a hard peri-op
+    signal, or hemodynamic instability. Deliberately structured-only — soft
+    prose indications are not trusted here (they are what over-cleared the
+    motivating cases)."""
+    hb = context.hb_result.value_g_dl
+    if hb is not None and hb < UNIVERSAL_LOW_HB_APPROPRIATE_THRESHOLD:
+        return True
+    if context.cohort_assignment.label == CohortLabel.MTP:
+        return True
+    if _has_hard_periop_signal(context.periop_summary):
+        return True
+    return _has_hard_hemodynamic_signal(context)
+
+
+def llm_overclear_suspect(
+    final_classification: Classification,
+    rule_classification: Classification,
+    context: PipelineRowContext,
+) -> bool:
+    """True iff the LLM over-cleared a withholding deterministic verdict.
+
+    Fires only when the LLM returned ``APPROPRIATE``, the deterministic leg
+    had withheld the clear (``NEEDS_REVIEW`` / ``INSUFFICIENT_EVIDENCE``), and
+    no structured hard signal (:func:`_has_structured_hard_signal`) justifies
+    the clear. Deterministic and side-effect-free so the override in
+    :func:`_build_audit_row` is trivially testable and replay-stable."""
+    if final_classification != "APPROPRIATE":
+        return False
+    if rule_classification not in _LLM_OVERCLEAR_DET_VERDICTS:
+        return False
+    return not _has_structured_hard_signal(context)
 
 
 def apply_batch_results(
@@ -388,6 +502,23 @@ def _build_audit_row(
     if periop_contradiction(final_classification, context):
         final_classification = "NEEDS_REVIEW"
         review_reason = PERIOP_CONTRADICTION_REVIEW_REASON
+    # B1 over-clear guardrail (Cases 47 / 100): the symmetric arm. An LLM
+    # APPROPRIATE upgrading a withholding deterministic verdict, with no
+    # structured hard signal, is floored to human review. Checked after the
+    # peri-op guardrail; if that already rewrote the verdict to NEEDS_REVIEW
+    # this is inert (final_classification is no longer APPROPRIATE). The LLM
+    # reasoning / indications are preserved so the reviewer sees the conflict.
+    elif llm_overclear_suspect(final_classification, rule_classification, context):
+        final_classification = "NEEDS_REVIEW"
+        review_reason = LLM_OVERCLEAR_REVIEW_REASON
+    # Empty-reasoning guardrail: a verdict with no reasoning in either
+    # language cannot be audited by the committee. Separate `if` (not
+    # elif) so it composes with the guardrails above; an earlier, more
+    # specific review_reason is preserved.
+    if not summary_en.strip() and not summary_th.strip():
+        final_classification = "NEEDS_REVIEW"
+        if review_reason is None:
+            review_reason = EMPTY_REASONING_REVIEW_REASON
     return AuditRow(
         audit_id=context.order.audit_id,
         run_id=run_id,
@@ -650,6 +781,58 @@ def _negative_evidence_from_result(
     return tuple(item for item in ne if isinstance(item, str))
 
 
+# =============================================================================
+# Structured-output tag-leak salvage (pilot run 2026-07-06)
+#
+# WHY: on 131/165 pilot rows, claude-sonnet-5 serialized BOTH reasoning
+# summaries into the ``reasoning_summary_en`` tool field — separated by
+# fragments of its internal tool-call tag syntax — and returned an empty
+# ``reasoning_summary_th``. Observed separators, verbatim:
+#
+#   ...EN text...</reasoning_summary_en>
+#   <reasoning_summary_th">...TH text...</reasoning_summary_th>          (96x)
+#   <reasoning_summary_th>...                                            (28x)
+#   <parameter name="reasoning_summary_th">...</parameter>/</invoke>     (rest)
+#   <reasoning_summary_th name="reasoning_summary_th">...
+#
+# The split is fully deterministic, so it is code, not an LLM judgment.
+# Salvage only fires when the th field came back empty — a row that
+# parsed cleanly passes through byte-identical.
+# =============================================================================
+
+_LEAK_EN_CLOSE_RE: Final[re.Pattern[str]] = re.compile(r"</reasoning_summary_en>")
+_LEAK_TH_OPEN_RE: Final[re.Pattern[str]] = re.compile(
+    r'<(?:parameter\s+name="reasoning_summary_th"'
+    r'|reasoning_summary_th(?:\s+name="reasoning_summary_th")?"?)>'
+)
+_LEAK_TH_CLOSE_RE: Final[re.Pattern[str]] = re.compile(
+    r'</(?:parameter|invoke|reasoning_summary_th"?)>'
+)
+
+
+def split_leaked_summaries(en: str, th: str) -> tuple[str, str]:
+    """Recover (en, th) from a tag-leaked ``reasoning_summary_en`` blob.
+
+    No-op unless ``th`` is empty AND ``en`` contains the leaked
+    ``</reasoning_summary_en>`` separator. An unterminated Thai block
+    (no closing tag) is recovered to end-of-string.
+    """
+    if th.strip():
+        return (en, th)
+    en_close = _LEAK_EN_CLOSE_RE.search(en)
+    if en_close is None:
+        return (en, th)
+    clean_en = en[: en_close.start()].strip()
+    rest = en[en_close.end() :]
+    th_open = _LEAK_TH_OPEN_RE.search(rest)
+    if th_open is None:
+        return (clean_en, th)
+    tail = rest[th_open.end() :]
+    th_close = _LEAK_TH_CLOSE_RE.search(tail)
+    clean_th = (tail[: th_close.start()] if th_close else tail).strip()
+    return (clean_en, clean_th)
+
+
 def _summaries_from_result(result: BatchSubmissionResult) -> tuple[str, str]:
     """Extract (en, th) reasoning summaries from the payload."""
     content = result.raw_response_json.get("content", [])
@@ -663,7 +846,7 @@ def _summaries_from_result(result: BatchSubmissionResult) -> tuple[str, str]:
         return ("", "")
     en = input_payload.get("reasoning_summary_en", "")
     th = input_payload.get("reasoning_summary_th", "")
-    return (
+    return split_leaked_summaries(
         en if isinstance(en, str) else "",
         th if isinstance(th, str) else "",
     )
@@ -691,11 +874,17 @@ def _confidence_from_attempts(
 
 
 __all__ = [
+    "EMPTY_REASONING_REVIEW_REASON",
+    "LLM_OVERCLEAR_REVIEW_REASON",
+    "LLM_OVERCLEAR_UNSTABLE_HR",
+    "LLM_OVERCLEAR_UNSTABLE_SBP",
     "PERIOP_CONTRADICTION_REVIEW_REASON",
     "PERIOP_GUARDRAIL_MIN_EBL_ML",
     "Verifier",
     "apply_batch_results",
     "default_verifier",
+    "llm_overclear_suspect",
     "periop_contradiction",
     "select_winning_attempt",
+    "split_leaked_summaries",
 ]

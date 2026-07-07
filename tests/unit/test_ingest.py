@@ -1552,6 +1552,21 @@ class TestRunIdentityCompletion:
         assert b.is_complete(out) is False
 
 
+class TestBdvstCarriesOrderingDoctor:
+    def test_bdvst_schema_declares_dctreq(self) -> None:
+        """``BDVST.DCTREQ`` is the ordering-doctor code (filled ~99.8%);
+        it must flow through the normalize projection into the store so
+        physician / department attribution (Feature 2) never re-reads
+        the raw export. Dropping this column would silently resurrect
+        the M0/M1 attribution blocker."""
+        assert "DCTREQ" in get_schema("BDVST").columns
+
+    def test_normalize_keeps_dctreq(self) -> None:
+        cols = list(get_schema("BDVST").columns)
+        r = normalize_header("BDVST", cols)
+        assert "DCTREQ" in r.header
+
+
 class TestSchemaFingerprintStable:
     def test_fingerprint_is_deterministic(self) -> None:
         assert schema_fingerprint() == schema_fingerprint()

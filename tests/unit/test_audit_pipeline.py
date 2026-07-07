@@ -60,9 +60,15 @@ from bba.audit_orders import AuditOrder
 from bba.audit_store import AuditRow, LlmCall
 from bba.audit_store.models import Classification
 from bba.audit_pipeline.replay import (
+    EMPTY_REASONING_REVIEW_REASON,
+    LLM_OVERCLEAR_REVIEW_REASON,
+    LLM_OVERCLEAR_UNSTABLE_HR,
+    LLM_OVERCLEAR_UNSTABLE_SBP,
     PERIOP_CONTRADICTION_REVIEW_REASON,
     PERIOP_GUARDRAIL_MIN_EBL_ML,
+    llm_overclear_suspect,
     periop_contradiction,
+    split_leaked_summaries,
 )
 from bba.audit_pipeline import (
     VALID_TRANSITIONS,
@@ -335,6 +341,8 @@ def _row_context(
     cohort_threshold: float | None = 7.0,
     evidence_text: str = "Hb 7.5 with symptomatic chest pain",
     periop_summary: PeriopSummary | None = None,
+    sbp: float = 110.0,
+    hr: float = 85.0,
 ) -> PipelineRowContext:
     """Build a PipelineRowContext whose upstream data drives the
     deterministic_classifier to produce the requested ``classification``.
@@ -404,7 +412,7 @@ def _row_context(
         needs_review_single_low_hb=False,
     )
     vitals = VitalsResult(
-        vitals=VitalSigns(sbp=110.0, hr=85.0, dbp=70.0, bt=37.0, rr=16.0),
+        vitals=VitalSigns(sbp=sbp, hr=hr, dbp=70.0, bt=37.0, rr=16.0),
         source=vitals_source,
         flags=frozenset(),
         note_timestamp=_RUN_TS,
@@ -1519,6 +1527,7 @@ def _periop_llm_response(
     classification: str,
     indications: list[dict[str, object]] | None = None,
     reasoning_en: str = "model rationale",
+    reasoning_th: str = "th",
 ) -> RawBatchResponse:
     """One grounded LLM result carrying ``classification`` for ``audit_id``.
 
@@ -1545,7 +1554,7 @@ def _periop_llm_response(
                                 "indications": indications or [],
                                 "negative_evidence": [],
                                 "reasoning_summary_en": reasoning_en,
-                                "reasoning_summary_th": "th",
+                                "reasoning_summary_th": reasoning_th,
                             },
                         }
                     ],
@@ -1615,9 +1624,7 @@ class TestPeriopContradictionPredicate:
         # loss; a sub-floor EBL must NOT override an "insufficient" verdict.
         ctx = _row_context(
             audit_id="p-4",
-            periop_summary=PeriopSummary(
-                blood_loss_ml=PERIOP_GUARDRAIL_MIN_EBL_ML - 1
-            ),
+            periop_summary=PeriopSummary(blood_loss_ml=PERIOP_GUARDRAIL_MIN_EBL_ML - 1),
         )
         assert periop_contradiction("INSUFFICIENT_EVIDENCE", ctx) is False
 
@@ -1638,12 +1645,171 @@ class TestPeriopContradictionPredicate:
         assert PERIOP_CONTRADICTION_REVIEW_REASON != "hallucination_suspect"
 
 
+class TestLlmOverclearPredicate:
+    """Unit pin on the B1 symmetric upgrade-guardrail predicate.
+
+    The complementary arm of the peri-op guardrail: where
+    ``periop_contradiction`` floors an LLM that UNDER-called against a hard
+    peri-op signal, ``llm_overclear_suspect`` floors an LLM that OVER-cleared
+    — returned APPROPRIATE on a gray-zone / missing-Hb order the deterministic
+    leg withheld (NEEDS_REVIEW / INSUFFICIENT_EVIDENCE) with NO structured
+    hard signal to justify it. Cases 47 (68062324) and 100 (68069089) are the
+    motivating over-clears. Exemption is deterministic-only (B1): sub-7.0 Hb,
+    hard peri-op signal, MTP cohort, or hemodynamic instability.
+    """
+
+    def test_case_100_shape_is_overclear(self) -> None:
+        # Hb 9.4 gray-zone, default cohort, stable vitals, no peri-op: the LLM
+        # cleared it on a specialist "keep Hb > 9" target it misread as breached.
+        ctx = _row_context(audit_id="oc-1", hb_value=9.4)
+        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is True
+
+    def test_insufficient_evidence_upgrade_is_overclear(self) -> None:
+        # Case 47 shape: det INSUFFICIENT_EVIDENCE (missing structured Hb), LLM
+        # upgraded to APPROPRIATE on stale-history + soft symptomatic-anemia.
+        ctx = _row_context(audit_id="oc-2", hb_value=9.4)
+        assert (
+            llm_overclear_suspect("APPROPRIATE", "INSUFFICIENT_EVIDENCE", ctx) is True
+        )
+
+    def test_sub_seven_hb_exempts(self) -> None:
+        # A genuinely low Hb (< 7.0) is a hard signal; clearing it is not an
+        # over-clear even when a det carve-out routed it to review.
+        ctx = _row_context(audit_id="oc-3", classification="APPROPRIATE", hb_value=6.5)
+        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is False
+
+    def test_hard_periop_signal_exempts(self) -> None:
+        ctx = _row_context(
+            audit_id="oc-4",
+            hb_value=9.4,
+            periop_summary=PeriopSummary(surgical_context=True),
+        )
+        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is False
+
+    def test_mtp_cohort_exempts(self) -> None:
+        ctx = _row_context(
+            audit_id="oc-5",
+            hb_value=9.4,
+            cohort_label=CohortLabel.MTP,
+            cohort_threshold=None,
+        )
+        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is False
+
+    def test_hypotension_exempts(self) -> None:
+        ctx = _row_context(
+            audit_id="oc-6", hb_value=9.4, sbp=LLM_OVERCLEAR_UNSTABLE_SBP - 1
+        )
+        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is False
+
+    def test_tachycardia_exempts(self) -> None:
+        ctx = _row_context(
+            audit_id="oc-7", hb_value=9.4, hr=LLM_OVERCLEAR_UNSTABLE_HR + 1
+        )
+        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is False
+
+    def test_stable_vitals_at_thresholds_do_not_exempt(self) -> None:
+        # SBP == 90 and HR == 120 are the stable side of the boundary
+        # (strict < 90 / > 120), so the over-clear still fires.
+        ctx = _row_context(
+            audit_id="oc-8",
+            hb_value=9.4,
+            sbp=LLM_OVERCLEAR_UNSTABLE_SBP,
+            hr=LLM_OVERCLEAR_UNSTABLE_HR,
+        )
+        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is True
+
+    def test_non_appropriate_llm_verdict_never_fires(self) -> None:
+        ctx = _row_context(audit_id="oc-9", hb_value=9.4)
+        for verdict in (
+            "INAPPROPRIATE",
+            "INSUFFICIENT_EVIDENCE",
+            "NEEDS_REVIEW",
+            "POTENTIALLY_INAPPROPRIATE",
+        ):
+            assert llm_overclear_suspect(verdict, "NEEDS_REVIEW", ctx) is False
+
+    def test_committed_deterministic_verdict_never_fires(self) -> None:
+        # Only an LLM *upgrade* over a withholding det verdict qualifies. If the
+        # det leg already cleared (APPROPRIATE) or leaned negative on a high Hb
+        # (POTENTIALLY_INAPPROPRIATE, Hb >= 10 — handled by the HB_GT_10 prompt),
+        # there is no gray-zone upgrade for this guardrail to floor.
+        ctx = _row_context(audit_id="oc-10", hb_value=9.4)
+        assert llm_overclear_suspect("APPROPRIATE", "APPROPRIATE", ctx) is False
+        assert (
+            llm_overclear_suspect("APPROPRIATE", "POTENTIALLY_INAPPROPRIATE", ctx)
+            is False
+        )
+
+    def test_review_reason_is_distinct(self) -> None:
+        assert LLM_OVERCLEAR_REVIEW_REASON not in {
+            PERIOP_CONTRADICTION_REVIEW_REASON,
+            "hallucination_suspect",
+        }
+
+
+class TestLlmOverclearGuardrail:
+    """Integration pin on the B1 override inside ``apply_batch_results``."""
+
+    def test_case_100_overclear_floored_to_review(self, tmp_path: object) -> None:
+        ctx = _row_context(
+            audit_id="audit-oc-100", classification="NEEDS_REVIEW", hb_value=9.4
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {"name": "THAL_TARGET_HB", "confidence": 0.97, "quote": "keep Hb >9"}
+            ],
+            reasoning_en="specialist target misread",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+        assert row.needs_human_review is True
+
+    def test_overclear_preserves_llm_reasoning_and_indications(
+        self, tmp_path: object
+    ) -> None:
+        # The reviewer must see exactly what the model concluded and why it is
+        # being second-guessed, so verifier_pass, reasoning, indications, and
+        # the deterministic verdict are all preserved.
+        ctx = _row_context(
+            audit_id="audit-oc-keep", classification="NEEDS_REVIEW", hb_value=9.4
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {"name": "SYMPTOMATIC_ANEMIA", "confidence": 0.9, "quote": "pale"}
+            ],
+            reasoning_en="soft indications only",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.verifier_pass is True
+        assert row.reasoning_summary_en == "soft indications only"
+        assert len(row.indications_json) == 1
+        assert row.rule_classification == "NEEDS_REVIEW"
+
+    def test_hard_signal_backed_appropriate_not_floored(self, tmp_path: object) -> None:
+        # An LLM APPROPRIATE backed by a hard peri-op signal is not an
+        # over-clear — it must survive as APPROPRIATE.
+        ctx = _row_context(
+            audit_id="audit-oc-hard",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            periop_summary=PeriopSummary(surgical_context=True, blood_loss_ml=1500),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id, classification="APPROPRIATE"
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "APPROPRIATE"
+
+
 class TestPeriopContradictionGuardrail:
     """Integration pin on the override inside ``apply_batch_results``."""
 
-    def test_case_107_shape_escalates_to_human_review(
-        self, tmp_path: object
-    ) -> None:
+    def test_case_107_shape_escalates_to_human_review(self, tmp_path: object) -> None:
         # Exact Case 107 shape: documented ORIF + 1500 mL EBL in a focus note,
         # LLM still returns INSUFFICIENT_EVIDENCE.
         summary = PeriopSummary(
@@ -1685,9 +1851,7 @@ class TestPeriopContradictionGuardrail:
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
             classification="INSUFFICIENT_EVIDENCE",
-            indications=[
-                {"text": "post-op blood loss", "confidence": 0.4, "tier": 1}
-            ],
+            indications=[{"text": "post-op blood loss", "confidence": 0.4, "tier": 1}],
             reasoning_en="No structured procedure row found.",
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
@@ -1697,9 +1861,7 @@ class TestPeriopContradictionGuardrail:
         assert len(row.indications_json) == 1
         assert row.verifier_pass is True
 
-    def test_appropriate_verdict_survives_strong_signal(
-        self, tmp_path: object
-    ) -> None:
+    def test_appropriate_verdict_survives_strong_signal(self, tmp_path: object) -> None:
         ctx = _row_context(
             audit_id="audit-periop-appropriate",
             periop_summary=PeriopSummary(surgical_context=True, blood_loss_ml=1500),
@@ -1715,9 +1877,7 @@ class TestPeriopContradictionGuardrail:
     def test_no_signal_leaves_insufficient_verdict_untouched(
         self, tmp_path: object
     ) -> None:
-        ctx = _row_context(
-            audit_id="audit-periop-nosignal", periop_summary=None
-        )
+        ctx = _row_context(audit_id="audit-periop-nosignal", periop_summary=None)
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id, classification="INSUFFICIENT_EVIDENCE"
         )
@@ -2179,3 +2339,165 @@ class TestMissingHbBypassPersistence:
         assert row.model_id == "deterministic"
         assert row.hb_value == 0.0
         assert row.hb_freshness == "missing"
+
+
+# Observed leak shapes from the 2026-07-06 pilot run (165 rows,
+# claude-sonnet-5): the model serialized BOTH summaries into
+# reasoning_summary_en, separated by fragments of its internal
+# tool-call tag syntax, leaving reasoning_summary_th empty. 131/165
+# rows were affected; each constant below reproduces one observed
+# opening-tag variant verbatim.
+_LEAK_EN = "Hb 14.8 g/dL is far above the 7.0 floor."
+_LEAK_TH = "ค่า Hb สูงกว่าเกณฑ์ 7.0 g/dL มาก จึงไม่เข้าเกณฑ์"
+
+
+def _leaked(th_open: str, tail: str = "</reasoning_summary_th>") -> str:
+    return f"{_LEAK_EN}</reasoning_summary_en>\n{th_open}{_LEAK_TH}{tail}"
+
+
+class TestSplitLeakedSummaries:
+    """Unit pin on the pure tag-leak salvage function.
+
+    WHY: the committee report renders both languages side by side; a
+    leaked row shows English+tags+Thai as one blob and an empty Thai
+    panel, which reviewers cannot read. The salvage must recover every
+    observed variant WITHOUT touching rows that parsed cleanly.
+    """
+
+    def test_clean_pair_passes_through(self) -> None:
+        assert split_leaked_summaries("english", "thai") == ("english", "thai")
+
+    def test_both_empty_pass_through(self) -> None:
+        assert split_leaked_summaries("", "") == ("", "")
+
+    def test_stray_quote_variant_splits(self) -> None:
+        # 96/131 leaked rows used <reasoning_summary_th"> (stray quote).
+        en, th = split_leaked_summaries(_leaked('<reasoning_summary_th">'), "")
+        assert en == _LEAK_EN
+        assert th == _LEAK_TH
+
+    def test_well_formed_tag_variant_splits(self) -> None:
+        en, th = split_leaked_summaries(_leaked("<reasoning_summary_th>"), "")
+        assert (en, th) == (_LEAK_EN, _LEAK_TH)
+
+    def test_parameter_name_variant_splits(self) -> None:
+        en, th = split_leaked_summaries(
+            _leaked('<parameter name="reasoning_summary_th">'), ""
+        )
+        assert (en, th) == (_LEAK_EN, _LEAK_TH)
+
+    def test_name_attribute_variant_splits(self) -> None:
+        en, th = split_leaked_summaries(
+            _leaked('<reasoning_summary_th name="reasoning_summary_th">'), ""
+        )
+        assert (en, th) == (_LEAK_EN, _LEAK_TH)
+
+    def test_trailing_invoke_close_is_stripped(self) -> None:
+        raw = _leaked(
+            '<reasoning_summary_th">',
+            tail='</reasoning_summary_th">\n</invoke>',
+        )
+        en, th = split_leaked_summaries(raw, "")
+        assert (en, th) == (_LEAK_EN, _LEAK_TH)
+
+    def test_unterminated_thai_block_recovered_to_end(self) -> None:
+        raw = f'{_LEAK_EN}</reasoning_summary_en>\n<reasoning_summary_th">{_LEAK_TH}'
+        en, th = split_leaked_summaries(raw, "")
+        assert (en, th) == (_LEAK_EN, _LEAK_TH)
+
+    def test_dangling_close_without_thai_open_strips_tag_only(self) -> None:
+        raw = f"{_LEAK_EN}</reasoning_summary_en>"
+        en, th = split_leaked_summaries(raw, "")
+        assert (en, th) == (_LEAK_EN, "")
+
+    def test_nonempty_thai_is_never_overwritten(self) -> None:
+        # Salvage only fires when the th field came back empty; a row
+        # that parsed cleanly must be byte-identical after the call.
+        raw = _leaked('<reasoning_summary_th">')
+        assert split_leaked_summaries(raw, "existing thai") == (
+            raw,
+            "existing thai",
+        )
+
+
+class TestReasoningLeakSalvageIntegration:
+    """The salvage must run inside apply_batch_results so persisted
+    rows are clean without any caller-side post-processing."""
+
+    def test_leaked_row_persists_split_summaries(self, tmp_path: object) -> None:
+        ctx = _row_context(audit_id="audit-leak-1", hb_value=9.4)
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="INAPPROPRIATE",
+            reasoning_en=_leaked('<reasoning_summary_th">'),
+            reasoning_th="",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.reasoning_summary_en == _LEAK_EN
+        assert row.reasoning_summary_thai == _LEAK_TH
+
+
+class TestEmptyReasoningGuardrail:
+    """A verdict with no reasoning in either language cannot be audited
+    by the committee — it must be floored to human review.
+
+    WHY: pilot run 2026-07-06 contained 9 rows with completely empty
+    reasoning, one of them APPROPRIATE with needs_human_review=False —
+    an unexplained automatic clear, which is exactly what the audit
+    exists to prevent.
+    """
+
+    def test_empty_reasoning_floors_appropriate_to_review(
+        self, tmp_path: object
+    ) -> None:
+        # Hard peri-op signal exempts the B1 overclear guardrail (see
+        # test_hard_signal_backed_appropriate_not_floored), so ONLY the
+        # empty reasoning can be what floors this APPROPRIATE verdict.
+        ctx = _row_context(
+            audit_id="audit-empty-1",
+            hb_value=9.4,
+            periop_summary=PeriopSummary(surgical_context=True, blood_loss_ml=1500),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            reasoning_en="",
+            reasoning_th="",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == EMPTY_REASONING_REVIEW_REASON
+        assert row.needs_human_review is True
+
+    def test_whitespace_only_reasoning_counts_as_empty(self, tmp_path: object) -> None:
+        ctx = _row_context(audit_id="audit-empty-2", hb_value=9.4)
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="INAPPROPRIATE",
+            reasoning_en="  \n ",
+            reasoning_th="\t",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == EMPTY_REASONING_REVIEW_REASON
+
+    def test_single_language_reasoning_is_sufficient(self, tmp_path: object) -> None:
+        # One populated language is reviewable; the guardrail targets
+        # totally unexplained verdicts, not missing translations.
+        ctx = _row_context(audit_id="audit-empty-3", hb_value=9.4)
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="INAPPROPRIATE",
+            reasoning_en="english only",
+            reasoning_th="",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason is None
+
+    def test_review_reason_is_distinct(self) -> None:
+        assert EMPTY_REASONING_REVIEW_REASON not in {
+            PERIOP_CONTRADICTION_REVIEW_REASON,
+            LLM_OVERCLEAR_REVIEW_REASON,
+            "hallucination_suspect",
+        }
