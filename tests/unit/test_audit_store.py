@@ -27,6 +27,7 @@ The acceptance-criterion → test-class map:
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -348,6 +349,61 @@ class TestModelImmutability:
         assert isinstance(row.indications_json, tuple)
         assert isinstance(row.negative_evidence_json, tuple)
         assert isinstance(row.delta_hb_window_results, tuple)
+
+    def test_component_axis_defaults_preserve_red_cell_contract(self) -> None:
+        # Phase 2 additive schema: a row that omits the component fields (every
+        # legacy Parquet payload, and every red-cell row) defaults to
+        # component="red_cell" with all platelet_* fields None — so old rows
+        # deserialize byte-equivalently and RBC persistence is unchanged.
+        row = _row()
+        assert row.component == "red_cell"
+        assert row.platelet_value is None
+        assert row.platelet_datetime is None
+        assert row.platelet_freshness is None
+        assert row.platelet_source is None
+        assert row.platelet_review_ceiling is None
+
+    def test_legacy_payload_without_component_deserializes(self) -> None:
+        # A payload serialized before Phase 2 (no component/platelet_* keys)
+        # must still validate — the component axis is backward-compatible.
+        payload = _row().model_dump_json()
+        legacy = json.loads(payload)
+        for key in (
+            "component",
+            "platelet_value",
+            "platelet_datetime",
+            "platelet_freshness",
+            "platelet_source",
+            "platelet_review_ceiling",
+        ):
+            legacy.pop(key, None)
+        restored = AuditRow.model_validate_json(json.dumps(legacy))
+        assert restored.component == "red_cell"
+        assert restored.platelet_value is None
+
+    def test_platelet_row_round_trips(self) -> None:
+        # A platelet row carries its count/freshness/source/ceiling and uses the
+        # Hb missing-sentinels for the required Hb-shaped fields.
+        row = _row(
+            component="platelet",
+            products_ordered=("LDPPC",),
+            hb_value=0.0,
+            hb_freshness="missing",
+            hb_source="missing",
+            cohort_threshold=0.0,
+            delta_hb_window_results=(),
+            platelet_value=45.0,
+            platelet_datetime=datetime(2026, 5, 1, 7, 0, 0, tzinfo=UTC),
+            platelet_freshness="fresh",
+            platelet_source="HEMATOLOGY",
+            platelet_review_ceiling=100.0,
+            rule_classification="NEEDS_REVIEW",
+            final_classification="NEEDS_REVIEW",
+        )
+        restored = AuditRow.model_validate_json(row.model_dump_json())
+        assert restored.component == "platelet"
+        assert restored.platelet_value == 45.0
+        assert restored.platelet_freshness == "fresh"
 
 
 # =============================================================================
