@@ -33,6 +33,13 @@ PlateletSource = Literal["HEMATOLOGY"]
 HEMATOLOGY-only); a ``Literal`` so an unexpected source fails loud rather than
 being silently accepted."""
 
+# Freshness tier boundaries (anchor → chosen-current age). Mirrors
+# HbFreshness. SEED (docs plan §5.4): platelet counts move faster than Hb
+# post-transfusion, so a tighter window may be warranted after clinical
+# review — the tiers live here as named constants so a ruling changes one map.
+#   <24h → fresh; [24h, 72h) → stale_24_72h; [72h, 7d) → stale_3_7d; ≥7d/none → missing
+PlateletFreshness = Literal["fresh", "stale_24_72h", "stale_3_7d", "missing"]
+
 
 class PlateletObservation(BaseModel):
     """One validated platelet-count result from the Lab table.
@@ -62,9 +69,28 @@ class PlateletObservation(BaseModel):
         return v
 
 
+class PlateletLookupResult(BaseModel):
+    """Result of looking up the most-recent platelet count before an anchor.
+
+    Simpler than :class:`bba.hb_lookup.HbLookupResult`: the §5.1 platelet gate
+    is a plain count-vs-ceiling rule, so there is no delta-count bypass and no
+    single-low-value-no-trend flag. Invariant: when ``freshness == "missing"``,
+    ``value_k_ul`` / ``datetime_utc`` / ``source`` are all ``None``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    value_k_ul: float | None
+    datetime_utc: datetime | None
+    source: PlateletSource | None
+    freshness: PlateletFreshness
+
+
 __all__: Sequence[str] = (
     "PLATELET_LABEXM",
     "PLATELET_UNIT",
+    "PlateletFreshness",
+    "PlateletLookupResult",
     "PlateletObservation",
     "PlateletSource",
 )

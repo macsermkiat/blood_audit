@@ -137,3 +137,102 @@ class TestPlateletObservation:
 class TestLabConfig:
     def test_labexm_is_platelet_count_code(self) -> None:
         assert PLATELET_LABEXM == "290078"
+
+
+class TestLookupPlatelet:
+    """Most-recent-count selection + freshness (mirrors hb_lookup contract)."""
+
+    def _obs(self, value: float, hours_before_anchor: float, item_no: int = 1):
+        from bba.platelet_lookup import PlateletObservation
+
+        anchor = datetime(2025, 5, 12, 12, 0, tzinfo=UTC)
+        return PlateletObservation(
+            value_k_ul=value,
+            datetime_utc=anchor - timedelta(hours=hours_before_anchor),
+            source="HEMATOLOGY",
+            item_no=item_no,
+        )
+
+    @property
+    def _anchor(self) -> datetime:
+        return datetime(2025, 5, 12, 12, 0, tzinfo=UTC)
+
+    def test_no_observations_is_missing(self) -> None:
+        from bba.platelet_lookup import lookup_platelet
+
+        result = lookup_platelet(observations=[], anchor_utc=self._anchor)
+        assert result.freshness == "missing"
+        assert result.value_k_ul is None
+        assert result.datetime_utc is None
+        assert result.source is None
+
+    def test_selects_most_recent_before_anchor(self) -> None:
+        from bba.platelet_lookup import lookup_platelet
+
+        result = lookup_platelet(
+            observations=[
+                self._obs(200.0, hours_before_anchor=48.0),
+                self._obs(80.0, hours_before_anchor=2.0),
+                self._obs(300.0, hours_before_anchor=120.0),
+            ],
+            anchor_utc=self._anchor,
+        )
+        assert result.value_k_ul == 80.0
+        assert result.freshness == "fresh"
+
+    def test_ignores_observations_after_anchor(self) -> None:
+        from bba.platelet_lookup import lookup_platelet
+
+        # A count drawn AFTER the order anchor (negative hours-before) must not
+        # be selected — the deterministic gate is backward-only.
+        result = lookup_platelet(
+            observations=[
+                self._obs(50.0, hours_before_anchor=-3.0),
+                self._obs(150.0, hours_before_anchor=5.0),
+            ],
+            anchor_utc=self._anchor,
+        )
+        assert result.value_k_ul == 150.0
+
+    def test_ignores_observations_beyond_lookback(self) -> None:
+        from bba.platelet_lookup import lookup_platelet
+
+        result = lookup_platelet(
+            observations=[self._obs(90.0, hours_before_anchor=24 * 8)],
+            anchor_utc=self._anchor,
+        )
+        assert result.freshness == "missing"
+        assert result.value_k_ul is None
+
+    def test_same_datetime_tie_breaks_on_highest_item_no(self) -> None:
+        from bba.platelet_lookup import lookup_platelet
+
+        # Amended Lab row (higher item_no) at the same instant wins.
+        result = lookup_platelet(
+            observations=[
+                self._obs(100.0, hours_before_anchor=6.0, item_no=1),
+                self._obs(60.0, hours_before_anchor=6.0, item_no=2),
+            ],
+            anchor_utc=self._anchor,
+        )
+        assert result.value_k_ul == 60.0
+
+    @pytest.mark.parametrize(
+        ("hours", "expected"),
+        [
+            (1.0, "fresh"),
+            (23.9, "fresh"),
+            (24.0, "stale_24_72h"),
+            (71.9, "stale_24_72h"),
+            (72.0, "stale_3_7d"),
+            (167.0, "stale_3_7d"),
+        ],
+    )
+    def test_freshness_tiers(self, hours: float, expected: str) -> None:
+        from bba.platelet_lookup import lookup_platelet
+
+        result = lookup_platelet(
+            observations=[self._obs(100.0, hours_before_anchor=hours)],
+            anchor_utc=self._anchor,
+        )
+        assert result.freshness == expected

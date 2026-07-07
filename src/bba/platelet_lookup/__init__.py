@@ -9,9 +9,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from bba.platelet_lookup.lookup import lookup_platelet
 from bba.platelet_lookup.models import (
     PLATELET_LABEXM,
     PLATELET_UNIT,
+    PlateletFreshness,
+    PlateletLookupResult,
     PlateletObservation,
     PlateletSource,
 )
@@ -26,7 +29,10 @@ __all__: Sequence[str] = (
     "MIN_PLATELET",
     "PLATELET_LABEXM",
     "PLATELET_UNIT",
+    "PlateletFreshness",
+    "PlateletLookupResult",
     "PlateletObservation",
     "PlateletSource",
+    "lookup_platelet",
     "parse_platelet_count",
 )

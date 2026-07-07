@@ -15,6 +15,13 @@ covered: `#3 ingest`, `#4 audit_orders`, `#5 hb_lookup`, `#6 vitals_extractor`,
 Also covers: `#76 hemodynamic/periop evidence`, Hb-anchor unification,
 missing-Hb positive-evidence pre-pass, and clinical-salience MED ordering.
 
+Phase 2 (platelet auditor) is now **partially** covered — the deterministic
+CORE only: `component_map`, `platelet_lookup` (config/parse/observation), and
+the `platelet_classifier` §5.1 gate, on branch `feat/platelet-auditor`. The
+store-schema re-derivation, pipeline dispatch, and LLM leg are NOT built (docs
+plan §5.3 stages 1/4-5); the RBC path is untouched. Their concepts are grouped
+under the three `(Phase 2)` sections at the end of this file.
+
 ## Ingest concepts (#3)
 
 ### HOSxP table
@@ -3224,6 +3231,130 @@ CLI log event renders to a JSON line and is handed to
 `logging.getLogger("bba.cli")`, so `caplog` /
 `logging.handlers.RotatingFileHandler` / SIEM forwarders all consume
 the same stream without extra adapters.
+
+## Component-map concepts (Phase 2)
+
+Deterministic-core module `bba.component_map` — the intake gating prerequisite
+that lets the auditor tell a platelet order from a red-cell one without
+blending their statistics. Docs plan §5.3 gating prerequisite (AR-M8).
+
+### Component family
+
+Six-member `StrEnum` naming the blood-component family a BDTYPE product
+belongs to: `RED_CELL`, `PLATELET`, `FFP`, `CRYO`, `WHOLE_BLOOD`, `UNKNOWN`.
+`bba.component_map.ComponentFamily`. Only `RED_CELL` (Phase 1) and `PLATELET`
+(Phase 2) have auditors; `FFP` / `CRYO` / `WHOLE_BLOOD` are recognised so the
+intake gate can EXCLUDE them with a precise reason (docs plan §6). `UNKNOWN`
+is the honest fallback for an unrecognised name — never guessed into a real
+family.
+
+### classify_component (NAME classifier)
+
+`bba.component_map.classify_component(product_name) → ComponentFamily`. A
+keyword classifier over the BDTYPE dictionary's `NAME` column — the source of
+truth. Robust to new product codes: irradiated / filtered / pooled variants
+all resolve to the same family from their descriptive name.
+
+### BDTYPE_FAMILY and PLATELET_PRODUCTS
+
+`bba.component_map.BDTYPE_FAMILY` is the frozen, verified code→family map for
+the fast intake gate (mirrors `bba.audit_orders.rules.RBC_PRODUCTS`);
+`component_of_code` reads it. `PLATELET_PRODUCTS` is the 8-code platelet
+allow-list (`LDPPC, LDPPCI, SDPFI, SDPF, SDPPI, LPPC, PC, LDPC`);
+`is_platelet_product` tests membership. Every entry was cross-checked against
+the KCMH dictionary's `GRPCAUSELABCBC` grouping AND `classify_component`; the
+`test_component_map` suite asserts the two never disagree on a known code.
+
+### Family volume (raw BDVSTDT, verified 2026-07-08)
+
+Issued-unit counts recount from the raw `BDVSTDT` feed (join by column name —
+the raw column order differs from the bundle projection, `BDTYPE` at index 3):
+`red_cell 23867, platelet 8193, ffp 5350, cryo 2335, whole_blood 4`. The 8,193
+platelet units break down as `LDPPC 6392, LDPPCI 792, SDPFI 600, SDPF 398,
+LPPC 9, PC 1, LDPC 1` (`SDPPI` is in the dictionary but 0 issued).
+
+## Platelet-lookup concepts (Phase 2)
+
+Deterministic-core module `bba.platelet_lookup` — the platelet counterpart to
+`bba.hb_lookup`'s value layer. **Config + parser + observation model ONLY**;
+the recent-value selection engine is deferred (see below).
+
+### Platelet lab config
+
+`bba.platelet_lookup.PLATELET_LABEXM = "290078"` ("Platelets Counts", LABGRP
+29 HEMATOLOGY, unit ×10³/µL, reference range 150-450 — confirmed against the
+Lab dictionary 2026-07-08). Unlike Hb (which has a POCT fallback, LABEXM
+500001), the platelet count is HEMATOLOGY-only in this dataset, so
+`PlateletSource` is the single-valued `Literal["HEMATOLOGY"]`.
+
+### parse_platelet_count
+
+`bba.platelet_lookup.parse_platelet_count(raw) → float | None`. NOT a copy of
+the Hb parser — the count column is messier. Handles comma-grouped thousands
+(`1,117`), left/right-censored `<N` / `>N` values (mapped to the bound `N` —
+`<2` is a REAL critically-low measurement, not missing), and the `--` / empty
+/ non-numeric sentinels (→ `None`). Out-of-range values (outside
+`[MIN_PLATELET=1.0, MAX_PLATELET=3000.0]` ×10³/µL) and `nan` / `inf` → `None`,
+failed loud as transcription/unit errors rather than coerced.
+
+### PlateletObservation
+
+`bba.platelet_lookup.PlateletObservation` — a frozen, validated single count
+from the Lab table: `value_k_ul` in `[MIN_PLATELET, MAX_PLATELET]`, tz-aware
+UTC `datetime_utc`, `source`, and `item_no` (the tie-breaker when two
+observations share an exact datetime, mirroring `HbObservation.item_no`).
+
+### Deferred: recent-value selection engine
+
+The recent-value SELECTION engine (source preference, freshness tiers, trend /
+staleness) is shared with `bba.hb_lookup` and is extracted into a
+component-parameterised core in a follow-up (docs plan §5.3 stage 2). This
+module does NOT duplicate that logic — `hb_lookup`'s `[2, 25]` g/dL parser
+would reject every platelet count, which is why it cannot simply be reused.
+
+## Platelet-classifier concepts (Phase 2)
+
+Deterministic-core module `bba.platelet_classifier` — the v1 platelet §5.1
+gate, mirroring `bba.deterministic_classifier` for the RBC path but
+**auto-clearing NOTHING**.
+
+### classify_platelet (§5.1 gate)
+
+`bba.platelet_classifier.classify_platelet(inputs) → PlateletClassifierResult`.
+Precedence (top wins): count missing → `NEEDS_REVIEW` /
+`plt_missing_defer_llm` (defer flag on) or `INSUFFICIENT_EVIDENCE` /
+`plt_missing` (flag off, the default); count ≥ `PLATELET_REVIEW_CEILING` →
+`POTENTIALLY_INAPPROPRIATE` / `plt_ge_100` (routes to review, NOT terminal);
+count < ceiling (including < 10) → `NEEDS_REVIEW` / `plt_defer_llm`. The
+missing-count defer flag mirrors the RBC `enable_missing_hb_positive_evidence`
+opt-in and is a SEED pending clinical sign-off.
+
+### PLATELET_REVIEW_CEILING
+
+`bba.platelet_classifier.PLATELET_REVIEW_CEILING = 100.0` (×10³/µL). At or
+above this count a platelet order is `POTENTIALLY_INAPPROPRIATE`. A SEED
+pending clinician sign-off (docs plan §7); OPEN (§5.4) whether 100 is the
+right ceiling or an 80-100k high-bleeding-risk surgical band should also
+defer. One named constant so a ruling change is one line.
+
+### Nothing auto-cleared (CR-C1 invariant)
+
+The original `plt < 10 → APPROPRIATE` auto-clear was REMOVED as a
+patient-safety defect (§8/CR-C1): `APPROPRIATE` is deterministic-final (no
+LLM, no human), but the policies WITHHOLD platelets at very low counts for 6+
+exclusion populations (dengue-no-bleed, TTP, HIT, ITP, aplastic-no-bleed,
+snakebite-no-bleed — TTP/HIT transfusion is actively harmful). The classifier
+therefore NEVER emits `APPROPRIATE` or `INAPPROPRIATE` in v1; every present
+count routes onward, so no present-count verdict is ever deterministic-final.
+Pinned by a hypothesis property test (CR-M2).
+
+### Deferred: MTP-window suppression
+
+MTP-window suppression is intentionally NOT in this pure single-order gate.
+Platelet units co-ordered inside an active massive-transfusion-protocol window
+are suppressed as independent audit units at dispatch (docs plan §5.3
+stage 4) — the MTP co-order stays a *signal*, never a second audit row. That
+needs cross-order context this gate does not have.
 
 ## Vocabulary not in this file
 
