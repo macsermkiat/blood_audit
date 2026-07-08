@@ -465,6 +465,38 @@ class TestPlateletLlmClassificationResponseModel:
         with pytest.raises((ValidationError, TypeError)):
             resp.active_bleeding = True  # type: ignore[misc]
 
+    def test_strict_bool_rejects_string_true(self) -> None:
+        # C1 LOW: the three hard-signal fields are StrictBool. A JSON string
+        # ``"true"`` must NOT coerce to True — a malformed bool has to fail the
+        # schema so the parser routes it to SCHEMA_MISMATCH (fail closed) rather
+        # than fabricating a grounded signal that would let the row over-clear.
+        with pytest.raises(ValidationError):
+            PlateletLlmClassificationResponse(
+                classification="APPROPRIATE",
+                indications=(),
+                negative_evidence=(),
+                reasoning_summary_en="x",
+                reasoning_summary_th="x",
+                active_bleeding="true",  # type: ignore[arg-type]
+                procedure_indication=False,
+                prophylactic_marrow_failure=False,
+            )
+
+    def test_strict_bool_rejects_int_one(self) -> None:
+        # ``1`` is Python-truthy but is not a bool; StrictBool must reject it so
+        # an integer flag cannot silently ground a hard signal.
+        with pytest.raises(ValidationError):
+            PlateletLlmClassificationResponse(
+                classification="APPROPRIATE",
+                indications=(),
+                negative_evidence=(),
+                reasoning_summary_en="x",
+                reasoning_summary_th="x",
+                active_bleeding=False,
+                procedure_indication=1,  # type: ignore[arg-type]
+                prophylactic_marrow_failure=False,
+            )
+
 
 # =============================================================================
 # C1b — parse_platelet_structured_response extracts hard signals
@@ -588,6 +620,33 @@ class TestParsePlateletStructuredResponse:
         result = _batch_result(content=_platelet_tool_content())
         outcome = parse_platelet_structured_response(result)
         assert isinstance(outcome, ParseOutcome)
+
+    def test_coerced_string_bool_is_schema_mismatch(self) -> None:
+        # C1 LOW end-to-end: a coerced ``"true"`` hard-signal bool in the tool
+        # payload fails closed through the parser as SCHEMA_MISMATCH with
+        # platelet_hard_signals=None (no grounded signal), so the Stage C2
+        # guardrail treats it as ungrounded rather than a fabricated clear.
+        content = [
+            {
+                "type": "tool_use",
+                "id": "tool_01",
+                "name": "classify_transfusion_order",
+                "input": {
+                    "classification": "APPROPRIATE",
+                    "indications": [],
+                    "negative_evidence": [],
+                    "reasoning_summary_en": "ok",
+                    "reasoning_summary_th": "ok",
+                    "active_bleeding": "true",
+                    "procedure_indication": False,
+                    "prophylactic_marrow_failure": False,
+                },
+            }
+        ]
+        outcome = parse_platelet_structured_response(_batch_result(content=content))
+        assert outcome.parse_failure is True
+        assert outcome.parse_failure_reason == ParseFailureReason.SCHEMA_MISMATCH
+        assert outcome.platelet_hard_signals is None
 
 
 # =============================================================================

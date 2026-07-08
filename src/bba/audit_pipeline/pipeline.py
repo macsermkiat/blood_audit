@@ -42,6 +42,7 @@ from bba.audit_pipeline.models import (
 )
 from bba.audit_pipeline.replay import (
     Verifier,
+    _platelet_source_repr,
     apply_batch_results,
     default_verifier,
 )
@@ -60,6 +61,7 @@ from bba.llm_client.models import (
     BatchSubmissionRequest,
     LlmClientConfig,
 )
+from bba import feature_flags
 from bba.platelet_classifier import (
     PlateletClassifierInputs,
     PlateletClassifierResult,
@@ -74,6 +76,11 @@ from bba.platelet_classifier import (
 _DETERMINISTIC_FINAL_CLASSIFICATIONS = frozenset(
     {"APPROPRIATE", "INSUFFICIENT_EVIDENCE", "INAPPROPRIATE"}
 )
+
+# Platelet gate verdicts that route onward to the platelet LLM leg (Stage C2).
+# INSUFFICIENT_EVIDENCE is deterministic-final (persisted above); everything
+# with a count (POTENTIALLY_INAPPROPRIATE / NEEDS_REVIEW) defers to the LLM.
+_PLATELET_LLM_CLASSIFICATIONS = frozenset({"POTENTIALLY_INAPPROPRIATE", "NEEDS_REVIEW"})
 
 
 def run_pipeline(
@@ -193,64 +200,50 @@ def run_pipeline(
             ctx.order.audit_id: llm_results_by_id[ctx.order.audit_id]
             for ctx in chunk_contexts
         }
-        batch_id = _batch_id_for(run_id, chunk_contexts)
-        now = _now_utc()
-        pending = BatchRun(
-            batch_id=batch_id,
-            state=BatchRunState.PENDING,
+        _run_batch_chunk(
+            chunk_contexts,
             run_id=run_id,
-            code_version=pipeline_config.code_version,
-            audit_ids=tuple(c.order.audit_id for c in chunk_contexts),
-            updated_at=now,
-        )
-        batch_run_store.create(pending)
-        touched.append(batch_id)
-
-        requests = _build_submission_requests(chunk_contexts, run_id=run_id)
-
-        # Split-phase submission (PR #54 codex P1 fix): create the
-        # remote batch and persist the anthropic_batch_id BEFORE
-        # polling. A SIGTERM during the polling window now leaves a
-        # SUBMITTED row whose batch_id the resume reconciler can
-        # poll, instead of a stranded PENDING row.
-        anthropic_batch_id = transport.submit_batch_only(
-            model=llm_config.sonnet_model_id,
-            requests=requests,
-            prompt_cache_enabled=llm_config.prompt_cache_enabled,
-        )
-
-        submitted = transition(
-            pending,
-            to_state=BatchRunState.SUBMITTED,
-            anthropic_batch_id=anthropic_batch_id,
-            now=_now_utc(),
-        )
-        batch_run_store.update(submitted)
-
-        response = transport.fetch_batch_results(
-            anthropic_batch_id,
-            model=llm_config.sonnet_model_id,
-            requests=requests,
-            prompt_cache_enabled=llm_config.prompt_cache_enabled,
-        )
-
-        context_map = {ctx.order.audit_id: ctx for ctx in chunk_contexts}
-        write_summary = apply_batch_results(
-            response,
-            audit_store=audit_store,
-            run_id=run_id,
-            contexts=context_map,
             classifier_results=chunk_results,
+            transport=transport,
+            audit_store=audit_store,
+            batch_run_store=batch_run_store,
+            llm_config=llm_config,
+            pipeline_config=pipeline_config,
             verifier=verifier,
+            enable_missing_platelet_defer=False,
+            persisted=persisted,
+            touched=touched,
         )
-        persisted.extend(write_summary.audit_ids_persisted)
 
-        completed = transition(
-            submitted,
-            to_state=BatchRunState.COMPLETE,
-            now=_now_utc(),
-        )
-        batch_run_store.update(completed)
+    # Platelet LLM leg (Stage C2, feature-flagged). Runs as SEPARATE batches
+    # AFTER the RBC loop so the RBC batch composition (chunking + batch_id) is
+    # byte-identical whether or not the platelet leg is enabled. With the flag
+    # off, POTENTIALLY_INAPPROPRIATE / NEEDS_REVIEW platelet rows simply orphan
+    # (Stage B behaviour); the deterministic-final INSUFFICIENT_EVIDENCE rows
+    # already persisted above.
+    if feature_flags.PLATELET_LLM_ENABLED:
+        platelet_llm_contexts = [
+            ctx
+            for ctx, plt_result in platelet_classified
+            if plt_result.classification in _PLATELET_LLM_CLASSIFICATIONS
+        ]
+        for chunk_contexts in _chunked(
+            platelet_llm_contexts, pipeline_config.max_batch_size
+        ):
+            _run_batch_chunk(
+                chunk_contexts,
+                run_id=run_id,
+                classifier_results={},
+                transport=transport,
+                audit_store=audit_store,
+                batch_run_store=batch_run_store,
+                llm_config=llm_config,
+                pipeline_config=pipeline_config,
+                verifier=verifier,
+                enable_missing_platelet_defer=pipeline_config.enable_missing_platelet_defer,
+                persisted=persisted,
+                touched=touched,
+            )
 
     orphans = _detect_orphans(
         expected_audit_ids=tuple(c.order.audit_id for c in active_contexts),
@@ -292,6 +285,96 @@ def process_audit_order(
         run_id=run_id,
         verifier=verifier,
     )
+
+
+def _run_batch_chunk(
+    chunk_contexts: Sequence[PipelineRowContext],
+    *,
+    run_id: str,
+    classifier_results: dict[str, ClassifierResult],
+    transport: AnthropicTransport,
+    audit_store: AuditStore,
+    batch_run_store: BatchRunStore,
+    llm_config: LlmClientConfig,
+    pipeline_config: AuditPipelineConfig,
+    verifier: Verifier,
+    enable_missing_platelet_defer: bool,
+    persisted: list[str],
+    touched: list[str],
+) -> None:
+    """Submit one chunk as a Batch run and apply its results.
+
+    Shared by the RBC and platelet LLM legs so the crash-recovery checkpoint
+    state machine (create PENDING -> submit -> SUBMITTED -> fetch -> apply ->
+    COMPLETE) has ONE implementation. ``persisted`` and ``touched`` are the
+    run-level accumulators, mutated in the SAME order the original inline RBC
+    loop did: ``touched`` records the batch_id immediately after the PENDING row
+    is created — before any fallible Anthropic step — so a SIGTERM during the
+    polling window leaves a recoverable SUBMITTED (or PENDING) checkpoint the
+    resume reconciler can poll, never a stranded row.
+
+    ``enable_missing_platelet_defer`` is forwarded to
+    :func:`apply_batch_results`; it is inert for RBC rows (their
+    ``rule_classification`` never comes from the platelet gate) so the RBC leg
+    passes ``False`` and stays byte-identical."""
+    batch_id = _batch_id_for(run_id, chunk_contexts)
+    now = _now_utc()
+    pending = BatchRun(
+        batch_id=batch_id,
+        state=BatchRunState.PENDING,
+        run_id=run_id,
+        code_version=pipeline_config.code_version,
+        audit_ids=tuple(c.order.audit_id for c in chunk_contexts),
+        updated_at=now,
+    )
+    batch_run_store.create(pending)
+    touched.append(batch_id)
+
+    requests = _build_submission_requests(chunk_contexts, run_id=run_id)
+
+    # Split-phase submission (PR #54 codex P1 fix): create the remote batch and
+    # persist the anthropic_batch_id BEFORE polling. A SIGTERM during the polling
+    # window now leaves a SUBMITTED row whose batch_id the resume reconciler can
+    # poll, instead of a stranded PENDING row.
+    anthropic_batch_id = transport.submit_batch_only(
+        model=llm_config.sonnet_model_id,
+        requests=requests,
+        prompt_cache_enabled=llm_config.prompt_cache_enabled,
+    )
+
+    submitted = transition(
+        pending,
+        to_state=BatchRunState.SUBMITTED,
+        anthropic_batch_id=anthropic_batch_id,
+        now=_now_utc(),
+    )
+    batch_run_store.update(submitted)
+
+    response = transport.fetch_batch_results(
+        anthropic_batch_id,
+        model=llm_config.sonnet_model_id,
+        requests=requests,
+        prompt_cache_enabled=llm_config.prompt_cache_enabled,
+    )
+
+    context_map = {ctx.order.audit_id: ctx for ctx in chunk_contexts}
+    write_summary = apply_batch_results(
+        response,
+        audit_store=audit_store,
+        run_id=run_id,
+        contexts=context_map,
+        classifier_results=classifier_results,
+        verifier=verifier,
+        enable_missing_platelet_defer=enable_missing_platelet_defer,
+    )
+    persisted.extend(write_summary.audit_ids_persisted)
+
+    completed = transition(
+        submitted,
+        to_state=BatchRunState.COMPLETE,
+        now=_now_utc(),
+    )
+    batch_run_store.update(completed)
 
 
 def _persist_deterministic_row(
@@ -560,9 +643,7 @@ def _deterministic_platelet_audit_row(
         platelet_value=plt.value_k_ul if plt is not None else None,
         platelet_datetime=plt.datetime_utc if plt is not None else None,
         platelet_freshness=plt.freshness if plt is not None else None,
-        platelet_source=str(plt.source)
-        if (plt is not None and plt.source is not None)
-        else None,
+        platelet_source=_platelet_source_repr(plt.source if plt is not None else None),
         platelet_review_ceiling=classifier_result.review_ceiling,
     )
 
@@ -662,7 +743,7 @@ def _build_submission_requests(
     CRITICAL #2: "fabricates fallback evidence when evidence_chunks is
     empty").
     """
-    from bba.prompt_builder import PromptBuildRequest, build_prompt
+    from bba.prompt_builder import PromptBuildRequest, TaskMode, build_prompt
 
     out: list[BatchSubmissionRequest] = []
     for context in chunk:
@@ -674,21 +755,37 @@ def _build_submission_requests(
                 "bba.deid_redactor) before routing through the pipeline"
             )
         chunks = context.evidence_chunks
-        prompt = build_prompt(
-            PromptBuildRequest(
-                task_mode="HB_7_10_REVIEW",
-                cohort_threshold=context.cohort_assignment.threshold
-                if context.cohort_assignment.threshold is not None
-                else 7.0,
-                evidence_chunks=chunks,
-                few_shot_examples=(),
+        task_mode: TaskMode
+        if context.component == "platelet":
+            # Platelet review has no Hb cohort threshold: cohort_threshold=None
+            # is required (PromptBuildRequest validator) and build_prompt selects
+            # the platelet system prompt for PLATELET_REVIEW (Stage C2).
+            task_mode = "PLATELET_REVIEW"
+            prompt = build_prompt(
+                PromptBuildRequest(
+                    task_mode="PLATELET_REVIEW",
+                    cohort_threshold=None,
+                    evidence_chunks=chunks,
+                    few_shot_examples=(),
+                )
             )
-        )
+        else:
+            task_mode = "HB_7_10_REVIEW"
+            prompt = build_prompt(
+                PromptBuildRequest(
+                    task_mode="HB_7_10_REVIEW",
+                    cohort_threshold=context.cohort_assignment.threshold
+                    if context.cohort_assignment.threshold is not None
+                    else 7.0,
+                    evidence_chunks=chunks,
+                    few_shot_examples=(),
+                )
+            )
         out.append(
             BatchSubmissionRequest(
                 audit_id=context.order.audit_id,
                 run_id=run_id,
-                task_mode="HB_7_10_REVIEW",
+                task_mode=task_mode,
                 prompt=prompt,
             )
         )

@@ -30,6 +30,7 @@ from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final, NamedTuple
 
+from bba import feature_flags
 from bba.audit_pipeline.models import PipelineRowContext, PipelineRunResult
 from bba.audit_store import AuditRow, AuditStore, LlmCall
 from bba.audit_store.models import Classification
@@ -40,6 +41,17 @@ from bba.deterministic_classifier import (
     ClassifierResult,
 )
 from bba.llm_client.models import BatchSubmissionResult, RawBatchResponse
+from bba.llm_client.parser import parse_platelet_structured_response
+from bba.platelet_classifier import (
+    PlateletClassifierInputs,
+    PlateletClassifierResult,
+    classify_platelet,
+)
+from bba.platelet_guardrail import (
+    PLATELET_OVERCLEAR_REVIEW_REASON,
+    platelet_overclear_suspect,
+)
+from bba.platelet_guardrail.models import PlateletHardSignals
 from bba.vitals_extractor import PeriopSummary
 
 
@@ -253,6 +265,73 @@ def llm_overclear_suspect(
     return not _has_structured_hard_signal(context)
 
 
+# =============================================================================
+# Platelet leg helpers (Stage C2)
+# =============================================================================
+
+
+def _platelet_source_repr(source: object | None) -> str | None:
+    """Serialize a platelet lab source to its persisted string form.
+
+    ``.value``-aware: a future :class:`enum.StrEnum` source serializes to its
+    ``.value``, while today's plain-string ``PlateletSource`` Literal passes
+    through unchanged. Returns ``None`` for a missing source."""
+    if source is None:
+        return None
+    if hasattr(source, "value"):
+        return str(source.value)
+    return str(source)
+
+
+def _platelet_gate_result(
+    context: PipelineRowContext,
+    *,
+    enable_missing_platelet_defer: bool,
+) -> PlateletClassifierResult | None:
+    """Run the deterministic platelet gate for a PLATELET row; ``None`` for RBC.
+
+    Stage B MED-1: a PLATELET row's RBC ``classifier_result`` was computed off
+    the inert Hb / cohort sentinels (:meth:`PipelineRowContext.for_platelet`) and
+    is WRONG for a platelet order. The platelet gate (:func:`classify_platelet`)
+    reads the count instead, and its result supplies BOTH the row's
+    ``rule_classification`` and its ``platelet_review_ceiling`` so the two are
+    computed from one call and cannot drift."""
+    if context.component != "platelet":
+        return None
+    count = (
+        context.platelet_result.value_k_ul
+        if context.platelet_result is not None
+        else None
+    )
+    return classify_platelet(
+        PlateletClassifierInputs(
+            audit_id=context.order.audit_id,
+            platelet_count=count,
+            enable_missing_platelet_defer=enable_missing_platelet_defer,
+        )
+    )
+
+
+def _platelet_overclear_floor(
+    final_classification: Classification,
+    rule_classification: Classification,
+    winning_result: BatchSubmissionResult,
+) -> bool:
+    """True iff the platelet over-clear guardrail must floor this row to review.
+
+    Parses the platelet hard-signal booleans off the winning tool-use payload;
+    a parse failure yields no grounded signal (``PlateletHardSignals()`` all
+    False) so a malformed platelet response fails CLOSED — an APPROPRIATE on a
+    sub-ceiling count with no grounded indication floors to human review."""
+    hard_signals = (
+        parse_platelet_structured_response(winning_result).platelet_hard_signals
+        or PlateletHardSignals()
+    )
+    return platelet_overclear_suspect(
+        final_classification, rule_classification, hard_signals
+    )
+
+
 def apply_batch_results(
     response: RawBatchResponse,
     *,
@@ -261,6 +340,7 @@ def apply_batch_results(
     contexts: Mapping[str, PipelineRowContext],
     classifier_results: Mapping[str, ClassifierResult] | None = None,
     verifier: Verifier = default_verifier,
+    enable_missing_platelet_defer: bool = False,
 ) -> PipelineRunResult:
     """Apply a single :class:`RawBatchResponse` to the audit_store.
 
@@ -329,6 +409,7 @@ def apply_batch_results(
             context=context,
             classifier_result=classifier,
             run_id=run_id,
+            enable_missing_platelet_defer=enable_missing_platelet_defer,
         )
         calls = [
             _build_llm_call(
@@ -450,6 +531,7 @@ def _build_audit_row(
     context: PipelineRowContext,
     classifier_result: ClassifierResult,
     run_id: str,
+    enable_missing_platelet_defer: bool = False,
 ) -> AuditRow:
     """Translate the winning :class:`BatchSubmissionResult` + caller
     context + deterministic classifier result into a persistable
@@ -461,7 +543,14 @@ def _build_audit_row(
     relies on this). There is NO hardcoded clinical data (Codex review
     HIGH #5).
     """
-    rule_classification = classifier_result.classification
+    platelet_gate = _platelet_gate_result(
+        context, enable_missing_platelet_defer=enable_missing_platelet_defer
+    )
+    rule_classification: Classification = (
+        platelet_gate.classification
+        if platelet_gate is not None
+        else classifier_result.classification
+    )
 
     if winner is None:
         # No attempt passed verifier → hallucination-suspect path
@@ -473,6 +562,7 @@ def _build_audit_row(
             run_id=run_id,
             context=context,
             classifier_result=classifier_result,
+            enable_missing_platelet_defer=enable_missing_platelet_defer,
             review_reason="hallucination_suspect",
             verifier_pass=False,
             verifier_retries=max(len(attempts) - 1, 0),
@@ -499,7 +589,14 @@ def _build_audit_row(
     # We rewrite the classification + review_reason but keep verifier_pass,
     # the reasoning summaries, and the indications so the human reviewer sees
     # exactly what the model concluded and why it is being second-guessed.
-    if periop_contradiction(final_classification, context):
+    # The peri-op + RBC over-clear guardrails read Hb / cohort / periop_summary
+    # off ``context``; on a PLATELET row those are inert sentinels
+    # (:meth:`PipelineRowContext.for_platelet`), so both are gated OFF platelet
+    # rows (Stage B MED-2). The platelet leg has its own over-clear guardrail
+    # below.
+    if context.component != "platelet" and periop_contradiction(
+        final_classification, context
+    ):
         final_classification = "NEEDS_REVIEW"
         review_reason = PERIOP_CONTRADICTION_REVIEW_REASON
     # B1 over-clear guardrail (Cases 47 / 100): the symmetric arm. An LLM
@@ -513,6 +610,20 @@ def _build_audit_row(
     ):
         final_classification = "NEEDS_REVIEW"
         review_reason = LLM_OVERCLEAR_REVIEW_REASON
+    # Platelet over-clear guardrail (Stage C2, "ADD hard signals" ruling): an
+    # LLM APPROPRIATE on a sub-ceiling platelet count with NO grounded platelet
+    # hard signal floors to review — a bare low count (the TTP/HIT/dengue
+    # exclusion trap) can never clear. Gated behind PLATELET_LLM_ENABLED so with
+    # the flag off the platelet leg is inert and the RBC path is unchanged.
+    elif (
+        context.component == "platelet"
+        and feature_flags.PLATELET_LLM_ENABLED
+        and _platelet_overclear_floor(
+            final_classification, rule_classification, winning_result
+        )
+    ):
+        final_classification = "NEEDS_REVIEW"
+        review_reason = PLATELET_OVERCLEAR_REVIEW_REASON
     # Empty-reasoning guardrail: a verdict with no reasoning in either
     # language cannot be audited by the committee. Separate `if` (not
     # elif) so it composes with the guardrails above; an earlier, more
@@ -587,13 +698,14 @@ def _build_audit_row(
         platelet_freshness=context.platelet_result.freshness
         if context.platelet_result is not None
         else None,
-        platelet_source=str(context.platelet_result.source)
-        if (
-            context.platelet_result is not None
-            and context.platelet_result.source is not None
-        )
-        else None,
-        platelet_review_ceiling=None,  # Stage C will thread PlateletClassifierResult
+        platelet_source=_platelet_source_repr(
+            context.platelet_result.source
+            if context.platelet_result is not None
+            else None
+        ),
+        platelet_review_ceiling=(
+            platelet_gate.review_ceiling if platelet_gate is not None else None
+        ),
     )
 
 
@@ -612,6 +724,7 @@ def _audit_row_for_needs_review(
     negative_evidence: tuple[str, ...],
     confidence: float,
     escalated: bool,
+    enable_missing_platelet_defer: bool = False,
 ) -> AuditRow:
     """Construct a NEEDS_REVIEW AuditRow with a typed review_reason.
 
@@ -620,6 +733,9 @@ def _audit_row_for_needs_review(
     row is fully reproducible — the only "missing" data is the LLM
     answer, which is exactly what NEEDS_REVIEW signals.
     """
+    platelet_gate = _platelet_gate_result(
+        context, enable_missing_platelet_defer=enable_missing_platelet_defer
+    )
     return AuditRow(
         audit_id=context.order.audit_id,
         run_id=run_id,
@@ -657,7 +773,11 @@ def _audit_row_for_needs_review(
             }
             for w in context.hb_result.delta_hb_windows
         ),
-        rule_classification=classifier_result.classification,
+        rule_classification=(
+            platelet_gate.classification
+            if platelet_gate is not None
+            else classifier_result.classification
+        ),
         final_classification="NEEDS_REVIEW",
         cohort_applied=context.cohort_assignment.label.value,
         indications_json=indications,
@@ -686,13 +806,14 @@ def _audit_row_for_needs_review(
         platelet_freshness=context.platelet_result.freshness
         if context.platelet_result is not None
         else None,
-        platelet_source=str(context.platelet_result.source)
-        if (
-            context.platelet_result is not None
-            and context.platelet_result.source is not None
-        )
-        else None,
-        platelet_review_ceiling=None,
+        platelet_source=_platelet_source_repr(
+            context.platelet_result.source
+            if context.platelet_result is not None
+            else None
+        ),
+        platelet_review_ceiling=(
+            platelet_gate.review_ceiling if platelet_gate is not None else None
+        ),
     )
 
 

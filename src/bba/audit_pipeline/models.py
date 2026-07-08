@@ -236,9 +236,13 @@ class PipelineRowContext(BaseModel):
 
         The three required RBC sub-objects (hb_result, vitals_result,
         cohort_assignment) are populated with inert missing/neutral sentinels.
-        They are NEVER READ by the platelet dispatch path and exist only to
-        satisfy the required-field contract. Callers must not inspect these
-        sentinel values on platelet contexts.
+        They ARE read for RBC-COLUMN SERIALIZATION on the persisted AuditRow
+        (hb_value=0.0 / freshness="missing", null vitals, cohort_threshold=0.0)
+        so a platelet row still fills the shared row schema — but they are NEVER
+        read for a platelet DECISION: the platelet gate keys on the count and
+        the RBC guardrails (peri-op / B1 over-clear) are component-gated OFF
+        platelet rows. Callers must not derive any platelet verdict from these
+        sentinel values.
         """
         from bba.cohort_detector import CohortAssignment, CohortLabel
         from bba.hb_lookup import HbLookupResult

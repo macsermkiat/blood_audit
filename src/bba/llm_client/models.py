@@ -35,6 +35,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
     field_validator,
     model_validator,
 )
@@ -206,13 +207,17 @@ class PlateletLlmClassificationResponse(LlmClassificationResponse):
 
     model_config = ConfigDict(frozen=True)
 
-    active_bleeding: bool
+    # StrictBool (C1 LOW): reject coerced booleans so ``"true"`` / ``1`` in the
+    # tool-use payload fail the schema instead of silently becoming ``True``. A
+    # malformed hard-signal bool must fail closed (SCHEMA_MISMATCH → NEEDS_REVIEW
+    # with no grounded signal), never over-clear on a coerced truthy value.
+    active_bleeding: StrictBool
     """Documented active, life-threatening, or clinically significant bleeding."""
 
-    procedure_indication: bool
+    procedure_indication: StrictBool
     """Invasive procedure in-window below its policy threshold (LP/CVC/surgery)."""
 
-    prophylactic_marrow_failure: bool
+    prophylactic_marrow_failure: StrictBool
     """Chemo/HSCT/consumptive with count <10k (or expected <10k/24h), no exclusion."""
 
 

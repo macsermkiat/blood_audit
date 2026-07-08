@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import bba.feature_flags as feature_flags
 from bba.audit_orders import AuditOrder
 from bba.audit_pipeline import (
     AuditPipelineConfig,
@@ -16,13 +17,23 @@ from bba.audit_pipeline import (
     apply_batch_results,
     run_pipeline,
 )
-from bba.audit_pipeline.pipeline import _deterministic_audit_row
+from bba.audit_pipeline.pipeline import (
+    _build_submission_requests,
+    _deterministic_audit_row,
+)
 from bba.audit_store import AuditRow, AuditStore
 from bba.audit_store.models import AuditStoreConfig
 from bba.deterministic_classifier import BypassReason, ClassifierResult
 from bba.llm_client import CassetteTransport, LlmClientConfig, RawBatchResponse
-from bba.llm_client.models import BatchSubmissionResult
+from bba.llm_client.models import (
+    SONNET_MODEL_ID,
+    BatchSubmissionResult,
+    CassetteInteraction,
+)
+from bba.platelet_guardrail import PLATELET_OVERCLEAR_REVIEW_REASON
 from bba.platelet_lookup.models import PlateletLookupResult
+from bba.prompt_builder import EvidenceChunk
+from bba.vitals_extractor import PeriopSummary
 
 _RUN_TS = datetime(2026, 5, 16, 12, 0, 0, tzinfo=UTC)
 _PIPELINE_CONFIG = AuditPipelineConfig(
@@ -51,6 +62,8 @@ def _platelet_ctx(
     *,
     platelet_count: float | None = None,
     platelet_mtp_suppressed: bool = False,
+    evidence_chunks: tuple[EvidenceChunk, ...] = (),
+    periop_summary: PeriopSummary | None = None,
 ) -> PipelineRowContext:
     plt_result = (
         PlateletLookupResult(
@@ -77,8 +90,58 @@ def _platelet_ctx(
         policy_version="kcmh-pr17.2-2024",
         prompt_hash=f"ph_{audit_id}",
         evidence_bundle_hash=f"bh_{audit_id}",
+        evidence_chunks=evidence_chunks,
+        periop_summary=periop_summary,
         platelet_mtp_suppressed=platelet_mtp_suppressed,
     )
+
+
+def _platelet_result_item(
+    audit_id: str,
+    *,
+    classification: str = "APPROPRIATE",
+    active_bleeding: bool = False,
+    procedure_indication: bool = False,
+    prophylactic_marrow_failure: bool = False,
+) -> BatchSubmissionResult:
+    """A platelet-shaped tool-use response carrying the three hard-signal bools.
+
+    Distinct from tests 8/9's RBC-shaped payloads: the platelet parser validates
+    the three booleans, so the over-clear guardrail sees grounded (or absent)
+    signals rather than fail-closing on a schema mismatch."""
+    return BatchSubmissionResult(
+        custom_id=audit_id,
+        model_id=SONNET_MODEL_ID,  # type: ignore[arg-type]
+        raw_response_json={
+            "content": [
+                {
+                    "type": "tool_use",
+                    "name": "classify_transfusion_order",
+                    "input": {
+                        "classification": classification,
+                        "indications": [],
+                        "negative_evidence": [],
+                        "reasoning_summary_en": "platelet audit rationale",
+                        "reasoning_summary_th": "เหตุผลการตรวจสอบเกล็ดเลือด",
+                        "active_bleeding": active_bleeding,
+                        "procedure_indication": procedure_indication,
+                        "prophylactic_marrow_failure": prophylactic_marrow_failure,
+                    },
+                }
+            ]
+        },
+        request_json={"messages": [{"role": "user", "content": "..."}]},
+        response_headers={"anthropic-version": "2023-06-01"},
+        request_timestamp=_RUN_TS,
+        latency_ms=500,
+        anthropic_version="2023-06-01",
+        prompt_cache_id=None,
+        extended_thinking_blocks=None,
+    )
+
+
+def _evidence_chunk() -> tuple[EvidenceChunk, ...]:
+    return (EvidenceChunk(evidence_id="E1", source="Lab", text="platelet 48k"),)
 
 
 def _audit_store(tmp_path):
@@ -128,7 +191,11 @@ def test_platelet_insufficient_evidence_round_trip(tmp_path):
 
 
 def test_platelet_potentially_inappropriate_routes_onward(tmp_path):
-    """count>=100 → POTENTIALLY_INAPPROPRIATE → NOT persisted in Stage B (LLM pending)."""
+    """count>=100 → POTENTIALLY_INAPPROPRIATE → NOT persisted in Stage B (LLM pending).
+
+    With the platelet LLM leg OFF (default) the row is neither persisted NOR
+    silently dropped: it must surface as an ORPHAN so an operator sees it is
+    still pending, never lost."""
     ctx = _platelet_ctx("audit-plt-003", platelet_count=150.0)
     store = _audit_store(tmp_path)
     result = run_pipeline(
@@ -141,13 +208,17 @@ def test_platelet_potentially_inappropriate_routes_onward(tmp_path):
         run_id="run-plt-003",
     )
     assert "audit-plt-003" not in result.audit_ids_persisted
+    assert "audit-plt-003" in result.orphan_audit_ids
+    assert store.read_audit_results() == ()
 
 
 # ───────────────────────── Test 4 ─────────────────────────
 
 
 def test_platelet_needs_review_routes_onward(tmp_path):
-    """count<100 → NEEDS_REVIEW → NOT persisted in Stage B (LLM pending)."""
+    """count<100 → NEEDS_REVIEW → NOT persisted in Stage B (LLM pending).
+
+    Same orphan-not-dropped contract as the POTENTIALLY_INAPPROPRIATE case."""
     ctx = _platelet_ctx("audit-plt-004", platelet_count=50.0)
     store = _audit_store(tmp_path)
     result = run_pipeline(
@@ -160,6 +231,8 @@ def test_platelet_needs_review_routes_onward(tmp_path):
         run_id="run-plt-004",
     )
     assert "audit-plt-004" not in result.audit_ids_persisted
+    assert "audit-plt-004" in result.orphan_audit_ids
+    assert store.read_audit_results() == ()
 
 
 # ───────────────────────── Test 5 ─────────────────────────
@@ -380,3 +453,247 @@ def test_apply_batch_results_platelet_row_sets_component(tmp_path):
     rows = store.read_audit_results()
     assert len(rows) == 1
     assert rows[0].component == "platelet"
+
+
+# ═════════════════ Stage C2 — replay wiring ═════════════════
+
+
+def test_platelet_rule_classification_is_platelet_derived(tmp_path):
+    """C2a (Stage B MED-1): a platelet row's rule_classification comes from the
+    platelet gate (count 50 → NEEDS_REVIEW, ceiling 100), NOT the RBC classifier
+    run on the inert Hb sentinels (which would yield INSUFFICIENT_EVIDENCE)."""
+    ctx = _platelet_ctx("audit-plt-c2a", platelet_count=50.0)
+    # LLM returns NEEDS_REVIEW so no guardrail rewrites the verdict; the point is
+    # the RULE column, which must reflect the platelet gate.
+    response = RawBatchResponse(
+        batch_id="msgbatch_c2a",
+        results=(
+            _platelet_result_item("audit-plt-c2a", classification="NEEDS_REVIEW"),
+        ),
+    )
+    store = _audit_store(tmp_path)
+    apply_batch_results(
+        response,
+        audit_store=store,
+        run_id="run-c2a",
+        contexts={"audit-plt-c2a": ctx},
+    )
+    row = store.read_audit_results()[0]
+    assert row.rule_classification == "NEEDS_REVIEW"
+    assert row.rule_classification != "INSUFFICIENT_EVIDENCE"
+    assert row.platelet_review_ceiling == 100.0
+
+
+def test_platelet_overclear_floors_ungrounded_appropriate(tmp_path, monkeypatch):
+    """C2b: flag ON — an LLM APPROPRIATE on a sub-ceiling count with NO grounded
+    hard signal floors to NEEDS_REVIEW with the platelet over-clear reason. This
+    makes the ADD-hard-signals ruling real: a bare low count can never clear."""
+    monkeypatch.setattr(feature_flags, "PLATELET_LLM_ENABLED", True)
+    ctx = _platelet_ctx("audit-plt-c2b", platelet_count=50.0)
+    response = RawBatchResponse(
+        batch_id="msgbatch_c2b",
+        results=(
+            _platelet_result_item(
+                "audit-plt-c2b",
+                classification="APPROPRIATE",  # ungrounded: all hard signals False
+            ),
+        ),
+    )
+    store = _audit_store(tmp_path)
+    apply_batch_results(
+        response,
+        audit_store=store,
+        run_id="run-c2b",
+        contexts={"audit-plt-c2b": ctx},
+    )
+    row = store.read_audit_results()[0]
+    assert row.final_classification == "NEEDS_REVIEW"
+    assert row.review_reason == PLATELET_OVERCLEAR_REVIEW_REASON
+    assert row.needs_human_review is True
+
+
+def test_platelet_grounded_hard_signal_clears(tmp_path, monkeypatch):
+    """C2b: flag ON — an LLM APPROPRIATE WITH a grounded hard signal
+    (active_bleeding) is NOT floored; the clear stands."""
+    monkeypatch.setattr(feature_flags, "PLATELET_LLM_ENABLED", True)
+    ctx = _platelet_ctx("audit-plt-c2c", platelet_count=50.0)
+    response = RawBatchResponse(
+        batch_id="msgbatch_c2c",
+        results=(
+            _platelet_result_item(
+                "audit-plt-c2c",
+                classification="APPROPRIATE",
+                active_bleeding=True,
+            ),
+        ),
+    )
+    store = _audit_store(tmp_path)
+    apply_batch_results(
+        response,
+        audit_store=store,
+        run_id="run-c2c",
+        contexts={"audit-plt-c2c": ctx},
+    )
+    row = store.read_audit_results()[0]
+    assert row.final_classification == "APPROPRIATE"
+
+
+def test_platelet_overclear_inert_when_flag_off(tmp_path):
+    """C2e: flag OFF — the platelet over-clear guardrail does not fire, so an
+    ungrounded APPROPRIATE is preserved (the leg is entirely inert)."""
+    assert feature_flags.PLATELET_LLM_ENABLED is False
+    ctx = _platelet_ctx("audit-plt-c2e", platelet_count=50.0)
+    response = RawBatchResponse(
+        batch_id="msgbatch_c2e",
+        results=(_platelet_result_item("audit-plt-c2e", classification="APPROPRIATE"),),
+    )
+    store = _audit_store(tmp_path)
+    apply_batch_results(
+        response,
+        audit_store=store,
+        run_id="run-c2e",
+        contexts={"audit-plt-c2e": ctx},
+    )
+    row = store.read_audit_results()[0]
+    assert row.final_classification == "APPROPRIATE"
+
+
+def test_periop_contradiction_does_not_fire_on_platelet(tmp_path):
+    """C2b (Stage B MED-2): the RBC peri-op contradiction guardrail reads
+    context.periop_summary; on a platelet row it must be gated OFF. An LLM
+    INSUFFICIENT_EVIDENCE against a hard peri-op signal must stay
+    INSUFFICIENT_EVIDENCE, not be escalated to NEEDS_REVIEW."""
+    ctx = _platelet_ctx(
+        "audit-plt-periop",
+        platelet_count=50.0,
+        periop_summary=PeriopSummary(surgical_context=True),
+    )
+    response = RawBatchResponse(
+        batch_id="msgbatch_periop",
+        results=(
+            _platelet_result_item(
+                "audit-plt-periop", classification="INSUFFICIENT_EVIDENCE"
+            ),
+        ),
+    )
+    store = _audit_store(tmp_path)
+    apply_batch_results(
+        response,
+        audit_store=store,
+        run_id="run-periop-plt",
+        contexts={"audit-plt-periop": ctx},
+    )
+    row = store.read_audit_results()[0]
+    assert row.final_classification == "INSUFFICIENT_EVIDENCE"
+
+
+# ═════════════════ Stage C2 — submission (C2c) ═════════════════
+
+
+def test_platelet_submission_uses_platelet_prompt():
+    """C2c: a platelet context builds a PLATELET_REVIEW request with the platelet
+    system prompt and cohort_threshold=None; an RBC context is unchanged."""
+    plt_ctx = _platelet_ctx(
+        "audit-plt-sub", platelet_count=50.0, evidence_chunks=_evidence_chunk()
+    )
+    requests = _build_submission_requests([plt_ctx], run_id="run-sub")
+    assert len(requests) == 1
+    assert requests[0].task_mode == "PLATELET_REVIEW"
+    assert requests[0].prompt.task_mode == "PLATELET_REVIEW"
+    assert requests[0].prompt.cohort_threshold is None
+
+
+def test_rbc_submission_unchanged_by_platelet_branch(tmp_path):
+    """C2c: the RBC submission path stays HB_7_10_REVIEW with a cohort threshold —
+    the platelet branch must not touch RBC request-building."""
+    from bba.cohort_detector import CohortAssignment, CohortLabel
+    from bba.hb_lookup import HbLookupResult
+    from bba.vitals_extractor import SourceProvenance, VitalSigns, VitalsResult
+
+    order = AuditOrder(
+        audit_id="audit-rbc-sub",
+        hn="HN-rbc-sub",
+        an="AN-rbc-sub",
+        reqno="REQ-rbc-sub",
+        order_datetime=_RUN_TS,
+        anchor_imputed=False,
+        products_ordered=("LPRC",),
+        diagnosis_codes=("D62",),
+    )
+    ctx = PipelineRowContext(
+        order=order,
+        hb_result=HbLookupResult(
+            value_g_dl=8.0,
+            datetime_utc=_RUN_TS,
+            source="HEMATOLOGY",
+            freshness="fresh",
+            delta_hb_bypass=False,
+            delta_hb_windows=(),
+            needs_review_single_low_hb=False,
+        ),
+        vitals_result=VitalsResult(
+            vitals=VitalSigns(),
+            source=SourceProvenance.NONE_IN_WINDOW,
+            flags=frozenset(),
+            note_timestamp=None,
+        ),
+        cohort_assignment=CohortAssignment(
+            label=CohortLabel.UNKNOWN,
+            threshold=7.5,
+            evidence_code=None,
+            evidence_name=None,
+        ),
+        procedure_proximity_hours=None,
+        crystalloid_liters_prior_4h=0.0,
+        hn_hash="hn_rbc_sub",
+        an_hash="an_rbc_sub",
+        prior_rbc_units_24h=0,
+        prior_rbc_units_7d=0,
+        redactor_version="0.4.1+test",
+        redactor_model_sha="sha_rbc_sub",
+        policy_version="kcmh-pr17.2-2024",
+        prompt_hash="ph_rbc_sub",
+        evidence_bundle_hash="bh_rbc_sub",
+        evidence_chunks=_evidence_chunk(),
+    )
+    requests = _build_submission_requests([ctx], run_id="run-sub")
+    assert requests[0].task_mode == "HB_7_10_REVIEW"
+    assert requests[0].prompt.cohort_threshold == 7.5
+
+
+def test_run_pipeline_platelet_leg_submits_when_flag_on(tmp_path, monkeypatch):
+    """C2c + C2e end-to-end: with the flag ON, a NEEDS_REVIEW platelet row is
+    submitted through the platelet prompt and persisted, with the platelet-
+    derived rule_classification and the over-clear guardrail applied (ungrounded
+    APPROPRIATE → floored to NEEDS_REVIEW)."""
+    monkeypatch.setattr(feature_flags, "PLATELET_LLM_ENABLED", True)
+    ctx = _platelet_ctx(
+        "audit-plt-run", platelet_count=50.0, evidence_chunks=_evidence_chunk()
+    )
+    interaction = CassetteInteraction(
+        model=SONNET_MODEL_ID,
+        custom_ids=("audit-plt-run",),
+        response=RawBatchResponse(
+            batch_id="msgbatch_run",
+            results=(
+                _platelet_result_item("audit-plt-run", classification="APPROPRIATE"),
+            ),
+        ),
+    )
+    store = _audit_store(tmp_path)
+    result = run_pipeline(
+        [ctx],
+        transport=CassetteTransport(interactions=(interaction,)),
+        audit_store=store,
+        batch_run_store=InMemoryBatchRunStore(),
+        llm_config=_LLM_CONFIG,
+        pipeline_config=_PIPELINE_CONFIG,
+        run_id="run-plt-run",
+    )
+    assert "audit-plt-run" in result.audit_ids_persisted
+    row = store.read_audit_results()[0]
+    assert row.component == "platelet"
+    assert row.rule_classification == "NEEDS_REVIEW"
+    # ungrounded APPROPRIATE on a sub-ceiling count → over-clear guardrail floors
+    assert row.final_classification == "NEEDS_REVIEW"
+    assert row.review_reason == PLATELET_OVERCLEAR_REVIEW_REASON

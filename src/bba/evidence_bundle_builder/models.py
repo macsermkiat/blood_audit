@@ -35,6 +35,8 @@ from pydantic import (
     model_validator,
 )
 
+from bba.platelet_lookup.models import PlateletSource
+from bba.platelet_lookup.parse import MAX_PLATELET, MIN_PLATELET
 from bba.vitals_extractor.bounds import (
     BT_MAX,
     BT_MIN,
@@ -301,6 +303,27 @@ class HbRecord(BaseModel):
     item_no: int
 
 
+class PlateletRecord(BaseModel):
+    """One platelet-count result (LABEXM 290078) — the platelet analog of
+    :class:`HbRecord`.
+
+    The count trend is the platelet leg's decision context (Stage C2), just as
+    the Hb history is for the RBC leg. ``value_k_ul`` is bounded to the
+    analytic-validity window [:data:`MIN_PLATELET`, :data:`MAX_PLATELET`]
+    x10^3/uL for parity with :class:`bba.platelet_lookup.PlateletObservation` —
+    out-of-range values are transcription errors, not real measurements.
+    ``item_no`` is the Lab row identifier and breaks same-(source, timestamp)
+    ties (higher = later insert / correction), mirroring
+    :class:`HbRecord.item_no`."""
+
+    model_config = ConfigDict(frozen=True)
+
+    timestamp: AwareDatetime
+    value_k_ul: float = Field(ge=MIN_PLATELET, le=MAX_PLATELET)
+    source: PlateletSource
+    item_no: int
+
+
 class VitalsRecord(BaseModel):
     """A pre-extracted vital-signs snapshot for the bundle.
 
@@ -344,6 +367,9 @@ class EvidenceInputs(BaseModel):
     focus_notes: tuple[FocusNote, ...] = ()
     meds: tuple[MedRecord, ...] = ()
     hb_history: tuple[HbRecord, ...] = ()
+    # Platelet count-trend (Stage C2). Defaults to () so RBC bundles — which
+    # never populate it — are byte-identical to before this field existed.
+    platelet_history: tuple[PlateletRecord, ...] = ()
     vitals: tuple[VitalsRecord, ...] = ()
 
 
@@ -602,6 +628,7 @@ __all__: Sequence[str] = (
     "HbSource",
     "MedRecord",
     "OrderAnchor",
+    "PlateletRecord",
     "ProgressNote",
     "SOAPSection",
     "UTCDatetime",

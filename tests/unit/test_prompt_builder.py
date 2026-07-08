@@ -1335,3 +1335,31 @@ class TestPublicSurface:
 
         names: Sequence[str] = mod.__all__
         assert list(names) == sorted(names)
+
+
+class TestRbcPromptHashGolden:
+    """Pin the RBC prompt_hash to a known value (C1 review HIGH, Rule 9).
+
+    WHY: the prompt_hash lands on every persisted AuditRow and is the audit
+    chain's reproducibility anchor. A silent change to the RBC system-prompt
+    text, the canonical envelope, or the hashing would shift this hash and
+    invalidate stored rows without any behavioural test failing. The value below
+    is generated from the current build; if this test breaks, an RBC
+    serialization regression is the suspect — do not blindly re-pin it.
+    """
+
+    RBC_HB_7_10_75_EMPTY_EVIDENCE = (
+        "612871a70db968da36ac9a86304d27fc84a213a45461d0c733e796617a12186b"
+    )
+
+    def test_hb_7_10_review_cohort_7_5_hash_is_pinned(self) -> None:
+        from bba.prompt_builder import PromptBuildRequest, build_prompt
+
+        result = build_prompt(
+            PromptBuildRequest(
+                task_mode="HB_7_10_REVIEW",
+                cohort_threshold=7.5,
+                evidence_chunks=(),
+            )
+        )
+        assert result.prompt_hash == self.RBC_HB_7_10_75_EMPTY_EVIDENCE
