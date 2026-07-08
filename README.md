@@ -1,14 +1,17 @@
-# blood_audit — KCMH RBC Transfusion Audit Pipeline (Phase 1)
+# blood_audit — KCMH Transfusion Audit Pipeline
 
-Post-hoc audit of inpatient adult RBC transfusion appropriateness at Chulalongkorn Hospital, against KCMH PR 17.2 + AABB 2023 guidelines.
+Post-hoc audit of inpatient adult transfusion appropriateness at Chulalongkorn Hospital (KCMH), against PR 17.2 + AABB 2023 guidelines. Phase 1 audits red blood cell (RBC) orders; Phase 2 extends the same pipeline to platelet orders.
 
-> **Status:** Phase 1 is feature-complete (20/20 modules, version `0.1.0`). Pilot run against one month of historical data is pending clinical co-lead sign-off (M8). Phase B operative-table data re-encryption is pending KCMH IT (#2).
+> **Status:** 26 modules under `src/bba/`, version `0.1.0`.
+> - **Phase 1 (RBC)** is feature-complete at module level. `bba audit` runs the ingest leg today; the analysis leg (deterministic classifier → LLM review → quote grounding) runs via the pilot scripts and is wired into the CLI in Phase 1.5.
+> - **Phase 2 (platelet auditor)** is **merged** (PR #85). The deterministic leg is live; the platelet LLM leg is behind a default-off flag (`feature_flags.PLATELET_LLM_ENABLED`). The RBC path is byte-identical throughout.
+> - Pilot validation against one month of historical data is pending clinical co-lead sign-off (M8). Phase B operative-table re-encryption is pending KCMH IT (#2).
 
 Full requirements: **[PRD — issue #1](https://github.com/macsermkiat/blood_audit/issues/1)**.
 
 ## What this is (and isn't)
 
-- **Is:** a post-hoc Quality Improvement pipeline. Reads finished HOSxP exports, classifies each RBC unit as `APPROPRIATE` / `NEEDS_REVIEW` / `INSUFFICIENT_EVIDENCE` / `POTENTIALLY_INAPPROPRIATE` against the 3-tier Hb policy with cohort-aware thresholds and deterministic bypasses.
+- **Is:** a post-hoc Quality Improvement pipeline. Reads finished HOSxP exports, routes each blood-bank order to its component family, then classifies each RBC unit against the 3-tier Hb policy (cohort-aware thresholds + deterministic bypasses) and each platelet unit against the §5.1 count gate. Verdicts are `APPROPRIATE` / `NEEDS_REVIEW` / `INSUFFICIENT_EVIDENCE` / `POTENTIALLY_INAPPROPRIATE` / `INAPPROPRIATE`.
 - **Is not:** a real-time clinical decision support tool. Nothing in this codebase is intended to influence a transfusion order at the point of care.
 
 ## Quickstart
@@ -72,9 +75,15 @@ export ANTHROPIC_API_KEY=sk-ant-...             # LLM review leg
 # 1. Ingest the HOSxP CSV bundle into DuckDB + Parquet under $BBA_DATA_DIR
 uv run bba ingest /path/to/hosxp_bundle/BDVST.csv
 
-# 2. Run the audit (deterministic classifier + LLM review route + quote grounding)
+# 2. Run the audit ingest leg (validate + materialize the bundle under $BBA_DATA_DIR)
 uv run bba audit --input /path/to/hosxp_bundle/BDVST.csv
 ```
+
+`bba audit` today runs the **ingest leg** — it validates and materializes the
+bundle into the DuckDB + Parquet store under `$BBA_DATA_DIR/audit/<run_id>/`.
+The analysis leg (deterministic classifier → evidence bundle → de-id → prompt →
+LLM batch → quote grounding → audit-store write) ships as separate modules and
+runs today through the pilot scripts (Section A); CLI wiring lands in Phase 1.5.
 
 `bba audit` is run-level idempotent: re-running on the same input + same code
 version is a no-op. Pass `--force` to override (writes a compliance row to
@@ -465,23 +474,32 @@ WHERE
 
 ## Architecture
 
-20 modules under `src/bba/`. See **[`docs/CONTEXT.md`](docs/CONTEXT.md)** for the module glossary — every public interface, invariant, and seam is documented there. Read it before touching anything.
+26 modules under `src/bba/`. See **[`docs/CONTEXT.md`](docs/CONTEXT.md)** for the module glossary — every public interface, invariant, and seam is documented there. Read it before touching anything.
 
-Coarse dependency shape:
+Coarse dependency shape (the RBC path is Phase 1; the platelet path is Phase 2 and forks at the `component_map` intake gate):
 
 ```
-ingest → audit_orders, hb_lookup, vitals_extractor, cohort_detector
-                                          ↘
-                                           deterministic_classifier
-                                                  ↘
-evidence_bundle_builder → deid_redactor → prompt_builder → llm_client
-                                                                ↘
-                                                   quote_grounder → confidence_calibrator
-                                                                              ↘
-                                                                       audit_pipeline → audit_store
-                                                                                            ↑
-                          eval_harness, monitoring, review_actions, dashboard, report_generator, cli
+ingest → audit_orders → component_map ─┬─ RED_CELL → hb_lookup, vitals_extractor, cohort_detector
+                                       │                             ↘
+                                       │                              deterministic_classifier
+                                       │                                     ↘
+                                       └─ PLATELET → platelet_lookup → platelet_classifier
+                                                                             ↘ (platelet_guardrail)
+evidence_bundle_builder → deid_redactor → prompt_builder → llm_client ─────────↘
+                                                    ↘                    quote_grounder → confidence_calibrator
+                                                                                                  ↘
+                                                                                    audit_pipeline → audit_store
+                                                                                                         ↑
+      eval_harness, monitoring, review_actions, dashboard, report_generator, attribution, verification, cli
 ```
+
+Modules added since the initial Phase 1 build: `component_map` (component-family intake gate), `platelet_lookup`, `platelet_classifier`, `platelet_guardrail` (Phase 2 platelet auditor); `attribution` (doctor/department appropriateness ranking); `verification` (before/after scoring for the peri-op fix).
+
+## What's new since Phase 1
+
+- **Phase 2 — platelet auditor (merged, PR #85).** `component_map` routes each blood-bank order to a component family (`RED_CELL`, `PLATELET`, `FFP`, `CRYO`, `WHOLE_BLOOD`, `UNKNOWN`) from the BDTYPE dictionary name. Platelet orders go through `platelet_lookup` (count value layer) and `platelet_classifier` (§5.1 gate). The gate **auto-clears nothing**: count ≥ 100 ×10³/µL → `POTENTIALLY_INAPPROPRIATE` (routes to review), count < 100 → `NEEDS_REVIEW` (defer to LLM), missing count → `INSUFFICIENT_EVIDENCE` by default. The platelet LLM leg (`PLATELET_REVIEW` prompt + grounded-hard-signal over-clear guardrail) is behind default-off `feature_flags.PLATELET_LLM_ENABLED`.
+- **Doctor / department attribution (Feature 2, PR #82).** `bba.attribution` ranks the top-10 ordering doctors and departments by blood-order appropriateness in three buckets (appropriate / inappropriate / unresolved). Attribution is `BDVST.DCTREQ` → `DCT.csv`; the verdict source is swappable (`VerdictSource`) — the current build ranks on the 300-case human review, and a full-cohort pipeline verdict source drops in without other changes. Driven by `scripts/pilot/rank_doctors.py` and surfaced through the `serve-dashboard` integration seam.
+- **Cohort refinements.** Orthopedic surgery is now its own `ORTHO_SURGERY` cohort (Hb floor 8.0, PR #83), split out from the cardiac cohort. A `CARDIOPULMONARY_COMORBIDITY` cohort (heart-disease floor 8.0) and the peri-op defer-to-LLM behavior landed in PR #81 — pre-op crossmatch defers to the LLM, and hard peri-op evidence (`intraop_transfusion` or `EBL ≥ 500 mL`) bypasses.
 
 ## Safety & policy notes
 
@@ -490,6 +508,8 @@ evidence_bundle_builder → deid_redactor → prompt_builder → llm_client
 - **Missing-Hb positive-evidence pre-pass is disabled by default.** The `enable_missing_hb_positive_evidence` flag (`BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE`) is `False` until the QI committee signs off. When `False`, missing Hb always returns `INSUFFICIENT_EVIDENCE` (original PRD spec); when `True`, the pre-pass auto-approves on hard peri-op evidence and defers everything else to the LLM rather than dead-ending.
 - **Hemodynamic and peri-op summaries are supporting evidence only.** The `scan_hemodynamics` and `scan_periop` scans surface MAP/vasopressor/EBL facts as pinned, truncation-exempt evidence items. They never gate the deterministic classifier — all appropriateness weighting stays with the LLM and the auditor.
 - **Quote-grounding is fail-closed.** The LLM_REVIEW leg's claims are checked against six anti-hallucination layers (NFC + substring + cited_id + within-doc uniqueness + ≥25 chars + numeric-tuple + medical-NLI). Failures route to `hallucination_suspect`, not to a result row.
+- **Platelet auditor auto-clears nothing.** `platelet_classifier` never emits `APPROPRIATE` or `INAPPROPRIATE` in v1: because the policies withhold platelets at very low counts for several exclusion populations (TTP/HIT transfusion is actively harmful), every present count routes onward to review or the LLM rather than dead-ending as deterministic-final. Pinned by a hypothesis property test (CR-M2).
+- **Component families are isolated at intake.** `component_map` keeps platelet statistics out of RBC reporting and the dashboard, and excludes `FFP` / `CRYO` / `WHOLE_BLOOD` with a precise reason rather than guessing them into an auditable family.
 - **Run-level idempotency is enforced at the store layer.** `bba audit` cannot accidentally produce two rows for the same `(run_id, encounter_id)` pair.
 
 ## How this was built (history)
@@ -534,3 +554,5 @@ Then `gh issue close N` after review passes. Parallel work happened in `git work
 | #29 | `bba.cli` | #24, #20, #28, #26, #27 |
 
 Modules without deps were built in parallel.
+
+Phase 2 (platelet auditor) and the attribution/cohort features followed the same workflow on feature branches: `feat/periop-defer-llm` (#81, peri-op defer + cardiopulmonary cohort), `feat/doctor-dept-ranking` (#82, `attribution`), `feat/ortho-surgery-cohort` (#83, `ORTHO_SURGERY` split), `feat/platelet-auditor` (#84, deterministic core), and `feat/platelet-pipeline-dispatch` (#85, live-pipeline integration + platelet LLM leg).

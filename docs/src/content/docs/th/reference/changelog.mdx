@@ -1,6 +1,6 @@
 ---
 title: บันทึกการเปลี่ยนแปลง
-description: สถานะ release และสิ่งที่รวมอยู่ใน Phase 1
+description: สถานะ release — Phase 1 (RBC) feature-complete และ Phase 2 (platelet auditor) merged แล้ว
 ---
 
 import AtAGlance from "../../../../components/AtAGlance.astro";
@@ -8,9 +8,9 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
 <AtAGlance
   title="สรุป release"
   items={[
-    { label: "Current version", value: "0.1.0 ใน pyproject.toml", tone: "ok" },
+    { label: "Current version", value: "0.1.0 ใน pyproject.toml (26 modules ภายใต้ bba.*)", tone: "ok" },
     { label: "Release notes", value: "หลัง tag แล้ว GitHub Releases จะเป็นแหล่งอ้างอิงหลัก" },
-    { label: "Phase 1", value: "มี implementation ระดับ module; ยังไม่ production-wired หรือ pilot-validated" },
+    { label: "Phase 2", value: "Platelet auditor merged (PR #85); deterministic leg ใช้งานได้แล้ว, LLM leg ปิดโดยค่าเริ่มต้น" },
     { label: "ยังไม่รวม", value: "pilot validation, production wiring และ Phase B re-encryption", tone: "warn" },
   ]}
 />
@@ -24,7 +24,23 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
 - Audit store models, idempotency และ review-action primitives
 - Docs site สำหรับ operator, developer และ clinical/QI users
 
+## สิ่งที่เพิ่มหลังจาก Phase 1 รอบแรก
+
+- **Phase 2 — platelet auditor (PR #85, merged)** `component_map` แยกประเภท
+  ส่วนประกอบเลือด (RED_CELL / PLATELET / FFP / CRYO / WHOLE_BLOOD / UNKNOWN);
+  `platelet_lookup` + `platelet_classifier` เพิ่ม §5.1 count gate ที่
+  **ไม่ auto-clear อะไรเลย**: count ≥ 100 ×10³/µL → review, ต่ำกว่านั้น →
+  ส่งต่อ LLM, ไม่มีค่า → INSUFFICIENT_EVIDENCE. Platelet LLM leg อยู่หลัง flag
+  `PLATELET_LLM_ENABLED` ที่ปิดโดยค่าเริ่มต้น; RBC path เหมือนเดิมทุกไบต์
+- **Doctor / department attribution (Feature 2, PR #82)** `bba.attribution`
+  จัดอันดับแพทย์และแผนกที่สั่งเลือด 10 อันดับแรกตามความเหมาะสม แบ่งเป็น 3 กลุ่ม
+  ผ่าน `BDVST.DCTREQ` → `DCT.csv` โดยแหล่ง verdict สลับเปลี่ยนได้
+- **ปรับ cohort** แยก `ORTHO_SURGERY` เป็น cohort ของตัวเอง (Hb floor 8.0,
+  PR #83); เพิ่ม `CARDIOPULMONARY_COMORBIDITY` cohort + peri-op defer-to-LLM
+  (PR #81)
+
 ## ยังไม่ใช่ระบบ production ที่เชื่อมใช้งานจริง
 
-Phase 1 ยังไม่รวมการเชื่อม production database, scheduler, dashboard,
-pilot validation หรือ re-encryption workflow ของ Phase B
+ยังไม่รวมการเชื่อม integration-seam subcommands, platelet LLM leg ใน
+production (ปิดด้วย flag จนกว่าจะมี clinician sign-off), pilot validation
+หรือ re-encryption workflow ของ Phase B
