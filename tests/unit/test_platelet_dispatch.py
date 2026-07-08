@@ -524,24 +524,97 @@ def test_platelet_grounded_hard_signal_clears(tmp_path, monkeypatch):
     assert row.final_classification == "APPROPRIATE"
 
 
-def test_platelet_overclear_inert_when_flag_off(tmp_path):
-    """C2e: flag OFF — the platelet over-clear guardrail does not fire, so an
-    ungrounded APPROPRIATE is preserved (the leg is entirely inert)."""
+def test_platelet_flag_gates_submission_not_guardrail(tmp_path):
+    """C2e (flag contract): PLATELET_LLM_ENABLED gates SUBMISSION only — when
+    the flag is OFF, non-terminal platelet rows are never sent to the LLM
+    (they orphan via run_pipeline). The persist-time over-clear guardrail is a
+    separate, unconditional safety net in _build_audit_row.
+
+    This test verifies the submission gate: with flag OFF, a NEEDS_REVIEW
+    platelet row is not persisted and surfaces as an orphan."""
     assert feature_flags.PLATELET_LLM_ENABLED is False
-    ctx = _platelet_ctx("audit-plt-c2e", platelet_count=50.0)
+    ctx = _platelet_ctx("audit-plt-c2e-gate", platelet_count=50.0)
+    store = _audit_store(tmp_path)
+    result = run_pipeline(
+        [ctx],
+        transport=CassetteTransport(interactions=()),
+        audit_store=store,
+        batch_run_store=InMemoryBatchRunStore(),
+        llm_config=_LLM_CONFIG,
+        pipeline_config=_PIPELINE_CONFIG,
+        run_id="run-c2e-gate",
+    )
+    # Flag OFF: platelet row is NOT submitted → orphaned, not persisted.
+    assert "audit-plt-c2e-gate" not in result.audit_ids_persisted
+    assert "audit-plt-c2e-gate" in result.orphan_audit_ids
+
+
+def test_platelet_overclear_guardrail_fires_regardless_of_flag(tmp_path):
+    """Fix 1 (Codex P1): the persist-time over-clear guardrail must fire for
+    any platelet row reaching _build_audit_row, regardless of the current
+    PLATELET_LLM_ENABLED flag value.
+
+    WHY: a platelet batch submitted with flag ON can be resumed after the flag
+    is toggled OFF. The flag must not disable the persist-time safety net —
+    only the submission gate. An ungrounded LLM APPROPRIATE must always floor
+    to NEEDS_REVIEW when persisted through _build_audit_row."""
+    assert feature_flags.PLATELET_LLM_ENABLED is False  # flag is OFF at persist time
+    ctx = _platelet_ctx("audit-plt-c2e-guard", platelet_count=50.0)
     response = RawBatchResponse(
-        batch_id="msgbatch_c2e",
-        results=(_platelet_result_item("audit-plt-c2e", classification="APPROPRIATE"),),
+        batch_id="msgbatch_c2e_guard",
+        results=(
+            _platelet_result_item(
+                "audit-plt-c2e-guard",
+                classification="APPROPRIATE",  # ungrounded: all hard signals False
+            ),
+        ),
     )
     store = _audit_store(tmp_path)
     apply_batch_results(
         response,
         audit_store=store,
-        run_id="run-c2e",
-        contexts={"audit-plt-c2e": ctx},
+        run_id="run-c2e-guard",
+        contexts={"audit-plt-c2e-guard": ctx},
     )
     row = store.read_audit_results()[0]
-    assert row.final_classification == "APPROPRIATE"
+    # Guardrail must fire even with flag OFF: ungrounded APPROPRIATE → NEEDS_REVIEW
+    assert row.final_classification == "NEEDS_REVIEW"
+    assert row.review_reason == PLATELET_OVERCLEAR_REVIEW_REASON
+
+
+def test_platelet_overclear_guardrail_fires_on_resume_after_flag_toggle(
+    tmp_path, monkeypatch
+):
+    """Fix 1 (Codex P1 resume scenario): a platelet batch submitted with flag ON,
+    then applied/resumed with flag OFF, must still be protected by the over-clear
+    guardrail.
+
+    Simulates: flag=ON at submission time, flag=OFF at persist time (resume).
+    The guardrail must fire regardless of the flag's current value."""
+    # Step 1: verify flag is OFF now (simulates the post-toggle resume state)
+    assert feature_flags.PLATELET_LLM_ENABLED is False
+    ctx = _platelet_ctx("audit-plt-resume-toggle", platelet_count=50.0)
+    response = RawBatchResponse(
+        batch_id="msgbatch_resume_toggle",
+        results=(
+            _platelet_result_item(
+                "audit-plt-resume-toggle",
+                classification="APPROPRIATE",  # ungrounded
+            ),
+        ),
+    )
+    store = _audit_store(tmp_path)
+    # Step 2: apply results with flag OFF (resume scenario)
+    apply_batch_results(
+        response,
+        audit_store=store,
+        run_id="run-resume-toggle",
+        contexts={"audit-plt-resume-toggle": ctx},
+    )
+    row = store.read_audit_results()[0]
+    # Guardrail fires regardless: ungrounded APPROPRIATE → NEEDS_REVIEW
+    assert row.final_classification == "NEEDS_REVIEW"
+    assert row.review_reason == PLATELET_OVERCLEAR_REVIEW_REASON
 
 
 def test_periop_contradiction_does_not_fire_on_platelet(tmp_path):
@@ -854,3 +927,130 @@ def test_rbc_schema_mismatch_behavior_unchanged(tmp_path):
     # RBC parse-failure still routes to NEEDS_REVIEW via the RBC path
     assert row.final_classification == "NEEDS_REVIEW"
     assert row.component == "red_cell"
+
+
+# ═════════════════ Fix 3 (Codex P2): resume rebuild — platelet → PLATELET_REVIEW ═════════════════
+
+
+def test_platelet_resume_rebuilds_platelet_review_request():
+    """Fix 3 (Codex P2): _rebuild_submission_requests must produce a
+    PLATELET_REVIEW request (not HB_7_10_REVIEW) for a platelet context.
+
+    WHY: if the process dies after storing anthropic_batch_id but before
+    fetching results, the reconciler calls _rebuild_submission_requests to
+    re-submit the batch. Before the fix, it always uses task_mode='HB_7_10_REVIEW'
+    with a numeric cohort_threshold — wrong prompt, wrong tool schema, wrong
+    threshold for a platelet row. A resumed platelet batch would produce a
+    corrupt verdict.
+
+    After the fix, the rebuild branches on context.component: platelet contexts
+    get task_mode='PLATELET_REVIEW' with cohort_threshold=None, mirroring the
+    live platelet submission path in pipeline._build_submission_requests."""
+    from bba.audit_pipeline.models import BatchRun, BatchRunState
+    from bba.audit_pipeline.resume import _rebuild_submission_requests
+
+    plt_ctx = _platelet_ctx(
+        "audit-plt-resume-rebuild",
+        platelet_count=50.0,
+        evidence_chunks=_evidence_chunk(),
+    )
+    run = BatchRun(
+        batch_id="batch-resume-plt",
+        state=BatchRunState.SUBMITTED,
+        run_id="run-resume-plt",
+        code_version="v0.1.0+test",
+        audit_ids=("audit-plt-resume-rebuild",),
+        anthropic_batch_id="msgbatch_in_flight_plt",
+        submitted_at=_RUN_TS,
+        updated_at=_RUN_TS,
+    )
+    requests = _rebuild_submission_requests(
+        run=run,
+        contexts={"audit-plt-resume-rebuild": plt_ctx},
+        audit_ids=("audit-plt-resume-rebuild",),
+    )
+    assert len(requests) == 1
+    req = requests[0]
+    # Must use PLATELET_REVIEW, not HB_7_10_REVIEW
+    assert req.task_mode == "PLATELET_REVIEW"
+    # Platelet prompt must have cohort_threshold=None
+    assert req.prompt.task_mode == "PLATELET_REVIEW"
+    assert req.prompt.cohort_threshold is None
+
+
+def test_rbc_resume_rebuild_unchanged():
+    """Fix 3: the RBC rebuild path is byte-identical — HB_7_10_REVIEW with a
+    numeric cohort_threshold. The platelet branch must not touch RBC rebuilds."""
+    from bba.cohort_detector import CohortAssignment, CohortLabel
+    from bba.hb_lookup import HbLookupResult
+    from bba.vitals_extractor import SourceProvenance, VitalSigns, VitalsResult
+
+    from bba.audit_pipeline.models import BatchRun, BatchRunState
+    from bba.audit_pipeline.resume import _rebuild_submission_requests
+
+    order = AuditOrder(
+        audit_id="audit-rbc-resume",
+        hn="HN-rbc-resume",
+        an="AN-rbc-resume",
+        reqno="REQ-rbc-resume",
+        order_datetime=_RUN_TS,
+        anchor_imputed=False,
+        products_ordered=("LPRC",),
+        diagnosis_codes=("D62",),
+    )
+    rbc_ctx = PipelineRowContext(
+        order=order,
+        hb_result=HbLookupResult(
+            value_g_dl=8.0,
+            datetime_utc=_RUN_TS,
+            source="HEMATOLOGY",
+            freshness="fresh",
+            delta_hb_bypass=False,
+            delta_hb_windows=(),
+            needs_review_single_low_hb=False,
+        ),
+        vitals_result=VitalsResult(
+            vitals=VitalSigns(),
+            source=SourceProvenance.NONE_IN_WINDOW,
+            flags=frozenset(),
+            note_timestamp=None,
+        ),
+        cohort_assignment=CohortAssignment(
+            label=CohortLabel.UNKNOWN,
+            threshold=7.5,
+            evidence_code=None,
+            evidence_name=None,
+        ),
+        procedure_proximity_hours=None,
+        crystalloid_liters_prior_4h=0.0,
+        hn_hash="hn_rbc_resume",
+        an_hash="an_rbc_resume",
+        prior_rbc_units_24h=0,
+        prior_rbc_units_7d=0,
+        redactor_version="0.4.1+test",
+        redactor_model_sha="sha_rbc_resume",
+        policy_version="kcmh-pr17.2-2024",
+        prompt_hash="ph_rbc_resume",
+        evidence_bundle_hash="bh_rbc_resume",
+        evidence_chunks=_evidence_chunk(),
+    )
+    run = BatchRun(
+        batch_id="batch-resume-rbc",
+        state=BatchRunState.SUBMITTED,
+        run_id="run-resume-rbc",
+        code_version="v0.1.0+test",
+        audit_ids=("audit-rbc-resume",),
+        anthropic_batch_id="msgbatch_in_flight_rbc",
+        submitted_at=_RUN_TS,
+        updated_at=_RUN_TS,
+    )
+    requests = _rebuild_submission_requests(
+        run=run,
+        contexts={"audit-rbc-resume": rbc_ctx},
+        audit_ids=("audit-rbc-resume",),
+    )
+    assert len(requests) == 1
+    req = requests[0]
+    # RBC path unchanged: HB_7_10_REVIEW with cohort_threshold
+    assert req.task_mode == "HB_7_10_REVIEW"
+    assert req.prompt.cohort_threshold == 7.5

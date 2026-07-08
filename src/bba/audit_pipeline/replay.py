@@ -30,7 +30,6 @@ from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final, NamedTuple
 
-from bba import feature_flags
 from bba.audit_pipeline.models import PipelineRowContext, PipelineRunResult
 from bba.audit_store import AuditRow, AuditStore, LlmCall
 from bba.audit_store.models import Classification
@@ -636,16 +635,15 @@ def _build_audit_row(
         review_reason = LLM_OVERCLEAR_REVIEW_REASON
     # Platelet over-clear guardrail (Stage C2, "ADD hard signals" ruling): an
     # LLM APPROPRIATE on any withheld platelet verdict with NO grounded platelet
-    # hard signal floors to review.  Gated behind PLATELET_LLM_ENABLED so with
-    # the flag off the platelet leg is inert and the RBC path is unchanged.
-    # Uses the already-parsed _plt_signals from the primary platelet parse above
-    # (no second parse of winning_result).
-    elif (
-        context.component == "platelet"
-        and feature_flags.PLATELET_LLM_ENABLED
-        and _platelet_overclear_floor(
-            final_classification, rule_classification, _plt_signals
-        )
+    # hard signal floors to review.  Keyed on context.component only — NOT on
+    # PLATELET_LLM_ENABLED — so the guardrail stays active during crash-recovery
+    # replay/resume even when the flag is toggled off after the batch was
+    # submitted. The flag's sole job is gating SUBMISSION (whether platelet rows
+    # enter the LLM leg at all); once a row reaches this persist path it must
+    # always be protected. Uses the already-parsed _plt_signals from the primary
+    # platelet parse above (no second parse of winning_result).
+    elif context.component == "platelet" and _platelet_overclear_floor(
+        final_classification, rule_classification, _plt_signals
     ):
         final_classification = "NEEDS_REVIEW"
         review_reason = PLATELET_OVERCLEAR_REVIEW_REASON

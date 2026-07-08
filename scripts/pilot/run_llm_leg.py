@@ -908,6 +908,81 @@ def main() -> None:
                 )
                 for obs in plt_obs
             )
+            # --- Platelet evidence: notes / meds / procedures / vitals ---
+            # Fix 3 (Codex P2): the platelet hard signals (active_bleeding,
+            # procedure_indication, prophylactic_marrow_failure) are grounded
+            # in narrative notes and procedure records. Without this evidence
+            # the LLM cannot ground any signal and everything floors to review.
+            # Reuse the same evidence-gathering helpers as the RBC path; swap
+            # Hb history for platelet history and keep everything else.
+            plt_ev_anchor = order.order_datetime  # no re-anchoring for platelets
+            plt_local_tz = ZoneInfo(TZ_LOCAL)
+            plt_order_date_local = plt_ev_anchor.astimezone(plt_local_tz).date()
+            plt_notes_lo = datetime.combine(
+                plt_order_date_local - timedelta(days=WINDOW_NOTES_DAYS_BEFORE),
+                _time.min,
+                tzinfo=plt_local_tz,
+            ).astimezone(timezone.utc)
+            plt_notes_hi = datetime.combine(
+                plt_order_date_local + timedelta(days=WINDOW_NOTES_DAYS_AFTER + 1),
+                _time.min,
+                tzinfo=plt_local_tz,
+            ).astimezone(timezone.utc)
+            # op_events is used in the RBC path for cohort + proximity only;
+            # platelet rows have no cohort and no proximity requirement, so
+            # procedure evidence surfaces through narrative notes (same as RBC).
+            plt_med_events = _med_events(med, order.an)
+            plt_meds_in_window = sorted(
+                [
+                    m
+                    for m in plt_med_events
+                    if plt_notes_lo <= m.timestamp < plt_notes_hi
+                ],
+                key=lambda m: m.timestamp,
+                reverse=True,
+            )
+            plt_meds_for_bundle = tuple(
+                MedRecord(timestamp=m.timestamp, drug=m.drug)
+                for m in plt_meds_in_window
+            )
+            plt_vitals_notes = vitals_notes_for(
+                progress, focus, order.an, plt_ev_anchor
+            )
+            plt_vitals = extract_vitals(anchor=plt_ev_anchor, notes=plt_vitals_notes)
+            plt_progress_for_bundle = tuple(
+                ProgressNote(timestamp=n.timestamp, text=n.text)
+                for n in plt_vitals_notes
+                if n.source == "IPDADMPROGRESS"
+            )
+            plt_focus_for_bundle = tuple(
+                FocusNote(timestamp=n.timestamp, text=n.text)
+                for n in plt_vitals_notes
+                if n.source == "IPDNRFOCUSDT"
+            )
+            plt_vital_records: tuple[VitalsRecord, ...] = ()
+            if plt_vitals.note_timestamp is not None and any(
+                getattr(plt_vitals.vitals, k) is not None
+                for k in ("sbp", "dbp", "hr", "rr", "bt")
+            ):
+                _plt_src_map = {
+                    "IPDADMPROGRESS": "IPDADMPROGRESS",
+                    "IPDNRFOCUSDT": "IPDNRFOCUSDT",
+                    "LLM_EXTRACTED": "LLM_extracted",
+                    "NONE_IN_WINDOW": None,
+                }
+                _plt_v_src = _plt_src_map.get(plt_vitals.source.value)
+                if _plt_v_src is not None:
+                    plt_vital_records = (
+                        VitalsRecord(
+                            timestamp=plt_vitals.note_timestamp,
+                            source=cast(Any, _plt_v_src),
+                            sbp=plt_vitals.vitals.sbp,
+                            dbp=plt_vitals.vitals.dbp,
+                            hr=plt_vitals.vitals.hr,
+                            rr=plt_vitals.vitals.rr,
+                            bt=plt_vitals.vitals.bt,
+                        ),
+                    )
             bundle = build_evidence_bundle(
                 inputs=EvidenceInputs(
                     anchor=OrderAnchor(
@@ -917,7 +992,11 @@ def main() -> None:
                         products=order.products_ordered,
                     ),
                     diagnoses=plt_diagnoses,
+                    progress_notes=plt_progress_for_bundle,
+                    focus_notes=plt_focus_for_bundle,
+                    meds=plt_meds_for_bundle,
                     platelet_history=plt_records,
+                    vitals=plt_vital_records,
                 )
             )
             plt_chunks: list[EvidenceChunk] = []

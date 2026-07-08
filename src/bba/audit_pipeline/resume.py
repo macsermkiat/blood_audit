@@ -295,33 +295,59 @@ def _rebuild_submission_requests(
     the rebuild produces the same prompt_hash + envelope_hash bytes
     the submission used — :func:`apply_batch_results` then accepts
     the response without contract drift.
+
+    Branches on ``context.component``:
+
+    * ``"platelet"`` → ``PLATELET_REVIEW`` with ``cohort_threshold=None``,
+      mirroring :func:`bba.audit_pipeline.pipeline._build_submission_requests`.
+      Without this branch a resumed platelet batch would be rebuilt as an RBC
+      request (wrong prompt, wrong tool schema, wrong threshold).
+
+    * anything else → ``HB_7_10_REVIEW`` with the cohort threshold, unchanged
+      from the original RBC path.
     """
-    from bba.prompt_builder import PromptBuildRequest, build_prompt
+    from bba.prompt_builder import PromptBuildRequest, TaskMode, build_prompt
 
     requests: list[BatchSubmissionRequest] = []
     for audit_id in audit_ids:
         ctx = contexts.get(audit_id)
         if ctx is None or not ctx.evidence_chunks:
             continue
-        # Default threshold mirrors run_pipeline's _build_submission_requests
-        threshold = (
-            ctx.cohort_assignment.threshold
-            if ctx.cohort_assignment.threshold is not None
-            else 7.0
-        )
-        prompt = build_prompt(
-            PromptBuildRequest(
-                task_mode="HB_7_10_REVIEW",
-                cohort_threshold=threshold,
-                evidence_chunks=ctx.evidence_chunks,
-                few_shot_examples=(),
+        task_mode: TaskMode
+        if ctx.component == "platelet":
+            # Platelet resume: cohort_threshold=None, platelet system prompt.
+            # Mirrors pipeline._build_submission_requests's platelet branch so
+            # the rebuilt prompt_hash + envelope_hash stay byte-identical.
+            task_mode = "PLATELET_REVIEW"
+            prompt = build_prompt(
+                PromptBuildRequest(
+                    task_mode="PLATELET_REVIEW",
+                    cohort_threshold=None,
+                    evidence_chunks=ctx.evidence_chunks,
+                    few_shot_examples=(),
+                )
             )
-        )
+        else:
+            # RBC / default: mirrors the original rebuild path unchanged.
+            task_mode = "HB_7_10_REVIEW"
+            threshold = (
+                ctx.cohort_assignment.threshold
+                if ctx.cohort_assignment.threshold is not None
+                else 7.0
+            )
+            prompt = build_prompt(
+                PromptBuildRequest(
+                    task_mode="HB_7_10_REVIEW",
+                    cohort_threshold=threshold,
+                    evidence_chunks=ctx.evidence_chunks,
+                    few_shot_examples=(),
+                )
+            )
         requests.append(
             BatchSubmissionRequest(
                 audit_id=audit_id,
                 run_id=run.run_id,
-                task_mode="HB_7_10_REVIEW",
+                task_mode=task_mode,
                 prompt=prompt,
             )
         )
