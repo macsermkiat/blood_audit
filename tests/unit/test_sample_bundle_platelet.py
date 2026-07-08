@@ -84,9 +84,16 @@ _PLT_ORDERS = [
     ("H6", "PLT003", "A6", "SDPF"),
     ("H7", "PLT004", "A7", "PC"),
 ]
+# Mixed order: same REQNO carries both an RBC and a platelet line item.
+# Intake tags this as component="red_cell" (mixed → red_cell), so the
+# platelet sampler must NOT include it in the platelet stream.
+_MIXED_HN = "H8"
+_MIXED_REQNO = "MIX001"
+_MIXED_AN = "A8"
 
-# Determined empirically: random.Random(42).sample(_RBC_ORDERS, 2)
-_EXPECTED_RBC_REQNOS_SEED42 = {"RBC003", "RBC001"}
+# Determined empirically: random.Random(42).sample(rbc_candidates, 2)
+# rbc_candidates = _RBC_ORDERS + [_MIXED_REQNO] (4 total; MIX001 carries LPRC).
+_EXPECTED_RBC_REQNOS_SEED42 = {"MIX001", "RBC001"}
 
 # random.Random(90).sample(_PLT_ORDERS, 2) and random.Random(91).sample(...)
 # give DIFFERENT sets — confirmed in pre-commit verification.
@@ -99,7 +106,7 @@ def _make_raw_dir(base: Path) -> Path:
     raw = base
     raw.mkdir(parents=True, exist_ok=True)
 
-    # --- BDVST.csv (all orders, RBC + platelet) ---
+    # --- BDVST.csv (all orders: RBC + platelet + mixed) ---
     bdvst_rows = []
     for hn, reqno, an in _RBC_ORDERS:
         bdvst_rows.append(
@@ -139,6 +146,26 @@ def _make_raw_dir(base: Path) -> Path:
                 "DIAGNOSIS": f"diag-{reqno}",
             }
         )
+    # Mixed order: contains both LPRC (RBC) and LPPC (platelet) — must be
+    # excluded from the platelet stream but admitted via the RBC stream.
+    bdvst_rows.append(
+        {
+            "HN": _MIXED_HN,
+            "REQNO": _MIXED_REQNO,
+            "AN": _MIXED_AN,
+            "BDVSTST": "4",
+            "REQTYPE": "P",
+            "CANCELDATE": "",
+            "REQDATE": "2026-01-01",
+            "REQTIME": "080000",
+            "BDVSTDATE": "2026-01-01",
+            "BDVSTTIME": "090000",
+            "PICKDATE": "",
+            "PICKTIME": "",
+            "ICD10": f"ICD-{_MIXED_REQNO}",
+            "DIAGNOSIS": f"diag-{_MIXED_REQNO}",
+        }
+    )
     _write_csv(raw / "BDVST.csv", bdvst_rows)
 
     # --- BDVSTDT.csv ---
@@ -168,6 +195,21 @@ def _make_raw_dir(base: Path) -> Path:
                 "USETIME": "100000",
                 "BDTYPE": bdtype,
                 "ITEMNO": "1",
+                "UNITAMT": "1",
+            }
+        )
+    # Mixed order has TWO line items: one RBC (LPRC) and one platelet (LPPC).
+    for bdtype in ("LPRC", "LPPC"):
+        bdvstdt_rows.append(
+            {
+                "REQNO": _MIXED_REQNO,
+                "HN": _MIXED_HN,
+                "BDVSTDATE": "2026-01-01",
+                "BDVSTTIME": "090000",
+                "USEDATE": "2026-01-01",
+                "USETIME": "100000",
+                "BDTYPE": bdtype,
+                "ITEMNO": "1" if bdtype == "LPRC" else "2",
                 "UNITAMT": "1",
             }
         )
@@ -422,3 +464,54 @@ def test_zero_platelet_n_produces_no_platelet_rows_in_bundle(
         "platelet REQNOs must not appear in the bundle when PLATELET_N=0"
     )
     assert rbc_reqnos == _EXPECTED_RBC_REQNOS_SEED42
+
+
+def test_mixed_order_excluded_from_platelet_stream(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """(f) A REQNO that mixes RBC and platelet line items must NOT appear in
+    the platelet sample.
+
+    WHY: build_audit_orders tags an order as component="platelet" only when
+    ALL its BDTYPE codes are platelet products — mixed orders get tagged
+    component="red_cell". The sampler predicate must match this contract
+    (all-platelet), not the looser "has at least one platelet" predicate.
+    If it does not, a mixed order would appear in both the platelet manifest
+    AND the RBC bundle, causing it to be classified twice (once as RBC, once
+    as platelet) and inflating the platelet count.
+    """
+    from bba.component_map import is_platelet_product
+
+    raw = _make_raw_dir(tmp_path / "raw")
+    work = tmp_path / "work"
+    monkeypatch.setenv("BBA_PILOT_RAW_DIR", str(raw))
+    monkeypatch.setenv("BBA_PILOT_WORK_DIR", str(work))
+    monkeypatch.setenv("BBA_PILOT_SAMPLE_N", "2")
+    monkeypatch.setenv("BBA_PILOT_SAMPLE_SEED", "42")
+    monkeypatch.setenv("BBA_PILOT_PLATELET_SAMPLE_N", "2")
+    monkeypatch.setenv("BBA_PILOT_PLATELET_SEED", "90")
+    mod = _load_sample_bundle()
+    mod.main()
+
+    manifest = _read_manifest(work / "sample_manifest.csv")
+    plt_reqnos_in_manifest = {
+        r["REQNO"] for r in manifest if r.get("component") == "platelet"
+    }
+
+    # The mixed order must NOT appear in the platelet manifest.
+    assert _MIXED_REQNO not in plt_reqnos_in_manifest, (
+        f"Mixed order {_MIXED_REQNO!r} (LPRC+LPPC) must not appear in the platelet "
+        "manifest — intake tags it as red_cell, so the platelet sampler predicate "
+        "(all-platelet) must exclude it"
+    )
+
+    # Sanity: the sampled platelet REQNOs must all be purely platelet-only.
+    bundle = work / "bundle"
+    with (bundle / "BDVSTDT.csv").open(encoding="utf-8", newline="") as fh:
+        for row in csv.DictReader(fh):
+            if row.get("REQNO") in plt_reqnos_in_manifest:
+                bdtype = row["BDTYPE"].strip().upper()
+                assert is_platelet_product(bdtype), (
+                    f"BDTYPE {bdtype!r} in a sampled platelet order is not a "
+                    "platelet product — all-platelet predicate was not enforced"
+                )

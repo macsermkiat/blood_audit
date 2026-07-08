@@ -54,6 +54,7 @@ from pathlib import Path
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
+import bba.feature_flags as feature_flags
 from bba.audit_orders import (
     AuditOrdersConfig,
     BloodOrderInput,
@@ -78,6 +79,7 @@ from bba.evidence_bundle_builder import (
     HbRecord,
     MedRecord,
     OrderAnchor,
+    PlateletRecord,
     ProgressNote,
     VitalsRecord,
     build_evidence_bundle,
@@ -88,6 +90,14 @@ from bba.hb_lookup import (
     parse_hb_value,
     resolve_evidence_anchor,
     resolve_hb_with_fallback,
+)
+from bba.platelet_classifier import classify_platelet
+from bba.platelet_classifier.models import PlateletClassifierInputs
+from bba.platelet_lookup import (
+    PLATELET_LABEXM,
+    PlateletObservation,
+    lookup_platelet,
+    parse_platelet_count,
 )
 from bba.ingest.date_parser import parse_kcmh_english_date
 from bba.ingest.models import ParsedTimeOfDay
@@ -269,6 +279,33 @@ def _hb_observations(lab: list[dict[str, str]], an: str) -> list[HbObservation]:
                 value_g_dl=v,
                 datetime_utc=dt,
                 source="HEMATOLOGY" if labexm == HB_HEM_CODE else "POCT",
+                item_no=i,
+            )
+        )
+    return obs
+
+
+def _plt_observations(lab: list[dict[str, str]], an: str) -> list[PlateletObservation]:
+    obs: list[PlateletObservation] = []
+    for i, r in enumerate(lab):
+        if r.get("AN") != an:
+            continue
+        if (r.get("LABEXM") or "").strip() != PLATELET_LABEXM:
+            continue
+        v = parse_platelet_count(r.get("RESULT"))
+        if v is None:
+            continue
+        dt = _combine(
+            _parse_hosxp_date(r.get("LVSTDATE") or ""),
+            _parse_time(r.get("LVSTTIME") or ""),
+        )
+        if dt is None:
+            continue
+        obs.append(
+            PlateletObservation(
+                value_k_ul=v,
+                datetime_utc=dt,
+                source="HEMATOLOGY",
                 item_no=i,
             )
         )
@@ -822,6 +859,101 @@ def main() -> None:
     anchor_by_id: dict[str, EvidenceAnchor] = {}
 
     for order in fr.included:
+        # --- Platelet path (Phase 2, component="platelet") ---
+        # Only active when feature_flags.PLATELET_LLM_ENABLED is True.
+        # With the flag off, non-terminal platelet verdicts orphan intentionally
+        # (matching the pipeline.py Stage C2 gate); INSUFFICIENT_EVIDENCE rows
+        # were already persisted by the deterministic leg.
+        if order.component == "platelet":
+            if not feature_flags.PLATELET_LLM_ENABLED:
+                continue
+            plt_obs = _plt_observations(lab, order.an)
+            plt_result = lookup_platelet(
+                observations=plt_obs,
+                anchor_utc=order.order_datetime,
+            )
+            # Deterministic platelet gate: INSUFFICIENT_EVIDENCE is terminal
+            # (same contract as the pipeline library).  POTENTIALLY_INAPPROPRIATE
+            # and NEEDS_REVIEW route onward to the LLM.
+            plt_clf = classify_platelet(
+                PlateletClassifierInputs(
+                    audit_id=order.audit_id,
+                    platelet_count=plt_result.value_k_ul,
+                )
+            )
+            if plt_clf.classification == "INSUFFICIENT_EVIDENCE":
+                # Terminal: no LLM submission; deterministic-final row would be
+                # persisted by the pipeline library but is out-of-scope here.
+                continue
+            hn_hash = _hash(order.hn)
+            an_hash = _hash(order.an)
+            anchor_by_id[order.audit_id] = EvidenceAnchor(
+                anchor_utc=order.order_datetime,
+                display="",
+                reason="order",
+                gap_hours=0.0,
+            )
+            plt_diagnoses: tuple[DiagnosisRecord, ...] = tuple(
+                DiagnosisRecord(icd10=code, description=diag_name_by_code.get(code))
+                for code in dict.fromkeys(order.diagnosis_codes)
+            )
+            # Platelet count trend for the evidence bundle (Stage C2).
+            # PlateletRecord objects for all valid counts for this AN.
+            plt_records = tuple(
+                PlateletRecord(
+                    timestamp=obs.datetime_utc,
+                    value_k_ul=obs.value_k_ul,
+                    source="HEMATOLOGY",
+                    item_no=obs.item_no,
+                )
+                for obs in plt_obs
+            )
+            bundle = build_evidence_bundle(
+                inputs=EvidenceInputs(
+                    anchor=OrderAnchor(
+                        order_datetime=order.order_datetime,
+                        hn_hash=hn_hash,
+                        an_hash=an_hash,
+                        products=order.products_ordered,
+                    ),
+                    diagnoses=plt_diagnoses,
+                    platelet_history=plt_records,
+                )
+            )
+            plt_chunks: list[EvidenceChunk] = []
+            for item in bundle.items:
+                text = _render_payload(item.source, dict(item.payload))
+                if text.strip():
+                    plt_chunks.append(
+                        EvidenceChunk(
+                            evidence_id=item.id,
+                            source=item.source,
+                            text=text,
+                        )
+                    )
+            if not plt_chunks:
+                print(
+                    f"  WARN: empty chunks for platelet order {order.reqno}; "
+                    "skipping LLM submit"
+                )
+                continue
+            contexts.append(
+                PipelineRowContext.for_platelet(
+                    order=order,
+                    platelet_result=plt_result,
+                    hn_hash=hn_hash,
+                    an_hash=an_hash,
+                    redactor_version="external-deid-gate-narrative-0.1",
+                    redactor_model_sha="0" * 64,
+                    policy_version="KCMH-PR17.2 / AABB-2023 (pilot)",
+                    prompt_hash="0" * 64,
+                    evidence_bundle_hash=bundle.bundle_hash,
+                    evidence_chunks=tuple(plt_chunks),
+                )
+            )
+            continue
+
+        # --- Red-cell path (Phase 1, component="red_cell") ---
         # Reserve-ahead elective orders are crossmatched days before they are
         # transfused; re-anchor the evidence windows (Hb lookback, notes, CBC,
         # meds, vitals, INCPT) onto the issue datetime so the model adjudicates
@@ -1251,6 +1383,13 @@ def main() -> None:
     classifier_results: dict[str, Any] = {}
     llm_contexts: list[PipelineRowContext] = []
     for ctx in contexts:
+        if ctx.component == "platelet":
+            # Platelet contexts were already classified in the order loop above
+            # (INSUFFICIENT_EVIDENCE was skipped; anything reaching here routes
+            # to the LLM). No RBC classify() call — sentinel Hb values must not
+            # drive a classification decision.
+            llm_contexts.append(ctx)
+            continue
         periop = ctx.periop_summary
         cres = classify(
             ClassifierInputs(
@@ -1279,6 +1418,26 @@ def main() -> None:
 
     submissions: list[BatchSubmissionRequest] = []
     for ctx in llm_contexts:
+        if ctx.component == "platelet":
+            # Platelet review uses the dedicated PLATELET_REVIEW task mode
+            # and system prompt (no Hb cohort threshold).
+            prompt = build_prompt(
+                PromptBuildRequest(
+                    task_mode="PLATELET_REVIEW",
+                    cohort_threshold=None,
+                    evidence_chunks=ctx.evidence_chunks,
+                    few_shot_examples=(),
+                )
+            )
+            submissions.append(
+                BatchSubmissionRequest(
+                    audit_id=ctx.order.audit_id,
+                    run_id=RUN_ID,
+                    task_mode="PLATELET_REVIEW",
+                    prompt=prompt,
+                )
+            )
+            continue
         threshold = (
             ctx.cohort_assignment.threshold
             if ctx.cohort_assignment.threshold is not None

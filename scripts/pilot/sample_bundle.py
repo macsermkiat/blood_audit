@@ -219,15 +219,24 @@ def main() -> None:
     # with `rng`.
     platelet_sample: list[tuple[str, str, str]] = []
     if PLATELET_N > 0:
-        # Pass 1p — index BDVSTDT REQNOs that carry at least one platelet line item.
-        plt_reqnos: set[str] = set()
+        # Pass 1p — index BDVSTDT REQNOs where ALL line items are platelet
+        # products.  Mixed RBC+platelet REQNOs carry at least one RBC code
+        # and are tagged component="red_cell" by build_audit_orders — they
+        # must not appear in the platelet stream.  Only a REQNO whose every
+        # BDTYPE passes is_platelet_product() (and has at least one item)
+        # matches the intake predicate that tags component="platelet".
+        plt_bdtypes_by_reqno: dict[str, list[str]] = {}
         with (SRC / "BDVSTDT.csv").open(encoding="utf-8", newline="") as fh:
             for row in csv.DictReader(fh):
-                if is_platelet_product(row.get("BDTYPE", "").strip().upper()):
-                    plt_reqnos.add(row["REQNO"])
-        print(
-            f"BDVSTDT: {len(plt_reqnos)} REQNOs carry at least one platelet line item"
-        )
+                reqno = row["REQNO"]
+                bdtype = row.get("BDTYPE", "").strip().upper()
+                plt_bdtypes_by_reqno.setdefault(reqno, []).append(bdtype)
+
+        plt_reqnos: set[str] = set()
+        for reqno, bdtypes in plt_bdtypes_by_reqno.items():
+            if bdtypes and all(is_platelet_product(bt) for bt in bdtypes):
+                plt_reqnos.add(reqno)
+        print(f"BDVSTDT: {len(plt_reqnos)} REQNOs are platelet-ONLY orders")
 
         # Pass 2p — scan BDVST, keep eligible platelet orders.
         plt_candidates: list[tuple[str, str, str]] = []
