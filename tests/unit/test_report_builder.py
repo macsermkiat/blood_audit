@@ -330,3 +330,64 @@ class TestRejectMultiVersionRunRows:
             physician_resolver=lambda _r: "phys-1",
         )
         assert len(inputs.rows) == 3
+
+
+# =============================================================================
+# A2 — Platelet rows excluded from RBC report inputs
+# =============================================================================
+
+
+class TestPlateletRowsExcludedFromRbcReport:
+    """Platelet AuditRows must not appear in RBC build_report_inputs output.
+
+    WHY: platelet appropriateness is evaluated against platelet-count thresholds,
+    not Hb thresholds. Blending platelet rows into RBC report inputs would dilute
+    the RBC inappropriate_rate and produce clinically meaningless monthly committee
+    reports. The filter at build_report_inputs (before projection) is the single
+    choke point that keeps the RBC and platelet pipelines separate in reporting.
+    """
+
+    def test_platelet_rows_not_projected_into_report(self, tmp_path: Path) -> None:
+        """A platelet row in the store must not appear in the projected report rows."""
+        rbc_row = _row(audit_id="rbc-001")
+        platelet_row = _row(audit_id="plt-001", component="platelet")
+        inputs = build_report_inputs(
+            run_id="run-aaa",
+            audit_store=_store_returning(rbc_row, platelet_row),
+            output_dir=tmp_path,
+            ward_resolver=lambda _r: "ward-1",
+            physician_resolver=lambda _r: "phys-1",
+        )
+        assert len(inputs.rows) == 1
+        assert inputs.rows[0].audit_id == "rbc-001"
+
+    def test_rbc_row_count_unchanged_when_platelet_rows_added(
+        self, tmp_path: Path
+    ) -> None:
+        """A mixed store (RBC + platelet) produces the same projected row count as
+        an RBC-only store. Platelet rows contribute exactly zero to RBC totals."""
+        rbc_only = (_row(audit_id="rbc-001"), _row(audit_id="rbc-002"))
+        mixed = (
+            _row(audit_id="rbc-001"),
+            _row(audit_id="rbc-002"),
+            _row(audit_id="plt-001", component="platelet"),
+            _row(audit_id="plt-002", component="platelet"),
+        )
+        rbc_inputs = build_report_inputs(
+            run_id="run-aaa",
+            audit_store=_store_returning(*rbc_only),
+            output_dir=tmp_path / "rbc",
+            ward_resolver=lambda _r: "ward-1",
+            physician_resolver=lambda _r: "phys-1",
+        )
+        mixed_inputs = build_report_inputs(
+            run_id="run-aaa",
+            audit_store=_store_returning(*mixed),
+            output_dir=tmp_path / "mixed",
+            ward_resolver=lambda _r: "ward-1",
+            physician_resolver=lambda _r: "phys-1",
+        )
+        assert len(mixed_inputs.rows) == len(rbc_inputs.rows) == 2
+        assert {r.audit_id for r in mixed_inputs.rows} == {
+            r.audit_id for r in rbc_inputs.rows
+        }

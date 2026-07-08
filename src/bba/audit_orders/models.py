@@ -30,6 +30,13 @@ from bba.ingest.models import ParsedTimeOfDay
 RBCProduct = Literal["LPRC", "LDPRC", "SDR"]
 
 
+# Blood-component family of an admitted order (Phase 2). Mirrors
+# ``bba.audit_store.models.Component`` — kept local to avoid coupling
+# audit_orders (a foundational intake module) to audit_store.
+# ``red_cell`` is the default so existing RBC orders require no change.
+Component = Literal["red_cell", "platelet"]
+
+
 # Typed reason for excluding a (HN, REQNO). One enum value per excluded
 # subgroup named in the issue acceptance criteria; the ``detail`` field on
 # :class:`ExcludedRecord` carries the specific ICD-10 code (e.g., "D55.1")
@@ -111,8 +118,15 @@ class AuditOrder(BaseModel):
     reqno: str
     order_datetime: datetime
     anchor_imputed: bool
-    products_ordered: tuple[RBCProduct, ...]
+    # Widened from tuple[RBCProduct, ...] in Phase 2 to accommodate platelet
+    # product codes. RBC orders still carry exactly the same string values as
+    # before (LPRC / LDPRC / SDR); only platelet-only orders carry platelet codes.
+    products_ordered: tuple[str, ...]
     diagnosis_codes: tuple[str, ...]
+    # Component axis (Phase 2). Defaults to "red_cell" so existing RBC order
+    # construction is byte-identical — callers that do not set this field get
+    # the same AuditOrder they would have before Phase 2.
+    component: Component = "red_cell"
 
 
 class ExcludedRecord(BaseModel):
@@ -175,6 +189,7 @@ __all__: Sequence[str] = (
     "AuditOrder",
     "AuditOrdersConfig",
     "BloodOrderInput",
+    "Component",
     "ExcludedRecord",
     "ExclusionReason",
     "FilterResult",

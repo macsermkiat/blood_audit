@@ -181,16 +181,22 @@ def _audit_row_to_case_detail(
 
 
 def _read_snapshot_rows(config: DashboardConfig) -> tuple[AuditRow, ...]:
-    """Read audit rows via the daily-rotated DuckDB snapshot view.
+    """Read RBC audit rows via the daily-rotated DuckDB snapshot view.
 
     Keyed by ``datetime.now(UTC).date()`` — same-day reads share the
     materialized snapshot, mid-batch writes are isolated. The first read
     of a given day materializes the view; subsequent reads return the
     same frozen result set.
+
+    Only ``component == "red_cell"`` rows are returned. Platelet rows use
+    different clinical thresholds (platelet count vs Hb) and are excluded
+    from every RBC dashboard view (queue, ward/physician scorecard, pipeline
+    health). This is the single choke point: filtering here keeps every
+    downstream handler free of per-component branching.
     """
     today = datetime.now(UTC).date()
     view = SnapshotView.open(config.audit_store, today)
-    return view.read_audit_results()
+    return tuple(r for r in view.read_audit_results() if r.component == "red_cell")
 
 
 def _find_audit_row(config: DashboardConfig, audit_id: str) -> AuditRow:

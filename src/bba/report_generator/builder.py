@@ -175,7 +175,17 @@ def build_report_inputs(
             "missing — investigate before shipping an empty report"
         )
     _assert_single_code_version(records, run_id)
-    rows = tuple(row for row, _slug in records)
+    # Filter to red_cell rows before projection. Platelet rows (component=
+    # "platelet") use different clinical thresholds and must not dilute RBC
+    # report statistics. The filter happens at the source so every downstream
+    # aggregate function operates on a homogeneous red_cell set.
+    rows = tuple(row for row, _slug in records if row.component == "red_cell")
+    if not rows:
+        raise EmptyInputError(
+            f"audit_store has rows for run_id={run_id!r} but none are "
+            "component='red_cell'; the RBC report cannot be generated from "
+            "a platelet-only run"
+        )
 
     footer = _reconstruct_footer(rows)
     monthly_rows = tuple(

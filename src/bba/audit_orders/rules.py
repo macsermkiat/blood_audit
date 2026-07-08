@@ -22,6 +22,7 @@ from bba.audit_orders.models import (
     ExcludedRecord,
     RBCProduct,
 )
+from bba.component_map import PLATELET_PRODUCTS, is_platelet_product
 
 # Allow-listed RBC products per PRD §2 / issue #4 acceptance criteria.
 RBC_PRODUCTS: frozenset[str] = frozenset({"LPRC", "LDPRC", "SDR"})
@@ -54,14 +55,35 @@ def rbc_products_in(products: tuple[str, ...]) -> tuple[RBCProduct, ...]:
     return tuple(cast("RBCProduct", p) for p in products if p in RBC_PRODUCTS)
 
 
-def check_rbc_product(record: BloodOrderInput) -> ExcludedRecord | None:
-    """Reject records whose products are entirely outside :data:`RBC_PRODUCTS`.
+def platelet_products_in(products: tuple[str, ...]) -> tuple[str, ...]:
+    """Return the subset of ``products`` that are allow-listed platelet products,
+    preserving input order.
 
-    A record with at least one RBC product passes. Mixed-product orders
-    (one RBC + one non-RBC) are passed at this gate; downstream stages
-    care about which RBC product was actually issued.
+    Mirrors :func:`rbc_products_in` for the platelet family. Used by the
+    pipeline to populate ``products_ordered`` on platelet-only orders.
+    """
+    return tuple(p for p in products if p in PLATELET_PRODUCTS)
+
+
+def check_rbc_product(record: BloodOrderInput) -> ExcludedRecord | None:
+    """Reject records whose products are neither RBC nor platelet-only.
+
+    Admission rules (Phase 2 widening):
+
+    * At least one RBC product → pass (as red_cell, unchanged from Phase 1).
+    * All products are platelet products (and non-empty) → pass (as platelet).
+    * Everything else (FFP-only, cryo-only, empty, unknown) → reject with
+      reason ``not_rbc_product``.
+
+    Mixed RBC+platelet orders already pass the first branch (they have at least
+    one RBC product); :func:`rbc_products_in` strips the platelet code downstream.
+    FFP / cryo / whole-blood-only orders are deliberately excluded (docs plan §6).
+    An empty ``products`` tuple also falls through to the rejection branch —
+    the ``all()`` vacuous-truth edge case is guarded by the non-empty check.
     """
     if any(is_rbc_product(p) for p in record.products):
+        return None
+    if record.products and all(is_platelet_product(p) for p in record.products):
         return None
     return ExcludedRecord(
         hn=record.hn,
@@ -215,6 +237,7 @@ def check_hemoglobinopathy(record: BloodOrderInput) -> ExcludedRecord | None:
 __all__ = (
     "ELIGIBLE_STATUS",
     "HEMOGLOBINOPATHY_PREFIXES",
+    "PLATELET_PRODUCTS",
     "RBC_PRODUCTS",
     "check_an_scoped",
     "check_cancelled",
@@ -222,6 +245,8 @@ __all__ = (
     "check_rbc_product",
     "check_request_type",
     "check_status",
+    "is_platelet_product",
     "is_rbc_product",
+    "platelet_products_in",
     "rbc_products_in",
 )
