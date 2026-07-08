@@ -1460,7 +1460,20 @@ def main() -> None:
         )
 
     DETERMINISTIC_FINAL = {"APPROPRIATE", "INSUFFICIENT_EVIDENCE", "INAPPROPRIATE"}
+    # Two deliberately separate maps (Codex round-6 P1):
+    #   * ``classifier_results`` holds ONLY RBC ``ClassifierResult`` entries and
+    #     is handed to ``apply_batch_results``. Platelet contexts are excluded so
+    #     the replay path re-derives ``rule_classification`` from the platelet
+    #     gate (``_platelet_gate_result``) instead of reading ``.cohort_threshold``
+    #     off a ``PlateletClassifierResult`` (which has no such attribute and
+    #     would crash). This mirrors the main pipeline, which submits platelet
+    #     batches with ``classifier_results={}``.
+    #   * ``report_classifier_results`` holds BOTH RBC and platelet deterministic
+    #     results and is consumed only by the summary + JSON-report loops below,
+    #     so the round-4 KeyError fix's intent is preserved without leaking a
+    #     ``PlateletClassifierResult`` into the RBC replay classifier map.
     classifier_results: dict[str, Any] = {}
+    report_classifier_results: dict[str, Any] = {}
     llm_contexts: list[PipelineRowContext] = []
     for ctx in contexts:
         if ctx.component == "platelet":
@@ -1468,17 +1481,19 @@ def main() -> None:
             # (INSUFFICIENT_EVIDENCE was skipped; anything reaching here routes
             # to the LLM). No RBC classify() call — sentinel Hb values must not
             # drive a classification decision.
-            # Fix 2 (Codex P2): store the platelet classifier result so the
-            # downstream summary and JSON-report loops can look it up without
-            # a KeyError.  Use the deterministic gate (same inputs as the order
-            # loop) rather than re-reading the pre-computed value that is local
-            # to the order loop.
+            # Store the platelet classifier result in the REPORT map only so the
+            # downstream summary and JSON-report loops can look it up without a
+            # KeyError. It is intentionally kept OUT of ``classifier_results``
+            # (the replay map) so ``apply_batch_results`` never receives a
+            # ``PlateletClassifierResult``. Use the deterministic gate (same
+            # inputs as the order loop) rather than re-reading the pre-computed
+            # value that is local to the order loop.
             plt_count = (
                 ctx.platelet_result.value_k_ul
                 if ctx.platelet_result is not None
                 else None
             )
-            classifier_results[ctx.order.audit_id] = classify_platelet(
+            report_classifier_results[ctx.order.audit_id] = classify_platelet(
                 PlateletClassifierInputs(
                     audit_id=ctx.order.audit_id,
                     platelet_count=plt_count,
@@ -1505,6 +1520,7 @@ def main() -> None:
             )
         )
         classifier_results[ctx.order.audit_id] = cres
+        report_classifier_results[ctx.order.audit_id] = cres
         if cres.classification not in DETERMINISTIC_FINAL:
             llm_contexts.append(ctx)
 
@@ -1640,6 +1656,10 @@ def main() -> None:
         print(f"  batch complete in {elapsed:.1f}s; {len(response.results)} results")
 
         context_map = {ctx.order.audit_id: ctx for ctx in llm_contexts}
+        # ``classifier_results`` holds RBC ``ClassifierResult`` entries only;
+        # platelet contexts are absent, so the replay path re-derives their
+        # ``rule_classification`` from the platelet gate rather than reading
+        # ``.cohort_threshold`` off a ``PlateletClassifierResult``.
         write_summary = apply_batch_results(
             response,
             audit_store=audit_store,
@@ -1658,7 +1678,7 @@ def main() -> None:
     )
     print("=" * 120)
     for ctx in llm_contexts:
-        det = classifier_results[ctx.order.audit_id]
+        det = report_classifier_results[ctx.order.audit_id]
         r = rows_by_id.get(ctx.order.audit_id)
         reasoning = r.reasoning_summary_en[:60] if r and r.reasoning_summary_en else ""
         final = r.final_classification if r else "(no row)"
@@ -1671,7 +1691,7 @@ def main() -> None:
 
     report = []
     for ctx in llm_contexts:
-        det = classifier_results[ctx.order.audit_id]
+        det = report_classifier_results[ctx.order.audit_id]
         r = rows_by_id.get(ctx.order.audit_id)
         ev = anchor_by_id.get(ctx.order.audit_id)
         report.append(
