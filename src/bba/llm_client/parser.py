@@ -24,6 +24,8 @@ from bba.llm_client.models import (
     LlmClassificationResponse,
     ParseFailureReason,
     ParseOutcome,
+    PlateletHardSignals,
+    PlateletLlmClassificationResponse,
     _ALLOWED_CLASSIFICATIONS,
 )
 
@@ -85,6 +87,67 @@ def parse_structured_response(result: BatchSubmissionResult) -> ParseOutcome:
         parse_failure=False,
         parse_failure_reason=None,
         raw_text=_stringify(parsed_dict),
+    )
+
+
+def parse_platelet_structured_response(result: BatchSubmissionResult) -> ParseOutcome:
+    """Parse a platelet tool-use response and extract the three hard-signal bools.
+
+    Fails closed (same contract as :func:`parse_structured_response`): every
+    failure mode lands as ``parse_failure=True`` with a structured
+    :class:`ParseFailureReason` and ``platelet_hard_signals=None``.
+
+    On success, ``platelet_hard_signals`` carries the three grounded booleans
+    from :class:`PlateletLlmClassificationResponse`.  A response that omits
+    any of the three booleans fails as ``SCHEMA_MISMATCH`` so Stage C2 can
+    distinguish a schema failure from an all-False signal set.
+    """
+    raw_text_fallback = ""
+
+    try:
+        content = _extract_content(result.raw_response_json)
+    except _ParseGuard as guard:
+        return _failure(guard.reason, raw_text_fallback)
+
+    tool_block = _find_tool_use(content)
+    if tool_block is None:
+        return _failure(
+            ParseFailureReason.TOOL_USE_MISSING, _stringify_content(content)
+        )
+
+    tool_input = tool_block.get("input")
+    parsed_dict, malformed = _coerce_to_dict(tool_input)
+    if malformed:
+        return _failure(ParseFailureReason.MALFORMED_JSON, _stringify(tool_input))
+    if parsed_dict is None:
+        return _failure(ParseFailureReason.SCHEMA_MISMATCH, _stringify(tool_input))
+
+    classification = parsed_dict.get("classification")
+    if (
+        isinstance(classification, str)
+        and classification not in _ALLOWED_CLASSIFICATIONS
+    ):
+        return _failure(
+            ParseFailureReason.CLASSIFICATION_OUT_OF_SET, _stringify(parsed_dict)
+        )
+
+    try:
+        response = PlateletLlmClassificationResponse.model_validate(parsed_dict)
+    except ValidationError:
+        return _failure(ParseFailureReason.SCHEMA_MISMATCH, _stringify(parsed_dict))
+
+    signals = PlateletHardSignals(
+        active_bleeding=response.active_bleeding,
+        procedure_indication=response.procedure_indication,
+        prophylactic_marrow_failure=response.prophylactic_marrow_failure,
+    )
+
+    return ParseOutcome(
+        parsed=response,
+        parse_failure=False,
+        parse_failure_reason=None,
+        raw_text=_stringify(parsed_dict),
+        platelet_hard_signals=signals,
     )
 
 

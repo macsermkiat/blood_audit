@@ -46,6 +46,14 @@ from bba.hb_lookup import (
 )
 from bba.ingest.date_parser import parse_kcmh_english_date
 from bba.ingest.models import ParsedTimeOfDay
+from bba.platelet_classifier import classify_platelet
+from bba.platelet_classifier.models import PlateletClassifierInputs
+from bba.platelet_lookup import (
+    PLATELET_LABEXM,
+    PlateletObservation,
+    lookup_platelet,
+    parse_platelet_count,
+)
 from bba.vitals_extractor import scan_periop
 
 from _anchor_candidates import build_anchor_candidates
@@ -126,6 +134,10 @@ REPORT_FIELDNAMES = [
     "classification",
     "rationale",
     "bypass_reason",
+    # Phase 2 platelet columns — empty for red_cell rows.
+    "component",
+    "platelet_count_k_ul",
+    "platelet_freshness",
 ]
 
 csv.field_size_limit(sys.maxsize)
@@ -189,6 +201,35 @@ def _build_hb_observations(
                 value_g_dl=v,
                 datetime_utc=dt,
                 source="HEMATOLOGY" if labexm == HB_HEM_CODE else "POCT",
+                item_no=i,
+            )
+        )
+    return obs
+
+
+def _build_platelet_observations(
+    lab_rows: list[dict[str, str]], an: str
+) -> list[PlateletObservation]:
+    obs: list[PlateletObservation] = []
+    for i, r in enumerate(lab_rows):
+        if r.get("AN") != an:
+            continue
+        if (r.get("LABEXM") or "").strip() != PLATELET_LABEXM:
+            continue
+        v = parse_platelet_count(r.get("RESULT"))
+        if v is None:
+            continue
+        dt = _combine(
+            _parse_hosxp_date(r.get("LVSTDATE") or ""),
+            _parse_time(r.get("LVSTTIME") or ""),
+        )
+        if dt is None:
+            continue
+        obs.append(
+            PlateletObservation(
+                value_k_ul=v,
+                datetime_utc=dt,
+                source="HEMATOLOGY",
                 item_no=i,
             )
         )
@@ -586,6 +627,48 @@ def main() -> None:
 
     rows: list[dict[str, Any]] = []
     for order in filter_result.included:
+        # --- Platelet path (Phase 2, component="platelet") ---
+        if order.component == "platelet":
+            plt_obs = _build_platelet_observations(lab, order.an)
+            plt_result = lookup_platelet(
+                observations=plt_obs,
+                anchor_utc=order.order_datetime,
+            )
+            plt_clf = classify_platelet(
+                PlateletClassifierInputs(
+                    audit_id=order.audit_id,
+                    platelet_count=plt_result.value_k_ul,
+                )
+            )
+            plt_disp = (
+                f"{plt_result.value_k_ul:.0f}"
+                if plt_result.value_k_ul is not None
+                else "----"
+            )
+            print(
+                f"{order.reqno:<10} {order.an[:20]:<22} "
+                f"{'platelet':<24} "
+                f"PLT={plt_disp:<5} {plt_result.freshness:<14} "
+                f"{'n/a':<5} {plt_clf.classification:<26} {plt_clf.rationale}"
+            )
+            rows.append(
+                {
+                    "reqno": order.reqno,
+                    "an": order.an,
+                    "order_datetime_utc": order.order_datetime.isoformat(),
+                    "anchor_imputed": order.anchor_imputed,
+                    "products_ordered": "|".join(order.products_ordered),
+                    "diagnosis_codes_n": len(order.diagnosis_codes),
+                    "component": "platelet",
+                    "platelet_count_k_ul": plt_result.value_k_ul,
+                    "platelet_freshness": plt_result.freshness,
+                    "classification": plt_clf.classification,
+                    "rationale": plt_clf.rationale,
+                }
+            )
+            continue
+
+        # --- Red-cell path (Phase 1, component="red_cell") ---
         # Reserve-ahead elective orders are crossmatched days before transfusion;
         # re-anchor the Hb lookback (and the LLM gate's evidence windows) onto
         # the issue datetime so the op-day Hb is what the order is judged on.
@@ -745,6 +828,7 @@ def main() -> None:
                 "classification": clf.classification,
                 "rationale": clf.rationale,
                 "bypass_reason": clf.bypass_reason.value,
+                "component": "red_cell",
             }
         )
 

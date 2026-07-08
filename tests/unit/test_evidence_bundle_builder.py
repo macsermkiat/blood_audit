@@ -64,6 +64,7 @@ from bba.evidence_bundle_builder import (
     HbRecord,
     MedRecord,
     OrderAnchor,
+    PlateletRecord,
     ProgressNote,
     VitalsRecord,
     build_evidence_bundle,
@@ -136,6 +137,20 @@ def _hb(
         timestamp=ANCHOR_DT + timedelta(hours=offset_hours),
         value_g_dl=value,
         source=source,  # type: ignore[arg-type]
+        item_no=item_no,
+    )
+
+
+def _plt(
+    *,
+    offset_hours: float,
+    value: float = 45.0,
+    item_no: int = 1,
+) -> PlateletRecord:
+    return PlateletRecord(
+        timestamp=ANCHOR_DT + timedelta(hours=offset_hours),
+        value_k_ul=value,
+        source="HEMATOLOGY",
         item_no=item_no,
     )
 
@@ -2783,3 +2798,67 @@ class TestEmptyInputs:
             bundle.bundle_hash
             == hashlib.sha256(bundle.canonical_json.encode("utf-8")).hexdigest()
         )
+
+
+# =============================================================================
+# Stage C2 — platelet count-trend evidence
+#
+# WHY: the platelet LLM leg needs the count over time (LABEXM 290078) exactly
+# as the RBC leg needs the Hb trend. The count-trend is emitted under the shared
+# ``Lab`` source; because the RBC bundle never populates ``platelet_history`` the
+# addition must leave RBC bundles byte-identical.
+# =============================================================================
+
+
+class TestPlateletCountTrend:
+    def test_count_trend_emitted_as_lab_items(self) -> None:
+        # Two in-window counts must both surface as Lab evidence items carrying
+        # the platelet payload, so the LLM can read the trend.
+        bundle = _build_minimal(
+            platelet_history=(
+                _plt(offset_hours=-2, value=40.0, item_no=2),
+                _plt(offset_hours=-48, value=95.0, item_no=1),
+            )
+        )
+        lab_items = [it for it in bundle.items if it.source == "Lab"]
+        assert len(lab_items) == 2
+        assert all(it.payload.get("test") == "platelet_count" for it in lab_items)
+        assert {it.payload["value_k_ul"] for it in lab_items} == {40.0, 95.0}
+
+    def test_count_trend_newest_first(self) -> None:
+        # Newest-first (like Hb): the decision-time count leads and survives
+        # tail-drop pressure. -2h (newest) must precede -48h.
+        bundle = _build_minimal(
+            platelet_history=(
+                _plt(offset_hours=-48, value=95.0, item_no=1),
+                _plt(offset_hours=-2, value=40.0, item_no=2),
+            )
+        )
+        lab_values = [
+            it.payload["value_k_ul"] for it in bundle.items if it.source == "Lab"
+        ]
+        assert lab_values == [40.0, 95.0]
+
+    def test_count_older_than_7d_excluded(self) -> None:
+        # STRICT 7-day lower bound mirrors _filter_hb: a count exactly 7 d old is
+        # invisible to the platelet gate's lookup, so it must not reach the bundle.
+        bundle = _build_minimal(
+            platelet_history=(_plt(offset_hours=-7 * 24, value=30.0),)
+        )
+        assert [it for it in bundle.items if it.source == "Lab"] == []
+
+    def test_post_order_count_excluded(self) -> None:
+        # A count charted after the order is response analysis, not decision
+        # evidence — excluded, same as post-order Hb.
+        bundle = _build_minimal(platelet_history=(_plt(offset_hours=+3, value=30.0),))
+        assert [it for it in bundle.items if it.source == "Lab"] == []
+
+    def test_empty_platelet_history_is_byte_identical(self) -> None:
+        # The load-bearing byte-identity guarantee: an RBC-shaped bundle built
+        # WITHOUT platelet_history must hash-match one that passes the default
+        # empty tuple explicitly. If this drifts, every stored RBC
+        # evidence_bundle_hash would change.
+        without = _build_minimal()
+        with_empty = _build_minimal(platelet_history=())
+        assert with_empty.bundle_hash == without.bundle_hash
+        assert with_empty.canonical_json == without.canonical_json

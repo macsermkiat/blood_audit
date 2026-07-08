@@ -8,22 +8,32 @@ Strategy:
    CANCELDATE NULL, AN non-null.
 2. Random-sample N (HN, REQNO) keys (seed configurable so reruns are
    reproducible).
-3. Project each table to rows that match the sampled keys, into
-   ``$BBA_PILOT_WORK_DIR/bundle/``. Blood-bank order tables keep only
-   sampled REQNOs so pipeline outputs remain manifest-scoped; review-only
-   sidecar tables carry same-admission rows for related platelet/FFP/PRC
-   requests under neighboring REQNOs.
-4. Carry the dictionaries (BDVSTST, BDTYPE, ICD9CM) whole — they are
+3. Optionally sample an additional M platelet orders using a SEPARATE
+   ``random.Random`` instance seeded by ``BBA_PILOT_PLATELET_SEED``.
+   The platelet RNG never touches the RBC RNG — the two instances are
+   completely independent, so the RBC sample is byte-identical whether
+   platelet sampling is active or not.
+4. Project each table to rows that match the sampled keys (RBC union
+   platelet), into ``$BBA_PILOT_WORK_DIR/bundle/``. Blood-bank order
+   tables keep only sampled REQNOs so pipeline outputs remain
+   manifest-scoped; review-only sidecar tables carry same-admission rows
+   for related requests under neighboring REQNOs.
+5. Carry the dictionaries (BDVSTST, BDTYPE, ICD9CM) whole — they are
    small and the audit pipeline needs them for lookups.
-5. Write the sample manifest alongside the bundle for traceability.
+6. Write the sample manifest alongside the bundle, component-tagged
+   (``rbc`` / ``platelet``) with each row's seed for traceability.
 
 Environment variables:
 
 * ``BBA_PILOT_RAW_DIR`` — directory containing the encrypted HOSxP
   CSVs (default: ``../Bloodbank/data/encrypted`` relative to repo root).
 * ``BBA_PILOT_WORK_DIR`` — output directory (default: ``/tmp/bba_mini``).
-* ``BBA_PILOT_SAMPLE_N`` — number of orders to sample (default: 10).
-* ``BBA_PILOT_SAMPLE_SEED`` — RNG seed (default: 20260519).
+* ``BBA_PILOT_SAMPLE_N`` — number of RBC orders to sample (default: 10).
+* ``BBA_PILOT_SAMPLE_SEED`` — RBC RNG seed (default: 20260519).
+* ``BBA_PILOT_PLATELET_SAMPLE_N`` — number of platelet orders to sample
+  (default: 0, opt-in so the bundle is RBC-only unless explicitly set).
+* ``BBA_PILOT_PLATELET_SEED`` — platelet RNG seed, independent from the
+  RBC seed (default: 20260520).
 """
 
 from __future__ import annotations
@@ -33,6 +43,8 @@ import os
 import random
 import sys
 from pathlib import Path
+
+from bba.component_map import is_platelet_product
 
 SRC = Path(
     os.environ.get(
@@ -50,6 +62,8 @@ WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
 DST = WORK / "bundle"
 N = int(os.environ.get("BBA_PILOT_SAMPLE_N", "10"))
 SEED = int(os.environ.get("BBA_PILOT_SAMPLE_SEED", "20260519"))
+PLATELET_N = int(os.environ.get("BBA_PILOT_PLATELET_SAMPLE_N", "0"))
+PLATELET_SEED = int(os.environ.get("BBA_PILOT_PLATELET_SEED", "20260520"))
 
 RBC = {"LPRC", "LDPRC", "SDR"}
 ELIGIBLE_STATUS = {"4", "5"}
@@ -193,28 +207,99 @@ def main() -> None:
     sample_pairs = {(h, a) for h, _, a in sample}
     sample_hns = {hn for hn, _, _ in sample}
     sample_ans = {a for _, _, a in sample}
-    related_reqnos = set(sample_reqnos)
+    print("\nSampled RBC (HN, REQNO, AN):")
+    for s in sample:
+        print(" ", s)
+
+    # --- Platelet sampling (ADDITIVE; separate rng, never touches the RBC rng) ---
+    # When PLATELET_N=0 (default) the block below is skipped entirely, so the RBC
+    # rng's call sequence — and therefore its output — is byte-identical to a
+    # pre-platelet run.  When PLATELET_N>0 a completely independent
+    # random.Random(PLATELET_SEED) is constructed and used; it never shares state
+    # with `rng`.
+    platelet_sample: list[tuple[str, str, str]] = []
+    if PLATELET_N > 0:
+        # Pass 1p — index BDVSTDT REQNOs where ALL line items are platelet
+        # products.  Mixed RBC+platelet REQNOs carry at least one RBC code
+        # and are tagged component="red_cell" by build_audit_orders — they
+        # must not appear in the platelet stream.  Only a REQNO whose every
+        # BDTYPE passes is_platelet_product() (and has at least one item)
+        # matches the intake predicate that tags component="platelet".
+        plt_bdtypes_by_reqno: dict[str, list[str]] = {}
+        with (SRC / "BDVSTDT.csv").open(encoding="utf-8", newline="") as fh:
+            for row in csv.DictReader(fh):
+                reqno = row["REQNO"]
+                bdtype = row.get("BDTYPE", "").strip().upper()
+                plt_bdtypes_by_reqno.setdefault(reqno, []).append(bdtype)
+
+        plt_reqnos: set[str] = set()
+        for reqno, bdtypes in plt_bdtypes_by_reqno.items():
+            if bdtypes and all(is_platelet_product(bt) for bt in bdtypes):
+                plt_reqnos.add(reqno)
+        print(f"BDVSTDT: {len(plt_reqnos)} REQNOs are platelet-ONLY orders")
+
+        # Pass 2p — scan BDVST, keep eligible platelet orders.
+        plt_candidates: list[tuple[str, str, str]] = []
+        with (SRC / "BDVST.csv").open(encoding="utf-8", newline="") as fh:
+            for row in csv.DictReader(fh):
+                if row["REQNO"] not in plt_reqnos:
+                    continue
+                if row.get("REQTYPE", "").strip() != "P":
+                    continue
+                if row.get("BDVSTST", "").strip() not in ELIGIBLE_STATUS:
+                    continue
+                if row.get("CANCELDATE", "").strip():
+                    continue
+                an = (row.get("AN") or "").strip()
+                hn = (row.get("HN") or "").strip()
+                if not an or not hn:
+                    continue
+                plt_candidates.append((hn, row["REQNO"], an))
+        print(f"BDVST: {len(plt_candidates)} eligible platelet orders")
+        if len(plt_candidates) < PLATELET_N:
+            sys.exit(
+                f"only {len(plt_candidates)} platelet candidates < PLATELET_N={PLATELET_N}"
+            )
+
+        # Separate rng — NEVER draws from the RBC rng.
+        plt_rng = random.Random(PLATELET_SEED)
+        platelet_sample = plt_rng.sample(plt_candidates, PLATELET_N)
+        print("\nSampled platelet (HN, REQNO, AN):")
+        for s in platelet_sample:
+            print(" ", s)
+
+    # --- Build combined key sets (RBC union platelet) ---
+    # When PLATELET_N=0 all plt_* sets are empty so the unions collapse to
+    # the RBC-only sets — behaviour is byte-identical to the original code.
+    plt_reqnos_sampled: set[str] = {r for _, r, _ in platelet_sample}
+    plt_ans: set[str] = {a for _, _, a in platelet_sample}
+    plt_hns: set[str] = {hn for hn, _, _ in platelet_sample}
+    plt_pairs: set[tuple[str, str]] = {(h, a) for h, _, a in platelet_sample}
+
+    all_reqnos = sample_reqnos | plt_reqnos_sampled
+    all_ans = sample_ans | plt_ans
+    all_hns = sample_hns | plt_hns
+    all_pairs = sample_pairs | plt_pairs
+
+    related_reqnos = set(all_reqnos)
     with (SRC / "BDVST.csv").open(encoding="utf-8", newline="") as fh:
         for row in csv.DictReader(fh):
             hn = (row.get("HN") or "").strip()
             an = (row.get("AN") or "").strip()
-            if (hn, an) in sample_pairs:
+            if (hn, an) in all_pairs:
                 related_reqnos.add(row["REQNO"])
-    print("\nSampled (HN, REQNO, AN):")
-    for s in sample:
-        print(" ", s)
 
     print("\nWriting mini bundle:")
     _filter(
         "BDVST.csv",
         "BDVST.csv",
-        lambda r: r["REQNO"] in sample_reqnos,
+        lambda r: r["REQNO"] in all_reqnos,
         cols=BDVST_COLS,
     )
     _filter(
         "BDVSTDT.csv",
         "BDVSTDT.csv",
-        lambda r: r["REQNO"] in sample_reqnos,
+        lambda r: r["REQNO"] in all_reqnos,
         cols=BDVSTDT_COLS,
     )
     _filter(
@@ -229,24 +314,24 @@ def main() -> None:
         lambda r: r["REQNO"] in related_reqnos,
         cols=BDVSTDT_COLS,
     )
-    _filter("Diagnosis.csv", "Diagnosis.csv", lambda r: r.get("AN") in sample_ans)
-    _filter("Lab.csv", "Lab.csv", lambda r: r.get("AN") in sample_ans)
-    _filter("Med.csv", "Med.csv", lambda r: r.get("AN") in sample_ans)
+    _filter("Diagnosis.csv", "Diagnosis.csv", lambda r: r.get("AN") in all_ans)
+    _filter("Lab.csv", "Lab.csv", lambda r: r.get("AN") in all_ans)
+    _filter("Med.csv", "Med.csv", lambda r: r.get("AN") in all_ans)
     _filter(
-        "IPDADMPROGRESS.csv", "IPDADMPROGRESS.csv", lambda r: r.get("AN") in sample_ans
+        "IPDADMPROGRESS.csv", "IPDADMPROGRESS.csv", lambda r: r.get("AN") in all_ans
     )
-    _filter("IPDNRFOCUSDT.csv", "IPDNRFOCUSDT.csv", lambda r: r.get("AN") in sample_ans)
+    _filter("IPDNRFOCUSDT.csv", "IPDNRFOCUSDT.csv", lambda r: r.get("AN") in all_ans)
     # Procedure-family exports have arrived as both Title-Case and ALL-CAPS.
     _filter(
         "IPTSUMOPRT.csv",
         "IPTSUMOPRT.csv",
-        lambda r: (r.get("An") or r.get("AN")) in sample_ans,
+        lambda r: (r.get("An") or r.get("AN")) in all_ans,
     )
     if (SRC / "IPDDCHSUMOPRT.csv").exists():
         _filter(
             "IPDDCHSUMOPRT.csv",
             "IPDDCHSUMOPRT.csv",
-            lambda r: (r.get("An") or r.get("AN")) in sample_ans,
+            lambda r: (r.get("An") or r.get("AN")) in all_ans,
         )
     if (SRC / "INCPT_OPRTACT.csv").exists():
         _filter(
@@ -257,7 +342,7 @@ def main() -> None:
                     (r.get("Hn") or r.get("HN") or ""),
                     (r.get("An") or r.get("AN") or ""),
                 )
-                in sample_pairs
+                in all_pairs
             ),
         )
     elif (SRC / "INCPT.csv").exists():
@@ -269,7 +354,7 @@ def main() -> None:
                     (r.get("Hn") or r.get("HN") or ""),
                     (r.get("An") or r.get("AN") or ""),
                 )
-                in sample_pairs
+                in all_pairs
             ),
         )
     if (SRC / "BDVSTTRANS.csv").exists():
@@ -277,8 +362,8 @@ def main() -> None:
             "BDVSTTRANS.csv",
             "BDVSTTRANS.csv",
             lambda r: (
-                (r.get("AN") or r.get("An")) in sample_ans
-                or (r.get("HN") or r.get("Hn")) in sample_hns
+                (r.get("AN") or r.get("An")) in all_ans
+                or (r.get("HN") or r.get("Hn")) in all_hns
             ),
             cols=BDVSTTRANS_COLS,
         )
@@ -292,11 +377,16 @@ def main() -> None:
     )
 
     manifest = WORK / "sample_manifest.csv"
-    with manifest.open("w", encoding="utf-8") as fh:
-        fh.write("HN,REQNO,AN\n")
+    with manifest.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["HN", "REQNO", "AN", "component", "seed"])
         for s in sample:
-            fh.write(",".join(s) + "\n")
-    print(f"\nManifest: {manifest}")
+            writer.writerow([s[0], s[1], s[2], "rbc", SEED])
+        for s in platelet_sample:
+            writer.writerow([s[0], s[1], s[2], "platelet", PLATELET_SEED])
+    print(
+        f"\nManifest: {manifest} ({len(sample)} rbc, {len(platelet_sample)} platelet)"
+    )
 
 
 if __name__ == "__main__":

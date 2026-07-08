@@ -54,12 +54,14 @@ from pathlib import Path
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
+import bba.feature_flags as feature_flags
 from bba.audit_orders import (
     AuditOrdersConfig,
     BloodOrderInput,
     build_audit_orders,
 )
 from bba.audit_pipeline import PipelineRowContext
+from bba.audit_pipeline.pipeline import _persist_injection_flagged_row
 from bba.audit_pipeline.replay import apply_batch_results
 from bba.audit_store import AuditStore, AuditStoreConfig
 from bba.cohort_detector import (
@@ -78,6 +80,7 @@ from bba.evidence_bundle_builder import (
     HbRecord,
     MedRecord,
     OrderAnchor,
+    PlateletRecord,
     ProgressNote,
     VitalsRecord,
     build_evidence_bundle,
@@ -88,6 +91,14 @@ from bba.hb_lookup import (
     parse_hb_value,
     resolve_evidence_anchor,
     resolve_hb_with_fallback,
+)
+from bba.platelet_classifier import classify_platelet
+from bba.platelet_classifier.models import PlateletClassifierInputs
+from bba.platelet_lookup import (
+    PLATELET_LABEXM,
+    PlateletObservation,
+    lookup_platelet,
+    parse_platelet_count,
 )
 from bba.ingest.date_parser import parse_kcmh_english_date
 from bba.ingest.models import ParsedTimeOfDay
@@ -269,6 +280,33 @@ def _hb_observations(lab: list[dict[str, str]], an: str) -> list[HbObservation]:
                 value_g_dl=v,
                 datetime_utc=dt,
                 source="HEMATOLOGY" if labexm == HB_HEM_CODE else "POCT",
+                item_no=i,
+            )
+        )
+    return obs
+
+
+def _plt_observations(lab: list[dict[str, str]], an: str) -> list[PlateletObservation]:
+    obs: list[PlateletObservation] = []
+    for i, r in enumerate(lab):
+        if r.get("AN") != an:
+            continue
+        if (r.get("LABEXM") or "").strip() != PLATELET_LABEXM:
+            continue
+        v = parse_platelet_count(r.get("RESULT"))
+        if v is None:
+            continue
+        dt = _combine(
+            _parse_hosxp_date(r.get("LVSTDATE") or ""),
+            _parse_time(r.get("LVSTTIME") or ""),
+        )
+        if dt is None:
+            continue
+        obs.append(
+            PlateletObservation(
+                value_k_ul=v,
+                datetime_utc=dt,
+                source="HEMATOLOGY",
                 item_no=i,
             )
         )
@@ -822,6 +860,180 @@ def main() -> None:
     anchor_by_id: dict[str, EvidenceAnchor] = {}
 
     for order in fr.included:
+        # --- Platelet path (Phase 2, component="platelet") ---
+        # Only active when feature_flags.PLATELET_LLM_ENABLED is True.
+        # With the flag off, non-terminal platelet verdicts orphan intentionally
+        # (matching the pipeline.py Stage C2 gate); INSUFFICIENT_EVIDENCE rows
+        # were already persisted by the deterministic leg.
+        if order.component == "platelet":
+            if not feature_flags.PLATELET_LLM_ENABLED:
+                continue
+            plt_obs = _plt_observations(lab, order.an)
+            plt_result = lookup_platelet(
+                observations=plt_obs,
+                anchor_utc=order.order_datetime,
+            )
+            # Deterministic platelet gate: INSUFFICIENT_EVIDENCE is terminal
+            # (same contract as the pipeline library).  POTENTIALLY_INAPPROPRIATE
+            # and NEEDS_REVIEW route onward to the LLM.
+            plt_clf = classify_platelet(
+                PlateletClassifierInputs(
+                    audit_id=order.audit_id,
+                    platelet_count=plt_result.value_k_ul,
+                )
+            )
+            if plt_clf.classification == "INSUFFICIENT_EVIDENCE":
+                # Terminal: no LLM submission; deterministic-final row would be
+                # persisted by the pipeline library but is out-of-scope here.
+                continue
+            hn_hash = _hash(order.hn)
+            an_hash = _hash(order.an)
+            anchor_by_id[order.audit_id] = EvidenceAnchor(
+                anchor_utc=order.order_datetime,
+                display="",
+                reason="order",
+                gap_hours=0.0,
+            )
+            plt_diagnoses: tuple[DiagnosisRecord, ...] = tuple(
+                DiagnosisRecord(icd10=code, description=diag_name_by_code.get(code))
+                for code in dict.fromkeys(order.diagnosis_codes)
+            )
+            # Platelet count trend for the evidence bundle (Stage C2).
+            # PlateletRecord objects for all valid counts for this AN.
+            plt_records = tuple(
+                PlateletRecord(
+                    timestamp=obs.datetime_utc,
+                    value_k_ul=obs.value_k_ul,
+                    source="HEMATOLOGY",
+                    item_no=obs.item_no,
+                )
+                for obs in plt_obs
+            )
+            # --- Platelet evidence: notes / meds / procedures / vitals ---
+            # Fix 3 (Codex P2): the platelet hard signals (active_bleeding,
+            # procedure_indication, prophylactic_marrow_failure) are grounded
+            # in narrative notes and procedure records. Without this evidence
+            # the LLM cannot ground any signal and everything floors to review.
+            # Reuse the same evidence-gathering helpers as the RBC path; swap
+            # Hb history for platelet history and keep everything else.
+            plt_ev_anchor = order.order_datetime  # no re-anchoring for platelets
+            plt_local_tz = ZoneInfo(TZ_LOCAL)
+            plt_order_date_local = plt_ev_anchor.astimezone(plt_local_tz).date()
+            plt_notes_lo = datetime.combine(
+                plt_order_date_local - timedelta(days=WINDOW_NOTES_DAYS_BEFORE),
+                _time.min,
+                tzinfo=plt_local_tz,
+            ).astimezone(timezone.utc)
+            plt_notes_hi = datetime.combine(
+                plt_order_date_local + timedelta(days=WINDOW_NOTES_DAYS_AFTER + 1),
+                _time.min,
+                tzinfo=plt_local_tz,
+            ).astimezone(timezone.utc)
+            # op_events is used in the RBC path for cohort + proximity only;
+            # platelet rows have no cohort and no proximity requirement, so
+            # procedure evidence surfaces through narrative notes (same as RBC).
+            plt_med_events = _med_events(med, order.an)
+            plt_meds_in_window = sorted(
+                [
+                    m
+                    for m in plt_med_events
+                    if plt_notes_lo <= m.timestamp < plt_notes_hi
+                ],
+                key=lambda m: m.timestamp,
+                reverse=True,
+            )
+            plt_meds_for_bundle = tuple(
+                MedRecord(timestamp=m.timestamp, drug=m.drug)
+                for m in plt_meds_in_window
+            )
+            plt_vitals_notes = vitals_notes_for(
+                progress, focus, order.an, plt_ev_anchor
+            )
+            plt_vitals = extract_vitals(anchor=plt_ev_anchor, notes=plt_vitals_notes)
+            plt_progress_for_bundle = tuple(
+                ProgressNote(timestamp=n.timestamp, text=n.text)
+                for n in plt_vitals_notes
+                if n.source == "IPDADMPROGRESS"
+            )
+            plt_focus_for_bundle = tuple(
+                FocusNote(timestamp=n.timestamp, text=n.text)
+                for n in plt_vitals_notes
+                if n.source == "IPDNRFOCUSDT"
+            )
+            plt_vital_records: tuple[VitalsRecord, ...] = ()
+            if plt_vitals.note_timestamp is not None and any(
+                getattr(plt_vitals.vitals, k) is not None
+                for k in ("sbp", "dbp", "hr", "rr", "bt")
+            ):
+                _plt_src_map = {
+                    "IPDADMPROGRESS": "IPDADMPROGRESS",
+                    "IPDNRFOCUSDT": "IPDNRFOCUSDT",
+                    "LLM_EXTRACTED": "LLM_extracted",
+                    "NONE_IN_WINDOW": None,
+                }
+                _plt_v_src = _plt_src_map.get(plt_vitals.source.value)
+                if _plt_v_src is not None:
+                    plt_vital_records = (
+                        VitalsRecord(
+                            timestamp=plt_vitals.note_timestamp,
+                            source=cast(Any, _plt_v_src),
+                            sbp=plt_vitals.vitals.sbp,
+                            dbp=plt_vitals.vitals.dbp,
+                            hr=plt_vitals.vitals.hr,
+                            rr=plt_vitals.vitals.rr,
+                            bt=plt_vitals.vitals.bt,
+                        ),
+                    )
+            bundle = build_evidence_bundle(
+                inputs=EvidenceInputs(
+                    anchor=OrderAnchor(
+                        order_datetime=order.order_datetime,
+                        hn_hash=hn_hash,
+                        an_hash=an_hash,
+                        products=order.products_ordered,
+                    ),
+                    diagnoses=plt_diagnoses,
+                    progress_notes=plt_progress_for_bundle,
+                    focus_notes=plt_focus_for_bundle,
+                    meds=plt_meds_for_bundle,
+                    platelet_history=plt_records,
+                    vitals=plt_vital_records,
+                )
+            )
+            plt_chunks: list[EvidenceChunk] = []
+            for item in bundle.items:
+                text = _render_payload(item.source, dict(item.payload))
+                if text.strip():
+                    plt_chunks.append(
+                        EvidenceChunk(
+                            evidence_id=item.id,
+                            source=item.source,
+                            text=text,
+                        )
+                    )
+            if not plt_chunks:
+                print(
+                    f"  WARN: empty chunks for platelet order {order.reqno}; "
+                    "skipping LLM submit"
+                )
+                continue
+            contexts.append(
+                PipelineRowContext.for_platelet(
+                    order=order,
+                    platelet_result=plt_result,
+                    hn_hash=hn_hash,
+                    an_hash=an_hash,
+                    redactor_version="external-deid-gate-narrative-0.1",
+                    redactor_model_sha="0" * 64,
+                    policy_version="KCMH-PR17.2 / AABB-2023 (pilot)",
+                    prompt_hash="0" * 64,
+                    evidence_bundle_hash=bundle.bundle_hash,
+                    evidence_chunks=tuple(plt_chunks),
+                )
+            )
+            continue
+
+        # --- Red-cell path (Phase 1, component="red_cell") ---
         # Reserve-ahead elective orders are crossmatched days before they are
         # transfused; re-anchor the evidence windows (Hb lookback, notes, CBC,
         # meds, vitals, INCPT) onto the issue datetime so the model adjudicates
@@ -1248,9 +1460,47 @@ def main() -> None:
         )
 
     DETERMINISTIC_FINAL = {"APPROPRIATE", "INSUFFICIENT_EVIDENCE", "INAPPROPRIATE"}
+    # Two deliberately separate maps (Codex round-6 P1):
+    #   * ``classifier_results`` holds ONLY RBC ``ClassifierResult`` entries and
+    #     is handed to ``apply_batch_results``. Platelet contexts are excluded so
+    #     the replay path re-derives ``rule_classification`` from the platelet
+    #     gate (``_platelet_gate_result``) instead of reading ``.cohort_threshold``
+    #     off a ``PlateletClassifierResult`` (which has no such attribute and
+    #     would crash). This mirrors the main pipeline, which submits platelet
+    #     batches with ``classifier_results={}``.
+    #   * ``report_classifier_results`` holds BOTH RBC and platelet deterministic
+    #     results and is consumed only by the summary + JSON-report loops below,
+    #     so the round-4 KeyError fix's intent is preserved without leaking a
+    #     ``PlateletClassifierResult`` into the RBC replay classifier map.
     classifier_results: dict[str, Any] = {}
+    report_classifier_results: dict[str, Any] = {}
     llm_contexts: list[PipelineRowContext] = []
     for ctx in contexts:
+        if ctx.component == "platelet":
+            # Platelet contexts were already classified in the order loop above
+            # (INSUFFICIENT_EVIDENCE was skipped; anything reaching here routes
+            # to the LLM). No RBC classify() call — sentinel Hb values must not
+            # drive a classification decision.
+            # Store the platelet classifier result in the REPORT map only so the
+            # downstream summary and JSON-report loops can look it up without a
+            # KeyError. It is intentionally kept OUT of ``classifier_results``
+            # (the replay map) so ``apply_batch_results`` never receives a
+            # ``PlateletClassifierResult``. Use the deterministic gate (same
+            # inputs as the order loop) rather than re-reading the pre-computed
+            # value that is local to the order loop.
+            plt_count = (
+                ctx.platelet_result.value_k_ul
+                if ctx.platelet_result is not None
+                else None
+            )
+            report_classifier_results[ctx.order.audit_id] = classify_platelet(
+                PlateletClassifierInputs(
+                    audit_id=ctx.order.audit_id,
+                    platelet_count=plt_count,
+                )
+            )
+            llm_contexts.append(ctx)
+            continue
         periop = ctx.periop_summary
         cres = classify(
             ClassifierInputs(
@@ -1270,6 +1520,7 @@ def main() -> None:
             )
         )
         classifier_results[ctx.order.audit_id] = cres
+        report_classifier_results[ctx.order.audit_id] = cres
         if cres.classification not in DETERMINISTIC_FINAL:
             llm_contexts.append(ctx)
 
@@ -1278,7 +1529,35 @@ def main() -> None:
         sys.exit("nothing to submit")
 
     submissions: list[BatchSubmissionRequest] = []
+    # Codex round-5 P2 (security): honor injection routing in the pilot leg. A
+    # prompt whose scanner raised route_to_needs_review must NEVER be submitted
+    # to Anthropic; it is quarantined to a local NEEDS_REVIEW row below,
+    # mirroring the batch pipeline's _persist_injection_flagged_row.
+    injection_flagged: list[PipelineRowContext] = []
     for ctx in llm_contexts:
+        if ctx.component == "platelet":
+            # Platelet review uses the dedicated PLATELET_REVIEW task mode
+            # and system prompt (no Hb cohort threshold).
+            prompt = build_prompt(
+                PromptBuildRequest(
+                    task_mode="PLATELET_REVIEW",
+                    cohort_threshold=None,
+                    evidence_chunks=ctx.evidence_chunks,
+                    few_shot_examples=(),
+                )
+            )
+            if prompt.route_to_needs_review:
+                injection_flagged.append(ctx)
+                continue
+            submissions.append(
+                BatchSubmissionRequest(
+                    audit_id=ctx.order.audit_id,
+                    run_id=RUN_ID,
+                    task_mode="PLATELET_REVIEW",
+                    prompt=prompt,
+                )
+            )
+            continue
         threshold = (
             ctx.cohort_assignment.threshold
             if ctx.cohort_assignment.threshold is not None
@@ -1292,6 +1571,9 @@ def main() -> None:
                 few_shot_examples=(),
             )
         )
+        if prompt.route_to_needs_review:
+            injection_flagged.append(ctx)
+            continue
         submissions.append(
             BatchSubmissionRequest(
                 audit_id=ctx.order.audit_id,
@@ -1301,59 +1583,91 @@ def main() -> None:
             )
         )
 
-    transport = RealAnthropicTransport(
-        api_key=api_key,
-        poll_interval_seconds=20.0,
-        max_wait_seconds=3600.0,
-    )
-    t0 = time.time()
-    # Resume path: if BBA_PILOT_BATCH_ID is set, re-attach to an already-
-    # submitted batch instead of creating a new one. The deterministic
-    # context build above is reproducible, so ``submissions`` matches the
-    # original submission set and fetch_batch_results can rebuild each
-    # result's request_json. Use this after a Ctrl+C during polling so the
-    # in-flight batch is not abandoned and re-billed.
-    resume_batch_id = os.environ.get("BBA_PILOT_BATCH_ID")
-    if resume_batch_id:
-        batch_id = resume_batch_id
-        print(f"  resuming existing batch_id = {batch_id} (skipping submit)")
-    else:
-        print(
-            f"\nSubmitting batch of {len(submissions)} requests to "
-            f"Anthropic (model={MODEL_ID})..."
-        )
-        batch_id = transport.submit_batch_only(
-            model=MODEL_ID,
-            requests=submissions,
-            prompt_cache_enabled=True,
-        )
-        print(f"  batch_id = {batch_id}")
-        print(f"  (resume with: BBA_PILOT_BATCH_ID={batch_id})")
-    print("  polling (this can take a while)...")
-    response = transport.fetch_batch_results(
-        batch_id,
-        model=MODEL_ID,
-        requests=submissions,
-        prompt_cache_enabled=True,
-    )
-    elapsed = time.time() - t0
-    print(f"  batch complete in {elapsed:.1f}s; {len(response.results)} results")
-
     audit_store = AuditStore(
         AuditStoreConfig(
             root_dir=AUDIT_STORE_ROOT,
             code_version=CODE_VERSION,
         )
     )
-    context_map = {ctx.order.audit_id: ctx for ctx in llm_contexts}
-    write_summary = apply_batch_results(
-        response,
-        audit_store=audit_store,
-        run_id=RUN_ID,
-        contexts=context_map,
-        classifier_results=classifier_results,
-    )
-    print(f"  persisted audit rows: {len(write_summary.audit_ids_persisted)}")
+
+    # Codex round-5 P2 (security): persist injection-flagged rows locally as
+    # NEEDS_REVIEW — they were never sent to Anthropic. Mirrors the batch
+    # pipeline's quarantine: an RBC context carries its real deterministic
+    # ClassifierResult; a platelet context (classifier_result=None) re-derives
+    # rule_classification from the platelet gate inside
+    # _persist_injection_flagged_row. The pilot's platelet gate runs with
+    # defer off (the order loop above), so the default flag matches here.
+    for inj_ctx in injection_flagged:
+        _persist_injection_flagged_row(
+            inj_ctx,
+            classifier_result=(
+                None
+                if inj_ctx.component == "platelet"
+                else classifier_results.get(inj_ctx.order.audit_id)
+            ),
+            audit_store=audit_store,
+            run_id=RUN_ID,
+        )
+    if injection_flagged:
+        print(
+            "  injection-flagged (not submitted, routed to NEEDS_REVIEW): "
+            f"{len(injection_flagged)}"
+        )
+
+    if not submissions:
+        print("  no clean submissions remaining after the injection filter")
+    else:
+        transport = RealAnthropicTransport(
+            api_key=api_key,
+            poll_interval_seconds=20.0,
+            max_wait_seconds=3600.0,
+        )
+        t0 = time.time()
+        # Resume path: if BBA_PILOT_BATCH_ID is set, re-attach to an already-
+        # submitted batch instead of creating a new one. The deterministic
+        # context build above is reproducible, so ``submissions`` matches the
+        # original submission set and fetch_batch_results can rebuild each
+        # result's request_json. Use this after a Ctrl+C during polling so the
+        # in-flight batch is not abandoned and re-billed.
+        resume_batch_id = os.environ.get("BBA_PILOT_BATCH_ID")
+        if resume_batch_id:
+            batch_id = resume_batch_id
+            print(f"  resuming existing batch_id = {batch_id} (skipping submit)")
+        else:
+            print(
+                f"\nSubmitting batch of {len(submissions)} requests to "
+                f"Anthropic (model={MODEL_ID})..."
+            )
+            batch_id = transport.submit_batch_only(
+                model=MODEL_ID,
+                requests=submissions,
+                prompt_cache_enabled=True,
+            )
+            print(f"  batch_id = {batch_id}")
+            print(f"  (resume with: BBA_PILOT_BATCH_ID={batch_id})")
+        print("  polling (this can take a while)...")
+        response = transport.fetch_batch_results(
+            batch_id,
+            model=MODEL_ID,
+            requests=submissions,
+            prompt_cache_enabled=True,
+        )
+        elapsed = time.time() - t0
+        print(f"  batch complete in {elapsed:.1f}s; {len(response.results)} results")
+
+        context_map = {ctx.order.audit_id: ctx for ctx in llm_contexts}
+        # ``classifier_results`` holds RBC ``ClassifierResult`` entries only;
+        # platelet contexts are absent, so the replay path re-derives their
+        # ``rule_classification`` from the platelet gate rather than reading
+        # ``.cohort_threshold`` off a ``PlateletClassifierResult``.
+        write_summary = apply_batch_results(
+            response,
+            audit_store=audit_store,
+            run_id=RUN_ID,
+            contexts=context_map,
+            classifier_results=classifier_results,
+        )
+        print(f"  persisted audit rows: {len(write_summary.audit_ids_persisted)}")
 
     print("\n" + "=" * 120)
     rows = list(audit_store.read_audit_results(run_id=RUN_ID))
@@ -1364,7 +1678,7 @@ def main() -> None:
     )
     print("=" * 120)
     for ctx in llm_contexts:
-        det = classifier_results[ctx.order.audit_id]
+        det = report_classifier_results[ctx.order.audit_id]
         r = rows_by_id.get(ctx.order.audit_id)
         reasoning = r.reasoning_summary_en[:60] if r and r.reasoning_summary_en else ""
         final = r.final_classification if r else "(no row)"
@@ -1377,7 +1691,7 @@ def main() -> None:
 
     report = []
     for ctx in llm_contexts:
-        det = classifier_results[ctx.order.audit_id]
+        det = report_classifier_results[ctx.order.audit_id]
         r = rows_by_id.get(ctx.order.audit_id)
         ev = anchor_by_id.get(ctx.order.audit_id)
         report.append(

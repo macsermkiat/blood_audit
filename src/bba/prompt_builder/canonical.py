@@ -82,12 +82,17 @@ def build_envelope(
     *,
     blocks: Sequence[Mapping[str, Any]],
     task_mode: str,
-    cohort_threshold: float,
+    cohort_threshold: float | None,
     injection_matches: Sequence[Mapping[str, Any]],
     route_to_needs_review: bool,
     needs_review_reasons: Sequence[str],
 ) -> Mapping[str, Any]:
     """Assemble the canonical envelope hashed for prompt-hash stability.
+
+    ``cohort_threshold`` is ``None`` for ``PLATELET_REVIEW`` (platelet
+    transfusion has no Hb cohort) and a validated float for RBC modes.
+    The envelope serialises ``None`` as JSON ``null`` so the platelet
+    hash is distinct from any RBC hash regardless of content.
 
     ``injection_matches`` is a sequence of full match records, one dict
     per :class:`InjectionMatch` with keys ``category``, ``pattern_id``,
@@ -104,7 +109,9 @@ def build_envelope(
     return {
         "blocks": [dict(b) for b in blocks],
         "task_mode": str(task_mode),
-        "cohort_threshold": float(cohort_threshold),
+        "cohort_threshold": float(cohort_threshold)
+        if cohort_threshold is not None
+        else None,
         "injection_matches": [dict(m) for m in injection_matches],
         "route_to_needs_review": bool(route_to_needs_review),
         "needs_review_reasons": list(needs_review_reasons),

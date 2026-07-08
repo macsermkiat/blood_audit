@@ -1335,3 +1335,97 @@ class TestPublicSurface:
 
         names: Sequence[str] = mod.__all__
         assert list(names) == sorted(names)
+
+
+class TestRbcPromptHashGolden:
+    """Pin the RBC prompt_hash to a known value (C1 review HIGH, Rule 9).
+
+    WHY: the prompt_hash lands on every persisted AuditRow and is the audit
+    chain's reproducibility anchor. A silent change to the RBC system-prompt
+    text, the canonical envelope, or the hashing would shift this hash and
+    invalidate stored rows without any behavioural test failing. The value below
+    is generated from the current build; if this test breaks, an RBC
+    serialization regression is the suspect — do not blindly re-pin it.
+    """
+
+    RBC_HB_7_10_75_EMPTY_EVIDENCE = (
+        "612871a70db968da36ac9a86304d27fc84a213a45461d0c733e796617a12186b"
+    )
+
+    def test_hb_7_10_review_cohort_7_5_hash_is_pinned(self) -> None:
+        from bba.prompt_builder import PromptBuildRequest, build_prompt
+
+        result = build_prompt(
+            PromptBuildRequest(
+                task_mode="HB_7_10_REVIEW",
+                cohort_threshold=7.5,
+                evidence_chunks=(),
+            )
+        )
+        assert result.prompt_hash == self.RBC_HB_7_10_75_EMPTY_EVIDENCE
+
+
+class TestPlateletPromptWithholdPopulations:
+    """The platelet system prompt must name TTP, HIT, ITP, and chronic marrow failure.
+
+    WHY: the deterministic gate routes ALL present-count platelet orders to the
+    LLM. The prompt is the ONLY mechanism by which withhold / exclusion populations
+    are communicated to the model — there is no deterministic denylist for these
+    conditions in the pipeline. For TTP and HIT, platelet transfusion is actively
+    harmful and may worsen thrombosis; omitting them from the exclusion list lets
+    the model ground a hard signal and clear a patient the policy says to withhold
+    from (a directly dangerous outcome). ITP and chronic marrow failure are
+    prophylactic withhold populations whose omission risks inappropriate over-clearing.
+    """
+
+    def test_platelet_prompt_names_ttp_abbreviation_and_full_name(self) -> None:
+        from bba.prompt_builder.system_prompt import platelet_system_prompt
+
+        prompt = platelet_system_prompt()
+        assert "TTP" in prompt, "platelet prompt must name TTP (abbreviation)"
+        assert "thrombotic thrombocytopenic purpura" in prompt.lower(), (
+            "platelet prompt must spell out TTP in full so the model recognises "
+            "both the abbreviation and the clinical diagnosis"
+        )
+
+    def test_platelet_prompt_names_hit_abbreviation_and_full_name(self) -> None:
+        from bba.prompt_builder.system_prompt import platelet_system_prompt
+
+        prompt = platelet_system_prompt()
+        assert "HIT" in prompt, "platelet prompt must name HIT (abbreviation)"
+        assert "heparin-induced thrombocytopenia" in prompt.lower(), (
+            "platelet prompt must spell out HIT; transfusion in HIT is "
+            "actively harmful — omitting it risks patient harm"
+        )
+
+    def test_platelet_prompt_names_itp_abbreviation_and_full_name(self) -> None:
+        from bba.prompt_builder.system_prompt import platelet_system_prompt
+
+        prompt = platelet_system_prompt()
+        assert "ITP" in prompt, "platelet prompt must name ITP (abbreviation)"
+        assert "immune thrombocytopenia" in prompt.lower(), (
+            "platelet prompt must spell out ITP in full"
+        )
+
+    def test_platelet_prompt_names_chronic_marrow_failure(self) -> None:
+        from bba.prompt_builder.system_prompt import platelet_system_prompt
+
+        prompt = platelet_system_prompt()
+        assert "chronic marrow failure" in prompt.lower(), (
+            "platelet prompt must name chronic marrow failure as a withhold population"
+        )
+
+    def test_rbc_prompts_unchanged_by_platelet_withhold_additions(self) -> None:
+        # WHY: RBC prompts must be byte-identical. TTP/HIT/ITP are not relevant
+        # to RBC auditing; their presence would also shift the pinned RBC
+        # prompt_hash golden and invalidate stored audit records.
+        from bba.prompt_builder.system_prompt import system_prompt_for
+
+        for mode in ("HB_7_10_REVIEW", "HB_GT_10_OVERRIDE"):
+            rbc = system_prompt_for(
+                task_mode=mode,  # type: ignore[arg-type]
+                cohort_threshold=7.0,
+            )
+            assert "TTP" not in rbc, f"RBC prompt ({mode}) must not mention TTP"
+            assert "HIT" not in rbc, f"RBC prompt ({mode}) must not mention HIT"
+            assert "ITP" not in rbc, f"RBC prompt ({mode}) must not mention ITP"

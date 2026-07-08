@@ -37,6 +37,7 @@ from bba.audit_orders.models import (
     AuditOrder,
     AuditOrdersConfig,
     BloodOrderInput,
+    Component,
     ExcludedRecord,
     FilterResult,
 )
@@ -47,6 +48,8 @@ from bba.audit_orders.rules import (
     check_rbc_product,
     check_request_type,
     check_status,
+    is_rbc_product,
+    platelet_products_in,
     rbc_products_in,
 )
 
@@ -111,6 +114,21 @@ def build_audit_orders(
         # All gates passed — construct the canonical row. an is non-None at
         # this point (check_an_scoped passed); assert to narrow for mypy.
         assert record.an is not None  # noqa: S101 — type narrowing
+
+        # Determine component: if the order contains at least one RBC product it
+        # is a red_cell order (mixed RBC+platelet orders fall here too — the
+        # platelet codes are stripped by rbc_products_in, matching Phase 1 behavior
+        # byte-for-byte). Only a platelet-only order (no RBC, all platelet) becomes
+        # component="platelet"; check_rbc_product already admitted it through the
+        # gate, so the branch is safe and no re-validation is needed.
+        component: Component
+        if any(is_rbc_product(p) for p in record.products):
+            component = "red_cell"
+            products_tuple: tuple[str, ...] = rbc_products_in(record.products)
+        else:
+            component = "platelet"
+            products_tuple = platelet_products_in(record.products)
+
         included.append(
             AuditOrder(
                 audit_id=build_audit_id(record.hn, record.reqno),
@@ -119,8 +137,9 @@ def build_audit_orders(
                 reqno=record.reqno,
                 order_datetime=resolved.anchor.utc,
                 anchor_imputed=resolved.imputed,
-                products_ordered=rbc_products_in(record.products),
+                products_ordered=products_tuple,
                 diagnosis_codes=record.diagnosis_codes,
+                component=component,
             )
         )
 

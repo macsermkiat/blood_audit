@@ -1330,3 +1330,88 @@ class TestModelContracts:
         )
         assert ctx.subject_physician_id is None
         assert ctx.ward_id is None
+
+
+# =============================================================================
+# A2 — Platelet rows excluded from dashboard aggregates
+# =============================================================================
+
+
+class TestPlateletRowsExcludedFromDashboard:
+    """Platelet AuditRows must not appear in RBC dashboard counts or rates.
+
+    WHY: dashboard views (queue, ward scorecard, physician scorecard, pipeline
+    health) expose RBC-specific metrics. Platelet appropriateness uses different
+    clinical thresholds (platelet count vs Hb) and different policy criteria.
+    Including platelet rows in dashboard aggregates would misrepresent the RBC
+    inappropriate_rate to committee reviewers. _read_snapshot_rows is the single
+    choke point — filtering there protects every downstream dashboard view.
+    """
+
+    def test_pipeline_health_count_excludes_platelet_rows(
+        self,
+        config: DashboardConfig,
+        context_in_care_team: RouteContext,
+        audit_store: AuditStore,
+    ) -> None:
+        """Pipeline health total_orders must equal RBC row count only.
+
+        Writing one RBC row and one platelet row to the store, the reported
+        total must be 1, not 2, because the platelet row is not an RBC audit.
+        """
+        rbc_row, rbc_calls = _writeable_audit_row_pair("audit-rbc", "run-001")
+        audit_store.write(rbc_row, rbc_calls)
+
+        plt_row_dict = {
+            **_audit_row(audit_id="audit-plt", run_id="run-001").model_dump(),
+            "component": "platelet",
+        }
+        plt_row = AuditRow.model_validate(plt_row_dict)
+        plt_call = _llm_call(audit_id="audit-plt", run_id="run-001")
+        audit_store.write(plt_row, (plt_call,))
+
+        health = get_pipeline_health(config, context_in_care_team)
+
+        assert health.total_audits == 1, (
+            "platelet row must not be counted in RBC pipeline health total"
+        )
+
+    def test_queue_excludes_platelet_rows(
+        self,
+        context_in_care_team: RouteContext,
+        audit_store: AuditStore,
+        tmp_path: Path,
+    ) -> None:
+        """The NEEDS_REVIEW queue must not surface platelet rows.
+
+        Both the RBC and platelet rows carry needs_human_review=True, but
+        only the RBC row belongs in the RBC queue.
+        """
+        from bba.audit_store import AuditStoreConfig
+        from bba.dashboard import DashboardConfig
+
+        store2 = AuditStore(
+            AuditStoreConfig(root_dir=tmp_path / "aud2", code_version="v-test")
+        )
+        rbc_row, rbc_calls = _writeable_audit_row_pair("audit-rbc2", "run-002")
+        store2.write(rbc_row, rbc_calls)
+
+        plt_row_dict = {
+            **_audit_row(audit_id="audit-plt2", run_id="run-002").model_dump(),
+            "component": "platelet",
+        }
+        plt_row = AuditRow.model_validate(plt_row_dict)
+        store2.write(plt_row, (_llm_call(audit_id="audit-plt2", run_id="run-002"),))
+
+        cfg2 = DashboardConfig(
+            audit_store=store2,
+            review_actions_store=_InMemoryReviewActionsStore(),
+            snapshot_dir=tmp_path / "snap2",
+        )
+        items = list_queue(cfg2, context_in_care_team)
+        audit_ids = {it.audit_id for it in items}
+
+        assert "audit-rbc2" in audit_ids
+        assert "audit-plt2" not in audit_ids, (
+            "platelet row must not appear in the RBC NEEDS_REVIEW queue"
+        )

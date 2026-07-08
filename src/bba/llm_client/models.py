@@ -35,6 +35,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
     field_validator,
     model_validator,
 )
@@ -46,6 +47,7 @@ from bba.audit_store.models import (
     SafeId,
     UTCDatetime,
 )
+from bba.platelet_guardrail.models import PlateletHardSignals
 from bba.prompt_builder.models import PromptBuildResult, TaskMode
 
 
@@ -190,6 +192,35 @@ class LlmClassificationResponse(BaseModel):
     reasoning_summary_th: str
 
 
+class PlateletLlmClassificationResponse(LlmClassificationResponse):
+    """Platelet-specific structured-output response with hard-signal indicators.
+
+    Extends :class:`LlmClassificationResponse` with the three booleans the
+    platelet guardrail (Stage C2) reads from the parse outcome.  Each boolean
+    must be grounded from the evidence — a bare low count must NOT set any to
+    True (CR-C2 / documentation-absence rule).
+
+    The LLM is instructed to set these in the platelet system prompt; the
+    parser validates the schema here so a missing field fails closed to
+    SCHEMA_MISMATCH → NEEDS_REVIEW.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    # StrictBool (C1 LOW): reject coerced booleans so ``"true"`` / ``1`` in the
+    # tool-use payload fail the schema instead of silently becoming ``True``. A
+    # malformed hard-signal bool must fail closed (SCHEMA_MISMATCH → NEEDS_REVIEW
+    # with no grounded signal), never over-clear on a coerced truthy value.
+    active_bleeding: StrictBool
+    """Documented active, life-threatening, or clinically significant bleeding."""
+
+    procedure_indication: StrictBool
+    """Invasive procedure in-window below its policy threshold (LP/CVC/surgery)."""
+
+    prophylactic_marrow_failure: StrictBool
+    """Chemo/HSCT/consumptive with count <10k (or expected <10k/24h), no exclusion."""
+
+
 class StructuredToolInput(BaseModel):
     """The Anthropic tool-use ``input_schema`` mirror.
 
@@ -206,12 +237,19 @@ class StructuredToolInput(BaseModel):
 
 
 class ParseOutcome(BaseModel):
-    """Result of :func:`parse_structured_response`.
+    """Result of :func:`parse_structured_response` or
+    :func:`parse_platelet_structured_response`.
 
     Fail-closed contract: ``parsed is None`` iff ``parse_failure is True``
     iff ``parse_failure_reason is not None``. A caller that sees
     ``parse_failure=True`` MUST route the row to ``NEEDS_REVIEW`` with
     the ``parse_failure`` review reason (PRD §13).
+
+    ``platelet_hard_signals`` is ``None`` for RBC responses (and for any
+    parse failure).  For a successful platelet parse it carries the three
+    grounded booleans the guardrail reads.  Defaulting to ``None`` keeps
+    all existing RBC callers byte-identical — no existing test expectation
+    changes.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -220,6 +258,7 @@ class ParseOutcome(BaseModel):
     parse_failure: bool
     parse_failure_reason: ParseFailureReason | None
     raw_text: str = Field(default="")
+    platelet_hard_signals: PlateletHardSignals | None = None
 
     @model_validator(mode="after")
     def _failure_fields_consistent(self) -> Self:
@@ -615,6 +654,8 @@ __all__: Sequence[str] = (
     "ParseFailureReason",
     "ParseOutcome",
     "PinnedModel",
+    "PlateletHardSignals",
+    "PlateletLlmClassificationResponse",
     "RawBatchResponse",
     "SONNET_MODEL_ID",
     "StructuredToolInput",

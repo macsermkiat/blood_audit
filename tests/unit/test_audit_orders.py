@@ -927,3 +927,106 @@ class TestHelperFunctions:
 
     def test_rbc_products_in_empty(self) -> None:
         assert rbc_products_in(("FFP", "PLT")) == ()
+
+
+# =============================================================================
+# A1 — Platelet order admission + component tagging
+# =============================================================================
+
+
+class TestPlateletOrderAdmission:
+    """Platelet-only orders are admitted as component="platelet"; RBC path unchanged.
+
+    WHY: Phase 2 requires platelet appropriateness auditing. Without
+    admitting platelet-only orders at intake, every platelet transfusion
+    is silently discarded and never evaluated. Simultaneously, the RBC
+    path must remain byte-identical — adding a platelet route must not
+    change the outcome for any existing RBC order.
+    """
+
+    def test_platelet_only_order_admitted(self, config: AuditOrdersConfig) -> None:
+        """A platelet-only order (products all in PLATELET_PRODUCTS) is included."""
+        result = build_audit_orders([_input(products=("PC",))], config)
+        assert len(result.included) == 1
+        assert len(result.excluded) == 0
+
+    def test_platelet_order_has_component_platelet(
+        self, config: AuditOrdersConfig
+    ) -> None:
+        """Platelet orders carry component="platelet" so downstream dispatch can route
+        them to the platelet auditor rather than the RBC auditor."""
+        result = build_audit_orders([_input(products=("PC",))], config)
+        assert result.included[0].component == "platelet"
+
+    def test_platelet_order_products_preserved_in_products_ordered(
+        self, config: AuditOrdersConfig
+    ) -> None:
+        """Platelet product codes are carried verbatim in products_ordered.
+
+        Unlike RBC mixed orders where rbc_products_in strips non-RBC codes,
+        platelet-only orders must retain their platelet codes — the downstream
+        auditor needs them to determine which platelet product was issued.
+        """
+        result = build_audit_orders([_input(products=("LDPPC", "LDPPCI"))], config)
+        order = result.included[0]
+        assert "LDPPC" in order.products_ordered
+        assert "LDPPCI" in order.products_ordered
+
+    def test_irradiated_platelet_product_admitted(
+        self, config: AuditOrdersConfig
+    ) -> None:
+        """Irradiated leukodepleted platelet (LDPPCI) is in PLATELET_PRODUCTS and
+        must be admitted. Irradiation changes processing, not the clinical
+        appropriateness obligation to audit the transfusion."""
+        result = build_audit_orders([_input(products=("LDPPCI",))], config)
+        assert len(result.included) == 1
+        assert result.included[0].component == "platelet"
+
+    def test_ffp_only_order_still_rejected(self, config: AuditOrdersConfig) -> None:
+        """FFP is neither RBC nor platelet — must remain excluded with
+        reason not_rbc_product. Only platelet codes widen the admission gate."""
+        result = build_audit_orders([_input(products=("FFP",))], config)
+        assert len(result.excluded) == 1
+        assert result.excluded[0].reason == "not_rbc_product"
+
+    def test_cryo_only_order_still_rejected(self, config: AuditOrdersConfig) -> None:
+        """Cryoprecipitate is out of audit scope (docs plan §6) and must remain
+        excluded. Only platelets are added to the admission gate in Stage A."""
+        result = build_audit_orders([_input(products=("CPP",))], config)
+        assert len(result.excluded) == 1
+        assert result.excluded[0].reason == "not_rbc_product"
+
+    def test_rbc_only_order_component_is_red_cell(
+        self, config: AuditOrdersConfig
+    ) -> None:
+        """RBC-only orders carry component="red_cell" — byte-identical to
+        pre-Phase-2 behavior. Adding the platelet path must not change the
+        component on any order that only contains RBC products."""
+        result = build_audit_orders([_input(products=("LPRC",))], config)
+        assert result.included[0].component == "red_cell"
+
+    def test_rbc_only_products_ordered_unchanged(
+        self, config: AuditOrdersConfig
+    ) -> None:
+        """RBC-only products_ordered is byte-identical to pre-Phase-2. The tuple
+        value must be exactly ("LPRC",), not wrapped or reordered."""
+        result = build_audit_orders([_input(products=("LPRC",))], config)
+        assert result.included[0].products_ordered == ("LPRC",)
+
+    def test_mixed_rbc_platelet_order_admitted_as_red_cell(
+        self, config: AuditOrdersConfig
+    ) -> None:
+        """A mixed RBC+platelet order is admitted as red_cell with the platelet
+        code stripped — exactly as today. Mixed orders already pass check_rbc_product
+        (they have at least one RBC product) and rbc_products_in drops non-RBC codes."""
+        result = build_audit_orders([_input(products=("LPRC", "PC"))], config)
+        assert result.included[0].component == "red_cell"
+        assert result.included[0].products_ordered == ("LPRC",)
+
+    def test_empty_products_still_rejected(self, config: AuditOrdersConfig) -> None:
+        """An order with no products at all must be rejected. The vacuous-truth
+        risk of `all(is_platelet_product(p) for p in ())` returning True on an
+        empty tuple is a safety hazard — the empty case must not slip through."""
+        result = build_audit_orders([_input(products=())], config)
+        assert len(result.excluded) == 1
+        assert result.excluded[0].reason == "not_rbc_product"

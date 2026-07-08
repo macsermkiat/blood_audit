@@ -25,9 +25,11 @@ from bba.evidence_bundle_builder.models import (
     HbRecord,
     MedRecord,
     OrderAnchor,
+    PlateletRecord,
     ProgressNote,
     VitalsRecord,
 )
+from bba.platelet_lookup.models import PLATELET_UNIT
 from bba.evidence_bundle_builder.ranking import (
     SECTION_PRIORITY,
     parse_soap_sections,
@@ -76,6 +78,10 @@ WINDOW_MED_AFTER = timedelta(hours=24)
 
 WINDOW_HB_BEFORE = timedelta(days=7)
 """Lab Hb history backward edge: ``anchor - 7d`` (mirrors :mod:`bba.hb_lookup`)."""
+
+WINDOW_PLATELET_BEFORE = timedelta(days=7)
+"""Lab platelet count-trend backward edge: ``anchor - 7d`` (Stage C2, the
+platelet analog of :data:`WINDOW_HB_BEFORE`)."""
 
 WINDOW_VITALS = timedelta(hours=6)
 """Vitals window: ``[anchor - 6h, anchor + 6h]`` (mirrors :mod:`bba.vitals_extractor`)."""
@@ -216,6 +222,20 @@ def _filter_hb(
     )
 
 
+def _filter_platelet(
+    plts: Sequence[PlateletRecord], anchor: datetime
+) -> tuple[PlateletRecord, ...]:
+    # Platelet trend is pre-order only, same STRICT 7-day lower bound as
+    # _filter_hb (a count at exactly 7 d old is invisible to the deterministic
+    # platelet gate's lookup). The upper bound is the order anchor: post-order
+    # counts belong to the response analysis, not the decision evidence.
+    return tuple(
+        p
+        for p in plts
+        if anchor - p.timestamp < WINDOW_PLATELET_BEFORE and p.timestamp <= anchor
+    )
+
+
 def _filter_vitals(
     vitals: Sequence[VitalsRecord], anchor: datetime
 ) -> tuple[VitalsRecord, ...]:
@@ -330,6 +350,20 @@ def _hb_payload(h: HbRecord) -> dict[str, Any]:
         "value_g_dl": h.value_g_dl,
         "lab_source": h.source,
         "item_no": h.item_no,
+    }
+
+
+def _platelet_payload(p: PlateletRecord) -> dict[str, Any]:
+    # ``test`` discriminates the platelet count from an Hb value: both emit
+    # under the ``Lab`` source, so the LLM (and any quote_grounder lookup)
+    # needs the analyte name to read the count trend correctly. ``item_no``
+    # resolves a citation back to the exact Lab row (mirrors _hb_payload).
+    return {
+        "test": "platelet_count",
+        "value_k_ul": p.value_k_ul,
+        "unit": PLATELET_UNIT,
+        "lab_source": p.source,
+        "item_no": p.item_no,
     }
 
 
@@ -473,6 +507,16 @@ def _hb_sort_key(h: HbRecord) -> tuple[int, datetime, int, float]:
         h.item_no,
         h.value_g_dl,
     )
+
+
+def _plt_sort_key(p: PlateletRecord) -> tuple[datetime, int, float]:
+    """Total sort key for platelet records (Stage C2). Platelet counts are
+    HEMATOLOGY-only (LABEXM 290078 has no POCT fallback), so there is no
+    source-rank term. Emitted newest-first (``reverse=True``) for the same
+    clinical + tail-drop-safety reasons as Hb; ``item_no`` breaks same-timestamp
+    ties (max = corrected result) and ``value_k_ul`` makes the order TOTAL
+    across input shuffles."""
+    return (p.timestamp, p.item_no, p.value_k_ul)
 
 
 def _vitals_emission_key(
@@ -706,6 +750,7 @@ def _assign_ids(
     focus: Sequence[FocusNote],
     meds: Sequence[MedRecord],
     hbs: Sequence[HbRecord],
+    platelets: Sequence[PlateletRecord],
     vitals: Sequence[VitalsRecord],
     anchor_dt: datetime,
 ) -> tuple[EvidenceItem, ...]:
@@ -867,6 +912,21 @@ def _assign_ids(
             )
         )
 
+    # Platelet count-trend (Stage C2): the platelet analog of the Hb history,
+    # emitted in the same ``Lab`` section (LABEXM 290078) so the platelet LLM
+    # reads the count over time. Newest-first (reverse) for the same clinical +
+    # tail-drop-safety reasons as Hb. Empty on RBC bundles (which never populate
+    # platelet_history), so those bundles are byte-identical.
+    for plt in sorted(platelets, key=_plt_sort_key, reverse=True):
+        items.append(
+            EvidenceItem(
+                id=_next_id(),
+                source="Lab",
+                timestamp_utc=_to_utc(plt.timestamp),
+                payload=_platelet_payload(plt),
+            )
+        )
+
     # Vitals: pre-anchor (decision-time state) ALWAYS BEFORE post-anchor
     # (response state). Mirrors :mod:`bba.vitals_extractor` which prefers
     # any pre-anchor note over the closest post-anchor one — the audit
@@ -974,6 +1034,7 @@ def build_evidence_bundle(
         else None
     )
     hbs = _filter_hb(inputs.hb_history, anchor_dt, hb_anchor_dt)
+    platelets = _filter_platelet(inputs.platelet_history, anchor_dt)
     # Drop all-null vitals (only note_source populated): no measurement to
     # cite, so the LLM would get a dead E_N reference into the bundle.
     vitals_in_window = _filter_vitals(inputs.vitals, anchor_dt)
@@ -999,6 +1060,7 @@ def build_evidence_bundle(
         focus=focus,
         meds=meds,
         hbs=hbs,
+        platelets=platelets,
         vitals=vitals,
         anchor_dt=anchor_dt,
     )
@@ -1024,6 +1086,7 @@ __all__ = (
     "WINDOW_HB_BEFORE",
     "WINDOW_MED_AFTER",
     "WINDOW_MED_BEFORE",
+    "WINDOW_PLATELET_BEFORE",
     "WINDOW_PROGRESS",
     "WINDOW_VITALS",
     "build_evidence_bundle",

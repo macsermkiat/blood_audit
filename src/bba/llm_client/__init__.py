@@ -65,10 +65,15 @@ from bba.llm_client.models import (
     Model,
     ParseFailureReason,
     ParseOutcome,
+    PlateletHardSignals,
+    PlateletLlmClassificationResponse,
     RawBatchResponse,
     StructuredToolInput,
 )
-from bba.llm_client.parser import parse_structured_response
+from bba.llm_client.parser import (
+    parse_platelet_structured_response,
+    parse_structured_response,
+)
 from bba.llm_client.transport import (
     AnthropicBatchTransport,
     build_anthropic_request,
@@ -100,6 +105,8 @@ __all__ = [
     "OPUS_MODEL_ID",
     "ParseFailureReason",
     "ParseOutcome",
+    "PlateletHardSignals",
+    "PlateletLlmClassificationResponse",
     "RawBatchResponse",
     "SONNET_MODEL_ID",
     "StructuredToolInput",
@@ -108,6 +115,7 @@ __all__ = [
     "detect_disagreement",
     "escalate_to_opus",
     "load_cassette",
+    "parse_platelet_structured_response",
     "parse_structured_response",
     "process_batch",
     "run_with_escalation",
