@@ -36,6 +36,13 @@ Classification = Literal[
 ]
 
 
+# The blood-component axis of an audit row (Phase 2). ``red_cell`` is the
+# Phase 1 default so legacy Parquet payloads (which have no ``component`` key)
+# deserialize unchanged; ``platelet`` rows carry their data in the
+# ``platelet_*`` fields and use the Hb-field missing-sentinels.
+Component = Literal["red_cell", "platelet"]
+
+
 def _ensure_utc(dt: datetime) -> datetime:
     """Reject naive datetimes; normalize aware non-UTC datetimes to UTC.
 
@@ -247,6 +254,21 @@ class AuditRow(BaseModel):
     verifier_retries: int
     escalated_to_opus: bool
 
+    # Component axis (Phase 2). Defaults preserve the Phase 1 RBC contract:
+    # ``component`` defaults to ``"red_cell"`` and every ``platelet_*`` field
+    # defaults to ``None``, so a legacy payload without these keys deserializes
+    # to a byte-equivalent red-cell row. A platelet row sets ``component`` and
+    # carries its count / freshness / source / review-ceiling here, while the
+    # Hb-shaped required fields hold their missing-sentinels (hb_value 0.0,
+    # hb_freshness "missing"), mirroring how a missing-Hb red-cell row is
+    # persisted today.
+    component: Component = "red_cell"
+    platelet_value: float | None = None
+    platelet_datetime: UTCDatetime | None = None
+    platelet_freshness: str | None = None
+    platelet_source: str | None = None
+    platelet_review_ceiling: float | None = None
+
     @field_serializer(
         "indications_json", "negative_evidence_json", "delta_hb_window_results"
     )
@@ -363,6 +385,7 @@ __all__: Sequence[str] = (
     "AuditStoreConfig",
     "Classification",
     "ColdStorageReport",
+    "Component",
     "LlmCall",
     "ReconciliationReport",
     "WriteResult",
