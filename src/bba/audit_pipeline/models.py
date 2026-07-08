@@ -38,9 +38,10 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from bba.audit_orders import AuditOrder
-from bba.audit_store.models import SafeId, UTCDatetime
+from bba.audit_store.models import Component, SafeId, UTCDatetime
 from bba.cohort_detector import CohortAssignment
 from bba.hb_lookup import HbLookupResult
+from bba.platelet_lookup.models import PlateletLookupResult
 from bba.prompt_builder import EvidenceChunk
 from bba.vitals_extractor import PeriopSummary, VitalsResult
 
@@ -200,6 +201,94 @@ class PipelineRowContext(BaseModel):
     # original run did.
     enable_missing_hb_positive_evidence: bool = False
 
+    # Component axis (Phase 2). Defaults to "red_cell" to preserve the Phase 1
+    # RBC contract. Platelet contexts must be constructed via :meth:`for_platelet`.
+    component: Component = "red_cell"
+
+    # Platelet lookup result (Phase 2, platelet path only). None on RBC contexts.
+    platelet_result: PlateletLookupResult | None = None
+
+    # MTP-window suppression flag (Phase 2, B4). A platelet unit co-ordered
+    # inside an active MTP window is suppressed: no AuditRow is emitted.
+    platelet_mtp_suppressed: bool = False
+
+    @classmethod
+    def for_platelet(
+        cls,
+        *,
+        order: "AuditOrder",
+        platelet_result: "PlateletLookupResult | None",
+        hn_hash: str,
+        an_hash: str,
+        prior_rbc_units_24h: int = 0,
+        prior_rbc_units_7d: int = 0,
+        redactor_version: str,
+        redactor_model_sha: str,
+        policy_version: str,
+        prompt_hash: str,
+        evidence_bundle_hash: str,
+        evidence_chunks: "tuple[EvidenceChunk, ...]" = (),
+        periop_summary: "PeriopSummary | None" = None,
+        platelet_mtp_suppressed: bool = False,
+        enable_missing_hb_positive_evidence: bool = False,
+    ) -> "PipelineRowContext":
+        """Build a PipelineRowContext for a platelet order.
+
+        The three required RBC sub-objects (hb_result, vitals_result,
+        cohort_assignment) are populated with inert missing/neutral sentinels.
+        They are NEVER READ by the platelet dispatch path and exist only to
+        satisfy the required-field contract. Callers must not inspect these
+        sentinel values on platelet contexts.
+        """
+        from bba.cohort_detector import CohortAssignment, CohortLabel
+        from bba.hb_lookup import HbLookupResult
+        from bba.vitals_extractor import SourceProvenance, VitalSigns, VitalsResult
+
+        sentinel_hb = HbLookupResult(
+            value_g_dl=None,
+            datetime_utc=None,
+            source=None,
+            freshness="missing",
+            delta_hb_bypass=False,
+            delta_hb_windows=(),
+            needs_review_single_low_hb=False,
+        )
+        sentinel_vitals = VitalsResult(
+            vitals=VitalSigns(),
+            source=SourceProvenance.NONE_IN_WINDOW,
+            flags=frozenset(),
+            note_timestamp=None,
+        )
+        sentinel_cohort = CohortAssignment(
+            label=CohortLabel.UNKNOWN,
+            threshold=None,
+            evidence_code=None,
+            evidence_name=None,
+        )
+        return cls(
+            order=order,
+            hb_result=sentinel_hb,
+            vitals_result=sentinel_vitals,
+            cohort_assignment=sentinel_cohort,
+            procedure_proximity_hours=None,
+            crystalloid_liters_prior_4h=0.0,
+            hn_hash=hn_hash,
+            an_hash=an_hash,
+            prior_rbc_units_24h=prior_rbc_units_24h,
+            prior_rbc_units_7d=prior_rbc_units_7d,
+            redactor_version=redactor_version,
+            redactor_model_sha=redactor_model_sha,
+            policy_version=policy_version,
+            prompt_hash=prompt_hash,
+            evidence_bundle_hash=evidence_bundle_hash,
+            evidence_chunks=evidence_chunks,
+            periop_summary=periop_summary,
+            component="platelet",
+            platelet_result=platelet_result,
+            platelet_mtp_suppressed=platelet_mtp_suppressed,
+            enable_missing_hb_positive_evidence=enable_missing_hb_positive_evidence,
+        )
+
 
 class AuditPipelineConfig(BaseModel):
     """Operator-supplied configuration for the pipeline orchestrator.
@@ -221,6 +310,11 @@ class AuditPipelineConfig(BaseModel):
     code_version: str = Field(min_length=1)
     max_batch_size: int = Field(default=100, ge=1, le=10_000)
     poll_interval_seconds: float = Field(default=30.0, gt=0.0)
+
+    # Mirror of PipelineRowContext.enable_missing_hb_positive_evidence for the
+    # platelet classifier: when True, missing-count platelet orders defer to the
+    # LLM (NEEDS_REVIEW) rather than INSUFFICIENT_EVIDENCE terminal.
+    enable_missing_platelet_defer: bool = False
 
 
 class PipelineRunResult(BaseModel):

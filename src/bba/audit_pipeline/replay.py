@@ -508,7 +508,9 @@ def _build_audit_row(
     # peri-op guardrail; if that already rewrote the verdict to NEEDS_REVIEW
     # this is inert (final_classification is no longer APPROPRIATE). The LLM
     # reasoning / indications are preserved so the reviewer sees the conflict.
-    elif llm_overclear_suspect(final_classification, rule_classification, context):
+    elif context.component != "platelet" and llm_overclear_suspect(
+        final_classification, rule_classification, context
+    ):
         final_classification = "NEEDS_REVIEW"
         review_reason = LLM_OVERCLEAR_REVIEW_REASON
     # Empty-reasoning guardrail: a verdict with no reasoning in either
@@ -575,6 +577,23 @@ def _build_audit_row(
         verifier_pass=True,
         verifier_retries=max(len(attempts) - 1, 0),
         escalated_to_opus=escalated,
+        component=context.component,
+        platelet_value=context.platelet_result.value_k_ul
+        if context.platelet_result is not None
+        else None,
+        platelet_datetime=context.platelet_result.datetime_utc
+        if context.platelet_result is not None
+        else None,
+        platelet_freshness=context.platelet_result.freshness
+        if context.platelet_result is not None
+        else None,
+        platelet_source=str(context.platelet_result.source)
+        if (
+            context.platelet_result is not None
+            and context.platelet_result.source is not None
+        )
+        else None,
+        platelet_review_ceiling=None,  # Stage C will thread PlateletClassifierResult
     )
 
 
@@ -657,6 +676,23 @@ def _audit_row_for_needs_review(
         verifier_pass=verifier_pass,
         verifier_retries=verifier_retries,
         escalated_to_opus=escalated,
+        component=context.component,
+        platelet_value=context.platelet_result.value_k_ul
+        if context.platelet_result is not None
+        else None,
+        platelet_datetime=context.platelet_result.datetime_utc
+        if context.platelet_result is not None
+        else None,
+        platelet_freshness=context.platelet_result.freshness
+        if context.platelet_result is not None
+        else None,
+        platelet_source=str(context.platelet_result.source)
+        if (
+            context.platelet_result is not None
+            and context.platelet_result.source is not None
+        )
+        else None,
+        platelet_review_ceiling=None,
     )
 
 

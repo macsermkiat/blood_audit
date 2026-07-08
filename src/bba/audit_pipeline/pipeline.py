@@ -48,6 +48,7 @@ from bba.audit_pipeline.replay import (
 from bba.audit_pipeline.state_machine import transition
 from bba.audit_pipeline.store import BatchRunStore
 from bba.audit_store import AuditRow, AuditStore, LlmCall
+from bba.cohort_detector import CohortLabel
 from bba.deterministic_classifier import (
     BypassReason,
     ClassifierInputs,
@@ -58,6 +59,11 @@ from bba.llm_client.models import (
     AnthropicTransport,
     BatchSubmissionRequest,
     LlmClientConfig,
+)
+from bba.platelet_classifier import (
+    PlateletClassifierInputs,
+    PlateletClassifierResult,
+    classify_platelet,
 )
 
 
@@ -118,6 +124,18 @@ def run_pipeline(
     persisted: list[str] = []
     touched: list[str] = []
 
+    # Separate MTP-suppressed platelet rows first. MTP-suppressed platelet units
+    # are co-ordered inside an active massive-transfusion-protocol window and are
+    # intentionally not audit rows — they neither persist nor become orphans.
+    active_contexts: list[PipelineRowContext] = []
+    for ctx in contexts:
+        if ctx.component == "platelet" and ctx.platelet_mtp_suppressed:
+            continue  # suppress: no AuditRow emitted
+        active_contexts.append(ctx)
+
+    # Platelet bucket (Phase 2 dispatch).
+    platelet_classified: list[tuple[PipelineRowContext, PlateletClassifierResult]] = []
+
     # Call the deterministic classifier ON EACH context (user
     # constraint #1: the pipeline composes the deterministic engine —
     # callers no longer pre-compute it). Partition into the two
@@ -125,13 +143,23 @@ def run_pipeline(
     classified: list[tuple[PipelineRowContext, ClassifierResult]] = []
     deterministic_final: list[tuple[PipelineRowContext, ClassifierResult]] = []
     llm_required: list[tuple[PipelineRowContext, ClassifierResult]] = []
-    for ctx in contexts:
-        result = classify(_classifier_inputs_for(ctx))
-        classified.append((ctx, result))
-        if result.classification in _DETERMINISTIC_FINAL_CLASSIFICATIONS:
-            deterministic_final.append((ctx, result))
+    for ctx in active_contexts:
+        if ctx.component == "platelet":
+            plt_inputs = PlateletClassifierInputs(
+                audit_id=ctx.order.audit_id,
+                platelet_count=ctx.platelet_result.value_k_ul
+                if ctx.platelet_result is not None
+                else None,
+                enable_missing_platelet_defer=pipeline_config.enable_missing_platelet_defer,
+            )
+            platelet_classified.append((ctx, classify_platelet(plt_inputs)))
         else:
-            llm_required.append((ctx, result))
+            result = classify(_classifier_inputs_for(ctx))
+            classified.append((ctx, result))
+            if result.classification in _DETERMINISTIC_FINAL_CLASSIFICATIONS:
+                deterministic_final.append((ctx, result))
+            else:
+                llm_required.append((ctx, result))
 
     for ctx, result in deterministic_final:
         if _persist_deterministic_row(
@@ -141,6 +169,19 @@ def run_pipeline(
             run_id=run_id,
         ):
             persisted.append(ctx.order.audit_id)
+
+    # Persist deterministic-final platelet rows (INSUFFICIENT_EVIDENCE only).
+    # POTENTIALLY_INAPPROPRIATE and NEEDS_REVIEW route onward (Stage C wires LLM).
+    for ctx, plt_result in platelet_classified:
+        if plt_result.classification == "INSUFFICIENT_EVIDENCE":
+            if _persist_deterministic_platelet_row(
+                ctx,
+                classifier_result=plt_result,
+                audit_store=audit_store,
+                run_id=run_id,
+            ):
+                persisted.append(ctx.order.audit_id)
+        # else: POTENTIALLY_INAPPROPRIATE / NEEDS_REVIEW → Stage C; orphan in Stage B
 
     llm_contexts_only = [ctx for ctx, _result in llm_required]
     llm_results_by_id: dict[str, ClassifierResult] = {
@@ -212,7 +253,7 @@ def run_pipeline(
         batch_run_store.update(completed)
 
     orphans = _detect_orphans(
-        expected_audit_ids=tuple(c.order.audit_id for c in contexts),
+        expected_audit_ids=tuple(c.order.audit_id for c in active_contexts),
         persisted=tuple(persisted),
     )
 
@@ -321,6 +362,22 @@ def _deterministic_audit_row(
     LLM payload (no Anthropic call was made).
     """
     from bba.audit_store import AuditRow
+
+    # Defensive guard: platelet rows must use _deterministic_platelet_audit_row.
+    # The run_pipeline dispatch prevents platelet rows from reaching here, but
+    # this guard ensures a platelet context never trips the Hb=None raise below.
+    if context.component == "platelet":
+        plt_inputs = PlateletClassifierInputs(
+            audit_id=context.order.audit_id,
+            platelet_count=context.platelet_result.value_k_ul
+            if context.platelet_result is not None
+            else None,
+        )
+        return _deterministic_platelet_audit_row(
+            context=context,
+            classifier_result=classify_platelet(plt_inputs),
+            run_id=run_id,
+        )
 
     # INSUFFICIENT_EVIDENCE legitimately has a missing Hb; APPROPRIATE
     # with an Hb-independent bypass (MTP, peri-procedural, or hard peri-op
@@ -445,6 +502,125 @@ def _deterministic_marker_call(
         extended_thinking_blocks=None,
         cold_storage_uri=None,
     )
+
+
+def _deterministic_platelet_audit_row(
+    *,
+    context: PipelineRowContext,
+    classifier_result: PlateletClassifierResult,
+    run_id: str,
+) -> AuditRow:
+    """AuditRow for a deterministic-final platelet order.
+
+    Sets component="platelet" and populates platelet_* fields.
+    The Hb-shaped required fields hold their missing-sentinels.
+    """
+    plt = context.platelet_result
+    return AuditRow(
+        audit_id=context.order.audit_id,
+        run_id=run_id,
+        run_timestamp=context.order.order_datetime,
+        hn_hash=context.hn_hash,
+        an_hash=context.an_hash,
+        reqno=context.order.reqno,
+        order_datetime=context.order.order_datetime,
+        products_ordered=tuple(context.order.products_ordered),
+        hb_value=0.0,
+        hb_datetime=context.order.order_datetime,
+        hb_freshness="missing",
+        hb_source="missing",
+        vitals_sbp=None,
+        vitals_hr=None,
+        vitals_timestamp=None,
+        vitals_source=None,
+        prior_rbc_units_24h=context.prior_rbc_units_24h,
+        prior_rbc_units_7d=context.prior_rbc_units_7d,
+        cohort_threshold=0.0,
+        delta_hb_window_results=(),
+        rule_classification=classifier_result.classification,
+        final_classification=classifier_result.classification,
+        cohort_applied=CohortLabel.UNKNOWN.value,
+        indications_json=(),
+        negative_evidence_json=(),
+        confidence=1.0,
+        reasoning_summary_thai="",
+        reasoning_summary_en=f"deterministic: {classifier_result.rationale}",
+        needs_human_review=False,
+        review_reason=None,
+        model_id="deterministic",
+        prompt_hash=context.prompt_hash,
+        evidence_bundle_hash=context.evidence_bundle_hash,
+        redactor_version=context.redactor_version,
+        redactor_model_sha=context.redactor_model_sha,
+        policy_version=context.policy_version,
+        verifier_pass=True,
+        verifier_retries=0,
+        escalated_to_opus=False,
+        component="platelet",
+        platelet_value=plt.value_k_ul if plt is not None else None,
+        platelet_datetime=plt.datetime_utc if plt is not None else None,
+        platelet_freshness=plt.freshness if plt is not None else None,
+        platelet_source=str(plt.source)
+        if (plt is not None and plt.source is not None)
+        else None,
+        platelet_review_ceiling=classifier_result.review_ceiling,
+    )
+
+
+def _platelet_marker_call(
+    *,
+    context: PipelineRowContext,
+    classifier_result: PlateletClassifierResult,
+    run_id: str,
+) -> LlmCall:
+    """A placeholder LlmCall for deterministic-final platelet rows."""
+    fingerprint = hashlib.sha256(
+        f"{run_id}|{context.order.audit_id}|deterministic-plt".encode("utf-8")
+    ).hexdigest()[:16]
+    return LlmCall(
+        call_id=f"call-{context.order.audit_id}-det-plt-{fingerprint}",
+        audit_id=context.order.audit_id,
+        run_id=run_id,
+        model_id="deterministic",
+        anthropic_version="n/a",
+        prompt_cache_id=None,
+        request_json={
+            "rationale": classifier_result.rationale,
+            "bypass_reason": "none",
+            "component": "platelet",
+        },
+        response_json={
+            "classification": classifier_result.classification,
+            "rationale": classifier_result.rationale,
+        },
+        request_timestamp=context.order.order_datetime,
+        latency_ms=0,
+        extended_thinking_blocks=None,
+        cold_storage_uri=None,
+    )
+
+
+def _persist_deterministic_platelet_row(
+    context: PipelineRowContext,
+    *,
+    classifier_result: PlateletClassifierResult,
+    audit_store: AuditStore,
+    run_id: str,
+) -> bool:
+    """Persist a deterministic-final platelet row (INSUFFICIENT_EVIDENCE only).
+
+    Returns True iff a new row was committed.
+    """
+    row = _deterministic_platelet_audit_row(
+        context=context,
+        classifier_result=classifier_result,
+        run_id=run_id,
+    )
+    marker_call = _platelet_marker_call(
+        context=context, classifier_result=classifier_result, run_id=run_id
+    )
+    write_result = audit_store.write(row, [marker_call])
+    return not write_result.skipped_idempotent
 
 
 def _chunked(
