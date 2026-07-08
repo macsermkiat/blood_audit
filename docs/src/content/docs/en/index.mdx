@@ -1,9 +1,9 @@
 ---
 title: blood_audit
-description: KCMH RBC transfusion audit pipeline — post-hoc quality-improvement audit against PR 17.2 + AABB 2023.
+description: KCMH transfusion audit pipeline — post-hoc quality-improvement audit of RBC (Phase 1) and platelet (Phase 2) orders against PR 17.2 + AABB 2023.
 template: splash
 hero:
-  tagline: Post-hoc audit of inpatient adult RBC transfusions at KCMH against PR 17.2 + AABB 2023.
+  tagline: Post-hoc audit of inpatient adult RBC (Phase 1) and platelet (Phase 2) transfusions at KCMH against PR 17.2 + AABB 2023.
   actions:
     - text: Install & first audit run
       link: /blood_audit/en/operators/install/
@@ -26,19 +26,22 @@ import QiNotSamdBanner from "../../../components/QiNotSamdBanner.astro";
   items={[
     { label: "Scope", value: "Retrospective QI audit only; no point-of-care alerts.", tone: "warn" },
     { label: "Input", value: "HOSxP CSV bundle with transfusion, lab, diagnosis, procedure, medication, and note tables." },
-    { label: "Core rule", value: "Deterministic 3-tier Hb classifier with clinical-context thresholds and evidence-gated bypasses." },
-    { label: "Output", value: "Phase 1 validates/drains CSV rows and records run markers; AuditRows/reporting land in Phase 1.5." },
+    { label: "Core rule", value: "RBC: deterministic 3-tier Hb classifier with clinical-context thresholds and evidence-gated bypasses. Platelet: §5.1 count gate (auto-clears nothing)." },
+    { label: "Output", value: "bba audit validates/drains CSV rows and records run markers; the analysis leg + AuditRows run via the pilot scripts (CLI wiring in Phase 1.5)." },
   ]}
 />
 
 ## What blood_audit does
 
 blood_audit reads completed HOSxP exports from the hospital information
-system. When the Phase 1.5 analysis leg is wired, it compares each audited
-red blood cell (RBC) order against the 3-tier hemoglobin (Hb) policy, then
-writes one audit row per audited order to the audit store. The classifier
-checks Lab Hb, ICD-10 diagnoses, ICD-9-CM procedures, medications,
-blood-order patterns, and procedure timing in a fixed order.
+system. The `component_map` intake gate routes each blood-bank order to its
+component family, then the analysis leg compares each audited red blood cell
+(RBC) order against the 3-tier hemoglobin (Hb) policy and each platelet order
+against the §5.1 count gate, and writes one audit row per audited order to the
+audit store. The RBC classifier checks Lab Hb, ICD-10 diagnoses, ICD-9-CM
+procedures, medications, blood-order patterns, and procedure timing in a fixed
+order. This analysis leg runs today through the pilot scripts and is wired into
+the CLI in Phase 1.5.
 
 The final `final_classification` stored for each transfusion is one of:
 
@@ -62,8 +65,9 @@ HOSxP CSV bundle, streams rows through normalization, and records run-state
 markers under `$BBA_DATA_DIR/audit/<run_id>/` and
 `$BBA_DATA_DIR/audit_runs/<run_id>/` with idempotent run-level guarantees.
 In these docs, a "cohort" means the clinical-context bucket for one audit
-row, such as default, recent cardiac surgery, ESRD with dialysis-medication
-evidence, MTP, active heme malignancy, or unknown context.
+row, such as default, cardiac surgery, orthopedic surgery, combined
+ortho-cardiac, ESRD with dialysis-medication evidence, MTP, active heme
+malignancy, cardiopulmonary comorbidity, or unknown context.
 
 The LLM-driven analysis leg (deterministic classifier → evidence bundle
 → de-id → prompt → batch → quote grounding → audit-store write) is
@@ -72,6 +76,16 @@ implemented as separate modules but is **wired in Phase 1.5**. See
 
 Six fail-closed quote-grounding layers protect every LLM review row from
 hallucination. The deterministic classifier remains the authoritative source.
+
+## Phase 2 status — platelet auditor (merged)
+
+The platelet auditor is **merged** (PR #85). The `component_map` intake gate
+tells a platelet order from a red-cell one, and the deterministic platelet leg
+(`platelet_lookup` + `platelet_classifier` §5.1 gate) is live. It auto-clears
+nothing: a count ≥ 100 ×10³/µL routes to review, a count below the ceiling
+defers to the LLM, and a missing count returns `INSUFFICIENT_EVIDENCE`. The
+platelet LLM leg sits behind the default-off `PLATELET_LLM_ENABLED` flag, and
+the RBC path is byte-identical throughout.
 
 ## The 12 pipeline stages
 
