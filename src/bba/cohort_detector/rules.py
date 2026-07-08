@@ -36,8 +36,24 @@ DEFAULT_THRESHOLD: float = 7.0
 CARDIAC_SURGERY_THRESHOLD: float = 7.5
 """Hb threshold (g/dL) for the ``cardiac_surgery`` cohort (PRD §5 + Round 1)."""
 
+ORTHO_SURGERY_THRESHOLD: float = 8.0
+"""Hb threshold (g/dL) for the ``ortho_surgery`` cohort.
+
+Chula orthopedic-surgery guideline (``policy_2``/``policy_3``): "ผู้ป่วยที่จะ
+ผ่าตัดเกี่ยวกับระบบกระดูก: 8 g/dL". An orthopedic operation raises the
+transfusion floor to 8.0 on its own — a cardiac-history diagnosis is NOT
+required (unlike the deprecated ``ortho_cardiac`` cohort). Ranked above
+``cardiac_surgery`` (7.5) so the higher floor wins when a patient carries
+both surgical contexts."""
+
 ORTHO_CARDIAC_THRESHOLD: float = 8.0
-"""Hb threshold (g/dL) for the ``ortho_cardiac`` cohort (PRD §5)."""
+"""Hb threshold (g/dL) for the DEPRECATED ``ortho_cardiac`` cohort (PRD §5).
+
+No longer emitted by :func:`bba.cohort_detector.assign_cohort` — the
+orthopedic-surgery guideline applies the 8.0 floor to an ortho operation
+alone (see :data:`ORTHO_SURGERY_THRESHOLD`), which subsumes the fused
+"ortho + cardiac history" cohort. Retained (with its threshold) so
+persisted audit-store rows written before the split still resolve."""
 
 ESRD_EPO_THRESHOLD: float = 8.0
 """Hb threshold (g/dL) for the ``esrd_epo`` cohort (PRD §5 + Round 2 N1)."""
@@ -59,6 +75,7 @@ heart-disease only."""
 
 COHORT_THRESHOLDS: dict[CohortLabel, float | None] = {
     CohortLabel.CARDIAC_SURGERY: CARDIAC_SURGERY_THRESHOLD,
+    CohortLabel.ORTHO_SURGERY: ORTHO_SURGERY_THRESHOLD,
     CohortLabel.ORTHO_CARDIAC: ORTHO_CARDIAC_THRESHOLD,
     CohortLabel.ESRD_EPO: ESRD_EPO_THRESHOLD,
     CohortLabel.CARDIOPULMONARY_COMORBIDITY: CARDIOPULMONARY_COMORBIDITY_THRESHOLD,
@@ -530,6 +547,7 @@ __all__: Sequence[str] = (
     "MTP_TIME_WINDOW",
     "ORTHO_CARDIAC_THRESHOLD",
     "ORTHO_SURGERY_CODE_PREFIXES",
+    "ORTHO_SURGERY_THRESHOLD",
     "detect_mtp_pattern",
     "find_cardiac_history_diagnosis",
     "find_cardiopulmonary_comorbidity_diagnosis",

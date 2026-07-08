@@ -12,9 +12,11 @@ Cohort precedence (top wins):
 2. ``MTP`` — auto-bypass to APPROPRIATE; checked even when other signals
    are present because the RBC-cluster pattern is the most actionable
    safety signal.
-3. ``ORTHO_CARDIAC`` — ortho operative event AND cardiac history; takes
-   precedence over plain cardiac because it carries the higher 8.0
-   threshold.
+3. ``ORTHO_SURGERY`` — recent ortho operative event (cardiac history NOT
+   required); threshold 8.0. Takes precedence over plain cardiac surgery
+   because it carries the higher floor. (Supersedes the deprecated
+   ``ORTHO_CARDIAC`` cohort, which additionally required a cardiac-history
+   diagnosis — dropped per the Chula ortho guideline policy_2/policy_3.)
 4. ``CARDIAC_SURGERY`` — recent cardiac operative event; threshold 7.5.
 5. ``ESRD_EPO`` — ESRD diagnosis AND dialysis med; threshold 8.0
    (Round 2 fix N1: both signals required).
@@ -38,7 +40,6 @@ from bba.cohort_detector.models import (
 from bba.cohort_detector.rules import (
     COHORT_THRESHOLDS,
     detect_mtp_pattern,
-    find_cardiac_history_diagnosis,
     find_cardiopulmonary_comorbidity_diagnosis,
     find_chemo_med,
     find_dialysis_med,
@@ -95,16 +96,18 @@ def assign_cohort(inputs: CohortInputs) -> CohortAssignment:
     if mtp_match is not None:
         return _make(CohortLabel.MTP)
 
-    # ORTHO_CARDIAC checked before plain CARDIAC_SURGERY — it carries
-    # the stricter 8.0 threshold, so when both signals are present the
-    # higher target wins.
+    # ORTHO_SURGERY checked before plain CARDIAC_SURGERY — an orthopedic
+    # operation raises the floor to 8.0 on its own (Chula ortho guideline
+    # policy_2/policy_3), which is stricter than cardiac surgery's 7.5, so
+    # when both surgical contexts are present the higher target wins. This
+    # supersedes the deprecated ORTHO_CARDIAC cohort, which additionally
+    # required a cardiac-history diagnosis; that requirement is dropped.
     ortho_event = find_recent_ortho_surgery(
         inputs.procedure_events, inputs.order_datetime
     )
-    cardiac_history = find_cardiac_history_diagnosis(inputs.diagnosis_codes)
-    if ortho_event is not None and cardiac_history is not None:
+    if ortho_event is not None:
         return _make(
-            CohortLabel.ORTHO_CARDIAC,
+            CohortLabel.ORTHO_SURGERY,
             evidence_code=ortho_event.icd9,
             evidence_name=ortho_event.name,
         )

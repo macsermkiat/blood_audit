@@ -32,14 +32,23 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 
 class CohortLabel(StrEnum):
-    """The eight cohort outcomes assignable by :func:`assign_cohort`.
+    """The cohort outcomes assignable by :func:`assign_cohort`.
 
     Values are ``snake_case`` and intended for direct logging and downstream
     classifier dispatch. Adding a new label must be paired with a threshold
     decision in :data:`COHORT_THRESHOLDS` (see :mod:`bba.cohort_detector.rules`).
+
+    ``ORTHO_CARDIAC`` is DEPRECATED and no longer emitted by the detector: the
+    Chula orthopedic-surgery guideline raises the RBC floor to 8.0 for an
+    orthopedic operation on its own, so the fused "ortho + cardiac history"
+    cohort is subsumed by :attr:`ORTHO_SURGERY`. The member is retained (with
+    its 8.0 threshold in :data:`COHORT_THRESHOLDS`) so audit-store rows written
+    before the split still resolve; ``assign_cohort`` never returns it (a
+    regression test enforces this).
     """
 
     CARDIAC_SURGERY = "cardiac_surgery"
+    ORTHO_SURGERY = "ortho_surgery"
     ORTHO_CARDIAC = "ortho_cardiac"
     ESRD_EPO = "esrd_epo"
     MTP = "mtp"

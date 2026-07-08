@@ -95,6 +95,7 @@ from bba.cohort_detector import (
     MTP_TIME_WINDOW,
     ORTHO_CARDIAC_THRESHOLD,
     ORTHO_SURGERY_CODE_PREFIXES,
+    ORTHO_SURGERY_THRESHOLD,
     BloodOrderEvent,
     CohortAssignment,
     CohortInputs,
@@ -208,16 +209,18 @@ def _order(
 
 
 class TestPublicAPI:
-    def test_cohort_label_has_eight_members(self) -> None:
+    def test_cohort_label_has_nine_members(self) -> None:
         # Adding or removing a label is a contract change that downstream
-        # classifier (#8) and dashboard (#10) rely on. The eighth member is
-        # CARDIOPULMONARY_COMORBIDITY (diagnosis-based 8.0 floor).
-        assert len(list(CohortLabel)) == 8
+        # classifier (#8) and dashboard (#10) rely on. The ninth member is
+        # ORTHO_SURGERY (ortho-alone 8.0 floor); ORTHO_CARDIAC is retained but
+        # DEPRECATED (never emitted) for persisted-row compatibility.
+        assert len(list(CohortLabel)) == 9
 
     @pytest.mark.parametrize(
         "name",
         [
             "CARDIAC_SURGERY",
+            "ORTHO_SURGERY",
             "ORTHO_CARDIAC",
             "ESRD_EPO",
             "MTP",
@@ -249,6 +252,7 @@ class TestThresholdNumericContract:
         ("label", "threshold"),
         [
             (CohortLabel.CARDIAC_SURGERY, 7.5),
+            (CohortLabel.ORTHO_SURGERY, 8.0),
             (CohortLabel.ORTHO_CARDIAC, 8.0),
             (CohortLabel.ESRD_EPO, 8.0),
             (CohortLabel.CARDIOPULMONARY_COMORBIDITY, 8.0),
@@ -450,11 +454,27 @@ class TestAdversarialCardiacExclusions:
         assert is_cardiac_surgery_code(code, or_flag=True) is False
 
 
-class TestCohortOrthoCardiac:
-    """Ortho operative event + ICD-10 cardiac history → 8.0 g/dL."""
+class TestCohortOrthoSurgery:
+    """Recent ortho operative event → 8.0 g/dL, cardiac history NOT required.
 
-    def test_8151_plus_i25_yields_80(self) -> None:
-        # 8151 = total hip replacement; I25.10 = chronic IHD.
+    Chula ortho guideline (policy_2/policy_3): "ผู้ป่วยที่จะผ่าตัดเกี่ยวกับ
+    ระบบกระดูก: 8 g/dL". An orthopedic operation raises the floor on its own;
+    the fused ORTHO_CARDIAC cohort (which additionally required cardiac
+    history) is deprecated and superseded by this.
+    """
+
+    def test_ortho_alone_yields_ortho_surgery_80(self) -> None:
+        # 8151 = total hip replacement. No cardiac history — still 8.0.
+        result = assign_cohort(
+            _inputs(procedure_events=(_op("8151", or_flag=True, name="THR"),))
+        )
+        assert result.label == CohortLabel.ORTHO_SURGERY
+        assert result.threshold == 8.0
+
+    def test_ortho_plus_cardiac_history_still_ortho_surgery_80(self) -> None:
+        # 8151 = total hip replacement; I25.10 = chronic IHD. The cardiac
+        # history is now incidental — the ortho op alone drives 8.0, and the
+        # emitted label is ORTHO_SURGERY (not the deprecated ORTHO_CARDIAC).
         result = assign_cohort(
             _inputs(
                 procedure_events=(
@@ -463,34 +483,33 @@ class TestCohortOrthoCardiac:
                 diagnosis_codes=("I25.10",),
             )
         )
-        assert result.label == CohortLabel.ORTHO_CARDIAC
+        assert result.label == CohortLabel.ORTHO_SURGERY
         assert result.threshold == 8.0
 
-    def test_7805_plus_i50_yields_80(self) -> None:
-        # 7805 = open reduction of fracture; I50.9 = heart failure NOS.
+    def test_7805_open_reduction_yields_ortho_surgery_80(self) -> None:
+        # 7805 = open reduction of fracture; no cardiac signal required.
+        result = assign_cohort(_inputs(procedure_events=(_op("7805", or_flag=True),)))
+        assert result.label == CohortLabel.ORTHO_SURGERY
+        assert result.threshold == 8.0
+
+    def test_cardiac_history_alone_does_not_trigger_ortho_surgery(self) -> None:
+        # ORTHO_SURGERY needs an ortho *procedure*; a cardiac-history diagnosis
+        # alone lands in CARDIOPULMONARY_COMORBIDITY.
+        result = assign_cohort(_inputs(diagnosis_codes=("I25.10",)))
+        assert result.label != CohortLabel.ORTHO_SURGERY
+        assert result.label == CohortLabel.CARDIOPULMONARY_COMORBIDITY
+
+    def test_ortho_cardiac_is_deprecated_never_emitted(self) -> None:
+        # Deprecation tripwire: the fused ORTHO_CARDIAC cohort must NEVER be
+        # returned by assign_cohort — ortho-with-cardiac-history now resolves
+        # to ORTHO_SURGERY. If this fails, the deprecation regressed.
         result = assign_cohort(
             _inputs(
-                procedure_events=(_op("7805", or_flag=True),),
-                diagnosis_codes=("I50.9",),
+                procedure_events=(_op("8151", or_flag=True),),
+                diagnosis_codes=("I25.10", "I50.9"),
             )
         )
-        assert result.label == CohortLabel.ORTHO_CARDIAC
-        assert result.threshold == 8.0
-
-    def test_ortho_alone_does_not_trigger_ortho_cardiac(self) -> None:
-        # Plain ortho is not a cohort by itself per the PRD §5 table.
-        result = assign_cohort(_inputs(procedure_events=(_op("8151", or_flag=True),)))
-        assert result.label == CohortLabel.DEFAULT
-        assert result.threshold == 7.0
-
-    def test_cardiac_history_alone_does_not_trigger_ortho_cardiac(self) -> None:
-        # ORTHO_CARDIAC needs an ortho *procedure* too; a cardiac-history
-        # diagnosis alone must not reach it. (Absent an ortho procedure, an
-        # I25 heart-disease code now lands in CARDIOPULMONARY_COMORBIDITY,
-        # not DEFAULT — but the invariant under test is "not ORTHO_CARDIAC".)
-        result = assign_cohort(_inputs(diagnosis_codes=("I25.10",)))
         assert result.label != CohortLabel.ORTHO_CARDIAC
-        assert result.label == CohortLabel.CARDIOPULMONARY_COMORBIDITY
 
 
 class TestCohortEsrdEpo:
@@ -912,20 +931,20 @@ class TestCohortPrecedence:
         )
         assert result.label == CohortLabel.MTP
 
-    def test_ortho_cardiac_preferred_over_plain_cardiac(self) -> None:
-        # Patient has both a recent cardiac code AND a recent ortho code
-        # AND cardiac history — the ortho_cardiac threshold (8.0) is
-        # stricter than cardiac alone (7.5), so ortho_cardiac wins.
+    def test_ortho_surgery_preferred_over_plain_cardiac_surgery(self) -> None:
+        # Patient has both a recent ortho code AND a recent cardiac code.
+        # The ortho_surgery floor (8.0) is higher than cardiac surgery (7.5),
+        # so the higher floor wins — ortho_surgery is ranked above cardiac.
+        # (No cardiac-history diagnosis needed; the ortho op alone drives it.)
         result = assign_cohort(
             _inputs(
                 procedure_events=(
                     _op("8151", or_flag=True, days_before_anchor=15),
                     _op("3601", or_flag=True, days_before_anchor=10),
                 ),
-                diagnosis_codes=("I25.10",),
             )
         )
-        assert result.label == CohortLabel.ORTHO_CARDIAC
+        assert result.label == CohortLabel.ORTHO_SURGERY
         assert result.threshold == 8.0
 
     def test_esrd_preferred_over_default(self) -> None:
@@ -1267,6 +1286,7 @@ class TestAllowListSeeds:
     def test_cohort_threshold_constants(self) -> None:
         assert DEFAULT_THRESHOLD == 7.0
         assert CARDIAC_SURGERY_THRESHOLD == 7.5
+        assert ORTHO_SURGERY_THRESHOLD == 8.0
         assert ORTHO_CARDIAC_THRESHOLD == 8.0
         assert ESRD_EPO_THRESHOLD == 8.0
 
