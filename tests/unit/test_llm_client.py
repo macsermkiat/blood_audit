@@ -88,6 +88,7 @@ from bba.llm_client import (
     detect_disagreement,
     escalate_to_opus,
     load_cassette,
+    parse_platelet_structured_response,
     parse_structured_response,
     process_batch,
     run_with_escalation,
@@ -1897,3 +1898,168 @@ class TestParserPropertyBasedExpanded:
             assert outcome.parse_failure_reason is not None
         else:
             assert outcome.parsed is not None
+
+
+# =============================================================================
+# Fix A (Codex P2): PLATELET_REVIEW tool schema must advertise hard-signal bools
+#
+# WHY: the request tool schema and the parser response contract must agree.
+# parse_platelet_structured_response requires active_bleeding,
+# procedure_indication, prophylactic_marrow_failure as StrictBool. Without
+# these fields in the tool input_schema, the model is never instructed to
+# emit them, omits them, and EVERY platelet response fails SCHEMA_MISMATCH
+# — the live platelet leg is dead-on-arrival producing no real verdicts.
+# =============================================================================
+
+
+def _platelet_request(audit_id: str = "plt-001") -> BatchSubmissionRequest:
+    """Build a minimal PLATELET_REVIEW BatchSubmissionRequest."""
+    from bba.prompt_builder import EvidenceChunk, PromptBuildRequest, build_prompt
+
+    result = build_prompt(
+        PromptBuildRequest(
+            task_mode="PLATELET_REVIEW",
+            cohort_threshold=None,
+            evidence_chunks=(
+                EvidenceChunk(
+                    evidence_id="E1",
+                    source="IPDNRFOCUSDT",
+                    text="Plt 5,000 /uL. Active GI bleed documented.",
+                ),
+            ),
+            few_shot_examples=(),
+        )
+    )
+    return BatchSubmissionRequest(
+        audit_id=audit_id,
+        run_id="run-plt",
+        task_mode="PLATELET_REVIEW",
+        prompt=result,
+    )
+
+
+class TestPlateletReviewToolSchema:
+    """PLATELET_REVIEW requests must advertise the three hard-signal bool fields.
+
+    WHY: request schema and parser contract must agree end-to-end. If the
+    tool input_schema omits active_bleeding / procedure_indication /
+    prophylactic_marrow_failure, the model never emits them, and
+    parse_platelet_structured_response raises SCHEMA_MISMATCH on every
+    response — the live platelet leg can never produce a real verdict.
+    """
+
+    def test_platelet_review_schema_contains_three_boolean_fields(self) -> None:
+        payload = build_anthropic_request(
+            _platelet_request(), model=SONNET_MODEL_ID, prompt_cache_enabled=True
+        )
+        props = payload["tools"][0]["input_schema"]["properties"]
+        for field in (
+            "active_bleeding",
+            "procedure_indication",
+            "prophylactic_marrow_failure",
+        ):
+            assert field in props, (
+                f"PLATELET_REVIEW tool schema missing '{field}'; "
+                "model will omit it and every response will fail SCHEMA_MISMATCH"
+            )
+
+    def test_platelet_review_hard_signal_fields_are_type_boolean(self) -> None:
+        payload = build_anthropic_request(
+            _platelet_request(), model=SONNET_MODEL_ID, prompt_cache_enabled=True
+        )
+        props = payload["tools"][0]["input_schema"]["properties"]
+        for field in (
+            "active_bleeding",
+            "procedure_indication",
+            "prophylactic_marrow_failure",
+        ):
+            assert props[field]["type"] == "boolean", (
+                f"'{field}' must be type 'boolean' so the model emits a proper bool "
+                "and StrictBool in PlateletLlmClassificationResponse catches coercions"
+            )
+
+    def test_platelet_review_hard_signal_fields_are_required(self) -> None:
+        payload = build_anthropic_request(
+            _platelet_request(), model=SONNET_MODEL_ID, prompt_cache_enabled=True
+        )
+        required: list[str] = payload["tools"][0]["input_schema"]["required"]
+        for field in (
+            "active_bleeding",
+            "procedure_indication",
+            "prophylactic_marrow_failure",
+        ):
+            assert field in required, (
+                f"'{field}' must be in 'required'; omitting it means the model "
+                "may omit the field and every response silently fails SCHEMA_MISMATCH"
+            )
+
+    def test_rbc_tool_schema_unchanged_no_platelet_bool_fields(self) -> None:
+        # RBC path must be byte-identical: platelet booleans must NOT appear
+        # in RBC requests; adding them would alter the tool schema hash and
+        # invalidate stored RBC audit records.
+        for mode in ("HB_7_10_REVIEW", "HB_GT_10_OVERRIDE"):
+            rbc_req = _request(audit_id="rbc-chk", task_mode=mode)
+            payload = build_anthropic_request(
+                rbc_req, model=SONNET_MODEL_ID, prompt_cache_enabled=True
+            )
+            props = payload["tools"][0]["input_schema"]["properties"]
+            for field in (
+                "active_bleeding",
+                "procedure_indication",
+                "prophylactic_marrow_failure",
+            ):
+                assert field not in props, (
+                    f"RBC tool schema must not contain platelet field '{field}' "
+                    f"(task_mode={mode!r}); RBC path must be byte-identical"
+                )
+
+    def test_conforming_platelet_response_parses_without_schema_mismatch(
+        self,
+    ) -> None:
+        # A model response that conforms to the platelet tool schema must
+        # parse via parse_platelet_structured_response without SCHEMA_MISMATCH
+        # and must yield grounded PlateletHardSignals — the live leg round-trip.
+        conforming_content = [
+            {
+                "type": "tool_use",
+                "id": "tool_01",
+                "name": "classify_transfusion_order",
+                "input": {
+                    "classification": "APPROPRIATE",
+                    "indications": [
+                        {
+                            "code": "C1.active_bleeding",
+                            "quote": "Active GI bleed documented.",
+                            "source_id": "E1",
+                            "confidence": 0.92,
+                        }
+                    ],
+                    "negative_evidence": [],
+                    "reasoning_summary_en": "Active GI bleed grounded from E1.",
+                    "reasoning_summary_th": "พบเลือดออกทางเดินอาหารเฉียบพลันจาก E1",
+                    "active_bleeding": True,
+                    "procedure_indication": False,
+                    "prophylactic_marrow_failure": False,
+                },
+            }
+        ]
+        result = BatchSubmissionResult(
+            custom_id="plt-001",
+            model_id=SONNET_MODEL_ID,
+            raw_response_json={"content": conforming_content},
+            request_json={"model": SONNET_MODEL_ID},
+            response_headers={"anthropic-version": "2023-06-01"},
+            request_timestamp=datetime(2026, 7, 1, 10, 0, 0, tzinfo=UTC),
+            latency_ms=100,
+            anthropic_version="2023-06-01",
+        )
+        outcome = parse_platelet_structured_response(result)
+        assert not outcome.parse_failure, (
+            f"Expected successful parse but got "
+            f"parse_failure_reason={outcome.parse_failure_reason!r}; "
+            "the tool schema and parser must agree on the three boolean fields"
+        )
+        assert outcome.platelet_hard_signals is not None
+        assert outcome.platelet_hard_signals.active_bleeding is True
+        assert outcome.platelet_hard_signals.procedure_indication is False
+        assert outcome.platelet_hard_signals.prophylactic_marrow_failure is False

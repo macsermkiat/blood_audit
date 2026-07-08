@@ -106,7 +106,11 @@ def build_anthropic_request(
             {
                 "name": _TOOL_NAME,
                 "description": _TOOL_DESCRIPTION,
-                "input_schema": _TOOL_INPUT_SCHEMA,
+                "input_schema": (
+                    _PLATELET_TOOL_INPUT_SCHEMA
+                    if request.task_mode == "PLATELET_REVIEW"
+                    else _TOOL_INPUT_SCHEMA
+                ),
             },
         ],
         "tool_choice": {"type": "tool", "name": _TOOL_NAME},
@@ -164,6 +168,49 @@ _TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
         "negative_evidence",
         "reasoning_summary_en",
         "reasoning_summary_th",
+    ],
+}
+
+# Platelet-specific extension: adds the three hard-signal booleans that
+# parse_platelet_structured_response requires. Without these fields the
+# model never emits them, every platelet response fails SCHEMA_MISMATCH,
+# and the live platelet leg can produce no real verdicts.
+# Used ONLY for PLATELET_REVIEW requests; RBC requests use _TOOL_INPUT_SCHEMA
+# unchanged so the RBC path remains byte-identical.
+_PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
+    "type": "object",
+    "properties": {
+        **_TOOL_INPUT_SCHEMA["properties"],
+        "active_bleeding": {
+            "type": "boolean",
+            "description": (
+                "True iff the evidence explicitly grounds documented active, "
+                "life-threatening, or clinically significant bleeding AND no "
+                "exclusion population applies. Set False for bare low count alone."
+            ),
+        },
+        "procedure_indication": {
+            "type": "boolean",
+            "description": (
+                "True iff the evidence grounds an invasive procedure or surgery "
+                "within the audit window whose policy threshold the count sits "
+                "below (LP <50-80k /uL, CVC <50k /uL, major surgery <80-100k /uL)."
+            ),
+        },
+        "prophylactic_marrow_failure": {
+            "type": "boolean",
+            "description": (
+                "True iff the evidence grounds chemo/HSCT/consumptive "
+                "thrombocytopenia with count <10,000 /uL (or expected <10,000 "
+                "/uL within 24 hours) AND no exclusion population applies."
+            ),
+        },
+    },
+    "required": [
+        *_TOOL_INPUT_SCHEMA["required"],
+        "active_bleeding",
+        "procedure_indication",
+        "prophylactic_marrow_failure",
     ],
 }
 
