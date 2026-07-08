@@ -61,6 +61,7 @@ from bba.audit_orders import (
     build_audit_orders,
 )
 from bba.audit_pipeline import PipelineRowContext
+from bba.audit_pipeline.pipeline import _persist_injection_flagged_row
 from bba.audit_pipeline.replay import apply_batch_results
 from bba.audit_store import AuditStore, AuditStoreConfig
 from bba.cohort_detector import (
@@ -1512,6 +1513,11 @@ def main() -> None:
         sys.exit("nothing to submit")
 
     submissions: list[BatchSubmissionRequest] = []
+    # Codex round-5 P2 (security): honor injection routing in the pilot leg. A
+    # prompt whose scanner raised route_to_needs_review must NEVER be submitted
+    # to Anthropic; it is quarantined to a local NEEDS_REVIEW row below,
+    # mirroring the batch pipeline's _persist_injection_flagged_row.
+    injection_flagged: list[PipelineRowContext] = []
     for ctx in llm_contexts:
         if ctx.component == "platelet":
             # Platelet review uses the dedicated PLATELET_REVIEW task mode
@@ -1524,6 +1530,9 @@ def main() -> None:
                     few_shot_examples=(),
                 )
             )
+            if prompt.route_to_needs_review:
+                injection_flagged.append(ctx)
+                continue
             submissions.append(
                 BatchSubmissionRequest(
                     audit_id=ctx.order.audit_id,
@@ -1546,6 +1555,9 @@ def main() -> None:
                 few_shot_examples=(),
             )
         )
+        if prompt.route_to_needs_review:
+            injection_flagged.append(ctx)
+            continue
         submissions.append(
             BatchSubmissionRequest(
                 audit_id=ctx.order.audit_id,
@@ -1555,59 +1567,87 @@ def main() -> None:
             )
         )
 
-    transport = RealAnthropicTransport(
-        api_key=api_key,
-        poll_interval_seconds=20.0,
-        max_wait_seconds=3600.0,
-    )
-    t0 = time.time()
-    # Resume path: if BBA_PILOT_BATCH_ID is set, re-attach to an already-
-    # submitted batch instead of creating a new one. The deterministic
-    # context build above is reproducible, so ``submissions`` matches the
-    # original submission set and fetch_batch_results can rebuild each
-    # result's request_json. Use this after a Ctrl+C during polling so the
-    # in-flight batch is not abandoned and re-billed.
-    resume_batch_id = os.environ.get("BBA_PILOT_BATCH_ID")
-    if resume_batch_id:
-        batch_id = resume_batch_id
-        print(f"  resuming existing batch_id = {batch_id} (skipping submit)")
-    else:
-        print(
-            f"\nSubmitting batch of {len(submissions)} requests to "
-            f"Anthropic (model={MODEL_ID})..."
-        )
-        batch_id = transport.submit_batch_only(
-            model=MODEL_ID,
-            requests=submissions,
-            prompt_cache_enabled=True,
-        )
-        print(f"  batch_id = {batch_id}")
-        print(f"  (resume with: BBA_PILOT_BATCH_ID={batch_id})")
-    print("  polling (this can take a while)...")
-    response = transport.fetch_batch_results(
-        batch_id,
-        model=MODEL_ID,
-        requests=submissions,
-        prompt_cache_enabled=True,
-    )
-    elapsed = time.time() - t0
-    print(f"  batch complete in {elapsed:.1f}s; {len(response.results)} results")
-
     audit_store = AuditStore(
         AuditStoreConfig(
             root_dir=AUDIT_STORE_ROOT,
             code_version=CODE_VERSION,
         )
     )
-    context_map = {ctx.order.audit_id: ctx for ctx in llm_contexts}
-    write_summary = apply_batch_results(
-        response,
-        audit_store=audit_store,
-        run_id=RUN_ID,
-        contexts=context_map,
-        classifier_results=classifier_results,
-    )
-    print(f"  persisted audit rows: {len(write_summary.audit_ids_persisted)}")
+
+    # Codex round-5 P2 (security): persist injection-flagged rows locally as
+    # NEEDS_REVIEW — they were never sent to Anthropic. Mirrors the batch
+    # pipeline's quarantine: an RBC context carries its real deterministic
+    # ClassifierResult; a platelet context (classifier_result=None) re-derives
+    # rule_classification from the platelet gate inside
+    # _persist_injection_flagged_row. The pilot's platelet gate runs with
+    # defer off (the order loop above), so the default flag matches here.
+    for inj_ctx in injection_flagged:
+        _persist_injection_flagged_row(
+            inj_ctx,
+            classifier_result=(
+                None
+                if inj_ctx.component == "platelet"
+                else classifier_results.get(inj_ctx.order.audit_id)
+            ),
+            audit_store=audit_store,
+            run_id=RUN_ID,
+        )
+    if injection_flagged:
+        print(
+            "  injection-flagged (not submitted, routed to NEEDS_REVIEW): "
+            f"{len(injection_flagged)}"
+        )
+
+    if not submissions:
+        print("  no clean submissions remaining after the injection filter")
+    else:
+        transport = RealAnthropicTransport(
+            api_key=api_key,
+            poll_interval_seconds=20.0,
+            max_wait_seconds=3600.0,
+        )
+        t0 = time.time()
+        # Resume path: if BBA_PILOT_BATCH_ID is set, re-attach to an already-
+        # submitted batch instead of creating a new one. The deterministic
+        # context build above is reproducible, so ``submissions`` matches the
+        # original submission set and fetch_batch_results can rebuild each
+        # result's request_json. Use this after a Ctrl+C during polling so the
+        # in-flight batch is not abandoned and re-billed.
+        resume_batch_id = os.environ.get("BBA_PILOT_BATCH_ID")
+        if resume_batch_id:
+            batch_id = resume_batch_id
+            print(f"  resuming existing batch_id = {batch_id} (skipping submit)")
+        else:
+            print(
+                f"\nSubmitting batch of {len(submissions)} requests to "
+                f"Anthropic (model={MODEL_ID})..."
+            )
+            batch_id = transport.submit_batch_only(
+                model=MODEL_ID,
+                requests=submissions,
+                prompt_cache_enabled=True,
+            )
+            print(f"  batch_id = {batch_id}")
+            print(f"  (resume with: BBA_PILOT_BATCH_ID={batch_id})")
+        print("  polling (this can take a while)...")
+        response = transport.fetch_batch_results(
+            batch_id,
+            model=MODEL_ID,
+            requests=submissions,
+            prompt_cache_enabled=True,
+        )
+        elapsed = time.time() - t0
+        print(f"  batch complete in {elapsed:.1f}s; {len(response.results)} results")
+
+        context_map = {ctx.order.audit_id: ctx for ctx in llm_contexts}
+        write_summary = apply_batch_results(
+            response,
+            audit_store=audit_store,
+            run_id=RUN_ID,
+            contexts=context_map,
+            classifier_results=classifier_results,
+        )
+        print(f"  persisted audit rows: {len(write_summary.audit_ids_persisted)}")
 
     print("\n" + "=" * 120)
     rows = list(audit_store.read_audit_results(run_id=RUN_ID))

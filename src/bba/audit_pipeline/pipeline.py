@@ -326,7 +326,13 @@ def _run_batch_chunk(
     )
 
     for inj_ctx in injection_sink:
-        _persist_injection_flagged_row(inj_ctx, audit_store=audit_store, run_id=run_id)
+        _persist_injection_flagged_row(
+            inj_ctx,
+            classifier_result=classifier_results.get(inj_ctx.order.audit_id),
+            audit_store=audit_store,
+            run_id=run_id,
+            enable_missing_platelet_defer=enable_missing_platelet_defer,
+        )
         persisted.append(inj_ctx.order.audit_id)
 
     if not requests:
@@ -726,8 +732,10 @@ def _persist_deterministic_platelet_row(
 def _persist_injection_flagged_row(
     context: PipelineRowContext,
     *,
+    classifier_result: ClassifierResult | None,
     audit_store: AuditStore,
     run_id: str,
+    enable_missing_platelet_defer: bool = False,
 ) -> None:
     """Persist a NEEDS_REVIEW row for an injection-flagged context.
 
@@ -736,10 +744,25 @@ def _persist_injection_flagged_row(
     poisoned evidence chunk never reaches the model (Codex P1 security).
     A synthetic marker LlmCall satisfies the audit_store transactional
     invariant (every audit_results row must have a paired llm_calls row).
+
+    Only ``final_classification`` (NEEDS_REVIEW) and ``review_reason`` (the
+    injection constant) are forced; ``rule_classification`` must stay the TRUE
+    deterministic verdict so the audit trail is not skewed (Codex round-5 P2).
+    For an RBC context the verdict is the ``classifier_result`` the batch path
+    already computed (POTENTIALLY_INAPPROPRIATE / NEEDS_REVIEW — deterministic-
+    final RBC rows never reach the batch path). For a PLATELET context the RBC
+    classifier is absent (the platelet leg submits with ``classifier_results={}``)
+    and would be wrong anyway; :func:`_audit_row_for_needs_review` re-derives the
+    platelet ``rule_classification`` from the platelet gate, so
+    ``enable_missing_platelet_defer`` is threaded through for that gate rather
+    than running the RBC ``classify()`` on a platelet sentinel Hb. The fallback
+    sentinel is only reached when no real verdict is available; its
+    ``classification`` is ignored for platelet (gate overrides) and its
+    ``cohort_threshold=None`` reproduces the prior 0.0 fallback for the field.
     """
     from bba.audit_pipeline.replay import _audit_row_for_needs_review
 
-    sentinel = ClassifierResult(
+    deterministic_result = classifier_result or ClassifierResult(
         classification="INSUFFICIENT_EVIDENCE",
         rationale="injection_detected",
         cohort_threshold=None,
@@ -748,7 +771,7 @@ def _persist_injection_flagged_row(
     row = _audit_row_for_needs_review(
         run_id=run_id,
         context=context,
-        classifier_result=sentinel,
+        classifier_result=deterministic_result,
         review_reason="injection_detected",
         verifier_pass=False,
         verifier_retries=0,
@@ -759,6 +782,7 @@ def _persist_injection_flagged_row(
         negative_evidence=(),
         confidence=0.0,
         escalated=False,
+        enable_missing_platelet_defer=enable_missing_platelet_defer,
     )
     fingerprint = hashlib.sha256(
         f"{run_id}|{context.order.audit_id}|injection-filtered".encode("utf-8")
