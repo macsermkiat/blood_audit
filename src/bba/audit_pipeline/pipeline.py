@@ -317,20 +317,39 @@ def _run_batch_chunk(
     :func:`apply_batch_results`; it is inert for RBC rows (their
     ``rule_classification`` never comes from the platelet gate) so the RBC leg
     passes ``False`` and stays byte-identical."""
-    batch_id = _batch_id_for(run_id, chunk_contexts)
+    # Codex P1 (security): build submission requests FIRST so injection-flagged
+    # contexts are routed to NEEDS_REVIEW before a BatchRun is created.  A
+    # BatchRun only covers the clean (non-injection) contexts.
+    injection_sink: list[PipelineRowContext] = []
+    requests = _build_submission_requests(
+        chunk_contexts, run_id=run_id, injection_sink=injection_sink
+    )
+
+    for inj_ctx in injection_sink:
+        _persist_injection_flagged_row(inj_ctx, audit_store=audit_store, run_id=run_id)
+        persisted.append(inj_ctx.order.audit_id)
+
+    if not requests:
+        # All contexts in this chunk were injection-flagged; no Anthropic batch
+        # is needed.  The rows were persisted above as NEEDS_REVIEW.
+        return
+
+    # Remaining contexts are clean: compute the batch from clean contexts only.
+    clean_audit_ids = frozenset(r.audit_id for r in requests)
+    clean_contexts = [c for c in chunk_contexts if c.order.audit_id in clean_audit_ids]
+
+    batch_id = _batch_id_for(run_id, clean_contexts)
     now = _now_utc()
     pending = BatchRun(
         batch_id=batch_id,
         state=BatchRunState.PENDING,
         run_id=run_id,
         code_version=pipeline_config.code_version,
-        audit_ids=tuple(c.order.audit_id for c in chunk_contexts),
+        audit_ids=tuple(c.order.audit_id for c in clean_contexts),
         updated_at=now,
     )
     batch_run_store.create(pending)
     touched.append(batch_id)
-
-    requests = _build_submission_requests(chunk_contexts, run_id=run_id)
 
     # Split-phase submission (PR #54 codex P1 fix): create the remote batch and
     # persist the anthropic_batch_id BEFORE polling. A SIGTERM during the polling
@@ -357,7 +376,7 @@ def _run_batch_chunk(
         prompt_cache_enabled=llm_config.prompt_cache_enabled,
     )
 
-    context_map = {ctx.order.audit_id: ctx for ctx in chunk_contexts}
+    context_map = {ctx.order.audit_id: ctx for ctx in clean_contexts}
     write_summary = apply_batch_results(
         response,
         audit_store=audit_store,
@@ -704,6 +723,69 @@ def _persist_deterministic_platelet_row(
     return not write_result.skipped_idempotent
 
 
+def _persist_injection_flagged_row(
+    context: PipelineRowContext,
+    *,
+    audit_store: AuditStore,
+    run_id: str,
+) -> None:
+    """Persist a NEEDS_REVIEW row for an injection-flagged context.
+
+    The prompt builder's injection scanner raised a flag; the context
+    is routed to NEEDS_REVIEW without an Anthropic call so the
+    poisoned evidence chunk never reaches the model (Codex P1 security).
+    A synthetic marker LlmCall satisfies the audit_store transactional
+    invariant (every audit_results row must have a paired llm_calls row).
+    """
+    from bba.audit_pipeline.replay import _audit_row_for_needs_review
+
+    sentinel = ClassifierResult(
+        classification="INSUFFICIENT_EVIDENCE",
+        rationale="injection_detected",
+        cohort_threshold=None,
+        bypass_reason=BypassReason.NONE,
+    )
+    row = _audit_row_for_needs_review(
+        run_id=run_id,
+        context=context,
+        classifier_result=sentinel,
+        review_reason="injection_detected",
+        verifier_pass=False,
+        verifier_retries=0,
+        model_id="injection-filter",
+        reasoning_en="Prompt injection detected in evidence chunks; not submitted to LLM.",
+        reasoning_th="",
+        indications=(),
+        negative_evidence=(),
+        confidence=0.0,
+        escalated=False,
+    )
+    fingerprint = hashlib.sha256(
+        f"{run_id}|{context.order.audit_id}|injection-filtered".encode("utf-8")
+    ).hexdigest()[:16]
+    marker_call = LlmCall(
+        call_id=f"call-{context.order.audit_id}-inj-{fingerprint}",
+        audit_id=context.order.audit_id,
+        run_id=run_id,
+        model_id="injection-filter",
+        anthropic_version="n/a",
+        prompt_cache_id=None,
+        request_json={
+            "injection_detected": True,
+            "audit_id": context.order.audit_id,
+        },
+        response_json={
+            "classification": "NEEDS_REVIEW",
+            "review_reason": "injection_detected",
+        },
+        request_timestamp=context.order.order_datetime,
+        latency_ms=0,
+        extended_thinking_blocks=None,
+        cold_storage_uri=None,
+    )
+    audit_store.write(row, [marker_call])
+
+
 def _chunked(
     contexts: Sequence[PipelineRowContext], size: int
 ) -> list[tuple[PipelineRowContext, ...]]:
@@ -726,7 +808,10 @@ def _batch_id_for(run_id: str, chunk: Sequence[PipelineRowContext]) -> str:
 
 
 def _build_submission_requests(
-    chunk: Sequence[PipelineRowContext], *, run_id: str
+    chunk: Sequence[PipelineRowContext],
+    *,
+    run_id: str,
+    injection_sink: list[PipelineRowContext] | None = None,
 ) -> list[BatchSubmissionRequest]:
     """Build :class:`BatchSubmissionRequest` objects for ``chunk``.
 
@@ -742,6 +827,12 @@ def _build_submission_requests(
     with no real content to ground citations against (Codex review
     CRITICAL #2: "fabricates fallback evidence when evidence_chunks is
     empty").
+
+    ``injection_sink``: when provided, contexts whose prompt builder
+    raises the injection flag (``route_to_needs_review=True``) are
+    appended here instead of to the submission list.  The caller is
+    responsible for persisting them as NEEDS_REVIEW without a batch
+    submission (Codex P1 security fix).
     """
     from bba.prompt_builder import PromptBuildRequest, TaskMode, build_prompt
 
@@ -781,6 +872,15 @@ def _build_submission_requests(
                     few_shot_examples=(),
                 )
             )
+
+        # Codex P1 (security): prompt builder flagged injection in the evidence
+        # chunks.  Route this context to NEEDS_REVIEW without submitting to
+        # Anthropic — a poisoned chunk must never reach the model.
+        if prompt.route_to_needs_review:
+            if injection_sink is not None:
+                injection_sink.append(context)
+            continue
+
         out.append(
             BatchSubmissionRequest(
                 audit_id=context.order.audit_id,

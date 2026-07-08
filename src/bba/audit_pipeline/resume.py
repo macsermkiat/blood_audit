@@ -38,6 +38,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 
 from bba.audit_pipeline.models import (
+    AuditPipelineConfig,
     BatchRun,
     BatchRunState,
     PipelineRowContext,
@@ -63,6 +64,7 @@ def resume_on_startup(
     contexts: Mapping[str, PipelineRowContext] | None = None,
     transport: AnthropicTransport | None = None,
     llm_config: LlmClientConfig | None = None,
+    pipeline_config: AuditPipelineConfig | None = None,
 ) -> ResumeReport:
     """Reconcile every non-terminal ``batch_runs`` row and return a report.
 
@@ -128,6 +130,7 @@ def resume_on_startup(
             contexts=contexts,
             transport=transport,
             llm_config=llm_config,
+            pipeline_config=pipeline_config,
         )
         completed.extend(run_completed)
         reemitted.extend(run_reemitted)
@@ -149,6 +152,7 @@ def _reconcile_submitted_or_partial(
     contexts: Mapping[str, PipelineRowContext],
     transport: AnthropicTransport | None,
     llm_config: LlmClientConfig | None,
+    pipeline_config: AuditPipelineConfig | None = None,
 ) -> tuple[list[str], list[str], list[str]]:
     """Reconcile one SUBMITTED/PARTIAL row.
 
@@ -200,11 +204,17 @@ def _reconcile_submitted_or_partial(
                 if aid in contexts
             }
             if polled_contexts:
+                _defer = (
+                    pipeline_config.enable_missing_platelet_defer
+                    if pipeline_config is not None
+                    else False
+                )
                 apply_batch_results(
                     response,
                     audit_store=audit_store,
                     run_id=run.run_id,
                     contexts=polled_contexts,
+                    enable_missing_platelet_defer=_defer,
                 )
                 # Refresh cached state — the call(s) and audit row(s)
                 # are now persisted.
@@ -233,6 +243,7 @@ def _reconcile_submitted_or_partial(
                 context=contexts[audit_id],
                 audit_store=audit_store,
                 run_id=run.run_id,
+                pipeline_config=pipeline_config,
             )
             run_reemitted.append(audit_id)
             run_completed.append(audit_id)
@@ -371,6 +382,7 @@ def _re_emit_audit_row(
     context: PipelineRowContext,
     audit_store: AuditStore,
     run_id: str,
+    pipeline_config: AuditPipelineConfig | None = None,
 ) -> None:
     """Rebuild an audit_row from cached call responses + context.
 
@@ -380,6 +392,11 @@ def _re_emit_audit_row(
     code path that the original submission used. The audit_store's
     idempotency contract guarantees re-running this for an already-
     persisted audit_id is a no-op.
+
+    ``pipeline_config`` threads ``enable_missing_platelet_defer`` so that
+    a missing-count platelet order recomputes the same verdict as the
+    original submission rather than defaulting to INSUFFICIENT_EVIDENCE
+    (Codex P2 resume drift fix).
     """
     from bba.audit_pipeline.replay import apply_batch_results
 
@@ -388,11 +405,17 @@ def _re_emit_audit_row(
         batch_id=f"resume-{audit_id}",
         results=results,
     )
+    _defer = (
+        pipeline_config.enable_missing_platelet_defer
+        if pipeline_config is not None
+        else False
+    )
     apply_batch_results(
         synthetic_response,
         audit_store=audit_store,
         run_id=run_id,
         contexts={audit_id: context},
+        enable_missing_platelet_defer=_defer,
     )
 
 

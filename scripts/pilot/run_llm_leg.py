@@ -1467,6 +1467,22 @@ def main() -> None:
             # (INSUFFICIENT_EVIDENCE was skipped; anything reaching here routes
             # to the LLM). No RBC classify() call — sentinel Hb values must not
             # drive a classification decision.
+            # Fix 2 (Codex P2): store the platelet classifier result so the
+            # downstream summary and JSON-report loops can look it up without
+            # a KeyError.  Use the deterministic gate (same inputs as the order
+            # loop) rather than re-reading the pre-computed value that is local
+            # to the order loop.
+            plt_count = (
+                ctx.platelet_result.value_k_ul
+                if ctx.platelet_result is not None
+                else None
+            )
+            classifier_results[ctx.order.audit_id] = classify_platelet(
+                PlateletClassifierInputs(
+                    audit_id=ctx.order.audit_id,
+                    platelet_count=plt_count,
+                )
+            )
             llm_contexts.append(ctx)
             continue
         periop = ctx.periop_summary
