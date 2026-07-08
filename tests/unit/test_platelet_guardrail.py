@@ -57,6 +57,49 @@ class TestAllowsGroundedClear:
         )
 
 
+class TestHighCountUngroundedClear:
+    """POTENTIALLY_INAPPROPRIATE rows must be covered by the guardrail (Fix 1 / Codex P1).
+
+    WHY: Transfusing at a normal or high platelet count (>= 100k ceiling) is almost
+    never appropriate. There is no separate high-count prompt path to act as a
+    backstop; the guardrail is the sole safety mechanism. An ungrounded LLM
+    APPROPRIATE at high count is clinically as dangerous as at low count — both
+    must be floored to human review unless a grounded hard signal (e.g.
+    high-bleeding-risk surgery permitting >= 100k) justifies the clear.
+    """
+
+    def test_ungrounded_appropriate_on_high_count_is_suspect(self) -> None:
+        # POTENTIALLY_INAPPROPRIATE = plt >= 100k ceiling. An ungrounded LLM
+        # clear at high count must be floored — the absence of a hard signal
+        # is indistinguishable from a bare count-only clear at any level.
+        assert (
+            platelet_overclear_suspect(
+                "APPROPRIATE", "POTENTIALLY_INAPPROPRIATE", _NO_SIGNALS
+            )
+            is True
+        )
+
+    def test_grounded_procedure_indication_on_high_count_is_allowed(self) -> None:
+        # High-bleeding-risk major surgery permitting >= 100k is a valid grounded
+        # indication. The clear must stand when a positive signal is grounded.
+        signals = PlateletHardSignals(procedure_indication=True)
+        assert (
+            platelet_overclear_suspect(
+                "APPROPRIATE", "POTENTIALLY_INAPPROPRIATE", signals
+            )
+            is False
+        )
+
+    def test_active_bleeding_grounds_high_count_clear(self) -> None:
+        signals = PlateletHardSignals(active_bleeding=True)
+        assert (
+            platelet_overclear_suspect(
+                "APPROPRIATE", "POTENTIALLY_INAPPROPRIATE", signals
+            )
+            is False
+        )
+
+
 class TestGuardrailScope:
     """The guardrail only fires on an LLM APPROPRIATE over a withheld verdict."""
 
@@ -66,11 +109,10 @@ class TestGuardrailScope:
     def test_non_appropriate_final_never_suspect(self, final: str) -> None:
         assert platelet_overclear_suspect(final, "NEEDS_REVIEW", _NO_SIGNALS) is False
 
-    @pytest.mark.parametrize("rule", ["APPROPRIATE", "POTENTIALLY_INAPPROPRIATE"])
+    @pytest.mark.parametrize("rule", ["APPROPRIATE"])
     def test_non_withholding_rule_never_suspect(self, rule: str) -> None:
-        # If the deterministic leg did not withhold (it already cleared, or is
-        # a high-count POTENTIALLY_INAPPROPRIATE handled elsewhere), this
-        # gray-zone guardrail is out of scope.
+        # Only a deterministic APPROPRIATE is non-withholding. POTENTIALLY_INAPPROPRIATE
+        # is now covered by the guardrail (Fix 1), so it is no longer in this list.
         assert platelet_overclear_suspect("APPROPRIATE", rule, _NO_SIGNALS) is False
 
 

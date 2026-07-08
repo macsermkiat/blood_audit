@@ -364,34 +364,20 @@ def test_rbc_overclear_guardrail_not_called_on_platelet(tmp_path):
     hb_result (value_g_dl=None) and cohort_assignment (UNKNOWN) and
     incorrectly floor APPROPRIATE → NEEDS_REVIEW. With the guard it is
     skipped and APPROPRIATE is preserved.
+
+    Uses a valid platelet-shaped response (with the three required hard-signal
+    bools) so the platelet schema enforcement (Fix 2) does not mask the test's
+    intent. The platelet over-clear guardrail is OFF (PLATELET_LLM_ENABLED
+    default=False), so an ungrounded APPROPRIATE is also preserved here.
     """
     ctx = _platelet_ctx("audit-plt-008", platelet_count=50.0)
-    # Build a minimal LLM-APPROPRIATE response for the platelet audit_id
-    result_item = BatchSubmissionResult(
-        custom_id="audit-plt-008",
-        model_id="claude-sonnet-5",
-        raw_response_json={
-            "content": [
-                {
-                    "type": "tool_use",
-                    "name": "classify_audit",
-                    "input": {
-                        "classification": "APPROPRIATE",
-                        "indications": [{"text": "active bleed", "confidence": 0.9}],
-                        "negative_evidence": [],
-                        "reasoning_summary_en": "platelet transfusion appropriate for active bleeding",
-                        "reasoning_summary_th": "เหมาะสม",
-                    },
-                }
-            ]
-        },
-        request_json={"messages": [{"role": "user", "content": "..."}]},
-        response_headers={"anthropic-version": "2023-06-01"},
-        request_timestamp=_RUN_TS,
-        latency_ms=500,
-        anthropic_version="2023-06-01",
-        prompt_cache_id=None,
-        extended_thinking_blocks=None,
+    # Platelet-shaped response: includes the three hard-signal booleans required
+    # by the platelet parser (Fix 2). active_bleeding=True so the response has a
+    # grounded positive indication, though the guardrail is OFF by default.
+    result_item = _platelet_result_item(
+        "audit-plt-008",
+        classification="APPROPRIATE",
+        active_bleeding=True,
     )
     response = RawBatchResponse(batch_id="msgbatch_plt", results=(result_item,))
     store = _audit_store(tmp_path)
@@ -697,3 +683,174 @@ def test_run_pipeline_platelet_leg_submits_when_flag_on(tmp_path, monkeypatch):
     # ungrounded APPROPRIATE on a sub-ceiling count → over-clear guardrail floors
     assert row.final_classification == "NEEDS_REVIEW"
     assert row.review_reason == PLATELET_OVERCLEAR_REVIEW_REASON
+
+
+# ═════════════════ Fix 2: platelet schema enforcement ═════════════════
+
+
+def test_platelet_schema_mismatch_fails_closed(tmp_path):
+    """Fix 2 (Codex P2): a platelet response with a valid classification but
+    missing hard-signal booleans must fail closed to NEEDS_REVIEW, regardless
+    of the classification returned.
+
+    WHY: The three hard-signal bools are required for the platelet guardrail to
+    function. A response that omits them (schema mismatch) cannot be safely
+    audited — we cannot tell whether a grounded indication exists. Silently
+    preserving INAPPROPRIATE (or any other classification) would bypass the
+    guardrail contract and produce an audit row whose grounding is unknown.
+    Fail-closed to NEEDS_REVIEW ensures a human reviews the row.
+    """
+    ctx = _platelet_ctx("audit-plt-fm", platelet_count=50.0)
+    # RBC-shaped payload: valid INAPPROPRIATE classification but no hard-signal bools.
+    # Before Fix 2 this would persist as INAPPROPRIATE; after Fix 2 it must be
+    # NEEDS_REVIEW because the platelet schema is enforced end-to-end.
+    result_item = BatchSubmissionResult(
+        custom_id="audit-plt-fm",
+        model_id=SONNET_MODEL_ID,  # type: ignore[arg-type]
+        raw_response_json={
+            "content": [
+                {
+                    "type": "tool_use",
+                    "name": "classify_transfusion_order",
+                    "input": {
+                        "classification": "INAPPROPRIATE",  # valid classification
+                        "indications": [],
+                        "negative_evidence": [],
+                        "reasoning_summary_en": "platelet not indicated",
+                        "reasoning_summary_th": "ไม่เหมาะสม",
+                        # active_bleeding, procedure_indication,
+                        # prophylactic_marrow_failure intentionally absent
+                    },
+                }
+            ]
+        },
+        request_json={"messages": [{"role": "user", "content": "..."}]},
+        response_headers={"anthropic-version": "2023-06-01"},
+        request_timestamp=_RUN_TS,
+        latency_ms=500,
+        anthropic_version="2023-06-01",
+        prompt_cache_id=None,
+        extended_thinking_blocks=None,
+    )
+    response = RawBatchResponse(batch_id="msgbatch_fm", results=(result_item,))
+    store = _audit_store(tmp_path)
+    apply_batch_results(
+        response,
+        audit_store=store,
+        run_id="run-plt-fm",
+        contexts={"audit-plt-fm": ctx},
+    )
+    rows = store.read_audit_results()
+    assert len(rows) == 1
+    row = rows[0]
+    # Schema mismatch must floor to NEEDS_REVIEW, NOT preserve INAPPROPRIATE
+    assert row.final_classification == "NEEDS_REVIEW"
+    assert row.review_reason == "schema_mismatch"
+    assert row.component == "platelet"
+
+
+def test_platelet_well_formed_response_not_affected_by_schema_fix(tmp_path):
+    """Fix 2: a well-formed platelet response (all three bools present) is
+    unaffected — the classification from the LLM is preserved as-is."""
+    ctx = _platelet_ctx("audit-plt-wf", platelet_count=50.0)
+    result_item = _platelet_result_item(
+        "audit-plt-wf",
+        classification="NEEDS_REVIEW",
+    )
+    response = RawBatchResponse(batch_id="msgbatch_wf", results=(result_item,))
+    store = _audit_store(tmp_path)
+    apply_batch_results(
+        response,
+        audit_store=store,
+        run_id="run-plt-wf",
+        contexts={"audit-plt-wf": ctx},
+    )
+    row = store.read_audit_results()[0]
+    assert row.final_classification == "NEEDS_REVIEW"
+    assert row.review_reason is None
+    assert row.component == "platelet"
+
+
+def test_rbc_schema_mismatch_behavior_unchanged(tmp_path):
+    """Fix 2: RBC parse-failure behavior is byte-identical — an RBC response
+    with no tool-use block still fails closed via the RBC path (NEEDS_REVIEW).
+    The RBC path must NOT go through parse_platelet_structured_response.
+    """
+    from bba.cohort_detector import CohortAssignment, CohortLabel
+    from bba.hb_lookup import HbLookupResult
+    from bba.vitals_extractor import SourceProvenance, VitalSigns, VitalsResult
+
+    order = AuditOrder(
+        audit_id="audit-rbc-fm",
+        hn="HN-rbc-fm",
+        an="AN-rbc-fm",
+        reqno="REQ-rbc-fm",
+        order_datetime=_RUN_TS,
+        anchor_imputed=False,
+        products_ordered=("LPRC",),
+        diagnosis_codes=("D62",),
+    )
+    ctx = PipelineRowContext(
+        order=order,
+        hb_result=HbLookupResult(
+            value_g_dl=6.5,
+            datetime_utc=_RUN_TS,
+            source="HEMATOLOGY",
+            freshness="fresh",
+            delta_hb_bypass=False,
+            delta_hb_windows=(),
+            needs_review_single_low_hb=False,
+        ),
+        vitals_result=VitalsResult(
+            vitals=VitalSigns(),
+            source=SourceProvenance.NONE_IN_WINDOW,
+            flags=frozenset(),
+            note_timestamp=None,
+        ),
+        cohort_assignment=CohortAssignment(
+            label=CohortLabel.UNKNOWN,
+            threshold=None,
+            evidence_code=None,
+            evidence_name=None,
+        ),
+        procedure_proximity_hours=None,
+        crystalloid_liters_prior_4h=0.0,
+        hn_hash="hn_rbc_fm",
+        an_hash="an_rbc_fm",
+        prior_rbc_units_24h=0,
+        prior_rbc_units_7d=0,
+        redactor_version="0.4.1+test",
+        redactor_model_sha="sha_rbc_fm",
+        policy_version="kcmh-pr17.2-2024",
+        prompt_hash="ph_rbc_fm",
+        evidence_bundle_hash="bh_rbc_fm",
+    )
+    # Text block instead of tool_use → RBC parse failure path
+    result_item = BatchSubmissionResult(
+        custom_id="audit-rbc-fm",
+        model_id=SONNET_MODEL_ID,  # type: ignore[arg-type]
+        raw_response_json={
+            "content": [{"type": "text", "text": "I cannot classify this."}]
+        },
+        request_json={"messages": [{"role": "user", "content": "..."}]},
+        response_headers={"anthropic-version": "2023-06-01"},
+        request_timestamp=_RUN_TS,
+        latency_ms=500,
+        anthropic_version="2023-06-01",
+        prompt_cache_id=None,
+        extended_thinking_blocks=None,
+    )
+    response = RawBatchResponse(batch_id="msgbatch_rbc_fm", results=(result_item,))
+    store = _audit_store(tmp_path)
+    apply_batch_results(
+        response,
+        audit_store=store,
+        run_id="run-rbc-fm",
+        contexts={"audit-rbc-fm": ctx},
+    )
+    rows = store.read_audit_results()
+    assert len(rows) == 1
+    row = rows[0]
+    # RBC parse-failure still routes to NEEDS_REVIEW via the RBC path
+    assert row.final_classification == "NEEDS_REVIEW"
+    assert row.component == "red_cell"

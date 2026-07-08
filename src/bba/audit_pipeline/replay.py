@@ -315,18 +315,17 @@ def _platelet_gate_result(
 def _platelet_overclear_floor(
     final_classification: Classification,
     rule_classification: Classification,
-    winning_result: BatchSubmissionResult,
+    platelet_hard_signals: PlateletHardSignals | None,
 ) -> bool:
     """True iff the platelet over-clear guardrail must floor this row to review.
 
-    Parses the platelet hard-signal booleans off the winning tool-use payload;
-    a parse failure yields no grounded signal (``PlateletHardSignals()`` all
-    False) so a malformed platelet response fails CLOSED — an APPROPRIATE on a
-    sub-ceiling count with no grounded indication floors to human review."""
-    hard_signals = (
-        parse_platelet_structured_response(winning_result).platelet_hard_signals
-        or PlateletHardSignals()
-    )
+    Accepts the already-parsed :class:`PlateletHardSignals` from the primary
+    platelet parse (``_build_audit_row`` calls ``parse_platelet_structured_response``
+    once and passes the result here, avoiding a second parse).  A ``None``
+    signals object (parse failure) leaves the guardrail maximally protective —
+    all signals False, so any APPROPRIATE on a withheld deterministic verdict
+    floors to human review."""
+    hard_signals = platelet_hard_signals or PlateletHardSignals()
     return platelet_overclear_suspect(
         final_classification, rule_classification, hard_signals
     )
@@ -576,9 +575,34 @@ def _build_audit_row(
         )
 
     winning_result = winner.result
-    parsed = _classification_from_result(winning_result)
-    final_classification = parsed.classification
-    review_reason = parsed.parse_failure_reason
+    # For platelet rows, parse via parse_platelet_structured_response which
+    # enforces the three hard-signal booleans.  A schema mismatch (missing or
+    # malformed bools) fails closed to NEEDS_REVIEW regardless of the returned
+    # classification — matching the RBC parse-failure→NEEDS_REVIEW contract but
+    # applied end-to-end for every platelet verdict, not only APPROPRIATE.
+    # The parsed signals are re-used by the over-clear guardrail below so the
+    # response is parsed exactly once.
+    if context.component == "platelet":
+        _plt_outcome = parse_platelet_structured_response(winning_result)
+        if _plt_outcome.parse_failure:
+            final_classification: Classification = "NEEDS_REVIEW"
+            review_reason: str | None = (
+                _plt_outcome.parse_failure_reason.value
+                if _plt_outcome.parse_failure_reason is not None
+                else "schema_mismatch"
+            )
+        else:
+            assert (
+                _plt_outcome.parsed is not None
+            )  # guaranteed by ParseOutcome contract
+            final_classification = _plt_outcome.parsed.classification
+            review_reason = None
+        _plt_signals = _plt_outcome.platelet_hard_signals
+    else:
+        parsed = _classification_from_result(winning_result)
+        final_classification = parsed.classification
+        review_reason = parsed.parse_failure_reason
+        _plt_signals = None
     summary_en, summary_th = _summaries_from_result(winning_result)
     indications = _indications_from_result(winning_result)
     negative_evidence = _negative_evidence_from_result(winning_result)
@@ -611,15 +635,16 @@ def _build_audit_row(
         final_classification = "NEEDS_REVIEW"
         review_reason = LLM_OVERCLEAR_REVIEW_REASON
     # Platelet over-clear guardrail (Stage C2, "ADD hard signals" ruling): an
-    # LLM APPROPRIATE on a sub-ceiling platelet count with NO grounded platelet
-    # hard signal floors to review — a bare low count (the TTP/HIT/dengue
-    # exclusion trap) can never clear. Gated behind PLATELET_LLM_ENABLED so with
+    # LLM APPROPRIATE on any withheld platelet verdict with NO grounded platelet
+    # hard signal floors to review.  Gated behind PLATELET_LLM_ENABLED so with
     # the flag off the platelet leg is inert and the RBC path is unchanged.
+    # Uses the already-parsed _plt_signals from the primary platelet parse above
+    # (no second parse of winning_result).
     elif (
         context.component == "platelet"
         and feature_flags.PLATELET_LLM_ENABLED
         and _platelet_overclear_floor(
-            final_classification, rule_classification, winning_result
+            final_classification, rule_classification, _plt_signals
         )
     ):
         final_classification = "NEEDS_REVIEW"
