@@ -33,7 +33,7 @@ from bba.prompt_builder.models import (
     PromptBuildRequest,
     PromptBuildResult,
 )
-from bba.prompt_builder.system_prompt import system_prompt_for
+from bba.prompt_builder.system_prompt import platelet_system_prompt, system_prompt_for
 
 
 _EMPTY_USER_PAYLOAD: str = "<no_evidence/>"
@@ -51,10 +51,22 @@ def build_prompt(request: PromptBuildRequest) -> PromptBuildResult:
     """Assemble the system + few-shot + user-payload prompt for ``request``."""
     injection_matches = scan_chunks(request.evidence_chunks)
 
-    system_text = system_prompt_for(
-        task_mode=request.task_mode,
-        cohort_threshold=request.cohort_threshold,
-    )
+    if request.task_mode == "PLATELET_REVIEW":
+        # Platelet mode has no cohort threshold; use the dedicated function
+        # so system_prompt_for is never called with cohort_threshold=None.
+        system_text = platelet_system_prompt()
+    else:
+        # For RBC modes cohort_threshold is guaranteed non-None by the
+        # PromptBuildRequest._cohort_threshold_mode_consistent validator.
+        cohort_threshold = request.cohort_threshold
+        assert cohort_threshold is not None, (
+            "cohort_threshold must be set for RBC task modes; "
+            "PromptBuildRequest validator should have caught this"
+        )
+        system_text = system_prompt_for(
+            task_mode=request.task_mode,
+            cohort_threshold=cohort_threshold,
+        )
     few_shot_text = build_few_shot_block(request.few_shot_examples)
     user_payload = wrap_evidence_chunks(request.evidence_chunks)
 

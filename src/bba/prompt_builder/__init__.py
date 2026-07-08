@@ -64,7 +64,7 @@ from bba.prompt_builder.models import (
     PromptRole,
     TaskMode,
 )
-from bba.prompt_builder.system_prompt import system_prompt_for
+from bba.prompt_builder.system_prompt import platelet_system_prompt, system_prompt_for
 
 __all__ = [
     "ALLOWED_COHORT_THRESHOLDS",
@@ -95,6 +95,7 @@ __all__ = [
     "build_prompt",
     "canonical_serialize",
     "compute_prompt_hash",
+    "platelet_system_prompt",
     "scan_chunks",
     "scan_injection",
     "system_prompt_for",

@@ -6,7 +6,7 @@ The module surface mirrors the convention established by
 pure function; the canonical envelope underwrites a SHA-256 ``prompt_hash``
 the audit row persists (PRD §"Output schema" — ``prompt_hash`` reproducible).
 
-Task modes correspond directly to the two LLM-eligible audit branches in
+Task modes correspond directly to the LLM-eligible audit branches in
 the PRD's deterministic-engine output:
 
 * ``HB_7_10_REVIEW`` — gray-zone case (Hb 7-10 g/dL, or Hb < cohort_threshold
@@ -17,6 +17,9 @@ the PRD's deterministic-engine output:
   ACS, peri-operative, symptomatic anemia, neuro-target) that would
   justify ordering despite the deterministic ``POTENTIALLY_INAPPROPRIATE``
   pre-classification.
+* ``PLATELET_REVIEW`` — platelet transfusion order, reviewed against the
+  Chula DRAFT policy (AABB/ICTMG 2025). Has no Hb cohort threshold;
+  ``cohort_threshold`` is None for this mode.
 """
 
 from __future__ import annotations
@@ -40,16 +43,19 @@ from pydantic import (
 # =============================================================================
 
 
-TaskMode = Literal["HB_7_10_REVIEW", "HB_GT_10_OVERRIDE"]
-"""The two LLM-eligible audit branches.
+TaskMode = Literal["HB_7_10_REVIEW", "HB_GT_10_OVERRIDE", "PLATELET_REVIEW"]
+"""The LLM-eligible audit branches.
 
 Mirrors the deterministic-engine outputs that route into the LLM stage
 (PRD §12 — "task_mode switch ``HB_7_10_REVIEW`` / ``HB_GT_10_OVERRIDE``").
-Adding a third branch is a Phase-2 contract change.
+``PLATELET_REVIEW`` is the Phase-2 platelet branch (Stage C1 prompt +
+response contract; Stage C2 pipeline wiring).
 """
 
 
-TASK_MODES: frozenset[str] = frozenset({"HB_7_10_REVIEW", "HB_GT_10_OVERRIDE"})
+TASK_MODES: frozenset[str] = frozenset(
+    {"HB_7_10_REVIEW", "HB_GT_10_OVERRIDE", "PLATELET_REVIEW"}
+)
 """Runtime-introspectable copy of :data:`TaskMode` for defensive checks
 outside Pydantic's literal validation (e.g. the
 :func:`bba.prompt_builder.system_prompt.system_prompt_for` selector)."""
@@ -233,12 +239,18 @@ class FewShotExample(BaseModel):
     assistant_output: str = Field(min_length=1)
 
 
+_RBC_TASK_MODES: frozenset[str] = frozenset({"HB_7_10_REVIEW", "HB_GT_10_OVERRIDE"})
+"""The two RBC audit branches that require a ``cohort_threshold``."""
+
+
 class PromptBuildRequest(BaseModel):
     """Top-level input to :func:`bba.prompt_builder.build_prompt`.
 
     ``task_mode`` selects the system-prompt template (PRD §12). The
     ``cohort_threshold`` lands as a hard numeric input in the system
-    prompt — never inferred by the LLM. ``evidence_chunks`` is the
+    prompt for RBC modes — never inferred by the LLM. For
+    ``PLATELET_REVIEW``, ``cohort_threshold`` must be ``None`` (platelet
+    transfusion has no Hb cohort threshold). ``evidence_chunks`` is the
     per-row payload (the redacted bundle's items, in canonical emission
     order). ``few_shot_examples`` is the vetted exemplar block — empty
     tuple is acceptable for early-pilot builds before the clinical-team
@@ -248,9 +260,31 @@ class PromptBuildRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     task_mode: TaskMode
-    cohort_threshold: CohortThreshold
+    cohort_threshold: CohortThreshold | None = None
     evidence_chunks: tuple[EvidenceChunk, ...]
     few_shot_examples: tuple[FewShotExample, ...] = ()
+
+    @model_validator(mode="after")
+    def _cohort_threshold_mode_consistent(self) -> Self:
+        # RBC modes require a validated cohort threshold; PLATELET_REVIEW
+        # must NOT carry one (platelet policy has no Hb cohort). Enforcing
+        # here keeps the downstream system-prompt selector simple: it can
+        # trust cohort_threshold is non-None for RBC and None for platelet.
+        if self.task_mode in _RBC_TASK_MODES:
+            if self.cohort_threshold is None:
+                raise ValueError(
+                    f"cohort_threshold is required for task_mode "
+                    f"{self.task_mode!r} (must be one of "
+                    f"{sorted(ALLOWED_COHORT_THRESHOLDS)} g/dL)"
+                )
+        elif self.task_mode == "PLATELET_REVIEW":
+            if self.cohort_threshold is not None:
+                raise ValueError(
+                    "cohort_threshold must be None for PLATELET_REVIEW "
+                    "(platelet transfusion has no Hb cohort threshold; "
+                    "pass cohort_threshold=None or omit the argument)"
+                )
+        return self
 
     @model_validator(mode="after")
     def _evidence_ids_unique(self) -> Self:
@@ -346,7 +380,7 @@ class PromptBuildResult(BaseModel):
 
     blocks: tuple[PromptBlock, ...]
     task_mode: TaskMode
-    cohort_threshold: CohortThreshold
+    cohort_threshold: CohortThreshold | None
     injection_verdict: InjectionVerdict
     route_to_needs_review: bool
     needs_review_reasons: tuple[NeedsReviewReason, ...]
