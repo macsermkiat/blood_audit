@@ -162,11 +162,18 @@ The platelet LLM leg — a `PLATELET_REVIEW` prompt, the over-clear guardrail,
 and grounded hard signals — is gated behind the **default-off**
 `feature_flags.PLATELET_LLM_ENABLED`.
 
-When the flag is **OFF**, platelet orders are handled by the deterministic
-gate only, which auto-clears nothing:
+When the flag is **OFF**, platelet orders are classified by the deterministic
+gate only, which auto-clears nothing. Only one outcome is **written** as an
+audit row:
 
-- count ≥ 100 → review,
-- otherwise → would-defer-to-LLM.
+- **missing count → `INSUFFICIENT_EVIDENCE`** — persisted as a
+  deterministic-final row.
+
+Present-count orders — both `count ≥ 100` (`POTENTIALLY_INAPPROPRIATE`) and
+`count < 100` (`NEEDS_REVIEW`) — are classified but **not written**. They route
+onward to the platelet LLM leg, so with the flag off they **orphan (are
+skipped), not reviewed**, and are only audited once `PLATELET_LLM_ENABLED` is
+enabled.
 
 The deterministic leg is validated on real data. The RBC (Phase 1) path is
 byte-identical whether or not the platelet feature is on.

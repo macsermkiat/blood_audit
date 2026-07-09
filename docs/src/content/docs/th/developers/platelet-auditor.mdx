@@ -160,11 +160,15 @@ over-clear คำสั่ง platelet ได้ **โดยไม่มี hard
 grounded hard signals — ถูก gate ไว้หลัง `feature_flags.PLATELET_LLM_ENABLED`
 ที่ **ปิดเป็นค่าเริ่มต้น**
 
-เมื่อ flag **OFF** คำสั่ง platelet จะถูกจัดการด้วย deterministic gate เท่านั้น
-ซึ่งไม่ auto-clear อะไรเลย:
+เมื่อ flag **OFF** คำสั่ง platelet จะถูก classify ด้วย deterministic gate เท่านั้น
+ซึ่งไม่ auto-clear อะไรเลย และ **เขียน** เป็น audit row เพียงผลเดียว:
 
-- count ≥ 100 → ส่งทบทวน,
-- ที่เหลือ → would-defer-to-LLM
+- **count ไม่มีค่า → `INSUFFICIENT_EVIDENCE`** — persist เป็น deterministic-final row
+
+คำสั่งที่ **มี count** — ทั้ง `count ≥ 100` (`POTENTIALLY_INAPPROPRIATE`) และ
+`count < 100` (`NEEDS_REVIEW`) — ถูก classify แต่ **ไม่ถูกเขียน** เพราะ route ต่อไป
+ขา LLM ของ platelet ดังนั้นเมื่อ flag ปิด row เหล่านี้จะ **orphan (ถูกข้าม) ไม่ได้ถูก
+ทบทวน** และจะถูก audit ก็ต่อเมื่อเปิด `PLATELET_LLM_ENABLED` แล้วเท่านั้น
 
 ขา deterministic validate บนข้อมูลจริงแล้ว เส้นทาง RBC (Phase 1) เหมือนเดิมทุก
 byte ไม่ว่าจะเปิด feature platelet หรือไม่
