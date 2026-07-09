@@ -163,6 +163,26 @@ def check_request_type(record: BloodOrderInput) -> ExcludedRecord | None:
     )
 
 
+def _canonicalize_icd10(code: str) -> str:
+    """Insert the implicit decimal after the 3-char ICD-10 category.
+
+    Source data (Chulalongkorn ``Diagnosis``/``BDVST`` exports) stores
+    subcategory codes *without* the dot — ``"D561"`` for D56.1. ICD-10
+    categories are always 3 chars, so the subcategory always begins at
+    index 3; re-inserting the dot lets the boundary-safe matcher below
+    recognize a dotless subcategory as belonging to its category (so a
+    dotless thalassemia code correctly hits the hemoglobinopathy
+    exclusion instead of slipping through).
+
+    Only a *digit* at index 3 is canonicalized: a letter there is a
+    garbled code, not a subcategory, so it is left untouched. Twin of
+    :func:`bba.cohort_detector.rules._canonicalize_icd10`.
+    """
+    if len(code) > 3 and "." not in code and code[3].isdigit():
+        return f"{code[:3]}.{code[3:]}"
+    return code
+
+
 def _code_matches_prefix(code: str, prefix: str) -> bool:
     """True iff ``code`` belongs to the ICD-10 chapter denoted by ``prefix``.
 
@@ -176,11 +196,12 @@ def _code_matches_prefix(code: str, prefix: str) -> bool:
     * subcategory code (e.g., ``"M31.1"``) — matches the bare code or
       the code followed by ``"."`` and further subdivisions.
 
-    The boundary check rejects malformed near-misses like ``"D550"``
-    (which is NOT ``D55`` + dot — it's a different chapter), per the
-    Codex review of issue #4. A raw ``startswith`` would collapse the
-    boundary and silently broaden the hard-exclusion set.
+    Dotless source codes are canonicalized first
+    (:func:`_canonicalize_icd10`), so ``"D550"`` is treated as ``D55.0``
+    and matches ``D55``. The boundary check still rejects a genuine
+    *letter* near-miss that is not a subcategory.
     """
+    code = _canonicalize_icd10(code)
     if not code.startswith(prefix):
         return False
     if len(code) == len(prefix):

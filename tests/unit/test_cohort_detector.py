@@ -781,6 +781,16 @@ class TestCohortCardiopulmonaryComorbidity:
         assert result.threshold == 8.0
         assert result.evidence_code == "I25.10"
 
+    def test_dotless_ischemic_heart_disease_yields_cardiopulmonary(self) -> None:
+        # Regression: source data is dotless, so I25.1 arrives as "I251".
+        # It must still raise the floor to 8.0 — before the canonicalization
+        # fix it fell through to DEFAULT (7.0), which left a Hb 7.6 cardiac
+        # order stuck at NEEDS_REVIEW instead of clearing APPROPRIATE.
+        result = assign_cohort(_inputs(diagnosis_codes=("I251",)))
+        assert result.label == CohortLabel.CARDIOPULMONARY_COMORBIDITY
+        assert result.threshold == 8.0
+        assert result.evidence_code == "I251"
+
     def test_heart_failure_yields_cardiopulmonary(self) -> None:
         # I50 = heart failure.
         result = assign_cohort(_inputs(diagnosis_codes=("I50.9",)))
@@ -1030,13 +1040,14 @@ class TestPredicateHelpers:
     def test_find_esrd_diagnosis_n186_subdivision_matches(self) -> None:
         assert find_esrd_diagnosis(("N18.69",)) == "N18.69"
 
-    def test_find_cardiac_history_d550_does_not_match_d55(self) -> None:
-        # Defense-in-depth: "D550" (no dot) is a different ICD-10 category
-        # from "D55" — the matcher must not collapse the boundary even
-        # though the prefix list here is I-codes, not D-codes. Use a
-        # cardiac-history call as a proxy for the same matcher logic:
-        # an "I250" without dot is NOT "I25".
-        assert find_cardiac_history_diagnosis(("I250",)) is None
+    def test_find_cardiac_history_dotless_subcategory_matches(self) -> None:
+        # Chulalongkorn exports store subcategory codes WITHOUT the dot:
+        # "I250" is the dotless form of I25.0, not a different category
+        # (ICD-10 categories are always 3 chars). The matcher canonicalizes
+        # it to "I25.0" so it matches the I25 prefix. Before this fix,
+        # dotless cardiac codes silently fell through to the 7.0 default
+        # cohort (real defect found on an I251 cardiac order).
+        assert find_cardiac_history_diagnosis(("I250",)) == "I250"
 
     def test_find_cardiac_history_i25_dotted_subcategories_match(self) -> None:
         assert find_cardiac_history_diagnosis(("I25.10",)) == "I25.10"

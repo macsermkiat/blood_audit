@@ -318,6 +318,28 @@ def is_neutropenic(anc: int | None) -> bool:
     return anc < ANC_NEUTROPENIA_THRESHOLD
 
 
+def _canonicalize_icd10(code: str) -> str:
+    """Insert the implicit decimal after the 3-char ICD-10 category.
+
+    Source data (Chulalongkorn ``Diagnosis``/``BDVST`` exports) stores
+    subcategory codes *without* the dot — ``"I251"`` for ``I25.1``,
+    ``"N186"`` for ``N18.6``. ICD-10 categories are always 3 chars, so
+    the subcategory always begins at index 3; re-inserting the dot lets
+    the boundary-safe matcher below recognize a dotless subcategory as
+    belonging to its category (``"I251"`` → ``I25`` → cardiopulmonary
+    8.0, rather than falling through to the 7.0 default).
+
+    Only a *digit* at index 3 is canonicalized: a letter there is a
+    garbled code, not an ICD-10 subcategory (7th-character extension
+    letters sit after the subcategory digits + dot), so it is left
+    untouched to preserve the letter-continuation rejection. Already-
+    dotted and bare 3-char codes are returned unchanged.
+    """
+    if len(code) > 3 and "." not in code and code[3].isdigit():
+        return f"{code[:3]}.{code[3:]}"
+    return code
+
+
 def _icd10_code_matches_prefix(code: str, prefix: str) -> bool:
     """ICD-10 boundary-safe prefix match.
 
@@ -329,13 +351,16 @@ def _icd10_code_matches_prefix(code: str, prefix: str) -> bool:
       ``"C83.30"``).
     * 3-char category prefixes (``"D55"``, ``"I50"``, ``"N18"``) match
       the bare code or the code followed by ``"."`` and a subcategory.
-      Digit continuation past the 3-char boundary is forbidden:
-      ``"D550"`` is NOT ``"D55"`` — it's a different category.
+      Dotless source codes are canonicalized first
+      (:func:`_canonicalize_icd10`), so ``"I251"`` matches ``"I25"`` as
+      ``I25.1`` — the boundary rule still rejects a genuine
+      *letter* continuation (``"C8X"`` is not ``"C8"``).
     * Explicit subcategory prefixes (``"N18.5"``) match the bare code
       or further subdivisions following a digit (``"N18.50"``). The
       "3-char boundary" rule does not apply once the prefix has crossed
       the dot.
     """
+    code = _canonicalize_icd10(code)
     if not code.startswith(prefix):
         return False
     if len(code) == len(prefix):
@@ -480,8 +505,9 @@ def find_cardiopulmonary_comorbidity_diagnosis(
     :data:`CARDIOPULMONARY_COMORBIDITY_ICD10_PREFIXES`, or None.
 
     Uses the same boundary-safe prefix rule as the other diagnosis
-    predicates, so ``"I25"`` matches ``"I25.10"`` but ``"I250"`` (a
-    different category continuation) does not.
+    predicates. Dotless source codes are canonicalized first, so both
+    ``"I25.1"`` and the dotless ``"I251"`` match ``"I25"`` — a genuine
+    *letter* continuation still does not.
     """
     return _first_match(
         diagnosis_codes, sorted(CARDIOPULMONARY_COMORBIDITY_ICD10_PREFIXES)
