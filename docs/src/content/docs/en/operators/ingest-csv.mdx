@@ -36,7 +36,7 @@ The HOSxP export bundle contains 12 canonical tables:
 | `IPDADMPROGRESS` | Progress-note evidence for the LLM bundle. |
 | `IPDNRFOCUSDT` | Nursing-note evidence for the LLM bundle. |
 | `IPTSUMOPRT` | Operative events and procedure timestamps. |
-| `INCPT` | Procedure/charge-adjacent event table validated as part of schema v1. |
+| `INCPT_OPRTACT` | Procedure charge-support table: the INCPT ⋈ OPRTACT export pre-joined on Income (per #69), validated as part of schema v1. |
 | `ICD9CM` | Procedure-code dictionary and OR/non-OR flag. |
 
 The exact column contract is defined in `src/bba/ingest/`.

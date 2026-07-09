@@ -1,6 +1,6 @@
 ---
 title: Architecture
-description: How the 20 modules under bba.* fit together.
+description: How the 26 modules under bba.* fit together.
 ---
 
 import AtAGlance from "../../../../components/AtAGlance.astro";
@@ -11,7 +11,7 @@ import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
 
 <AtAGlance
   items={[
-    { label: "Shape", value: "20 packages, 12 happy-path stages, deterministic-first." },
+    { label: "Shape", value: "26 packages, 12 happy-path stages (RBC), deterministic-first. Intake forks into RBC (Phase 1) and platelet (Phase 2) legs." },
     { label: "Boundary", value: "Only bba.audit_pipeline orchestrates across stage boundaries." },
     { label: "Phase 1 CLI", value: "bba audit wires ingest only; analysis modules are implemented for Phase 1.5.", tone: "warn" },
     { label: "Safety invariant", value: "No real-time output; de-id before LLM; quote grounding fail-closed.", tone: "ok" },
@@ -25,15 +25,21 @@ import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
 Each stage is an importable subpackage under `src/bba/`. The `bba.audit_pipeline`
 module orchestrates them; no other module reaches across stage boundaries.
 
-## Module map (20 packages)
+Intake forks at `bba.component_map`: red-cell orders take the 12-stage RBC path
+below (Phase 1), and platelet orders take the platelet leg (Phase 2 — merged,
+PR #85). The RBC path is byte-identical whether or not the platelet feature is
+enabled.
+
+## Module map (26 packages)
 
 | Module | Role |
 | --- | --- |
 | `bba.ingest` | HOSxP CSV schema validation + row normalization drain, content-hashed `run_id`. |
-| `bba.audit_orders` | Per-(HN, REQNO) RBC filter; hard exclusions (age, products, ICD gates). |
+| `bba.audit_orders` | Per-(HN, REQNO) blood-order filter; hard exclusions (age, products, ICD gates); admits platelet-only orders isolated from RBC stats. |
+| `bba.component_map` | Intake gate: routes each order to a component family (RED_CELL, PLATELET, FFP, CRYO, WHOLE_BLOOD, UNKNOWN); forks the RBC and platelet legs. |
 | `bba.hb_lookup` | Pre-transfusion Hb from the Lab table. |
 | `bba.vitals_extractor` | BP, HR, urine output, temperature from MED + progress notes. |
-| `bba.cohort_detector` | Deterministic cohort assignment: default, cardiac-surgery, ortho-cardiac, ESRD-EPO, MTP, active heme malignancy, unknown. |
+| `bba.cohort_detector` | Deterministic cohort assignment: default, cardiac-surgery, ortho-surgery, ESRD-EPO, cardiopulmonary-comorbidity (heart disease), MTP, active heme malignancy, unknown. |
 | `bba.deterministic_classifier` | 3-tier Hb engine → `APPROPRIATE`, `NEEDS_REVIEW`, `INSUFFICIENT_EVIDENCE`, `POTENTIALLY_INAPPROPRIATE`. |
 | `bba.evidence_bundle_builder` | Structures evidence (unredacted) for the LLM context window. |
 | `bba.deid_redactor` | De-identifies the bundle before any data leaves the audit container. |
@@ -48,6 +54,11 @@ module orchestrates them; no other module reaches across stage boundaries.
 | `bba.dashboard` | FastAPI reviewer UI (integration seam). |
 | `bba.report_generator` | 6-section CSV + PDF monthly report. |
 | `bba.eval_harness` | Gold-standard performance primitives. |
+| `bba.platelet_lookup` | Platelet count value layer (Lab LABEXM 290078; parser + observation model). |
+| `bba.platelet_classifier` | §5.1 platelet gate; auto-clears nothing (≥ 100 → review, &lt; 100 → defer-LLM, missing → `INSUFFICIENT_EVIDENCE`). |
+| `bba.platelet_guardrail` | Over-clear guardrail for the platelet LLM leg (grounded hard signals; gated by default-off `PLATELET_LLM_ENABLED`). |
+| `bba.attribution` | Ranks top-10 ordering doctors / departments by appropriateness (`BDVST.DCTREQ` → `DCT.csv`; swappable verdict source). |
+| `bba.verification` | Before/after scoring for the peri-op fix (confusion matrix by mechanism). |
 | `bba.cli` | Click entry point; dispatches to six subcommands. |
 
 The full glossary lives in [Module glossary](/blood_audit/en/reference/module-glossary/)

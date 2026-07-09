@@ -1,0 +1,180 @@
+---
+title: ตัวตรวจ platelet (Phase 2)
+description: ขา deterministic ของ platelet ที่ fork ตั้งแต่ intake ไม่ auto-clear อะไรเลย และ gate ขา LLM ไว้หลัง flag ที่ปิดเป็นค่าเริ่มต้น
+---
+
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
+**ตัวตรวจ platelet ของ Phase 2** ถูก MERGED แล้ว (PR #85) โดยใช้รูปแบบ
+pipeline เดียวกับเส้นทาง RBC (Phase 1) แต่ **fork ตั้งแต่ intake**: คำสั่ง
+blood-bank ทุกรายการจะถูก route ไปยัง component family ก่อน และมีเฉพาะคำสั่ง
+platelet เท่านั้นที่จะไปถึง platelet gate ขา deterministic **live แล้ว**
+ส่วนขา LLM ของ platelet อยู่หลัง flag ที่ **ปิดเป็นค่าเริ่มต้น**
+`feature_flags.PLATELET_LLM_ENABLED`
+
+<AtAGlance
+  title="สรุปตรรกะ"
+  items={[
+    { label: "จุด fork", value: "intake — ทุกคำสั่งถูก route ไปยัง ComponentFamily ก่อนที่ auditor ใด ๆ จะทำงาน" },
+    { label: "ขา deterministic", value: "live แล้ว ไม่ auto-clear อะไรเลย: count >= 100 ส่งทบทวน, ที่เหลือ defer ไปขา LLM", tone: "ok" },
+    { label: "ขา LLM", value: "อยู่หลัง feature_flags.PLATELET_LLM_ENABLED ที่ปิดเป็นค่าเริ่มต้น", tone: "warn" },
+    { label: "เส้นทาง RBC", value: "เหมือนเดิมทุก byte ไม่ว่าจะเปิด feature platelet หรือไม่", tone: "ok" },
+  ]}
+/>
+
+## เส้นทาง platelet สัมพันธ์กับเส้นทาง RBC อย่างไร
+
+ตัวตรวจ platelet ไม่ได้เขียนใหม่ทั้งหมด แต่ยืมรูปแบบ pipeline ของ RBC มา —
+intake, value layer, deterministic gate และขา LLM พร้อม over-clear guardrail
+— แต่ fork ทันทีที่คำสั่งเข้ามา เส้นทาง RBC (Phase 1) **เหมือนเดิมทุก byte**
+ไม่ว่าจะเปิด feature platelet หรือไม่ การเปิด platelet เป็นการเพิ่ม branch
+ใหม่ ไม่ได้ไปรบกวน branch ของ red-cell เดิม
+
+component family ถูก **แยกออกจากกัน** สถิติของ platelet ไม่ปะปนกับ report ของ
+RBC หรือ dashboard คำสั่ง platelet ถูกรับเข้าเป็น audit unit ของตัวเองด้วย
+`component="platelet"` และอยู่นอกตัวเลขของ red-cell
+
+## `component_map` — intake gate
+
+Module: `src/bba/component_map/`
+
+intake gate route คำสั่ง blood-bank ทุกรายการไปยัง `ComponentFamily` หนึ่ง
+ค่า ได้แก่ `RED_CELL`, `PLATELET`, `FFP`, `CRYO`, `WHOLE_BLOOD` หรือ `UNKNOWN`
+
+- `classify_component(product_name)` เป็น keyword classifier ที่ทำงานบน
+  column `NAME` ของ dictionary **BDTYPE** ซึ่งเป็น source of truth และ robust
+  ต่อ product code ใหม่: variant แบบ irradiated / filtered / pooled จะ resolve
+  ไปยัง family เดียวกัน
+- `PLATELET_PRODUCTS` เป็น allow-list **8 code**:
+  `LDPPC`, `LDPPCI`, `SDPFI`, `SDPF`, `SDPPI`, `LPPC`, `PC`, `LDPC`
+- มีเฉพาะ `RED_CELL` (Phase 1) และ `PLATELET` (Phase 2) เท่านั้นที่มี auditor
+  ส่วน `FFP` / `CRYO` / `WHOLE_BLOOD` ถูกรู้จัก **เพื่อให้ intake EXCLUDE ได้
+  ด้วยเหตุผลที่ชัดเจน** ไม่ใช่เดาเข้าไปยัง family จริง `UNKNOWN` เป็น fallback
+  ที่ซื่อสัตย์สำหรับชื่อที่ไม่รู้จัก
+
+### ทำไมต้องรู้จัก family ที่ไม่มี auditor
+
+การรู้จัก `FFP` / `CRYO` / `WHOLE_BLOOD` เป็นความตั้งใจ คำสั่งที่ audit
+ทำอะไรไม่ได้ควรถูก exclude **ด้วยเหตุผลที่ระบุ** ไม่ใช่ถูกดูดเข้า family ที่
+ไม่ได้เป็นของมันแบบเงียบ ๆ ส่วน `UNKNOWN` สงวนไว้สำหรับชื่อที่ classifier
+ไม่รู้จักจริง ๆ เพื่อให้ product ที่ label ผิดหรือเป็นของใหม่ปรากฏออกมาอย่าง
+ซื่อสัตย์แทนที่จะถูกยัดเข้า family
+
+### ปริมาณที่จ่ายจริงต่อ family
+
+feed `BDVSTDT` ดิบ ตรวจสอบเมื่อ 2026-07-08:
+
+| Component family | ปริมาณที่จ่าย |
+| --- | --- |
+| `red_cell` | 23,867 |
+| `platelet` | 8,193 |
+| `ffp` | 5,350 |
+| `cryo` | 2,335 |
+| `whole_blood` | 4 |
+
+## `platelet_lookup` — value layer
+
+Module: `src/bba/platelet_lookup/`
+
+นี่คือคู่ขนานของ Hb lookup สำหรับ platelet: แปลง lab row ดิบให้เป็น platelet
+count ที่ validate แล้วหนึ่งค่า
+
+- `PLATELET_LABEXM = "290078"` ("Platelets Counts", `LABGRP` 29 HEMATOLOGY,
+  หน่วย ×10³/µL, reference range **150–450**) platelet count เป็น
+  **HEMATOLOGY-only** ในชุดข้อมูลนี้ — **ไม่มี POCT fallback** ต่างจาก Hb
+- `parse_platelet_count(raw)` รองรับ:
+  - หลักพันที่คั่นด้วย comma (เช่น `"1,117"`),
+  - ค่า censored ซ้าย/ขวา `"<N"` / `">N"` map ไปยังขอบเขต `N` — `"<2"` เป็น
+    **ค่าวัดที่ต่ำวิกฤตจริง** ไม่ใช่ค่า missing,
+  - sentinel `"--"` / ว่าง / ไม่ใช่ตัวเลข → `None`,
+  - ค่า out-of-range (นอก `[1.0, 3000.0]` ×10³/µL) และ `nan` / `inf` → `None`
+    โดย **failed loud** ในฐานะ error ของการ transcribe / หน่วย ไม่ใช่ coerce
+- `PlateletObservation` เป็น count เดี่ยวที่ frozen และ validate แล้ว มี
+  `value_k_ul`, `datetime_utc` แบบ tz-aware UTC, `source` เป็น `HEMATOLOGY`
+  และ `item_no` ที่เป็น tie-breaker เมื่อ observation สองรายการมี datetime
+  เท่ากัน
+
+## `platelet_classifier` — gate §5.1
+
+Module: `src/bba/platelet_classifier/`
+
+`classify_platelet(inputs)` mirror ตัวจำแนก deterministic ของ RBC แต่ **ไม่
+AUTO-CLEAR อะไรเลย** review ceiling คือ `PLATELET_REVIEW_CEILING = 100.0`
+(×10³/µL)
+
+### Precedence (ข้อบนชนะ)
+
+| เงื่อนไข count | ผล | reason code | routing |
+| --- | --- | --- | --- |
+| count missing, defer flag **ON** | `NEEDS_REVIEW` | `plt_missing_defer_llm` | defer ไปขา LLM |
+| count missing, defer flag **OFF** (**ค่าเริ่มต้น**) | `INSUFFICIENT_EVIDENCE` | `plt_missing` | terminal ไม่เรียก LLM |
+| count ≥ 100 | `POTENTIALLY_INAPPROPRIATE` | `plt_ge_100` | ส่งทบทวน — **ไม่ terminal** |
+| count < 100 (รวม < 10) | `NEEDS_REVIEW` | `plt_defer_llm` | defer ไปขา LLM |
+
+missing-count defer flag นี้ mirror opt-in ของ RBC
+`enable_missing_hb_positive_evidence` เป็น **SEED ที่รอ clinical sign-off**
+และ **ปิด (OFF) เป็นค่าเริ่มต้น**
+
+### Safety invariant (CR-C1): classifier ไม่เคยให้ `APPROPRIATE`
+
+ใน v1 classifier **ไม่เคยให้ `APPROPRIATE` หรือ `INAPPROPRIATE`**
+`APPROPRIATE` จะเป็น deterministic-final — ไม่มี LLM ไม่มีคน — แต่ policy
+**WITHHOLD platelet ที่ count ต่ำมาก** สำหรับหลาย exclusion population:
+
+- dengue ที่ไม่มี bleeding,
+- TTP,
+- HIT,
+- ITP,
+- aplastic anemia ที่ไม่มี bleeding,
+- snakebite ที่ไม่มี bleeding
+
+สำหรับ TTP และ HIT การให้เลือด **เป็นอันตรายจริง** เพราะลำพัง count ต่ำไม่
+สามารถแยก population เหล่านี้ออกจากคำสั่งที่ appropriate จริง ๆ ได้ ดังนั้น
+**ทุก count ที่มีอยู่จะถูก route ต่อไป** — ไม่มี verdict ของ count ที่มีอยู่
+รายการใดเป็น deterministic-final ข้อนี้ถูก pin ไว้ด้วย Hypothesis property
+test (CR-M2)
+
+ทำไมข้อนี้สำคัญ: การ auto-clear ตรงนี้เป็น **ความล้มเหลวด้านความปลอดภัยของ
+ผู้ป่วย** ไม่ใช่แค่พลาด workflow count ของ platelet ที่ต่ำคือสถานการณ์ที่
+reflex ผิด (ให้เลือด) สามารถทำอันตรายต่อผู้ป่วยได้พอดี ชั้น deterministic จึง
+ปฏิเสธที่จะตัดสินเองลำพัง
+
+### MTP-window suppression ไม่อยู่ใน gate นี้
+
+MTP-window suppression **ไม่ได้** อยู่ใน single-order gate นี้โดยตั้งใจ unit
+ของ platelet ที่ co-order ภายใน massive-transfusion-protocol window ที่ active
+จะถูก suppress ในฐานะ audit unit อิสระที่ **DISPATCH** — MTP co-order ยังเป็น
+signal ไม่เคยกลายเป็น audit row ที่สอง
+
+## `platelet_guardrail` — over-clear guardrail
+
+Module: `src/bba/platelet_guardrail/`
+
+over-clear guardrail สำหรับขา LLM ของ platelet จะ floor การ clear count สูงที่
+ไม่มี ground และ enforce response schema แบบ end-to-end เพื่อให้ LLM ไม่สามารถ
+over-clear คำสั่ง platelet ได้ **โดยไม่มี hard-signal evidence ที่ grounded**
+
+## Feature flag และสถานะ
+
+ขา LLM ของ platelet — prompt `PLATELET_REVIEW`, over-clear guardrail และ
+grounded hard signals — ถูก gate ไว้หลัง `feature_flags.PLATELET_LLM_ENABLED`
+ที่ **ปิดเป็นค่าเริ่มต้น**
+
+เมื่อ flag **OFF** คำสั่ง platelet จะถูกจัดการด้วย deterministic gate เท่านั้น
+ซึ่งไม่ auto-clear อะไรเลย:
+
+- count ≥ 100 → ส่งทบทวน,
+- ที่เหลือ → would-defer-to-LLM
+
+ขา deterministic validate บนข้อมูลจริงแล้ว เส้นทาง RBC (Phase 1) เหมือนเดิมทุก
+byte ไม่ว่าจะเปิด feature platelet หรือไม่
+
+## ตำแหน่งใน code
+
+- `src/bba/component_map/` — intake gate และการ route `ComponentFamily`
+- `src/bba/platelet_lookup/` — value layer (`PLATELET_LABEXM`,
+  `parse_platelet_count`, `PlateletObservation`)
+- `src/bba/platelet_classifier/` — gate §5.1 (`classify_platelet`,
+  `PLATELET_REVIEW_CEILING`)
+- `src/bba/platelet_guardrail/` — over-clear guardrail ของขา LLM
+- glossary หลักคือ `docs/CONTEXT.md` (Phase 2 sections)

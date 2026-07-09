@@ -24,70 +24,86 @@ cd blood_audit
 uv sync
 ```
 
-Set the three environment variables:
+The pipeline reads a HOSxP CSV bundle. No sample data ships in-repo (PHI exposure risk) — see [Expected input bundle](#expected-input-bundle). Configuration is via environment variables; **each run path below needs a different subset**, so set them per path rather than all at once:
 
-```bash
-export BBA_DATA_DIR=/path/to/persistent/data    # required — Parquet + DuckDB + run-state
-export BBA_DB_URL=postgresql://user@host/db     # required for audit-store + dashboard
-export ANTHROPIC_API_KEY=sk-ant-...             # required for the LLM_REVIEW leg
-```
-
-No sample data ships in-repo (PHI exposure risk). The pipeline reads a HOSxP CSV bundle — see [Expected input bundle](#expected-input-bundle).
+| Variable | Needed by | Purpose |
+|----------|-----------|---------|
+| `BBA_DATA_DIR` | path B (`bba` CLI) | Parquet + DuckDB + run-state directory |
+| `BBA_DB_URL` | audit-store + dashboard | Postgres DSN (`postgresql://user@host/db`) |
+| `ANTHROPIC_API_KEY` | path A (LLM leg) | Anthropic API key (`sk-ant-...`) |
+| `BBA_PILOT_WORK_DIR` | paths A, C (pilot scripts) | where outputs land (e.g. `/tmp/bba_mini`) |
+| `BBA_REVIEW_XLSX`, `BBA_BDVST_CSV`, `BBA_DCT_CSV` | path C (ranking) | verdict source + attribution inputs |
 
 ## Run the pipeline
 
-There are two ways to run, depending on what you want. Pick **A** to see the
-whole thing work end-to-end on a tiny sample; pick **B** to run the supported
-CLI on a real export. Full operator walkthrough:
-[docs site → Operators → Run the pipeline](docs/src/content/docs/en/operators/run-pipeline.mdx).
+Pick the path that matches your goal. Full operator walkthrough:
+[docs site → Operators](docs/src/content/docs/en/operators/run-pipeline.mdx).
 
-### A. Simple pilot run (smoke test)
+| I want to… | Path | Entry point |
+|------------|------|-------------|
+| See the **full audit** (deterministic + live LLM) end-to-end on a small sample and get a review HTML | **A** | pilot scripts |
+| **Ingest + validate** a full HOSxP export into the store (the supported CLI) | **B** | `bba` CLI |
+| **Rank ordering doctors / departments** by appropriateness | **C** | ranking script |
 
-The fastest way to watch the full audit run end-to-end and produce an HTML for
-human review. It samples a handful of cases from an encrypted bundle and walks
-them through the four pilot scripts. Not a supported entry point — it's a
-worked example of how the modules compose. (Details:
+> Every path reads real HOSxP data and writes **real PHI**. Never commit, email, or share any output.
+
+### Path A — full audit on a sample (pilot scripts)
+
+The only way to run the whole audit — deterministic classifier **and** live LLM
+leg — end-to-end today. It samples ~10 cases from an encrypted bundle, walks
+them through four scripts, and produces a review HTML. A worked example of how
+the modules compose, not a supported entry point. (Details:
 [`scripts/pilot/README.md`](scripts/pilot/README.md).)
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...          # required for the LLM leg
+export ANTHROPIC_API_KEY=sk-ant-...          # the LLM leg
 export BBA_PILOT_WORK_DIR=/tmp/bba_mini      # all outputs land here
 
 uv run python scripts/pilot/sample_bundle.py   # 1. sample ~10 cases
-uv run python scripts/pilot/run_pipeline.py     # 2. deterministic verdicts → report.csv
-uv run python scripts/pilot/run_llm_leg.py      # 3. live Anthropic batch → llm_report.json
-uv run python scripts/pilot/build_review.py     # 4. assemble review.html
+uv run python scripts/pilot/run_pipeline.py    # 2. deterministic verdicts  → report.csv
+uv run python scripts/pilot/run_llm_leg.py     # 3. live Anthropic batch     → llm_report.json
+uv run python scripts/pilot/build_review.py    # 4. assemble review          → review.html
 
 open "$BBA_PILOT_WORK_DIR/review.html"
 ```
 
-> Outputs under `$BBA_PILOT_WORK_DIR` contain **real PHI** — never commit, email, or share them.
-
-### B. Production run (supported CLI)
+### Path B — ingest a full export (supported `bba` CLI)
 
 Runs the wired `bba` CLI against a full 12-file HOSxP export.
 
 ```bash
 export BBA_DATA_DIR=/path/to/persistent/data   # Parquet + DuckDB + run-state
-export BBA_DB_URL=postgresql://user@host/db     # audit-store + dashboard
-export ANTHROPIC_API_KEY=sk-ant-...             # LLM review leg
 
-# 1. Ingest the HOSxP CSV bundle into DuckDB + Parquet under $BBA_DATA_DIR
+# 1. Ingest the bundle into DuckDB + Parquet under $BBA_DATA_DIR
 uv run bba ingest /path/to/hosxp_bundle/BDVST.csv
 
-# 2. Run the audit ingest leg (validate + materialize the bundle under $BBA_DATA_DIR)
+# 2. Run the audit ingest leg (validate + materialize the bundle; idempotent per run_id)
 uv run bba audit --input /path/to/hosxp_bundle/BDVST.csv
 ```
 
-`bba audit` today runs the **ingest leg** — it validates and materializes the
-bundle into the DuckDB + Parquet store under `$BBA_DATA_DIR/audit/<run_id>/`.
-The analysis leg (deterministic classifier → evidence bundle → de-id → prompt →
-LLM batch → quote grounding → audit-store write) ships as separate modules and
-runs today through the pilot scripts (Section A); CLI wiring lands in Phase 1.5.
+**What `bba audit` does today:** the **ingest leg** only — it validates and
+materializes the bundle into `$BBA_DATA_DIR/audit/<run_id>/`. The analysis leg
+(deterministic classifier → evidence bundle → de-id → prompt → LLM batch →
+quote grounding → audit-store write) runs through the pilot scripts (Path A)
+today; its CLI wiring lands in Phase 1.5. Re-running the same input + code
+version is a no-op; pass `--force` to override (writes an `audit_log` row).
 
-`bba audit` is run-level idempotent: re-running on the same input + same code
-version is a no-op. Pass `--force` to override (writes a compliance row to
-`audit_log`).
+### Path C — rank doctors / departments (attribution)
+
+Ranks the top-10 ordering doctors and departments by blood-order appropriateness
+in three buckets (appropriate / inappropriate / unresolved). Thin glue over
+`bba.attribution`. Full guide:
+[docs site → Operators → Doctor & department ranking](docs/src/content/docs/en/operators/doctor-ranking.mdx).
+
+```bash
+export BBA_REVIEW_XLSX="$HOME/Downloads/Review การใช้เลือด.xlsx"  # verdict source (300-case review)
+export BBA_BDVST_CSV=/path/to/BDVST.csv    # BDVST export with REQNO + DCTREQ
+export BBA_DCT_CSV=/path/to/DCT.csv        # DCT.csv doctor registry
+export BBA_PILOT_WORK_DIR=/tmp/bba_mini    # outputs land here
+
+uv run python scripts/pilot/rank_doctors.py     # → doctor_ranking.csv, department_ranking.csv, doctor_rankings.html
+open "$BBA_PILOT_WORK_DIR/doctor_rankings.html"
+```
 
 ## CLI
 

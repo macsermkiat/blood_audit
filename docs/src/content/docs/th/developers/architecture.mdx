@@ -9,7 +9,7 @@ import PipelineDiagram from "../../../../components/PipelineDiagram.astro";
 <AtAGlance
   title="สรุปสถาปัตยกรรม"
   items={[
-    { label: "โครงสร้าง", value: "20 packages, 12 happy-path stages, deterministic-first" },
+    { label: "โครงสร้าง", value: "26 packages, 12 happy-path stages (RBC), deterministic-first; intake แยกเป็น RBC (Phase 1) และ platelet (Phase 2) legs" },
     { label: "ขอบเขต", value: "มีเพียง bba.audit_pipeline ที่ orchestrate ข้าม stage" },
     { label: "Phase 1 CLI", value: "bba audit เชื่อม ingest ก่อน; analysis modules จะ wire ใน Phase 1.5", tone: "warn" },
     { label: "Safety invariant", value: "ไม่มี real-time output; de-id ก่อน LLM; quote grounding fail-closed", tone: "ok" },
@@ -25,19 +25,29 @@ import PipelineDiagram from "../../../../components/PipelineDiagram.astro";
 ควรอยู่ใน `bba.audit_pipeline` เท่านั้น เพื่อให้ boundary ของโมดูลอื่นยังเล็ก
 และทดสอบได้ง่าย
 
+Intake แยกที่ `bba.component_map`: คำสั่งเลือดแดงเข้ากับ RBC path 12 stage
+(Phase 1) ส่วนคำสั่งเกล็ดเลือดเข้ากับ platelet leg (Phase 2 — merged, PR #85)
+โดย RBC path เหมือนเดิมทุกไบต์ไม่ว่าจะเปิดฟีเจอร์เกล็ดเลือดหรือไม่
+
 ## กลุ่ม package สำคัญ
+
+รายชื่อเต็ม 26 modules อยู่ใน [Module glossary](/blood_audit/th/reference/module-glossary/)
+(อ้างอิงจาก `docs/CONTEXT.md`) ตารางนี้แสดงเฉพาะ package หลัก:
 
 | Package | หน้าที่ |
 | --- | --- |
 | `bba.ingest` | ตรวจ CSV schema, hash input, normalize rows และเขียน completion marker |
-| `bba.audit_orders` | แปลงคำสั่งเลือดให้เป็น audit anchor ต่อ RBC order |
+| `bba.audit_orders` | แปลงคำสั่งเลือดให้เป็น audit anchor ต่อ order; รับคำสั่งเกล็ดเลือดแยกจากสถิติ RBC |
+| `bba.component_map` | intake gate: แยก component family (RED_CELL, PLATELET, FFP, CRYO, WHOLE_BLOOD, UNKNOWN) และ fork RBC/platelet legs |
 | `bba.hb_lookup` | หา Hb ก่อนให้เลือดและ prior Hb trend |
-| `bba.cohort_detector` | assign clinical-context cohort เช่น default, cardiac surgery, ESRD-EPO, MTP, unknown |
+| `bba.cohort_detector` | assign clinical-context cohort เช่น default, cardiac surgery, ortho-surgery, ESRD-EPO, cardiopulmonary-comorbidity (heart disease), MTP, unknown |
 | `bba.deterministic_classifier` | ใช้กฎ 3-tier Hb และ bypass/review rules |
 | `bba.evidence_bundle_builder` | รวมหลักฐานสำหรับแถวที่ต้องเข้า LLM route |
 | `bba.deid_redactor` | de-identify bundle ก่อนออกจาก container |
 | `bba.quote_grounder` | ตรวจ citation ของ LLM แบบ fail-closed |
 | `bba.audit_store` | เขียน AuditRow, LlmCall และ batch/run state |
+| `bba.platelet_classifier` | §5.1 platelet gate; ไม่ auto-clear อะไรเลย (≥ 100 → review, &lt; 100 → defer-LLM, ไม่มีค่า → `INSUFFICIENT_EVIDENCE`) |
+| `bba.attribution` | จัดอันดับแพทย์/แผนก 10 อันดับตามความเหมาะสม (`BDVST.DCTREQ` → `DCT.csv`) |
 
 ## เส้นทาง failure
 

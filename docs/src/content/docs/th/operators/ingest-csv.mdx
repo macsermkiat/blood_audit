@@ -37,7 +37,7 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
 | `IPDADMPROGRESS` | progress note สำหรับ evidence bundle ของ LLM |
 | `IPDNRFOCUSDT` | nursing note สำหรับ evidence bundle ของ LLM |
 | `IPTSUMOPRT` | operative event และเวลา procedure |
-| `INCPT` | ตาราง event ที่เกี่ยวกับ procedure/charge และถูก validate เป็นส่วนหนึ่งของ schema v1 |
+| `INCPT_OPRTACT` | ตาราง procedure charge-support: export ที่ pre-join INCPT ⋈ OPRTACT บน Income (ตาม #69) และถูก validate เป็นส่วนหนึ่งของ schema v1 |
 | `ICD9CM` | dictionary ของ procedure code และ flag ว่าเป็น OR/non-OR |
 
 สัญญาของคอลัมน์จริงอยู่ใน `src/bba/ingest/`
