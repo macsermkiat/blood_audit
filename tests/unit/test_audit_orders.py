@@ -772,9 +772,7 @@ class TestAdversarialIcdMatching:
         # fires. Before this fix a dotless thalassemia code slipped past
         # the exclusion and got audited with the wrong RBC logic.
         for dotless in ("D550", "D561"):
-            result = build_audit_orders(
-                [_input(diagnosis_codes=(dotless,))], config
-            )
+            result = build_audit_orders([_input(diagnosis_codes=(dotless,))], config)
             assert any(r.reason == "hemoglobinopathy" for r in result.excluded), (
                 f"dotless {dotless} should hit the hemoglobinopathy exclusion"
             )
