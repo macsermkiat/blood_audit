@@ -28,7 +28,7 @@ The pipeline reads a HOSxP CSV bundle. No sample data ships in-repo (PHI exposur
 
 | Variable | Needed by | Purpose |
 |----------|-----------|---------|
-| `BBA_DATA_DIR` | path B (`bba` CLI) | Parquet + DuckDB + run-state directory |
+| `BBA_DATA_DIR` | path B (`bba` CLI) | run-state directory (Parquet + DuckDB planned) |
 | `BBA_DB_URL` | audit-store + dashboard | Postgres DSN (`postgresql://user@host/db`) |
 | `ANTHROPIC_API_KEY` | path A (LLM leg) | Anthropic API key (`sk-ant-...`) |
 | `BBA_PILOT_WORK_DIR` | paths A, C (pilot scripts) | where outputs land (e.g. `/tmp/bba_mini`) |
@@ -77,9 +77,9 @@ open "$BBA_PILOT_WORK_DIR/review.html"
 Runs the wired `bba` CLI against a full 12-file HOSxP export.
 
 ```bash
-export BBA_DATA_DIR=/path/to/persistent/data   # Parquet + DuckDB + run-state
+export BBA_DATA_DIR=/path/to/persistent/data   # run-state today (Parquet + DuckDB planned)
 
-# 1. Ingest the bundle into DuckDB + Parquet under $BBA_DATA_DIR
+# 1. Ingest the bundle: validate + normalize, write the run completion marker under $BBA_DATA_DIR
 uv run bba ingest /path/to/hosxp_bundle/BDVST.csv
 
 # 2. Run the audit ingest leg (validate + normalize, write the run completion marker; idempotent per run_id)
@@ -116,7 +116,7 @@ open "$BBA_PILOT_WORK_DIR/doctor_rankings.html"
 
 | Subcommand | Status | Notes |
 |------------|--------|-------|
-| `bba ingest <csv>` | Wired | Validates + hashes + Parquet-loads the 12-table HOSxP bundle. |
+| `bba ingest <csv>` | Wired | Validates + hashes + normalizes the 12-table HOSxP bundle, then writes the run completion marker (marker-only today; Parquet loader is the intended next storage). |
 | `bba audit --input <csv>` | Wired | Run-level idempotent; `--force` overrides with an `audit_log` row. |
 | `bba evaluate --run-id <id>` | Integration seam | Underlying `bba.eval_harness` primitives ship and are tested; the CLI hand-off composes them against the deployment's `audit_store`. Raises `CliError` until wired. |
 | `bba report --run-id <id> --format html\|pdf\|json` | Integration seam | Underlying `bba.report_generator` ships; CLI needs the deployment to source `ReportInputs` from the store. |
