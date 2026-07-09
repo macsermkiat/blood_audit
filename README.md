@@ -55,6 +55,11 @@ them through four scripts, and produces a review HTML. A worked example of how
 the modules compose, not a supported entry point. (Details:
 [`scripts/pilot/README.md`](scripts/pilot/README.md).)
 
+The live LLM leg covers RBC orders. While `PLATELET_LLM_ENABLED` is off (the
+default), `run_llm_leg.py` skips present-count platelet orders — they get a
+deterministic verdict but orphan instead of an LLM review — so a sample that
+includes platelet orders is not audited end-to-end until the flag is enabled.
+
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...          # the LLM leg
 export BBA_PILOT_WORK_DIR=/tmp/bba_mini      # all outputs land here
