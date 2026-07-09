@@ -32,8 +32,9 @@ Property + adversarial tests:
 * :class:`TestAuditIdDeterminism` — same ``(hn, reqno)`` → same audit_id
   across runs; different pairs → different audit_ids (hypothesis).
 * :class:`TestAdversarialIcdMatching` — D55.999 still counts as D55;
-  ``"D550"`` (no dot) is NOT D55; case sensitivity is preserved (Round 1
-  B1 hard-exclude must not be evadable by code formatting drift).
+  dotless ``"D550"`` is canonicalized to D55.0 and excluded; case
+  sensitivity is preserved (Round 1 B1 hard-exclude must not be evadable
+  by code formatting drift).
 * :class:`TestAdversarialAnchorTimes` — the strict time parser's
   ``parse_warning`` path disqualifies a pair from being the anchor; the
   fallback must take over, not silently emit a sentinel time.
@@ -760,21 +761,21 @@ class TestAdversarialIcdMatching:
             "D55.999 should hit the hemoglobinopathy block"
         )
 
-    def test_d550_without_dot_is_NOT_d55(self, config: AuditOrdersConfig) -> None:
-        # ICD-10 chapters are 3-char ``<letter><digit><digit>``, optionally
-        # followed by a dot and a subcategory. ``"D550"`` has four chars
-        # without a dot — it is NOT a D55 subcategory, just a malformed
-        # near-miss. A raw ``startswith("D55")`` would silently broaden
-        # the hard-exclusion to D550 and any future D55x code; the
-        # matcher must enforce the dot-or-end boundary.
-        #
-        # Codex review feedback (NEEDS-CHANGES): the prior assertion
-        # allowed either outcome and so was not failing-capable. This
-        # is the strict form.
-        result = build_audit_orders([_input(diagnosis_codes=("D550",))], config)
-        assert all(r.reason != "hemoglobinopathy" for r in result.excluded), (
-            "D550 must NOT match the D55 chapter without a dot boundary"
-        )
+    def test_dotless_subcategory_is_canonicalized_and_excluded(
+        self, config: AuditOrdersConfig
+    ) -> None:
+        # Chulalongkorn exports store subcategory codes WITHOUT the dot:
+        # "D550" is the dotless form of D55.0, and "D561" of D56.1
+        # (beta-thalassemia) — both hemoglobinopathies. ICD-10 categories
+        # are always 3 chars, so index-3 digits are the subcategory; the
+        # matcher canonicalizes ("D550" -> "D55.0") and the hard-exclude
+        # fires. Before this fix a dotless thalassemia code slipped past
+        # the exclusion and got audited with the wrong RBC logic.
+        for dotless in ("D550", "D561"):
+            result = build_audit_orders([_input(diagnosis_codes=(dotless,))], config)
+            assert any(r.reason == "hemoglobinopathy" for r in result.excluded), (
+                f"dotless {dotless} should hit the hemoglobinopathy exclusion"
+            )
 
     def test_lowercase_d55_does_not_match(self, config: AuditOrdersConfig) -> None:
         # HOSxP ICD-10 codes are uppercase. A lowercase ``"d55.0"`` is
