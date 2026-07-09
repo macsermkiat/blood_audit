@@ -1,0 +1,103 @@
+---
+title: Doctor & department ranking
+description: Run the attribution feature to rank the top-10 ordering doctors and departments by blood-order appropriateness.
+---
+
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
+The attribution feature (`bba.attribution`) ranks the **top-10 ordering
+doctors** and **top-10 departments** by how appropriate their blood orders
+are, split into three buckets: Appropriate, Inappropriate, and Unresolved.
+
+<AtAGlance
+  items={[
+    { label: "What it ranks", value: "Top-10 doctors and top-10 departments by blood-order appropriateness." },
+    { label: "Buckets", value: "Appropriate / Inappropriate / Unresolved." },
+    { label: "How to run", value: "uv run python scripts/pilot/rank_doctors.py", tone: "ok" },
+    { label: "Outputs contain PHI", value: "Doctor identities tied to real verdicts. Never commit or share.", tone: "warn" },
+  ]}
+/>
+
+:::caution[Real PHI in inputs and outputs]
+The inputs are **real encrypted patient/order data** and the outputs contain
+**real PHI** — doctor identities tied to real appropriateness verdicts. Never
+commit, email, or share the workbook, the `BDVST`/`DCT` CSVs, or the generated
+CSV/HTML outputs outside the approved review channel.
+:::
+
+## What it is
+
+`bba.attribution` (Feature 2, PR #82) ranks the top-10 ordering doctors and
+departments by blood-order appropriateness, in three buckets: Appropriate,
+Inappropriate, and Unresolved.
+
+The attribution chain resolves an order back to a doctor:
+
+- An order's `REQNO` → `BDVST.DCTREQ` → the `DCT.csv` doctor registry.
+
+The verdict source is **swappable** through the `VerdictSource` seam. The
+current build ranks on the 300-case human-review workbook (Sheet1, column J).
+The next build swaps in full-cohort pipeline verdicts through the same seam —
+gated on the peri-op classifier fix, with no other code changes.
+
+This is a **pilot script / integration seam**, not a top-level `bba`
+subcommand. It is also surfaced through the `serve-dashboard` integration seam
+(the attribution resolvers).
+
+## How to run
+
+The pilot script is `scripts/pilot/rank_doctors.py`. From the repo root:
+
+```bash
+uv run python scripts/pilot/rank_doctors.py
+```
+
+The script **fails loud** (exits non-zero) if any of the three input files is
+missing, printing which one.
+
+### Environment variables
+
+| Variable | What it is | Default |
+| --- | --- | --- |
+| `BBA_REVIEW_XLSX` | The human-review workbook (verdict source). | `~/Downloads/Review การใช้เลือด.xlsx` |
+| `BBA_BDVST_CSV` | BDVST export containing `REQNO` + `DCTREQ`. | `../Bloodbank/data/encrypted/BDVST.csv` (relative to repo root) |
+| `BBA_DCT_CSV` | The `DCT.csv` doctor registry. | `../Bloodbank/data/raw/DCT.csv` |
+| `BBA_PILOT_WORK_DIR` | Output directory. | `/tmp/bba_mini` |
+
+### Example invocation
+
+```bash
+export BBA_REVIEW_XLSX="$HOME/Downloads/Review การใช้เลือด.xlsx"
+export BBA_BDVST_CSV=/path/to/BDVST.csv
+export BBA_DCT_CSV=/path/to/DCT.csv
+export BBA_PILOT_WORK_DIR=/tmp/bba_mini
+uv run python scripts/pilot/rank_doctors.py
+open "$BBA_PILOT_WORK_DIR/doctor_rankings.html"
+```
+
+## Outputs
+
+Written to `$BBA_PILOT_WORK_DIR`:
+
+| Output | What it is |
+| --- | --- |
+| `doctor_ranking.csv` | Top-10 doctors, ranked with per-bucket counts. |
+| `department_ranking.csv` | Top-10 departments, ranked with per-bucket counts. |
+| `doctor_rankings.html` | Self-contained page for human review. |
+
+The script also prints a **reconciliation summary** to stdout: total verdicts
+(with appropriate / inappropriate / unresolved counts), the ranked bucket, the
+minimum-N threshold, and the number of doctor/department table rows.
+
+## Where this lives in code
+
+- `src/bba/attribution/` — the tested module (loaders, aggregation, ranking,
+  writers).
+- `scripts/pilot/rank_doctors.py` — thin glue that resolves the input paths and
+  reports the reconciliation summary.
+
+## Next steps
+
+- [Environment variables](/blood_audit/en/operators/env-vars/) — the variables the supported CLI reads.
+- [Integration seams](/blood_audit/en/operators/integration-seams/) — where attribution is surfaced through `serve-dashboard`.
+- [Troubleshooting](/blood_audit/en/operators/troubleshooting/) — common failures.

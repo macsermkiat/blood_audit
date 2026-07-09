@@ -41,11 +41,16 @@ import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
 | --- | --- | --- | --- |
 | `DEFAULT` | ไม่มีบริบทพิเศษ เป็น restrictive-transfusion pathway ปกติ | procedure data มีให้ใช้ แต่ไม่พบหลักฐานที่ priority สูงกว่า | ใช้ threshold **7.0 g/dL** |
 | `CARDIAC_SURGERY` | อยู่ใกล้บริบทผ่าตัดหัวใจหรือหลอดเลือดใหญ่ | ICD-9-CM procedure prefix ของ cardiac/vascular OR ภายในช่วงที่กำหนด และตัด non-OR cardiac items ออก | ใช้ threshold **7.5 g/dL** |
-| `ORTHO_CARDIAC` | ผ่าตัด orthopedic ร่วมกับประวัติ cardiac | ICD-9-CM orthopedic OR + ICD-10 cardiac history เช่น I20-I25 หรือ I50 | ใช้ threshold **8.0 g/dL** |
+| `ORTHO_SURGERY` | ผ่าตัด orthopedic โดยลำพัง threshold สูงกว่า default | orthopedic OR procedure (ICD-9-CM prefix **78**, **79**, **81**) ภายใน 30 วันก่อน order **ไม่ต้อง**มีประวัติ cardiac | ใช้ threshold **8.0 g/dL** จัดลำดับเหนือ `CARDIAC_SURGERY` เมื่อมีทั้งสองบริบท floor ที่สูงกว่าชนะ |
 | `ESRD_EPO` | ESRD พร้อมหลักฐานยาในบริบท dialysis | ICD-10 ESRD + medication signal ของ dialysis context | ใช้ threshold **8.0 g/dL** |
+| `CARDIOPULMONARY_COMORBIDITY` | โรคหัวใจเรื้อรัง ตัดสินจากการวินิจฉัย ไม่ใช่การผ่าตัด แนวทาง restrictive คงเกณฑ์ 8.0 สำหรับผู้ป่วยโรคหัวใจ ("> 8 ถ้ามีโรคหัวใจ, > 7 ถ้าไม่มี") | ICD-10 heart-disease prefix **I11**, **I13**, **I20-I25**, **I42**, **I50** โรคปอด **ไม่**นับ | ใช้ threshold **8.0 g/dL** |
 | `MTP` | pattern แบบ massive transfusion protocol | RBC units หลาย unit หรือ RBC + FFP + platelet ใน MTP window | bypass Hb tier และให้ `APPROPRIATE` |
 | `HEME_MALIGNANCY_ACTIVE` | active heme malignancy ที่ไม่ควรลดเหลือ threshold เดียว | ICD-10 heme malignancy + chemo med + ANC < 500 | Hb < 7.0 ให้ `APPROPRIATE`; ถ้า Hb ≥ 7.0 ไม่มี numeric threshold และส่ง `NEEDS_REVIEW` |
 | `UNKNOWN` | ข้อมูล procedure ไม่พอให้เลือก threshold อย่างปลอดภัย | procedure events unavailable ไม่ใช่แค่ไม่พบ procedure | Hb < 7.0 ให้ `APPROPRIATE`; ถ้า Hb ≥ 7.0 ไม่ assume default และส่ง `NEEDS_REVIEW` |
+
+> cohort เดิม `ORTHO_CARDIAC` (ผ่าตัด orthopedic **ร่วมกับ**ประวัติ cardiac)
+> ถูก **ยกเลิก**แล้ว เพราะ `ORTHO_SURGERY` ใช้ floor 8.0 กับการผ่าตัด
+> orthopedic โดยลำพัง ซึ่งครอบคลุม cohort เดิม; threshold ยังเก็บไว้เพื่อให้แถวเก่า resolve ได้
 
 แนวคิดสำคัญคือ **ข้อมูลหัตถการ "ไม่มีให้ตรวจ" ไม่เหมือนกับ "ตรวจแล้วไม่พบหัตถการ"**
 ถ้ามีข้อมูลหัตถการและไม่พบหัตถการพิเศษ ระบบตกไป `DEFAULT` ได้
@@ -78,11 +83,12 @@ import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
 | --- | --- | --- | --- |
 | 1 | `UNKNOWN` | procedure-event join | ถ้า procedure events unavailable (`None`) ให้หยุด ห้าม assume threshold 7.0 |
 | 2 | `MTP` | blood-order events | ใน 1 ชั่วโมงก่อนหน้า: RBC units ≥ 4 หรือ RBC + FFP + platelet co-order |
-| 3 | `ORTHO_CARDIAC` | **ICD-9-CM procedure** + **ICD-10 diagnosis** | orthopedic OR procedure ภายใน 30 วันก่อน order โดยใช้ prefix **78**, **79**, **81** และ cardiac history ICD-10 prefix **I20-I25** หรือ **I50** |
-| 4 | `CARDIAC_SURGERY` | **ICD-9-CM procedure** | cardiac/large-vessel OR procedure ภายใน 30 วันก่อน order; prefix **36**, **38**, **39** และ exclude non-OR cardiac **894**, **3796** |
-| 5 | `ESRD_EPO` | **ICD-10 diagnosis** + **MED** | ESRD **N18.5** หรือ **N18.6** + dialysis-context medication ภายใน 14 วัน เช่น `heparin`, `sevelamer`, `cinacalcet` |
+| 3 | `ORTHO_SURGERY` | **ICD-9-CM procedure** | orthopedic OR procedure ภายใน 30 วันก่อน order โดยใช้ prefix **78**, **79**, **81** **ไม่ต้อง**มีประวัติ cardiac; ตรวจก่อน `CARDIAC_SURGERY` เพื่อให้ floor สูงกว่าชนะ threshold 8.0 |
+| 4 | `CARDIAC_SURGERY` | **ICD-9-CM procedure** | cardiac/large-vessel OR procedure ภายใน 30 วันก่อน order; prefix **36**, **38**, **39** และ exclude non-OR cardiac **894**, **3796** threshold 7.5 |
+| 5 | `ESRD_EPO` | **ICD-10 diagnosis** + **MED** | ESRD **N18.5** หรือ **N18.6** + dialysis-context medication ภายใน 14 วัน เช่น `heparin`, `sevelamer`, `cinacalcet` threshold 8.0 |
 | 6 | `HEME_MALIGNANCY_ACTIVE` | **ICD-10 diagnosis** + **MED** + **Lab ANC** | heme malignancy prefix **C8** หรือ **C9** + chemo med ภายใน 30 วัน + ANC < 500 cells/uL |
-| 7 | `DEFAULT` | fall-through | procedure data มีให้ใช้ แต่ไม่พบ cohort พิเศษ ใช้ threshold 7.0 |
+| 7 | `CARDIOPULMONARY_COMORBIDITY` | **ICD-10 diagnosis** | heart-disease prefix **I11**, **I13**, **I20-I25**, **I42**, **I50** (ตัดสินจากการวินิจฉัย ไม่ต้องผ่าตัด) โรคปอดไม่นับ threshold 8.0 |
+| 8 | `DEFAULT` | fall-through | procedure data มีให้ใช้ แต่ไม่พบ cohort พิเศษ ใช้ threshold 7.0 |
 
 ## แผนที่ source → rule
 
@@ -90,7 +96,8 @@ import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
 - **ICD-9-CM procedure**: cardiac surgery, orthopedic surgery,
   peri-procedural timing และ pre-op crossmatch timing; procedure rows มาจาก
   `IPTSUMOPRT` ส่วน OR/non-OR และชื่อ procedure มาจาก `ICD9CM`
-- **ICD-10 diagnosis**: cardiac history, ESRD, heme malignancy
+- **ICD-10 diagnosis**: cardiac history, ESRD, heme malignancy และ
+  heart-disease comorbidity (floor 8.0 ของ `CARDIOPULMONARY_COMORBIDITY`)
 - **MED**: dialysis-medication signal, chemotherapy-medication signal,
   และ crystalloid volume ใน 4 ชั่วโมงก่อน order
 - **Blood-order history**: ตรวจ MTP จาก RBC-unit cluster หรือ RBC + FFP +

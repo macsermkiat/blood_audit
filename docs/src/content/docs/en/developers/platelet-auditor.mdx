@@ -1,0 +1,195 @@
+---
+title: Platelet auditor (Phase 2)
+description: The deterministic platelet leg that forks at intake, auto-clears nothing, and gates its LLM leg behind a default-off flag.
+---
+
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
+The **Phase 2 platelet auditor** is MERGED (PR #85). It reuses the same
+pipeline shape as the RBC (Phase 1) path but **forks at intake**: every
+blood-bank order is routed to a component family first, and only platelet
+orders reach the platelet gate. The deterministic leg is **live**; the
+platelet LLM leg is behind a **default-off** flag
+`feature_flags.PLATELET_LLM_ENABLED`.
+
+<AtAGlance
+  items={[
+    { label: "Fork point", value: "Intake — every order is routed to a ComponentFamily before any auditor runs." },
+    { label: "Deterministic leg", value: "Live. Auto-clears nothing: count >= 100 routes to review, else defers to the LLM leg.", tone: "ok" },
+    { label: "LLM leg", value: "Behind default-off feature_flags.PLATELET_LLM_ENABLED.", tone: "warn" },
+    { label: "RBC path", value: "Byte-identical whether or not the platelet feature is on.", tone: "ok" },
+  ]}
+/>
+
+## How the platelet path relates to the RBC path
+
+The platelet auditor is not a rewrite. It borrows the RBC pipeline shape —
+intake, a value layer, a deterministic gate, and an LLM leg with an
+over-clear guardrail — but it forks the moment an order arrives. The RBC
+(Phase 1) path is **byte-identical** whether or not the platelet feature is
+enabled: turning platelets on adds a new branch, it does not perturb the
+existing red-cell branch.
+
+Component families are **isolated**. Platelet statistics never blend into
+RBC reporting or the dashboard. A platelet order is admitted as its own
+`component="platelet"` audit unit and stays out of the red-cell numbers.
+
+## `component_map` — the intake gate
+
+Module: `src/bba/component_map/`.
+
+`component_map` provides a six-way `ComponentFamily` classifier —
+`RED_CELL`, `PLATELET`, `FFP`, `CRYO`, `WHOLE_BLOOD`, or `UNKNOWN`.
+
+- `classify_component(product_name)` is a keyword classifier over the
+  **BDTYPE** dictionary's `NAME` column, which is the source of truth. It is
+  robust to new product codes: irradiated / filtered / pooled variants
+  resolve to the same family.
+- `PLATELET_PRODUCTS` is an **8-code** allow-list:
+  `LDPPC`, `LDPPCI`, `SDPFI`, `SDPF`, `SDPPI`, `LPPC`, `PC`, `LDPC`.
+- Only `RED_CELL` (Phase 1) and `PLATELET` (Phase 2) have auditors.
+
+The **live pilot intake** (`build_audit_orders`) does not yet route through the
+six-way classifier. It admits an order if it contains any RBC product
+(→ `red_cell`) or is entirely platelet products (→ `platelet`), and excludes
+everything else — FFP-only, cryo-only, whole-blood-only, unknown, or empty —
+under the single reason `not_rbc_product`. The `classify_component` NAME
+classifier and per-family exclusion reasons are wired in a later phase; today
+the allow-list membership checks carry the gate.
+  `UNKNOWN` is the honest fallback for an unrecognised name.
+
+### Why recognise families that have no auditor
+
+Recognising `FFP` / `CRYO` / `WHOLE_BLOOD` is deliberate. An order the audit
+cannot act on should be excluded **for a stated reason**, not silently
+absorbed into a family it does not belong to. `UNKNOWN` is reserved for a
+name the classifier genuinely does not recognise, so a mislabelled or new
+product surfaces honestly instead of being coerced.
+
+### Family volumes issued
+
+Raw `BDVSTDT` feed, verified 2026-07-08:
+
+| Component family | Volumes issued |
+| --- | --- |
+| `red_cell` | 23,867 |
+| `platelet` | 8,193 |
+| `ffp` | 5,350 |
+| `cryo` | 2,335 |
+| `whole_blood` | 4 |
+
+## `platelet_lookup` — the value layer
+
+Module: `src/bba/platelet_lookup/`.
+
+This is the platelet counterpart to the Hb lookup: it turns raw lab rows
+into a single validated platelet count.
+
+- `PLATELET_LABEXM = "290078"` ("Platelets Counts", `LABGRP` 29 HEMATOLOGY,
+  unit ×10³/µL, reference range **150–450**). The platelet count is
+  **HEMATOLOGY-only** in this dataset — there is **no POCT fallback**, unlike
+  Hb.
+- `parse_platelet_count(raw)` handles:
+  - comma-grouped thousands (e.g. `"1,117"`),
+  - left/right-censored `"<N"` / `">N"` values, mapped to the bound `N` — a
+    `"<2"` is a **REAL critically-low measurement**, not a missing value,
+  - `"--"` / empty / non-numeric sentinels → `None`,
+  - out-of-range values (outside `[1.0, 3000.0]` ×10³/µL) and `nan` / `inf`
+    → `None`, **failed loud** as transcription / unit errors rather than
+    coerced.
+- `PlateletObservation` is a frozen, validated single count with
+  `value_k_ul`, a tz-aware UTC `datetime_utc`, a `source` of `HEMATOLOGY`,
+  and an `item_no` that acts as the tie-breaker when two observations share a
+  datetime.
+
+## `platelet_classifier` — the §5.1 gate
+
+Module: `src/bba/platelet_classifier/`.
+
+`classify_platelet(inputs)` mirrors the RBC deterministic classifier but
+**AUTO-CLEARS NOTHING**. The review ceiling is
+`PLATELET_REVIEW_CEILING = 100.0` (×10³/µL).
+
+### Precedence (top wins)
+
+| Count condition | Result | Reason code | Routing |
+| --- | --- | --- | --- |
+| Missing count, defer flag **ON** | `NEEDS_REVIEW` | `plt_missing_defer_llm` | Defers to the LLM leg. |
+| Missing count, defer flag **OFF** (**default**) | `INSUFFICIENT_EVIDENCE` | `plt_missing` | Terminal, no LLM. |
+| count ≥ 100 | `POTENTIALLY_INAPPROPRIATE` | `plt_ge_100` | Routes to review — **not terminal**. |
+| count < 100 (including < 10) | `NEEDS_REVIEW` | `plt_defer_llm` | Defers to the LLM leg. |
+
+The missing-count defer flag mirrors the RBC `enable_missing_hb_positive_evidence`
+opt-in. It is a **SEED pending clinical sign-off**, and is **OFF by default**.
+
+### Safety invariant (CR-C1): the classifier never emits `APPROPRIATE`
+
+In v1 the classifier **never emits `APPROPRIATE` or `INAPPROPRIATE`**.
+`APPROPRIATE` would be deterministic-final — no LLM, no human — but the
+policies **WITHHOLD platelets at very low counts** for several exclusion
+populations:
+
+- dengue without bleeding,
+- TTP,
+- HIT,
+- ITP,
+- aplastic anemia without bleeding,
+- snakebite without bleeding.
+
+For TTP and HIT, transfusion is **actively harmful**. Because a low count
+alone cannot distinguish these populations from a genuinely appropriate
+order, **every present count routes onward** — no present-count verdict is
+ever deterministic-final. This is pinned by a Hypothesis property test
+(CR-M2).
+
+Why this matters: an auto-clear here is a **patient-safety failure**, not
+just a workflow miss. A low platelet count is exactly the situation where the
+wrong reflex (transfuse) can harm the patient, so the deterministic layer
+refuses to make the call alone.
+
+### MTP-window suppression is not in this gate
+
+MTP-window suppression is intentionally **not** in this single-order gate.
+Platelet units co-ordered inside an active massive-transfusion-protocol
+window are suppressed as independent audit units at **DISPATCH** — the MTP
+co-order stays a signal, it never becomes a second audit row.
+
+## `platelet_guardrail` — the over-clear guardrail
+
+Module: `src/bba/platelet_guardrail/`.
+
+The over-clear guardrail for the platelet LLM leg floors ungrounded
+high-count clears and enforces the response schema end-to-end, so the LLM
+cannot over-clear a platelet order **without grounded hard-signal evidence**.
+
+## Feature flag and status
+
+The platelet LLM leg — a `PLATELET_REVIEW` prompt, the over-clear guardrail,
+and grounded hard signals — is gated behind the **default-off**
+`feature_flags.PLATELET_LLM_ENABLED`.
+
+When the flag is **OFF**, platelet orders are classified by the deterministic
+gate only, which auto-clears nothing. Only one outcome is **written** as an
+audit row:
+
+- **missing count → `INSUFFICIENT_EVIDENCE`** — persisted as a
+  deterministic-final row.
+
+Present-count orders — both `count ≥ 100` (`POTENTIALLY_INAPPROPRIATE`) and
+`count < 100` (`NEEDS_REVIEW`) — are classified but **not written**. They route
+onward to the platelet LLM leg, so with the flag off they **orphan (are
+skipped), not reviewed**, and are only audited once `PLATELET_LLM_ENABLED` is
+enabled.
+
+The deterministic leg is validated on real data. The RBC (Phase 1) path is
+byte-identical whether or not the platelet feature is on.
+
+## Where this lives in code
+
+- `src/bba/component_map/` — intake gate and `ComponentFamily` routing.
+- `src/bba/platelet_lookup/` — value layer (`PLATELET_LABEXM`,
+  `parse_platelet_count`, `PlateletObservation`).
+- `src/bba/platelet_classifier/` — the §5.1 gate (`classify_platelet`,
+  `PLATELET_REVIEW_CEILING`).
+- `src/bba/platelet_guardrail/` — the over-clear guardrail for the LLM leg.
+- The canonical glossary is `docs/CONTEXT.md` (Phase 2 sections).

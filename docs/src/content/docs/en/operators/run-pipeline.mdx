@@ -78,14 +78,16 @@ go out: ICD-10 diagnoses, Hb history, CBC values, meds, and vital-sign
 Runs the wired `bba` CLI against a full 12-file HOSxP export.
 
 ```bash
-export BBA_DATA_DIR=/path/to/persistent/data   # Parquet + DuckDB + run-state
+export BBA_DATA_DIR=/path/to/persistent/data   # run-state today (Parquet + DuckDB planned)
 export BBA_DB_URL=postgresql://user@host/db     # audit-store + dashboard
 export ANTHROPIC_API_KEY=sk-ant-...             # LLM review leg
 
-# 1. Ingest the HOSxP CSV bundle into DuckDB + Parquet under $BBA_DATA_DIR
+# 1. Ingest the HOSxP CSV bundle: validate + normalize, write the run completion marker under $BBA_DATA_DIR
 uv run bba ingest /path/to/hosxp_bundle/BDVST.csv
 
-# 2. Run the audit (deterministic classifier + LLM review route + quote grounding)
+# 2. Run the audit ingest leg (validate + normalize, write the run completion marker; idempotent per run_id)
+#    Marker-only today: DuckDB + Parquet payload writers are the intended next storage. The analysis leg
+#    (classifier + LLM review + quote grounding) is wired into the CLI in Phase 1.5.
 uv run bba audit --input /path/to/hosxp_bundle/BDVST.csv
 ```
 

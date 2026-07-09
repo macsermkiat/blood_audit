@@ -65,9 +65,9 @@ HOSxP CSV bundle, streams rows through normalization, and records run-state
 markers under `$BBA_DATA_DIR/audit/<run_id>/` and
 `$BBA_DATA_DIR/audit_runs/<run_id>/` with idempotent run-level guarantees.
 In these docs, a "cohort" means the clinical-context bucket for one audit
-row, such as default, cardiac surgery, orthopedic surgery, combined
-ortho-cardiac, ESRD with dialysis-medication evidence, MTP, active heme
-malignancy, cardiopulmonary comorbidity, or unknown context.
+row, such as default, cardiac surgery, orthopedic surgery, ESRD with
+dialysis-medication evidence, MTP, active heme malignancy, cardiopulmonary
+comorbidity (heart disease), or unknown context.
 
 The LLM-driven analysis leg (deterministic classifier → evidence bundle
 → de-id → prompt → batch → quote grounding → audit-store write) is

@@ -1,0 +1,103 @@
+---
+title: จัดอันดับแพทย์และแผนก
+description: รันฟีเจอร์ attribution เพื่อจัดอันดับแพทย์และแผนก 10 อันดับแรก ตามความเหมาะสมของการสั่งใช้เลือด
+---
+
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
+ฟีเจอร์ attribution (`bba.attribution`) จัดอันดับ **แพทย์ผู้สั่ง 10 อันดับแรก**
+และ **แผนก 10 อันดับแรก** ตามความเหมาะสมของการสั่งใช้เลือด แบ่งเป็นสามกลุ่ม:
+เหมาะสม, ไม่เหมาะสม และยังไม่สรุป
+
+<AtAGlance
+  title="สิ่งที่จะได้"
+  items={[
+    { label: "จัดอันดับอะไร", value: "แพทย์ 10 อันดับแรก และแผนก 10 อันดับแรก ตามความเหมาะสมของการสั่งใช้เลือด" },
+    { label: "กลุ่ม", value: "เหมาะสม / ไม่เหมาะสม / ยังไม่สรุป" },
+    { label: "วิธีรัน", value: "uv run python scripts/pilot/rank_doctors.py", tone: "ok" },
+    { label: "ผลลัพธ์มี PHI", value: "ตัวตนแพทย์ผูกกับ verdict จริง ห้าม commit หรือแชร์", tone: "warn" },
+  ]}
+/>
+
+:::caution[ข้อมูล PHI จริงทั้ง input และ output]
+Input เป็น **ข้อมูลผู้ป่วย/คำสั่งจริงที่เข้ารหัส** และ output มี **PHI จริง** —
+ตัวตนแพทย์ผูกกับ verdict ความเหมาะสมจริง ห้าม commit, ส่งอีเมล หรือแชร์
+workbook, ไฟล์ CSV `BDVST`/`DCT` หรือ output CSV/HTML ที่สร้างขึ้น
+นอกช่องทางตรวจที่ได้รับอนุมัติ
+:::
+
+## คืออะไร
+
+`bba.attribution` (Feature 2, PR #82) จัดอันดับแพทย์ผู้สั่งและแผนก 10 อันดับแรก
+ตามความเหมาะสมของการสั่งใช้เลือด แบ่งเป็นสามกลุ่ม: เหมาะสม, ไม่เหมาะสม และยังไม่สรุป
+
+สาย attribution จะย้อนคำสั่งกลับไปหาแพทย์:
+
+- `REQNO` ของคำสั่ง → `BDVST.DCTREQ` → ทะเบียนแพทย์ `DCT.csv`
+
+แหล่งที่มาของ verdict **สลับได้** ผ่าน seam ชื่อ `VerdictSource` build ปัจจุบัน
+จัดอันดับจาก workbook การตรวจโดยคน 300 เคส (Sheet1, คอลัมน์ J) build ถัดไปจะสลับ
+มาใช้ verdict จาก pipeline เต็มทั้ง cohort ผ่าน seam เดิม — โดยรอ (gate) การแก้
+classifier ช่วง peri-op และไม่มีการเปลี่ยนโค้ดส่วนอื่น
+
+ตัวนี้เป็น **สคริปต์ pilot / integration seam** ไม่ใช่ subcommand ระดับบนของ
+`bba` และยังถูกนำเสนอผ่าน integration seam ของ `serve-dashboard`
+(attribution resolvers) อีกด้วย
+
+## วิธีรัน
+
+สคริปต์ pilot คือ `scripts/pilot/rank_doctors.py` จาก root ของ repo:
+
+```bash
+uv run python scripts/pilot/rank_doctors.py
+```
+
+สคริปต์ **fail loud** (exit ไม่เป็นศูนย์) ถ้าไฟล์ input ตัวใดตัวหนึ่งในสามหายไป
+พร้อมพิมพ์ว่าไฟล์ไหนที่หาย
+
+### ตัวแปรสภาพแวดล้อม
+
+| ตัวแปร | คืออะไร | ค่าเริ่มต้น |
+| --- | --- | --- |
+| `BBA_REVIEW_XLSX` | workbook การตรวจโดยคน (แหล่งของ verdict) | `~/Downloads/Review การใช้เลือด.xlsx` |
+| `BBA_BDVST_CSV` | ไฟล์ส่งออก BDVST ที่มี `REQNO` + `DCTREQ` | `../Bloodbank/data/encrypted/BDVST.csv` (สัมพัทธ์กับ root ของ repo) |
+| `BBA_DCT_CSV` | ทะเบียนแพทย์ `DCT.csv` | `../Bloodbank/data/raw/DCT.csv` |
+| `BBA_PILOT_WORK_DIR` | โฟลเดอร์ผลลัพธ์ | `/tmp/bba_mini` |
+
+### ตัวอย่างการรัน
+
+```bash
+export BBA_REVIEW_XLSX="$HOME/Downloads/Review การใช้เลือด.xlsx"
+export BBA_BDVST_CSV=/path/to/BDVST.csv
+export BBA_DCT_CSV=/path/to/DCT.csv
+export BBA_PILOT_WORK_DIR=/tmp/bba_mini
+uv run python scripts/pilot/rank_doctors.py
+open "$BBA_PILOT_WORK_DIR/doctor_rankings.html"
+```
+
+## ผลลัพธ์
+
+เขียนไปที่ `$BBA_PILOT_WORK_DIR`:
+
+| ผลลัพธ์ | คืออะไร |
+| --- | --- |
+| `doctor_ranking.csv` | แพทย์ 10 อันดับแรก จัดอันดับพร้อมจำนวนต่อกลุ่ม |
+| `department_ranking.csv` | แผนก 10 อันดับแรก จัดอันดับพร้อมจำนวนต่อกลุ่ม |
+| `doctor_rankings.html` | หน้าเดียวจบสำหรับให้คนตรวจ |
+
+สคริปต์ยังพิมพ์ **สรุปการกระทบยอด (reconciliation summary)** ไปที่ stdout:
+จำนวน verdict ทั้งหมด (พร้อมจำนวนเหมาะสม / ไม่เหมาะสม / ยังไม่สรุป), กลุ่มที่จัดอันดับ,
+ค่า threshold ขั้นต่ำ (minimum-N) และจำนวนแถวตารางของแพทย์/แผนก
+
+## อยู่ตรงไหนในโค้ด
+
+- `src/bba/attribution/` — module ที่มีเทสต์ (loaders, aggregation, ranking,
+  writers)
+- `scripts/pilot/rank_doctors.py` — glue บาง ๆ ที่ resolve path ของ input และ
+  รายงานสรุปการกระทบยอด
+
+## ขั้นถัดไป
+
+- [ตัวแปรสภาพแวดล้อม](/blood_audit/th/operators/env-vars/) — ตัวแปรที่ CLI ที่รองรับอ่าน
+- [Integration seams](/blood_audit/th/operators/integration-seams/) — จุดที่ attribution ถูกนำเสนอผ่าน `serve-dashboard`
+- [แก้ปัญหาเบื้องต้น](/blood_audit/th/operators/troubleshooting/) — ปัญหาที่พบบ่อย

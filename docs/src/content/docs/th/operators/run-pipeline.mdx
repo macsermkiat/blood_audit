@@ -77,14 +77,16 @@ pilot **ไม่** ส่ง progress / focus notes แบบข้อควา
 รัน `bba` CLI ที่ wire แล้ว กับข้อมูลส่งออก HOSxP เต็ม 12 ไฟล์
 
 ```bash
-export BBA_DATA_DIR=/path/to/persistent/data   # Parquet + DuckDB + run-state
+export BBA_DATA_DIR=/path/to/persistent/data   # run-state ตอนนี้ (Parquet + DuckDB วางแผนไว้)
 export BBA_DB_URL=postgresql://user@host/db     # audit-store + dashboard
 export ANTHROPIC_API_KEY=sk-ant-...             # ส่วน LLM review
 
-# 1. Ingest bundle CSV ของ HOSxP เข้าสู่ DuckDB + Parquet ใต้ $BBA_DATA_DIR
+# 1. Ingest bundle CSV ของ HOSxP: validate + normalize, เขียน run completion marker ใต้ $BBA_DATA_DIR
 uv run bba ingest /path/to/hosxp_bundle/BDVST.csv
 
-# 2. รันออดิท (deterministic classifier + LLM review + quote grounding)
+# 2. รัน audit ingest leg (validate + normalize, เขียน run completion marker; idempotent ต่อ run_id)
+#    ตอนนี้เขียนแค่ marker: ตัวเขียน payload DuckDB + Parquet เป็น storage ขั้นถัดไปที่ตั้งใจไว้
+#    ส่วน analysis (classifier + LLM review + quote grounding) จะ wire เข้า CLI ใน Phase 1.5
 uv run bba audit --input /path/to/hosxp_bundle/BDVST.csv
 ```
 

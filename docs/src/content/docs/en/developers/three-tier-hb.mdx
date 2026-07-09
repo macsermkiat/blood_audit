@@ -51,11 +51,17 @@ everyone:
 | --- | --- | --- | --- |
 | `DEFAULT` | No special cohort rule matched. This is the ordinary restrictive-transfusion pathway. | Procedure data is available, but no higher-priority cohort evidence matched. | Uses Hb threshold **7.0 g/dL**. Hb below 7.0 can be `APPROPRIATE`; Hb 7.0-10 routes to review; Hb ≥10 is high-Hb concern. |
 | `CARDIAC_SURGERY` | The order is near a recent cardiac / large-vessel operative context. | Recent operating-room procedure with cardiac / major vascular ICD-9-CM procedure-code prefixes, with non-OR cardiac items excluded. | Uses Hb threshold **7.5 g/dL**. |
-| `ORTHO_CARDIAC` | Orthopedic surgery plus cardiac history. This has a higher threshold than default. | Orthopedic operative procedure plus cardiac-history ICD-10 evidence such as ischemic heart disease or heart failure. | Uses Hb threshold **8.0 g/dL**. |
+| `ORTHO_SURGERY` | Orthopedic surgery on its own. A higher threshold than default. | Orthopedic operative procedure (ICD-9-CM prefixes **78**, **79**, **81**) within 30 days before the order. Cardiac history is **not** required. | Uses Hb threshold **8.0 g/dL**. Ranked above `CARDIAC_SURGERY`, so when both surgical contexts are present the higher floor wins. |
 | `ESRD_EPO` | End-stage renal disease context with dialysis-medication evidence. | ESRD ICD-10 diagnosis plus a dialysis-context medication signal. Both are required. | Uses Hb threshold **8.0 g/dL**. |
+| `CARDIOPULMONARY_COMORBIDITY` | Chronic **heart-disease** comorbidity, judged from diagnoses rather than a surgery. Restrictive practice keeps the trigger at 8.0 for heart-disease patients ("> 8 with heart disease, > 7 without"). | Heart-disease ICD-10 diagnosis prefix **I11**, **I13**, **I20-I25**, **I42**, or **I50**. Lung-disease diagnoses are **not** included. | Uses Hb threshold **8.0 g/dL**. |
 | `MTP` | Massive transfusion protocol pattern. This is not judged by the Hb threshold. | RBC-unit cluster pattern, or RBC + FFP + platelet co-ordering pattern in the MTP window. | Bypasses the Hb tier and returns `APPROPRIATE`. |
 | `HEME_MALIGNANCY_ACTIVE` | Active hematologic malignancy context where one numeric threshold is not enough. | Heme-malignancy ICD-10 signal plus recent chemotherapy medication plus neutropenia. | Hb < 7.0 is `APPROPRIATE`; otherwise no numeric threshold is applied and the row routes to `NEEDS_REVIEW` / LLM context review. |
 | `UNKNOWN` | The audit does not have enough procedure data to safely choose a threshold. | Procedure events are unavailable, not merely empty. | Hb < 7.0 is `APPROPRIATE`; otherwise the classifier does not silently assume 7.0 and routes to `NEEDS_REVIEW`. |
+
+> The older `ORTHO_CARDIAC` cohort (orthopedic surgery **plus** cardiac
+> history) is **deprecated**: an orthopedic operation now raises the floor to
+> 8.0 on its own, which subsumes the fused cohort. Its threshold is retained
+> only so audit-store rows written before the split still resolve.
 
 The key safety idea: **missing procedure data is different from no procedure
 found**. If procedure data is available and empty, the detector can fall
@@ -90,11 +96,12 @@ fixed order:
 | --- | --- | --- | --- |
 | 1 | `UNKNOWN` | Procedure-event join | If procedure events are unavailable (`None`), stop. Do not apply the default 7.0 threshold. |
 | 2 | `MTP` | Blood-order events | In the prior 1 hour: total RBC units ≥ 4, or RBC + FFP + platelets co-ordered. |
-| 3 | `ORTHO_CARDIAC` | **ICD-9-CM procedure** + **ICD-10 diagnosis** | Orthopedic OR procedure within 30 days before the order, using ICD-9-CM procedure prefixes **78**, **79**, or **81**, and cardiac-history ICD-10 prefix **I20-I25** or **I50**. Threshold 8.0. |
+| 3 | `ORTHO_SURGERY` | **ICD-9-CM procedure** | Orthopedic OR procedure within 30 days before the order, using ICD-9-CM procedure prefixes **78**, **79**, or **81**. Cardiac history is **not** required. Checked before `CARDIAC_SURGERY` so the higher floor wins when both are present. Threshold 8.0. |
 | 4 | `CARDIAC_SURGERY` | **ICD-9-CM procedure** | Cardiac / large-vessel OR procedure within 30 days before the order. ICD-9-CM procedure prefixes **36**, **38**, or **39**. Non-OR cardiac items **894** and **3796** are excluded. Threshold 7.5. |
 | 5 | `ESRD_EPO` | **ICD-10 diagnosis** + **MED** drug text | ESRD diagnosis **N18.5** or **N18.6** plus recent dialysis-context medication within 14 days. Medication keywords include `heparin`, `sevelamer`, `cinacalcet`. Threshold 8.0. |
 | 6 | `HEME_MALIGNANCY_ACTIVE` | **ICD-10 diagnosis** + **MED** drug text + **Lab ANC** | Heme malignancy ICD-10 prefix **C8** or **C9**, plus recent chemo medication within 30 days, plus ANC < 500 cells/uL. No numeric threshold; route to review. |
-| 7 | `DEFAULT` | Fall-through after all above checks | Procedure data is available, but no special cohort matched. Threshold 7.0. |
+| 7 | `CARDIOPULMONARY_COMORBIDITY` | **ICD-10 diagnosis** | Heart-disease diagnosis prefix **I11**, **I13**, **I20-I25**, **I42**, or **I50** (diagnosis-driven, no surgery required). Lung-disease diagnoses are excluded. Threshold 8.0. |
+| 8 | `DEFAULT` | Fall-through after all above checks | Procedure data is available, but no special cohort matched. Threshold 7.0. |
 
 ## Source-to-rule map
 
@@ -103,7 +110,8 @@ fixed order:
 - **ICD-9-CM procedure codes**: cardiac surgery, orthopedic surgery,
   peri-procedural timing, pre-op crossmatch timing. Procedure rows come from
   `IPTSUMOPRT`; OR/non-OR status and procedure names come from `ICD9CM`.
-- **ICD-10 diagnosis codes**: cardiac history, ESRD, heme malignancy.
+- **ICD-10 diagnosis codes**: cardiac history, ESRD, heme malignancy, and
+  heart-disease comorbidity (the `CARDIOPULMONARY_COMORBIDITY` 8.0 g/dL floor).
 - **MED**: dialysis-medication signals, chemotherapy-medication signals,
   and crystalloid volume in the 4 hours before the order.
 - **Blood-order history**: MTP detection from RBC-unit clustering or
@@ -164,12 +172,17 @@ never trigger a bypass on their own and never override the Hb tier.
 | Cohort | Hb threshold for `APPROPRIATE` | Notes |
 | --- | --- | --- |
 | Default | < 7.0 g/dL | Fall-through threshold. |
-| Cardiac surgery | < 7.5 g/dL | Recent cardiac surgery cohort. |
-| Orthopedic + cardiac history | < 8.0 g/dL | Orthopedic procedure plus cardiac-history evidence. |
+| Cardiac surgery | < 7.5 g/dL | Recent cardiac / large-vessel OR procedure. |
+| Orthopedic surgery | < 8.0 g/dL | Orthopedic OR procedure on its own; cardiac history not required. |
 | ESRD + dialysis-med signal | < 8.0 g/dL | ESRD diagnosis plus active dialysis-context medication. |
+| Heart-disease comorbidity | < 8.0 g/dL | Diagnosis-driven (`CARDIOPULMONARY_COMORBIDITY`): ICD-10 heart-disease code, no surgery required. |
 | MTP | None | Bypasses directly to `APPROPRIATE`. |
 | Active heme malignancy | None | Hb < 7.0 is `APPROPRIATE`; Hb ≥ 7.0 routes to `NEEDS_REVIEW`; LLM interprets context. |
 | Unknown | None | Hb < 7.0 is `APPROPRIATE`; Hb ≥ 7.0 routes to `NEEDS_REVIEW`; the classifier refuses to assume a threshold. |
+
+> Deprecated: `ORTHO_CARDIAC` (orthopedic surgery **plus** cardiac history) is
+> no longer emitted — `ORTHO_SURGERY` applies the same 8.0 floor to an
+> orthopedic operation alone.
 
 ## Why vitals are not standalone
 
