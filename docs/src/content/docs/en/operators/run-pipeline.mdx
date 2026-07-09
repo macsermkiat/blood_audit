@@ -85,8 +85,9 @@ export ANTHROPIC_API_KEY=sk-ant-...             # LLM review leg
 # 1. Ingest the HOSxP CSV bundle into DuckDB + Parquet under $BBA_DATA_DIR
 uv run bba ingest /path/to/hosxp_bundle/BDVST.csv
 
-# 2. Run the audit ingest leg (validate + materialize the bundle; idempotent per run_id)
-#    The analysis leg (classifier + LLM review + quote grounding) is wired into the CLI in Phase 1.5.
+# 2. Run the audit ingest leg (validate + normalize, write the run completion marker; idempotent per run_id)
+#    Marker-only today: DuckDB + Parquet payload writers are the intended next storage. The analysis leg
+#    (classifier + LLM review + quote grounding) is wired into the CLI in Phase 1.5.
 uv run bba audit --input /path/to/hosxp_bundle/BDVST.csv
 ```
 

@@ -41,7 +41,7 @@ Pick the path that matches your goal. Full operator walkthrough:
 
 | I want to… | Path | Entry point |
 |------------|------|-------------|
-| See the **full audit** (deterministic + live LLM) end-to-end on a small sample and get a review HTML | **A** | pilot scripts |
+| Run **deterministic + live LLM** together on a small sample (RBC end-to-end; platelet LLM off by default) and get a review HTML | **A** | pilot scripts |
 | **Ingest + validate** a full HOSxP export into the store (the supported CLI) | **B** | `bba` CLI |
 | **Rank ordering doctors / departments** by appropriateness | **C** | ranking script |
 
@@ -49,11 +49,11 @@ Pick the path that matches your goal. Full operator walkthrough:
 
 ### Path A — full audit on a sample (pilot scripts)
 
-The only way to run the whole audit — deterministic classifier **and** live LLM
-leg — end-to-end today. It samples ~10 cases from an encrypted bundle, walks
-them through four scripts, and produces a review HTML. A worked example of how
-the modules compose, not a supported entry point. (Details:
-[`scripts/pilot/README.md`](scripts/pilot/README.md).)
+The closest thing to an end-to-end audit today — it runs the deterministic
+classifier **and** the live LLM leg together on one sample. It samples ~10 cases
+from an encrypted bundle, walks them through four scripts, and produces a review
+HTML. A worked example of how the modules compose, not a supported entry point.
+(Details: [`scripts/pilot/README.md`](scripts/pilot/README.md).)
 
 The live LLM leg covers RBC orders. While `PLATELET_LLM_ENABLED` is off (the
 default), `run_llm_leg.py` skips present-count platelet orders — they get a
@@ -82,12 +82,14 @@ export BBA_DATA_DIR=/path/to/persistent/data   # Parquet + DuckDB + run-state
 # 1. Ingest the bundle into DuckDB + Parquet under $BBA_DATA_DIR
 uv run bba ingest /path/to/hosxp_bundle/BDVST.csv
 
-# 2. Run the audit ingest leg (validate + materialize the bundle; idempotent per run_id)
+# 2. Run the audit ingest leg (validate + normalize, write the run completion marker; idempotent per run_id)
 uv run bba audit --input /path/to/hosxp_bundle/BDVST.csv
 ```
 
-**What `bba audit` does today:** the **ingest leg** only — it validates and
-materializes the bundle into `$BBA_DATA_DIR/audit/<run_id>/`. The analysis leg
+**What `bba audit` does today:** the **ingest leg** only — it validates the
+schema, normalizes rows, and writes a run completion marker under
+`$BBA_DATA_DIR/audit/<run_id>/` (marker-only; DuckDB + Parquet payload writers
+are the intended next storage). The analysis leg
 (deterministic classifier → evidence bundle → de-id → prompt → LLM batch →
 quote grounding → audit-store write) runs through the pilot scripts (Path A)
 today; its CLI wiring lands in Phase 1.5. Re-running the same input + code

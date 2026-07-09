@@ -38,7 +38,7 @@ RBC reporting or the dashboard. A platelet order is admitted as its own
 
 Module: `src/bba/component_map/`.
 
-The intake gate routes every blood-bank order to one `ComponentFamily`:
+`component_map` provides a six-way `ComponentFamily` classifier —
 `RED_CELL`, `PLATELET`, `FFP`, `CRYO`, `WHOLE_BLOOD`, or `UNKNOWN`.
 
 - `classify_component(product_name)` is a keyword classifier over the
@@ -48,8 +48,14 @@ The intake gate routes every blood-bank order to one `ComponentFamily`:
 - `PLATELET_PRODUCTS` is an **8-code** allow-list:
   `LDPPC`, `LDPPCI`, `SDPFI`, `SDPF`, `SDPPI`, `LPPC`, `PC`, `LDPC`.
 - Only `RED_CELL` (Phase 1) and `PLATELET` (Phase 2) have auditors.
-  `FFP` / `CRYO` / `WHOLE_BLOOD` are recognised **so intake can EXCLUDE them
-  with a precise reason** — they are not guessed into a real family.
+
+The **live pilot intake** (`build_audit_orders`) does not yet route through the
+six-way classifier. It admits an order if it contains any RBC product
+(→ `red_cell`) or is entirely platelet products (→ `platelet`), and excludes
+everything else — FFP-only, cryo-only, whole-blood-only, unknown, or empty —
+under the single reason `not_rbc_product`. The `classify_component` NAME
+classifier and per-family exclusion reasons are wired in a later phase; today
+the allow-list membership checks carry the gate.
   `UNKNOWN` is the honest fallback for an unrecognised name.
 
 ### Why recognise families that have no auditor
