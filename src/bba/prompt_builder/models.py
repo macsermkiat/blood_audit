@@ -16,11 +16,13 @@ the PRD's deterministic-engine output:
   Tier-1 override from the fixed hard-indication vocabulary (ACTIVE_BLEEDING,
   HEMODYNAMIC_INSTABILITY, ACS, PERIOPERATIVE, MTP) that would justify
   ordering despite the deterministic ``POTENTIALLY_INAPPROPRIATE``
-  pre-classification. Under the clear-cut policy (#92) soft/prose grounds — a
-  specialist or neuro Hb target, symptomatic-anemia prose — do NOT clear the
-  order; absent a hard override the verdict is INAPPROPRIATE. This mirrors the
-  over-clear guardrail, which trusts only structured hard signals plus a
-  quantified or life-threatening bleed, never soft prose.
+  pre-classification. Under the clear-cut policy (#92) the prompt treats
+  soft/prose grounds — a specialist or neuro Hb target, symptomatic-anemia
+  prose — as non-clearing and instructs the model to return INAPPROPRIATE when
+  no hard override is documented. This entry describes the prompt contract
+  only; structural enforcement of that verdict — extending the over-clear
+  guardrail to the Hb>=10 path and adding the quantified/life-threatening
+  bleed exception — lands in #94 and is not yet wired.
 * ``PLATELET_REVIEW`` — platelet transfusion order, reviewed against the
   Chula DRAFT policy (AABB/ICTMG 2025). Has no Hb cohort threshold;
   ``cohort_threshold`` is None for this mode.
