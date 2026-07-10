@@ -1337,6 +1337,109 @@ class TestPublicSurface:
         assert list(names) == sorted(names)
 
 
+class TestRbcClearCutPromptSemantics:
+    """Both RBC templates must encode the clear-cut gray-zone policy (#92).
+
+    WHY: the over-clear guardrail (``replay.py``) matches an ``ACTIVE_BLEEDING``
+    indication code and asserts INAPPROPRIATE when the LLM clears a withheld
+    order with no hard indication. The prompt is the ONLY place the model
+    learns (a) the fixed indication-code vocabulary the guardrail keys on,
+    (b) that a bleed clears an order only when it is large (>300 mL) or
+    life-threatening, (c) that ESRD/EPO chronic anemia is too vague, and
+    (d) that NEEDS_REVIEW is no longer an allowed RBC verdict. If any of these
+    drifts out of the prompt the model and the guardrail silently disagree and
+    the audit stops being clear-cut, so each assertion fails when the clinical
+    policy changes — not when the code is merely refactored.
+    """
+
+    _RBC_MODES = ("HB_7_10_REVIEW", "HB_GT_10_OVERRIDE")
+    _VOCABULARY = (
+        "ACTIVE_BLEEDING",
+        "HEMODYNAMIC_INSTABILITY",
+        "ACS",
+        "PERIOPERATIVE",
+        "MTP",
+        "SUB_THRESHOLD_HB",
+    )
+
+    @pytest.mark.parametrize("mode", _RBC_MODES)
+    def test_indication_code_vocabulary_present(self, mode: str) -> None:
+        prompt = system_prompt_for(task_mode=mode, cohort_threshold=7.5)
+        for code in self._VOCABULARY:
+            assert code in prompt, (
+                f"{mode} prompt must name the fixed indication code {code!r} so "
+                "the over-clear guardrail can match an ACTIVE_BLEEDING family "
+                "reliably; without a shared vocabulary model and guardrail diverge"
+            )
+
+    @pytest.mark.parametrize("mode", _RBC_MODES)
+    def test_active_bleeding_requires_volume_or_life_threatening(
+        self, mode: str
+    ) -> None:
+        prompt = system_prompt_for(task_mode=mode, cohort_threshold=7.5)
+        assert "300 mL" in prompt, (
+            f"{mode} prompt must state the >300 mL bleed threshold that the "
+            "guardrail's OR-logic enforces, else a small bleed can over-clear"
+        )
+        assert "0.8" in prompt, (
+            f"{mode} prompt must state the >=0.8 confidence gate that mirrors "
+            "LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE; a drift here silently desyncs "
+            "the prompt from the guardrail so model confidence alone over-clears"
+        )
+        assert "life-threatening" in prompt.lower(), (
+            f"{mode} prompt must accept an explicit life-threatening/uncontrolled "
+            "bleed as the alternative qualifier (the guardrail's OR branch)"
+        )
+
+    @pytest.mark.parametrize("mode", _RBC_MODES)
+    def test_small_bleed_disqualifiers_enumerated(self, mode: str) -> None:
+        prompt = system_prompt_for(task_mode=mode, cohort_threshold=7.5).lower()
+        for phrase in ("ecchymosis", "gauze", "tinged", "bleeding precaution", "oozing"):
+            assert phrase in prompt, (
+                f"{mode} prompt must name {phrase!r} as a disqualifying minor "
+                "bleed; these were the weak grounds the model over-cleared on"
+            )
+
+    @pytest.mark.parametrize("mode", _RBC_MODES)
+    def test_esrd_epo_excluded_as_soft_context(self, mode: str) -> None:
+        prompt = system_prompt_for(task_mode=mode, cohort_threshold=7.5)
+        assert "ESRD" in prompt and "EPO" in prompt, (
+            f"{mode} prompt must list ESRD/EPO chronic anemia as too-vague soft "
+            "context; the esrd_epo cohort now routes to the LLM at the 7.0 floor"
+        )
+
+    @pytest.mark.parametrize("mode", _RBC_MODES)
+    def test_needs_review_removed_from_allowed_outputs(self, mode: str) -> None:
+        prompt = system_prompt_for(task_mode=mode, cohort_threshold=7.5)
+        assert "NEEDS_REVIEW" not in prompt, (
+            f"{mode} prompt must NOT offer NEEDS_REVIEW; the LLM leg must return "
+            "a clear-cut verdict — review is asserted structurally by guardrails"
+        )
+
+    @pytest.mark.parametrize("mode", _RBC_MODES)
+    def test_inappropriate_vs_insufficient_boundary_defined(self, mode: str) -> None:
+        prompt = system_prompt_for(task_mode=mode, cohort_threshold=7.5)
+        assert "INAPPROPRIATE" in prompt and "INSUFFICIENT_EVIDENCE" in prompt, (
+            f"{mode} prompt must define both terminal verdicts"
+        )
+        assert "silent" in prompt.lower(), (
+            f"{mode} prompt must reserve INSUFFICIENT_EVIDENCE for genuinely "
+            "silent notes, drawing the precise line against INAPPROPRIATE"
+        )
+
+    def test_at_floor_hb_is_not_sub_threshold(self) -> None:
+        # HB_7_10 only: an Hb exactly at the floor is AT the floor, not
+        # sub-threshold. The over-clear pile included Hb 7.0/7.1 mislabeled
+        # "sub-threshold" against a 7.0 floor — SUB_THRESHOLD_HB must be
+        # defined as strictly below the injected floor.
+        prompt = system_prompt_for(task_mode="HB_7_10_REVIEW", cohort_threshold=7.5)
+        assert "strictly below" in prompt.lower(), (
+            "HB_7_10 prompt must define SUB_THRESHOLD_HB as strictly below the "
+            "floor so an at-floor Hb is not mislabeled sub-threshold"
+        )
+        assert "7.5" in prompt, "the floor value must be injected verbatim"
+
+
 class TestRbcPromptHashGolden:
     """Pin the RBC prompt_hash to a known value (C1 review HIGH, Rule 9).
 
@@ -1348,8 +1451,18 @@ class TestRbcPromptHashGolden:
     serialization regression is the suspect — do not blindly re-pin it.
     """
 
+    # Re-pinned for #92 (clear-cut gray-zone rewrite): both RBC templates now
+    # establish the fixed indication-code vocabulary, the >300 mL / life-
+    # threatening bleeding rule, the ESRD/EPO soft-context exclusion, and drop
+    # NEEDS_REVIEW. The accompanying TestRbcClearCutPromptSemantics assertions
+    # bless this change deliberately — a bare hash re-pin without them would be
+    # blind. If this breaks WITHOUT a matching prompt edit, suspect a
+    # serialization regression, not a stale pin.
     RBC_HB_7_10_75_EMPTY_EVIDENCE = (
-        "612871a70db968da36ac9a86304d27fc84a213a45461d0c733e796617a12186b"
+        "6538cb401faf6a713871211a4012bb3202dce0ce6d73ae21c2d9b4caf7426bba"
+    )
+    RBC_HB_GT_10_75_EMPTY_EVIDENCE = (
+        "128e3b9292cfd6341255f804f99c7df7394cd464afaf0ac3d2ce33cab168e52e"
     )
 
     def test_hb_7_10_review_cohort_7_5_hash_is_pinned(self) -> None:
@@ -1363,6 +1476,21 @@ class TestRbcPromptHashGolden:
             )
         )
         assert result.prompt_hash == self.RBC_HB_7_10_75_EMPTY_EVIDENCE
+
+    def test_hb_gt_10_override_cohort_7_5_hash_is_pinned(self) -> None:
+        # The high-Hb override template is now dispatched for real (Hb>10 rows,
+        # #93), so its bytes land on persisted AuditRows and need their own
+        # reproducibility anchor alongside the gray-zone golden.
+        from bba.prompt_builder import PromptBuildRequest, build_prompt
+
+        result = build_prompt(
+            PromptBuildRequest(
+                task_mode="HB_GT_10_OVERRIDE",
+                cohort_threshold=7.5,
+                evidence_chunks=(),
+            )
+        )
+        assert result.prompt_hash == self.RBC_HB_GT_10_75_EMPTY_EVIDENCE
 
 
 class TestPlateletPromptWithholdPopulations:
