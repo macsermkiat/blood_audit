@@ -663,8 +663,8 @@ def test_platelet_submission_uses_platelet_prompt():
 
 
 def test_rbc_submission_unchanged_by_platelet_branch(tmp_path):
-    """C2c: the RBC submission path stays HB_7_10_REVIEW with a cohort threshold —
-    the platelet branch must not touch RBC request-building."""
+    """C2c: this fixture's Hb 8.0 (< 10) selects the gray-zone mode via
+    rbc_task_mode; the platelet branch must not touch RBC request-building."""
     from bba.cohort_detector import CohortAssignment, CohortLabel
     from bba.hb_lookup import HbLookupResult
     from bba.vitals_extractor import SourceProvenance, VitalSigns, VitalsResult
@@ -979,8 +979,8 @@ def test_platelet_resume_rebuilds_platelet_review_request():
 
 
 def test_rbc_resume_rebuild_unchanged():
-    """Fix 3: the RBC rebuild path is byte-identical — HB_7_10_REVIEW with a
-    numeric cohort_threshold. The platelet branch must not touch RBC rebuilds."""
+    """Fix 3: this fixture's Hb 8.0 (< 10) selects the gray-zone mode via
+    rbc_task_mode; the platelet branch must not touch RBC rebuilds."""
     from bba.cohort_detector import CohortAssignment, CohortLabel
     from bba.hb_lookup import HbLookupResult
     from bba.vitals_extractor import SourceProvenance, VitalSigns, VitalsResult

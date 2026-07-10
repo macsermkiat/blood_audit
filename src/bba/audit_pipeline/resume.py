@@ -44,6 +44,7 @@ from bba.audit_pipeline.models import (
     PipelineRowContext,
     ResumeReport,
 )
+from bba.audit_pipeline.pipeline import rbc_task_mode
 from bba.audit_pipeline.state_machine import is_terminal, transition
 from bba.audit_pipeline.store import BatchRunStore
 from bba.audit_store import AuditStore, LlmCall
@@ -314,8 +315,16 @@ def _rebuild_submission_requests(
       Without this branch a resumed platelet batch would be rebuilt as an RBC
       request (wrong prompt, wrong tool schema, wrong threshold).
 
-    * anything else → ``HB_7_10_REVIEW`` with the cohort threshold, unchanged
-      from the original RBC path.
+    * anything else → Hb-keyed selection: Hb >= 10.0 uses
+      ``HB_GT_10_OVERRIDE``; otherwise ``HB_7_10_REVIEW``, via
+      :func:`bba.audit_pipeline.pipeline.rbc_task_mode`, mirroring the live
+      submission path.
+
+    The byte-identity invariant holds only when the resuming process runs
+    the same code version that submitted the batch. Resuming an in-flight
+    batch across a prompt- or dispatch-changing upgrade would pair the old
+    responses with new request bytes; cross-version recovery uses a fresh
+    run (new ``run_id``/``code_version``) instead.
     """
     from bba.prompt_builder import PromptBuildRequest, TaskMode, build_prompt
 
@@ -339,8 +348,8 @@ def _rebuild_submission_requests(
                 )
             )
         else:
-            # RBC / default: mirrors the original rebuild path unchanged.
-            task_mode = "HB_7_10_REVIEW"
+            # RBC / default: mirrors live submission via the shared selector.
+            task_mode = rbc_task_mode(ctx.hb_result.value_g_dl)
             threshold = (
                 ctx.cohort_assignment.threshold
                 if ctx.cohort_assignment.threshold is not None
@@ -348,7 +357,7 @@ def _rebuild_submission_requests(
             )
             prompt = build_prompt(
                 PromptBuildRequest(
-                    task_mode="HB_7_10_REVIEW",
+                    task_mode=task_mode,
                     cohort_threshold=threshold,
                     evidence_chunks=ctx.evidence_chunks,
                     few_shot_examples=(),
