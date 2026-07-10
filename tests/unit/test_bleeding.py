@@ -248,6 +248,29 @@ class TestHasLifeThreateningMarker:
             is True
         )
 
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "active hemorrhage is not present",
+            "uncontrolled bleeding denied",
+            "hemorrhagic shock ruled out",
+            "active haemorrhage: absent",
+            "exsanguination no longer suspected",
+        ],
+    )
+    def test_post_marker_negations_do_not_flag(self, text: str) -> None:
+        # Codex PR #97 round 2: the emergency can be negated AFTER the marker
+        # in the same clause; a pre-marker-only screen would still exempt.
+        assert has_life_threatening_marker(text) is False
+
+    def test_post_marker_negation_does_not_leak_across_boundary(self) -> None:
+        # A negation in the NEXT clause is about something else; the marker
+        # itself stands.
+        assert (
+            has_life_threatening_marker("active hemorrhage ongoing; wound not infected")
+            is True
+        )
+
 
 class TestQualifiedBleedingExempt:
     """The exemption predicate: does a genuine major bleed keep the clear?

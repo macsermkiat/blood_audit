@@ -119,6 +119,23 @@ _MARKER_NEGATION_WINDOW_CHARS = 30
 # genuine marker in the next clause.
 _MARKER_CLAUSE_BOUNDARIES: tuple[str, ...] = (";", ".", ",", ":", "\n")
 
+# Trailing negators that void the marker AFTER it in the same clause
+# ("active hemorrhage is not present", "uncontrolled bleeding denied" —
+# Codex PR #97 round 2). The post-marker window keeps ":" inside the clause
+# ("hemorrhagic shock: absent" is one label:value statement) but stops at
+# ";.,\n" so a negation in the next clause cannot void a standing marker.
+_MARKER_POST_NEGATION_TOKENS: tuple[str, ...] = (
+    "not ",
+    "no longer",
+    "denie",  # denied / denies
+    "resolved",
+    "ruled out",
+    "absent",
+    "negative",
+    "ไม่",  # Thai negator ("... has stopped / is absent")
+)
+_MARKER_POST_CLAUSE_BOUNDARIES: tuple[str, ...] = (";", ".", ",", "\n")
+
 
 def parse_max_volume_ml(text: str) -> float | None:
     """Return the largest documented blood-loss volume in ``text`` as mL.
@@ -160,24 +177,38 @@ def has_life_threatening_marker(text: str) -> bool:
     for marker in _LIFE_THREATENING_MARKERS:
         start = 0
         while (idx := lowered.find(marker, start)) != -1:
-            if not _marker_occurrence_negated(lowered, idx):
+            end = idx + len(marker)
+            if not _marker_occurrence_negated(lowered, idx, end):
                 return True
-            start = idx + len(marker)
+            start = end
     return False
 
 
-def _marker_occurrence_negated(lowered: str, marker_index: int) -> bool:
-    """True iff a negator precedes ``marker_index`` within the same clause."""
-    window = lowered[
-        max(0, marker_index - _MARKER_NEGATION_WINDOW_CHARS) : marker_index
-    ]
+def _marker_occurrence_negated(lowered: str, start: int, end: int) -> bool:
+    """True iff a negator voids the ``lowered[start:end]`` marker occurrence —
+    either preceding it or trailing it within the same clause."""
+    pre = lowered[max(0, start - _MARKER_NEGATION_WINDOW_CHARS) : start]
     cut = max(
-        (window.rfind(boundary) for boundary in _MARKER_CLAUSE_BOUNDARIES),
+        (pre.rfind(boundary) for boundary in _MARKER_CLAUSE_BOUNDARIES),
         default=-1,
     )
     if cut != -1:
-        window = window[cut + 1 :]
-    return any(token in window for token in _MARKER_NEGATION_TOKENS)
+        pre = pre[cut + 1 :]
+    if any(token in pre for token in _MARKER_NEGATION_TOKENS):
+        return True
+
+    post = lowered[end : end + _MARKER_NEGATION_WINDOW_CHARS]
+    cut = min(
+        (
+            found
+            for boundary in _MARKER_POST_CLAUSE_BOUNDARIES
+            if (found := post.find(boundary)) != -1
+        ),
+        default=-1,
+    )
+    if cut != -1:
+        post = post[:cut]
+    return any(token in post for token in _MARKER_POST_NEGATION_TOKENS)
 
 
 def qualified_bleeding_exempt(indications: Iterable[Mapping[str, object]]) -> bool:
