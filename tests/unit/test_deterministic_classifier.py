@@ -459,15 +459,9 @@ class TestBypassPathways:
         assert result.bypass_reason == BypassReason.NONE
         assert result.rationale == "preop_defer_llm"
 
-    def test_pre_op_sub_cohort_threshold_hb_still_clears(self) -> None:
-        """A pre-op order whose Hb is below an elevated cohort floor is
-        indicated by the Hb itself and MUST clear deterministically — the
-        pre-op deferral must not preempt the cohort-threshold clear (Codex
-        P2). Otherwise the LLM re-clears the sub-threshold Hb and the
-        over-clear guardrail (which exempts only Hb < 7.0) floors it back,
-        trapping a genuinely-indicated order in review. Hb 7.5 in an ESRD
-        cohort (floor 8.0) is sub-threshold, so it clears even with an
-        upcoming procedure in-window."""
+    def test_pre_op_esrd_gray_zone_defers_to_llm(self) -> None:
+        """Hb 7.5 is at/above ESRD's 7.0 floor, so an upcoming procedure
+        remains LLM-bound rather than earning a deterministic clear."""
         result = classify(
             _inputs(
                 hb=_hb(7.5),
@@ -475,8 +469,24 @@ class TestBypassPathways:
                 upcoming_procedure_hours=24.0,
             )
         )
+        assert result.classification == "NEEDS_REVIEW"
+        assert result.bypass_reason == BypassReason.NONE
+        assert result.cohort_threshold == 7.0
+        assert result.rationale == "preop_defer_llm"
+
+    def test_pre_op_esrd_below_7_still_clears_universally(self) -> None:
+        """ESRD does not change the universal Hb < 7.0 clear."""
+        result = classify(
+            _inputs(
+                hb=_hb(6.9),
+                cohort=_cohort(CohortLabel.ESRD_EPO, ESRD_EPO_THRESHOLD),
+                upcoming_procedure_hours=24.0,
+            )
+        )
         assert result.classification == "APPROPRIATE"
-        assert result.rationale == "hb_lt_threshold"
+        assert result.bypass_reason == BypassReason.NONE
+        assert result.cohort_threshold == 7.0
+        assert result.rationale == "hb_lt_7_universal"
 
     def test_pre_op_at_or_above_cohort_threshold_still_defers(self) -> None:
         """A pre-op order at/above the cohort floor (gray zone) has no
@@ -1032,7 +1042,7 @@ class TestHemodilutionFlag:
         result = classify(
             _inputs(
                 hb=_hb(7.5),
-                cohort=_cohort(CohortLabel.ESRD_EPO, ESRD_EPO_THRESHOLD),
+                cohort=_cohort(CohortLabel.ORTHO_SURGERY, ORTHO_SURGERY_THRESHOLD),
                 crystalloid_liters_prior_4h=2.5,
             )
         )
@@ -1044,12 +1054,27 @@ class TestHemodilutionFlag:
         result = classify(
             _inputs(
                 hb=_hb(7.5),
-                cohort=_cohort(CohortLabel.ESRD_EPO, ESRD_EPO_THRESHOLD),
+                cohort=_cohort(CohortLabel.ORTHO_SURGERY, ORTHO_SURGERY_THRESHOLD),
                 crystalloid_liters_prior_4h=HEMODILUTION_CRYSTALLOID_LITERS,
             )
         )
         assert result.bypass_reason == BypassReason.HEMODILUTION_FLAGGED
         assert result.classification == "NEEDS_REVIEW"
+
+    def test_esrd_gray_zone_does_not_trigger_hemodilution(self) -> None:
+        """Hb 7.5 is above ESRD's 7.0 floor, so crystalloid does not turn
+        the gray-zone row into a cohort-threshold hemodilution bypass."""
+        result = classify(
+            _inputs(
+                hb=_hb(7.5),
+                cohort=_cohort(CohortLabel.ESRD_EPO, ESRD_EPO_THRESHOLD),
+                crystalloid_liters_prior_4h=2.5,
+            )
+        )
+        assert result.classification == "NEEDS_REVIEW"
+        assert result.bypass_reason == BypassReason.NONE
+        assert result.cohort_threshold == 7.0
+        assert result.rationale == "hb_7_to_10"
 
     def test_hb_below_7_bypasses_hemodilution_review(self) -> None:
         """Hb < 7.0 is globally APPROPRIATE before the hemodilution gate."""
@@ -1127,7 +1152,7 @@ class TestBypassReasonDistinct:
         hemo = classify(
             _inputs(
                 hb=_hb(7.5),
-                cohort=_cohort(CohortLabel.ESRD_EPO, ESRD_EPO_THRESHOLD),
+                cohort=_cohort(CohortLabel.ORTHO_SURGERY, ORTHO_SURGERY_THRESHOLD),
                 crystalloid_liters_prior_4h=2.5,
             )
         )
@@ -1242,9 +1267,9 @@ class TestSingleLowHbReviewFlag:
     routes to human review.
     """
 
-    def test_isolated_low_hb_routes_to_needs_review(self) -> None:
-        """ESRD/ortho-cardiac patient with Hb 7.5 and no 24 h trend
-        (sub-threshold for the 8.0 cohort) → NEEDS_REVIEW, not APPROPRIATE."""
+    def test_esrd_gray_zone_is_not_an_isolated_low_hb_clear(self) -> None:
+        """ESRD Hb 7.5 is gray-zone at the 7.0 floor regardless of the
+        isolated-low-Hb flag, so it remains LLM-bound."""
         result = classify(
             _inputs(
                 hb=_hb(7.5, needs_review_single_low_hb=True),
@@ -1253,6 +1278,22 @@ class TestSingleLowHbReviewFlag:
         )
         assert result.classification == "NEEDS_REVIEW"
         assert result.bypass_reason == BypassReason.NONE
+        assert result.cohort_threshold == 7.0
+        assert result.rationale == "hb_7_to_10"
+
+    def test_isolated_low_hb_routes_to_needs_review(self) -> None:
+        """An isolated Hb 7.5 below the orthopedic 8.0 floor routes to
+        review rather than clearing without a confirming trend."""
+        result = classify(
+            _inputs(
+                hb=_hb(7.5, needs_review_single_low_hb=True),
+                cohort=_cohort(CohortLabel.ORTHO_SURGERY, ORTHO_SURGERY_THRESHOLD),
+            )
+        )
+        assert result.classification == "NEEDS_REVIEW"
+        assert result.bypass_reason == BypassReason.NONE
+        assert result.cohort_threshold == 8.0
+        assert result.rationale == "single_low_hb_no_trend"
 
     def test_isolated_low_hb_below_7_routes_to_appropriate(self) -> None:
         """Default-cohort case: Hb 6.5 with the flag set is still

@@ -415,9 +415,9 @@ class TestSystemPromptCohortInjection:
 
     def test_allowed_cohort_threshold_set_is_exactly_three_values(self) -> None:
         # Locks the contract: PRD §"Cohort detection is deterministic" =
-        # three cohorts only (default 7.0, cardiac 7.5, ortho+cardiac /
-        # ESRD 8.0). Adding or removing a value is a Phase-2 contract
-        # change visible here.
+        # three threshold values only (default/ESRD 7.0, cardiac surgery
+        # 7.5, ortho/cardiopulmonary 8.0). Adding or removing a value is a
+        # Phase-2 contract change visible here.
         assert ALLOWED_COHORT_THRESHOLDS == frozenset({7.0, 7.5, 8.0})
 
 

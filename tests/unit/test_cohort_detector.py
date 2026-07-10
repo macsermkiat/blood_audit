@@ -254,7 +254,7 @@ class TestThresholdNumericContract:
             (CohortLabel.CARDIAC_SURGERY, 7.5),
             (CohortLabel.ORTHO_SURGERY, 8.0),
             (CohortLabel.ORTHO_CARDIAC, 8.0),
-            (CohortLabel.ESRD_EPO, 8.0),
+            (CohortLabel.ESRD_EPO, 7.0),
             (CohortLabel.CARDIOPULMONARY_COMORBIDITY, 8.0),
             (CohortLabel.DEFAULT, 7.0),
         ],
@@ -513,9 +513,9 @@ class TestCohortOrthoSurgery:
 
 
 class TestCohortEsrdEpo:
-    """ESRD ICD-10 + dialysis-context med → 8.0 g/dL."""
+    """ESRD ICD-10 + dialysis-context med → restrictive 7.0 g/dL."""
 
-    def test_n185_plus_sevelamer_yields_80(self) -> None:
+    def test_n185_plus_sevelamer_yields_70(self) -> None:
         result = assign_cohort(
             _inputs(
                 diagnosis_codes=("N18.5",),
@@ -523,9 +523,9 @@ class TestCohortEsrdEpo:
             )
         )
         assert result.label == CohortLabel.ESRD_EPO
-        assert result.threshold == 8.0
+        assert result.threshold == 7.0
 
-    def test_n186_plus_cinacalcet_yields_80(self) -> None:
+    def test_n186_plus_cinacalcet_yields_70(self) -> None:
         result = assign_cohort(
             _inputs(
                 diagnosis_codes=("N18.6",),
@@ -533,8 +533,9 @@ class TestCohortEsrdEpo:
             )
         )
         assert result.label == CohortLabel.ESRD_EPO
+        assert result.threshold == 7.0
 
-    def test_n186_plus_heparin_yields_80(self) -> None:
+    def test_n186_plus_heparin_yields_70(self) -> None:
         # heparin-for-HD: scoped by the co-required ESRD diagnosis.
         result = assign_cohort(
             _inputs(
@@ -543,6 +544,7 @@ class TestCohortEsrdEpo:
             )
         )
         assert result.label == CohortLabel.ESRD_EPO
+        assert result.threshold == 7.0
 
 
 class TestEsrdRequiresBothSignals:
@@ -759,7 +761,7 @@ class TestCohortHemeMalignancy:
 
 
 class TestCohortCardiopulmonaryComorbidity:
-    """ICD-10 heart-disease comorbidity (no surgery/ESRD/heme) → 8.0 g/dL floor.
+    """Heart-disease comorbidity (no higher-priority surgery/heme) → 8.0 floor.
 
     Restrictive-transfusion practice raises the trigger to 8.0 for patients
     with a heart-disease comorbidity (vs 7.0 default). This is a *comorbidity*
@@ -812,16 +814,17 @@ class TestCohortCardiopulmonaryComorbidity:
         )
         assert result.label == CohortLabel.CARDIAC_SURGERY
 
-    def test_esrd_takes_precedence(self) -> None:
-        # ESRD and cardiopulmonary now both carry 8.0; ESRD is checked first
-        # (more specific — dx + dialysis med), so it wins on the tie.
+    def test_cardiopulmonary_takes_precedence_over_esrd(self) -> None:
+        # ESRD is intentionally ranked below heart-disease comorbidity, so
+        # the combined case keeps the cardiopulmonary cohort's 8.0 floor.
         result = assign_cohort(
             _inputs(
                 diagnosis_codes=("N18.6", "I25.10"),
                 med_events=(_med("sevelamer"),),
             )
         )
-        assert result.label == CohortLabel.ESRD_EPO
+        assert result.label == CohortLabel.CARDIOPULMONARY_COMORBIDITY
+        assert result.threshold == 8.0
 
     def test_missing_procedure_data_still_yields_unknown(self) -> None:
         # A diagnosis-based cohort must NOT mask the UNKNOWN invariant:
@@ -955,6 +958,7 @@ class TestCohortPrecedence:
             )
         )
         assert result.label == CohortLabel.ESRD_EPO
+        assert result.threshold == 7.0
 
 
 # =============================================================================
@@ -1288,7 +1292,7 @@ class TestAllowListSeeds:
         assert CARDIAC_SURGERY_THRESHOLD == 7.5
         assert ORTHO_SURGERY_THRESHOLD == 8.0
         assert ORTHO_CARDIAC_THRESHOLD == 8.0
-        assert ESRD_EPO_THRESHOLD == 8.0
+        assert ESRD_EPO_THRESHOLD == 7.0
 
 
 # =============================================================================

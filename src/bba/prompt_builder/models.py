@@ -65,10 +65,10 @@ ALLOWED_COHORT_THRESHOLDS: frozenset[float] = frozenset({7.0, 7.5, 8.0})
 """The three deterministic cohort thresholds the LLM receives as a hard input.
 
 PRD §"Cohort detection is deterministic, not LLM-judged": ``7.0`` is the
-default, ``7.5`` is the cardiac-surgery cohort, ``8.0`` is the
-ortho+cardiac / ESRD-on-EPO cohort. Free-form floats here would let a
-caller silently push a non-clinical threshold past the assembly layer
-into the LLM prompt.
+default and ESRD-on-EPO floor, ``7.5`` is the cardiac-surgery cohort, and
+``8.0`` is the orthopedic-surgery / cardiopulmonary-comorbidity floor.
+Free-form floats here would let a caller silently push a non-clinical
+threshold past the assembly layer into the LLM prompt.
 """
 
 
