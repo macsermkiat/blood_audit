@@ -263,6 +263,26 @@ class TestHasLifeThreateningMarker:
         # in the same clause; a pre-marker-only screen would still exempt.
         assert has_life_threatening_marker(text) is False
 
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "uncontrolled pain despite morphine",
+            "uncontrolled agitation, RASS +3",
+            "uncontrolled DM on insulin",
+            "life-threatening arrhythmia",
+            "life threatening sepsis",
+        ],
+    )
+    def test_non_bleeding_uncontrolled_context_does_not_flag(self, text: str) -> None:
+        # Codex PR #97 round 4: "uncontrolled" / "life-threatening" are
+        # generic clinical intensifiers. Without bleeding context in the same
+        # clause, a mislabeled ACTIVE_BLEEDING quote about pain/agitation/DM
+        # must not exempt an over-clear.
+        assert has_life_threatening_marker(text) is False
+
+    def test_bleeding_context_before_generic_marker_flags(self) -> None:
+        assert has_life_threatening_marker("bleeding uncontrolled despite packing")
+
     def test_post_marker_negation_does_not_leak_across_boundary(self) -> None:
         # A negation in the NEXT clause is about something else; the marker
         # itself stands.

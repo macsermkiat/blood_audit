@@ -152,6 +152,24 @@ _MARKER_POST_NEGATION_TOKENS: tuple[str, ...] = (
 )
 _MARKER_POST_CLAUSE_BOUNDARIES: tuple[str, ...] = (";", ".", ",", "\n")
 
+# Markers that are generic clinical intensifiers rather than bleed terms —
+# "uncontrolled pain", "life-threatening arrhythmia" must not exempt an
+# over-clear (Codex PR #97 round 4). These require a bleeding term in the
+# same clause; the remaining markers name the bleed inherently
+# (hemorrhagic shock, active hemorrhage, exsanguinat-, the Thai phrases).
+_CONTEXT_REQUIRED_MARKERS: frozenset[str] = frozenset(
+    {"life-threatening", "life threatening", "uncontrolled"}
+)
+_BLEEDING_CONTEXT_TERMS: tuple[str, ...] = (
+    "bleed",  # bleed / bleeding / bleeds
+    "hemorrhag",  # hemorrhage / hemorrhagic
+    "haemorrhag",
+    "blood loss",
+    "exsanguinat",
+    "เลือด",  # Thai blood/bleeding compounds
+)
+_MARKER_CONTEXT_WINDOW_CHARS = 40
+
 
 def parse_max_volume_ml(text: str) -> float | None:
     """Return the largest documented blood-loss volume in ``text`` as mL.
@@ -186,18 +204,48 @@ def has_life_threatening_marker(text: str) -> bool:
 
     Each marker occurrence is screened for a preceding negator within a
     clause-bounded window ("no active hemorrhage" documents the ABSENCE of
-    the emergency, Codex PR #97 P2). The screen errs fail-closed: a false
-    negation hit only withholds the exemption, never auto-clears.
+    the emergency, Codex PR #97 P2). Generic intensifier markers
+    ("uncontrolled", "life-threatening") additionally require a bleeding
+    term in the same clause — "uncontrolled pain" is not a bleed (round 4).
+    Both screens err fail-closed: a false hit only withholds the exemption,
+    never auto-clears.
     """
     lowered = text.lower()
     for marker in _LIFE_THREATENING_MARKERS:
         start = 0
         while (idx := lowered.find(marker, start)) != -1:
             end = idx + len(marker)
-            if not _marker_occurrence_negated(lowered, idx, end):
+            if not _marker_occurrence_negated(lowered, idx, end) and (
+                marker not in _CONTEXT_REQUIRED_MARKERS
+                or _bleeding_context_near(lowered, idx, end)
+            ):
                 return True
             start = end
     return False
+
+
+def _bleeding_context_near(lowered: str, start: int, end: int) -> bool:
+    """True iff a bleeding term appears near ``lowered[start:end]`` within
+    the same clause (either side)."""
+    pre = lowered[max(0, start - _MARKER_CONTEXT_WINDOW_CHARS) : start]
+    cut = max(
+        (pre.rfind(boundary) for boundary in _MARKER_CLAUSE_BOUNDARIES),
+        default=-1,
+    )
+    if cut != -1:
+        pre = pre[cut + 1 :]
+    post = lowered[end : end + _MARKER_CONTEXT_WINDOW_CHARS]
+    cut = min(
+        (
+            found
+            for boundary in _MARKER_POST_CLAUSE_BOUNDARIES
+            if (found := post.find(boundary)) != -1
+        ),
+        default=-1,
+    )
+    if cut != -1:
+        post = post[:cut]
+    return any(term in pre or term in post for term in _BLEEDING_CONTEXT_TERMS)
 
 
 def _marker_occurrence_negated(lowered: str, start: int, end: int) -> bool:
