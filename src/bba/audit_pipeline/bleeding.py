@@ -125,9 +125,20 @@ _MARKER_NEGATION_TOKENS: tuple[str, ...] = (
     "denies ",
     "denied ",
     "negative for ",
+    # Pre-marker exclusion phrases (Codex PR #97 round 6): "ruled out
+    # active hemorrhage" and history/risk-of prose are documented
+    # non-events, not active bleeds.
+    "ruled out",
+    "rule out",
+    "r/o ",
+    "absence of",
+    "history of",
+    "hx of",
+    "risk of",
     "ไม่มี",  # "there is no ..."
     "ไม่พบ",  # "... not found"
     "ปฏิเสธ",  # "denies ..."
+    "ประวัติ",  # "history of ..."
 )
 _MARKER_NEGATION_WINDOW_CHARS = 30
 # A clause boundary cuts the lookback so an unrelated negation earlier in

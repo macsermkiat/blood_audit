@@ -61,9 +61,24 @@ def main() -> None:
             code_version=run_llm_leg.CODE_VERSION,
         )
     )
+
+    def attempt_order(call: LlmCall) -> tuple[int, object]:
+        # read_llm_calls returns files sorted by hashed parquet name, not
+        # attempt order; apply_batch_results treats sequence position as the
+        # attempt index (last = winner). call_id embeds the original index
+        # (replay._build_llm_call: "call-<audit_id>-<attempt_index>-<fp>");
+        # fall back to the request timestamp for foreign id formats.
+        parts = call.call_id.rsplit("-", 2)
+        try:
+            return (int(parts[1]), call.request_timestamp)
+        except (IndexError, ValueError):
+            return (0, call.request_timestamp)
+
     calls_by_audit_id: dict[str, list[LlmCall]] = {}
     for call in store.read_llm_calls(run_id=source_run_id):
         calls_by_audit_id.setdefault(call.audit_id, []).append(call)
+    for cached in calls_by_audit_id.values():
+        cached.sort(key=attempt_order)
     if not calls_by_audit_id:
         sys.exit(
             f"no cached llm_calls found under BBA_PILOT_SOURCE_RUN_ID={source_run_id!r}"

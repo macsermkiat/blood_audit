@@ -229,6 +229,11 @@ class TestHasLifeThreateningMarker:
             "not exsanguinating",
             "ไม่มีเลือดออกไม่หยุด",  # "no unstoppable bleeding"
             "ไม่พบ hemorrhagic shock",  # "hemorrhagic shock not found"
+            "ruled out active hemorrhage",  # PR #97 round 6: pre-marker
+            "r/o active haemorrhage",  # exclusion phrases
+            "absence of active hemorrhage",
+            "history of active hemorrhage",
+            "risk of uncontrolled bleeding",
         ],
     )
     def test_negated_markers_do_not_flag(self, text: str) -> None:
