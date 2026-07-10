@@ -168,12 +168,13 @@ _REVIEW_REASON_LABELS: dict[str, str] = {
     ),
     "llm_overclear_suspect": (
         "Over-clear floored to NEEDS_REVIEW: historical rows from before the "
-        "assert guardrail, plus three live paths — the tool payload is "
-        "shape-drifted (missing or garbled indications/negative_evidence), "
-        "or a grounded high-confidence ACS citation (no structured "
-        "extractor exists), or a grounded structurally-true sub-floor Hb "
-        "the deterministic leg withheld as unreliable — each makes "
-        "asserting unsafe"
+        "assert guardrail, plus the live paths where asserting is unsafe — "
+        "a shape-drifted tool payload (missing or garbled "
+        "indications/negative_evidence), or a grounded high-confidence "
+        "citation of a hard indication the structured system cannot "
+        "dismiss (ACS; documented shock/pressors the vitals snapshot "
+        "cannot see; a structurally-true sub-floor Hb withheld as "
+        "unreliable)"
     ),
     "periop_signal_contradiction": (
         "Peri-operative hard signal contradicts the LLM verdict — kept "
@@ -1845,7 +1846,7 @@ LLM: Anthropic Batch classification on structured evidence only.
 <dt>model_verdict</dt><dd>No guardrail action — the final classification is the model's own verdict.</dd>
 <dt>llm_overclear_asserted_inappropriate</dt><dd>Guardrail-asserted INAPPROPRIATE: the LLM cleared a withheld gray-zone/high-Hb order with no genuine hard indication, so the over-clear guardrail asserted the final verdict (not the model's own label); the human-review flag is cleared.</dd>
 <dt>llm_native_review_asserted_inappropriate</dt><dd>Guardrail-converted INAPPROPRIATE: the model itself returned NEEDS_REVIEW with reasoning but no hard signal and no qualified bleed, so the verdict was converted to INAPPROPRIATE; the human-review flag is cleared.</dd>
-<dt>llm_overclear_suspect</dt><dd>Over-clear floored to NEEDS_REVIEW: historical rows from before the assert guardrail, plus three live paths — the tool payload is shape-drifted (missing or garbled indications/negative_evidence), or a grounded high-confidence ACS citation (no structured extractor exists), or a grounded structurally-true sub-floor Hb the deterministic leg withheld as unreliable — each makes asserting unsafe.</dd>
+<dt>llm_overclear_suspect</dt><dd>Over-clear floored to NEEDS_REVIEW: historical rows from before the assert guardrail, plus the live paths where asserting is unsafe — a shape-drifted tool payload (missing or garbled indications/negative_evidence), or a grounded high-confidence citation of a hard indication the structured system cannot dismiss (ACS; documented shock/pressors the vitals snapshot cannot see; a structurally-true sub-floor Hb withheld as unreliable).</dd>
 <dt>periop_signal_contradiction</dt><dd>Peri-operative hard signal contradicts the LLM verdict — kept NEEDS_REVIEW for a human (the intended residual).</dd>
 <dt>hallucination_suspect</dt><dd>Quote verifier rejected every attempt — the cited quotes did not ground in the evidence bundle.</dd>
 <dt>empty_reasoning</dt><dd>Final verdict carried empty reasoning — floored to NEEDS_REVIEW (a verdict with no rationale is never asserted).</dd>

@@ -2103,6 +2103,111 @@ class TestLlmOverclearGuardrail:
         assert row.review_reason is None
         assert row.needs_human_review is True
 
+    def test_grounded_hemodynamic_overclear_floors_to_review(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #97 round 5: the structured extractor sees one vitals
+        # snapshot (SBP < 90 / HR > 120); the prompt's HEMODYNAMIC_INSTABILITY
+        # HARD definition also covers documented shock / pressor support the
+        # extractor can never see. A grounded, high-confidence citation of
+        # that prose floors to a human instead of being asserted against.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="NIBP 79/54 (MAP 63) mmHg, on Levophed 17 ml/hr",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                }
+            ],
+            reasoning_en="documented hypotension on vasopressor support",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+        assert row.needs_human_review is True
+
+    def test_low_confidence_hemodynamic_still_asserts(self, tmp_path: object) -> None:
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-lowconf",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="NIBP 79/54 (MAP 63) mmHg, on Levophed 17 ml/hr",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.5,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_ungrounded_hemodynamic_quote_still_asserts(self, tmp_path: object) -> None:
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-ungrounded",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="Routine post-op note, patient stable overnight",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_native_hedge_with_grounded_hemodynamic_stays_review(
+        self, tmp_path: object
+    ) -> None:
+        ctx = _row_context(
+            audit_id="audit-native-review-hemo",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="NIBP 79/54 (MAP 63) mmHg, on Levophed 17 ml/hr",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="NEEDS_REVIEW",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                }
+            ],
+            reasoning_en="pressor-dependent hypotension, deferring to a human",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason is None
+        assert row.needs_human_review is True
+
     def test_qualified_bleed_beats_acs_floor(self, tmp_path: object) -> None:
         # When a grounded qualified major bleed co-occurs with a grounded ACS
         # citation, the committee-approved bleeding exemption wins and the

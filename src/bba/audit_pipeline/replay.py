@@ -199,18 +199,19 @@ def periop_contradiction(
 LLM_OVERCLEAR_REVIEW_REASON = "llm_overclear_suspect"
 """Review-reason slug for an over-clear that could not be safely asserted.
 
-Pre-#94 every over-clear floor stamped this. Post-#94 it survives on three
-narrow paths: (1) an over-clear whose tool payload is missing a
+Pre-#94 every over-clear floor stamped this. Post-#94 it survives on two
+kinds of narrow paths: (1) an over-clear whose tool payload is missing a
 schema-required list field (:func:`_rbc_payload_well_formed`) — drift may
 have dropped cited evidence, so the row floors to human review instead of
 asserting ``INAPPROPRIATE`` on evidence-absence we cannot distinguish from
-loss; (2) an over-clear citing a grounded, high-confidence ACS indication
-(:func:`_grounded_acs_indication`) — a prompt-defined hard code the
-structured system cannot verify; (3) an over-clear citing a grounded,
-high-confidence, structurally TRUE sub-floor Hb
-(:func:`_grounded_true_subthreshold_indication`) — the deterministic leg
-withheld the value as unreliable, so neither asserting nor auto-clearing is
-safe. Historical pre-#94 rows also carry this value.
+loss; (2) an over-clear citing a grounded, high-confidence, prompt-defined
+hard indication the structured system cannot dismiss — ACS (no extractor
+exists), HEMODYNAMIC_INSTABILITY prose the vitals snapshot cannot see
+(documented shock / pressors), or a structurally TRUE sub-floor Hb the
+deterministic leg withheld as unreliable
+(:func:`_cited_at_prose_trust` / :func:`_grounded_true_subthreshold_indication`).
+Neither asserting nor auto-clearing is safe on those. Historical pre-#94
+rows also carry this value.
 """
 
 LLM_OVERCLEAR_ASSERT_REASON = "llm_overclear_asserted_inappropriate"
@@ -414,34 +415,36 @@ def _grounded_indications(
     return tuple(grounded)
 
 
-# The prompt's fixed HARD indication code for acute coronary syndrome /
-# active myocardial ischemia (prompt_builder._RBC_INDICATION_VOCABULARY).
-_ACS_HARD_CODE = "ACS"
+# Prompt-defined HARD codes the structured system cannot (fully) verify
+# (prompt_builder._RBC_INDICATION_VOCABULARY):
+#   * ACS — no structured extractor exists at all (Codex PR #97 P1).
+#   * HEMODYNAMIC_INSTABILITY — the structured extractor sees one vitals
+#     snapshot (SBP < 90 / HR > 120); the prompt's definition also covers
+#     documented shock / pressor support that only lives in prose (round 5).
+#     When the structured signal DID fire, llm_overclear_suspect never
+#     triggers and the clear stands — this floor covers the coverage gap.
+_ACS_HARD_CODES: frozenset[str] = frozenset({"ACS"})
+_HEMODYNAMIC_HARD_CODES: frozenset[str] = frozenset({"HEMODYNAMIC_INSTABILITY"})
 
 
-def _grounded_acs_indication(
+def _cited_at_prose_trust(
     grounded_indications: tuple[dict[str, object], ...],
+    codes: frozenset[str],
 ) -> bool:
-    """True iff a grounded indication cites the ACS hard code at or above the
+    """True iff a grounded indication cites one of ``codes`` at or above the
     shared prose-trust confidence bar.
 
-    WHY (Codex PR #97 P1): ACS is the one code in the prompt's HARD
-    vocabulary with neither a structured extractor
-    (:func:`_has_structured_hard_signal` covers low Hb / MTP / peri-op /
-    hemodynamic instability) nor a prose exemption path (qualified bleeding
-    covers ACTIVE_BLEEDING only). Without this check the guardrail would
-    assert ``INAPPROPRIATE`` against a prompt-compliant, grounded ACS clear —
-    an unreviewed committee verdict contradicting the prompt's own contract.
-    The caller floors such rows to ``NEEDS_REVIEW`` instead; it never
-    auto-clears them, because extending prose auto-clear trust beyond
-    qualified bleeding is a committee decision (spec #89 accepted bleeding
-    only). Confidence is read defensively, same rules as
-    :func:`bba.audit_pipeline.bleeding.qualified_bleeding_exempt`:
+    WHY: a prompt-defined HARD code the structured system cannot dismiss
+    must not be asserted against — the caller floors the row to
+    ``NEEDS_REVIEW`` instead. It never auto-clears, because extending prose
+    auto-clear trust beyond qualified bleeding is a committee decision
+    (spec #89 accepted bleeding only). Confidence is read defensively, same
+    rules as :func:`bba.audit_pipeline.bleeding.qualified_bleeding_exempt`:
     non-numeric, bool, NaN, or out-of-[0,1] never counts.
     """
     for indication in grounded_indications:
         code = indication.get("code")
-        if not isinstance(code, str) or code.strip().upper() != _ACS_HARD_CODE:
+        if not isinstance(code, str) or code.strip().upper() not in codes:
             continue
         confidence = indication.get("confidence")
         if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
@@ -451,6 +454,21 @@ def _grounded_acs_indication(
         if confidence >= LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE:
             return True
     return False
+
+
+def _grounded_acs_indication(
+    grounded_indications: tuple[dict[str, object], ...],
+) -> bool:
+    """Grounded ACS citation at the prose-trust bar (no extractor exists)."""
+    return _cited_at_prose_trust(grounded_indications, _ACS_HARD_CODES)
+
+
+def _grounded_hemodynamic_indication(
+    grounded_indications: tuple[dict[str, object], ...],
+) -> bool:
+    """Grounded HEMODYNAMIC_INSTABILITY citation at the prose-trust bar —
+    reached only when the structured vitals signal did not fire."""
+    return _cited_at_prose_trust(grounded_indications, _HEMODYNAMIC_HARD_CODES)
 
 
 # The prompt's fixed HARD code for a genuinely sub-floor order-time Hb
@@ -485,21 +503,7 @@ def _grounded_true_subthreshold_indication(
     threshold = context.cohort_assignment.threshold
     if hb is None or threshold is None or hb >= threshold:
         return False
-    for indication in grounded_indications:
-        code = indication.get("code")
-        if (
-            not isinstance(code, str)
-            or code.strip().upper() not in _SUBTHRESHOLD_HARD_CODES
-        ):
-            continue
-        confidence = indication.get("confidence")
-        if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
-            continue
-        if not (0.0 <= confidence <= 1.0):
-            continue
-        if confidence >= LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE:
-            return True
-    return False
+    return _cited_at_prose_trust(grounded_indications, _SUBTHRESHOLD_HARD_CODES)
 
 
 # =============================================================================
@@ -881,12 +885,15 @@ def _build_audit_row(
         else:
             _grounded = _grounded_indications(indications, context)
             if not qualified_bleeding_exempt(_grounded):
-                if _grounded_acs_indication(
-                    _grounded
-                ) or _grounded_true_subthreshold_indication(_grounded, context):
+                if (
+                    _grounded_acs_indication(_grounded)
+                    or _grounded_hemodynamic_indication(_grounded)
+                    or _grounded_true_subthreshold_indication(_grounded, context)
+                ):
                     # A prompt-defined hard indication the structured system
-                    # cannot dismiss — ACS (no extractor exists) or a
-                    # structurally true sub-floor Hb the deterministic leg
+                    # cannot dismiss — ACS (no extractor exists), documented
+                    # shock/pressor prose the vitals snapshot cannot see, or
+                    # a structurally true sub-floor Hb the deterministic leg
                     # withheld as unreliable. Floor to a human; never assert
                     # against it (and never auto-clear on it either).
                     final_classification = "NEEDS_REVIEW"
@@ -909,10 +916,13 @@ def _build_audit_row(
         and _rbc_payload_well_formed(winning_result)
         and not _has_structured_hard_signal(context)
         and not qualified_bleeding_exempt(_grounded_indications(indications, context))
-        # A grounded high-confidence ACS citation or structurally true
-        # sub-floor Hb makes the hedge a genuine human case (same rationale
-        # as the over-clear floors above).
+        # A grounded high-confidence ACS / hemodynamic citation or a
+        # structurally true sub-floor Hb makes the hedge a genuine human
+        # case (same rationale as the over-clear floors above).
         and not _grounded_acs_indication(_grounded_indications(indications, context))
+        and not _grounded_hemodynamic_indication(
+            _grounded_indications(indications, context)
+        )
         and not _grounded_true_subthreshold_indication(
             _grounded_indications(indications, context), context
         )
