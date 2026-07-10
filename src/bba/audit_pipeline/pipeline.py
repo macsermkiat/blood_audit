@@ -31,6 +31,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from bba.audit_pipeline.cost_guard import assert_test_safe_transport
 from bba.audit_pipeline.models import (
@@ -54,6 +55,7 @@ from bba.deterministic_classifier import (
     BypassReason,
     ClassifierInputs,
     ClassifierResult,
+    HB_GT_10_THRESHOLD,
     classify,
 )
 from bba.llm_client.models import (
@@ -67,6 +69,9 @@ from bba.platelet_classifier import (
     PlateletClassifierResult,
     classify_platelet,
 )
+
+if TYPE_CHECKING:
+    from bba.prompt_builder import TaskMode
 
 
 # Deterministic classifier results that produce a final answer without
@@ -831,6 +836,29 @@ def _batch_id_for(run_id: str, chunk: Sequence[PipelineRowContext]) -> str:
     return f"batch-{digest}"
 
 
+def rbc_task_mode(hb_value_g_dl: float | None) -> TaskMode:
+    """Select the RBC task mode from the measured Hb value.
+
+    ``HB_GT_10_OVERRIDE`` at or above ``HB_GT_10_THRESHOLD`` (10.0),
+    matching the deterministic engine exactly: its ``hb_ge_10`` branch
+    assigns POTENTIALLY_INAPPROPRIATE for Hb >= 10.0 while the
+    ``hb_7_to_10`` gray zone is strictly below 10.0
+    (:mod:`bba.deterministic_classifier.classifier`). A missing Hb
+    (None) cannot establish Hb >= 10 and stays on the gray-zone
+    prompt. Keys on Hb, NOT rule_classification, so a pre-op reserve
+    at Hb 12.3 (rule NEEDS_REVIEW via preop_defer_llm) still gets the
+    override prompt.
+
+    Single source of truth for the production pipeline, the resume
+    rebuild path (:mod:`bba.audit_pipeline.resume`) and the pilot
+    runner (scripts/pilot/run_llm_leg.py) — three-way drift across
+    those call sites is what caused the #93 dispatch bug.
+    """
+    if hb_value_g_dl is not None and hb_value_g_dl >= HB_GT_10_THRESHOLD:
+        return "HB_GT_10_OVERRIDE"
+    return "HB_7_10_REVIEW"
+
+
 def _build_submission_requests(
     chunk: Sequence[PipelineRowContext],
     *,
@@ -858,7 +886,7 @@ def _build_submission_requests(
     responsible for persisting them as NEEDS_REVIEW without a batch
     submission (Codex P1 security fix).
     """
-    from bba.prompt_builder import PromptBuildRequest, TaskMode, build_prompt
+    from bba.prompt_builder import PromptBuildRequest, build_prompt
 
     out: list[BatchSubmissionRequest] = []
     for context in chunk:
@@ -885,10 +913,10 @@ def _build_submission_requests(
                 )
             )
         else:
-            task_mode = "HB_7_10_REVIEW"
+            task_mode = rbc_task_mode(context.hb_result.value_g_dl)
             prompt = build_prompt(
                 PromptBuildRequest(
-                    task_mode="HB_7_10_REVIEW",
+                    task_mode=task_mode,
                     cohort_threshold=context.cohort_assignment.threshold
                     if context.cohort_assignment.threshold is not None
                     else 7.0,

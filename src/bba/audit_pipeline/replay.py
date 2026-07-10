@@ -30,6 +30,10 @@ from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final, NamedTuple
 
+from bba.audit_pipeline.bleeding import (
+    LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE,
+    qualified_bleeding_exempt,
+)
 from bba.audit_pipeline.models import PipelineRowContext, PipelineRunResult
 from bba.audit_store import AuditRow, AuditStore, LlmCall
 from bba.audit_store.models import Classification
@@ -51,6 +55,12 @@ from bba.platelet_guardrail import (
     platelet_overclear_suspect,
 )
 from bba.platelet_guardrail.models import PlateletHardSignals
+from bba.quote_grounder.layers import (
+    contiguous_match,
+    find_cited_source,
+    nfc_normalize,
+)
+from bba.quote_grounder.models import EvidenceSource
 from bba.vitals_extractor import PeriopSummary
 
 
@@ -169,22 +179,57 @@ def periop_contradiction(
 # (Case 100, 68069089).
 #
 # This is the symmetric arm: when the LLM upgrades a withholding deterministic
-# verdict to APPROPRIATE and NO structured hard signal justifies it, floor the
-# row to human review (NEEDS_REVIEW) with a distinct review_reason. The prompt
-# recalibration teaches the model to return INAPPROPRIATE for these; this
-# guardrail is the deterministic NET for when it clears anyway. Per the locked
-# design (Path A + guardrail-as-net), the deterministic layer NEVER asserts
-# INAPPROPRIATE here — it only floors to review.
+# verdict to APPROPRIATE and no accepted exemption justifies it, spec #89 / T5
+# requires the guardrail to ASSERT INAPPROPRIATE with a distinct review_reason.
+# ``needs_human_review`` then auto-clears because it derives from the final
+# classification. The prompt teaches the same clear-cut policy; this guardrail
+# is the deterministic net for when the model clears anyway.
 #
 # "Hard signal" is deterministic-only (B1): a genuinely low Hb (< 7.0), a hard
 # peri-op signal, an MTP cohort, or hemodynamic instability. Bleeding /
-# symptomatic anaemia asserted only in the LLM's prose is deliberately NOT
-# trusted as an exemption — that soft prose is exactly what over-cleared these
-# cases. The measured cost (a gray-zone prose-only bleeding clear also routes
-# to review) is accepted and tracked in the verification harness.
+# symptomatic anaemia prose remains untrusted except for the one committee-
+# accepted exemption: an ACTIVE_BLEEDING indication with its own confidence
+# >= 0.8 and either volume strictly > 300 mL or a life-threatening marker (see
+# bleeding.py), and whose quote GROUNDS in the row's own evidence bundle
+# (:func:`_grounded_indications` — the batch path's verifier is still the
+# Phase-1 pass-through, so quote existence must be checked here, not assumed).
+# Small or merely qualitative bleeds do not clear the guardrail.
 # =============================================================================
 
 LLM_OVERCLEAR_REVIEW_REASON = "llm_overclear_suspect"
+"""Review-reason slug for an over-clear that could not be safely asserted.
+
+Pre-#94 every over-clear floor stamped this. Post-#94 it survives on two
+kinds of narrow paths: (1) an over-clear whose tool payload is missing a
+schema-required list field (:func:`_rbc_payload_well_formed`) — drift may
+have dropped cited evidence, so the row floors to human review instead of
+asserting ``INAPPROPRIATE`` on evidence-absence we cannot distinguish from
+loss; (2) an over-clear citing a grounded, high-confidence, prompt-defined
+hard indication the structured system cannot dismiss — ACS (no extractor
+exists), HEMODYNAMIC_INSTABILITY prose the vitals snapshot cannot see
+(documented shock / pressors), or a structurally TRUE sub-floor Hb the
+deterministic leg withheld as unreliable
+(:func:`_cited_at_prose_trust` / :func:`_grounded_true_subthreshold_indication`).
+Neither asserting nor auto-clearing is safe on those. Historical pre-#94
+rows also carry this value.
+"""
+
+LLM_OVERCLEAR_ASSERT_REASON = "llm_overclear_asserted_inappropriate"
+"""Reason slug for a clear-cut over-clear assertion.
+
+WHY: spec #89 requires the committee's clear-cut ``INAPPROPRIATE`` call rather
+than deferral; ``needs_human_review`` auto-clears from the final classification.
+"""
+
+LLM_NATIVE_REVIEW_ASSERT_REASON = "llm_native_review_asserted_inappropriate"
+"""Reason slug for converting a well-formed native LLM hedge.
+
+WHY: the prompt no longer allows ``NEEDS_REVIEW``. A hedge with reasoning, no
+structured hard signal, and no qualified bleed becomes the clear-cut verdict.
+Parse failures already have a non-None reason and are never converted, while
+the non-empty-reasoning gate leaves unexplained verdicts to the empty-reasoning
+net. Platelet rows are excluded by the component gate.
+"""
 
 EMPTY_REASONING_REVIEW_REASON = "empty_reasoning"
 """Review-reason slug for a verdict with no reasoning in either language.
@@ -194,11 +239,10 @@ were completely empty — one classified APPROPRIATE with
 needs_human_review=False, i.e. an unexplained automatic clear. A
 verdict the committee cannot audit is floored to NEEDS_REVIEW.
 """
-"""Typed review_reason stamped on rows floored by the B1 over-clear guardrail.
 
-Distinct from ``periop_signal_contradiction`` (the LLM under-called) and
-``hallucination_suspect`` (verifier rejected every attempt) so a reviewer
-dashboard can triage the three failure modes separately."""
+_LLM_ASSERT_REASONS: frozenset[str] = frozenset(
+    {LLM_OVERCLEAR_ASSERT_REASON, LLM_NATIVE_REVIEW_ASSERT_REASON}
+)
 
 LLM_OVERCLEAR_UNSTABLE_SBP: float = 90.0
 """Systolic BP (mmHg) strictly below which the patient is hemodynamically
@@ -210,12 +254,16 @@ LLM_OVERCLEAR_UNSTABLE_HR: float = 120.0
 hemodynamically stressed — the second hard hemodynamic exemption signal."""
 
 _LLM_OVERCLEAR_DET_VERDICTS: frozenset[Classification] = frozenset(
-    {"NEEDS_REVIEW", "INSUFFICIENT_EVIDENCE"}
+    {"NEEDS_REVIEW", "INSUFFICIENT_EVIDENCE", "POTENTIALLY_INAPPROPRIATE"}
 )
-"""Deterministic verdicts that "withheld" a clear. Only an LLM APPROPRIATE
-that upgrades one of these is an over-clear candidate. A deterministic
-APPROPRIATE (already cleared) or POTENTIALLY_INAPPROPRIATE (Hb >= 10, handled
-by the HB_GT_10 override prompt) is out of scope for this gray-zone guardrail."""
+"""Deterministic verdicts that withheld a clear.
+
+An LLM ``APPROPRIATE`` upgrading any of these is an over-clear candidate. Per
+spec #89, the high-Hb (Hb >= 10) ``POTENTIALLY_INAPPROPRIATE`` verdict is also
+withheld: #93 dispatches the HB_GT_10 override prompt, but a soft clear there
+must still be asserted ``INAPPROPRIATE``. The hard-signal exemption set is
+unchanged.
+"""
 
 
 def _has_hard_hemodynamic_signal(context: PipelineRowContext) -> bool:
@@ -253,15 +301,209 @@ def llm_overclear_suspect(
     """True iff the LLM over-cleared a withholding deterministic verdict.
 
     Fires only when the LLM returned ``APPROPRIATE``, the deterministic leg
-    had withheld the clear (``NEEDS_REVIEW`` / ``INSUFFICIENT_EVIDENCE``), and
-    no structured hard signal (:func:`_has_structured_hard_signal`) justifies
-    the clear. Deterministic and side-effect-free so the override in
+    withheld the clear (``NEEDS_REVIEW``, ``INSUFFICIENT_EVIDENCE``, or the
+    high-Hb ``POTENTIALLY_INAPPROPRIATE`` verdict), and no structured hard
+    signal (:func:`_has_structured_hard_signal`) justifies the clear. The
+    qualified-bleeding prose exemption is deliberately composed at the call
+    site so this pure predicate's signature and structured-signal scope stay
+    unchanged. Deterministic and side-effect-free so the override in
     :func:`_build_audit_row` is trivially testable and replay-stable."""
     if final_classification != "APPROPRIATE":
         return False
     if rule_classification not in _LLM_OVERCLEAR_DET_VERDICTS:
         return False
     return not _has_structured_hard_signal(context)
+
+
+def _indication_element_well_formed(item: object) -> bool:
+    """True iff one ``indications[]`` element matches the tool item schema.
+
+    Mirrors ``transport._TOOL_INPUT_SCHEMA``'s item contract: an object with
+    string ``code`` / ``quote`` / ``source_id`` and numeric ``confidence``
+    (bool is not a number). Shape only — value-level failures (out-of-range
+    confidence, a non-qualifying bleed) are semantics, judged downstream by
+    :func:`bba.audit_pipeline.bleeding.qualified_bleeding_exempt`.
+    """
+    if not isinstance(item, Mapping):
+        return False
+    if not all(
+        isinstance(item.get(key), str) for key in ("code", "quote", "source_id")
+    ):
+        return False
+    confidence = item.get("confidence")
+    return not isinstance(confidence, bool) and isinstance(confidence, (int, float))
+
+
+def _rbc_payload_well_formed(result: BatchSubmissionResult) -> bool:
+    """True iff the payload carries schema-shaped ``indications`` and
+    ``negative_evidence`` — required list fields with schema-shaped elements.
+
+    WHY: the batch path's shallow extraction (:func:`_indications_from_result`)
+    cannot distinguish "the model cited nothing" from "citations lost to
+    schema drift": a missing key reads back as ``()``, a non-mapping element
+    is silently dropped, and a garbled element survives extraction only to be
+    skipped by every defensive downstream reader. The RBC tool schema
+    (``transport._TOOL_INPUT_SCHEMA``) pins both fields and their element
+    shapes, so any deviation means the #94 assert branches must not treat the
+    resulting evidence-absence as "no genuine indication". Shape only —
+    in-shape value failures stay semantic (bleeding.py). Scoped to the assert
+    branches; row-level parse-failure classification is unchanged.
+    """
+    content = result.raw_response_json.get("content", [])
+    if not content:
+        return False
+    first = content[0]
+    if not isinstance(first, Mapping) or first.get("type") != "tool_use":
+        return False
+    input_payload = first.get("input", {})
+    if not isinstance(input_payload, Mapping):
+        return False
+    indications = input_payload.get("indications")
+    if not isinstance(indications, Sequence) or isinstance(indications, str | bytes):
+        return False
+    if not all(_indication_element_well_formed(item) for item in indications):
+        return False
+    negative_evidence = input_payload.get("negative_evidence")
+    if not isinstance(negative_evidence, Sequence) or isinstance(
+        negative_evidence, str | bytes
+    ):
+        return False
+    return all(isinstance(item, str) for item in negative_evidence)
+
+
+def _grounded_indications(
+    indications: tuple[dict[str, object], ...],
+    context: PipelineRowContext,
+) -> tuple[dict[str, object], ...]:
+    """Filter ``indications`` to those whose quote grounds in the row's own
+    evidence bundle (quote_grounder Layers 2+3: the cited source exists and
+    the quote is a word-boundary contiguous match inside it, NFC-normalized).
+
+    WHY: the batch path's verifier is still the Phase-1 pass-through
+    (:func:`default_verifier`), so a winning attempt does NOT guarantee its
+    quotes exist in the notes. The qualified-bleeding exemption turns prose
+    directly into a final APPROPRIATE with no human review (#94); feeding it
+    an unverified quote would let a hallucinated bleed clear a withheld
+    order. The committee's prose-trust decision (spec #89 #2) covers the
+    model's *characterization* of documented text, not the text's existence
+    — existence is verified here.
+
+    Layers 4 (uniqueness) and 5 (min length 25) are deliberately NOT
+    applied: genuine bleed quotes are often short ("EBL 400 mL") and a
+    re-charted bleed strengthens rather than weakens the evidence; the
+    semantic bar (> 300 mL strictly, or a life-threatening marker, at
+    confidence >= 0.8) is enforced by
+    :func:`bba.audit_pipeline.bleeding.qualified_bleeding_exempt` on the
+    filtered list. Fail-closed: a missing/non-string quote or source_id, an
+    unknown cited id, or an empty bundle grounds nothing.
+    """
+    sources = tuple(
+        EvidenceSource(source_id=chunk.evidence_id, text=nfc_normalize(chunk.text))
+        for chunk in context.evidence_chunks
+    )
+    grounded: list[dict[str, object]] = []
+    for indication in indications:
+        quote = indication.get("quote")
+        cited_id = indication.get("source_id")
+        if not isinstance(quote, str) or not isinstance(cited_id, str):
+            continue
+        source = find_cited_source(cited_id, sources)
+        if source is None:
+            continue
+        if contiguous_match(nfc_normalize(quote), source.text):
+            grounded.append(indication)
+    return tuple(grounded)
+
+
+# Prompt-defined HARD codes the structured system cannot (fully) verify
+# (prompt_builder._RBC_INDICATION_VOCABULARY):
+#   * ACS — no structured extractor exists at all (Codex PR #97 P1).
+#   * HEMODYNAMIC_INSTABILITY — the structured extractor sees one vitals
+#     snapshot (SBP < 90 / HR > 120); the prompt's definition also covers
+#     documented shock / pressor support that only lives in prose (round 5).
+#     When the structured signal DID fire, llm_overclear_suspect never
+#     triggers and the clear stands — this floor covers the coverage gap.
+_ACS_HARD_CODES: frozenset[str] = frozenset({"ACS"})
+_HEMODYNAMIC_HARD_CODES: frozenset[str] = frozenset({"HEMODYNAMIC_INSTABILITY"})
+
+
+def _cited_at_prose_trust(
+    grounded_indications: tuple[dict[str, object], ...],
+    codes: frozenset[str],
+) -> bool:
+    """True iff a grounded indication cites one of ``codes`` at or above the
+    shared prose-trust confidence bar.
+
+    WHY: a prompt-defined HARD code the structured system cannot dismiss
+    must not be asserted against — the caller floors the row to
+    ``NEEDS_REVIEW`` instead. It never auto-clears, because extending prose
+    auto-clear trust beyond qualified bleeding is a committee decision
+    (spec #89 accepted bleeding only). Confidence is read defensively, same
+    rules as :func:`bba.audit_pipeline.bleeding.qualified_bleeding_exempt`:
+    non-numeric, bool, NaN, or out-of-[0,1] never counts.
+    """
+    for indication in grounded_indications:
+        code = indication.get("code")
+        if not isinstance(code, str) or code.strip().upper() not in codes:
+            continue
+        confidence = indication.get("confidence")
+        if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+            continue
+        if not (0.0 <= confidence <= 1.0):
+            continue
+        if confidence >= LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE:
+            return True
+    return False
+
+
+def _grounded_acs_indication(
+    grounded_indications: tuple[dict[str, object], ...],
+) -> bool:
+    """Grounded ACS citation at the prose-trust bar (no extractor exists)."""
+    return _cited_at_prose_trust(grounded_indications, _ACS_HARD_CODES)
+
+
+def _grounded_hemodynamic_indication(
+    grounded_indications: tuple[dict[str, object], ...],
+) -> bool:
+    """Grounded HEMODYNAMIC_INSTABILITY citation at the prose-trust bar —
+    reached only when the structured vitals signal did not fire."""
+    return _cited_at_prose_trust(grounded_indications, _HEMODYNAMIC_HARD_CODES)
+
+
+# The prompt's fixed HARD code for a genuinely sub-floor order-time Hb
+# (prompt_builder._RBC_INDICATION_VOCABULARY). The no-underscore variant
+# appears in persisted pre-vocabulary responses.
+_SUBTHRESHOLD_HARD_CODES: frozenset[str] = frozenset(
+    {"SUB_THRESHOLD_HB", "SUBTHRESHOLD_HB"}
+)
+
+
+def _grounded_true_subthreshold_indication(
+    grounded_indications: tuple[dict[str, object], ...],
+    context: PipelineRowContext,
+) -> bool:
+    """True iff a grounded SUB_THRESHOLD_HB citation at the shared
+    prose-trust bar is also structurally TRUE (hb strictly below the cohort
+    floor).
+
+    WHY (Codex PR #97 round 3): the prompt defines SUB_THRESHOLD_HB as HARD,
+    but :func:`_has_structured_hard_signal` only exempts the universal
+    Hb < 7.0. A row whose Hb sits below its own cohort floor can still be
+    LLM-routed when the deterministic leg withheld the value as unreliable
+    (hemodilution flag, single low Hb with no trend) — asserting
+    ``INAPPROPRIATE`` against a prompt-compliant clear there would contradict
+    the prompt's own contract, so the caller floors it to a human instead.
+    The structural cross-check is the gate: an at/above-floor Hb mislabeled
+    "sub-threshold" (the motivating over-clear class, spec #89 story 6)
+    fails it and keeps the assert. Never auto-clears — the deterministic
+    leg flagged the value as unreliable for a reason.
+    """
+    hb = context.hb_result.value_g_dl
+    threshold = context.cohort_assignment.threshold
+    if hb is None or threshold is None or hb >= threshold:
+        return False
+    return _cited_at_prose_trust(grounded_indications, _SUBTHRESHOLD_HARD_CODES)
 
 
 # =============================================================================
@@ -622,17 +864,71 @@ def _build_audit_row(
     ):
         final_classification = "NEEDS_REVIEW"
         review_reason = PERIOP_CONTRADICTION_REVIEW_REASON
-    # B1 over-clear guardrail (Cases 47 / 100): the symmetric arm. An LLM
-    # APPROPRIATE upgrading a withholding deterministic verdict, with no
-    # structured hard signal, is floored to human review. Checked after the
-    # peri-op guardrail; if that already rewrote the verdict to NEEDS_REVIEW
-    # this is inert (final_classification is no longer APPROPRIATE). The LLM
-    # reasoning / indications are preserved so the reviewer sees the conflict.
+    # B1 over-clear guardrail (Cases 47 / 100): assert INAPPROPRIATE when an
+    # LLM clears a withheld deterministic verdict without a structured hard
+    # signal or the committee-approved qualified-major-bleeding exemption.
+    # The exemption only ever sees indications whose quote grounds in the
+    # row's evidence bundle — a fabricated bleed quote must never auto-clear.
+    # A payload missing a schema-required list field may have LOST cited
+    # evidence, so it floors to human review instead of asserting. A grounded
+    # high-confidence ACS citation also floors (never asserts, never
+    # auto-clears): ACS is in the prompt's HARD vocabulary but has no
+    # structured extractor and no prose exemption path. Checked after peri-op
+    # so that earlier winner remains authoritative; the LLM reasoning and
+    # indications are preserved for auditability.
     elif context.component != "platelet" and llm_overclear_suspect(
         final_classification, rule_classification, context
     ):
-        final_classification = "NEEDS_REVIEW"
-        review_reason = LLM_OVERCLEAR_REVIEW_REASON
+        if not _rbc_payload_well_formed(winning_result):
+            final_classification = "NEEDS_REVIEW"
+            review_reason = LLM_OVERCLEAR_REVIEW_REASON
+        else:
+            _grounded = _grounded_indications(indications, context)
+            if not qualified_bleeding_exempt(_grounded):
+                if (
+                    _grounded_acs_indication(_grounded)
+                    or _grounded_hemodynamic_indication(_grounded)
+                    or _grounded_true_subthreshold_indication(_grounded, context)
+                ):
+                    # A prompt-defined hard indication the structured system
+                    # cannot dismiss — ACS (no extractor exists), documented
+                    # shock/pressor prose the vitals snapshot cannot see, or
+                    # a structurally true sub-floor Hb the deterministic leg
+                    # withheld as unreliable. Floor to a human; never assert
+                    # against it (and never auto-clear on it either).
+                    final_classification = "NEEDS_REVIEW"
+                    review_reason = LLM_OVERCLEAR_REVIEW_REASON
+                else:
+                    final_classification = "INAPPROPRIATE"
+                    review_reason = LLM_OVERCLEAR_ASSERT_REASON
+            # else: a grounded qualified major bleed keeps the clear
+            # APPROPRIATE.
+    # WHY: the prompt no longer permits a native NEEDS_REVIEW hedge. Convert a
+    # well-formed, explained hedge to the committee's clear-cut verdict only
+    # when neither a structured hard signal nor a qualified (grounded) bleed
+    # makes it a genuine human case; a drifted payload or a parse/schema
+    # failure (non-None reason) stays a human case.
+    elif (
+        context.component != "platelet"
+        and final_classification == "NEEDS_REVIEW"
+        and review_reason is None
+        and (summary_en.strip() or summary_th.strip())
+        and _rbc_payload_well_formed(winning_result)
+        and not _has_structured_hard_signal(context)
+        and not qualified_bleeding_exempt(_grounded_indications(indications, context))
+        # A grounded high-confidence ACS / hemodynamic citation or a
+        # structurally true sub-floor Hb makes the hedge a genuine human
+        # case (same rationale as the over-clear floors above).
+        and not _grounded_acs_indication(_grounded_indications(indications, context))
+        and not _grounded_hemodynamic_indication(
+            _grounded_indications(indications, context)
+        )
+        and not _grounded_true_subthreshold_indication(
+            _grounded_indications(indications, context), context
+        )
+    ):
+        final_classification = "INAPPROPRIATE"
+        review_reason = LLM_NATIVE_REVIEW_ASSERT_REASON
     # Platelet over-clear guardrail (Stage C2, "ADD hard signals" ruling): an
     # LLM APPROPRIATE on any withheld platelet verdict with NO grounded platelet
     # hard signal floors to review.  Keyed on context.component only — NOT on
@@ -649,11 +945,12 @@ def _build_audit_row(
         review_reason = PLATELET_OVERCLEAR_REVIEW_REASON
     # Empty-reasoning guardrail: a verdict with no reasoning in either
     # language cannot be audited by the committee. Separate `if` (not
-    # elif) so it composes with the guardrails above; an earlier, more
-    # specific review_reason is preserved.
+    # elif) so it composes with the guardrails above. Preserve genuine review
+    # provenance, but overwrite assertion provenance when this net changes the
+    # final verdict: invariant — an assertion slug implies INAPPROPRIATE.
     if not summary_en.strip() and not summary_th.strip():
         final_classification = "NEEDS_REVIEW"
-        if review_reason is None:
+        if review_reason is None or review_reason in _LLM_ASSERT_REASONS:
             review_reason = EMPTY_REASONING_REVIEW_REASON
     return AuditRow(
         audit_id=context.order.audit_id,
@@ -1055,6 +1352,8 @@ def _confidence_from_attempts(
 
 __all__ = [
     "EMPTY_REASONING_REVIEW_REASON",
+    "LLM_NATIVE_REVIEW_ASSERT_REASON",
+    "LLM_OVERCLEAR_ASSERT_REASON",
     "LLM_OVERCLEAR_REVIEW_REASON",
     "LLM_OVERCLEAR_UNSTABLE_HR",
     "LLM_OVERCLEAR_UNSTABLE_SBP",

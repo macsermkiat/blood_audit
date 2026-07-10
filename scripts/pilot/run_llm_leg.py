@@ -61,7 +61,7 @@ from bba.audit_orders import (
     build_audit_orders,
 )
 from bba.audit_pipeline import PipelineRowContext
-from bba.audit_pipeline.pipeline import _persist_injection_flagged_row
+from bba.audit_pipeline.pipeline import _persist_injection_flagged_row, rbc_task_mode
 from bba.audit_pipeline.replay import apply_batch_results
 from bba.audit_store import AuditStore, AuditStoreConfig
 from bba.cohort_detector import (
@@ -1563,9 +1563,10 @@ def main() -> None:
             if ctx.cohort_assignment.threshold is not None
             else 7.0
         )
+        task_mode = rbc_task_mode(ctx.hb_result.value_g_dl)
         prompt = build_prompt(
             PromptBuildRequest(
-                task_mode="HB_7_10_REVIEW",
+                task_mode=task_mode,
                 cohort_threshold=threshold,
                 evidence_chunks=ctx.evidence_chunks,
                 few_shot_examples=(),
@@ -1578,7 +1579,7 @@ def main() -> None:
             BatchSubmissionRequest(
                 audit_id=ctx.order.audit_id,
                 run_id=RUN_ID,
-                task_mode="HB_7_10_REVIEW",
+                task_mode=task_mode,
                 prompt=prompt,
             )
         )

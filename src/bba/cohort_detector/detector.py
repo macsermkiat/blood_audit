@@ -18,15 +18,17 @@ Cohort precedence (top wins):
    ``ORTHO_CARDIAC`` cohort, which additionally required a cardiac-history
    diagnosis — dropped per the Chula ortho guideline policy_2/policy_3.)
 4. ``CARDIAC_SURGERY`` — recent cardiac operative event; threshold 7.5.
-5. ``ESRD_EPO`` — ESRD diagnosis AND dialysis med; threshold 8.0
-   (Round 2 fix N1: both signals required).
-6. ``HEME_MALIGNANCY_ACTIVE`` — heme malignancy diagnosis AND chemo med
+5. ``HEME_MALIGNANCY_ACTIVE`` — heme malignancy diagnosis AND chemo med
    AND ANC < 500; not threshold-driven (T2-supportive).
-7. ``CARDIOPULMONARY_COMORBIDITY`` — ICD-10 heart-disease diagnosis
-   (no surgery/ESRD/heme signal); threshold 8.0. Diagnosis-only, so it is
+6. ``CARDIOPULMONARY_COMORBIDITY`` — ICD-10 heart-disease diagnosis;
+   threshold 8.0. Diagnosis-only, so it is
    checked after the UNKNOWN guard and never masks missing procedure data.
    (Label name retained for persisted-row compatibility; lung-disease
    diagnoses were removed — the cohort is now heart-disease only.)
+7. ``ESRD_EPO`` — ESRD diagnosis AND dialysis med; restrictive threshold
+   7.0 (Round 2 fix N1: both signals required). Ranking ESRD below the
+   comorbidity and surgery cohorts means ESRD + heart disease resolves to
+   cardiopulmonary at 8.0, while ESRD alone remains at 7.0.
 8. ``DEFAULT`` — fall-through; threshold 7.0.
 """
 
@@ -122,15 +124,6 @@ def assign_cohort(inputs: CohortInputs) -> CohortAssignment:
             evidence_name=cardiac_event.name,
         )
 
-    esrd_dx = find_esrd_diagnosis(inputs.diagnosis_codes)
-    dialysis_med = find_dialysis_med(inputs.med_events, inputs.order_datetime)
-    if esrd_dx is not None and dialysis_med is not None:
-        return _make(
-            CohortLabel.ESRD_EPO,
-            evidence_code=esrd_dx,
-            evidence_name=dialysis_med.drug,
-        )
-
     heme_dx = find_heme_malignancy_diagnosis(inputs.diagnosis_codes)
     chemo_med = find_chemo_med(inputs.med_events, inputs.order_datetime)
     if (
@@ -145,10 +138,10 @@ def assign_cohort(inputs: CohortInputs) -> CohortAssignment:
         )
 
     # CARDIOPULMONARY_COMORBIDITY — diagnosis-only heart disease, checked
-    # AFTER the surgery / ESRD / heme cohorts (each more specific) and BEFORE
-    # DEFAULT. It raises the 7.0 default floor to 8.0. Reached only once
-    # procedure data was confirmed present (the UNKNOWN guard above), so a
-    # diagnosis-based match never masks the missing-procedure-data invariant.
+    # AFTER surgery / heme and BEFORE ESRD / DEFAULT. It raises the 7.0 floor
+    # to 8.0, including for an ESRD patient with heart disease. Reached only
+    # once procedure data was confirmed present (the UNKNOWN guard above),
+    # so a diagnosis match never masks the missing-procedure-data invariant.
     cardiopulmonary_dx = find_cardiopulmonary_comorbidity_diagnosis(
         inputs.diagnosis_codes
     )
@@ -156,6 +149,18 @@ def assign_cohort(inputs: CohortInputs) -> CohortAssignment:
         return _make(
             CohortLabel.CARDIOPULMONARY_COMORBIDITY,
             evidence_code=cardiopulmonary_dx,
+        )
+
+    # ESRD_EPO is deliberately the last positive cohort: EPO-managed chronic
+    # anemia alone keeps the restrictive 7.0 floor, while any heart-disease or
+    # surgical context has already selected its applicable higher floor.
+    esrd_dx = find_esrd_diagnosis(inputs.diagnosis_codes)
+    dialysis_med = find_dialysis_med(inputs.med_events, inputs.order_datetime)
+    if esrd_dx is not None and dialysis_med is not None:
+        return _make(
+            CohortLabel.ESRD_EPO,
+            evidence_code=esrd_dx,
+            evidence_name=dialysis_med.drug,
         )
 
     return _make(CohortLabel.DEFAULT)

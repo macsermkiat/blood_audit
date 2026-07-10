@@ -470,6 +470,31 @@ def test_platelet_rule_classification_is_platelet_derived(tmp_path):
     assert row.platelet_review_ceiling == 100.0
 
 
+def test_platelet_native_needs_review_is_not_converted(tmp_path):
+    """The RBC native-review assertion must remain isolated from platelet rows."""
+    # Platelet hedges use their own policy and must stay genuine review cases.
+    ctx = _platelet_ctx("audit-plt-native-review", platelet_count=50.0)
+    response = RawBatchResponse(
+        batch_id="msgbatch_plt_native_review",
+        results=(
+            _platelet_result_item(
+                "audit-plt-native-review", classification="NEEDS_REVIEW"
+            ),
+        ),
+    )
+    store = _audit_store(tmp_path)
+    apply_batch_results(
+        response,
+        audit_store=store,
+        run_id="run-plt-native-review",
+        contexts={"audit-plt-native-review": ctx},
+    )
+    row = store.read_audit_results()[0]
+    assert row.final_classification == "NEEDS_REVIEW"
+    assert row.review_reason is None
+    assert row.needs_human_review is True
+
+
 def test_platelet_overclear_floors_ungrounded_appropriate(tmp_path, monkeypatch):
     """C2b: flag ON — an LLM APPROPRIATE on a sub-ceiling count with NO grounded
     hard signal floors to NEEDS_REVIEW with the platelet over-clear reason. This
@@ -663,8 +688,8 @@ def test_platelet_submission_uses_platelet_prompt():
 
 
 def test_rbc_submission_unchanged_by_platelet_branch(tmp_path):
-    """C2c: the RBC submission path stays HB_7_10_REVIEW with a cohort threshold —
-    the platelet branch must not touch RBC request-building."""
+    """C2c: this fixture's Hb 8.0 (< 10) selects the gray-zone mode via
+    rbc_task_mode; the platelet branch must not touch RBC request-building."""
     from bba.cohort_detector import CohortAssignment, CohortLabel
     from bba.hb_lookup import HbLookupResult
     from bba.vitals_extractor import SourceProvenance, VitalSigns, VitalsResult
@@ -979,8 +1004,8 @@ def test_platelet_resume_rebuilds_platelet_review_request():
 
 
 def test_rbc_resume_rebuild_unchanged():
-    """Fix 3: the RBC rebuild path is byte-identical — HB_7_10_REVIEW with a
-    numeric cohort_threshold. The platelet branch must not touch RBC rebuilds."""
+    """Fix 3: this fixture's Hb 8.0 (< 10) selects the gray-zone mode via
+    rbc_task_mode; the platelet branch must not touch RBC rebuilds."""
     from bba.cohort_detector import CohortAssignment, CohortLabel
     from bba.hb_lookup import HbLookupResult
     from bba.vitals_extractor import SourceProvenance, VitalSigns, VitalsResult

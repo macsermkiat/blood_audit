@@ -55,8 +55,12 @@ alone (see :data:`ORTHO_SURGERY_THRESHOLD`), which subsumes the fused
 "ortho + cardiac history" cohort. Retained (with its threshold) so
 persisted audit-store rows written before the split still resolve."""
 
-ESRD_EPO_THRESHOLD: float = 8.0
-"""Hb threshold (g/dL) for the ``esrd_epo`` cohort (PRD §5 + Round 2 N1)."""
+ESRD_EPO_THRESHOLD: float = 7.0
+"""Restrictive Hb floor (g/dL) for the ``esrd_epo`` cohort.
+
+Chronic EPO-managed anemia is too vague to justify a permissive floor.
+Patients who also have heart disease or an orthopedic/cardiac-surgery
+context retain the applicable higher floor through cohort precedence."""
 
 CARDIOPULMONARY_COMORBIDITY_THRESHOLD: float = 8.0
 """Hb threshold (g/dL) for the ``cardiopulmonary_comorbidity`` cohort.

@@ -9,14 +9,21 @@ the audit row persists (PRD §"Output schema" — ``prompt_hash`` reproducible).
 Task modes correspond directly to the LLM-eligible audit branches in
 the PRD's deterministic-engine output:
 
-* ``HB_7_10_REVIEW`` — gray-zone case (Hb 7-10 g/dL, or Hb < cohort_threshold
-  for the patient's cohort). The LLM reads the ±24-h note window for Tier-1
+* ``HB_7_10_REVIEW`` — gray-zone case (Hb 7 to below 10 g/dL, or
+  Hb < cohort_threshold for the patient's cohort; Hb exactly 10.0 belongs
+  to the override mode). The LLM reads the ±24-h note window for Tier-1
   indications + Tier-2 supportive context.
-* ``HB_GT_10_OVERRIDE`` — Hb > 10 case escalated for the LLM to look for
-  Tier-1 override conditions (MTP, active bleed, hemodynamic instability,
-  ACS, peri-operative, symptomatic anemia, neuro-target) that would
-  justify ordering despite the deterministic ``POTENTIALLY_INAPPROPRIATE``
-  pre-classification.
+* ``HB_GT_10_OVERRIDE`` — Hb >= 10 case escalated for the LLM to look for a
+  Tier-1 override from the fixed hard-indication vocabulary (ACTIVE_BLEEDING,
+  HEMODYNAMIC_INSTABILITY, ACS, PERIOPERATIVE, MTP) that would justify
+  ordering despite the deterministic ``POTENTIALLY_INAPPROPRIATE``
+  pre-classification. Under the clear-cut policy (#92) the prompt treats
+  soft/prose grounds — a specialist or neuro Hb target, symptomatic-anemia
+  prose — as non-clearing and instructs the model to return INAPPROPRIATE when
+  no hard override is documented. This entry describes the prompt contract
+  only; structural enforcement of that verdict — extending the over-clear
+  guardrail to the Hb>=10 path and adding the quantified/life-threatening
+  bleed exception — lands in #94 and is not yet wired.
 * ``PLATELET_REVIEW`` — platelet transfusion order, reviewed against the
   Chula DRAFT policy (AABB/ICTMG 2025). Has no Hb cohort threshold;
   ``cohort_threshold`` is None for this mode.
@@ -65,10 +72,10 @@ ALLOWED_COHORT_THRESHOLDS: frozenset[float] = frozenset({7.0, 7.5, 8.0})
 """The three deterministic cohort thresholds the LLM receives as a hard input.
 
 PRD §"Cohort detection is deterministic, not LLM-judged": ``7.0`` is the
-default, ``7.5`` is the cardiac-surgery cohort, ``8.0`` is the
-ortho+cardiac / ESRD-on-EPO cohort. Free-form floats here would let a
-caller silently push a non-clinical threshold past the assembly layer
-into the LLM prompt.
+default and ESRD-on-EPO floor, ``7.5`` is the cardiac-surgery cohort, and
+``8.0`` is the orthopedic-surgery / cardiopulmonary-comorbidity floor.
+Free-form floats here would let a caller silently push a non-clinical
+threshold past the assembly layer into the LLM prompt.
 """
 
 
