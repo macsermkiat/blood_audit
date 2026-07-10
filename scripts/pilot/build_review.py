@@ -150,6 +150,55 @@ _BYPASS_LABELS: dict[str, str] = {
     "hemodilution_flagged": "Haemodilution suspected: Hb rise after IV fluid consistent with dilution artifact",
 }
 
+_REVIEW_REASON_LABELS: dict[str, str] = {
+    "model_verdict": (
+        "No guardrail action — the final classification is the model's own verdict"
+    ),
+    "llm_overclear_asserted_inappropriate": (
+        "Guardrail-asserted INAPPROPRIATE: the LLM cleared a withheld "
+        "gray-zone/high-Hb order with no genuine hard indication, so the "
+        "over-clear guardrail asserted the final verdict (not the model's "
+        "own label); the human-review flag is cleared"
+    ),
+    "llm_native_review_asserted_inappropriate": (
+        "Guardrail-converted INAPPROPRIATE: the model itself returned "
+        "NEEDS_REVIEW with reasoning but no hard signal and no qualified "
+        "bleed, so the verdict was converted to INAPPROPRIATE; the "
+        "human-review flag is cleared"
+    ),
+    "llm_overclear_suspect": (
+        "Over-clear floored to NEEDS_REVIEW: historical rows from before the "
+        "assert guardrail, plus the one live path — the tool payload is "
+        "shape-drifted (missing or garbled indications/negative_evidence), "
+        "so asserting would trust possibly-lost evidence"
+    ),
+    "periop_signal_contradiction": (
+        "Peri-operative hard signal contradicts the LLM verdict — kept "
+        "NEEDS_REVIEW for a human (the intended residual)"
+    ),
+    "hallucination_suspect": (
+        "Quote verifier rejected every attempt — the cited quotes did not "
+        "ground in the evidence bundle"
+    ),
+    "empty_reasoning": (
+        "Final verdict carried empty reasoning — floored to NEEDS_REVIEW "
+        "(a verdict with no rationale is never asserted)"
+    ),
+    "platelet_llm_overclear_suspect": (
+        "Platelet-leg over-clear floored to NEEDS_REVIEW (platelet "
+        "guardrail; the RBC assert path does not apply to platelets)"
+    ),
+    "malformed_json": "Parse failure — the response was not valid JSON",
+    "schema_mismatch": (
+        "Parse failure — the tool payload did not match the expected schema"
+    ),
+    "classification_out_of_set": (
+        "Parse failure — the classification label is outside the allowed vocabulary"
+    ),
+    "empty_response": "Parse failure — the model returned an empty response",
+    "tool_use_missing": ("Parse failure — no tool-use block was found in the response"),
+}
+
 
 def _code_abbr(code: str, labels: dict[str, str]) -> str:
     """Wrap a rationale/bypass slug in <abbr> with a plain-language tooltip."""
@@ -1202,6 +1251,11 @@ def main() -> None:
                 f"{esc(_display_cls(fc))} <span class='conf'>(conf {conf:.2f}; "
                 f"{esc(model)})</span></div>"
             )
+            review_reason = llm_block.get("review_reason") or "model_verdict"
+            parts.append(
+                f"<div class='rationale'>provenance: "
+                f"{_code_abbr(review_reason, _REVIEW_REASON_LABELS)}</div>"
+            )
             parts.append("<h5>Indications</h5>")
             parts.append(render_indications(llm_block["indications"]))
             parts.append("<h5>Negative evidence</h5>")
@@ -1784,6 +1838,20 @@ LLM: Anthropic Batch classification on structured evidence only.
 <dt>pre_op_crossmatch</dt><dd>[legacy] Pre-operative crossmatch bypass — superseded; pre-op orders now route to LLM review with bypass=none.</dd>
 <dt>delta_hb</dt><dd>Delta-Hb: ≥ 2 g/dL drop in 24 h pre-anchor window.</dd>
 <dt>hemodilution_flagged</dt><dd>Haemodilution suspected: Hb rise after IV fluid consistent with dilution artifact.</dd>
+<dt style='margin-top:14px;font-style:italic;'>LLM provenance codes (review_reason)</dt><dd></dd>
+<dt>model_verdict</dt><dd>No guardrail action — the final classification is the model's own verdict.</dd>
+<dt>llm_overclear_asserted_inappropriate</dt><dd>Guardrail-asserted INAPPROPRIATE: the LLM cleared a withheld gray-zone/high-Hb order with no genuine hard indication, so the over-clear guardrail asserted the final verdict (not the model's own label); the human-review flag is cleared.</dd>
+<dt>llm_native_review_asserted_inappropriate</dt><dd>Guardrail-converted INAPPROPRIATE: the model itself returned NEEDS_REVIEW with reasoning but no hard signal and no qualified bleed, so the verdict was converted to INAPPROPRIATE; the human-review flag is cleared.</dd>
+<dt>llm_overclear_suspect</dt><dd>Over-clear floored to NEEDS_REVIEW: historical rows from before the assert guardrail, plus the one live path — the tool payload is shape-drifted (missing or garbled indications/negative_evidence), so asserting would trust possibly-lost evidence.</dd>
+<dt>periop_signal_contradiction</dt><dd>Peri-operative hard signal contradicts the LLM verdict — kept NEEDS_REVIEW for a human (the intended residual).</dd>
+<dt>hallucination_suspect</dt><dd>Quote verifier rejected every attempt — the cited quotes did not ground in the evidence bundle.</dd>
+<dt>empty_reasoning</dt><dd>Final verdict carried empty reasoning — floored to NEEDS_REVIEW (a verdict with no rationale is never asserted).</dd>
+<dt>platelet_llm_overclear_suspect</dt><dd>Platelet-leg over-clear floored to NEEDS_REVIEW (platelet guardrail; the RBC assert path does not apply to platelets).</dd>
+<dt>malformed_json</dt><dd>Parse failure — the response was not valid JSON.</dd>
+<dt>schema_mismatch</dt><dd>Parse failure — the tool payload did not match the expected schema.</dd>
+<dt>classification_out_of_set</dt><dd>Parse failure — the classification label is outside the allowed vocabulary.</dd>
+<dt>empty_response</dt><dd>Parse failure — the model returned an empty response.</dd>
+<dt>tool_use_missing</dt><dd>Parse failure — no tool-use block was found in the response.</dd>
 </dl>
 </div>
 </details>
