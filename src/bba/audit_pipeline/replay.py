@@ -30,7 +30,10 @@ from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final, NamedTuple
 
-from bba.audit_pipeline.bleeding import qualified_bleeding_exempt
+from bba.audit_pipeline.bleeding import (
+    LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE,
+    qualified_bleeding_exempt,
+)
 from bba.audit_pipeline.models import PipelineRowContext, PipelineRunResult
 from bba.audit_store import AuditRow, AuditStore, LlmCall
 from bba.audit_store.models import Classification
@@ -196,12 +199,15 @@ def periop_contradiction(
 LLM_OVERCLEAR_REVIEW_REASON = "llm_overclear_suspect"
 """Review-reason slug for an over-clear that could not be safely asserted.
 
-Pre-#94 every over-clear floor stamped this. Post-#94 it survives on one
-narrow path: an over-clear whose tool payload is missing a schema-required
-list field (:func:`_rbc_payload_well_formed`) — drift may have dropped cited
-evidence, so the row floors to human review instead of asserting
-``INAPPROPRIATE`` on evidence-absence we cannot distinguish from loss.
-Historical pre-#94 rows also carry this value.
+Pre-#94 every over-clear floor stamped this. Post-#94 it survives on two
+narrow paths: (1) an over-clear whose tool payload is missing a
+schema-required list field (:func:`_rbc_payload_well_formed`) — drift may
+have dropped cited evidence, so the row floors to human review instead of
+asserting ``INAPPROPRIATE`` on evidence-absence we cannot distinguish from
+loss; (2) an over-clear citing a grounded, high-confidence ACS indication
+(:func:`_grounded_acs_indication`) — a prompt-defined hard code the
+structured system cannot verify, so neither asserting nor auto-clearing is
+safe. Historical pre-#94 rows also carry this value.
 """
 
 LLM_OVERCLEAR_ASSERT_REASON = "llm_overclear_asserted_inappropriate"
@@ -403,6 +409,45 @@ def _grounded_indications(
         if contiguous_match(nfc_normalize(quote), source.text):
             grounded.append(indication)
     return tuple(grounded)
+
+
+# The prompt's fixed HARD indication code for acute coronary syndrome /
+# active myocardial ischemia (prompt_builder._RBC_INDICATION_VOCABULARY).
+_ACS_HARD_CODE = "ACS"
+
+
+def _grounded_acs_indication(
+    grounded_indications: tuple[dict[str, object], ...],
+) -> bool:
+    """True iff a grounded indication cites the ACS hard code at or above the
+    shared prose-trust confidence bar.
+
+    WHY (Codex PR #97 P1): ACS is the one code in the prompt's HARD
+    vocabulary with neither a structured extractor
+    (:func:`_has_structured_hard_signal` covers low Hb / MTP / peri-op /
+    hemodynamic instability) nor a prose exemption path (qualified bleeding
+    covers ACTIVE_BLEEDING only). Without this check the guardrail would
+    assert ``INAPPROPRIATE`` against a prompt-compliant, grounded ACS clear —
+    an unreviewed committee verdict contradicting the prompt's own contract.
+    The caller floors such rows to ``NEEDS_REVIEW`` instead; it never
+    auto-clears them, because extending prose auto-clear trust beyond
+    qualified bleeding is a committee decision (spec #89 accepted bleeding
+    only). Confidence is read defensively, same rules as
+    :func:`bba.audit_pipeline.bleeding.qualified_bleeding_exempt`:
+    non-numeric, bool, NaN, or out-of-[0,1] never counts.
+    """
+    for indication in grounded_indications:
+        code = indication.get("code")
+        if not isinstance(code, str) or code.strip().upper() != _ACS_HARD_CODE:
+            continue
+        confidence = indication.get("confidence")
+        if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+            continue
+        if not (0.0 <= confidence <= 1.0):
+            continue
+        if confidence >= LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE:
+            return True
+    return False
 
 
 # =============================================================================
@@ -769,19 +814,32 @@ def _build_audit_row(
     # The exemption only ever sees indications whose quote grounds in the
     # row's evidence bundle — a fabricated bleed quote must never auto-clear.
     # A payload missing a schema-required list field may have LOST cited
-    # evidence, so it floors to human review instead of asserting. Checked
-    # after peri-op so that earlier winner remains authoritative; the LLM
-    # reasoning and indications are preserved for auditability.
+    # evidence, so it floors to human review instead of asserting. A grounded
+    # high-confidence ACS citation also floors (never asserts, never
+    # auto-clears): ACS is in the prompt's HARD vocabulary but has no
+    # structured extractor and no prose exemption path. Checked after peri-op
+    # so that earlier winner remains authoritative; the LLM reasoning and
+    # indications are preserved for auditability.
     elif context.component != "platelet" and llm_overclear_suspect(
         final_classification, rule_classification, context
     ):
         if not _rbc_payload_well_formed(winning_result):
             final_classification = "NEEDS_REVIEW"
             review_reason = LLM_OVERCLEAR_REVIEW_REASON
-        elif not qualified_bleeding_exempt(_grounded_indications(indications, context)):
-            final_classification = "INAPPROPRIATE"
-            review_reason = LLM_OVERCLEAR_ASSERT_REASON
-        # else: a grounded qualified major bleed keeps the clear APPROPRIATE.
+        else:
+            _grounded = _grounded_indications(indications, context)
+            if not qualified_bleeding_exempt(_grounded):
+                if _grounded_acs_indication(_grounded):
+                    # ACS is a prompt-defined hard indication the structured
+                    # system cannot see — floor to a human, never assert
+                    # against it (and never auto-clear on it either).
+                    final_classification = "NEEDS_REVIEW"
+                    review_reason = LLM_OVERCLEAR_REVIEW_REASON
+                else:
+                    final_classification = "INAPPROPRIATE"
+                    review_reason = LLM_OVERCLEAR_ASSERT_REASON
+            # else: a grounded qualified major bleed keeps the clear
+            # APPROPRIATE.
     # WHY: the prompt no longer permits a native NEEDS_REVIEW hedge. Convert a
     # well-formed, explained hedge to the committee's clear-cut verdict only
     # when neither a structured hard signal nor a qualified (grounded) bleed
@@ -795,6 +853,9 @@ def _build_audit_row(
         and _rbc_payload_well_formed(winning_result)
         and not _has_structured_hard_signal(context)
         and not qualified_bleeding_exempt(_grounded_indications(indications, context))
+        # A grounded high-confidence ACS citation makes the hedge a genuine
+        # human case (same rationale as the over-clear ACS floor above).
+        and not _grounded_acs_indication(_grounded_indications(indications, context))
     ):
         final_classification = "INAPPROPRIATE"
         review_reason = LLM_NATIVE_REVIEW_ASSERT_REASON

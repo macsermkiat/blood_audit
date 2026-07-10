@@ -219,6 +219,35 @@ class TestHasLifeThreateningMarker:
     def test_benign_language_does_not_flag(self, text: str) -> None:
         assert has_life_threatening_marker(text) is False
 
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "no active hemorrhage",
+            "denies uncontrolled bleeding",
+            "without active haemorrhage on exam",
+            "no evidence of hemorrhagic shock",
+            "not exsanguinating",
+            "ไม่มีเลือดออกไม่หยุด",  # "no unstoppable bleeding"
+            "ไม่พบ hemorrhagic shock",  # "hemorrhagic shock not found"
+        ],
+    )
+    def test_negated_markers_do_not_flag(self, text: str) -> None:
+        # Codex PR #97 P2: a negated marker documents the ABSENCE of the
+        # emergency. A raw substring hit on "no active hemorrhage" would let a
+        # mislabeled high-confidence quote exempt an over-clear — the exact
+        # negated-evidence scenario the guardrail exists to catch.
+        assert has_life_threatening_marker(text) is False
+
+    def test_negation_does_not_leak_across_clause_boundary(self) -> None:
+        # The lookback is clause-bounded: an unrelated negation earlier in the
+        # sentence must not suppress a genuine marker after a boundary.
+        assert (
+            has_life_threatening_marker(
+                "no fever today; active hemorrhage from varices"
+            )
+            is True
+        )
+
 
 class TestQualifiedBleedingExempt:
     """The exemption predicate: does a genuine major bleed keep the clear?

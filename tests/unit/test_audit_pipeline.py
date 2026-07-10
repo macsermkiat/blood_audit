@@ -1864,6 +1864,150 @@ class TestLlmOverclearGuardrail:
         assert row.final_classification == "APPROPRIATE"
         assert row.review_reason is None
 
+    def test_negated_life_threatening_quote_does_not_exempt(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #97 P2: "no active hemorrhage" grounds in the bundle (the
+        # note really says it), but it documents the ABSENCE of the emergency.
+        # A mislabeled high-confidence ACTIVE_BLEEDING citation of a negated
+        # marker must not exempt — the assert stands.
+        ctx = _row_context(
+            audit_id="audit-oc-bleed-negated",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="Overnight events: stable, no active hemorrhage",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "no active hemorrhage",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_grounded_acs_overclear_floors_to_review(self, tmp_path: object) -> None:
+        # Codex PR #97 P1: ACS is in the prompt's HARD vocabulary but has no
+        # structured extractor and no prose exemption path, so asserting
+        # INAPPROPRIATE would flip a prompt-compliant ACS clear into an
+        # unreviewed committee verdict. A grounded, high-confidence ACS
+        # citation floors to a human instead. It does NOT auto-clear:
+        # extending prose auto-clear trust beyond qualified bleeding is a
+        # committee decision (spec #89 accepted it for bleeding only).
+        ctx = _row_context(
+            audit_id="audit-oc-acs",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="Progress: NSTEMI with ongoing chest pain, troponin rising",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "ACS",
+                    "quote": "NSTEMI with ongoing chest pain",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+            reasoning_en="active ischemia justifies the gray-zone transfusion",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+        assert row.needs_human_review is True
+
+    def test_low_confidence_acs_still_asserts(self, tmp_path: object) -> None:
+        # Below the shared 0.8 prose-trust bar an ACS citation is not honored.
+        ctx = _row_context(
+            audit_id="audit-oc-acs-lowconf",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="Progress: NSTEMI with ongoing chest pain, troponin rising",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "ACS",
+                    "quote": "NSTEMI with ongoing chest pain",
+                    "source_id": "E1",
+                    "confidence": 0.5,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_ungrounded_acs_quote_still_asserts(self, tmp_path: object) -> None:
+        # A fabricated ACS quote (grounds nowhere in the bundle) never floors.
+        ctx = _row_context(
+            audit_id="audit-oc-acs-ungrounded",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="Routine post-op note, patient stable overnight",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "ACS",
+                    "quote": "NSTEMI with ongoing chest pain",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_qualified_bleed_beats_acs_floor(self, tmp_path: object) -> None:
+        # When a grounded qualified major bleed co-occurs with a grounded ACS
+        # citation, the committee-approved bleeding exemption wins and the
+        # clear survives as APPROPRIATE (the ACS floor is only reached when
+        # no exemption applies).
+        ctx = _row_context(
+            audit_id="audit-oc-acs-and-bleed",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=(
+                "EBL 400 mL from drain, ongoing ooze; NSTEMI with ongoing chest pain"
+            ),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "EBL 400 mL from drain",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                },
+                {
+                    "code": "ACS",
+                    "quote": "NSTEMI with ongoing chest pain",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                },
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "APPROPRIATE"
+        assert row.review_reason is None
+
     def test_ungrounded_bleed_quote_does_not_exempt(self, tmp_path: object) -> None:
         # The batch verifier is still the Phase-1 pass-through, so the
         # exemption itself must reject a bleed quote that appears nowhere in
@@ -2214,6 +2358,36 @@ class TestLlmOverclearGuardrail:
         assert row.final_classification == "INAPPROPRIATE"
         assert row.review_reason == LLM_NATIVE_REVIEW_ASSERT_REASON
         assert row.needs_human_review is False
+
+    def test_native_hedge_with_grounded_acs_stays_review(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #97 P1 (conversion side): a hedge that cites a grounded,
+        # high-confidence ACS indication is a genuine human case — converting
+        # it to INAPPROPRIATE would assert against the prompt's own hard code.
+        ctx = _row_context(
+            audit_id="audit-native-review-acs",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="Progress: NSTEMI with ongoing chest pain, troponin rising",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="NEEDS_REVIEW",
+            indications=[
+                {
+                    "code": "ACS",
+                    "quote": "NSTEMI with ongoing chest pain",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+            reasoning_en="possible ischemic indication, deferring to a human",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason is None
+        assert row.needs_human_review is True
 
     def test_native_needs_review_with_empty_reasoning_stays_review(
         self, tmp_path: object

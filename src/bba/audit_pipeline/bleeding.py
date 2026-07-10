@@ -96,6 +96,29 @@ _LIFE_THREATENING_MARKERS: tuple[str, ...] = (
 _ACTIVE_BLEEDING_PREFIX = "ACTIVE_BLEEDING"
 _ACTIVE_BLEEDING_NEGATIONS: tuple[str, ...] = ("RISK", "HISTORY", "NOT_ACTIVE")
 
+# Prose negators that turn a life-threatening marker into a documented
+# ABSENCE of the emergency ("no active hemorrhage"). Scanned in a short,
+# clause-bounded window before each marker occurrence (Codex PR #97 P2).
+# The screen deliberately errs fail-closed: a false negation hit merely
+# withholds the exemption (the assert stands); it can never auto-clear.
+_MARKER_NEGATION_TOKENS: tuple[str, ...] = (
+    "no ",
+    "not ",
+    "non-",
+    "without ",
+    "denies ",
+    "denied ",
+    "negative for ",
+    "ไม่มี",  # "there is no ..."
+    "ไม่พบ",  # "... not found"
+    "ปฏิเสธ",  # "denies ..."
+)
+_MARKER_NEGATION_WINDOW_CHARS = 30
+# A clause boundary cuts the lookback so an unrelated negation earlier in
+# the sentence ("no fever today; active hemorrhage") cannot suppress a
+# genuine marker in the next clause.
+_MARKER_CLAUSE_BOUNDARIES: tuple[str, ...] = (";", ".", ",", ":", "\n")
+
 
 def parse_max_volume_ml(text: str) -> float | None:
     """Return the largest documented blood-loss volume in ``text`` as mL.
@@ -127,9 +150,34 @@ def has_life_threatening_marker(text: str) -> bool:
     A conservative case-insensitive keyword scan (spec #89 §3.c). Benign
     bleeding language must not fire — this is the un-quantified path that can
     clear an order on prose alone, so it stays deliberately narrow.
+
+    Each marker occurrence is screened for a preceding negator within a
+    clause-bounded window ("no active hemorrhage" documents the ABSENCE of
+    the emergency, Codex PR #97 P2). The screen errs fail-closed: a false
+    negation hit only withholds the exemption, never auto-clears.
     """
     lowered = text.lower()
-    return any(marker in lowered for marker in _LIFE_THREATENING_MARKERS)
+    for marker in _LIFE_THREATENING_MARKERS:
+        start = 0
+        while (idx := lowered.find(marker, start)) != -1:
+            if not _marker_occurrence_negated(lowered, idx):
+                return True
+            start = idx + len(marker)
+    return False
+
+
+def _marker_occurrence_negated(lowered: str, marker_index: int) -> bool:
+    """True iff a negator precedes ``marker_index`` within the same clause."""
+    window = lowered[
+        max(0, marker_index - _MARKER_NEGATION_WINDOW_CHARS) : marker_index
+    ]
+    cut = max(
+        (window.rfind(boundary) for boundary in _MARKER_CLAUSE_BOUNDARIES),
+        default=-1,
+    )
+    if cut != -1:
+        window = window[cut + 1 :]
+    return any(token in window for token in _MARKER_NEGATION_TOKENS)
 
 
 def qualified_bleeding_exempt(indications: Iterable[Mapping[str, object]]) -> bool:
