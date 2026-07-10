@@ -234,6 +234,8 @@ class TestHasLifeThreateningMarker:
             "absence of active hemorrhage",
             "history of active hemorrhage",
             "risk of uncontrolled bleeding",
+            "r/o: active hemorrhage",  # PR #97 round 7: colon-formatted
+            "rule out: active hemorrhage",  # exclusions stay in the clause
         ],
     )
     def test_negated_markers_do_not_flag(self, text: str) -> None:
@@ -287,6 +289,12 @@ class TestHasLifeThreateningMarker:
 
     def test_bleeding_context_before_generic_marker_flags(self) -> None:
         assert has_life_threatening_marker("bleeding uncontrolled despite packing")
+
+    def test_label_colon_prefix_does_not_suppress_marker(self) -> None:
+        # A plain section label before a colon carries no negator; the marker
+        # must still flag (pins that the round-7 colon change only preserves
+        # negators, it does not suppress label-prefixed markers).
+        assert has_life_threatening_marker("Assessment: active hemorrhage ongoing")
 
     def test_post_marker_negation_does_not_leak_across_boundary(self) -> None:
         # A negation in the NEXT clause is about something else; the marker

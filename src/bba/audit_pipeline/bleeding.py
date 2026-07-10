@@ -130,7 +130,7 @@ _MARKER_NEGATION_TOKENS: tuple[str, ...] = (
     # non-events, not active bleeds.
     "ruled out",
     "rule out",
-    "r/o ",
+    "r/o",  # bare form so "r/o:" also matches (round 7)
     "absence of",
     "history of",
     "hx of",
@@ -143,8 +143,11 @@ _MARKER_NEGATION_TOKENS: tuple[str, ...] = (
 _MARKER_NEGATION_WINDOW_CHARS = 30
 # A clause boundary cuts the lookback so an unrelated negation earlier in
 # the sentence ("no fever today; active hemorrhage") cannot suppress a
-# genuine marker in the next clause.
-_MARKER_CLAUSE_BOUNDARIES: tuple[str, ...] = (";", ".", ",", ":", "\n")
+# genuine marker in the next clause. ":" is NOT a boundary on either side:
+# exclusion formatting binds across it ("r/o: active hemorrhage", round 7),
+# mirroring the post-marker "shock: absent" reasoning. A benign label
+# before a colon carries no negator, so markers still flag.
+_MARKER_CLAUSE_BOUNDARIES: tuple[str, ...] = (";", ".", ",", "\n")
 
 # Trailing negators that void the marker AFTER it in the same clause
 # ("active hemorrhage is not present", "uncontrolled bleeding denied" —
