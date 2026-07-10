@@ -1835,9 +1835,13 @@ class TestLlmOverclearGuardrail:
     def test_qualified_bleed_exempts_overclear_assertion(
         self, tmp_path: object
     ) -> None:
-        # A high-confidence major active bleed is the committee-approved prose exemption.
+        # A high-confidence major active bleed is the committee-approved prose
+        # exemption — and its quote must ground in the row's evidence bundle.
         ctx = _row_context(
-            audit_id="audit-oc-bleed-400", classification="NEEDS_REVIEW", hb_value=9.4
+            audit_id="audit-oc-bleed-400",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="Post-op note: EBL 400 mL from drain, ongoing ooze",
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
@@ -1854,6 +1858,58 @@ class TestLlmOverclearGuardrail:
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "APPROPRIATE"
         assert row.review_reason is None
+
+    def test_ungrounded_bleed_quote_does_not_exempt(self, tmp_path: object) -> None:
+        # The batch verifier is still the Phase-1 pass-through, so the
+        # exemption itself must reject a bleed quote that appears nowhere in
+        # the row's evidence — a fabricated major bleed must never auto-clear.
+        ctx = _row_context(
+            audit_id="audit-oc-bleed-ungrounded",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "EBL 400 mL from drain",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_bleed_quote_citing_unknown_source_does_not_exempt(
+        self, tmp_path: object
+    ) -> None:
+        # A quote must ground in the *cited* chunk; an unknown source_id is
+        # the same failure as a fabricated quote (fail closed).
+        ctx = _row_context(
+            audit_id="audit-oc-bleed-bad-source",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="Post-op note: EBL 400 mL from drain, ongoing ooze",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "EBL 400 mL from drain",
+                    "source_id": "E9",
+                    "confidence": 0.85,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
 
     def test_exactly_300_ml_does_not_exempt(self, tmp_path: object) -> None:
         # The major-bleed boundary is strictly greater than 300 mL.
@@ -1907,6 +1963,9 @@ class TestLlmOverclearGuardrail:
             audit_id="audit-oc-bleed-uncontrolled",
             classification="NEEDS_REVIEW",
             hb_value=9.4,
+            evidence_text=(
+                "Nursing note: uncontrolled bleeding from the tumor bed despite packing"
+            ),
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
@@ -1953,6 +2012,7 @@ class TestLlmOverclearGuardrail:
             audit_id="audit-oc-bleed-thai",
             classification="NEEDS_REVIEW",
             hb_value=9.4,
+            evidence_text="บันทึกพยาบาล: เสียเลือด 1,100 มล. ระหว่างผ่าตัด",
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
@@ -2075,6 +2135,7 @@ class TestLlmOverclearGuardrail:
             audit_id="audit-native-review-bleed",
             classification="NEEDS_REVIEW",
             hb_value=9.4,
+            evidence_text="Post-op note: EBL 400 mL from drain documented",
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,

@@ -52,6 +52,12 @@ from bba.platelet_guardrail import (
     platelet_overclear_suspect,
 )
 from bba.platelet_guardrail.models import PlateletHardSignals
+from bba.quote_grounder.layers import (
+    contiguous_match,
+    find_cited_source,
+    nfc_normalize,
+)
+from bba.quote_grounder.models import EvidenceSource
 from bba.vitals_extractor import PeriopSummary
 
 
@@ -181,7 +187,10 @@ def periop_contradiction(
 # symptomatic anaemia prose remains untrusted except for the one committee-
 # accepted exemption: an ACTIVE_BLEEDING indication with its own confidence
 # >= 0.8 and either volume strictly > 300 mL or a life-threatening marker (see
-# bleeding.py). Small or merely qualitative bleeds do not clear the guardrail.
+# bleeding.py), and whose quote GROUNDS in the row's own evidence bundle
+# (:func:`_grounded_indications` — the batch path's verifier is still the
+# Phase-1 pass-through, so quote existence must be checked here, not assumed).
+# Small or merely qualitative bleeds do not clear the guardrail.
 # =============================================================================
 
 LLM_OVERCLEAR_REVIEW_REASON = "llm_overclear_suspect"
@@ -290,6 +299,50 @@ def llm_overclear_suspect(
     if rule_classification not in _LLM_OVERCLEAR_DET_VERDICTS:
         return False
     return not _has_structured_hard_signal(context)
+
+
+def _grounded_indications(
+    indications: tuple[dict[str, object], ...],
+    context: PipelineRowContext,
+) -> tuple[dict[str, object], ...]:
+    """Filter ``indications`` to those whose quote grounds in the row's own
+    evidence bundle (quote_grounder Layers 2+3: the cited source exists and
+    the quote is a word-boundary contiguous match inside it, NFC-normalized).
+
+    WHY: the batch path's verifier is still the Phase-1 pass-through
+    (:func:`default_verifier`), so a winning attempt does NOT guarantee its
+    quotes exist in the notes. The qualified-bleeding exemption turns prose
+    directly into a final APPROPRIATE with no human review (#94); feeding it
+    an unverified quote would let a hallucinated bleed clear a withheld
+    order. The committee's prose-trust decision (spec #89 #2) covers the
+    model's *characterization* of documented text, not the text's existence
+    — existence is verified here.
+
+    Layers 4 (uniqueness) and 5 (min length 25) are deliberately NOT
+    applied: genuine bleed quotes are often short ("EBL 400 mL") and a
+    re-charted bleed strengthens rather than weakens the evidence; the
+    semantic bar (> 300 mL strictly, or a life-threatening marker, at
+    confidence >= 0.8) is enforced by
+    :func:`bba.audit_pipeline.bleeding.qualified_bleeding_exempt` on the
+    filtered list. Fail-closed: a missing/non-string quote or source_id, an
+    unknown cited id, or an empty bundle grounds nothing.
+    """
+    sources = tuple(
+        EvidenceSource(source_id=chunk.evidence_id, text=nfc_normalize(chunk.text))
+        for chunk in context.evidence_chunks
+    )
+    grounded: list[dict[str, object]] = []
+    for indication in indications:
+        quote = indication.get("quote")
+        cited_id = indication.get("source_id")
+        if not isinstance(quote, str) or not isinstance(cited_id, str):
+            continue
+        source = find_cited_source(cited_id, sources)
+        if source is None:
+            continue
+        if contiguous_match(nfc_normalize(quote), source.text):
+            grounded.append(indication)
+    return tuple(grounded)
 
 
 # =============================================================================
@@ -653,26 +706,29 @@ def _build_audit_row(
     # B1 over-clear guardrail (Cases 47 / 100): assert INAPPROPRIATE when an
     # LLM clears a withheld deterministic verdict without a structured hard
     # signal or the committee-approved qualified-major-bleeding exemption.
+    # The exemption only ever sees indications whose quote grounds in the
+    # row's evidence bundle — a fabricated bleed quote must never auto-clear.
     # Checked after peri-op so that earlier winner remains authoritative; the
     # LLM reasoning and indications are preserved for auditability.
     elif (
         context.component != "platelet"
         and llm_overclear_suspect(final_classification, rule_classification, context)
-        and not qualified_bleeding_exempt(indications)
+        and not qualified_bleeding_exempt(_grounded_indications(indications, context))
     ):
         final_classification = "INAPPROPRIATE"
         review_reason = LLM_OVERCLEAR_ASSERT_REASON
     # WHY: the prompt no longer permits a native NEEDS_REVIEW hedge. Convert a
     # well-formed, explained hedge to the committee's clear-cut verdict only
-    # when neither a structured hard signal nor a qualified bleed makes it a
-    # genuine human case; parse/schema failures already carry a reason.
+    # when neither a structured hard signal nor a qualified (grounded) bleed
+    # makes it a genuine human case; parse/schema failures already carry a
+    # reason.
     elif (
         context.component != "platelet"
         and final_classification == "NEEDS_REVIEW"
         and review_reason is None
         and (summary_en.strip() or summary_th.strip())
         and not _has_structured_hard_signal(context)
-        and not qualified_bleeding_exempt(indications)
+        and not qualified_bleeding_exempt(_grounded_indications(indications, context))
     ):
         final_classification = "INAPPROPRIATE"
         review_reason = LLM_NATIVE_REVIEW_ASSERT_REASON
