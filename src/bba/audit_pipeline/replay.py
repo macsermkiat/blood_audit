@@ -445,6 +445,21 @@ _FLUID_REFRACTORY_TOKENS: tuple[str, ...] = (
 )
 
 
+def _confidence_at_prose_trust_bar(confidence: object) -> bool:
+    """True iff ``confidence`` is a schema-valid probability at or above the
+    shared prose-trust bar.
+
+    Read defensively, same rules as
+    :func:`bba.audit_pipeline.bleeding.qualified_bleeding_exempt`:
+    non-numeric, bool, NaN, or out-of-[0,1] never counts.
+    """
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+        return False
+    if not (0.0 <= confidence <= 1.0):
+        return False
+    return confidence >= LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE
+
+
 def _cited_at_prose_trust(
     grounded_indications: tuple[dict[str, object], ...],
     codes: frozenset[str],
@@ -456,20 +471,13 @@ def _cited_at_prose_trust(
     must not be asserted against — the caller floors the row to
     ``NEEDS_REVIEW`` instead. It never auto-clears, because extending prose
     auto-clear trust beyond qualified bleeding is a committee decision
-    (spec #89 accepted bleeding only). Confidence is read defensively, same
-    rules as :func:`bba.audit_pipeline.bleeding.qualified_bleeding_exempt`:
-    non-numeric, bool, NaN, or out-of-[0,1] never counts.
+    (spec #89 accepted bleeding only).
     """
     for indication in grounded_indications:
         code = indication.get("code")
         if not isinstance(code, str) or code.strip().upper() not in codes:
             continue
-        confidence = indication.get("confidence")
-        if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
-            continue
-        if not (0.0 <= confidence <= 1.0):
-            continue
-        if confidence >= LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE:
+        if _confidence_at_prose_trust_bar(indication.get("confidence")):
             return True
     return False
 
@@ -501,21 +509,24 @@ def _qualified_hemodynamic_floor(
         return False
     for indication in grounded_indications:
         code = indication.get("code")
-        if isinstance(code, str) and is_active_bleeding_code(code.strip()):
-            confidence = indication.get("confidence")
-            if (
-                not isinstance(confidence, bool)
-                and isinstance(confidence, (int, float))
-                and 0.0 <= confidence <= 1.0
-                and confidence >= LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE
-            ):
-                return True
+        if (
+            isinstance(code, str)
+            and is_active_bleeding_code(code.strip())
+            and _confidence_at_prose_trust_bar(indication.get("confidence"))
+        ):
+            return True
     for indication in grounded_indications:
         code = indication.get("code")
         if (
             not isinstance(code, str)
             or code.strip().upper() not in _HEMODYNAMIC_HARD_CODES
         ):
+            continue
+        # Qualifier (3) applies to the refractory quote's OWN citation
+        # (Codex PR #99 P2): a low/malformed-confidence "despite fluid"
+        # quote must not floor just because a separate bare-hypotension
+        # citation cleared the bar.
+        if not _confidence_at_prose_trust_bar(indication.get("confidence")):
             continue
         quote = indication.get("quote")
         if isinstance(quote, str):

@@ -2231,6 +2231,44 @@ class TestLlmOverclearGuardrail:
         assert row.final_classification == "INAPPROPRIATE"
         assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
 
+    def test_low_confidence_refractory_quote_does_not_floor(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #99 P2: qualifier (3) requires the fluid-refractory quote
+        # to be its OWN >=0.8 citation. A high-conf bare-hypotension citation
+        # must not let a separate low-conf 'despite fluid' quote floor the
+        # row — the bare-hypotension assert stands.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-refract-lowconf",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=(
+                "NIBP 79/54 (MAP 63) mmHg, on Levophed; "
+                "BP 82/50 despite fluid resuscitation 1000 mL"
+            ),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                },
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "BP 82/50 despite fluid resuscitation 1000 mL",
+                    "source_id": "E1",
+                    "confidence": 0.4,
+                },
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
     def test_low_confidence_hemodynamic_still_asserts(self, tmp_path: object) -> None:
         ctx = _row_context(
             audit_id="audit-oc-hemo-lowconf",
