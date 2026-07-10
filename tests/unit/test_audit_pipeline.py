@@ -1528,6 +1528,7 @@ def _periop_llm_response(
     audit_id: str,
     classification: str,
     indications: list[dict[str, object]] | None = None,
+    negative_evidence: list[object] | None = None,
     reasoning_en: str = "model rationale",
     reasoning_th: str = "th",
     omit_input_keys: tuple[str, ...] = (),
@@ -1543,7 +1544,7 @@ def _periop_llm_response(
     input_payload: dict[str, object] = {
         "classification": classification,
         "indications": indications or [],
-        "negative_evidence": [],
+        "negative_evidence": negative_evidence or [],
         "reasoning_summary_en": reasoning_en,
         "reasoning_summary_th": reasoning_th,
     }
@@ -2108,8 +2109,13 @@ class TestLlmOverclearGuardrail:
         assert row.final_classification == "APPROPRIATE"
         assert row.review_reason is None
 
-    def test_malformed_indication_never_exempts(self, tmp_path: object) -> None:
-        # Malformed LLM indication fields must fail closed, never clear an order.
+    def test_malformed_indication_element_floors_to_review(
+        self, tmp_path: object
+    ) -> None:
+        # A wrong-SHAPED indication element (non-string quote, string
+        # confidence) is schema drift: the citation may be garbled rather
+        # than absent, so it never exempts AND is never asserted on — the
+        # over-clear fails closed to human review.
         ctx = _row_context(
             audit_id="audit-oc-bleed-malformed",
             classification="NEEDS_REVIEW",
@@ -2128,8 +2134,51 @@ class TestLlmOverclearGuardrail:
             ],
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
-        assert row.final_classification == "INAPPROPRIATE"
-        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+        assert row.needs_human_review is True
+
+    def test_non_mapping_indication_element_floors_to_review(
+        self, tmp_path: object
+    ) -> None:
+        # A bare-string element would be silently DROPPED by the shallow
+        # extraction — a lost citation must floor the over-clear, not read
+        # as "the model cited nothing".
+        ctx = _row_context(
+            audit_id="audit-oc-bleed-strelem",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=["ACTIVE_BLEEDING massive bleed"],  # type: ignore[list-item]
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+
+    def test_bad_negative_evidence_element_blocks_native_conversion(
+        self, tmp_path: object
+    ) -> None:
+        # negative_evidence items must be strings per the tool schema; a
+        # drifted element means the payload cannot be trusted enough to
+        # convert a hedge into a final INAPPROPRIATE.
+        ctx = _row_context(
+            audit_id="audit-native-bad-ne",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="NEEDS_REVIEW",
+            reasoning_en="hedge with reasoning but drifted negative evidence",
+            negative_evidence=[123],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason is None
+        assert row.needs_human_review is True
 
     def test_high_hb_soft_overclear_asserted_inappropriate(
         self, tmp_path: object

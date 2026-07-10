@@ -305,17 +305,39 @@ def llm_overclear_suspect(
     return not _has_structured_hard_signal(context)
 
 
+def _indication_element_well_formed(item: object) -> bool:
+    """True iff one ``indications[]`` element matches the tool item schema.
+
+    Mirrors ``transport._TOOL_INPUT_SCHEMA``'s item contract: an object with
+    string ``code`` / ``quote`` / ``source_id`` and numeric ``confidence``
+    (bool is not a number). Shape only — value-level failures (out-of-range
+    confidence, a non-qualifying bleed) are semantics, judged downstream by
+    :func:`bba.audit_pipeline.bleeding.qualified_bleeding_exempt`.
+    """
+    if not isinstance(item, Mapping):
+        return False
+    if not all(
+        isinstance(item.get(key), str) for key in ("code", "quote", "source_id")
+    ):
+        return False
+    confidence = item.get("confidence")
+    return not isinstance(confidence, bool) and isinstance(confidence, (int, float))
+
+
 def _rbc_payload_well_formed(result: BatchSubmissionResult) -> bool:
-    """True iff the tool-use payload carries both schema-required list fields.
+    """True iff the payload carries schema-shaped ``indications`` and
+    ``negative_evidence`` — required list fields with schema-shaped elements.
 
     WHY: the batch path's shallow extraction (:func:`_indications_from_result`)
-    cannot distinguish "the model cited nothing" from "the ``indications`` key
-    was lost to schema drift" — both read back as ``()``. The RBC tool schema
-    (``transport._TOOL_INPUT_SCHEMA``) requires ``indications`` and
-    ``negative_evidence``, so a payload missing either is drifted and the #94
-    assert branches must not treat its empty evidence as "no genuine
-    indication". Scoped to the assert branches only; row-level parse-failure
-    classification is unchanged.
+    cannot distinguish "the model cited nothing" from "citations lost to
+    schema drift": a missing key reads back as ``()``, a non-mapping element
+    is silently dropped, and a garbled element survives extraction only to be
+    skipped by every defensive downstream reader. The RBC tool schema
+    (``transport._TOOL_INPUT_SCHEMA``) pins both fields and their element
+    shapes, so any deviation means the #94 assert branches must not treat the
+    resulting evidence-absence as "no genuine indication". Shape only —
+    in-shape value failures stay semantic (bleeding.py). Scoped to the assert
+    branches; row-level parse-failure classification is unchanged.
     """
     content = result.raw_response_json.get("content", [])
     if not content:
@@ -326,11 +348,17 @@ def _rbc_payload_well_formed(result: BatchSubmissionResult) -> bool:
     input_payload = first.get("input", {})
     if not isinstance(input_payload, Mapping):
         return False
-    for key in ("indications", "negative_evidence"):
-        value = input_payload.get(key)
-        if not isinstance(value, Sequence) or isinstance(value, str | bytes):
-            return False
-    return True
+    indications = input_payload.get("indications")
+    if not isinstance(indications, Sequence) or isinstance(indications, str | bytes):
+        return False
+    if not all(_indication_element_well_formed(item) for item in indications):
+        return False
+    negative_evidence = input_payload.get("negative_evidence")
+    if not isinstance(negative_evidence, Sequence) or isinstance(
+        negative_evidence, str | bytes
+    ):
+        return False
+    return all(isinstance(item, str) for item in negative_evidence)
 
 
 def _grounded_indications(
