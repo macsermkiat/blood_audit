@@ -153,14 +153,12 @@ _HB_7_10_REVIEW_TEMPLATE: Final[str] = (
     + "\n"
     + _RBC_SOFT_CONTEXT
     + "\nAbsent EVERY hard indication, an Hb at or above {cohort_threshold} "
-    "g/dL is INAPPROPRIATE.\n\n"
-    + _RBC_OUTPUT_RULE
+    "g/dL is INAPPROPRIATE.\n\n" + _RBC_OUTPUT_RULE
 )
 
 
 _HB_GT_10_OVERRIDE_TEMPLATE: Final[str] = (
-    _BASE_PREAMBLE
-    + "\n\nTask mode: HB_GT_10_OVERRIDE (high-Hb override review).\n\n"
+    _BASE_PREAMBLE + "\n\nTask mode: HB_GT_10_OVERRIDE (high-Hb override review).\n\n"
     "This order has hemoglobin at or above 10 g/dL and was pre-classified "
     "POTENTIALLY_INAPPROPRIATE by the deterministic engine. Cohort threshold "
     "for this patient: {cohort_threshold} g/dL (deterministic input — do not "
@@ -175,8 +173,7 @@ _HB_GT_10_OVERRIDE_TEMPLATE: Final[str] = (
     + "\n"
     + _RBC_SOFT_CONTEXT
     + "\nAbsent EVERY override indication, an order at Hb 10 g/dL or above is "
-    "INAPPROPRIATE.\n\n"
-    + _RBC_OUTPUT_RULE
+    "INAPPROPRIATE.\n\n" + _RBC_OUTPUT_RULE
 )
 
 

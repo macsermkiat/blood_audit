@@ -202,9 +202,7 @@ def test_platelet_dispatch_never_uses_rbc_selector():
         }
     )
 
-    request = _build_submission_requests(
-        [platelet_ctx], run_id="run-rbc-task-mode"
-    )[0]
+    request = _build_submission_requests([platelet_ctx], run_id="run-rbc-task-mode")[0]
 
     assert platelet_ctx.hb_result.value_g_dl == 12.9
     assert request.task_mode == "PLATELET_REVIEW"

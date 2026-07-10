@@ -1394,7 +1394,13 @@ class TestRbcClearCutPromptSemantics:
     @pytest.mark.parametrize("mode", _RBC_MODES)
     def test_small_bleed_disqualifiers_enumerated(self, mode: str) -> None:
         prompt = system_prompt_for(task_mode=mode, cohort_threshold=7.5).lower()
-        for phrase in ("ecchymosis", "gauze", "tinged", "bleeding precaution", "oozing"):
+        for phrase in (
+            "ecchymosis",
+            "gauze",
+            "tinged",
+            "bleeding precaution",
+            "oozing",
+        ):
             assert phrase in prompt, (
                 f"{mode} prompt must name {phrase!r} as a disqualifying minor "
                 "bleed; these were the weak grounds the model over-cleared on"
@@ -1447,8 +1453,7 @@ class TestRbcClearCutPromptSemantics:
         # against the quoted lab evidence.
         prompt = system_prompt_for(task_mode="HB_GT_10_OVERRIDE", cohort_threshold=7.5)
         assert "at or above 10 g/dL" in prompt, (
-            "GT_10 prompt must state the inclusive >= 10 boundary as the "
-            "patient fact"
+            "GT_10 prompt must state the inclusive >= 10 boundary as the patient fact"
         )
         assert "> 10 g/dL" not in prompt, (
             "GT_10 prompt must not assert a strictly-greater Hb fact; "
