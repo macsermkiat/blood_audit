@@ -74,8 +74,12 @@ from bba.deterministic_classifier.models import (
 )
 
 HB_GT_10_THRESHOLD: float = 10.0
-"""PRD §6 Hb (g/dL) ceiling above which the deterministic pre-classification
-is ``POTENTIALLY_INAPPROPRIATE`` (LLM may override on positive evidence)."""
+"""PRD §6 Hb (g/dL) ceiling AT OR ABOVE which the deterministic
+pre-classification is ``POTENTIALLY_INAPPROPRIATE`` (the ``hb_ge_10``
+branch below; LLM may override on positive evidence). The boundary is
+inclusive: Hb exactly 10.0 is the high-Hb side, and RBC task-mode
+dispatch (:func:`bba.audit_pipeline.pipeline.rbc_task_mode`) mirrors
+this."""
 
 UNIVERSAL_LOW_HB_APPROPRIATE_THRESHOLD: float = 7.0
 """Hb (g/dL) below which RBC/LPRC orders are deterministically

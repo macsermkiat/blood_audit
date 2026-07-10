@@ -1455,6 +1455,20 @@ class TestRbcClearCutPromptSemantics:
             "dispatch includes Hb exactly 10.0"
         )
 
+    def test_gray_zone_band_tops_out_below_ten(self) -> None:
+        # HB_7_10 only: dispatch sends Hb >= 10.0 to the override mode, so
+        # the gray-zone band this prompt describes must top out strictly
+        # below 10 — a "7-10" band would claim Hb exactly 10.0 for both RBC
+        # modes at once, contradicting the task-mode glossary.
+        prompt = system_prompt_for(task_mode="HB_7_10_REVIEW", cohort_threshold=7.5)
+        assert "below 10 g/dL" in prompt, (
+            "gray-zone prompt must state its band tops out below 10 g/dL"
+        )
+        assert "7-10 g/dL" not in prompt, (
+            "gray-zone prompt must not describe an inclusive 7-10 band; "
+            "Hb exactly 10.0 dispatches to HB_GT_10_OVERRIDE"
+        )
+
 
 class TestRbcPromptHashGolden:
     """Pin the RBC prompt_hash to a known value (C1 review HIGH, Rule 9).
@@ -1474,8 +1488,12 @@ class TestRbcPromptHashGolden:
     # bless this change deliberately — a bare hash re-pin without them would be
     # blind. If this breaks WITHOUT a matching prompt edit, suspect a
     # serialization regression, not a stale pin.
+    # Re-pinned for #93 boundary alignment: the gray-zone band now reads
+    # "Hb 7 to below 10 g/dL" — "7-10" claimed Hb exactly 10.0 for both RBC
+    # modes while dispatch sends it to the override. Blessed by
+    # test_gray_zone_band_tops_out_below_ten.
     RBC_HB_7_10_75_EMPTY_EVIDENCE = (
-        "6538cb401faf6a713871211a4012bb3202dce0ce6d73ae21c2d9b4caf7426bba"
+        "507d8a6aa18fe939b903f9d382ded3996ca6a90b141417192680ac6409684852"
     )
     # Re-pinned for #93 boundary alignment: dispatch routes Hb >= 10.0 to this
     # template (engine ``hb_ge_10``), so its prose states the inclusive
@@ -1499,9 +1517,9 @@ class TestRbcPromptHashGolden:
         assert result.prompt_hash == self.RBC_HB_7_10_75_EMPTY_EVIDENCE
 
     def test_hb_gt_10_override_cohort_7_5_hash_is_pinned(self) -> None:
-        # The high-Hb override template is now dispatched for real (Hb>10 rows,
-        # #93), so its bytes land on persisted AuditRows and need their own
-        # reproducibility anchor alongside the gray-zone golden.
+        # The high-Hb override template is now dispatched for real (Hb >= 10
+        # rows, #93), so its bytes land on persisted AuditRows and need their
+        # own reproducibility anchor alongside the gray-zone golden.
         from bba.prompt_builder import PromptBuildRequest, build_prompt
 
         result = build_prompt(

@@ -137,7 +137,7 @@ _RBC_OUTPUT_RULE: Final[str] = (
 
 _HB_7_10_REVIEW_TEMPLATE: Final[str] = (
     _BASE_PREAMBLE + "\n\nTask mode: HB_7_10_REVIEW (gray-zone review).\n\n"
-    "This order has hemoglobin in the gray-zone band Hb 7-10 g/dL "
+    "This order has hemoglobin in the gray-zone band Hb 7 to below 10 g/dL "
     "(or Hb below the cohort threshold of {cohort_threshold} g/dL). "
     "Restrictive floor for this patient: {cohort_threshold} g/dL "
     "(deterministic input — do not re-derive).\n\n"
