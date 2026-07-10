@@ -1439,6 +1439,22 @@ class TestRbcClearCutPromptSemantics:
         )
         assert "7.5" in prompt, "the floor value must be injected verbatim"
 
+    def test_gt_10_override_states_inclusive_boundary(self) -> None:
+        # GT_10 only: dispatch routes Hb >= 10.0 to this template (the
+        # engine's hb_ge_10 branch is inclusive), so the prompt must not
+        # assert "Hb > 10 g/dL" as a patient fact — that is false for an
+        # order at exactly 10.0 and would hand the model a contradiction
+        # against the quoted lab evidence.
+        prompt = system_prompt_for(task_mode="HB_GT_10_OVERRIDE", cohort_threshold=7.5)
+        assert "at or above 10 g/dL" in prompt, (
+            "GT_10 prompt must state the inclusive >= 10 boundary as the "
+            "patient fact"
+        )
+        assert "> 10 g/dL" not in prompt, (
+            "GT_10 prompt must not assert a strictly-greater Hb fact; "
+            "dispatch includes Hb exactly 10.0"
+        )
+
 
 class TestRbcPromptHashGolden:
     """Pin the RBC prompt_hash to a known value (C1 review HIGH, Rule 9).
@@ -1461,8 +1477,13 @@ class TestRbcPromptHashGolden:
     RBC_HB_7_10_75_EMPTY_EVIDENCE = (
         "6538cb401faf6a713871211a4012bb3202dce0ce6d73ae21c2d9b4caf7426bba"
     )
+    # Re-pinned for #93 boundary alignment: dispatch routes Hb >= 10.0 to this
+    # template (engine ``hb_ge_10``), so its prose states the inclusive
+    # boundary ("at or above 10 g/dL") instead of asserting "Hb > 10 g/dL" —
+    # false patient fact at exactly 10.0. Blessed by
+    # test_gt_10_override_states_inclusive_boundary.
     RBC_HB_GT_10_75_EMPTY_EVIDENCE = (
-        "128e3b9292cfd6341255f804f99c7df7394cd464afaf0ac3d2ce33cab168e52e"
+        "4e40e37fbfb99d693f0cdc339a0b062e41b01c3d8f87dc8d91f0a2a50b14f429"
     )
 
     def test_hb_7_10_review_cohort_7_5_hash_is_pinned(self) -> None:

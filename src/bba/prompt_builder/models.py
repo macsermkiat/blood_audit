@@ -12,7 +12,7 @@ the PRD's deterministic-engine output:
 * ``HB_7_10_REVIEW`` — gray-zone case (Hb 7-10 g/dL, or Hb < cohort_threshold
   for the patient's cohort). The LLM reads the ±24-h note window for Tier-1
   indications + Tier-2 supportive context.
-* ``HB_GT_10_OVERRIDE`` — Hb > 10 case escalated for the LLM to look for a
+* ``HB_GT_10_OVERRIDE`` — Hb >= 10 case escalated for the LLM to look for a
   Tier-1 override from the fixed hard-indication vocabulary (ACTIVE_BLEEDING,
   HEMODYNAMIC_INSTABILITY, ACS, PERIOPERATIVE, MTP) that would justify
   ordering despite the deterministic ``POTENTIALLY_INAPPROPRIATE``

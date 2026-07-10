@@ -6,8 +6,9 @@ Three task modes:
   window for Tier-1 indications (active bleeding, hemodynamic instability,
   ACS, peri-operative, symptomatic anemia, neuro-target) and Tier-2
   supportive context. Requires ``cohort_threshold``.
-* ``HB_GT_10_OVERRIDE`` — Hb > 10 RBC case. The LLM looks for Tier-1
-  override conditions. Requires ``cohort_threshold``.
+* ``HB_GT_10_OVERRIDE`` — Hb >= 10 RBC case (the engine's ``hb_ge_10``
+  boundary; dispatch is inclusive at exactly 10.0). The LLM looks for
+  Tier-1 override conditions. Requires ``cohort_threshold``.
 * ``PLATELET_REVIEW`` — platelet transfusion audit against the Chula DRAFT
   policy (AABB/ICTMG 2025). Does NOT use ``cohort_threshold``; call
   :func:`platelet_system_prompt` directly (or :func:`system_prompt_for`
@@ -160,20 +161,20 @@ _HB_7_10_REVIEW_TEMPLATE: Final[str] = (
 _HB_GT_10_OVERRIDE_TEMPLATE: Final[str] = (
     _BASE_PREAMBLE
     + "\n\nTask mode: HB_GT_10_OVERRIDE (high-Hb override review).\n\n"
-    "This order has hemoglobin > 10 g/dL and was pre-classified "
+    "This order has hemoglobin at or above 10 g/dL and was pre-classified "
     "POTENTIALLY_INAPPROPRIATE by the deterministic engine. Cohort threshold "
     "for this patient: {cohort_threshold} g/dL (deterministic input — do not "
-    "re-derive). At Hb > 10 g/dL, transfusion is APPROPRIATE only when the "
-    "±24-hour clinical notes positively document at least one Tier-1 override "
-    "(HARD) indication from the vocabulary below. SUB_THRESHOLD_HB cannot apply "
-    "here — the Hb is above 10 g/dL, well above the {cohort_threshold} g/dL "
-    "floor.\n\n"
+    "re-derive). At Hb 10 g/dL or above, transfusion is APPROPRIATE only when "
+    "the ±24-hour clinical notes positively document at least one Tier-1 "
+    "override (HARD) indication from the vocabulary below. SUB_THRESHOLD_HB "
+    "cannot apply here — the Hb is at or above 10 g/dL, well above the "
+    "{cohort_threshold} g/dL floor.\n\n"
     + _RBC_INDICATION_VOCABULARY
     + "\n"
     + _RBC_ACTIVE_BLEEDING_RULE
     + "\n"
     + _RBC_SOFT_CONTEXT
-    + "\nAbsent EVERY override indication, an Hb > 10 g/dL order is "
+    + "\nAbsent EVERY override indication, an order at Hb 10 g/dL or above is "
     "INAPPROPRIATE.\n\n"
     + _RBC_OUTPUT_RULE
 )
