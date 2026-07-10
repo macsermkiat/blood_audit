@@ -263,8 +263,9 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
     #    and must clear (APPROPRIATE, below) regardless of an upcoming
     #    procedure. Deferring it would trap the order — the LLM re-clears the
     #    sub-threshold Hb and the over-clear guardrail (which exempts only
-    #    Hb < 7.0) floors it back to review (Codex P2). Non-threshold cohorts
-    #    (Hb-independent) fall through to their own routing below. Hb < 7.0
+    #    Hb < 7.0) now ASSERTS INAPPROPRIATE (#94), worsening the trap
+    #    (Codex P2). Non-threshold cohorts (Hb-independent) fall through to
+    #    their own routing below. Hb < 7.0
     #    already returned APPROPRIATE at step 2, so this only gates the
     #    [cohort_floor, ...) gray-zone / high-Hb pre-op cases.
     upcoming = inputs.upcoming_procedure_hours

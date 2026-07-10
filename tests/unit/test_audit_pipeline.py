@@ -61,6 +61,8 @@ from bba.audit_store import AuditRow, LlmCall
 from bba.audit_store.models import Classification
 from bba.audit_pipeline.replay import (
     EMPTY_REASONING_REVIEW_REASON,
+    LLM_NATIVE_REVIEW_ASSERT_REASON,
+    LLM_OVERCLEAR_ASSERT_REASON,
     LLM_OVERCLEAR_REVIEW_REASON,
     LLM_OVERCLEAR_UNSTABLE_HR,
     LLM_OVERCLEAR_UNSTABLE_SBP,
@@ -1650,12 +1652,14 @@ class TestLlmOverclearPredicate:
 
     The complementary arm of the peri-op guardrail: where
     ``periop_contradiction`` floors an LLM that UNDER-called against a hard
-    peri-op signal, ``llm_overclear_suspect`` floors an LLM that OVER-cleared
-    — returned APPROPRIATE on a gray-zone / missing-Hb order the deterministic
-    leg withheld (NEEDS_REVIEW / INSUFFICIENT_EVIDENCE) with NO structured
-    hard signal to justify it. Cases 47 (68062324) and 100 (68069089) are the
-    motivating over-clears. Exemption is deterministic-only (B1): sub-7.0 Hb,
-    hard peri-op signal, MTP cohort, or hemodynamic instability.
+    peri-op signal, ``llm_overclear_suspect`` identifies an LLM that OVER-cleared
+    — returned APPROPRIATE on a gray-zone / missing-Hb / high-Hb order the
+    deterministic leg withheld (NEEDS_REVIEW / INSUFFICIENT_EVIDENCE /
+    POTENTIALLY_INAPPROPRIATE) with NO structured hard signal to justify it.
+    Cases 47 (68062324) and 100 (68069089) are the
+    motivating over-clears. Structured exemptions are sub-7.0 Hb, hard peri-op
+    signal, MTP cohort, or hemodynamic instability; the call site separately
+    composes the committee-approved qualified-major-bleeding exemption.
     """
 
     def test_case_100_shape_is_overclear(self) -> None:
@@ -1728,29 +1732,40 @@ class TestLlmOverclearPredicate:
         ):
             assert llm_overclear_suspect(verdict, "NEEDS_REVIEW", ctx) is False
 
-    def test_committed_deterministic_verdict_never_fires(self) -> None:
-        # Only an LLM *upgrade* over a withholding det verdict qualifies. If the
-        # det leg already cleared (APPROPRIATE) or leaned negative on a high Hb
-        # (POTENTIALLY_INAPPROPRIATE, Hb >= 10 — handled by the HB_GT_10 prompt),
-        # there is no gray-zone upgrade for this guardrail to floor.
+    def test_deterministic_appropriate_never_fires(self) -> None:
+        # A deterministic clear cannot be over-cleared by the LLM.
         ctx = _row_context(audit_id="oc-10", hb_value=9.4)
         assert llm_overclear_suspect("APPROPRIATE", "APPROPRIATE", ctx) is False
+
+    def test_high_hb_soft_verdict_now_fires(self) -> None:
+        # Since #93 dispatches the high-Hb override, its withheld soft verdict
+        # must also be protected when the LLM clears it (#89 / #94).
+        ctx = _row_context(
+            audit_id="oc-11",
+            classification="POTENTIALLY_INAPPROPRIATE",
+            hb_value=12.9,
+        )
         assert (
             llm_overclear_suspect("APPROPRIATE", "POTENTIALLY_INAPPROPRIATE", ctx)
-            is False
+            is True
         )
 
     def test_review_reason_is_distinct(self) -> None:
-        assert LLM_OVERCLEAR_REVIEW_REASON not in {
+        reasons = {
             PERIOP_CONTRADICTION_REVIEW_REASON,
             "hallucination_suspect",
+            LLM_OVERCLEAR_REVIEW_REASON,
+            EMPTY_REASONING_REVIEW_REASON,
+            LLM_OVERCLEAR_ASSERT_REASON,
+            LLM_NATIVE_REVIEW_ASSERT_REASON,
         }
+        assert len(reasons) == 6
 
 
 class TestLlmOverclearGuardrail:
     """Integration pin on the B1 override inside ``apply_batch_results``."""
 
-    def test_case_100_overclear_floored_to_review(self, tmp_path: object) -> None:
+    def test_case_100_overclear_asserted_inappropriate(self, tmp_path: object) -> None:
         ctx = _row_context(
             audit_id="audit-oc-100", classification="NEEDS_REVIEW", hb_value=9.4
         )
@@ -1758,14 +1773,19 @@ class TestLlmOverclearGuardrail:
             audit_id=ctx.order.audit_id,
             classification="APPROPRIATE",
             indications=[
-                {"name": "THAL_TARGET_HB", "confidence": 0.97, "quote": "keep Hb >9"}
+                {
+                    "code": "THAL_TARGET_HB",
+                    "quote": "keep Hb >9",
+                    "source_id": "E1",
+                    "confidence": 0.97,
+                }
             ],
             reasoning_en="specialist target misread",
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
-        assert row.final_classification == "NEEDS_REVIEW"
-        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
-        assert row.needs_human_review is True
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+        assert row.needs_human_review is False
 
     def test_overclear_preserves_llm_reasoning_and_indications(
         self, tmp_path: object
@@ -1780,11 +1800,18 @@ class TestLlmOverclearGuardrail:
             audit_id=ctx.order.audit_id,
             classification="APPROPRIATE",
             indications=[
-                {"name": "SYMPTOMATIC_ANEMIA", "confidence": 0.9, "quote": "pale"}
+                {
+                    "code": "SYMPTOMATIC_ANEMIA",
+                    "quote": "pale",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
             ],
             reasoning_en="soft indications only",
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
         assert row.verifier_pass is True
         assert row.reasoning_summary_en == "soft indications only"
         assert len(row.indications_json) == 1
@@ -1804,6 +1831,284 @@ class TestLlmOverclearGuardrail:
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "APPROPRIATE"
+
+    def test_qualified_bleed_exempts_overclear_assertion(
+        self, tmp_path: object
+    ) -> None:
+        # A high-confidence major active bleed is the committee-approved prose exemption.
+        ctx = _row_context(
+            audit_id="audit-oc-bleed-400", classification="NEEDS_REVIEW", hb_value=9.4
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "EBL 400 mL from drain",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "APPROPRIATE"
+        assert row.review_reason is None
+
+    def test_exactly_300_ml_does_not_exempt(self, tmp_path: object) -> None:
+        # The major-bleed boundary is strictly greater than 300 mL.
+        ctx = _row_context(
+            audit_id="audit-oc-bleed-300", classification="NEEDS_REVIEW", hb_value=9.4
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "EBL 300 mL",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_low_confidence_major_bleed_does_not_exempt(self, tmp_path: object) -> None:
+        # Major-bleed prose is trusted only at indication confidence >= 0.8.
+        ctx = _row_context(
+            audit_id="audit-oc-bleed-low-confidence",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "EBL 400 mL from drain",
+                    "source_id": "E1",
+                    "confidence": 0.7,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_life_threatening_unquantified_bleed_exempts(
+        self, tmp_path: object
+    ) -> None:
+        # Explicit uncontrolled bleeding can qualify without a measured volume.
+        ctx = _row_context(
+            audit_id="audit-oc-bleed-uncontrolled",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "uncontrolled bleeding from the tumor bed",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "APPROPRIATE"
+        assert row.review_reason is None
+
+    def test_small_qualitative_bleed_does_not_exempt(self, tmp_path: object) -> None:
+        # Minor gauze staining is not a major active bleed, even at high confidence.
+        ctx = _row_context(
+            audit_id="audit-oc-bleed-small",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "2x2 cm gauze staining",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_thai_major_bleed_volume_exempts(self, tmp_path: object) -> None:
+        # Thai millilitre notation receives the same major-bleed exemption.
+        ctx = _row_context(
+            audit_id="audit-oc-bleed-thai",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "เสียเลือด 1,100 มล.",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "APPROPRIATE"
+        assert row.review_reason is None
+
+    def test_malformed_indication_never_exempts(self, tmp_path: object) -> None:
+        # Malformed LLM indication fields must fail closed, never clear an order.
+        ctx = _row_context(
+            audit_id="audit-oc-bleed-malformed",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": 500,
+                    "source_id": "E1",
+                    "confidence": "0.9",
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_high_hb_soft_overclear_asserted_inappropriate(
+        self, tmp_path: object
+    ) -> None:
+        # A soft clear of Hb >= 10 is withheld policy, not an automatic approval.
+        ctx = _row_context(
+            audit_id="audit-oc-high-hb",
+            classification="POTENTIALLY_INAPPROPRIATE",
+            hb_value=12.9,
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id, classification="APPROPRIATE"
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+        assert row.needs_human_review is False
+        assert row.rule_classification == "POTENTIALLY_INAPPROPRIATE"
+
+    def test_native_needs_review_converts_to_inappropriate(
+        self, tmp_path: object
+    ) -> None:
+        # A well-reasoned hedge is converted because the prompt no longer permits it.
+        ctx = _row_context(
+            audit_id="audit-native-review", classification="NEEDS_REVIEW", hb_value=9.4
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="NEEDS_REVIEW",
+            reasoning_en="gray-zone order lacks a transfusion indication",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_NATIVE_REVIEW_ASSERT_REASON
+        assert row.needs_human_review is False
+
+    def test_native_needs_review_with_empty_reasoning_stays_review(
+        self, tmp_path: object
+    ) -> None:
+        # An unexplained hedge belongs to the empty-reasoning safety net.
+        ctx = _row_context(
+            audit_id="audit-native-review-empty",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="NEEDS_REVIEW",
+            reasoning_en="",
+            reasoning_th="",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == EMPTY_REASONING_REVIEW_REASON
+
+    def test_native_needs_review_with_hard_signal_stays_review(
+        self, tmp_path: object
+    ) -> None:
+        # A hedge against a structured hard signal is a genuine human-review case.
+        ctx = _row_context(
+            audit_id="audit-native-review-hard",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            periop_summary=PeriopSummary(surgical_context=True),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="NEEDS_REVIEW",
+            reasoning_en="surgery documented but indication remains uncertain",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason is None
+        assert row.needs_human_review is True
+
+    def test_native_needs_review_with_qualified_bleed_stays_review(
+        self, tmp_path: object
+    ) -> None:
+        # A qualified major bleed makes a hedge a genuine human-review case.
+        ctx = _row_context(
+            audit_id="audit-native-review-bleed",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="NEEDS_REVIEW",
+            indications=[
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "EBL 400 mL from drain",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                }
+            ],
+            reasoning_en="major bleeding is documented but needs adjudication",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason is None
+
+    def test_overclear_with_empty_reasoning_uses_empty_reasoning_provenance(
+        self, tmp_path: object
+    ) -> None:
+        # Empty reasoning must override an assertion slug so provenance stays truthful.
+        ctx = _row_context(
+            audit_id="audit-oc-empty", classification="NEEDS_REVIEW", hb_value=9.4
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            reasoning_en="",
+            reasoning_th="",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == EMPTY_REASONING_REVIEW_REASON
 
 
 class TestPeriopContradictionGuardrail:
@@ -2496,8 +2801,12 @@ class TestEmptyReasoningGuardrail:
         assert row.review_reason is None
 
     def test_review_reason_is_distinct(self) -> None:
-        assert EMPTY_REASONING_REVIEW_REASON not in {
+        reasons = {
             PERIOP_CONTRADICTION_REVIEW_REASON,
             LLM_OVERCLEAR_REVIEW_REASON,
             "hallucination_suspect",
+            EMPTY_REASONING_REVIEW_REASON,
+            LLM_OVERCLEAR_ASSERT_REASON,
+            LLM_NATIVE_REVIEW_ASSERT_REASON,
         }
+        assert len(reasons) == 6

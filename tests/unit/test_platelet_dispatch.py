@@ -470,6 +470,31 @@ def test_platelet_rule_classification_is_platelet_derived(tmp_path):
     assert row.platelet_review_ceiling == 100.0
 
 
+def test_platelet_native_needs_review_is_not_converted(tmp_path):
+    """The RBC native-review assertion must remain isolated from platelet rows."""
+    # Platelet hedges use their own policy and must stay genuine review cases.
+    ctx = _platelet_ctx("audit-plt-native-review", platelet_count=50.0)
+    response = RawBatchResponse(
+        batch_id="msgbatch_plt_native_review",
+        results=(
+            _platelet_result_item(
+                "audit-plt-native-review", classification="NEEDS_REVIEW"
+            ),
+        ),
+    )
+    store = _audit_store(tmp_path)
+    apply_batch_results(
+        response,
+        audit_store=store,
+        run_id="run-plt-native-review",
+        contexts={"audit-plt-native-review": ctx},
+    )
+    row = store.read_audit_results()[0]
+    assert row.final_classification == "NEEDS_REVIEW"
+    assert row.review_reason is None
+    assert row.needs_human_review is True
+
+
 def test_platelet_overclear_floors_ungrounded_appropriate(tmp_path, monkeypatch):
     """C2b: flag ON — an LLM APPROPRIATE on a sub-ceiling count with NO grounded
     hard signal floors to NEEDS_REVIEW with the platelet over-clear reason. This

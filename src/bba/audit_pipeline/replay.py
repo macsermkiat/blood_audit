@@ -30,6 +30,7 @@ from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final, NamedTuple
 
+from bba.audit_pipeline.bleeding import qualified_bleeding_exempt
 from bba.audit_pipeline.models import PipelineRowContext, PipelineRunResult
 from bba.audit_store import AuditRow, AuditStore, LlmCall
 from bba.audit_store.models import Classification
@@ -169,22 +170,43 @@ def periop_contradiction(
 # (Case 100, 68069089).
 #
 # This is the symmetric arm: when the LLM upgrades a withholding deterministic
-# verdict to APPROPRIATE and NO structured hard signal justifies it, floor the
-# row to human review (NEEDS_REVIEW) with a distinct review_reason. The prompt
-# recalibration teaches the model to return INAPPROPRIATE for these; this
-# guardrail is the deterministic NET for when it clears anyway. Per the locked
-# design (Path A + guardrail-as-net), the deterministic layer NEVER asserts
-# INAPPROPRIATE here — it only floors to review.
+# verdict to APPROPRIATE and no accepted exemption justifies it, spec #89 / T5
+# requires the guardrail to ASSERT INAPPROPRIATE with a distinct review_reason.
+# ``needs_human_review`` then auto-clears because it derives from the final
+# classification. The prompt teaches the same clear-cut policy; this guardrail
+# is the deterministic net for when the model clears anyway.
 #
 # "Hard signal" is deterministic-only (B1): a genuinely low Hb (< 7.0), a hard
 # peri-op signal, an MTP cohort, or hemodynamic instability. Bleeding /
-# symptomatic anaemia asserted only in the LLM's prose is deliberately NOT
-# trusted as an exemption — that soft prose is exactly what over-cleared these
-# cases. The measured cost (a gray-zone prose-only bleeding clear also routes
-# to review) is accepted and tracked in the verification harness.
+# symptomatic anaemia prose remains untrusted except for the one committee-
+# accepted exemption: an ACTIVE_BLEEDING indication with its own confidence
+# >= 0.8 and either volume strictly > 300 mL or a life-threatening marker (see
+# bleeding.py). Small or merely qualitative bleeds do not clear the guardrail.
 # =============================================================================
 
 LLM_OVERCLEAR_REVIEW_REASON = "llm_overclear_suspect"
+"""Historical review-reason slug stamped by the pre-#94 over-clear floor.
+
+Persisted rows created before #94 can carry this value, so it remains exported;
+no current code path stamps it.
+"""
+
+LLM_OVERCLEAR_ASSERT_REASON = "llm_overclear_asserted_inappropriate"
+"""Reason slug for a clear-cut over-clear assertion.
+
+WHY: spec #89 requires the committee's clear-cut ``INAPPROPRIATE`` call rather
+than deferral; ``needs_human_review`` auto-clears from the final classification.
+"""
+
+LLM_NATIVE_REVIEW_ASSERT_REASON = "llm_native_review_asserted_inappropriate"
+"""Reason slug for converting a well-formed native LLM hedge.
+
+WHY: the prompt no longer allows ``NEEDS_REVIEW``. A hedge with reasoning, no
+structured hard signal, and no qualified bleed becomes the clear-cut verdict.
+Parse failures already have a non-None reason and are never converted, while
+the non-empty-reasoning gate leaves unexplained verdicts to the empty-reasoning
+net. Platelet rows are excluded by the component gate.
+"""
 
 EMPTY_REASONING_REVIEW_REASON = "empty_reasoning"
 """Review-reason slug for a verdict with no reasoning in either language.
@@ -194,11 +216,10 @@ were completely empty — one classified APPROPRIATE with
 needs_human_review=False, i.e. an unexplained automatic clear. A
 verdict the committee cannot audit is floored to NEEDS_REVIEW.
 """
-"""Typed review_reason stamped on rows floored by the B1 over-clear guardrail.
 
-Distinct from ``periop_signal_contradiction`` (the LLM under-called) and
-``hallucination_suspect`` (verifier rejected every attempt) so a reviewer
-dashboard can triage the three failure modes separately."""
+_LLM_ASSERT_REASONS: frozenset[str] = frozenset(
+    {LLM_OVERCLEAR_ASSERT_REASON, LLM_NATIVE_REVIEW_ASSERT_REASON}
+)
 
 LLM_OVERCLEAR_UNSTABLE_SBP: float = 90.0
 """Systolic BP (mmHg) strictly below which the patient is hemodynamically
@@ -210,12 +231,16 @@ LLM_OVERCLEAR_UNSTABLE_HR: float = 120.0
 hemodynamically stressed — the second hard hemodynamic exemption signal."""
 
 _LLM_OVERCLEAR_DET_VERDICTS: frozenset[Classification] = frozenset(
-    {"NEEDS_REVIEW", "INSUFFICIENT_EVIDENCE"}
+    {"NEEDS_REVIEW", "INSUFFICIENT_EVIDENCE", "POTENTIALLY_INAPPROPRIATE"}
 )
-"""Deterministic verdicts that "withheld" a clear. Only an LLM APPROPRIATE
-that upgrades one of these is an over-clear candidate. A deterministic
-APPROPRIATE (already cleared) or POTENTIALLY_INAPPROPRIATE (Hb >= 10, handled
-by the HB_GT_10 override prompt) is out of scope for this gray-zone guardrail."""
+"""Deterministic verdicts that withheld a clear.
+
+An LLM ``APPROPRIATE`` upgrading any of these is an over-clear candidate. Per
+spec #89, the high-Hb (Hb >= 10) ``POTENTIALLY_INAPPROPRIATE`` verdict is also
+withheld: #93 dispatches the HB_GT_10 override prompt, but a soft clear there
+must still be asserted ``INAPPROPRIATE``. The hard-signal exemption set is
+unchanged.
+"""
 
 
 def _has_hard_hemodynamic_signal(context: PipelineRowContext) -> bool:
@@ -253,9 +278,12 @@ def llm_overclear_suspect(
     """True iff the LLM over-cleared a withholding deterministic verdict.
 
     Fires only when the LLM returned ``APPROPRIATE``, the deterministic leg
-    had withheld the clear (``NEEDS_REVIEW`` / ``INSUFFICIENT_EVIDENCE``), and
-    no structured hard signal (:func:`_has_structured_hard_signal`) justifies
-    the clear. Deterministic and side-effect-free so the override in
+    withheld the clear (``NEEDS_REVIEW``, ``INSUFFICIENT_EVIDENCE``, or the
+    high-Hb ``POTENTIALLY_INAPPROPRIATE`` verdict), and no structured hard
+    signal (:func:`_has_structured_hard_signal`) justifies the clear. The
+    qualified-bleeding prose exemption is deliberately composed at the call
+    site so this pure predicate's signature and structured-signal scope stay
+    unchanged. Deterministic and side-effect-free so the override in
     :func:`_build_audit_row` is trivially testable and replay-stable."""
     if final_classification != "APPROPRIATE":
         return False
@@ -622,17 +650,32 @@ def _build_audit_row(
     ):
         final_classification = "NEEDS_REVIEW"
         review_reason = PERIOP_CONTRADICTION_REVIEW_REASON
-    # B1 over-clear guardrail (Cases 47 / 100): the symmetric arm. An LLM
-    # APPROPRIATE upgrading a withholding deterministic verdict, with no
-    # structured hard signal, is floored to human review. Checked after the
-    # peri-op guardrail; if that already rewrote the verdict to NEEDS_REVIEW
-    # this is inert (final_classification is no longer APPROPRIATE). The LLM
-    # reasoning / indications are preserved so the reviewer sees the conflict.
-    elif context.component != "platelet" and llm_overclear_suspect(
-        final_classification, rule_classification, context
+    # B1 over-clear guardrail (Cases 47 / 100): assert INAPPROPRIATE when an
+    # LLM clears a withheld deterministic verdict without a structured hard
+    # signal or the committee-approved qualified-major-bleeding exemption.
+    # Checked after peri-op so that earlier winner remains authoritative; the
+    # LLM reasoning and indications are preserved for auditability.
+    elif (
+        context.component != "platelet"
+        and llm_overclear_suspect(final_classification, rule_classification, context)
+        and not qualified_bleeding_exempt(indications)
     ):
-        final_classification = "NEEDS_REVIEW"
-        review_reason = LLM_OVERCLEAR_REVIEW_REASON
+        final_classification = "INAPPROPRIATE"
+        review_reason = LLM_OVERCLEAR_ASSERT_REASON
+    # WHY: the prompt no longer permits a native NEEDS_REVIEW hedge. Convert a
+    # well-formed, explained hedge to the committee's clear-cut verdict only
+    # when neither a structured hard signal nor a qualified bleed makes it a
+    # genuine human case; parse/schema failures already carry a reason.
+    elif (
+        context.component != "platelet"
+        and final_classification == "NEEDS_REVIEW"
+        and review_reason is None
+        and (summary_en.strip() or summary_th.strip())
+        and not _has_structured_hard_signal(context)
+        and not qualified_bleeding_exempt(indications)
+    ):
+        final_classification = "INAPPROPRIATE"
+        review_reason = LLM_NATIVE_REVIEW_ASSERT_REASON
     # Platelet over-clear guardrail (Stage C2, "ADD hard signals" ruling): an
     # LLM APPROPRIATE on any withheld platelet verdict with NO grounded platelet
     # hard signal floors to review.  Keyed on context.component only — NOT on
@@ -649,11 +692,12 @@ def _build_audit_row(
         review_reason = PLATELET_OVERCLEAR_REVIEW_REASON
     # Empty-reasoning guardrail: a verdict with no reasoning in either
     # language cannot be audited by the committee. Separate `if` (not
-    # elif) so it composes with the guardrails above; an earlier, more
-    # specific review_reason is preserved.
+    # elif) so it composes with the guardrails above. Preserve genuine review
+    # provenance, but overwrite assertion provenance when this net changes the
+    # final verdict: invariant — an assertion slug implies INAPPROPRIATE.
     if not summary_en.strip() and not summary_th.strip():
         final_classification = "NEEDS_REVIEW"
-        if review_reason is None:
+        if review_reason is None or review_reason in _LLM_ASSERT_REASONS:
             review_reason = EMPTY_REASONING_REVIEW_REASON
     return AuditRow(
         audit_id=context.order.audit_id,
@@ -1055,6 +1099,8 @@ def _confidence_from_attempts(
 
 __all__ = [
     "EMPTY_REASONING_REVIEW_REASON",
+    "LLM_NATIVE_REVIEW_ASSERT_REASON",
+    "LLM_OVERCLEAR_ASSERT_REASON",
     "LLM_OVERCLEAR_REVIEW_REASON",
     "LLM_OVERCLEAR_UNSTABLE_HR",
     "LLM_OVERCLEAR_UNSTABLE_SBP",
