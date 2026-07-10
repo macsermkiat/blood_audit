@@ -32,6 +32,7 @@ from typing import Final, NamedTuple
 
 from bba.audit_pipeline.bleeding import (
     LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE,
+    is_active_bleeding_code,
     qualified_bleeding_exempt,
 )
 from bba.audit_pipeline.models import PipelineRowContext, PipelineRunResult
@@ -421,10 +422,27 @@ def _grounded_indications(
 #   * HEMODYNAMIC_INSTABILITY — the structured extractor sees one vitals
 #     snapshot (SBP < 90 / HR > 120); the prompt's definition also covers
 #     documented shock / pressor support that only lives in prose (round 5).
-#     When the structured signal DID fire, llm_overclear_suspect never
-#     triggers and the clear stands — this floor covers the coverage gap.
+#     Owner ruling (#98, 2026-07-11): bare hypotension — even on pressors —
+#     is NOT a transfusion indication; the citation floors ONLY when
+#     accompanied by (1) grounded active-bleeding evidence, (2) severe organ
+#     ischemia (the separate ACS floor), or (3) fluid-refractory language.
 _ACS_HARD_CODES: frozenset[str] = frozenset({"ACS"})
 _HEMODYNAMIC_HARD_CODES: frozenset[str] = frozenset({"HEMODYNAMIC_INSTABILITY"})
+
+# Conservative fluid-refractoriness markers (owner ruling qualifier 3, SEED —
+# term list tunable with clinician input). Scanned only inside the grounded
+# instability citation's own quote.
+_FLUID_REFRACTORY_TOKENS: tuple[str, ...] = (
+    "unresponsive to fluid",
+    "not responding to fluid",
+    "no response to fluid",
+    "refractory",
+    "despite fluid",
+    "despite iv load",
+    "despite volume",
+    "despite resuscitation",
+    "ไม่ตอบสนอง",  # "not responding ..."
+)
 
 
 def _cited_at_prose_trust(
@@ -463,12 +481,48 @@ def _grounded_acs_indication(
     return _cited_at_prose_trust(grounded_indications, _ACS_HARD_CODES)
 
 
-def _grounded_hemodynamic_indication(
+def _qualified_hemodynamic_floor(
     grounded_indications: tuple[dict[str, object], ...],
 ) -> bool:
-    """Grounded HEMODYNAMIC_INSTABILITY citation at the prose-trust bar —
-    reached only when the structured vitals signal did not fire."""
-    return _cited_at_prose_trust(grounded_indications, _HEMODYNAMIC_HARD_CODES)
+    """Grounded HEMODYNAMIC_INSTABILITY citation at the prose-trust bar,
+    accompanied by transfusion-relevant evidence — reached only when the
+    structured vitals signal did not fire.
+
+    Owner ruling (#98, 2026-07-11): hypotension without evidence of active
+    bleeding, severe organ ischemia, or fluid-refractoriness is not a
+    transfusion indication and stays asserted. Accompaniment here is (1) a
+    grounded, non-negation-qualified ACTIVE_BLEEDING-family citation at the
+    shared bar (a possible hemorrhagic-shock picture below the
+    qualified-major-bleed bar), or (3) fluid-refractory language inside the
+    instability citation's own quote. Qualifier (2), organ ischemia, is the
+    separate grounded-ACS floor.
+    """
+    if not _cited_at_prose_trust(grounded_indications, _HEMODYNAMIC_HARD_CODES):
+        return False
+    for indication in grounded_indications:
+        code = indication.get("code")
+        if isinstance(code, str) and is_active_bleeding_code(code.strip()):
+            confidence = indication.get("confidence")
+            if (
+                not isinstance(confidence, bool)
+                and isinstance(confidence, (int, float))
+                and 0.0 <= confidence <= 1.0
+                and confidence >= LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE
+            ):
+                return True
+    for indication in grounded_indications:
+        code = indication.get("code")
+        if (
+            not isinstance(code, str)
+            or code.strip().upper() not in _HEMODYNAMIC_HARD_CODES
+        ):
+            continue
+        quote = indication.get("quote")
+        if isinstance(quote, str):
+            lowered = quote.lower()
+            if any(token in lowered for token in _FLUID_REFRACTORY_TOKENS):
+                return True
+    return False
 
 
 # The prompt's fixed HARD code for a genuinely sub-floor order-time Hb
@@ -887,7 +941,7 @@ def _build_audit_row(
             if not qualified_bleeding_exempt(_grounded):
                 if (
                     _grounded_acs_indication(_grounded)
-                    or _grounded_hemodynamic_indication(_grounded)
+                    or _qualified_hemodynamic_floor(_grounded)
                     or _grounded_true_subthreshold_indication(_grounded, context)
                 ):
                     # A prompt-defined hard indication the structured system
@@ -920,7 +974,7 @@ def _build_audit_row(
         # structurally true sub-floor Hb makes the hedge a genuine human
         # case (same rationale as the over-clear floors above).
         and not _grounded_acs_indication(_grounded_indications(indications, context))
-        and not _grounded_hemodynamic_indication(
+        and not _qualified_hemodynamic_floor(
             _grounded_indications(indications, context)
         )
         and not _grounded_true_subthreshold_indication(

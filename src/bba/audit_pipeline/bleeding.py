@@ -23,6 +23,7 @@ __all__ = [
     "LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE",
     "LLM_OVERCLEAR_MIN_BLEED_ML",
     "has_life_threatening_marker",
+    "is_active_bleeding_code",
     "parse_max_volume_ml",
     "qualified_bleeding_exempt",
 ]
@@ -109,6 +110,19 @@ def _code_negation_qualified(upper_code: str) -> bool:
     return any(
         first == "NOT" and second == "ACTIVE"
         for first, second in zip(segments, segments[1:])
+    )
+
+
+def is_active_bleeding_code(code: str) -> bool:
+    """True iff ``code`` is ACTIVE_BLEEDING-family with no negation qualifier.
+
+    Shared with the replay guardrail's hemodynamic-accompaniment check
+    (owner ruling on #98): a hypotension citation only floors to review when
+    real bleeding evidence accompanies it, judged by the same code-family
+    rules as the exemption itself."""
+    upper = code.upper()
+    return upper.startswith(_ACTIVE_BLEEDING_PREFIX) and not _code_negation_qualified(
+        upper
     )
 
 
