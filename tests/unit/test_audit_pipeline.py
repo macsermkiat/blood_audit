@@ -1973,6 +1973,136 @@ class TestLlmOverclearGuardrail:
         assert row.final_classification == "INAPPROPRIATE"
         assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
 
+    @staticmethod
+    def _single_low_hb_ctx(
+        audit_id: str, *, hb: float, threshold: float
+    ) -> PipelineRowContext:
+        # The real-world route for a sub-floor Hb the deterministic leg still
+        # withholds: a single low Hb with no supporting trend
+        # (needs_review_single_low_hb). The fixture helper clamps NEEDS_REVIEW
+        # rows to hb >= threshold, so rebuild the Hb result explicitly.
+        ctx = _row_context(
+            audit_id=audit_id,
+            classification="NEEDS_REVIEW",
+            hb_value=threshold + 0.5,
+            cohort_threshold=threshold,
+            evidence_text="Lab: Hb 7.6 g/dL this morning, no prior value",
+        )
+        return ctx.model_copy(
+            update={
+                "hb_result": ctx.hb_result.model_copy(
+                    update={
+                        "value_g_dl": hb,
+                        "needs_review_single_low_hb": True,
+                    }
+                )
+            }
+        )
+
+    def test_grounded_true_subthreshold_overclear_floors_to_review(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #97 round 3: the prompt defines SUB_THRESHOLD_HB (Hb
+        # strictly below the cohort floor) as HARD. When the claim is
+        # structurally TRUE (hb < threshold; the deterministic leg withheld
+        # only because the value was unreliable), asserting INAPPROPRIATE
+        # would contradict the prompt's own contract — floor to a human.
+        ctx = self._single_low_hb_ctx("audit-oc-subthr", hb=7.6, threshold=8.0)
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "SUB_THRESHOLD_HB",
+                    "quote": "Hb 7.6 g/dL this morning",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+            reasoning_en="single Hb below the 8.0 cohort floor",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+        assert row.needs_human_review is True
+
+    def test_structurally_false_subthreshold_claim_still_asserts(
+        self, tmp_path: object
+    ) -> None:
+        # The motivating over-clear class: an at/above-floor Hb mislabeled
+        # "sub-threshold" (spec #89 story 6). The structural cross-check
+        # (hb >= threshold) keeps the assert.
+        ctx = _row_context(
+            audit_id="audit-oc-subthr-false",
+            classification="NEEDS_REVIEW",
+            hb_value=7.6,
+            cohort_threshold=7.0,
+            evidence_text="Lab: Hb 7.6 g/dL this morning, no prior value",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "SUB_THRESHOLD_HB",
+                    "quote": "Hb 7.6 g/dL this morning",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_low_confidence_true_subthreshold_still_asserts(
+        self, tmp_path: object
+    ) -> None:
+        # The structural truth alone is not enough — the citation must carry
+        # the shared >=0.8 prose-trust confidence.
+        ctx = self._single_low_hb_ctx("audit-oc-subthr-lowconf", hb=7.6, threshold=8.0)
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "SUB_THRESHOLD_HB",
+                    "quote": "Hb 7.6 g/dL this morning",
+                    "source_id": "E1",
+                    "confidence": 0.5,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_native_hedge_with_true_subthreshold_stays_review(
+        self, tmp_path: object
+    ) -> None:
+        # Conversion side of the same rule: a hedge citing a structurally
+        # true sub-floor Hb is a genuine human case.
+        ctx = self._single_low_hb_ctx(
+            "audit-native-review-subthr", hb=7.6, threshold=8.0
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="NEEDS_REVIEW",
+            indications=[
+                {
+                    "code": "SUB_THRESHOLD_HB",
+                    "quote": "Hb 7.6 g/dL this morning",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+            reasoning_en="single unconfirmed Hb below floor, deferring",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason is None
+        assert row.needs_human_review is True
+
     def test_qualified_bleed_beats_acs_floor(self, tmp_path: object) -> None:
         # When a grounded qualified major bleed co-occurs with a grounded ACS
         # citation, the committee-approved bleeding exemption wins and the

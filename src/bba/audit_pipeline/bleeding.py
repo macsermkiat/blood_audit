@@ -93,8 +93,24 @@ _LIFE_THREATENING_MARKERS: tuple[str, ...] = (
 
 # Negation qualifiers that disqualify an otherwise ACTIVE_BLEEDING-prefixed
 # code: a risk of / history of / not-active bleed is not an active bleed.
+# Matched as whole _-delimited tokens (NOT_ACTIVE as an adjacent pair) so a
+# genuine qualifier like ACTIVE_BLEEDING_BRISK is not misread as RISK
+# (Codex PR #97 round 3).
 _ACTIVE_BLEEDING_PREFIX = "ACTIVE_BLEEDING"
-_ACTIVE_BLEEDING_NEGATIONS: tuple[str, ...] = ("RISK", "HISTORY", "NOT_ACTIVE")
+_ACTIVE_BLEEDING_NEGATION_TOKENS: frozenset[str] = frozenset({"RISK", "HISTORY"})
+
+
+def _code_negation_qualified(upper_code: str) -> bool:
+    """True iff the _-delimited code carries a RISK / HISTORY / NOT_ACTIVE
+    qualifier as whole tokens."""
+    segments = upper_code.split("_")
+    if any(segment in _ACTIVE_BLEEDING_NEGATION_TOKENS for segment in segments):
+        return True
+    return any(
+        first == "NOT" and second == "ACTIVE"
+        for first, second in zip(segments, segments[1:])
+    )
+
 
 # Prose negators that turn a life-threatening marker into a documented
 # ABSENCE of the emergency ("no active hemorrhage"). Scanned in a short,
@@ -238,7 +254,7 @@ def qualified_bleeding_exempt(indications: Iterable[Mapping[str, object]]) -> bo
         upper = code.upper()
         if not upper.startswith(_ACTIVE_BLEEDING_PREFIX):
             continue
-        if any(negation in upper for negation in _ACTIVE_BLEEDING_NEGATIONS):
+        if _code_negation_qualified(upper):
             continue
 
         confidence = indication.get("confidence")

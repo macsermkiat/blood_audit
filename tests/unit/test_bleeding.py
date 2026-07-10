@@ -329,6 +329,20 @@ class TestQualifiedBleedingExempt:
             [_active_bleed(quote="EBL 1100 mL", confidence=0.95, code=code)]
         )
 
+    def test_brisk_family_code_is_not_negation_qualified(self) -> None:
+        # Codex PR #97 round 3: negation qualifiers must match whole
+        # _-delimited tokens — BRISK contains RISK as a substring, but a
+        # brisk >300 mL bleed is a genuine major active bleed and must exempt.
+        assert qualified_bleeding_exempt(
+            [
+                _active_bleed(
+                    quote="brisk bleeding, EBL 400 mL",
+                    confidence=0.9,
+                    code="ACTIVE_BLEEDING_BRISK",
+                )
+            ]
+        )
+
     @pytest.mark.parametrize(
         "code",
         [

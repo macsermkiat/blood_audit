@@ -199,14 +199,17 @@ def periop_contradiction(
 LLM_OVERCLEAR_REVIEW_REASON = "llm_overclear_suspect"
 """Review-reason slug for an over-clear that could not be safely asserted.
 
-Pre-#94 every over-clear floor stamped this. Post-#94 it survives on two
+Pre-#94 every over-clear floor stamped this. Post-#94 it survives on three
 narrow paths: (1) an over-clear whose tool payload is missing a
 schema-required list field (:func:`_rbc_payload_well_formed`) — drift may
 have dropped cited evidence, so the row floors to human review instead of
 asserting ``INAPPROPRIATE`` on evidence-absence we cannot distinguish from
 loss; (2) an over-clear citing a grounded, high-confidence ACS indication
 (:func:`_grounded_acs_indication`) — a prompt-defined hard code the
-structured system cannot verify, so neither asserting nor auto-clearing is
+structured system cannot verify; (3) an over-clear citing a grounded,
+high-confidence, structurally TRUE sub-floor Hb
+(:func:`_grounded_true_subthreshold_indication`) — the deterministic leg
+withheld the value as unreliable, so neither asserting nor auto-clearing is
 safe. Historical pre-#94 rows also carry this value.
 """
 
@@ -439,6 +442,55 @@ def _grounded_acs_indication(
     for indication in grounded_indications:
         code = indication.get("code")
         if not isinstance(code, str) or code.strip().upper() != _ACS_HARD_CODE:
+            continue
+        confidence = indication.get("confidence")
+        if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+            continue
+        if not (0.0 <= confidence <= 1.0):
+            continue
+        if confidence >= LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE:
+            return True
+    return False
+
+
+# The prompt's fixed HARD code for a genuinely sub-floor order-time Hb
+# (prompt_builder._RBC_INDICATION_VOCABULARY). The no-underscore variant
+# appears in persisted pre-vocabulary responses.
+_SUBTHRESHOLD_HARD_CODES: frozenset[str] = frozenset(
+    {"SUB_THRESHOLD_HB", "SUBTHRESHOLD_HB"}
+)
+
+
+def _grounded_true_subthreshold_indication(
+    grounded_indications: tuple[dict[str, object], ...],
+    context: PipelineRowContext,
+) -> bool:
+    """True iff a grounded SUB_THRESHOLD_HB citation at the shared
+    prose-trust bar is also structurally TRUE (hb strictly below the cohort
+    floor).
+
+    WHY (Codex PR #97 round 3): the prompt defines SUB_THRESHOLD_HB as HARD,
+    but :func:`_has_structured_hard_signal` only exempts the universal
+    Hb < 7.0. A row whose Hb sits below its own cohort floor can still be
+    LLM-routed when the deterministic leg withheld the value as unreliable
+    (hemodilution flag, single low Hb with no trend) — asserting
+    ``INAPPROPRIATE`` against a prompt-compliant clear there would contradict
+    the prompt's own contract, so the caller floors it to a human instead.
+    The structural cross-check is the gate: an at/above-floor Hb mislabeled
+    "sub-threshold" (the motivating over-clear class, spec #89 story 6)
+    fails it and keeps the assert. Never auto-clears — the deterministic
+    leg flagged the value as unreliable for a reason.
+    """
+    hb = context.hb_result.value_g_dl
+    threshold = context.cohort_assignment.threshold
+    if hb is None or threshold is None or hb >= threshold:
+        return False
+    for indication in grounded_indications:
+        code = indication.get("code")
+        if (
+            not isinstance(code, str)
+            or code.strip().upper() not in _SUBTHRESHOLD_HARD_CODES
+        ):
             continue
         confidence = indication.get("confidence")
         if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
@@ -829,9 +881,13 @@ def _build_audit_row(
         else:
             _grounded = _grounded_indications(indications, context)
             if not qualified_bleeding_exempt(_grounded):
-                if _grounded_acs_indication(_grounded):
-                    # ACS is a prompt-defined hard indication the structured
-                    # system cannot see — floor to a human, never assert
+                if _grounded_acs_indication(
+                    _grounded
+                ) or _grounded_true_subthreshold_indication(_grounded, context):
+                    # A prompt-defined hard indication the structured system
+                    # cannot dismiss — ACS (no extractor exists) or a
+                    # structurally true sub-floor Hb the deterministic leg
+                    # withheld as unreliable. Floor to a human; never assert
                     # against it (and never auto-clear on it either).
                     final_classification = "NEEDS_REVIEW"
                     review_reason = LLM_OVERCLEAR_REVIEW_REASON
@@ -853,9 +909,13 @@ def _build_audit_row(
         and _rbc_payload_well_formed(winning_result)
         and not _has_structured_hard_signal(context)
         and not qualified_bleeding_exempt(_grounded_indications(indications, context))
-        # A grounded high-confidence ACS citation makes the hedge a genuine
-        # human case (same rationale as the over-clear ACS floor above).
+        # A grounded high-confidence ACS citation or structurally true
+        # sub-floor Hb makes the hedge a genuine human case (same rationale
+        # as the over-clear floors above).
         and not _grounded_acs_indication(_grounded_indications(indications, context))
+        and not _grounded_true_subthreshold_indication(
+            _grounded_indications(indications, context), context
+        )
     ):
         final_classification = "INAPPROPRIATE"
         review_reason = LLM_NATIVE_REVIEW_ASSERT_REASON
