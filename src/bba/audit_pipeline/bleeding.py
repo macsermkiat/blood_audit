@@ -144,9 +144,10 @@ def qualified_bleeding_exempt(indications: Iterable[Mapping[str, object]]) -> bo
 
     Every field is read defensively (``.get`` + ``isinstance``): the RBC
     replay path does not fully schema-validate the indication list, so a
-    missing key, a non-string code/quote, or a non-numeric confidence must
-    never raise and must never accidentally exempt an over-clear. The
-    per-indication confidence is used, never a min-across aggregate.
+    missing key, a non-string code/quote, or a non-numeric, out-of-range
+    ([0,1]) or NaN confidence must never raise and must never accidentally
+    exempt an over-clear. The per-indication confidence is used, never a
+    min-across aggregate.
     """
     for indication in indications:
         if not isinstance(indication, Mapping):
@@ -163,6 +164,12 @@ def qualified_bleeding_exempt(indications: Iterable[Mapping[str, object]]) -> bo
 
         confidence = indication.get("confidence")
         if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+            continue
+        # The tool schema means confidence as a [0,1] probability; an
+        # out-of-range value (2.0, inf) or NaN is schema drift and must read
+        # as malformed — never as "very sure" (spec #89 story 15). The chained
+        # comparison rejects NaN because NaN fails every comparison.
+        if not (0.0 <= confidence <= 1.0):
             continue
         if confidence < LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE:
             continue

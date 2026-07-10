@@ -194,10 +194,14 @@ def periop_contradiction(
 # =============================================================================
 
 LLM_OVERCLEAR_REVIEW_REASON = "llm_overclear_suspect"
-"""Historical review-reason slug stamped by the pre-#94 over-clear floor.
+"""Review-reason slug for an over-clear that could not be safely asserted.
 
-Persisted rows created before #94 can carry this value, so it remains exported;
-no current code path stamps it.
+Pre-#94 every over-clear floor stamped this. Post-#94 it survives on one
+narrow path: an over-clear whose tool payload is missing a schema-required
+list field (:func:`_rbc_payload_well_formed`) — drift may have dropped cited
+evidence, so the row floors to human review instead of asserting
+``INAPPROPRIATE`` on evidence-absence we cannot distinguish from loss.
+Historical pre-#94 rows also carry this value.
 """
 
 LLM_OVERCLEAR_ASSERT_REASON = "llm_overclear_asserted_inappropriate"
@@ -299,6 +303,34 @@ def llm_overclear_suspect(
     if rule_classification not in _LLM_OVERCLEAR_DET_VERDICTS:
         return False
     return not _has_structured_hard_signal(context)
+
+
+def _rbc_payload_well_formed(result: BatchSubmissionResult) -> bool:
+    """True iff the tool-use payload carries both schema-required list fields.
+
+    WHY: the batch path's shallow extraction (:func:`_indications_from_result`)
+    cannot distinguish "the model cited nothing" from "the ``indications`` key
+    was lost to schema drift" — both read back as ``()``. The RBC tool schema
+    (``transport._TOOL_INPUT_SCHEMA``) requires ``indications`` and
+    ``negative_evidence``, so a payload missing either is drifted and the #94
+    assert branches must not treat its empty evidence as "no genuine
+    indication". Scoped to the assert branches only; row-level parse-failure
+    classification is unchanged.
+    """
+    content = result.raw_response_json.get("content", [])
+    if not content:
+        return False
+    first = content[0]
+    if not isinstance(first, Mapping) or first.get("type") != "tool_use":
+        return False
+    input_payload = first.get("input", {})
+    if not isinstance(input_payload, Mapping):
+        return False
+    for key in ("indications", "negative_evidence"):
+        value = input_payload.get(key)
+        if not isinstance(value, Sequence) or isinstance(value, str | bytes):
+            return False
+    return True
 
 
 def _grounded_indications(
@@ -708,25 +740,31 @@ def _build_audit_row(
     # signal or the committee-approved qualified-major-bleeding exemption.
     # The exemption only ever sees indications whose quote grounds in the
     # row's evidence bundle — a fabricated bleed quote must never auto-clear.
-    # Checked after peri-op so that earlier winner remains authoritative; the
-    # LLM reasoning and indications are preserved for auditability.
-    elif (
-        context.component != "platelet"
-        and llm_overclear_suspect(final_classification, rule_classification, context)
-        and not qualified_bleeding_exempt(_grounded_indications(indications, context))
+    # A payload missing a schema-required list field may have LOST cited
+    # evidence, so it floors to human review instead of asserting. Checked
+    # after peri-op so that earlier winner remains authoritative; the LLM
+    # reasoning and indications are preserved for auditability.
+    elif context.component != "platelet" and llm_overclear_suspect(
+        final_classification, rule_classification, context
     ):
-        final_classification = "INAPPROPRIATE"
-        review_reason = LLM_OVERCLEAR_ASSERT_REASON
+        if not _rbc_payload_well_formed(winning_result):
+            final_classification = "NEEDS_REVIEW"
+            review_reason = LLM_OVERCLEAR_REVIEW_REASON
+        elif not qualified_bleeding_exempt(_grounded_indications(indications, context)):
+            final_classification = "INAPPROPRIATE"
+            review_reason = LLM_OVERCLEAR_ASSERT_REASON
+        # else: a grounded qualified major bleed keeps the clear APPROPRIATE.
     # WHY: the prompt no longer permits a native NEEDS_REVIEW hedge. Convert a
     # well-formed, explained hedge to the committee's clear-cut verdict only
     # when neither a structured hard signal nor a qualified (grounded) bleed
-    # makes it a genuine human case; parse/schema failures already carry a
-    # reason.
+    # makes it a genuine human case; a drifted payload or a parse/schema
+    # failure (non-None reason) stays a human case.
     elif (
         context.component != "platelet"
         and final_classification == "NEEDS_REVIEW"
         and review_reason is None
         and (summary_en.strip() or summary_th.strip())
+        and _rbc_payload_well_formed(winning_result)
         and not _has_structured_hard_signal(context)
         and not qualified_bleeding_exempt(_grounded_indications(indications, context))
     ):

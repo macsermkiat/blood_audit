@@ -324,9 +324,27 @@ class TestQualifiedBleedingExempt:
             {"code": "ACTIVE_BLEEDING_GI", "confidence": 0.9},  # missing quote
             {"code": "ACTIVE_BLEEDING_GI", "quote": "EBL 1100 mL"},  # missing conf
             {"code": 123, "quote": "EBL 1100 mL", "confidence": 0.9},  # non-str code
-            {"code": "ACTIVE_BLEEDING_GI", "quote": None, "confidence": 0.9},  # bad quote
+            {
+                "code": "ACTIVE_BLEEDING_GI",
+                "quote": None,
+                "confidence": 0.9,
+            },  # bad quote
             {"code": "ACTIVE_BLEEDING_GI", "quote": "EBL 1100 mL", "confidence": "hi"},
             {"code": "ACTIVE_BLEEDING_GI", "quote": "EBL 1100 mL", "confidence": True},
+            # Out-of-range confidence is schema-invalid (tool schema means
+            # [0,1]); it must be treated as malformed, never as "very sure".
+            {"code": "ACTIVE_BLEEDING_GI", "quote": "EBL 1100 mL", "confidence": 2.0},
+            {"code": "ACTIVE_BLEEDING_GI", "quote": "EBL 1100 mL", "confidence": -0.1},
+            {
+                "code": "ACTIVE_BLEEDING_GI",
+                "quote": "EBL 1100 mL",
+                "confidence": float("nan"),
+            },
+            {
+                "code": "ACTIVE_BLEEDING_GI",
+                "quote": "EBL 1100 mL",
+                "confidence": float("inf"),
+            },
         ],
     )
     def test_malformed_indication_never_raises_and_never_exempts(

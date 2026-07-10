@@ -1530,14 +1530,24 @@ def _periop_llm_response(
     indications: list[dict[str, object]] | None = None,
     reasoning_en: str = "model rationale",
     reasoning_th: str = "th",
+    omit_input_keys: tuple[str, ...] = (),
 ) -> RawBatchResponse:
     """One grounded LLM result carrying ``classification`` for ``audit_id``.
 
     Shapes a well-formed structured-output payload so the row reaches the
     *winner* branch of ``_build_audit_row`` (verifier passes by default) —
-    the only branch the guardrail override runs in."""
+    the only branch the guardrail override runs in. ``omit_input_keys``
+    drops schema-required keys from the tool input to simulate drift."""
     from bba.llm_client.models import BatchSubmissionResult
 
+    input_payload: dict[str, object] = {
+        "classification": classification,
+        "indications": indications or [],
+        "negative_evidence": [],
+        "reasoning_summary_en": reasoning_en,
+        "reasoning_summary_th": reasoning_th,
+    }
+    input_payload = {k: v for k, v in input_payload.items() if k not in omit_input_keys}
     return RawBatchResponse(
         batch_id="msgbatch_periop",
         results=(
@@ -1551,13 +1561,7 @@ def _periop_llm_response(
                         {
                             "type": "tool_use",
                             "name": "classify_audit",
-                            "input": {
-                                "classification": classification,
-                                "indications": indications or [],
-                                "negative_evidence": [],
-                                "reasoning_summary_en": reasoning_en,
-                                "reasoning_summary_th": reasoning_th,
-                            },
+                            "input": input_payload,
                         }
                     ],
                     "stop_reason": "tool_use",
@@ -1911,10 +1915,80 @@ class TestLlmOverclearGuardrail:
         assert row.final_classification == "INAPPROPRIATE"
         assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
 
+    def test_out_of_range_confidence_does_not_exempt(self, tmp_path: object) -> None:
+        # confidence 2.0 is schema-invalid; it must read as malformed, not
+        # as "very sure" — a malformed indication never exempts (spec #89).
+        ctx = _row_context(
+            audit_id="audit-oc-bleed-conf-2",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="Post-op note: EBL 400 mL from drain, ongoing ooze",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "EBL 400 mL from drain",
+                    "source_id": "E1",
+                    "confidence": 2.0,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_drifted_overclear_payload_floors_to_review(self, tmp_path: object) -> None:
+        # A payload missing the schema-required indications key may have LOST
+        # cited evidence — asserting INAPPROPRIATE on it would be a verdict
+        # built on absence we cannot distinguish from drift. Fail closed to
+        # the pre-#94 floor: NEEDS_REVIEW with the suspect slug.
+        ctx = _row_context(
+            audit_id="audit-oc-drifted",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            omit_input_keys=("indications",),
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+        assert row.needs_human_review is True
+
+    def test_drifted_native_review_payload_is_not_converted(
+        self, tmp_path: object
+    ) -> None:
+        # Same drift on a native hedge: the conversion requires a well-formed
+        # payload, so the row stays a genuine human-review case.
+        ctx = _row_context(
+            audit_id="audit-native-drifted",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="NEEDS_REVIEW",
+            reasoning_en="hedge with reasoning but drifted payload",
+            omit_input_keys=("negative_evidence",),
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason is None
+        assert row.needs_human_review is True
+
     def test_exactly_300_ml_does_not_exempt(self, tmp_path: object) -> None:
         # The major-bleed boundary is strictly greater than 300 mL.
         ctx = _row_context(
-            audit_id="audit-oc-bleed-300", classification="NEEDS_REVIEW", hb_value=9.4
+            audit_id="audit-oc-bleed-300",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            # Quote grounds so the strict > 300 boundary is what decides.
+            evidence_text="Post-op note: EBL 300 mL recorded",
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
@@ -1938,6 +2012,8 @@ class TestLlmOverclearGuardrail:
             audit_id="audit-oc-bleed-low-confidence",
             classification="NEEDS_REVIEW",
             hb_value=9.4,
+            # Quote grounds so the 0.7 < 0.8 confidence gate is what decides.
+            evidence_text="Post-op note: EBL 400 mL from drain, ongoing ooze",
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
@@ -1989,6 +2065,8 @@ class TestLlmOverclearGuardrail:
             audit_id="audit-oc-bleed-small",
             classification="NEEDS_REVIEW",
             hb_value=9.4,
+            # Quote grounds so the no-volume/no-marker test is what decides.
+            evidence_text="Wound check: 2x2 cm gauze staining noted",
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
