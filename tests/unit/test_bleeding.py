@@ -493,6 +493,12 @@ class TestQuoteNegatesBleeding:
             "no hematemesis overnight",
             "negative for hematochezia",
             "ไม่มีถ่ายดำ",  # "no melena (black stool)"
+            # Comma-separated denial lists (Codex PR #99 round 5): the
+            # denial verb distributes across the list, so the comma must
+            # not shield later items from the negator.
+            "denies bleeding, melena",
+            "no hematemesis, hematochezia, or melena",
+            "bleeding, melena denied",
         ],
     )
     def test_negated_bleed_prose_flags(self, quote: str) -> None:

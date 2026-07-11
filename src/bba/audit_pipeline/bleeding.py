@@ -220,6 +220,18 @@ _BLEEDING_NEGATION_SCREEN_TERMS: tuple[str, ...] = _BLEEDING_CONTEXT_TERMS + (
     "ถ่ายดำ",  # melena ("black stool")
 )
 
+# Clause boundaries for the accompaniment screen ONLY (Codex PR #99 round
+# 5): a clinical denial distributes across a comma list ("denies bleeding,
+# melena"), so the comma must not shield later items from the negator.
+# The marker screens above deliberately KEEP the comma boundary — there a
+# false negation hit would wrongly assert a genuine major bleed ("no fever
+# today, hemorrhagic shock"), while here it merely withholds the
+# hemodynamic floor and the ruling's assert stands. The window is wider
+# than the marker screens' for the same reason: a three-item denial list
+# ("no hematemesis, hematochezia, or melena") outruns 30 chars.
+_DENIAL_LIST_BOUNDARIES: tuple[str, ...] = (";", ".", "\n")
+_DENIAL_LIST_WINDOW_CHARS = 60
+
 
 def parse_max_volume_ml(text: str) -> float | None:
     """Return the largest documented blood-loss volume in ``text`` as mL.
@@ -306,9 +318,25 @@ def marker_occurrence_negated(lowered: str, start: int, end: int) -> bool:
     guardrail's fluid-refractory check (Codex PR #99 round 4: "not
     refractory after IV fluids" must not read as refractoriness), so every
     negation read uses the same negator tokens and clause windows."""
-    pre = lowered[max(0, start - _MARKER_NEGATION_WINDOW_CHARS) : start]
+    return _occurrence_negated(
+        lowered, start, end, _MARKER_CLAUSE_BOUNDARIES, _MARKER_POST_CLAUSE_BOUNDARIES
+    )
+
+
+def _occurrence_negated(
+    lowered: str,
+    start: int,
+    end: int,
+    pre_boundaries: tuple[str, ...],
+    post_boundaries: tuple[str, ...],
+    window: int = _MARKER_NEGATION_WINDOW_CHARS,
+) -> bool:
+    """Negator scan around ``lowered[start:end]`` with caller-chosen clause
+    boundaries — the marker screens keep the comma boundary, the
+    accompaniment screen drops it (see :data:`_DENIAL_LIST_BOUNDARIES`)."""
+    pre = lowered[max(0, start - window) : start]
     cut = max(
-        (pre.rfind(boundary) for boundary in _MARKER_CLAUSE_BOUNDARIES),
+        (pre.rfind(boundary) for boundary in pre_boundaries),
         default=-1,
     )
     if cut != -1:
@@ -316,13 +344,9 @@ def marker_occurrence_negated(lowered: str, start: int, end: int) -> bool:
     if any(token in pre for token in _MARKER_NEGATION_TOKENS):
         return True
 
-    post = lowered[end : end + _MARKER_NEGATION_WINDOW_CHARS]
+    post = lowered[end : end + window]
     cut = min(
-        (
-            found
-            for boundary in _MARKER_POST_CLAUSE_BOUNDARIES
-            if (found := post.find(boundary)) != -1
-        ),
+        (found for boundary in post_boundaries if (found := post.find(boundary)) != -1),
         default=-1,
     )
     if cut != -1:
@@ -343,7 +367,9 @@ def quote_negates_bleeding(quote: str) -> bool:
     negator / clause-window machinery as the life-threatening-marker screen
     so exemption and accompaniment read prose identically, over the
     synonym-extended term list (:data:`_BLEEDING_NEGATION_SCREEN_TERMS` —
-    "denies melena" counts, Codex PR #99 round 4). A quote with no
+    "denies melena" counts, Codex PR #99 round 4) with denial-list
+    boundaries (round 5: the negator distributes across "denies bleeding,
+    melena"; ";", ".", "\\n" still cut). A quote with no
     bleeding term returns ``False`` — this screen only rejects positively
     negated prose; code-level trust stays the caller's decision. One
     non-negated bleeding mention keeps the quote usable (a note often
@@ -363,7 +389,14 @@ def quote_negates_bleeding(quote: str) -> bool:
         start = 0
         while (idx := lowered.find(term, start)) != -1:
             end = idx + len(term)
-            if not marker_occurrence_negated(lowered, idx, end):
+            if not _occurrence_negated(
+                lowered,
+                idx,
+                end,
+                _DENIAL_LIST_BOUNDARIES,
+                _DENIAL_LIST_BOUNDARIES,
+                window=_DENIAL_LIST_WINDOW_CHARS,
+            ):
                 return False
             found_negated = True
             start = end
