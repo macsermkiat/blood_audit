@@ -120,6 +120,20 @@ source of truth shared with the classifier's missing-Hb auto-approve bar so
 the two thresholds cannot drift. Sub-500 mL losses are routine and do not, on
 their own, contradict an "insufficient evidence" verdict."""
 
+PERIOP_OVERCLEAR_WINDOW_HOURS = 72.0
+"""Peri-op window (hours before the transfusion) within which a *completed*
+surgery lets ``surgical_context`` exempt an LLM APPROPRIATE from the
+over-clear guardrail. 3 days (owner ruling, case 68009853).
+
+Only ``procedure_proximity_hours`` (a past operative event) is checked, NOT
+``upcoming_procedure_hours``: blood cross-matched / reserved ahead of a
+scheduled operation ("M/G for surgery") may or may not be transfused for
+that surgery, so an upcoming procedure is not a peri-op *transfusion*
+justification. A charted surgery with no completed procedure in this window
+(``procedure_proximity_hours`` None or > 72 h) is a remote/soft mention that
+must not shield an over-clear (case 68009853: last op absent, next op 142
+days out)."""
+
 PERIOP_CONTRADICTION_REVIEW_REASON = "periop_signal_contradiction"
 """Typed review_reason stamped on rows escalated by this guardrail.
 
@@ -155,6 +169,52 @@ def _has_hard_periop_signal(summary: PeriopSummary | None) -> bool:
     return (
         summary.blood_loss_ml is not None
         and summary.blood_loss_ml >= PERIOP_GUARDRAIL_MIN_EBL_ML
+    )
+
+
+def _has_windowed_periop_exemption(context: PipelineRowContext) -> bool:
+    """Peri-op signal strong enough to EXEMPT an LLM APPROPRIATE from the
+    over-clear guardrail — narrower than :func:`_has_hard_periop_signal`.
+
+    WHY this differs from :func:`_has_hard_periop_signal` (case 68009853):
+    that predicate treats the bare ``surgical_context`` flag as hard, which
+    is correct for :func:`periop_contradiction` (any charted surgery warrants
+    a human look when the model UNDER-called — over-inclusion is harmless
+    there) but DANGEROUS when reused to *exempt* an APPROPRIATE from
+    assertion. ``surgical_context`` is a prose-scan boolean with no op-time
+    (:class:`bba.vitals_extractor.PeriopSummary` carries no timestamp), so a
+    months-old surgery in a chronic wound-care note set it True and silently
+    disabled the over-clear check — clearing a gray-zone order with no
+    genuine hard indication (68009853: no completed op in the window, next op
+    142 days out).
+
+    Exempts on any of:
+
+    * an intra-op transfusion, or an EBL >= :data:`PERIOP_GUARDRAIL_MIN_EBL_ML`
+      — a real surgical event that self-evidently happened, ungated (a bundle
+      may recover these from prose with no structured op time, e.g. the
+      1300 mL intra-op bleed of REQNO 68044754); OR
+    * ``surgical_context`` WITH a completed operation within
+      :data:`PERIOP_OVERCLEAR_WINDOW_HOURS` before the transfusion
+      (``procedure_proximity_hours``). ``upcoming_procedure_hours`` is
+      deliberately NOT accepted — reserve-ahead ("M/G for surgery") blood may
+      never be transfused for that operation, so a future procedure is not a
+      peri-op transfusion justification (owner ruling)."""
+    summary = context.periop_summary
+    if summary is None:
+        return False
+    if summary.intraop_transfusion:
+        return True
+    if (
+        summary.blood_loss_ml is not None
+        and summary.blood_loss_ml >= PERIOP_GUARDRAIL_MIN_EBL_ML
+    ):
+        return True
+    proximity = context.procedure_proximity_hours
+    return (
+        summary.surgical_context
+        and proximity is not None
+        and proximity <= PERIOP_OVERCLEAR_WINDOW_HOURS
     )
 
 
@@ -289,9 +349,13 @@ def _has_structured_hard_signal(context: PipelineRowContext) -> bool:
     """True iff ``context`` carries a deterministic hard signal that justifies
     an LLM APPROPRIATE in the gray zone (B1 exemption set).
 
-    Any one of: a genuinely low Hb (< 7.0 g/dL), an MTP cohort, or a hard
-    peri-op signal. Deliberately structured-only — soft prose indications
-    are not trusted here (they are what over-cleared the motivating cases).
+    Any one of: a genuinely low Hb (< 7.0 g/dL), an MTP cohort, or a
+    windowed peri-op signal (:func:`_has_windowed_periop_exemption` — an
+    intra-op transfusion / major EBL, or a ``surgical_context`` with a
+    completed op within :data:`PERIOP_OVERCLEAR_WINDOW_HOURS`; NOT a bare
+    surgical mention or a reserve-ahead upcoming procedure; case 68009853).
+    Deliberately structured-only — soft prose indications are not trusted
+    here (they are what over-cleared the motivating cases).
 
     Hemodynamic instability left this set with owner ruling #98 (Codex PR
     #99 round 3): a verified SBP < 90 / HR > 120 snapshot is the same
@@ -305,7 +369,7 @@ def _has_structured_hard_signal(context: PipelineRowContext) -> bool:
         return True
     if context.cohort_assignment.label == CohortLabel.MTP:
         return True
-    return _has_hard_periop_signal(context.periop_summary)
+    return _has_windowed_periop_exemption(context)
 
 
 _SOURCE_WALL_CLOCK: Final = ZoneInfo("Asia/Bangkok")
@@ -1501,6 +1565,7 @@ __all__ = [
     "LLM_OVERCLEAR_UNSTABLE_SBP",
     "PERIOP_CONTRADICTION_REVIEW_REASON",
     "PERIOP_GUARDRAIL_MIN_EBL_ML",
+    "PERIOP_OVERCLEAR_WINDOW_HOURS",
     "Verifier",
     "apply_batch_results",
     "default_verifier",
