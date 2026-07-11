@@ -633,6 +633,28 @@ class TestBleedingQuoteIsStale:
             "EBL 250 mL now, prior Hx 1/12/68 bleed", _ORDER_DATE
         )
 
+    def test_current_denial_plus_stale_bleed_is_stale(self) -> None:
+        # PR #100 Codex round 3: the caller's up-front quote_negates_bleeding
+        # runs on the UNMASKED quote, where the stale non-negated "active
+        # bleeding 400 ml" defeats the denial screen. After masking, the only
+        # surviving bleed term ("no active bleeding today") is NEGATED, so it
+        # is a documented absence, not current evidence — the citation is
+        # stale and bare hypotension must assert, not floor.
+        assert bleeding_quote_is_stale(
+            "no active bleeding today; Hx.1/12/68: active bleeding 400 ml",
+            _ORDER_DATE,
+        )
+
+    def test_current_nonnegated_bleed_after_unrelated_denial_is_not_stale(
+        self,
+    ) -> None:
+        # The negation re-screen must not over-fire: a denial of a DIFFERENT
+        # symptom leaves the current bleed term non-negated and live.
+        assert not bleeding_quote_is_stale(
+            "denies chest pain; active bleeding per rectum now; Hx.1/12/68: 400 ml",
+            _ORDER_DATE,
+        )
+
     def test_current_dated_bleed_is_not_stale(self) -> None:
         assert not bleeding_quote_is_stale(
             "22/12/68: active bleeding 400 ml", _ORDER_DATE

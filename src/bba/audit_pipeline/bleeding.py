@@ -562,18 +562,24 @@ def bleeding_quote_is_stale(quote: str, order_date: date) -> bool:
       an undated or current-dated bleed citation stays live (fail open
       toward "current"; the floor's caller already screened negation).
     * If a stale span WAS blanked, the citation is stale UNLESS current bleed
-      evidence survives: a bleeding-family term or a documented volume.
-      Forward-governance masking blanks only from the date onward, so a
-      history/label prefix (``Hx.``, ``R/O LGIB Hx.``) is left behind (PR
+      evidence survives: a NON-NEGATED bleeding-family term or a documented
+      volume. Forward-governance masking blanks only from the date onward, so
+      a history/label prefix (``Hx.``, ``R/O LGIB Hx.``) is left behind (PR
       #100 Codex round 2) — that residue carries neither a bleed term nor a
       volume, so requiring surviving evidence (not merely surviving text)
-      correctly reads it as stale.
+      correctly reads it as stale. A surviving term that is itself negated
+      ("no active bleeding today; Hx.1/12/68: active bleeding 400 mL", PR #100
+      Codex round 3) is a documented ABSENCE, not current evidence: the
+      caller's up-front :func:`quote_negates_bleeding` runs on the UNMASKED
+      quote, where the stale non-negated mention defeats it, so the negation
+      re-screen must run here on the MASKED text.
     """
     masked = _mask_stale_dated_spans(quote, order_date)
     if masked == quote:
         return False
     lowered = masked.lower()
-    if any(term in lowered for term in _BLEEDING_NEGATION_SCREEN_TERMS):
+    surviving_term = any(term in lowered for term in _BLEEDING_NEGATION_SCREEN_TERMS)
+    if surviving_term and not quote_negates_bleeding(masked):
         return False
     return parse_max_volume_ml(masked) is None
 
