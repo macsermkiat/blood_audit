@@ -28,10 +28,13 @@ import hashlib
 import re
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
+from datetime import date
 from typing import Final, NamedTuple
+from zoneinfo import ZoneInfo
 
 from bba.audit_pipeline.bleeding import (
     LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE,
+    bleeding_quote_is_stale,
     is_active_bleeding_code,
     marker_occurrence_negated,
     qualified_bleeding_exempt,
@@ -305,6 +308,21 @@ def _has_structured_hard_signal(context: PipelineRowContext) -> bool:
     return _has_hard_periop_signal(context.periop_summary)
 
 
+_SOURCE_WALL_CLOCK: Final = ZoneInfo("Asia/Bangkok")
+"""HOSxP wall-clock zone the charted note dates are written in (mirrors
+:class:`bba.audit_orders.AuditOrdersConfig` ``tz_source`` default, which the
+row context does not carry). The bleed staleness gate compares calendar
+dates against a 7-day horizon, so a hypothetical zone drift of ±1 day is
+immaterial."""
+
+
+def _order_local_date(context: PipelineRowContext) -> date:
+    """The order moment as a source-wall-clock calendar date — the axis the
+    charted d/m/BE anchors in note prose live on, required by the
+    qualified-bleeding temporal gate (case 68080335)."""
+    return context.order.order_datetime.astimezone(_SOURCE_WALL_CLOCK).date()
+
+
 def llm_overclear_suspect(
     final_classification: Classification,
     rule_classification: Classification,
@@ -546,6 +564,7 @@ def _qualified_hemodynamic_floor(
         grounded_indications, _HEMODYNAMIC_HARD_CODES
     ) and not _has_hard_hemodynamic_signal(context):
         return False
+    order_date = _order_local_date(context)
     for indication in grounded_indications:
         code = indication.get("code")
         if (
@@ -558,8 +577,16 @@ def _qualified_hemodynamic_floor(
         # grounded quote documenting the ABSENCE of bleeding ("no active
         # hemorrhage") is a mislabeled citation and must not floor the row.
         quote = indication.get("quote")
-        if isinstance(quote, str) and quote_negates_bleeding(quote):
-            continue
+        if isinstance(quote, str):
+            if quote_negates_bleeding(quote):
+                continue
+            # ...and it must be the CURRENT hemorrhagic picture (case
+            # 68080335, PR #100 Codex): a purely stale-dated bleed cannot
+            # supply the accompaniment that floors an over-clear the
+            # stale-date gate is meant to assert. Same temporal screen as
+            # qualified_bleeding_exempt so the two cannot diverge.
+            if bleeding_quote_is_stale(quote, order_date):
+                continue
         return True
     for indication in grounded_indications:
         code = indication.get("code")
@@ -993,7 +1020,9 @@ def _build_audit_row(
             review_reason = LLM_OVERCLEAR_REVIEW_REASON
         else:
             _grounded = _grounded_indications(indications, context)
-            if not qualified_bleeding_exempt(_grounded):
+            if not qualified_bleeding_exempt(
+                _grounded, order_date=_order_local_date(context)
+            ):
                 if (
                     _grounded_acs_indication(_grounded)
                     or _qualified_hemodynamic_floor(_grounded, context)
@@ -1025,7 +1054,10 @@ def _build_audit_row(
         and (summary_en.strip() or summary_th.strip())
         and _rbc_payload_well_formed(winning_result)
         and not _has_structured_hard_signal(context)
-        and not qualified_bleeding_exempt(_grounded_indications(indications, context))
+        and not qualified_bleeding_exempt(
+            _grounded_indications(indications, context),
+            order_date=_order_local_date(context),
+        )
         # A grounded high-confidence ACS / hemodynamic citation or a
         # structurally true sub-floor Hb makes the hedge a genuine human
         # case (same rationale as the over-clear floors above).

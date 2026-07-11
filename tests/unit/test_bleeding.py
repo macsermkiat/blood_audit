@@ -14,12 +14,16 @@ carries the >=80% unit-coverage bar on its own.
 
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
 from bba.audit_pipeline.bleeding import (
     _MAX_SCAN_CHARS,
+    LLM_OVERCLEAR_MAX_BLEED_AGE_DAYS,
     LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE,
     LLM_OVERCLEAR_MIN_BLEED_ML,
+    bleeding_quote_is_stale,
     has_life_threatening_marker,
     parse_max_volume_ml,
     qualified_bleeding_exempt,
@@ -464,6 +468,222 @@ class TestQualifiedBleedingExempt:
         )
 
 
+# Case 68080335's order day: 23/12/2568 BE == 2025-12-23 CE.
+_ORDER_DATE = date(2025, 12, 23)
+
+
+class TestStaleDatedVolumeGate:
+    """The temporal gate: an old episode's figures must not clear this order.
+
+    WHY (owner ruling, case 68080335): the notes charted a 400 mL index
+    bleed dated ``Hx.1/12/68`` — 22 days before the order. Bleeding was
+    still ongoing but unquantified, so the >300 mL bar was met only by a
+    stale figure; auto-clearing on it defeats the restrictive policy. The
+    gate blanks spans governed by a date anchor older than
+    ``LLM_OVERCLEAR_MAX_BLEED_AGE_DAYS`` — and ONLY those spans, because a
+    false stale-read withholds the exemption and falsely asserts a genuine
+    transfusion INAPPROPRIATE (the doctor-facing error direction).
+    """
+
+    _STALE_QUOTE = "R/O LGIB Hx.1/12/68: ถ่ายอุจจาระเป็นเลือด 400 ml"
+
+    def test_stale_index_bleed_volume_does_not_exempt(self) -> None:
+        # The real case-68080335 charting: 400 mL dated 22 days pre-order.
+        assert not qualified_bleeding_exempt(
+            [_active_bleed(quote=self._STALE_QUOTE, confidence=0.85)],
+            order_date=_ORDER_DATE,
+        )
+
+    def test_without_order_date_stale_volume_still_exempts(self) -> None:
+        # Back-compat contract: the gate exists only when the caller supplies
+        # the order moment — which is why the replay call sites must pass it.
+        assert qualified_bleeding_exempt(
+            [_active_bleed(quote=self._STALE_QUOTE, confidence=0.85)]
+        )
+
+    def test_current_episode_dated_volume_exempts(self) -> None:
+        # A volume charted the day before the order is this episode's bleed.
+        assert qualified_bleeding_exempt(
+            [_active_bleed(quote="22/12/68: ถ่ายอุจจาระเป็นเลือด 400 ml", confidence=0.85)],
+            order_date=_ORDER_DATE,
+        )
+
+    def test_undated_volume_is_treated_as_current(self) -> None:
+        # No anchor -> no masking: an undated genuine bleed must keep clearing.
+        assert qualified_bleeding_exempt(
+            [_active_bleed(quote="EBL 400 mL intra-op", confidence=0.85)],
+            order_date=_ORDER_DATE,
+        )
+
+    def test_text_before_the_first_anchor_is_kept(self) -> None:
+        # A stale anchor governs only what FOLLOWS it; a current-episode
+        # volume ahead of it must survive.
+        assert qualified_bleeding_exempt(
+            [
+                _active_bleed(
+                    quote="EBL 400 mL now; Hx.1/12/68: melena", confidence=0.85
+                )
+            ],
+            order_date=_ORDER_DATE,
+        )
+
+    def test_stale_governance_stops_at_newline(self) -> None:
+        # Thai focus notes are line-oriented ("date: content"); the next line
+        # is a new statement and its current volume must survive.
+        assert qualified_bleeding_exempt(
+            [
+                _active_bleed(
+                    quote="Hx.1/12/68: melena\nวันนี้ EBL 400 mL", confidence=0.85
+                )
+            ],
+            order_date=_ORDER_DATE,
+        )
+
+    def test_stale_governance_stops_at_the_next_anchor(self) -> None:
+        # A later current-dated span is un-governed by the stale anchor.
+        assert qualified_bleeding_exempt(
+            [
+                _active_bleed(
+                    quote="1/12/68: ถ่ายเป็นเลือด 400 ml, 22/12/68: EBL 350 ml",
+                    confidence=0.85,
+                )
+            ],
+            order_date=_ORDER_DATE,
+        )
+
+    def test_stale_life_threatening_marker_does_not_exempt(self) -> None:
+        # The marker path is gated identically: a shock charted three weeks
+        # ago is not this order's emergency.
+        assert not qualified_bleeding_exempt(
+            [_active_bleed(quote="1/12/68: hemorrhagic shock", confidence=0.9)],
+            order_date=_ORDER_DATE,
+        )
+        assert qualified_bleeding_exempt(
+            [_active_bleed(quote="22/12/68: hemorrhagic shock", confidence=0.9)],
+            order_date=_ORDER_DATE,
+        )
+
+    def test_four_digit_buddhist_year_is_recognised(self) -> None:
+        assert not qualified_bleeding_exempt(
+            [_active_bleed(quote="1/12/2568: ถ่ายเป็นเลือด 400 ml", confidence=0.85)],
+            order_date=_ORDER_DATE,
+        )
+
+    def test_unparseable_date_token_governs_nothing(self) -> None:
+        # An impossible day/month must never mask a genuine current volume.
+        assert qualified_bleeding_exempt(
+            [_active_bleed(quote="40/13/68: EBL 400 ml", confidence=0.85)],
+            order_date=_ORDER_DATE,
+        )
+
+    def test_future_dated_anchor_governs_nothing(self) -> None:
+        # A planned-procedure date after the order is not a stale anchor.
+        assert qualified_bleeding_exempt(
+            [_active_bleed(quote="25/12/68: EBL 400 ml", confidence=0.85)],
+            order_date=_ORDER_DATE,
+        )
+
+    def test_age_boundary_seven_days_is_current_eight_is_stale(self) -> None:
+        # Stale is strictly OLDER than the horizon: exactly 7 days still
+        # plausibly belongs to the ordering episode.
+        assert qualified_bleeding_exempt(
+            [_active_bleed(quote="16/12/68: EBL 400 ml", confidence=0.85)],
+            order_date=_ORDER_DATE,
+        )
+        assert not qualified_bleeding_exempt(
+            [_active_bleed(quote="15/12/68: EBL 400 ml", confidence=0.85)],
+            order_date=_ORDER_DATE,
+        )
+
+
+class TestBleedingQuoteIsStale:
+    """``bleeding_quote_is_stale`` gates the hemodynamic-floor accompaniment.
+
+    WHY (case 68080335, PR #100 Codex): the major-bleed exemption is not the
+    only place a grounded ACTIVE_BLEEDING citation is trusted — the
+    hemodynamic floor treats one as the "possible hemorrhagic picture" that
+    routes a bare-hypotension over-clear to human review instead of asserting
+    INAPPROPRIATE. A purely stale-dated bleed must be recognised as stale
+    HERE too, or the stale-date gate leaks: hypotension + an old bleed would
+    floor to NEEDS_REVIEW when the ruling wants INAPPROPRIATE. The predicate
+    fails OPEN toward "current" so a genuine ongoing bleed still floors.
+    """
+
+    def test_purely_stale_dated_bleed_is_stale(self) -> None:
+        # Codex's exact scenario: a bleed dated 22 days before the order.
+        assert bleeding_quote_is_stale("1/12/68: active bleeding 400 ml", _ORDER_DATE)
+
+    def test_history_label_prefix_before_stale_date_is_stale(self) -> None:
+        # The REAL case-68080335 charting: a "Hx." / "R/O LGIB Hx." label
+        # precedes the date, so forward-governance masking leaves the label
+        # behind (PR #100 Codex round 2). A bare history label carries no
+        # bleed term and no volume, so it must still read as stale — else the
+        # hemodynamic floor accepts a 22-day-old bleed as current.
+        assert bleeding_quote_is_stale(
+            "Hx.1/12/68: active bleeding 400 ml", _ORDER_DATE
+        )
+        assert bleeding_quote_is_stale(
+            "R/O LGIB Hx.1/12/68: ถ่ายอุจจาระเป็นเลือด 400 ml", _ORDER_DATE
+        )
+
+    def test_current_bleed_before_stale_history_date_is_not_stale(self) -> None:
+        # A documented current volume ahead of a trailing stale history date
+        # is real current evidence and survives masking.
+        assert not bleeding_quote_is_stale(
+            "EBL 250 mL now, prior Hx 1/12/68 bleed", _ORDER_DATE
+        )
+
+    def test_current_denial_plus_stale_bleed_is_stale(self) -> None:
+        # PR #100 Codex round 3: the caller's up-front quote_negates_bleeding
+        # runs on the UNMASKED quote, where the stale non-negated "active
+        # bleeding 400 ml" defeats the denial screen. After masking, the only
+        # surviving bleed term ("no active bleeding today") is NEGATED, so it
+        # is a documented absence, not current evidence — the citation is
+        # stale and bare hypotension must assert, not floor.
+        assert bleeding_quote_is_stale(
+            "no active bleeding today; Hx.1/12/68: active bleeding 400 ml",
+            _ORDER_DATE,
+        )
+
+    def test_current_nonnegated_bleed_after_unrelated_denial_is_not_stale(
+        self,
+    ) -> None:
+        # The negation re-screen must not over-fire: a denial of a DIFFERENT
+        # symptom leaves the current bleed term non-negated and live.
+        assert not bleeding_quote_is_stale(
+            "denies chest pain; active bleeding per rectum now; Hx.1/12/68: 400 ml",
+            _ORDER_DATE,
+        )
+
+    def test_current_dated_bleed_is_not_stale(self) -> None:
+        assert not bleeding_quote_is_stale(
+            "22/12/68: active bleeding 400 ml", _ORDER_DATE
+        )
+
+    def test_undated_bleed_is_not_stale(self) -> None:
+        # No anchor -> nothing to mask -> current. An "EBL 450 mL" shorthand
+        # with no date must still count as accompaniment (fail-open).
+        assert not bleeding_quote_is_stale("EBL 450 mL, actively bleeding", _ORDER_DATE)
+
+    def test_mixed_current_and_stale_is_not_stale(self) -> None:
+        # Any surviving current text keeps the citation live (conservative:
+        # errs toward flooring to human review, never toward asserting).
+        assert not bleeding_quote_is_stale(
+            "active bleeding now; 1/12/68: 400 ml", _ORDER_DATE
+        )
+
+    def test_seven_day_boundary_is_current_eight_is_stale(self) -> None:
+        assert not bleeding_quote_is_stale("16/12/68: bleeding", _ORDER_DATE)
+        assert bleeding_quote_is_stale("15/12/68: bleeding", _ORDER_DATE)
+
+    def test_empty_and_undated_quotes_are_not_stale(self) -> None:
+        # Fail-open contract: with no stale span removed, the predicate leaves
+        # the caller's prior behaviour intact (the floor already screens
+        # negation and non-bleed codes upstream).
+        assert not bleeding_quote_is_stale("", _ORDER_DATE)
+        assert not bleeding_quote_is_stale("active bleeding, no date here", _ORDER_DATE)
+
+
 class TestQuoteNegatesBleeding:
     """``quote_negates_bleeding`` recognises absence-of-bleed prose.
 
@@ -594,3 +814,6 @@ def test_policy_constants_match_locked_decisions() -> None:
     # Spec #89 locked decision 2: >300 mL and confidence >=0.8.
     assert LLM_OVERCLEAR_MIN_BLEED_ML == 300.0
     assert LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE == 0.8
+    # Case 68080335 owner ruling: a dated bleed figure older than a week no
+    # longer quantifies the CURRENT episode.
+    assert LLM_OVERCLEAR_MAX_BLEED_AGE_DAYS == 7

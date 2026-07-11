@@ -38,6 +38,14 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
 - **ปรับ cohort** แยก `ORTHO_SURGERY` เป็น cohort ของตัวเอง (Hb floor 8.0,
   PR #83); เพิ่ม `CARDIOPULMONARY_COMORBIDITY` cohort + peri-op defer-to-LLM
   (PR #81)
+- **Stale-volume gate ของ bleeding auto-clear** ข้อยกเว้นแบบ prose เดียวของ
+  RBC over-clear guardrail (quote `ACTIVE_BLEEDING` ที่ ground แล้ว confidence
+  ≥ 0.8 พร้อมปริมาณ > 300 mL หรือ marker ที่เป็นอันตรายถึงชีวิต) จะลบช่วง
+  ข้อความที่อยู่ใต้ date anchor แบบ `d/m/y` (Thai BE หรือ CE) ที่เก่ากว่า 7 วัน
+  ก่อนการสั่งเลือด ทำให้ปริมาณเลือดออกของ index bleed เมื่อหลายสัปดาห์ก่อน
+  ไม่สามารถ clear order ปัจจุบันได้อีกต่อไป ข้อความที่ไม่มีวันที่หรืออ่านไม่ได้
+  จะไม่ถูกแตะต้อง — gate นี้ได้เพียงระงับข้อยกเว้นเท่านั้น RBC prompt ระบุกฎ
+  current-episode เดียวกันเพื่อให้ verdict ของโมเดลตรงกับ guardrail
 
 ## ยังไม่ใช่ระบบ production ที่เชื่อมใช้งานจริง
 

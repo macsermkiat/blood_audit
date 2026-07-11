@@ -51,6 +51,15 @@ will live at
 - **Cohort refinements.** `ORTHO_SURGERY` split into its own cohort (Hb floor
   8.0, PR #83); `CARDIOPULMONARY_COMORBIDITY` cohort + peri-op defer-to-LLM
   (PR #81).
+- **Stale-volume gate on the bleeding auto-clear.** The RBC over-clear
+  guardrail's only prose exemption (a grounded `ACTIVE_BLEEDING` quote at
+  confidence ≥ 0.8 with a documented volume > 300 mL or a life-threatening
+  marker) now blanks quote spans charted under a `d/m/y` date anchor (Thai BE
+  or CE) more than 7 days before the order, so a weeks-old quantified index
+  bleed can no longer clear the current order. Undated or unparseable text is
+  untouched — the gate can only withhold the exemption. The RBC prompt states
+  the same current-episode rule so the model's verdict agrees with the
+  guardrail.
 
 ## What is explicitly out of scope for now
 

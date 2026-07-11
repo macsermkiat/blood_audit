@@ -15,12 +15,17 @@ covered: `#3 ingest`, `#4 audit_orders`, `#5 hb_lookup`, `#6 vitals_extractor`,
 Also covers: `#76 hemodynamic/periop evidence`, Hb-anchor unification,
 missing-Hb positive-evidence pre-pass, and clinical-salience MED ordering.
 
-Phase 2 (platelet auditor) is now **partially** covered — the deterministic
-CORE only: `component_map`, `platelet_lookup` (config/parse/observation), and
-the `platelet_classifier` §5.1 gate, on branch `feat/platelet-auditor`. The
-store-schema re-derivation, pipeline dispatch, and LLM leg are NOT built (docs
-plan §5.3 stages 1/4-5); the RBC path is untouched. Their concepts are grouped
-under the three `(Phase 2)` sections at the end of this file.
+Phase 2 (platelet auditor) is now **fully integrated and MERGED** (PR #85): the
+deterministic CORE (`component_map`, `platelet_lookup`, `platelet_classifier`
+§5.1 gate) plus intake (`audit_orders` admits platelet-only orders as
+`component="platelet"`, isolated from RBC report/dashboard stats),
+pipeline/replay dispatch, the platelet LLM leg (`PLATELET_REVIEW` prompt +
+grounded-hard-signal over-clear guardrail + resume/injection handling),
+sampling, and the pilot drivers. The LLM leg is gated behind default-off
+`feature_flags.PLATELET_LLM_ENABLED` — only the deterministic leg is live
+(validated on real data; auto-clears NOTHING: plt≥100→review, else→LLM). The
+RBC path is byte-identical throughout. Concepts are grouped under the
+`(Phase 2)` sections at the end of this file.
 
 ## Ingest concepts (#3)
 
@@ -2880,6 +2885,40 @@ transactional-ordering invariant rejects rows without a paired
 `LlmCall`). `POTENTIALLY_INAPPROPRIATE` / `NEEDS_REVIEW` route through
 the LLM stage where the cassette / production transport supplies the
 response.
+
+### Qualified-bleeding exemption & stale-volume gate
+
+`bba.audit_pipeline.bleeding` is the ONLY place the RBC over-clear
+guardrail trusts the LLM's free-text prose: when the model clears a
+withheld gray-zone verdict with no structured hard signal, the assert
+to `INAPPROPRIATE` is skipped only for a grounded `ACTIVE_BLEEDING`
+indication with its own confidence ≥ 0.8 AND either a quoted volume
+strictly > 300 mL or an explicit life-threatening / uncontrolled
+marker (spec #89 locked decision 2).
+
+**Stale-volume temporal gate** (owner ruling, case 68080335): a
+quantified bleed charted for a dated earlier event must not clear the
+current order — the motivating case cited a 400 mL index bleed dated
+`Hx.1/12/68` for an order placed 22 days later while the ongoing
+bleeding was unquantified. When the caller passes the order's
+Asia/Bangkok calendar date, quote spans governed by a `d/m/y` anchor
+(two-digit Thai BE year, four-digit BE 2400–2700, or CE 1900–2100)
+more than `LLM_OVERCLEAR_MAX_BLEED_AGE_DAYS` (7, strictly older)
+before the order are blanked ahead of the volume / marker scans. An
+anchor governs text up to the next anchor or newline (the
+line-oriented `date: content` style of Thai focus notes); undated
+text, unparseable tokens, and future dates govern nothing — the gate
+can only WITHHOLD the exemption, never widen the auto-clear surface.
+The RBC system prompt states the same CURRENT-episode requirement
+(both golden prompt hashes re-pinned), so model verdict and guardrail
+agree instead of the guardrail silently overriding an
+appropriate-sounding rationale.
+
+Open policy question (pending committee ruling): ongoing but
+UNQUANTIFIED bleeding with a falling gray-zone Hb currently lands as a
+guardrail-asserted `INAPPROPRIATE` with no human-review flag; flooring
+that pattern to `NEEDS_REVIEW` instead is a one-line change in the
+assert path once ruled.
 
 ### Deferred review (post-merge)
 

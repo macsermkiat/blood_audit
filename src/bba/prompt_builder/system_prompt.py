@@ -106,7 +106,13 @@ _RBC_ACTIVE_BLEEDING_RULE: Final[str] = (
     "do NOT qualify as active bleeding and must NOT clear the order: ecchymosis "
     "or bruising; a 2×2 cm (or similarly small) gauze staining; blood-tinged "
     "drain or wound fluid; a standing 'bleeding precaution' order; minor oozing; "
-    "and any prior or 'history-of' bleed that is not active now.\n"
+    "and any prior or 'history-of' bleed that is not active now. The qualifying "
+    "quantified volume or life-threatening marker must belong to the CURRENT "
+    "bleeding episode at the time of THIS order: a volume charted for a dated "
+    "earlier event (e.g. an 'Hx. 1/12/68: 400 ml' index bleed cited for an order "
+    "placed weeks later) does NOT satisfy the volume test even when bleeding is "
+    "still ongoing — ongoing bleeding whose current loss is not quantified and "
+    "has no life-threatening marker is NOT a hard indication.\n"
 )
 
 

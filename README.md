@@ -72,6 +72,11 @@ uv run python scripts/pilot/build_review.py    # 4. assemble review          →
 open "$BBA_PILOT_WORK_DIR/review.html"
 ```
 
+To iterate on a single case without re-running the whole batch, set
+`BBA_PILOT_ONLY_REQNO` (with a fresh `BBA_PILOT_RUN_ID`) — the fresh record is
+merged into `llm_report.json` and the other cases keep theirs. See
+[`scripts/pilot/README.md`](scripts/pilot/README.md#re-running-a-single-case).
+
 ### Path B — ingest a full export (supported `bba` CLI)
 
 Runs the wired `bba` CLI against a full 12-file HOSxP export.
@@ -531,6 +536,7 @@ Modules added since the initial Phase 1 build: `component_map` (component-family
 - **Missing-Hb positive-evidence pre-pass is disabled by default.** The `enable_missing_hb_positive_evidence` flag (`BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE`) is `False` until the QI committee signs off. When `False`, missing Hb always returns `INSUFFICIENT_EVIDENCE` (original PRD spec); when `True`, the pre-pass auto-approves on hard peri-op evidence and defers everything else to the LLM rather than dead-ending.
 - **Hemodynamic and peri-op summaries are supporting evidence only.** The `scan_hemodynamics` and `scan_periop` scans surface MAP/vasopressor/EBL facts as pinned, truncation-exempt evidence items. They never gate the deterministic classifier — all appropriateness weighting stays with the LLM and the auditor.
 - **Quote-grounding is fail-closed.** The LLM_REVIEW leg's claims are checked against six anti-hallucination layers (NFC + substring + cited_id + within-doc uniqueness + ≥25 chars + numeric-tuple + medical-NLI). Failures route to `hallucination_suspect`, not to a result row.
+- **Prose-trusted bleeding auto-clears are current-episode only.** The RBC over-clear guardrail's sole prose exemption (a grounded `ACTIVE_BLEEDING` quote, confidence ≥ 0.8, > 300 mL or a life-threatening marker) blanks quote spans charted under a `d/m/y` date anchor (Thai BE or CE) more than 7 days before the order, so a weeks-old quantified index bleed cannot clear today's order (case 68080335). Undated or unparseable text is untouched — the gate can only withhold the exemption, never widen the auto-clear surface. The RBC prompt states the same current-episode rule so the model's verdict agrees with the guardrail.
 - **Platelet auditor auto-clears nothing.** `platelet_classifier` never emits `APPROPRIATE` or `INAPPROPRIATE` in v1: because the policies withhold platelets at very low counts for several exclusion populations (TTP/HIT transfusion is actively harmful), every present count routes onward to review or the LLM rather than dead-ending as deterministic-final. Pinned by a hypothesis property test (CR-M2).
 - **Component families are isolated at intake.** `component_map` keeps platelet statistics out of RBC reporting and the dashboard, and excludes `FFP` / `CRYO` / `WHOLE_BLOOD` with a precise reason rather than guessing them into an auditable family.
 - **Run-level idempotency is enforced at the store layer.** `bba audit` cannot accidentally produce two rows for the same `(run_id, encounter_id)` pair.

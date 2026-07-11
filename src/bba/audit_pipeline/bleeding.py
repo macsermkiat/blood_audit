@@ -18,10 +18,13 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping
+from datetime import date
 
 __all__ = [
+    "LLM_OVERCLEAR_MAX_BLEED_AGE_DAYS",
     "LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE",
     "LLM_OVERCLEAR_MIN_BLEED_ML",
+    "bleeding_quote_is_stale",
     "has_life_threatening_marker",
     "is_active_bleeding_code",
     "marker_occurrence_negated",
@@ -39,6 +42,16 @@ LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE: float = 0.8
 """The active-bleeding indication's *own* confidence must be at least this
 for the guardrail to trust its prose. Model confidence alone cannot clear a
 small bleed — the volume / life-threatening test still has to pass."""
+
+LLM_OVERCLEAR_MAX_BLEED_AGE_DAYS: int = 7
+"""Maximum age (source-wall-clock calendar days) a charted date anchor may
+have before the volume / marker text it governs stops describing the
+*current* bleeding episode. Owner ruling on case 68080335: a 400 mL index
+bleed charted ``Hx.1/12/68`` must not satisfy the >300 mL test for an order
+placed 23/12/68 — 22 days later — even though bleeding was still ongoing.
+Text with no parseable date anchor is treated as current, so this gate can
+only ever WITHHOLD the exemption (the assert stands); it never widens the
+auto-clear surface."""
 
 # Volume tokens. Litres scale x1000; every other unit is already millilitres
 # (cc, ml, and the Thai มล./ซีซี). Case-sensitive by design (spec #89 §3.c
@@ -463,7 +476,119 @@ def quote_negates_bleeding(quote: str) -> bool:
     return found_negated
 
 
-def qualified_bleeding_exempt(indications: Iterable[Mapping[str, object]]) -> bool:
+# Charted d/m/y date anchors ("Hx.1/12/68:", "Lab (21/12/68):"). Two-digit
+# years are Thai Buddhist Era shorthand (68 -> 2568 BE -> 2025 CE); four-digit
+# years accept BE (2400-2700) and CE (1900-2100). Digit lookarounds instead of
+# \b because Thai letters are word characters, and they also stop a long digit
+# run ("1/12/6800") from being misread as a date. Bounded quantifiers — linear
+# time on this replay-critical path.
+_DATE_ANCHOR_RE = re.compile(
+    r"(?<![0-9])([0-9]{1,2})/([0-9]{1,2})/([0-9]{2,4})(?![0-9])"
+)
+
+_BE_CE_OFFSET_YEARS = 543
+_TWO_DIGIT_BE_CENTURY = 2500
+
+
+def _anchor_ce_date(day: int, month: int, year_token: int) -> date | None:
+    """Resolve a charted d/m/y token to a CE calendar date, or ``None`` when
+    it cannot be a real date (invalid day/month, out-of-range year). A
+    ``None`` anchor governs nothing — an unreadable token must never mask a
+    genuine current-episode volume."""
+    if year_token < 100:
+        ce_year = _TWO_DIGIT_BE_CENTURY + year_token - _BE_CE_OFFSET_YEARS
+    elif 2400 <= year_token <= 2700:
+        ce_year = year_token - _BE_CE_OFFSET_YEARS
+    elif 1900 <= year_token <= 2100:
+        ce_year = year_token
+    else:
+        return None
+    try:
+        return date(ce_year, month, day)
+    except ValueError:
+        return None
+
+
+def _mask_stale_dated_spans(text: str, order_date: date) -> str:
+    """Return ``text`` with every span governed by a stale date anchor blanked.
+
+    A date anchor governs the text after it up to the next anchor or newline
+    — the line-oriented "date: content" charting style of Thai focus notes
+    (case 68080335's ``Hx.1/12/68: ... 400 ml``). When the anchor lies more
+    than :data:`LLM_OVERCLEAR_MAX_BLEED_AGE_DAYS` before ``order_date``, the
+    governed span (anchor included) is replaced with same-length whitespace
+    so the volume / marker scans cannot qualify the current order on an old
+    episode's figures. Length-preserving so :data:`_MAX_SCAN_CHARS` keeps its
+    exact meaning. Unparseable anchors and future dates govern nothing, and
+    text before the first anchor is always kept: masking can only ever
+    withhold the exemption, never create one.
+    """
+    matches = list(_DATE_ANCHOR_RE.finditer(text))
+    if not matches:
+        return text
+    masked = list(text)
+    for index, match in enumerate(matches):
+        anchor = _anchor_ce_date(
+            int(match.group(1)), int(match.group(2)), int(match.group(3))
+        )
+        if anchor is None:
+            continue
+        if (order_date - anchor).days <= LLM_OVERCLEAR_MAX_BLEED_AGE_DAYS:
+            continue
+        span_end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        newline = text.find("\n", match.end())
+        if newline != -1:
+            span_end = min(span_end, newline)
+        masked[match.start() : span_end] = " " * (span_end - match.start())
+    return "".join(masked)
+
+
+def bleeding_quote_is_stale(quote: str, order_date: date) -> bool:
+    """True iff ``quote``'s bleed evidence is entirely stale-dated — a stale
+    date anchor governs it and no CURRENT bleed evidence survives masking.
+
+    Used by the replay hemodynamic-floor accompaniment check so a purely
+    historical bleed citation (case 68080335: an ``Hx.1/12/68`` index bleed
+    cited for an order weeks later) does not supply the active-bleeding
+    accompaniment that would floor an over-clear to ``NEEDS_REVIEW`` instead
+    of asserting the ``INAPPROPRIATE`` the stale-date gate is meant to
+    enforce. Shares the exact forward-governance masking
+    (:func:`_mask_stale_dated_spans`) the major-bleed exemption uses, so the
+    two temporal screens cannot drift.
+
+    Two-part contract:
+
+    * If masking changed nothing (no stale span), the quote is NOT stale —
+      an undated or current-dated bleed citation stays live (fail open
+      toward "current"; the floor's caller already screened negation).
+    * If a stale span WAS blanked, the citation is stale UNLESS current bleed
+      evidence survives: a NON-NEGATED bleeding-family term or a documented
+      volume. Forward-governance masking blanks only from the date onward, so
+      a history/label prefix (``Hx.``, ``R/O LGIB Hx.``) is left behind (PR
+      #100 Codex round 2) — that residue carries neither a bleed term nor a
+      volume, so requiring surviving evidence (not merely surviving text)
+      correctly reads it as stale. A surviving term that is itself negated
+      ("no active bleeding today; Hx.1/12/68: active bleeding 400 mL", PR #100
+      Codex round 3) is a documented ABSENCE, not current evidence: the
+      caller's up-front :func:`quote_negates_bleeding` runs on the UNMASKED
+      quote, where the stale non-negated mention defeats it, so the negation
+      re-screen must run here on the MASKED text.
+    """
+    masked = _mask_stale_dated_spans(quote, order_date)
+    if masked == quote:
+        return False
+    lowered = masked.lower()
+    surviving_term = any(term in lowered for term in _BLEEDING_NEGATION_SCREEN_TERMS)
+    if surviving_term and not quote_negates_bleeding(masked):
+        return False
+    return parse_max_volume_ml(masked) is None
+
+
+def qualified_bleeding_exempt(
+    indications: Iterable[Mapping[str, object]],
+    *,
+    order_date: date | None = None,
+) -> bool:
     """True iff a genuine major active bleed justifies keeping an order clear.
 
     Fires when *one* indication satisfies all of: an
@@ -472,6 +597,14 @@ def qualified_bleeding_exempt(indications: Iterable[Mapping[str, object]]) -> bo
     :data:`LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE`; and either a parsed volume
     strictly > :data:`LLM_OVERCLEAR_MIN_BLEED_ML` OR a life-threatening
     marker in its ``quote``.
+
+    When ``order_date`` (source-wall-clock calendar date of the order) is
+    given, quote spans governed by a date anchor more than
+    :data:`LLM_OVERCLEAR_MAX_BLEED_AGE_DAYS` older are blanked first
+    (:func:`_mask_stale_dated_spans`): a quantified index bleed from weeks
+    ago must not clear today's order even when bleeding is still ongoing
+    (owner ruling, case 68080335). ``order_date=None`` preserves the
+    pre-gate behaviour for callers without an order moment.
 
     Every field is read defensively (``.get`` + ``isinstance``): the RBC
     replay path does not fully schema-validate the indication list, so a
@@ -508,6 +641,11 @@ def qualified_bleeding_exempt(indications: Iterable[Mapping[str, object]]) -> bo
         quote = indication.get("quote")
         if not isinstance(quote, str):
             continue
+        # Temporal gate (case 68080335): figures charted under a stale date
+        # anchor describe an old episode, not this order's bleed.
+        screened = (
+            quote if order_date is None else _mask_stale_dated_spans(quote, order_date)
+        )
         # Known limitation (spec #89 §3.c locks the parser as a plain mL
         # reader): parse_max_volume_ml is context-free, so an IV-fluid /
         # urine-output / irrigation volume co-located in the same
@@ -515,10 +653,10 @@ def qualified_bleeding_exempt(indications: Iterable[Mapping[str, object]]) -> bo
         # non-blood-loss figure. Bounded by the ACTIVE_BLEEDING code family +
         # the >=0.8 confidence gate above; tracked as a follow-up, not fixed
         # here (a context-aware parser is out of scope for T1).
-        volume = parse_max_volume_ml(quote)
+        volume = parse_max_volume_ml(screened)
         if (
             volume is not None and volume > LLM_OVERCLEAR_MIN_BLEED_ML
-        ) or has_life_threatening_marker(quote):
+        ) or has_life_threatening_marker(screened):
             return True
 
     return False
