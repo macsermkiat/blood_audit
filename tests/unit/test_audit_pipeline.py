@@ -2557,6 +2557,76 @@ class TestLlmOverclearGuardrail:
         assert row.final_classification == "NEEDS_REVIEW"
         assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
 
+    def test_hypotension_with_label_value_denial_asserts(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #99 round 8: a checklist-style label-value denial
+        # ("GI bleeding: no") is a documented absence — it must not count
+        # as qualifier-(1) accompaniment, and bare hypotension asserts.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-labelvalue",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=("NIBP 79/54 (MAP 63) mmHg, on Levophed; GI bleeding: no"),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                },
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "GI bleeding: no",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                },
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_hypotension_with_unresolved_bleed_adverb_floors(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #99 round 8: "bleeding not yet resolved" is explicitly
+        # ONGOING — the adverb between the negator and the control verb
+        # must not defeat the rescue, and the row floors to a human.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-notyetresolved",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=(
+                "NIBP 79/54 (MAP 63) mmHg, on Levophed; bleeding not yet resolved"
+            ),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                },
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "bleeding not yet resolved",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                },
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+
     def test_negated_refractory_wording_does_not_floor(self, tmp_path: object) -> None:
         # Codex PR #99 round 4: qualifier (3) requires POSITIVE
         # unresponsiveness to fluids. "not refractory after IV fluids" is

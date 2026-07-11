@@ -246,21 +246,30 @@ _DENIAL_PRE_BOUNDARIES: tuple[str, ...] = _DENIAL_LIST_BOUNDARIES + (
 
 # Post-side double negatives that mean the bleed is ONGOING, not absent
 # (Codex PR #99 round 7): in "bleeding not controlled" the negator binds
-# the control verb, not the bleeding. When one of these appears in the
+# the control verb, not the bleeding. When this matches in the
 # clause-bounded post window, the post negation is a false read and the
-# term stays visible to the floor. Accompaniment screen only — applying
-# these to the marker screens would widen the exemption / auto-clear
-# surface, which is committee-owned.
-_POST_STILL_ACTIVE_PATTERNS: tuple[str, ...] = (
-    "not controlled",
-    "not yet controlled",
-    "not under control",
-    "not stopped",
-    "not stopping",
-    "not resolved",
-    "no longer controlled",
-    "ไม่หยุด",  # "... does not stop" (also matches ยังไม่หยุด)
+# term stays visible to the floor. Up to two intervening adverbs are
+# tolerated ("not yet resolved", "not completely controlled" — round 8).
+# Accompaniment screen only — applying the rescue to the marker screens
+# would widen the exemption / auto-clear surface, which is
+# committee-owned. Bounded repetition, linear time.
+_POST_STILL_ACTIVE_RE = re.compile(
+    r"(?:not|never|no longer)(?:\s+\w+){0,2}\s+"
+    r"(?:controlled|stopped|stopping|resolved|resolving|abated|subsided)"
+    r"|not\s+under\s+control"
+    r"|ไม่หยุด"  # "... does not stop" (also matches ยังไม่หยุด)
 )
+
+# Label-value denials (Codex PR #99 round 8): checklist-style notes deny
+# with a bare value after a separator ("GI bleeding: no", "melena? neg").
+# Anchored at the term occurrence: the rest of the term's word, an
+# optional separator, then a denial value at a word boundary — so
+# "bleeding: normal saline" ("no" mid-word) never matches. Accompaniment
+# screen only, same fail direction as the rest of the denial scan.
+_LABEL_VALUE_DENIAL_RE = re.compile(
+    r"^\w*\s*[:=\-–?]\s*(?:no|none|neg|negative|denied|absent|nil|ไม่มี|ไม่พบ)\b"
+)
+_LABEL_VALUE_WINDOW_CHARS = 40
 
 
 def parse_max_volume_ml(text: str) -> float | None:
@@ -360,13 +369,13 @@ def _occurrence_negated(
     pre_boundaries: tuple[str, ...],
     post_boundaries: tuple[str, ...],
     window: int = _MARKER_NEGATION_WINDOW_CHARS,
-    post_rescue: tuple[str, ...] = (),
+    post_rescue: re.Pattern[str] | None = None,
 ) -> bool:
     """Negator scan around ``lowered[start:end]`` with caller-chosen clause
     boundaries — the marker screens keep the comma boundary, the
     accompaniment screen drops it (see :data:`_DENIAL_LIST_BOUNDARIES`).
-    A ``post_rescue`` pattern in the post window overrides a post-side
-    negator hit (still-active double negatives, round 7)."""
+    A ``post_rescue`` match in the post window overrides a post-side
+    negator hit (still-active double negatives, rounds 7-8)."""
     pre = lowered[max(0, start - window) : start]
     cut = max(
         (pre.rfind(boundary) for boundary in pre_boundaries),
@@ -386,7 +395,7 @@ def _occurrence_negated(
         post = post[:cut]
     if not any(token in post for token in _MARKER_POST_NEGATION_TOKENS):
         return False
-    return not any(pattern in post for pattern in post_rescue)
+    return post_rescue is None or post_rescue.search(post) is None
 
 
 def quote_negates_bleeding(quote: str) -> bool:
@@ -413,9 +422,11 @@ def quote_negates_bleeding(quote: str) -> bool:
     never auto-clear.
 
     Post-side double negatives whose negator binds a control verb
-    ("bleeding not controlled", "เลือดออกไม่หยุด" — the bleed is ONGOING)
-    are rescued via :data:`_POST_STILL_ACTIVE_PATTERNS` (round 7) and stay
-    visible to the floor.
+    ("bleeding not controlled", "bleeding not yet resolved",
+    "เลือดออกไม่หยุด" — the bleed is ONGOING) are rescued via
+    :data:`_POST_STILL_ACTIVE_RE` (rounds 7-8) and stay visible to the
+    floor. Checklist-style label-value denials ("GI bleeding: no",
+    round 8) read as negated via :data:`_LABEL_VALUE_DENIAL_RE`.
     """
     lowered = quote.lower()
     found_negated = False
@@ -423,15 +434,20 @@ def quote_negates_bleeding(quote: str) -> bool:
         start = 0
         while (idx := lowered.find(term, start)) != -1:
             end = idx + len(term)
-            if not _occurrence_negated(
+            negated = _occurrence_negated(
                 lowered,
                 idx,
                 end,
                 _DENIAL_PRE_BOUNDARIES,
                 _DENIAL_LIST_BOUNDARIES,
                 window=_DENIAL_LIST_WINDOW_CHARS,
-                post_rescue=_POST_STILL_ACTIVE_PATTERNS,
-            ):
+                post_rescue=_POST_STILL_ACTIVE_RE,
+            ) or bool(
+                _LABEL_VALUE_DENIAL_RE.match(
+                    lowered[end : end + _LABEL_VALUE_WINDOW_CHARS]
+                )
+            )
+            if not negated:
                 return False
             found_negated = True
             start = end

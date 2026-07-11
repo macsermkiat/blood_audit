@@ -504,6 +504,13 @@ class TestQuoteNegatesBleeding:
             "melena noted but now resolved",
             "bleeding resolved after packing",
             "bleeding no longer present",
+            # Label-value denials (Codex PR #99 round 8): checklist-style
+            # notes deny with a bare value after a separator.
+            "GI bleeding: no",
+            "active bleeding - no",
+            "bleeding: none",
+            "melena? negative",
+            "เลือดออก: ไม่มี",  # "bleeding: none"
         ],
     )
     def test_negated_bleed_prose_flags(self, quote: str) -> None:
@@ -519,6 +526,13 @@ class TestQuoteNegatesBleeding:
             "bleeding not yet controlled",
             "bleeding no longer controlled",
             "เลือดออกไม่หยุด",  # "bleeding does not stop"
+            # Adverb-split double negatives (round 8): still ongoing.
+            "bleeding not yet resolved",
+            "bleeding not completely resolved",
+            "bleeding not fully controlled",
+            # A label-value shape whose value is itself a rescued double
+            # negative stays visible too.
+            "bleeding: not controlled",
         ],
     )
     def test_still_active_double_negative_does_not_flag(self, quote: str) -> None:
