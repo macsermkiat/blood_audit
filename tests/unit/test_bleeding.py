@@ -644,6 +644,29 @@ class TestMelenaDoesNotQualify:
             [_active_bleed(quote="melena and hematochezia 500 mL", confidence=0.9)]
         )
 
+    @pytest.mark.parametrize(
+        "quote",
+        [
+            "denies melena; fresh PR bleeding 500 mL",
+            "no melena; fresh PR bleeding 500 mL",
+            "ไม่มีถ่ายดำ fresh PR bleeding 500 mL",
+        ],
+    )
+    def test_negated_melena_does_not_suppress_fresh_volume(self, quote: str) -> None:
+        # Codex PR #103: the disqualifier is negation-aware — an explicit
+        # melena denial must not strip the volume path from a co-documented
+        # current fresh bleed in the same quote.
+        assert qualified_bleeding_exempt([_active_bleed(quote=quote, confidence=0.9)])
+
+    def test_comma_denial_list_melena_stays_disqualified(self) -> None:
+        # The marker screen's comma boundary is kept: a comma-distributed
+        # denial ("no hematemesis, melena") still reads melena as present
+        # here, which only withholds the volume exemption — fail-closed for
+        # the auto-clear surface, same direction as the marker screens.
+        assert not qualified_bleeding_exempt(
+            [_active_bleed(quote="no hematemesis, melena; EBL 500 mL", confidence=0.9)]
+        )
+
 
 class TestBleedingQuoteIsStale:
     """``bleeding_quote_is_stale`` gates the hemodynamic-floor accompaniment.

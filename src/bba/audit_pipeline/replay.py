@@ -38,6 +38,7 @@ from bba.audit_pipeline.bleeding import (
     is_active_bleeding_code,
     marker_occurrence_negated,
     qualified_bleeding_exempt,
+    quote_indicates_melena,
     quote_negates_bleeding,
 )
 from bba.audit_pipeline.models import PipelineRowContext, PipelineRunResult
@@ -453,7 +454,8 @@ def _grounded_indications(
 #     documented shock / pressor support that only lives in prose (round 5).
 #     Owner ruling (#98, 2026-07-11): bare hypotension — even on pressors —
 #     is NOT a transfusion indication; the citation floors ONLY when
-#     accompanied by (1) grounded active-bleeding evidence, (2) severe organ
+#     accompanied by (1) grounded active-bleeding evidence (incl. melena in
+#     the instability citation's own quote, Codex PR #103), (2) severe organ
 #     ischemia (the separate ACS floor), or (3) fluid-refractory language.
 _ACS_HARD_CODES: frozenset[str] = frozenset({"ACS"})
 _HEMODYNAMIC_HARD_CODES: frozenset[str] = frozenset({"HEMODYNAMIC_INSTABILITY"})
@@ -559,6 +561,14 @@ def _qualified_hemodynamic_floor(
     instability citation's own quote (prose-only by nature — a vitals
     snapshot cannot document refractoriness). Qualifier (2), organ
     ischemia, is the separate grounded-ACS floor.
+
+    Qualifier (1) has a melena arm read from the instability citation's OWN
+    quote (Codex PR #103): the prompt routes melena + shock to a
+    HEMODYNAMIC_INSTABILITY citation instead of ACTIVE_BLEEDING (owner
+    ruling: melena is digested blood, not active hemorrhage), so the
+    bleeding accompaniment of that hemorrhagic-shock picture arrives inside
+    the instability citation itself and must still floor — "with shock we
+    care". Same negation and staleness screens as the family-code arm.
     """
     if not _cited_at_prose_trust(
         grounded_indications, _HEMODYNAMIC_HARD_CODES
@@ -602,7 +612,18 @@ def _qualified_hemodynamic_floor(
         if not _confidence_at_prose_trust_bar(indication.get("confidence")):
             continue
         quote = indication.get("quote")
-        if isinstance(quote, str) and _fluid_refractory_language(quote.lower()):
+        if not isinstance(quote, str):
+            continue
+        if _fluid_refractory_language(quote.lower()):
+            return True
+        # Qualifier (1) melena arm (Codex PR #103): the prompt steers
+        # melena + shock to this citation code, so the bleeding
+        # accompaniment lives in the instability quote itself.
+        # quote_indicates_melena is negation-aware; the staleness screen
+        # matches the family-code arm so the two cannot diverge.
+        if quote_indicates_melena(quote) and not bleeding_quote_is_stale(
+            quote, order_date
+        ):
             return True
     return False
 

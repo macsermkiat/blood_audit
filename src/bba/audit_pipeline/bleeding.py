@@ -30,6 +30,7 @@ __all__ = [
     "marker_occurrence_negated",
     "parse_max_volume_ml",
     "qualified_bleeding_exempt",
+    "quote_indicates_melena",
     "quote_negates_bleeding",
 ]
 
@@ -97,9 +98,11 @@ _LITRE_UNITS: frozenset[str] = frozenset({"l", "liter", "liters"})
 # major-bleed exemption on the >300 mL volume test — it clears only via a
 # documented life-threatening / shock marker (the shock pathway) or a
 # qualifying low Hb (the sub-threshold pathway), both handled elsewhere.
-# Deliberately does NOT gate the hemodynamic-floor accompaniment: melena +
-# documented hypotension is a hemorrhagic-shock picture that still floors to
-# human review ("with shock we care").
+# Melena + documented hypotension is a hemorrhagic-shock picture that still
+# floors to human review ("with shock we care"): the prompt routes that
+# combination to a HEMODYNAMIC_INSTABILITY citation, and the replay floor
+# reads these terms out of the instability citation's own quote as its
+# bleeding accompaniment (Codex PR #103).
 _MELENA_TERMS: tuple[str, ...] = (
     "melena",
     "melaena",
@@ -618,7 +621,7 @@ def qualified_bleeding_exempt(
     :data:`LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE`; and either a parsed volume
     strictly > :data:`LLM_OVERCLEAR_MIN_BLEED_ML` OR a life-threatening
     marker in its ``quote``. A melena / coffee-ground / tarry quote
-    (:func:`_quote_indicates_melena`) is disqualified from the volume path —
+    (:func:`quote_indicates_melena`) is disqualified from the volume path —
     digested blood is not active hemorrhage and its charted volume is stool,
     not blood loss (owner ruling) — so it clears only on a life-threatening /
     shock marker.
@@ -684,7 +687,7 @@ def qualified_bleeding_exempt(
         # documented life-threatening / shock marker (the shock pathway); a
         # qualifying low Hb is a separate exemption upstream.
         volume = (
-            None if _quote_indicates_melena(screened) else parse_max_volume_ml(screened)
+            None if quote_indicates_melena(screened) else parse_max_volume_ml(screened)
         )
         if (
             volume is not None and volume > LLM_OVERCLEAR_MIN_BLEED_ML
@@ -694,8 +697,31 @@ def qualified_bleeding_exempt(
     return False
 
 
-def _quote_indicates_melena(text: str) -> bool:
-    """True iff ``text`` names melena / coffee-ground / tarry (non-fresh,
-    digested blood). Case-insensitive substring scan over :data:`_MELENA_TERMS`."""
+def quote_indicates_melena(text: str) -> bool:
+    """True iff ``text`` documents melena / coffee-ground / tarry (non-fresh,
+    digested blood) in non-negated form.
+
+    Each :data:`_MELENA_TERMS` occurrence is screened through
+    :func:`marker_occurrence_negated` — the same per-occurrence negator read
+    as the life-threatening-marker screen — so an explicit denial ("denies
+    melena; fresh PR bleeding 500 mL", Codex PR #103) does not suppress the
+    volume path of a genuine co-documented fresh bleed. The marker screen's
+    comma boundary is kept deliberately: a denial distributing across a comma
+    list ("no hematemesis, melena") still reads as melena PRESENT here, which
+    only withholds the volume exemption — fail-closed for the auto-clear
+    surface, same direction as the marker screens.
+
+    Public seam shared with the replay guardrail's hemodynamic floor: the
+    prompt routes melena + shock to a HEMODYNAMIC_INSTABILITY citation, so
+    the floor reads melena out of the instability citation's own quote as
+    its hemorrhagic-shock accompaniment.
+    """
     lowered = text.lower()
-    return any(term in lowered for term in _MELENA_TERMS)
+    for term in _MELENA_TERMS:
+        start = 0
+        while (idx := lowered.find(term, start)) != -1:
+            end = idx + len(term)
+            if not marker_occurrence_negated(lowered, idx, end):
+                return True
+            start = end
+    return False

@@ -2206,6 +2206,94 @@ class TestLlmOverclearGuardrail:
         assert row.final_classification == "NEEDS_REVIEW"
         assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
 
+    def test_melena_shock_instability_citation_floors(self, tmp_path: object) -> None:
+        # Codex PR #103: the prompt routes melena + shock to a
+        # HEMODYNAMIC_INSTABILITY citation instead of ACTIVE_BLEEDING (owner
+        # ruling: melena is digested blood), so the hemorrhagic-shock
+        # accompaniment arrives inside the instability citation's own quote.
+        # It must still floor to human review — "with shock we care" — not
+        # fall through both the exemption and the floor to an assert.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-melena",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="melena x 3 this morning; BP 82/50, start Levophed",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "melena x 3 this morning; BP 82/50, start Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+
+    def test_negated_melena_instability_citation_asserts(
+        self, tmp_path: object
+    ) -> None:
+        # The melena arm is negation-aware: a denied melena inside the
+        # instability quote is a documented ABSENCE, not hemorrhagic-shock
+        # accompaniment — the bare-hypotension assert stands (ruling #98).
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-melena-neg",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="denies melena; NIBP 79/54 (MAP 63) mmHg, on Levophed",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "denies melena; NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_stale_dated_melena_instability_citation_asserts(
+        self, tmp_path: object
+    ) -> None:
+        # Same temporal screen as the family-code arm (case 68080335): a
+        # melena mention governed by a stale date anchor (1/5/69 BE ==
+        # 2026-05-01, 15 days before the 2026-05-16 order) is an old
+        # episode, not the current hemorrhagic picture — assert stands.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-melena-stale",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="NIBP 79/54 (MAP 63) mmHg, on Levophed; Hx.1/5/69: melena",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": (
+                        "NIBP 79/54 (MAP 63) mmHg, on Levophed; Hx.1/5/69: melena"
+                    ),
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
     def test_hypotension_with_negated_bleed_citation_asserts(
         self, tmp_path: object
     ) -> None:
