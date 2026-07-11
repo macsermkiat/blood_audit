@@ -1392,6 +1392,24 @@ class TestRbcClearCutPromptSemantics:
         )
 
     @pytest.mark.parametrize("mode", _RBC_MODES)
+    def test_qualifying_volume_must_be_current_episode(self, mode: str) -> None:
+        # Case 68080335 (owner ruling): the model cited a 400 mL index bleed
+        # dated 22 days pre-order to satisfy the volume test. The prompt must
+        # state the CURRENT-episode requirement so the model's verdict agrees
+        # with the guardrail's stale-dated-volume gate instead of producing
+        # APPROPRIATE reasoning the guardrail then overrides.
+        prompt = system_prompt_for(task_mode=mode, cohort_threshold=7.5)
+        assert "CURRENT" in prompt, (
+            f"{mode} prompt must require the qualifying volume/marker to belong "
+            "to the CURRENT bleeding episode; without it a weeks-old quantified "
+            "index bleed keeps mis-clearing gray-zone orders"
+        )
+        assert "Hx. 1/12/68" in prompt, (
+            f"{mode} prompt must carry the dated-historical-volume example so "
+            "the rule is concrete for Thai 'Hx. <date>:' charting"
+        )
+
+    @pytest.mark.parametrize("mode", _RBC_MODES)
     def test_small_bleed_disqualifiers_enumerated(self, mode: str) -> None:
         prompt = system_prompt_for(task_mode=mode, cohort_threshold=7.5).lower()
         for phrase in (
@@ -1497,16 +1515,22 @@ class TestRbcPromptHashGolden:
     # "Hb 7 to below 10 g/dL" — "7-10" claimed Hb exactly 10.0 for both RBC
     # modes while dispatch sends it to the override. Blessed by
     # test_gray_zone_band_tops_out_below_ten.
+    # Re-pinned for case 68080335 (stale-dated volume): the ACTIVE_BLEEDING
+    # rule now requires the qualifying volume/marker to belong to the CURRENT
+    # bleeding episode. Blessed by
+    # test_qualifying_volume_must_be_current_episode.
     RBC_HB_7_10_75_EMPTY_EVIDENCE = (
-        "507d8a6aa18fe939b903f9d382ded3996ca6a90b141417192680ac6409684852"
+        "b85268af77957e40cfd9e875f612922d5f579332400777378f62ad1e3818aeec"
     )
     # Re-pinned for #93 boundary alignment: dispatch routes Hb >= 10.0 to this
     # template (engine ``hb_ge_10``), so its prose states the inclusive
     # boundary ("at or above 10 g/dL") instead of asserting "Hb > 10 g/dL" —
     # false patient fact at exactly 10.0. Blessed by
     # test_gt_10_override_states_inclusive_boundary.
+    # Re-pinned for case 68080335 (stale-dated volume) — same shared
+    # ACTIVE_BLEEDING rule edit as the gray-zone golden above.
     RBC_HB_GT_10_75_EMPTY_EVIDENCE = (
-        "4e40e37fbfb99d693f0cdc339a0b062e41b01c3d8f87dc8d91f0a2a50b14f429"
+        "cfb6b9fd78557e232a4996a7dd4e2ab65368f7c8bfe81f2ecdf9d33f90c18dd9"
     )
 
     def test_hb_7_10_review_cohort_7_5_hash_is_pinned(self) -> None:

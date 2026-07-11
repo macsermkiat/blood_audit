@@ -14,10 +14,13 @@ carries the >=80% unit-coverage bar on its own.
 
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
 from bba.audit_pipeline.bleeding import (
     _MAX_SCAN_CHARS,
+    LLM_OVERCLEAR_MAX_BLEED_AGE_DAYS,
     LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE,
     LLM_OVERCLEAR_MIN_BLEED_ML,
     has_life_threatening_marker,
@@ -464,6 +467,134 @@ class TestQualifiedBleedingExempt:
         )
 
 
+# Case 68080335's order day: 23/12/2568 BE == 2025-12-23 CE.
+_ORDER_DATE = date(2025, 12, 23)
+
+
+class TestStaleDatedVolumeGate:
+    """The temporal gate: an old episode's figures must not clear this order.
+
+    WHY (owner ruling, case 68080335): the notes charted a 400 mL index
+    bleed dated ``Hx.1/12/68`` — 22 days before the order. Bleeding was
+    still ongoing but unquantified, so the >300 mL bar was met only by a
+    stale figure; auto-clearing on it defeats the restrictive policy. The
+    gate blanks spans governed by a date anchor older than
+    ``LLM_OVERCLEAR_MAX_BLEED_AGE_DAYS`` — and ONLY those spans, because a
+    false stale-read withholds the exemption and falsely asserts a genuine
+    transfusion INAPPROPRIATE (the doctor-facing error direction).
+    """
+
+    _STALE_QUOTE = "R/O LGIB Hx.1/12/68: ถ่ายอุจจาระเป็นเลือด 400 ml"
+
+    def test_stale_index_bleed_volume_does_not_exempt(self) -> None:
+        # The real case-68080335 charting: 400 mL dated 22 days pre-order.
+        assert not qualified_bleeding_exempt(
+            [_active_bleed(quote=self._STALE_QUOTE, confidence=0.85)],
+            order_date=_ORDER_DATE,
+        )
+
+    def test_without_order_date_stale_volume_still_exempts(self) -> None:
+        # Back-compat contract: the gate exists only when the caller supplies
+        # the order moment — which is why the replay call sites must pass it.
+        assert qualified_bleeding_exempt(
+            [_active_bleed(quote=self._STALE_QUOTE, confidence=0.85)]
+        )
+
+    def test_current_episode_dated_volume_exempts(self) -> None:
+        # A volume charted the day before the order is this episode's bleed.
+        assert qualified_bleeding_exempt(
+            [_active_bleed(quote="22/12/68: ถ่ายอุจจาระเป็นเลือด 400 ml", confidence=0.85)],
+            order_date=_ORDER_DATE,
+        )
+
+    def test_undated_volume_is_treated_as_current(self) -> None:
+        # No anchor -> no masking: an undated genuine bleed must keep clearing.
+        assert qualified_bleeding_exempt(
+            [_active_bleed(quote="EBL 400 mL intra-op", confidence=0.85)],
+            order_date=_ORDER_DATE,
+        )
+
+    def test_text_before_the_first_anchor_is_kept(self) -> None:
+        # A stale anchor governs only what FOLLOWS it; a current-episode
+        # volume ahead of it must survive.
+        assert qualified_bleeding_exempt(
+            [
+                _active_bleed(
+                    quote="EBL 400 mL now; Hx.1/12/68: melena", confidence=0.85
+                )
+            ],
+            order_date=_ORDER_DATE,
+        )
+
+    def test_stale_governance_stops_at_newline(self) -> None:
+        # Thai focus notes are line-oriented ("date: content"); the next line
+        # is a new statement and its current volume must survive.
+        assert qualified_bleeding_exempt(
+            [
+                _active_bleed(
+                    quote="Hx.1/12/68: melena\nวันนี้ EBL 400 mL", confidence=0.85
+                )
+            ],
+            order_date=_ORDER_DATE,
+        )
+
+    def test_stale_governance_stops_at_the_next_anchor(self) -> None:
+        # A later current-dated span is un-governed by the stale anchor.
+        assert qualified_bleeding_exempt(
+            [
+                _active_bleed(
+                    quote="1/12/68: ถ่ายเป็นเลือด 400 ml, 22/12/68: EBL 350 ml",
+                    confidence=0.85,
+                )
+            ],
+            order_date=_ORDER_DATE,
+        )
+
+    def test_stale_life_threatening_marker_does_not_exempt(self) -> None:
+        # The marker path is gated identically: a shock charted three weeks
+        # ago is not this order's emergency.
+        assert not qualified_bleeding_exempt(
+            [_active_bleed(quote="1/12/68: hemorrhagic shock", confidence=0.9)],
+            order_date=_ORDER_DATE,
+        )
+        assert qualified_bleeding_exempt(
+            [_active_bleed(quote="22/12/68: hemorrhagic shock", confidence=0.9)],
+            order_date=_ORDER_DATE,
+        )
+
+    def test_four_digit_buddhist_year_is_recognised(self) -> None:
+        assert not qualified_bleeding_exempt(
+            [_active_bleed(quote="1/12/2568: ถ่ายเป็นเลือด 400 ml", confidence=0.85)],
+            order_date=_ORDER_DATE,
+        )
+
+    def test_unparseable_date_token_governs_nothing(self) -> None:
+        # An impossible day/month must never mask a genuine current volume.
+        assert qualified_bleeding_exempt(
+            [_active_bleed(quote="40/13/68: EBL 400 ml", confidence=0.85)],
+            order_date=_ORDER_DATE,
+        )
+
+    def test_future_dated_anchor_governs_nothing(self) -> None:
+        # A planned-procedure date after the order is not a stale anchor.
+        assert qualified_bleeding_exempt(
+            [_active_bleed(quote="25/12/68: EBL 400 ml", confidence=0.85)],
+            order_date=_ORDER_DATE,
+        )
+
+    def test_age_boundary_seven_days_is_current_eight_is_stale(self) -> None:
+        # Stale is strictly OLDER than the horizon: exactly 7 days still
+        # plausibly belongs to the ordering episode.
+        assert qualified_bleeding_exempt(
+            [_active_bleed(quote="16/12/68: EBL 400 ml", confidence=0.85)],
+            order_date=_ORDER_DATE,
+        )
+        assert not qualified_bleeding_exempt(
+            [_active_bleed(quote="15/12/68: EBL 400 ml", confidence=0.85)],
+            order_date=_ORDER_DATE,
+        )
+
+
 class TestQuoteNegatesBleeding:
     """``quote_negates_bleeding`` recognises absence-of-bleed prose.
 
@@ -594,3 +725,6 @@ def test_policy_constants_match_locked_decisions() -> None:
     # Spec #89 locked decision 2: >300 mL and confidence >=0.8.
     assert LLM_OVERCLEAR_MIN_BLEED_ML == 300.0
     assert LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE == 0.8
+    # Case 68080335 owner ruling: a dated bleed figure older than a week no
+    # longer quantifies the CURRENT episode.
+    assert LLM_OVERCLEAR_MAX_BLEED_AGE_DAYS == 7
