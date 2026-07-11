@@ -2285,14 +2285,17 @@ class TestLlmOverclearGuardrail:
         # not supply qualifier-(1) accompaniment for a bare-hypotension
         # over-clear — otherwise the stale-date gate leaks and the row floors
         # to NEEDS_REVIEW instead of the asserted INAPPROPRIATE. Order date is
-        # 2026-05-16 (Bangkok); 1/5/69 BE == 2026-05-01, 15 days prior.
+        # 2026-05-16 (Bangkok); 1/5/69 BE == 2026-05-01, 15 days prior. The
+        # "Hx." label mirrors the real charting (Codex round 2): masking
+        # leaves the label prefix, but no current bleed evidence survives.
         ctx = _row_context(
             audit_id="audit-oc-hemo-stalebleed",
             classification="NEEDS_REVIEW",
             hb_value=9.4,
             sbp=LLM_OVERCLEAR_UNSTABLE_SBP - 8.0,
             evidence_text=(
-                "NIBP 79/54 (MAP 63) mmHg, on Levophed; 1/5/69: active bleeding 400 ml"
+                "NIBP 79/54 (MAP 63) mmHg, on Levophed; "
+                "Hx.1/5/69: active bleeding 400 ml"
             ),
         )
         response = _periop_llm_response(
@@ -2307,7 +2310,7 @@ class TestLlmOverclearGuardrail:
                 },
                 {
                     "code": "ACTIVE_BLEEDING",
-                    "quote": "1/5/69: active bleeding 400 ml",
+                    "quote": "Hx.1/5/69: active bleeding 400 ml",
                     "source_id": "E1",
                     "confidence": 0.9,
                 },

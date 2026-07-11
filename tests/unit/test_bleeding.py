@@ -613,6 +613,26 @@ class TestBleedingQuoteIsStale:
         # Codex's exact scenario: a bleed dated 22 days before the order.
         assert bleeding_quote_is_stale("1/12/68: active bleeding 400 ml", _ORDER_DATE)
 
+    def test_history_label_prefix_before_stale_date_is_stale(self) -> None:
+        # The REAL case-68080335 charting: a "Hx." / "R/O LGIB Hx." label
+        # precedes the date, so forward-governance masking leaves the label
+        # behind (PR #100 Codex round 2). A bare history label carries no
+        # bleed term and no volume, so it must still read as stale — else the
+        # hemodynamic floor accepts a 22-day-old bleed as current.
+        assert bleeding_quote_is_stale(
+            "Hx.1/12/68: active bleeding 400 ml", _ORDER_DATE
+        )
+        assert bleeding_quote_is_stale(
+            "R/O LGIB Hx.1/12/68: ถ่ายอุจจาระเป็นเลือด 400 ml", _ORDER_DATE
+        )
+
+    def test_current_bleed_before_stale_history_date_is_not_stale(self) -> None:
+        # A documented current volume ahead of a trailing stale history date
+        # is real current evidence and survives masking.
+        assert not bleeding_quote_is_stale(
+            "EBL 250 mL now, prior Hx 1/12/68 bleed", _ORDER_DATE
+        )
+
     def test_current_dated_bleed_is_not_stale(self) -> None:
         assert not bleeding_quote_is_stale(
             "22/12/68: active bleeding 400 ml", _ORDER_DATE
@@ -634,9 +654,12 @@ class TestBleedingQuoteIsStale:
         assert not bleeding_quote_is_stale("16/12/68: bleeding", _ORDER_DATE)
         assert bleeding_quote_is_stale("15/12/68: bleeding", _ORDER_DATE)
 
-    def test_empty_quote_is_stale(self) -> None:
-        # Nothing to accompany with; treated as stale so it cannot floor.
-        assert bleeding_quote_is_stale("", _ORDER_DATE)
+    def test_empty_and_undated_quotes_are_not_stale(self) -> None:
+        # Fail-open contract: with no stale span removed, the predicate leaves
+        # the caller's prior behaviour intact (the floor already screens
+        # negation and non-bleed codes upstream).
+        assert not bleeding_quote_is_stale("", _ORDER_DATE)
+        assert not bleeding_quote_is_stale("active bleeding, no date here", _ORDER_DATE)
 
 
 class TestQuoteNegatesBleeding:

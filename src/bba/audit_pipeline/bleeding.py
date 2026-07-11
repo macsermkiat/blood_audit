@@ -544,20 +544,38 @@ def _mask_stale_dated_spans(text: str, order_date: date) -> str:
 
 
 def bleeding_quote_is_stale(quote: str, order_date: date) -> bool:
-    """True iff every dated span in ``quote`` is stale, leaving no
-    current-episode text once stale spans are blanked.
+    """True iff ``quote``'s bleed evidence is entirely stale-dated — a stale
+    date anchor governs it and no CURRENT bleed evidence survives masking.
 
-    A quote with any undated or current-dated text is NOT stale — the
-    predicate fails open toward "current" so a genuine ongoing bleed still
-    counts. Used by the replay hemodynamic-floor accompaniment check so a
-    purely historical bleed citation (case 68080335: an ``Hx.1/12/68`` index
-    bleed cited for an order weeks later) does not supply the active-bleeding
+    Used by the replay hemodynamic-floor accompaniment check so a purely
+    historical bleed citation (case 68080335: an ``Hx.1/12/68`` index bleed
+    cited for an order weeks later) does not supply the active-bleeding
     accompaniment that would floor an over-clear to ``NEEDS_REVIEW`` instead
     of asserting the ``INAPPROPRIATE`` the stale-date gate is meant to
     enforce. Shares the exact forward-governance masking
     (:func:`_mask_stale_dated_spans`) the major-bleed exemption uses, so the
-    two temporal screens cannot drift."""
-    return not _mask_stale_dated_spans(quote, order_date).strip()
+    two temporal screens cannot drift.
+
+    Two-part contract:
+
+    * If masking changed nothing (no stale span), the quote is NOT stale —
+      an undated or current-dated bleed citation stays live (fail open
+      toward "current"; the floor's caller already screened negation).
+    * If a stale span WAS blanked, the citation is stale UNLESS current bleed
+      evidence survives: a bleeding-family term or a documented volume.
+      Forward-governance masking blanks only from the date onward, so a
+      history/label prefix (``Hx.``, ``R/O LGIB Hx.``) is left behind (PR
+      #100 Codex round 2) — that residue carries neither a bleed term nor a
+      volume, so requiring surviving evidence (not merely surviving text)
+      correctly reads it as stale.
+    """
+    masked = _mask_stale_dated_spans(quote, order_date)
+    if masked == quote:
+        return False
+    lowered = masked.lower()
+    if any(term in lowered for term in _BLEEDING_NEGATION_SCREEN_TERMS):
+        return False
+    return parse_max_volume_ml(masked) is None
 
 
 def qualified_bleeding_exempt(
