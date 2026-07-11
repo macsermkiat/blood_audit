@@ -34,6 +34,7 @@ from zoneinfo import ZoneInfo
 
 from bba.audit_pipeline.bleeding import (
     LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE,
+    bleeding_quote_is_stale,
     is_active_bleeding_code,
     marker_occurrence_negated,
     qualified_bleeding_exempt,
@@ -563,6 +564,7 @@ def _qualified_hemodynamic_floor(
         grounded_indications, _HEMODYNAMIC_HARD_CODES
     ) and not _has_hard_hemodynamic_signal(context):
         return False
+    order_date = _order_local_date(context)
     for indication in grounded_indications:
         code = indication.get("code")
         if (
@@ -575,8 +577,16 @@ def _qualified_hemodynamic_floor(
         # grounded quote documenting the ABSENCE of bleeding ("no active
         # hemorrhage") is a mislabeled citation and must not floor the row.
         quote = indication.get("quote")
-        if isinstance(quote, str) and quote_negates_bleeding(quote):
-            continue
+        if isinstance(quote, str):
+            if quote_negates_bleeding(quote):
+                continue
+            # ...and it must be the CURRENT hemorrhagic picture (case
+            # 68080335, PR #100 Codex): a purely stale-dated bleed cannot
+            # supply the accompaniment that floors an over-clear the
+            # stale-date gate is meant to assert. Same temporal screen as
+            # qualified_bleeding_exempt so the two cannot diverge.
+            if bleeding_quote_is_stale(quote, order_date):
+                continue
         return True
     for indication in grounded_indications:
         code = indication.get("code")

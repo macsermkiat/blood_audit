@@ -23,6 +23,7 @@ from bba.audit_pipeline.bleeding import (
     LLM_OVERCLEAR_MAX_BLEED_AGE_DAYS,
     LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE,
     LLM_OVERCLEAR_MIN_BLEED_ML,
+    bleeding_quote_is_stale,
     has_life_threatening_marker,
     parse_max_volume_ml,
     qualified_bleeding_exempt,
@@ -593,6 +594,49 @@ class TestStaleDatedVolumeGate:
             [_active_bleed(quote="15/12/68: EBL 400 ml", confidence=0.85)],
             order_date=_ORDER_DATE,
         )
+
+
+class TestBleedingQuoteIsStale:
+    """``bleeding_quote_is_stale`` gates the hemodynamic-floor accompaniment.
+
+    WHY (case 68080335, PR #100 Codex): the major-bleed exemption is not the
+    only place a grounded ACTIVE_BLEEDING citation is trusted — the
+    hemodynamic floor treats one as the "possible hemorrhagic picture" that
+    routes a bare-hypotension over-clear to human review instead of asserting
+    INAPPROPRIATE. A purely stale-dated bleed must be recognised as stale
+    HERE too, or the stale-date gate leaks: hypotension + an old bleed would
+    floor to NEEDS_REVIEW when the ruling wants INAPPROPRIATE. The predicate
+    fails OPEN toward "current" so a genuine ongoing bleed still floors.
+    """
+
+    def test_purely_stale_dated_bleed_is_stale(self) -> None:
+        # Codex's exact scenario: a bleed dated 22 days before the order.
+        assert bleeding_quote_is_stale("1/12/68: active bleeding 400 ml", _ORDER_DATE)
+
+    def test_current_dated_bleed_is_not_stale(self) -> None:
+        assert not bleeding_quote_is_stale(
+            "22/12/68: active bleeding 400 ml", _ORDER_DATE
+        )
+
+    def test_undated_bleed_is_not_stale(self) -> None:
+        # No anchor -> nothing to mask -> current. An "EBL 450 mL" shorthand
+        # with no date must still count as accompaniment (fail-open).
+        assert not bleeding_quote_is_stale("EBL 450 mL, actively bleeding", _ORDER_DATE)
+
+    def test_mixed_current_and_stale_is_not_stale(self) -> None:
+        # Any surviving current text keeps the citation live (conservative:
+        # errs toward flooring to human review, never toward asserting).
+        assert not bleeding_quote_is_stale(
+            "active bleeding now; 1/12/68: 400 ml", _ORDER_DATE
+        )
+
+    def test_seven_day_boundary_is_current_eight_is_stale(self) -> None:
+        assert not bleeding_quote_is_stale("16/12/68: bleeding", _ORDER_DATE)
+        assert bleeding_quote_is_stale("15/12/68: bleeding", _ORDER_DATE)
+
+    def test_empty_quote_is_stale(self) -> None:
+        # Nothing to accompany with; treated as stale so it cannot floor.
+        assert bleeding_quote_is_stale("", _ORDER_DATE)
 
 
 class TestQuoteNegatesBleeding:

@@ -24,6 +24,7 @@ __all__ = [
     "LLM_OVERCLEAR_MAX_BLEED_AGE_DAYS",
     "LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE",
     "LLM_OVERCLEAR_MIN_BLEED_ML",
+    "bleeding_quote_is_stale",
     "has_life_threatening_marker",
     "is_active_bleeding_code",
     "marker_occurrence_negated",
@@ -540,6 +541,23 @@ def _mask_stale_dated_spans(text: str, order_date: date) -> str:
             span_end = min(span_end, newline)
         masked[match.start() : span_end] = " " * (span_end - match.start())
     return "".join(masked)
+
+
+def bleeding_quote_is_stale(quote: str, order_date: date) -> bool:
+    """True iff every dated span in ``quote`` is stale, leaving no
+    current-episode text once stale spans are blanked.
+
+    A quote with any undated or current-dated text is NOT stale — the
+    predicate fails open toward "current" so a genuine ongoing bleed still
+    counts. Used by the replay hemodynamic-floor accompaniment check so a
+    purely historical bleed citation (case 68080335: an ``Hx.1/12/68`` index
+    bleed cited for an order weeks later) does not supply the active-bleeding
+    accompaniment that would floor an over-clear to ``NEEDS_REVIEW`` instead
+    of asserting the ``INAPPROPRIATE`` the stale-date gate is meant to
+    enforce. Shares the exact forward-governance masking
+    (:func:`_mask_stale_dated_spans`) the major-bleed exemption uses, so the
+    two temporal screens cannot drift."""
+    return not _mask_stale_dated_spans(quote, order_date).strip()
 
 
 def qualified_bleeding_exempt(

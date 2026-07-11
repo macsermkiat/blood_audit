@@ -2279,6 +2279,86 @@ class TestLlmOverclearGuardrail:
         assert row.final_classification == "INAPPROPRIATE"
         assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
 
+    def test_hypotension_with_stale_dated_bleed_asserts(self, tmp_path: object) -> None:
+        # Case 68080335 / PR #100 Codex: a bleed charted for an event weeks
+        # before the order is not the CURRENT hemorrhagic picture. It must
+        # not supply qualifier-(1) accompaniment for a bare-hypotension
+        # over-clear — otherwise the stale-date gate leaks and the row floors
+        # to NEEDS_REVIEW instead of the asserted INAPPROPRIATE. Order date is
+        # 2026-05-16 (Bangkok); 1/5/69 BE == 2026-05-01, 15 days prior.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-stalebleed",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            sbp=LLM_OVERCLEAR_UNSTABLE_SBP - 8.0,
+            evidence_text=(
+                "NIBP 79/54 (MAP 63) mmHg, on Levophed; 1/5/69: active bleeding 400 ml"
+            ),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                },
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "1/5/69: active bleeding 400 ml",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                },
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_hypotension_with_current_dated_bleed_floors(
+        self, tmp_path: object
+    ) -> None:
+        # Guard against over-correction: a CURRENT-episode dated bleed (14/5/69
+        # BE == 2026-05-14, 2 days before the 2026-05-16 order) is genuine
+        # accompaniment and must still floor a bare-hypotension over-clear to
+        # human review — the temporal gate blanks only STALE spans. The bleed
+        # is deliberately sub-major (no >300 mL, no life-threatening marker) so
+        # it is qualifier-(1) accompaniment, not a self-standing bleed
+        # exemption that would auto-clear the row to APPROPRIATE first.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-currentbleed",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            sbp=LLM_OVERCLEAR_UNSTABLE_SBP - 8.0,
+            evidence_text=(
+                "NIBP 79/54 (MAP 63) mmHg, on Levophed; "
+                "14/5/69: active bleeding per rectum ongoing"
+            ),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                },
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "14/5/69: active bleeding per rectum ongoing",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                },
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+
     def test_structured_bare_hypotension_overclear_asserts(
         self, tmp_path: object
     ) -> None:
