@@ -112,7 +112,13 @@ _RBC_ACTIVE_BLEEDING_RULE: Final[str] = (
     "earlier event (e.g. an 'Hx. 1/12/68: 400 ml' index bleed cited for an order "
     "placed weeks later) does NOT satisfy the volume test even when bleeding is "
     "still ongoing — ongoing bleeding whose current loss is not quantified and "
-    "has no life-threatening marker is NOT a hard indication.\n"
+    "has no life-threatening marker is NOT a hard indication. Melena, "
+    "coffee-ground emesis, and tarry black stool are DIGESTED (old) blood, NOT "
+    "active hemorrhage; they do NOT qualify as ACTIVE_BLEEDING on their own, and "
+    "a melena 'volume' is stool, not blood loss. Melena matters only when "
+    "accompanied by documented hemodynamic instability / hypovolemic shock (use "
+    "HEMODYNAMIC_INSTABILITY) or a sub-threshold Hb (use SUB_THRESHOLD_HB) — "
+    "absent both, do NOT cite ACTIVE_BLEEDING for melena.\n"
 )
 
 

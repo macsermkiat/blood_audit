@@ -90,6 +90,27 @@ reintroducing super-linear scanning on an attacker-influenced quote length."""
 
 _LITRE_UNITS: frozenset[str] = frozenset({"l", "liter", "liters"})
 
+# Digested / non-fresh blood — melena, coffee-ground emesis, tarry stool.
+# Owner ruling: melena is old blood (an upper-GI bleed already digested),
+# NOT active hemorrhage, and its charted "volume" is a stool volume, not
+# active blood loss. So a melena-only quote must NOT qualify the standalone
+# major-bleed exemption on the >300 mL volume test — it clears only via a
+# documented life-threatening / shock marker (the shock pathway) or a
+# qualifying low Hb (the sub-threshold pathway), both handled elsewhere.
+# Deliberately does NOT gate the hemodynamic-floor accompaniment: melena +
+# documented hypotension is a hemorrhagic-shock picture that still floors to
+# human review ("with shock we care").
+_MELENA_TERMS: tuple[str, ...] = (
+    "melena",
+    "melaena",
+    "tarry stool",
+    "tarry black",
+    "coffee ground",
+    "coffee-ground",
+    "ถ่ายดำ",  # black/tarry stool = melena
+    "อุจจาระดำ",  # black stool = melena
+)
+
 # Conservative, high-confidence-gated prose markers of a life-threatening or
 # uncontrolled bleed. Deliberately narrow (spec #89 risk note): benign
 # bleeding language ("oozing", "bleeding precaution") must never match. Thai
@@ -596,7 +617,11 @@ def qualified_bleeding_exempt(
     (``RISK`` / ``HISTORY`` / ``NOT_ACTIVE``); its own ``confidence`` >=
     :data:`LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE`; and either a parsed volume
     strictly > :data:`LLM_OVERCLEAR_MIN_BLEED_ML` OR a life-threatening
-    marker in its ``quote``.
+    marker in its ``quote``. A melena / coffee-ground / tarry quote
+    (:func:`_quote_indicates_melena`) is disqualified from the volume path —
+    digested blood is not active hemorrhage and its charted volume is stool,
+    not blood loss (owner ruling) — so it clears only on a life-threatening /
+    shock marker.
 
     When ``order_date`` (source-wall-clock calendar date of the order) is
     given, quote spans governed by a date anchor more than
@@ -653,10 +678,24 @@ def qualified_bleeding_exempt(
         # non-blood-loss figure. Bounded by the ACTIVE_BLEEDING code family +
         # the >=0.8 confidence gate above; tracked as a follow-up, not fixed
         # here (a context-aware parser is out of scope for T1).
-        volume = parse_max_volume_ml(screened)
+        # Owner ruling: melena is digested/old blood, not active hemorrhage,
+        # and its charted volume is stool, not blood loss — so a melena quote
+        # is disqualified from the >300 mL volume path. It still clears on a
+        # documented life-threatening / shock marker (the shock pathway); a
+        # qualifying low Hb is a separate exemption upstream.
+        volume = (
+            None if _quote_indicates_melena(screened) else parse_max_volume_ml(screened)
+        )
         if (
             volume is not None and volume > LLM_OVERCLEAR_MIN_BLEED_ML
         ) or has_life_threatening_marker(screened):
             return True
 
     return False
+
+
+def _quote_indicates_melena(text: str) -> bool:
+    """True iff ``text`` names melena / coffee-ground / tarry (non-fresh,
+    digested blood). Case-insensitive substring scan over :data:`_MELENA_TERMS`."""
+    lowered = text.lower()
+    return any(term in lowered for term in _MELENA_TERMS)
