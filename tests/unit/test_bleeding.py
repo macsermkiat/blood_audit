@@ -486,6 +486,13 @@ class TestQuoteNegatesBleeding:
             "r/o GI bleed",
             "without further blood loss overnight",
             "ไม่มีเลือดออก",  # "no bleeding"
+            # Bleed synonyms (Codex PR #99 round 4): a miscoded negated
+            # synonym must not slip past the screen just because the
+            # generic terms miss it.
+            "denies melena",
+            "no hematemesis overnight",
+            "negative for hematochezia",
+            "ไม่มีถ่ายดำ",  # "no melena (black stool)"
         ],
     )
     def test_negated_bleed_prose_flags(self, quote: str) -> None:
@@ -497,6 +504,7 @@ class TestQuoteNegatesBleeding:
             "intramuscular hematoma with active bleeding at Lt. thigh",
             "hemorrhagic shock, resuscitation ongoing",
             "เลือดออกมาก",  # "bleeding heavily"
+            "melena x 3 this morning, ongoing",
         ],
     )
     def test_genuine_bleed_prose_does_not_flag(self, quote: str) -> None:

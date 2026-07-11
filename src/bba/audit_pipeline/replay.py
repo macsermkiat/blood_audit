@@ -33,6 +33,7 @@ from typing import Final, NamedTuple
 from bba.audit_pipeline.bleeding import (
     LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE,
     is_active_bleeding_code,
+    marker_occurrence_negated,
     qualified_bleeding_exempt,
     quote_negates_bleeding,
 )
@@ -454,6 +455,29 @@ _FLUID_REFRACTORY_TOKENS: tuple[str, ...] = (
     "ไม่ตอบสนอง",  # "not responding ..."
 )
 
+# The one polarity-AMBIGUOUS token above: "not refractory after IV fluids"
+# documents responsiveness, so bare "refractory" occurrences are screened
+# with the shared negator/clause window (Codex PR #99 round 4). The phrase
+# tokens carry their own polarity ("no response to fluid" IS
+# refractoriness) and must NOT be screened — a pre-negation read would
+# falsely void genuine "not improving despite fluid resuscitation".
+_FLUID_REFRACTORY_NEGATION_SCREENED: frozenset[str] = frozenset({"refractory"})
+
+
+def _fluid_refractory_language(lowered: str) -> bool:
+    """True iff a fluid-refractory token appears in positive form in the
+    lowercased quote (owner-ruling qualifier 3)."""
+    for token in _FLUID_REFRACTORY_TOKENS:
+        start = 0
+        while (idx := lowered.find(token, start)) != -1:
+            end = idx + len(token)
+            if token not in _FLUID_REFRACTORY_NEGATION_SCREENED:
+                return True
+            if not marker_occurrence_negated(lowered, idx, end):
+                return True
+            start = end
+    return False
+
 
 def _confidence_at_prose_trust_bar(confidence: object) -> bool:
     """True iff ``confidence`` is a schema-valid probability at or above the
@@ -551,10 +575,8 @@ def _qualified_hemodynamic_floor(
         if not _confidence_at_prose_trust_bar(indication.get("confidence")):
             continue
         quote = indication.get("quote")
-        if isinstance(quote, str):
-            lowered = quote.lower()
-            if any(token in lowered for token in _FLUID_REFRACTORY_TOKENS):
-                return True
+        if isinstance(quote, str) and _fluid_refractory_language(quote.lower()):
+            return True
     return False
 
 

@@ -24,6 +24,7 @@ __all__ = [
     "LLM_OVERCLEAR_MIN_BLEED_ML",
     "has_life_threatening_marker",
     "is_active_bleeding_code",
+    "marker_occurrence_negated",
     "parse_max_volume_ml",
     "qualified_bleeding_exempt",
     "quote_negates_bleeding",
@@ -199,6 +200,26 @@ _BLEEDING_CONTEXT_TERMS: tuple[str, ...] = (
 )
 _MARKER_CONTEXT_WINDOW_CHARS = 40
 
+# Bleed-synonym terms recognised ONLY by the negation screen
+# (:func:`quote_negates_bleeding`, Codex PR #99 round 4): "denies melena"
+# miscoded as ACTIVE_BLEEDING must not pass as accompaniment just because
+# the generic terms miss the synonym. Kept OUT of
+# :data:`_BLEEDING_CONTEXT_TERMS` deliberately — adding them there would
+# widen the life-threatening-marker exemption ("uncontrolled melena"
+# auto-clearing), and prose auto-clear surface is a committee decision.
+# A false hit here only withholds the hemodynamic floor (assert stands).
+_BLEEDING_NEGATION_SCREEN_TERMS: tuple[str, ...] = _BLEEDING_CONTEXT_TERMS + (
+    "melena",
+    "hematemesis",
+    "haematemesis",
+    "hematochezia",
+    "haematochezia",
+    "hemoptysis",
+    "haemoptysis",
+    "epistaxis",
+    "ถ่ายดำ",  # melena ("black stool")
+)
+
 
 def parse_max_volume_ml(text: str) -> float | None:
     """Return the largest documented blood-loss volume in ``text`` as mL.
@@ -244,7 +265,7 @@ def has_life_threatening_marker(text: str) -> bool:
         start = 0
         while (idx := lowered.find(marker, start)) != -1:
             end = idx + len(marker)
-            if not _marker_occurrence_negated(lowered, idx, end) and (
+            if not marker_occurrence_negated(lowered, idx, end) and (
                 marker not in _CONTEXT_REQUIRED_MARKERS
                 or _bleeding_context_near(lowered, idx, end)
             ):
@@ -277,9 +298,14 @@ def _bleeding_context_near(lowered: str, start: int, end: int) -> bool:
     return any(term in pre or term in post for term in _BLEEDING_CONTEXT_TERMS)
 
 
-def _marker_occurrence_negated(lowered: str, start: int, end: int) -> bool:
+def marker_occurrence_negated(lowered: str, start: int, end: int) -> bool:
     """True iff a negator voids the ``lowered[start:end]`` marker occurrence —
-    either preceding it or trailing it within the same clause."""
+    either preceding it or trailing it within the same clause.
+
+    Public seam shared by this module's marker/quote screens and the replay
+    guardrail's fluid-refractory check (Codex PR #99 round 4: "not
+    refractory after IV fluids" must not read as refractoriness), so every
+    negation read uses the same negator tokens and clause windows."""
     pre = lowered[max(0, start - _MARKER_NEGATION_WINDOW_CHARS) : start]
     cut = max(
         (pre.rfind(boundary) for boundary in _MARKER_CLAUSE_BOUNDARIES),
@@ -315,7 +341,9 @@ def quote_negates_bleeding(quote: str) -> bool:
     a mislabeled citation whose grounded quote actually negates bleeding
     must not float a bare-hypotension over-clear to review. Reuses the same
     negator / clause-window machinery as the life-threatening-marker screen
-    so exemption and accompaniment read prose identically. A quote with no
+    so exemption and accompaniment read prose identically, over the
+    synonym-extended term list (:data:`_BLEEDING_NEGATION_SCREEN_TERMS` —
+    "denies melena" counts, Codex PR #99 round 4). A quote with no
     bleeding term returns ``False`` — this screen only rejects positively
     negated prose; code-level trust stays the caller's decision. One
     non-negated bleeding mention keeps the quote usable (a note often
@@ -331,11 +359,11 @@ def quote_negates_bleeding(quote: str) -> bool:
     """
     lowered = quote.lower()
     found_negated = False
-    for term in _BLEEDING_CONTEXT_TERMS:
+    for term in _BLEEDING_NEGATION_SCREEN_TERMS:
         start = 0
         while (idx := lowered.find(term, start)) != -1:
             end = idx + len(term)
-            if not _marker_occurrence_negated(lowered, idx, end):
+            if not marker_occurrence_negated(lowered, idx, end):
                 return False
             found_negated = True
             start = end

@@ -2412,6 +2412,124 @@ class TestLlmOverclearGuardrail:
         assert row.final_classification == "INAPPROPRIATE"
         assert row.review_reason == LLM_NATIVE_REVIEW_ASSERT_REASON
 
+    def test_hypotension_with_negated_bleed_synonym_asserts(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #99 round 4: a negated bleed SYNONYM ("denies melena")
+        # miscoded as ACTIVE_BLEEDING must not count as qualifier-(1)
+        # accompaniment either — the generic bleeding terms alone would
+        # miss it and the bare-hypotension assert would be lost.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-negsynonym",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=("NIBP 79/54 (MAP 63) mmHg, on Levophed; denies melena"),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                },
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "denies melena",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                },
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_negated_refractory_wording_does_not_floor(self, tmp_path: object) -> None:
+        # Codex PR #99 round 4: qualifier (3) requires POSITIVE
+        # unresponsiveness to fluids. "not refractory after IV fluids" is
+        # documented responsiveness — bare hypotension, assert stands.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-notrefractory",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="BP 82/50, not refractory after IV fluids",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "BP 82/50, not refractory after IV fluids",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_bare_refractory_token_floors(self, tmp_path: object) -> None:
+        # Positive control for the screened token: un-negated "refractory"
+        # in the instability citation's own quote still floors.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-refractory-bare",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="BP 82/50 refractory hypotension, start Levophed",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "BP 82/50 refractory hypotension",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+
+    def test_pre_negated_despite_phrase_still_floors(self, tmp_path: object) -> None:
+        # Guard against over-screening: "not improving despite fluid
+        # resuscitation" is GENUINE refractoriness (the negation binds
+        # "improving", not the refractory phrase). Only the
+        # polarity-ambiguous bare "refractory" token is negation-screened;
+        # the phrase tokens carry their own polarity.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-refract-doubleneg",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=(
+                "BP 82/50 not improving despite fluid resuscitation 1000 mL"
+            ),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": (
+                        "BP 82/50 not improving despite fluid resuscitation 1000 mL"
+                    ),
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+
     def test_low_confidence_refractory_quote_does_not_floor(
         self, tmp_path: object
     ) -> None:
