@@ -9,7 +9,9 @@ pipeline *cleared* that the human reviewer called inappropriate — the
 peri-op over-clear signal that must be ~0 to trust the swap.
 
 Read-only. Writes nothing. Fail-loud (non-zero exit) if either source is
-missing or the audit store has no committed rows for the requested scope.
+missing, the audit store has no committed rows for the requested scope, or
+the two sources share no REQNOs (a zero-overlap read compares nothing, so
+it must not present as a passing validation).
 
 Environment variables:
 
@@ -103,10 +105,23 @@ def main() -> int:
 
     human = human_label_verdict_source(REVIEW_XLSX)()
     recon = reconcile_verdict_sources(pipeline, human)
+    if recon.overlap == 0:
+        # Codex PR #104: a store/run that shares no REQNOs with the workbook
+        # (wrong BBA_DATA_DIR, mistyped BBA_RUN_ID) compares nothing — an
+        # over-clear count of 0 here would read as a passing pre-swap
+        # validation when no reviewed case was checked.
+        print(
+            "no REQNO overlap between the audit store and the review workbook "
+            f"(run_id={RUN_ID!r}, code_version={CODE_VERSION_FILTER!r}) — "
+            "agreement is undefined; check BBA_AUDIT_STORE_DIR / BBA_DATA_DIR "
+            "/ BBA_RUN_ID point at the reviewed pilot run",
+            file=sys.stderr,
+        )
+        return 1
 
     p_appr, p_inappr, p_unres, p_total = _buckets(pipeline)
     h_appr, h_inappr, h_unres, h_total = _buckets(human)
-    agree_pct = 100.0 * recon.agree / recon.overlap if recon.overlap else 0.0
+    agree_pct = 100.0 * recon.agree / recon.overlap
 
     print("verdict-source reconciliation")
     print(
