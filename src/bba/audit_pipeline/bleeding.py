@@ -374,8 +374,10 @@ def _occurrence_negated(
     """Negator scan around ``lowered[start:end]`` with caller-chosen clause
     boundaries — the marker screens keep the comma boundary, the
     accompaniment screen drops it (see :data:`_DENIAL_LIST_BOUNDARIES`).
-    A ``post_rescue`` match in the post window overrides a post-side
-    negator hit (still-active double negatives, rounds 7-8)."""
+    A ``post_rescue`` match overrides a post-side negator hit ONLY for the
+    negator occurrences its match span covers (still-active double
+    negatives, rounds 7-9): an unrelated "not controlled" about pain must
+    not cancel a "bleeding denied" in the same window."""
     pre = lowered[max(0, start - window) : start]
     cut = max(
         (pre.rfind(boundary) for boundary in pre_boundaries),
@@ -393,9 +395,16 @@ def _occurrence_negated(
     )
     if cut != -1:
         post = post[:cut]
-    if not any(token in post for token in _MARKER_POST_NEGATION_TOKENS):
-        return False
-    return post_rescue is None or post_rescue.search(post) is None
+    if post_rescue is None:
+        return any(token in post for token in _MARKER_POST_NEGATION_TOKENS)
+    rescued_spans = tuple(match.span() for match in post_rescue.finditer(post))
+    for token in _MARKER_POST_NEGATION_TOKENS:
+        t_start = 0
+        while (t_idx := post.find(token, t_start)) != -1:
+            if not any(s <= t_idx < e for s, e in rescued_spans):
+                return True
+            t_start = t_idx + 1
+    return False
 
 
 def quote_negates_bleeding(quote: str) -> bool:

@@ -504,6 +504,10 @@ class TestQuoteNegatesBleeding:
             "melena noted but now resolved",
             "bleeding resolved after packing",
             "bleeding no longer present",
+            # The rescue binds only its OWN negator (Codex PR #99 round
+            # 9): an unrelated "not controlled" about pain must not
+            # cancel the bleed denial in the same window.
+            "bleeding denied, pain not controlled",
             # Label-value denials (Codex PR #99 round 8): checklist-style
             # notes deny with a bare value after a separator.
             "GI bleeding: no",

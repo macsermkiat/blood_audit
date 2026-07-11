@@ -2627,6 +2627,43 @@ class TestLlmOverclearGuardrail:
         assert row.final_classification == "NEEDS_REVIEW"
         assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
 
+    def test_hypotension_with_denied_bleed_unrelated_rescue_asserts(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #99 round 9: the still-active rescue must bind its OWN
+        # negator. "bleeding denied, pain not controlled" denies the bleed;
+        # the unrelated pain phrase must not resurrect it as accompaniment.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-unrelated-rescue",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=(
+                "NIBP 79/54 (MAP 63) mmHg, on Levophed; "
+                "bleeding denied, pain not controlled"
+            ),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                },
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "bleeding denied, pain not controlled",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                },
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
     def test_negated_refractory_wording_does_not_floor(self, tmp_path: object) -> None:
         # Codex PR #99 round 4: qualifier (3) requires POSITIVE
         # unresponsiveness to fluids. "not refractory after IV fluids" is
