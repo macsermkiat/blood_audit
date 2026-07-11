@@ -46,6 +46,8 @@ build_review.py         →  review.html    (single page for human review)
 | `BBA_PILOT_LLM_MODEL` | `claude-sonnet-5` | Anthropic model id |
 | `BBA_PILOT_RUN_ID` | `pilot-mini` | run_id stamped on audit_store rows |
 | `BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE` | `false` | Opt-in to the missing-Hb MTP / peri-procedural auto-APPROPRIATE pre-check (SEED — set `1`/`true` only after clinical sign-off) |
+| `BBA_PILOT_ONLY_REQNO` | _(unset)_ | Comma-separated REQNOs: `run_llm_leg.py` processes/submits only those cases and MERGES the fresh records into the existing `llm_report.json` (other cases keep their records). Always pair with a fresh `BBA_PILOT_RUN_ID` — the store is idempotent on `(run_id, audit_id)`, so a reused run id keeps the stale row |
+| `BBA_PILOT_BATCH_MAX_WAIT` | `86400` | Seconds to wait for the Anthropic batch (default = the 24h batch SLA) |
 | `ANTHROPIC_API_KEY` | _(required)_ | Anthropic credentials |
 | `BBA_DATA_DIR` | _(required for `bba ingest`)_ | Where ingest writes Parquet + markers |
 | `BBA_DB_URL` | _(required for `bba ingest`)_ | DB URL — placeholder is fine for ingest-only |
@@ -68,6 +70,21 @@ uv run bba ingest "$BBA_PILOT_WORK_DIR/bundle/BDVST.csv"
 uv run python scripts/pilot/run_llm_leg.py           # live Anthropic batch
 uv run python scripts/pilot/build_review.py          # assemble review.html
 open "$BBA_PILOT_WORK_DIR/review.html"
+```
+
+## Re-running a single case
+
+To iterate on one case (e.g. after a prompt or guardrail change)
+without paying for a full batch, filter the LLM leg to that REQNO
+under a fresh run id, then rebuild the review — the fresh record is
+merged into `llm_report.json`; the other cases are untouched:
+
+```bash
+BBA_PILOT_ONLY_REQNO=68080335 \
+BBA_PILOT_RUN_ID=pilot-mini-68080335-v2 \
+uv run python scripts/pilot/run_llm_leg.py
+
+uv run python scripts/pilot/build_review.py
 ```
 
 ## What the LLM sees
