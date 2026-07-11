@@ -1663,8 +1663,11 @@ class TestLlmOverclearPredicate:
     POTENTIALLY_INAPPROPRIATE) with NO structured hard signal to justify it.
     Cases 47 (68062324) and 100 (68069089) are the
     motivating over-clears. Structured exemptions are sub-7.0 Hb, hard peri-op
-    signal, MTP cohort, or hemodynamic instability; the call site separately
-    composes the committee-approved qualified-major-bleeding exemption.
+    signal, or MTP cohort; the call site separately composes the
+    committee-approved qualified-major-bleeding exemption. Hemodynamic
+    instability left the exemption set with owner ruling #98 (Codex PR #99
+    round 3): verified hypotension/tachycardia is not a transfusion
+    indication by itself, so it routes through the qualifier logic instead.
     """
 
     def test_case_100_shape_is_overclear(self) -> None:
@@ -1704,17 +1707,24 @@ class TestLlmOverclearPredicate:
         )
         assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is False
 
-    def test_hypotension_exempts(self) -> None:
+    def test_hypotension_no_longer_exempts(self) -> None:
+        # Owner ruling #98 (Codex PR #99 round 3): a structured SBP < 90
+        # snapshot is the same clinical claim as pressor-verified
+        # hypotension — real, but not a transfusion indication by itself.
+        # The clear is suspect; bleeding / ischemia / fluid-refractory
+        # qualifiers decide the outcome downstream.
         ctx = _row_context(
             audit_id="oc-6", hb_value=9.4, sbp=LLM_OVERCLEAR_UNSTABLE_SBP - 1
         )
-        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is False
+        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is True
 
-    def test_tachycardia_exempts(self) -> None:
+    def test_tachycardia_no_longer_exempts(self) -> None:
+        # Same ruling, tachycardia arm: HR > 120 alone is a compensation
+        # sign, not an indication.
         ctx = _row_context(
             audit_id="oc-7", hb_value=9.4, hr=LLM_OVERCLEAR_UNSTABLE_HR + 1
         )
-        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is False
+        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is True
 
     def test_stable_vitals_at_thresholds_do_not_exempt(self) -> None:
         # SBP == 90 and HR == 120 are the stable side of the boundary
@@ -2268,6 +2278,139 @@ class TestLlmOverclearGuardrail:
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "INAPPROPRIATE"
         assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_structured_bare_hypotension_overclear_asserts(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #99 round 3 / owner ruling #98: a structured SBP < 90
+        # snapshot is bare hypotension too — verified, but still not a
+        # transfusion indication without bleeding / ischemia /
+        # fluid-refractory evidence. It no longer shields the clear.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-structured",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            sbp=LLM_OVERCLEAR_UNSTABLE_SBP - 8.0,
+            evidence_text="Routine ward note, transfusion given",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[],
+            reasoning_en="cleared on the overall picture",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_structured_hypotension_with_bleed_citation_floors(
+        self, tmp_path: object
+    ) -> None:
+        # Structured instability + a grounded sub-exemption bleed citation
+        # is the same possible-hemorrhagic-shock picture as the prose path —
+        # qualifier (1) floors it to a human.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-structured-bleed",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            sbp=LLM_OVERCLEAR_UNSTABLE_SBP - 8.0,
+            evidence_text="intramuscular hematoma with active bleeding at Lt. thigh",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "intramuscular hematoma with active bleeding",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+
+    def test_boundary_vitals_with_bleed_citation_still_assert(
+        self, tmp_path: object
+    ) -> None:
+        # SBP exactly 90 is the stable side of the strict boundary: no
+        # instability precondition holds, and a sub-exemption bleed alone
+        # does not floor — the assert stands.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-boundary-bleed",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            sbp=LLM_OVERCLEAR_UNSTABLE_SBP,
+            evidence_text="intramuscular hematoma with active bleeding at Lt. thigh",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "intramuscular hematoma with active bleeding",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_structured_hypotension_with_qualified_bleed_stays_appropriate(
+        self, tmp_path: object
+    ) -> None:
+        # The committee-approved major-bleed exemption still auto-clears a
+        # hypotensive row — the ruling narrows hemodynamic instability, not
+        # the bleeding exemption.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-structured-majorbleed",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            sbp=LLM_OVERCLEAR_UNSTABLE_SBP - 8.0,
+            evidence_text="Massive hematemesis, EBL 1100 mL over 2 hours",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "EBL 1100 mL",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "APPROPRIATE"
+        assert row.review_reason is None
+
+    def test_native_hedge_with_structured_bare_hypotension_converts(
+        self, tmp_path: object
+    ) -> None:
+        # Hedge side of the same ruling: structured bare hypotension is no
+        # longer a hard signal keeping the hedge a human case — it converts.
+        ctx = _row_context(
+            audit_id="audit-native-review-hemo-structured",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            sbp=LLM_OVERCLEAR_UNSTABLE_SBP - 8.0,
+            evidence_text="Routine ward note, transfusion given",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="NEEDS_REVIEW",
+            indications=[],
+            reasoning_en="hypotensive on the ward, deferring to a human",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_NATIVE_REVIEW_ASSERT_REASON
 
     def test_low_confidence_refractory_quote_does_not_floor(
         self, tmp_path: object

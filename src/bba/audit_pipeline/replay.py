@@ -248,12 +248,15 @@ _LLM_ASSERT_REASONS: frozenset[str] = frozenset(
 
 LLM_OVERCLEAR_UNSTABLE_SBP: float = 90.0
 """Systolic BP (mmHg) strictly below which the patient is hemodynamically
-unstable — a hard signal that exempts an LLM APPROPRIATE from the over-clear
-guardrail (transfusing an unstable patient in the gray zone is defensible)."""
+unstable. Owner ruling #98 (Codex PR #99 round 3) removed this from the
+hard-signal exemption set: verified hypotension is still not a transfusion
+indication by itself, so it now feeds the instability precondition of
+:func:`_qualified_hemodynamic_floor` instead of shielding the clear."""
 
 LLM_OVERCLEAR_UNSTABLE_HR: float = 120.0
 """Heart rate (bpm) strictly above which the patient is tachycardic /
-hemodynamically stressed — the second hard hemodynamic exemption signal."""
+hemodynamically stressed — the second structured instability arm, same
+ruling-#98 treatment as :data:`LLM_OVERCLEAR_UNSTABLE_SBP`."""
 
 _LLM_OVERCLEAR_DET_VERDICTS: frozenset[Classification] = frozenset(
     {"NEEDS_REVIEW", "INSUFFICIENT_EVIDENCE", "POTENTIALLY_INAPPROPRIATE"}
@@ -270,7 +273,8 @@ unchanged.
 
 def _has_hard_hemodynamic_signal(context: PipelineRowContext) -> bool:
     """True iff the ±6 h vitals show hypotension (SBP < 90) or tachycardia
-    (HR > 120) — the hemodynamic-instability arm of the hard-signal set."""
+    (HR > 120) — the structured instability arm of
+    :func:`_qualified_hemodynamic_floor`'s precondition."""
     vitals = context.vitals_result.vitals
     if vitals.sbp is not None and vitals.sbp < LLM_OVERCLEAR_UNSTABLE_SBP:
         return True
@@ -281,18 +285,23 @@ def _has_structured_hard_signal(context: PipelineRowContext) -> bool:
     """True iff ``context`` carries a deterministic hard signal that justifies
     an LLM APPROPRIATE in the gray zone (B1 exemption set).
 
-    Any one of: a genuinely low Hb (< 7.0 g/dL), an MTP cohort, a hard peri-op
-    signal, or hemodynamic instability. Deliberately structured-only — soft
-    prose indications are not trusted here (they are what over-cleared the
-    motivating cases)."""
+    Any one of: a genuinely low Hb (< 7.0 g/dL), an MTP cohort, or a hard
+    peri-op signal. Deliberately structured-only — soft prose indications
+    are not trusted here (they are what over-cleared the motivating cases).
+
+    Hemodynamic instability left this set with owner ruling #98 (Codex PR
+    #99 round 3): a verified SBP < 90 / HR > 120 snapshot is the same
+    clinical claim as the pressor-verified hypotension whose auto-clear the
+    ruling rejected — real instability, but not a transfusion indication
+    without bleeding / ischemia / fluid-refractory evidence. It now feeds
+    the instability precondition of :func:`_qualified_hemodynamic_floor`,
+    where the ruling's qualifiers decide floor-vs-assert."""
     hb = context.hb_result.value_g_dl
     if hb is not None and hb < UNIVERSAL_LOW_HB_APPROPRIATE_THRESHOLD:
         return True
     if context.cohort_assignment.label == CohortLabel.MTP:
         return True
-    if _has_hard_periop_signal(context.periop_summary):
-        return True
-    return _has_hard_hemodynamic_signal(context)
+    return _has_hard_periop_signal(context.periop_summary)
 
 
 def llm_overclear_suspect(
@@ -492,21 +501,26 @@ def _grounded_acs_indication(
 
 def _qualified_hemodynamic_floor(
     grounded_indications: tuple[dict[str, object], ...],
+    context: PipelineRowContext,
 ) -> bool:
-    """Grounded HEMODYNAMIC_INSTABILITY citation at the prose-trust bar,
-    accompanied by transfusion-relevant evidence — reached only when the
-    structured vitals signal did not fire.
+    """Hemodynamic instability — a grounded HEMODYNAMIC_INSTABILITY citation
+    at the prose-trust bar OR the structured SBP < 90 / HR > 120 snapshot
+    (Codex PR #99 round 3) — accompanied by transfusion-relevant evidence.
 
     Owner ruling (#98, 2026-07-11): hypotension without evidence of active
     bleeding, severe organ ischemia, or fluid-refractoriness is not a
-    transfusion indication and stays asserted. Accompaniment here is (1) a
-    grounded, non-negation-qualified ACTIVE_BLEEDING-family citation at the
-    shared bar whose quote does not itself negate bleeding (a possible
-    hemorrhagic-shock picture below the qualified-major-bleed bar), or (3)
-    fluid-refractory language inside the instability citation's own quote.
-    Qualifier (2), organ ischemia, is the separate grounded-ACS floor.
+    transfusion indication and stays asserted, however the instability was
+    verified. Accompaniment here is (1) a grounded, non-negation-qualified
+    ACTIVE_BLEEDING-family citation at the shared bar whose quote does not
+    itself negate bleeding (a possible hemorrhagic-shock picture below the
+    qualified-major-bleed bar), or (3) fluid-refractory language inside the
+    instability citation's own quote (prose-only by nature — a vitals
+    snapshot cannot document refractoriness). Qualifier (2), organ
+    ischemia, is the separate grounded-ACS floor.
     """
-    if not _cited_at_prose_trust(grounded_indications, _HEMODYNAMIC_HARD_CODES):
+    if not _cited_at_prose_trust(
+        grounded_indications, _HEMODYNAMIC_HARD_CODES
+    ) and not _has_hard_hemodynamic_signal(context):
         return False
     for indication in grounded_indications:
         code = indication.get("code")
@@ -960,15 +974,16 @@ def _build_audit_row(
             if not qualified_bleeding_exempt(_grounded):
                 if (
                     _grounded_acs_indication(_grounded)
-                    or _qualified_hemodynamic_floor(_grounded)
+                    or _qualified_hemodynamic_floor(_grounded, context)
                     or _grounded_true_subthreshold_indication(_grounded, context)
                 ):
                     # A prompt-defined hard indication the structured system
-                    # cannot dismiss — ACS (no extractor exists), documented
-                    # shock/pressor prose the vitals snapshot cannot see, or
-                    # a structurally true sub-floor Hb the deterministic leg
-                    # withheld as unreliable. Floor to a human; never assert
-                    # against it (and never auto-clear on it either).
+                    # cannot dismiss — ACS (no extractor exists), instability
+                    # (cited prose or the structured snapshot) qualified per
+                    # the #98 ruling, or a structurally true sub-floor Hb the
+                    # deterministic leg withheld as unreliable. Floor to a
+                    # human; never assert against it (and never auto-clear on
+                    # it either).
                     final_classification = "NEEDS_REVIEW"
                     review_reason = LLM_OVERCLEAR_REVIEW_REASON
                 else:
@@ -994,7 +1009,7 @@ def _build_audit_row(
         # case (same rationale as the over-clear floors above).
         and not _grounded_acs_indication(_grounded_indications(indications, context))
         and not _qualified_hemodynamic_floor(
-            _grounded_indications(indications, context)
+            _grounded_indications(indications, context), context
         )
         and not _grounded_true_subthreshold_indication(
             _grounded_indications(indications, context), context
