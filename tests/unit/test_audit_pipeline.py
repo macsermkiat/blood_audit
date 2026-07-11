@@ -68,6 +68,7 @@ from bba.audit_pipeline.replay import (
     LLM_OVERCLEAR_UNSTABLE_SBP,
     PERIOP_CONTRADICTION_REVIEW_REASON,
     PERIOP_GUARDRAIL_MIN_EBL_ML,
+    PERIOP_OVERCLEAR_WINDOW_HOURS,
     llm_overclear_suspect,
     periop_contradiction,
     split_leaked_summaries,
@@ -343,6 +344,7 @@ def _row_context(
     cohort_threshold: float | None = 7.0,
     evidence_text: str = "Hb 7.5 with symptomatic chest pain",
     periop_summary: PeriopSummary | None = None,
+    procedure_proximity_hours: float | None = None,
     sbp: float = 110.0,
     hr: float = 85.0,
 ) -> PipelineRowContext:
@@ -437,7 +439,7 @@ def _row_context(
         hb_result=hb_result,
         vitals_result=vitals,
         cohort_assignment=cohort,
-        procedure_proximity_hours=None,
+        procedure_proximity_hours=procedure_proximity_hours,
         crystalloid_liters_prior_4h=0.0,
         hn_hash=f"hn_hash_{audit_id}",
         an_hash=f"an_hash_{audit_id}",
@@ -1691,12 +1693,62 @@ class TestLlmOverclearPredicate:
         assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is False
 
     def test_hard_periop_signal_exempts(self) -> None:
+        # A GENUINE structured peri-op signal (intra-op transfusion) exempts;
+        # the bare surgical_context flag does not (see the next test, #68009853).
         ctx = _row_context(
             audit_id="oc-4",
             hb_value=9.4,
-            periop_summary=PeriopSummary(surgical_context=True),
+            periop_summary=PeriopSummary(intraop_transfusion=True),
         )
         assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is False
+
+    def test_surgical_context_without_recent_op_does_not_exempt(self) -> None:
+        # Case 68009853: surgical_context with no completed op in the window
+        # (proximity None) is a remote/soft mention and must not exempt — the
+        # suspect predicate stays True.
+        ctx = _row_context(
+            audit_id="oc-4b",
+            hb_value=9.4,
+            periop_summary=PeriopSummary(surgical_context=True),
+            procedure_proximity_hours=None,
+        )
+        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is True
+
+    def test_surgical_context_with_recent_op_exempts(self) -> None:
+        # A charted surgery WITH a completed op inside the 3-day window is a
+        # genuine peri-op transfusion context and exempts.
+        ctx = _row_context(
+            audit_id="oc-4c",
+            hb_value=9.4,
+            periop_summary=PeriopSummary(surgical_context=True),
+            procedure_proximity_hours=20.0,
+        )
+        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is False
+
+    def test_surgical_context_with_stale_op_does_not_exempt(self) -> None:
+        # A completed op beyond the 3-day window is outside the peri-op window.
+        ctx = _row_context(
+            audit_id="oc-4d",
+            hb_value=9.4,
+            periop_summary=PeriopSummary(surgical_context=True),
+            procedure_proximity_hours=PERIOP_OVERCLEAR_WINDOW_HOURS + 1.0,
+        )
+        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is True
+
+    def test_surgical_context_with_upcoming_op_only_does_not_exempt(self) -> None:
+        # Reserve-ahead ("M/G for surgery") blood: an UPCOMING procedure is
+        # not a peri-op transfusion justification, so a surgical mention whose
+        # only op is in the future (proximity None) does not exempt.
+        # (only the past-op field gates the exemption; an upcoming procedure
+        # is intentionally not consulted, so proximity=None is the reserve-
+        # ahead case regardless of any future op.)
+        ctx = _row_context(
+            audit_id="oc-4e",
+            hb_value=9.4,
+            periop_summary=PeriopSummary(surgical_context=True),
+            procedure_proximity_hours=None,
+        )
+        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is True
 
     def test_mtp_cohort_exempts(self) -> None:
         ctx = _row_context(
@@ -1840,6 +1892,65 @@ class TestLlmOverclearGuardrail:
             classification="NEEDS_REVIEW",
             hb_value=9.4,
             periop_summary=PeriopSummary(surgical_context=True, blood_loss_ml=1500),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id, classification="APPROPRIATE"
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "APPROPRIATE"
+
+    def test_surgical_context_without_recent_op_does_not_exempt_overclear(
+        self, tmp_path: object
+    ) -> None:
+        # Case 68009853: surgical_context with no completed op in the window
+        # (proximity None; the surgery was months prior, the next op 142 days
+        # out) must NOT exempt an LLM APPROPRIATE — it used to silently
+        # disable the over-clear check. With no genuine hard signal (Hb 9.4 >=
+        # floor, no EBL, no intra-op transfusion, no bleed), it asserts.
+        ctx = _row_context(
+            audit_id="audit-oc-surg-remote",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            periop_summary=PeriopSummary(surgical_context=True),
+            procedure_proximity_hours=None,
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id, classification="APPROPRIATE"
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_surgical_context_with_recent_op_exempts_overclear(
+        self, tmp_path: object
+    ) -> None:
+        # A charted surgery WITH a completed op inside the 3-day window is a
+        # genuine peri-op transfusion context — the LLM APPROPRIATE survives.
+        ctx = _row_context(
+            audit_id="audit-oc-surg-recent",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            periop_summary=PeriopSummary(surgical_context=True),
+            procedure_proximity_hours=20.0,
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id, classification="APPROPRIATE"
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "APPROPRIATE"
+
+    def test_intraop_transfusion_alone_still_exempts_overclear(
+        self, tmp_path: object
+    ) -> None:
+        # The strict signal is preserved: a documented intra-op transfusion
+        # (a genuine structured hard signal, unlike surgical_context) still
+        # exempts the LLM APPROPRIATE — the fix narrows the exemption, it
+        # does not remove the peri-op arm.
+        ctx = _row_context(
+            audit_id="audit-oc-intraop",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            periop_summary=PeriopSummary(intraop_transfusion=True),
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id, classification="APPROPRIATE"
@@ -3410,9 +3521,36 @@ class TestLlmOverclearGuardrail:
     def test_native_needs_review_with_hard_signal_stays_review(
         self, tmp_path: object
     ) -> None:
-        # A hedge against a structured hard signal is a genuine human-review case.
+        # A hedge against a structured hard signal is a genuine human-review
+        # case. The signal must be a GENUINE one (intra-op transfusion), not
+        # the bare surgical_context prose flag — see
+        # test_native_needs_review_with_surgical_context_only_converts (#68009853).
         ctx = _row_context(
             audit_id="audit-native-review-hard",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            periop_summary=PeriopSummary(intraop_transfusion=True),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="NEEDS_REVIEW",
+            reasoning_en="intra-op transfusion documented but indication uncertain",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason is None
+        assert row.needs_human_review is True
+
+    def test_native_needs_review_with_surgical_context_only_converts(
+        self, tmp_path: object
+    ) -> None:
+        # Case 68009853: the bare surgical_context flag (a prose scan with no
+        # op-time) is NOT a structured hard signal, so a native NEEDS_REVIEW
+        # hedge backed only by a documented (possibly months-old) surgery is
+        # not a genuine human case — it converts to the committee's clear-cut
+        # INAPPROPRIATE like any other unsupported hedge.
+        ctx = _row_context(
+            audit_id="audit-native-review-surg-only",
             classification="NEEDS_REVIEW",
             hb_value=9.4,
             periop_summary=PeriopSummary(surgical_context=True),
@@ -3420,12 +3558,11 @@ class TestLlmOverclearGuardrail:
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
             classification="NEEDS_REVIEW",
-            reasoning_en="surgery documented but indication remains uncertain",
+            reasoning_en="old surgery charted but no active indication at this order",
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
-        assert row.final_classification == "NEEDS_REVIEW"
-        assert row.review_reason is None
-        assert row.needs_human_review is True
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_NATIVE_REVIEW_ASSERT_REASON
 
     def test_native_needs_review_with_qualified_bleed_stays_review(
         self, tmp_path: object
