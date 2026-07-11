@@ -2481,6 +2481,44 @@ class TestLlmOverclearGuardrail:
         assert row.final_classification == "INAPPROPRIATE"
         assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
 
+    def test_hypotension_with_contrastive_bleed_clause_floors(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #99 round 6: "denies hematemesis but melena ongoing"
+        # documents an ACTIVE bleed after the contrastive — the earlier
+        # denial must not leak across "but" and rob a genuinely bleeding
+        # hypotensive row of its human review.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-contrastive",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=(
+                "NIBP 79/54 (MAP 63) mmHg, on Levophed; "
+                "denies hematemesis but melena ongoing"
+            ),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                },
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "denies hematemesis but melena ongoing",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                },
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+
     def test_negated_refractory_wording_does_not_floor(self, tmp_path: object) -> None:
         # Codex PR #99 round 4: qualifier (3) requires POSITIVE
         # unresponsiveness to fluids. "not refractory after IV fluids" is

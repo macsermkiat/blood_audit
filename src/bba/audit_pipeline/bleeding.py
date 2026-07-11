@@ -232,6 +232,18 @@ _BLEEDING_NEGATION_SCREEN_TERMS: tuple[str, ...] = _BLEEDING_CONTEXT_TERMS + (
 _DENIAL_LIST_BOUNDARIES: tuple[str, ...] = (";", ".", "\n")
 _DENIAL_LIST_WINDOW_CHARS = 60
 
+# Contrastive connectors cut the PRE side only (Codex PR #99 round 6):
+# in "denies hematemesis but melena ongoing" the denial binds up to the
+# connector — what follows is a documented ACTIVE bleed the floor must
+# see. Asymmetric by design: a contrastive AFTER a term still lets a
+# trailing negator void it ("melena noted but now resolved" is a bleed
+# documented as over), so the post side keeps flowing across "but".
+_DENIAL_PRE_BOUNDARIES: tuple[str, ...] = _DENIAL_LIST_BOUNDARIES + (
+    " but ",
+    "however",
+    "แต่",  # Thai "but"
+)
+
 
 def parse_max_volume_ml(text: str) -> float | None:
     """Return the largest documented blood-loss volume in ``text`` as mL.
@@ -393,7 +405,7 @@ def quote_negates_bleeding(quote: str) -> bool:
                 lowered,
                 idx,
                 end,
-                _DENIAL_LIST_BOUNDARIES,
+                _DENIAL_PRE_BOUNDARIES,
                 _DENIAL_LIST_BOUNDARIES,
                 window=_DENIAL_LIST_WINDOW_CHARS,
             ):

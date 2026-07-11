@@ -499,10 +499,27 @@ class TestQuoteNegatesBleeding:
             "denies bleeding, melena",
             "no hematemesis, hematochezia, or melena",
             "bleeding, melena denied",
+            # A contrastive AFTER the term still lets a trailing negator
+            # void it: this bleed is documented as over.
+            "melena noted but now resolved",
         ],
     )
     def test_negated_bleed_prose_flags(self, quote: str) -> None:
         assert quote_negates_bleeding(quote) is True
+
+    @pytest.mark.parametrize(
+        "quote",
+        [
+            # Contrastive connectors (Codex PR #99 round 6): the denial
+            # binds only up to "but" — what follows is documented ACTIVE
+            # bleeding, so the quote stays usable as accompaniment.
+            "denies hematemesis but melena ongoing",
+            "no hematemesis, hematochezia but melena ongoing",
+            "ไม่มีอาเจียนเป็นเลือด แต่ถ่ายดำ",  # "no hematemesis but melena"
+        ],
+    )
+    def test_contrastive_bleed_clause_does_not_flag(self, quote: str) -> None:
+        assert quote_negates_bleeding(quote) is False
 
     @pytest.mark.parametrize(
         "quote",
