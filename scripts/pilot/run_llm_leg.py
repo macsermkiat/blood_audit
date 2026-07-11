@@ -39,6 +39,9 @@ Environment variables:
 * ``BBA_PILOT_RUN_ID`` — run id suffix for the audit_store (default:
   ``pilot-mini``). Bump to force re-run; the store is idempotent on
   (run_id, audit_id).
+* ``BBA_PILOT_ONLY_REQNO`` — comma-separated REQNOs; process/submit only
+  those cases and MERGE their fresh records into the existing
+  ``llm_report.json``. Always pair with a fresh ``BBA_PILOT_RUN_ID``.
 """
 
 from __future__ import annotations
@@ -115,6 +118,17 @@ BUNDLE = WORK / "bundle"
 AUDIT_STORE_ROOT = WORK / "data" / "audit_store"
 RUN_ID = os.environ.get("BBA_PILOT_RUN_ID", "pilot-mini")
 MODEL_ID = os.environ.get("BBA_PILOT_LLM_MODEL", "claude-sonnet-5")
+# Single-case iteration knob: comma-separated REQNOs. When set, only the
+# matching orders are processed/submitted, and the fresh records are MERGED
+# into the existing llm_report.json (all other cases keep their records)
+# instead of overwriting it wholesale. Pair with a fresh BBA_PILOT_RUN_ID —
+# the store is idempotent on (run_id, audit_id), so re-using a run id that
+# already holds this case would keep the stale row.
+ONLY_REQNOS = frozenset(
+    v.strip()
+    for v in os.environ.get("BBA_PILOT_ONLY_REQNO", "").split(",")
+    if v.strip()
+)
 # Operator opt-in for the missing-Hb positive-evidence pre-check (MTP /
 # peri-procedural auto-APPROPRIATE on no documented Hb). Defaults off because
 # the policy is SEED pending clinical sign-off — see ClassifierInputs and
@@ -860,6 +874,8 @@ def main() -> None:
     anchor_by_id: dict[str, EvidenceAnchor] = {}
 
     for order in fr.included:
+        if ONLY_REQNOS and order.reqno not in ONLY_REQNOS:
+            continue
         # --- Platelet path (Phase 2, component="platelet") ---
         # Only active when feature_flags.PLATELET_LLM_ENABLED is True.
         # With the flag off, non-terminal platelet verdicts orphan intentionally
@@ -1621,7 +1637,10 @@ def main() -> None:
         transport = RealAnthropicTransport(
             api_key=api_key,
             poll_interval_seconds=20.0,
-            max_wait_seconds=3600.0,
+            # Anthropic batches have a 24h SLA; the old 1h cap gave up while
+            # the batch was still processing. Env-overridable for a shorter
+            # wait when iterating locally.
+            max_wait_seconds=float(os.environ.get("BBA_PILOT_BATCH_MAX_WAIT", "86400")),
         )
         t0 = time.time()
         # Resume path: if BBA_PILOT_BATCH_ID is set, re-attach to an already-
@@ -1738,6 +1757,16 @@ def main() -> None:
             }
         )
     out = WORK / "llm_report.json"
+    if ONLY_REQNOS and out.exists():
+        # Filtered run: splice the fresh records into the existing report so
+        # the other cases (and the review page built from it) are preserved.
+        existing = json.loads(out.read_text())
+        fresh_by_reqno = {rec["reqno"]: rec for rec in report}
+        existing_reqnos = {rec["reqno"] for rec in existing}
+        report = [fresh_by_reqno.get(rec["reqno"], rec) for rec in existing] + [
+            rec for rec in report if rec["reqno"] not in existing_reqnos
+        ]
+        print(f"  merged {len(fresh_by_reqno)} fresh record(s) into existing report")
     out.write_text(json.dumps(report, indent=2, ensure_ascii=False))
     print(f"\nFull JSON report: {out}")
 
