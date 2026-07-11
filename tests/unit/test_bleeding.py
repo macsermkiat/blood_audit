@@ -502,10 +502,27 @@ class TestQuoteNegatesBleeding:
             # A contrastive AFTER the term still lets a trailing negator
             # void it: this bleed is documented as over.
             "melena noted but now resolved",
+            "bleeding resolved after packing",
+            "bleeding no longer present",
         ],
     )
     def test_negated_bleed_prose_flags(self, quote: str) -> None:
         assert quote_negates_bleeding(quote) is True
+
+    @pytest.mark.parametrize(
+        "quote",
+        [
+            # Post-side double negatives (Codex PR #99 round 7): the
+            # negator binds the CONTROL verb, not the bleeding — these
+            # bleeds are ongoing and must stay visible to the floor.
+            "bleeding not controlled after pressure",
+            "bleeding not yet controlled",
+            "bleeding no longer controlled",
+            "เลือดออกไม่หยุด",  # "bleeding does not stop"
+        ],
+    )
+    def test_still_active_double_negative_does_not_flag(self, quote: str) -> None:
+        assert quote_negates_bleeding(quote) is False
 
     @pytest.mark.parametrize(
         "quote",

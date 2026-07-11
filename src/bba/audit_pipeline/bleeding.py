@@ -244,6 +244,24 @@ _DENIAL_PRE_BOUNDARIES: tuple[str, ...] = _DENIAL_LIST_BOUNDARIES + (
     "แต่",  # Thai "but"
 )
 
+# Post-side double negatives that mean the bleed is ONGOING, not absent
+# (Codex PR #99 round 7): in "bleeding not controlled" the negator binds
+# the control verb, not the bleeding. When one of these appears in the
+# clause-bounded post window, the post negation is a false read and the
+# term stays visible to the floor. Accompaniment screen only — applying
+# these to the marker screens would widen the exemption / auto-clear
+# surface, which is committee-owned.
+_POST_STILL_ACTIVE_PATTERNS: tuple[str, ...] = (
+    "not controlled",
+    "not yet controlled",
+    "not under control",
+    "not stopped",
+    "not stopping",
+    "not resolved",
+    "no longer controlled",
+    "ไม่หยุด",  # "... does not stop" (also matches ยังไม่หยุด)
+)
+
 
 def parse_max_volume_ml(text: str) -> float | None:
     """Return the largest documented blood-loss volume in ``text`` as mL.
@@ -342,10 +360,13 @@ def _occurrence_negated(
     pre_boundaries: tuple[str, ...],
     post_boundaries: tuple[str, ...],
     window: int = _MARKER_NEGATION_WINDOW_CHARS,
+    post_rescue: tuple[str, ...] = (),
 ) -> bool:
     """Negator scan around ``lowered[start:end]`` with caller-chosen clause
     boundaries — the marker screens keep the comma boundary, the
-    accompaniment screen drops it (see :data:`_DENIAL_LIST_BOUNDARIES`)."""
+    accompaniment screen drops it (see :data:`_DENIAL_LIST_BOUNDARIES`).
+    A ``post_rescue`` pattern in the post window overrides a post-side
+    negator hit (still-active double negatives, round 7)."""
     pre = lowered[max(0, start - window) : start]
     cut = max(
         (pre.rfind(boundary) for boundary in pre_boundaries),
@@ -363,7 +384,9 @@ def _occurrence_negated(
     )
     if cut != -1:
         post = post[:cut]
-    return any(token in post for token in _MARKER_POST_NEGATION_TOKENS)
+    if not any(token in post for token in _MARKER_POST_NEGATION_TOKENS):
+        return False
+    return not any(pattern in post for pattern in post_rescue)
 
 
 def quote_negates_bleeding(quote: str) -> bool:
@@ -389,11 +412,10 @@ def quote_negates_bleeding(quote: str) -> bool:
     floor: a false hit merely withholds it (the assert stands); it can
     never auto-clear.
 
-    Known limitation: a double negative whose negator binds a later verb
-    ("เลือดออกไม่หยุด" — bleeding does NOT STOP) reads as negated here, but
-    every reachable such quote carries a non-negated life-threatening
-    marker at the same confidence bar, so the exemption clears it before
-    the accompaniment check is ever consulted.
+    Post-side double negatives whose negator binds a control verb
+    ("bleeding not controlled", "เลือดออกไม่หยุด" — the bleed is ONGOING)
+    are rescued via :data:`_POST_STILL_ACTIVE_PATTERNS` (round 7) and stay
+    visible to the floor.
     """
     lowered = quote.lower()
     found_negated = False
@@ -408,6 +430,7 @@ def quote_negates_bleeding(quote: str) -> bool:
                 _DENIAL_PRE_BOUNDARIES,
                 _DENIAL_LIST_BOUNDARIES,
                 window=_DENIAL_LIST_WINDOW_CHARS,
+                post_rescue=_POST_STILL_ACTIVE_PATTERNS,
             ):
                 return False
             found_negated = True
