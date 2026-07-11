@@ -37,9 +37,12 @@ from bba.attribution import (
     load_reqno_to_doctor,
     make_physician_resolver,
     make_ward_resolver,
+    needs_review_verdict_projector,
+    pipeline_verdict_source,
     rank_department_scorecards,
     rank_doctor_scorecards,
     rank_top_n,
+    reconcile_verdict_sources,
     write_ranking_csv,
     write_rankings_html,
 )
@@ -320,6 +323,118 @@ class TestHumanLabelVerdictSource:
             "ไม่สมเหตุสมผล": "INAPPROPRIATE",
             "ไม่สามารถสรุปได้": "NEEDS_REVIEW",
         }
+
+
+# ---------------------------------------------------------------------------
+# Pipeline verdict adapter (the application's own per-order verdicts)
+# ---------------------------------------------------------------------------
+
+
+def _audit_row(reqno: object, final_classification: str) -> SimpleNamespace:
+    """A structural stand-in for :class:`bba.audit_store.models.AuditRow` —
+    only the two fields :class:`SupportsVerdict` reads."""
+    return SimpleNamespace(reqno=reqno, final_classification=final_classification)
+
+
+class TestPipelineVerdictSource:
+    def test_maps_reqno_to_final_classification(self) -> None:
+        rows = [
+            _audit_row("68000001", "APPROPRIATE"),
+            _audit_row("68000002", "INAPPROPRIATE"),
+            _audit_row("68000003", "NEEDS_REVIEW"),
+            _audit_row("68000004", "INSUFFICIENT_EVIDENCE"),
+        ]
+        assert pipeline_verdict_source(rows)() == {
+            "68000001": "APPROPRIATE",
+            "68000002": "INAPPROPRIATE",
+            "68000003": "NEEDS_REVIEW",
+            "68000004": "INSUFFICIENT_EVIDENCE",
+        }
+
+    def test_source_is_re_callable_over_a_generator(self) -> None:
+        # A generator must be materialized so a second call is not empty —
+        # the pilot's reconciliation reads the source more than once.
+        source = pipeline_verdict_source(
+            _audit_row(f"6800000{i}", "APPROPRIATE") for i in range(3)
+        )
+        first = source()
+        assert source() == first
+        assert len(first) == 3
+
+    def test_identical_duplicate_reqno_tolerated(self) -> None:
+        rows = [
+            _audit_row("68000001", "APPROPRIATE"),
+            _audit_row("68000001", "APPROPRIATE"),
+        ]
+        assert pipeline_verdict_source(rows)() == {"68000001": "APPROPRIATE"}
+
+    def test_conflicting_duplicate_reqno_fails_loud(self) -> None:
+        rows = [
+            _audit_row("68000001", "APPROPRIATE"),
+            _audit_row("68000001", "INAPPROPRIATE"),
+        ]
+        with pytest.raises(ValueError, match="68000001"):
+            pipeline_verdict_source(rows)()
+
+    def test_empty_reqno_fails_loud(self) -> None:
+        with pytest.raises(ValueError, match="empty REQNO"):
+            pipeline_verdict_source([_audit_row("  ", "APPROPRIATE")])()
+
+    def test_empty_cohort_yields_empty_mapping(self) -> None:
+        assert pipeline_verdict_source([])() == {}
+
+    def test_default_projector_fails_loud_on_potentially_inappropriate(self) -> None:
+        # The audit store's fifth value has no confident bucket; the default
+        # must refuse it rather than silently guess (clinical decision).
+        rows = [_audit_row("68000001", "POTENTIALLY_INAPPROPRIATE")]
+        with pytest.raises(ValueError, match="POTENTIALLY_INAPPROPRIATE"):
+            pipeline_verdict_source(rows)()
+
+    def test_needs_review_projector_pools_potentially_inappropriate(self) -> None:
+        rows = [_audit_row("68000001", "POTENTIALLY_INAPPROPRIATE")]
+        verdicts = pipeline_verdict_source(
+            rows, projector=needs_review_verdict_projector
+        )()
+        assert verdicts == {"68000001": "NEEDS_REVIEW"}
+
+    def test_unknown_classification_fails_loud_under_both_projectors(self) -> None:
+        rows = [_audit_row("68000001", "MADE_UP_LABEL")]
+        with pytest.raises(ValueError, match="MADE_UP_LABEL"):
+            pipeline_verdict_source(rows)()
+        with pytest.raises(ValueError, match="MADE_UP_LABEL"):
+            pipeline_verdict_source(rows, projector=needs_review_verdict_projector)()
+
+
+# ---------------------------------------------------------------------------
+# Verdict-source reconciliation (the pre-swap cross-check)
+# ---------------------------------------------------------------------------
+
+
+class TestReconcileVerdictSources:
+    def test_counts_agreement_over_the_overlap_only(self) -> None:
+        pipeline = {"1": "APPROPRIATE", "2": "APPROPRIATE", "3": "NEEDS_REVIEW"}
+        human = {"1": "APPROPRIATE", "2": "INAPPROPRIATE", "4": "APPROPRIATE"}
+        result = reconcile_verdict_sources(pipeline, human)
+        assert result.overlap == 2  # reqnos 1 and 2
+        assert result.agree == 1  # reqno 1
+        assert result.disagree == 1  # reqno 2
+        assert result.pipeline_only == 1  # reqno 3
+        assert result.human_only == 1  # reqno 4
+
+    def test_flags_pipeline_over_clear_of_a_human_inappropriate(self) -> None:
+        # The peri-op danger: the human called it inappropriate, the pipeline
+        # cleared it to appropriate. This count must stay ~0 to trust the swap.
+        result = reconcile_verdict_sources({"1": "APPROPRIATE"}, {"1": "INAPPROPRIATE"})
+        assert result.pipeline_over_clears == 1
+
+    def test_needs_review_disagreement_is_not_an_over_clear(self) -> None:
+        # Human INAPPROPRIATE vs pipeline NEEDS_REVIEW is a disagreement but
+        # not a dangerous clear — the order stays out of the appropriate bucket.
+        result = reconcile_verdict_sources(
+            {"1": "NEEDS_REVIEW"}, {"1": "INAPPROPRIATE"}
+        )
+        assert result.disagree == 1
+        assert result.pipeline_over_clears == 0
 
 
 # ---------------------------------------------------------------------------

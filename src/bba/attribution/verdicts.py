@@ -2,22 +2,37 @@
 
 A :data:`VerdictSource` yields ``REQNO`` → 4-value
 :data:`~bba.report_generator.models.Classification`. Two implementations
-are planned; only the first ships in this build:
+ship:
 
-* **Now** — :func:`human_label_verdict_source`: the 300-case human
-  review workbook (Sheet1 col J). Correct but thin per doctor.
-* **Next build** — a pipeline-verdict source over the full ~40k-order
-  cohort, gated on the peri-op classifier fix landing (today's
-  deterministic leg over-clears peri-op orders, which would credit
-  false "appropriate" to surgical doctors). Only this adapter swaps;
-  resolvers, aggregation, ranking, and outputs are unchanged.
+* :func:`human_label_verdict_source` — the 300-case human review
+  workbook (Sheet1 col J). Correct but thin per doctor.
+* :func:`pipeline_verdict_source` — the application's own per-order
+  verdicts (``bba.audit_store`` ``AuditRow.final_classification``) over
+  the full ~40k-order cohort. Far more orders per doctor. Only this
+  adapter differs; resolvers, aggregation, ranking, and outputs are
+  unchanged.
+
+Which source the pilot *ranks* on is a separate decision. Promoting
+:func:`pipeline_verdict_source` to the default is gated on validating it
+against a real audit-store run and reconciling it against the human
+labels (:func:`reconcile_verdict_sources`): the peri-op classifier fix
+that would otherwise over-clear surgical orders landed in #80/#81, but
+the reconciliation is what confirms the pipeline is no longer crediting
+false "appropriate" to surgical doctors before those verdicts drive a
+public ranking.
+
+This module keeps to :class:`~bba.report_generator.models.Classification`
+and never imports the storage layer — :func:`pipeline_verdict_source`
+takes the rows via the :class:`SupportsVerdict` protocol so the caller
+owns the ``bba.audit_store`` read (and its pyarrow/duckdb dependency).
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from types import MappingProxyType
+from typing import NamedTuple, Protocol
 
 import openpyxl
 
@@ -125,3 +140,175 @@ def human_label_verdict_source(
             workbook.close()
 
     return read
+
+
+class SupportsVerdict(Protocol):
+    """An audited order carrying its ``reqno`` and the pipeline's
+    ``final_classification`` — satisfied structurally by
+    :class:`bba.audit_store.models.AuditRow`.
+
+    Typing the input as a protocol (rather than importing ``AuditRow``)
+    keeps this module free of the storage layer's pyarrow/duckdb
+    dependency, mirroring :class:`bba.attribution.resolvers.SupportsReqno`.
+    The members are read-only ``@property`` so a frozen model — whose
+    fields the pydantic mypy plugin treats as read-only — still satisfies
+    the protocol.
+
+    ``final_classification`` is typed ``str`` (not
+    :data:`~bba.report_generator.models.Classification`) because the
+    audit store's own ``Classification`` is *five*-valued — it adds
+    ``POTENTIALLY_INAPPROPRIATE`` — and narrowing that onto the report
+    generator's four values is the ``projector``'s job below.
+    """
+
+    @property
+    def reqno(self) -> str: ...
+
+    @property
+    def final_classification(self) -> str: ...
+
+
+VerdictProjector = Callable[[str], Classification]
+"""Narrow an audit-store ``final_classification`` string onto the report
+generator's 4-value :data:`~bba.report_generator.models.Classification`."""
+
+
+_REPORT_CLASSIFICATIONS: frozenset[str] = frozenset(
+    {"APPROPRIATE", "INAPPROPRIATE", "NEEDS_REVIEW", "INSUFFICIENT_EVIDENCE"}
+)
+"""The four values the ranking layer can bucket. The audit store adds a
+fifth, ``POTENTIALLY_INAPPROPRIATE`` (see
+:data:`bba.audit_store.models.Classification`), which is not one of these."""
+
+
+def strict_verdict_projector(value: str) -> Classification:
+    """Identity on the four report classifications; fail loud on anything
+    else — including the audit-store-only ``POTENTIALLY_INAPPROPRIATE``.
+
+    The default so no build silently buckets the fifth value: mapping it is
+    a clinical decision (mirrors
+    :func:`bba.report_generator.builder.default_classification_projector`).
+    Callers that want it pooled into Unresolved pass
+    :func:`needs_review_verdict_projector`.
+    """
+    if value in _REPORT_CLASSIFICATIONS:
+        return value  # type: ignore[return-value]  # membership narrows to Classification
+    raise ValueError(
+        f"final_classification {value!r} is not one of the four report "
+        f"classifications {sorted(_REPORT_CLASSIFICATIONS)}; if this is the "
+        "audit-store-only 'POTENTIALLY_INAPPROPRIATE', pass "
+        "needs_review_verdict_projector to pool it into Unresolved"
+    )
+
+
+def needs_review_verdict_projector(value: str) -> Classification:
+    """Like :func:`strict_verdict_projector` but maps the audit-store-only
+    ``POTENTIALLY_INAPPROPRIATE`` onto ``NEEDS_REVIEW`` — which the ranking
+    buckets into Unresolved, consistent with
+    :data:`bba.verification.models._BUCKET_OF` (that label is a high-Hb /
+    above-ceiling pre-verdict, never a confident terminal call, so it must
+    not be ranked as confidently Inappropriate).
+    """
+    if value == "POTENTIALLY_INAPPROPRIATE":
+        return "NEEDS_REVIEW"
+    return strict_verdict_projector(value)
+
+
+def pipeline_verdict_source(
+    rows: Iterable[SupportsVerdict],
+    *,
+    projector: VerdictProjector = strict_verdict_projector,
+) -> VerdictSource:
+    """Return a :data:`VerdictSource` over the application's own per-order
+    verdicts — the full-cohort counterpart to
+    :func:`human_label_verdict_source`.
+
+    ``rows`` are audited orders (typically
+    ``AuditStore.read_audit_results(run_id=...)`` scoped to one run so each
+    ``reqno`` appears once). They are materialized once here, so the
+    returned source is re-callable even if a generator is passed.
+
+    ``projector`` narrows each order's five-valued audit
+    ``final_classification`` onto the ranking layer's four values. The
+    default fails loud on ``POTENTIALLY_INAPPROPRIATE``; pass
+    :func:`needs_review_verdict_projector` to pool it into Unresolved.
+
+    Fail-loud contract (mirrors
+    :func:`bba.attribution.order_doctor_map.load_reqno_to_doctor`): the
+    same ``reqno`` carrying two *different* projected verdicts raises
+    :class:`ValueError` naming the reqno — that only happens when the caller
+    mixed rows across runs/code-versions, which would silently mis-bucket
+    the order. An identical repeat is tolerated (idempotent re-read). An
+    empty ``reqno`` raises rather than collapsing distinct orders onto a
+    blank key.
+    """
+    materialized = tuple(rows)
+
+    def read() -> Mapping[str, Classification]:
+        verdicts: dict[str, Classification] = {}
+        for row in materialized:
+            reqno = row.reqno.strip()
+            if reqno == "":
+                raise ValueError(
+                    "audit row has an empty REQNO; refusing to key a verdict "
+                    "on a blank order id"
+                )
+            classification = projector(row.final_classification)
+            existing = verdicts.get(reqno)
+            if existing is not None and existing != classification:
+                raise ValueError(
+                    f"REQNO {reqno} carries conflicting verdicts "
+                    f"{existing!r} and {classification!r}; scope the read to a "
+                    "single run_id so each order resolves to one classification"
+                )
+            verdicts[reqno] = classification
+        return verdicts
+
+    return read
+
+
+class VerdictReconciliation(NamedTuple):
+    """Overlap between two verdict mappings — the pre-swap cross-check.
+
+    ``pipeline_over_clears`` is the safety-critical field: orders the human
+    reviewer called INAPPROPRIATE that the pipeline called APPROPRIATE. A
+    non-trivial count is the peri-op over-clear signal (the pipeline
+    crediting a surgical order as fine) and is the reason
+    :func:`pipeline_verdict_source` is validated before it becomes the
+    ranking default.
+    """
+
+    overlap: int
+    agree: int
+    disagree: int
+    pipeline_over_clears: int
+    human_only: int
+    pipeline_only: int
+
+
+def reconcile_verdict_sources(
+    pipeline: Mapping[str, Classification],
+    human: Mapping[str, Classification],
+) -> VerdictReconciliation:
+    """Compare two verdict mappings over the REQNOs they share.
+
+    Agreement is measured on the intersection only; ``human_only`` and
+    ``pipeline_only`` report the non-overlapping keys so a shrunken overlap
+    (e.g. the human 300 barely landing in the ranked cohort) is visible
+    rather than silently inflating the agreement rate.
+    """
+    shared = pipeline.keys() & human.keys()
+    agree = sum(1 for reqno in shared if pipeline[reqno] == human[reqno])
+    over_clears = sum(
+        1
+        for reqno in shared
+        if human[reqno] == "INAPPROPRIATE" and pipeline[reqno] == "APPROPRIATE"
+    )
+    return VerdictReconciliation(
+        overlap=len(shared),
+        agree=agree,
+        disagree=len(shared) - agree,
+        pipeline_over_clears=over_clears,
+        human_only=len(human.keys() - pipeline.keys()),
+        pipeline_only=len(pipeline.keys() - human.keys()),
+    )
