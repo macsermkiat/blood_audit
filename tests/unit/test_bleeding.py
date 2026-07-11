@@ -23,6 +23,7 @@ from bba.audit_pipeline.bleeding import (
     has_life_threatening_marker,
     parse_max_volume_ml,
     qualified_bleeding_exempt,
+    quote_negates_bleeding,
 )
 
 
@@ -461,6 +462,66 @@ class TestQualifiedBleedingExempt:
         assert qualified_bleeding_exempt(
             [junk, _active_bleed(quote="drain 900 mL", confidence=0.9)]  # type: ignore[list-item]
         )
+
+
+class TestQuoteNegatesBleeding:
+    """``quote_negates_bleeding`` recognises absence-of-bleed prose.
+
+    WHY (Codex PR #99 round 2 / owner ruling #98): qualifier (1) floors a
+    bare-hypotension over-clear to a human only when a grounded
+    ACTIVE_BLEEDING citation is genuine bleeding EVIDENCE. A citation whose
+    grounded quote documents the ABSENCE of bleeding ("no active
+    hemorrhage") is a mislabeled citation — trusting it would route bare
+    hypotension to review, against the ruling that it stays INAPPROPRIATE.
+    A false hit only withholds the floor (the assert stands); it can never
+    auto-clear.
+    """
+
+    @pytest.mark.parametrize(
+        "quote",
+        [
+            "no active hemorrhage seen",
+            "denies bleeding or melena",
+            "bleeding ruled out on scope",
+            "r/o GI bleed",
+            "without further blood loss overnight",
+            "ไม่มีเลือดออก",  # "no bleeding"
+        ],
+    )
+    def test_negated_bleed_prose_flags(self, quote: str) -> None:
+        assert quote_negates_bleeding(quote) is True
+
+    @pytest.mark.parametrize(
+        "quote",
+        [
+            "intramuscular hematoma with active bleeding at Lt. thigh",
+            "hemorrhagic shock, resuscitation ongoing",
+            "เลือดออกมาก",  # "bleeding heavily"
+        ],
+    )
+    def test_genuine_bleed_prose_does_not_flag(self, quote: str) -> None:
+        assert quote_negates_bleeding(quote) is False
+
+    def test_one_genuine_mention_outweighs_a_negated_one(self) -> None:
+        # A note often clears one site while another still bleeds; the
+        # genuine mention keeps the quote usable as evidence.
+        assert (
+            quote_negates_bleeding(
+                "no bleeding from drain; active bleeding at Lt. thigh"
+            )
+            is False
+        )
+
+    def test_negation_does_not_leak_across_clause_boundary(self) -> None:
+        # "no" bound to an earlier clause must not void a standing bleed.
+        assert (
+            quote_negates_bleeding("no fever today; bleeding from the wound continues")
+            is False
+        )
+
+    def test_quote_without_bleeding_terms_does_not_flag(self) -> None:
+        # Nothing to negate: the caller's code-level trust decides alone.
+        assert quote_negates_bleeding("NIBP 79/54 (MAP 63) mmHg, on Levophed") is False
 
 
 def test_policy_constants_match_locked_decisions() -> None:

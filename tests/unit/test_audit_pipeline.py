@@ -2231,6 +2231,44 @@ class TestLlmOverclearGuardrail:
         assert row.final_classification == "INAPPROPRIATE"
         assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
 
+    def test_hypotension_with_negated_bleed_quote_asserts(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #99 round 2: an ACTIVE_BLEEDING-coded citation whose
+        # grounded quote documents the ABSENCE of bleeding is a mislabeled
+        # citation, not qualifier-(1) accompaniment — bare hypotension
+        # stays asserted (owner ruling #98), same quote-negation screen as
+        # the bleed exemption.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-negbleed",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=(
+                "NIBP 79/54 (MAP 63) mmHg, on Levophed; no active hemorrhage seen"
+            ),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                },
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "no active hemorrhage seen",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                },
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
     def test_low_confidence_refractory_quote_does_not_floor(
         self, tmp_path: object
     ) -> None:

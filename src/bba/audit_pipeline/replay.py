@@ -34,6 +34,7 @@ from bba.audit_pipeline.bleeding import (
     LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE,
     is_active_bleeding_code,
     qualified_bleeding_exempt,
+    quote_negates_bleeding,
 )
 from bba.audit_pipeline.models import PipelineRowContext, PipelineRunResult
 from bba.audit_store import AuditRow, AuditStore, LlmCall
@@ -500,21 +501,28 @@ def _qualified_hemodynamic_floor(
     bleeding, severe organ ischemia, or fluid-refractoriness is not a
     transfusion indication and stays asserted. Accompaniment here is (1) a
     grounded, non-negation-qualified ACTIVE_BLEEDING-family citation at the
-    shared bar (a possible hemorrhagic-shock picture below the
-    qualified-major-bleed bar), or (3) fluid-refractory language inside the
-    instability citation's own quote. Qualifier (2), organ ischemia, is the
-    separate grounded-ACS floor.
+    shared bar whose quote does not itself negate bleeding (a possible
+    hemorrhagic-shock picture below the qualified-major-bleed bar), or (3)
+    fluid-refractory language inside the instability citation's own quote.
+    Qualifier (2), organ ischemia, is the separate grounded-ACS floor.
     """
     if not _cited_at_prose_trust(grounded_indications, _HEMODYNAMIC_HARD_CODES):
         return False
     for indication in grounded_indications:
         code = indication.get("code")
         if (
-            isinstance(code, str)
-            and is_active_bleeding_code(code.strip())
-            and _confidence_at_prose_trust_bar(indication.get("confidence"))
+            not isinstance(code, str)
+            or not is_active_bleeding_code(code.strip())
+            or not _confidence_at_prose_trust_bar(indication.get("confidence"))
         ):
-            return True
+            continue
+        # Qualifier (1) needs bleeding EVIDENCE (Codex PR #99 round 2): a
+        # grounded quote documenting the ABSENCE of bleeding ("no active
+        # hemorrhage") is a mislabeled citation and must not floor the row.
+        quote = indication.get("quote")
+        if isinstance(quote, str) and quote_negates_bleeding(quote):
+            continue
+        return True
     for indication in grounded_indications:
         code = indication.get("code")
         if (

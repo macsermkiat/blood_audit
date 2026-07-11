@@ -26,6 +26,7 @@ __all__ = [
     "is_active_bleeding_code",
     "parse_max_volume_ml",
     "qualified_bleeding_exempt",
+    "quote_negates_bleeding",
 ]
 
 LLM_OVERCLEAR_MIN_BLEED_ML: float = 300.0
@@ -301,6 +302,44 @@ def _marker_occurrence_negated(lowered: str, start: int, end: int) -> bool:
     if cut != -1:
         post = post[:cut]
     return any(token in post for token in _MARKER_POST_NEGATION_TOKENS)
+
+
+def quote_negates_bleeding(quote: str) -> bool:
+    """True iff ``quote`` mentions bleeding only in negation-voided form —
+    it documents the ABSENCE of a bleed ("no active hemorrhage", "r/o GI
+    bleed", "ไม่มีเลือดออก"), not evidence of one.
+
+    WHY (Codex PR #99 round 2 / owner ruling #98): the replay guardrail's
+    hemodynamic-accompaniment check trusts an ACTIVE_BLEEDING-family
+    citation as qualifier-(1) bleeding evidence on code + confidence alone;
+    a mislabeled citation whose grounded quote actually negates bleeding
+    must not float a bare-hypotension over-clear to review. Reuses the same
+    negator / clause-window machinery as the life-threatening-marker screen
+    so exemption and accompaniment read prose identically. A quote with no
+    bleeding term returns ``False`` — this screen only rejects positively
+    negated prose; code-level trust stays the caller's decision. One
+    non-negated bleeding mention keeps the quote usable (a note often
+    clears one site while another still bleeds). Errs fail-closed for the
+    floor: a false hit merely withholds it (the assert stands); it can
+    never auto-clear.
+
+    Known limitation: a double negative whose negator binds a later verb
+    ("เลือดออกไม่หยุด" — bleeding does NOT STOP) reads as negated here, but
+    every reachable such quote carries a non-negated life-threatening
+    marker at the same confidence bar, so the exemption clears it before
+    the accompaniment check is ever consulted.
+    """
+    lowered = quote.lower()
+    found_negated = False
+    for term in _BLEEDING_CONTEXT_TERMS:
+        start = 0
+        while (idx := lowered.find(term, start)) != -1:
+            end = idx + len(term)
+            if not _marker_occurrence_negated(lowered, idx, end):
+                return False
+            found_negated = True
+            start = end
+    return found_negated
 
 
 def qualified_bleeding_exempt(indications: Iterable[Mapping[str, object]]) -> bool:
