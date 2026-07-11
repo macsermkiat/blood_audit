@@ -1663,8 +1663,11 @@ class TestLlmOverclearPredicate:
     POTENTIALLY_INAPPROPRIATE) with NO structured hard signal to justify it.
     Cases 47 (68062324) and 100 (68069089) are the
     motivating over-clears. Structured exemptions are sub-7.0 Hb, hard peri-op
-    signal, MTP cohort, or hemodynamic instability; the call site separately
-    composes the committee-approved qualified-major-bleeding exemption.
+    signal, or MTP cohort; the call site separately composes the
+    committee-approved qualified-major-bleeding exemption. Hemodynamic
+    instability left the exemption set with owner ruling #98 (Codex PR #99
+    round 3): verified hypotension/tachycardia is not a transfusion
+    indication by itself, so it routes through the qualifier logic instead.
     """
 
     def test_case_100_shape_is_overclear(self) -> None:
@@ -1704,17 +1707,24 @@ class TestLlmOverclearPredicate:
         )
         assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is False
 
-    def test_hypotension_exempts(self) -> None:
+    def test_hypotension_no_longer_exempts(self) -> None:
+        # Owner ruling #98 (Codex PR #99 round 3): a structured SBP < 90
+        # snapshot is the same clinical claim as pressor-verified
+        # hypotension — real, but not a transfusion indication by itself.
+        # The clear is suspect; bleeding / ischemia / fluid-refractory
+        # qualifiers decide the outcome downstream.
         ctx = _row_context(
             audit_id="oc-6", hb_value=9.4, sbp=LLM_OVERCLEAR_UNSTABLE_SBP - 1
         )
-        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is False
+        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is True
 
-    def test_tachycardia_exempts(self) -> None:
+    def test_tachycardia_no_longer_exempts(self) -> None:
+        # Same ruling, tachycardia arm: HR > 120 alone is a compensation
+        # sign, not an indication.
         ctx = _row_context(
             audit_id="oc-7", hb_value=9.4, hr=LLM_OVERCLEAR_UNSTABLE_HR + 1
         )
-        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is False
+        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is True
 
     def test_stable_vitals_at_thresholds_do_not_exempt(self) -> None:
         # SBP == 90 and HR == 120 are the stable side of the boundary
@@ -2103,14 +2113,11 @@ class TestLlmOverclearGuardrail:
         assert row.review_reason is None
         assert row.needs_human_review is True
 
-    def test_grounded_hemodynamic_overclear_floors_to_review(
-        self, tmp_path: object
-    ) -> None:
-        # Codex PR #97 round 5: the structured extractor sees one vitals
-        # snapshot (SBP < 90 / HR > 120); the prompt's HEMODYNAMIC_INSTABILITY
-        # HARD definition also covers documented shock / pressor support the
-        # extractor can never see. A grounded, high-confidence citation of
-        # that prose floors to a human instead of being asserted against.
+    def test_bare_hypotension_overclear_asserts(self, tmp_path: object) -> None:
+        # Owner ruling (#98, 2026-07-11): hypotension — even on pressors —
+        # without evidence of active bleeding, severe organ ischemia, or
+        # fluid-refractoriness is NOT a transfusion indication; the assert
+        # stands. Deliberately narrows the round-5 floor.
         ctx = _row_context(
             audit_id="audit-oc-hemo",
             classification="NEEDS_REVIEW",
@@ -2131,9 +2138,652 @@ class TestLlmOverclearGuardrail:
             reasoning_en="documented hypotension on vasopressor support",
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_hypotension_with_active_bleed_citation_floors(
+        self, tmp_path: object
+    ) -> None:
+        # Owner ruling qualifier (1): grounded instability accompanied by a
+        # grounded active-bleeding citation (possible hemorrhagic shock that
+        # does not meet the qualified-major-bleed bar) is a genuine human
+        # case — floor, never assert, never auto-clear.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-bleed",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=(
+                "NIBP 79/54 (MAP 63) mmHg, on Levophed; "
+                "intramuscular hematoma with active bleeding at Lt. thigh"
+            ),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                },
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "intramuscular hematoma with active bleeding",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                },
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "NEEDS_REVIEW"
         assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
-        assert row.needs_human_review is True
+
+    def test_fluid_refractory_hypotension_floors(self, tmp_path: object) -> None:
+        # Owner ruling qualifier (3): instability documented as unresponsive
+        # to fluid resuscitation floors to a human.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-refractory",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=(
+                "BP 82/50 despite fluid resuscitation 1000 mL, start Levophed"
+            ),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "BP 82/50 despite fluid resuscitation 1000 mL",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+
+    def test_hypotension_with_negated_bleed_citation_asserts(
+        self, tmp_path: object
+    ) -> None:
+        # A risk/history-qualified bleed code is not bleeding evidence; the
+        # bare-hypotension assert stands.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-riskbleed",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=(
+                "NIBP 79/54 (MAP 63) mmHg, on Levophed; bleeding precaution"
+            ),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                },
+                {
+                    "code": "ACTIVE_BLEEDING_RISK",
+                    "quote": "bleeding precaution",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                },
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_hypotension_with_negated_bleed_quote_asserts(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #99 round 2: an ACTIVE_BLEEDING-coded citation whose
+        # grounded quote documents the ABSENCE of bleeding is a mislabeled
+        # citation, not qualifier-(1) accompaniment — bare hypotension
+        # stays asserted (owner ruling #98), same quote-negation screen as
+        # the bleed exemption.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-negbleed",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=(
+                "NIBP 79/54 (MAP 63) mmHg, on Levophed; no active hemorrhage seen"
+            ),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                },
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "no active hemorrhage seen",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                },
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_structured_bare_hypotension_overclear_asserts(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #99 round 3 / owner ruling #98: a structured SBP < 90
+        # snapshot is bare hypotension too — verified, but still not a
+        # transfusion indication without bleeding / ischemia /
+        # fluid-refractory evidence. It no longer shields the clear.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-structured",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            sbp=LLM_OVERCLEAR_UNSTABLE_SBP - 8.0,
+            evidence_text="Routine ward note, transfusion given",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[],
+            reasoning_en="cleared on the overall picture",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_structured_hypotension_with_bleed_citation_floors(
+        self, tmp_path: object
+    ) -> None:
+        # Structured instability + a grounded sub-exemption bleed citation
+        # is the same possible-hemorrhagic-shock picture as the prose path —
+        # qualifier (1) floors it to a human.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-structured-bleed",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            sbp=LLM_OVERCLEAR_UNSTABLE_SBP - 8.0,
+            evidence_text="intramuscular hematoma with active bleeding at Lt. thigh",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "intramuscular hematoma with active bleeding",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+
+    def test_boundary_vitals_with_bleed_citation_still_assert(
+        self, tmp_path: object
+    ) -> None:
+        # SBP exactly 90 is the stable side of the strict boundary: no
+        # instability precondition holds, and a sub-exemption bleed alone
+        # does not floor — the assert stands.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-boundary-bleed",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            sbp=LLM_OVERCLEAR_UNSTABLE_SBP,
+            evidence_text="intramuscular hematoma with active bleeding at Lt. thigh",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "intramuscular hematoma with active bleeding",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_structured_hypotension_with_qualified_bleed_stays_appropriate(
+        self, tmp_path: object
+    ) -> None:
+        # The committee-approved major-bleed exemption still auto-clears a
+        # hypotensive row — the ruling narrows hemodynamic instability, not
+        # the bleeding exemption.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-structured-majorbleed",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            sbp=LLM_OVERCLEAR_UNSTABLE_SBP - 8.0,
+            evidence_text="Massive hematemesis, EBL 1100 mL over 2 hours",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "EBL 1100 mL",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "APPROPRIATE"
+        assert row.review_reason is None
+
+    def test_native_hedge_with_structured_bare_hypotension_converts(
+        self, tmp_path: object
+    ) -> None:
+        # Hedge side of the same ruling: structured bare hypotension is no
+        # longer a hard signal keeping the hedge a human case — it converts.
+        ctx = _row_context(
+            audit_id="audit-native-review-hemo-structured",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            sbp=LLM_OVERCLEAR_UNSTABLE_SBP - 8.0,
+            evidence_text="Routine ward note, transfusion given",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="NEEDS_REVIEW",
+            indications=[],
+            reasoning_en="hypotensive on the ward, deferring to a human",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_NATIVE_REVIEW_ASSERT_REASON
+
+    def test_hypotension_with_negated_bleed_synonym_asserts(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #99 round 4: a negated bleed SYNONYM ("denies melena")
+        # miscoded as ACTIVE_BLEEDING must not count as qualifier-(1)
+        # accompaniment either — the generic bleeding terms alone would
+        # miss it and the bare-hypotension assert would be lost.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-negsynonym",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=("NIBP 79/54 (MAP 63) mmHg, on Levophed; denies melena"),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                },
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "denies melena",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                },
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_hypotension_with_comma_denial_list_asserts(self, tmp_path: object) -> None:
+        # Codex PR #99 round 5: "denies bleeding, melena" is one denial
+        # distributed across a comma list — the comma must not shield
+        # "melena" from the negator and float bare hypotension to review.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-denial-list",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=(
+                "NIBP 79/54 (MAP 63) mmHg, on Levophed; denies bleeding, melena"
+            ),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                },
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "denies bleeding, melena",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                },
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_hypotension_with_contrastive_bleed_clause_floors(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #99 round 6: "denies hematemesis but melena ongoing"
+        # documents an ACTIVE bleed after the contrastive — the earlier
+        # denial must not leak across "but" and rob a genuinely bleeding
+        # hypotensive row of its human review.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-contrastive",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=(
+                "NIBP 79/54 (MAP 63) mmHg, on Levophed; "
+                "denies hematemesis but melena ongoing"
+            ),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                },
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "denies hematemesis but melena ongoing",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                },
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+
+    def test_hypotension_with_uncontrolled_bleed_double_negative_floors(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #99 round 7: "bleeding not controlled after pressure"
+        # is an ONGOING bleed — the "not" binds "controlled". No volume
+        # and no exact marker means the exemption cannot catch it, so the
+        # accompaniment screen must keep it visible and floor the row.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-notcontrolled",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=(
+                "NIBP 79/54 (MAP 63) mmHg, on Levophed; "
+                "bleeding not controlled after pressure"
+            ),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                },
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "bleeding not controlled after pressure",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                },
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+
+    def test_hypotension_with_label_value_denial_asserts(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #99 round 8: a checklist-style label-value denial
+        # ("GI bleeding: no") is a documented absence — it must not count
+        # as qualifier-(1) accompaniment, and bare hypotension asserts.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-labelvalue",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=("NIBP 79/54 (MAP 63) mmHg, on Levophed; GI bleeding: no"),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                },
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "GI bleeding: no",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                },
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_hypotension_with_unresolved_bleed_adverb_floors(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #99 round 8: "bleeding not yet resolved" is explicitly
+        # ONGOING — the adverb between the negator and the control verb
+        # must not defeat the rescue, and the row floors to a human.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-notyetresolved",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=(
+                "NIBP 79/54 (MAP 63) mmHg, on Levophed; bleeding not yet resolved"
+            ),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                },
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "bleeding not yet resolved",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                },
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+
+    def test_hypotension_with_denied_bleed_unrelated_rescue_asserts(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #99 round 9: the still-active rescue must bind its OWN
+        # negator. "bleeding denied, pain not controlled" denies the bleed;
+        # the unrelated pain phrase must not resurrect it as accompaniment.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-unrelated-rescue",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=(
+                "NIBP 79/54 (MAP 63) mmHg, on Levophed; "
+                "bleeding denied, pain not controlled"
+            ),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                },
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "bleeding denied, pain not controlled",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                },
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_negated_refractory_wording_does_not_floor(self, tmp_path: object) -> None:
+        # Codex PR #99 round 4: qualifier (3) requires POSITIVE
+        # unresponsiveness to fluids. "not refractory after IV fluids" is
+        # documented responsiveness — bare hypotension, assert stands.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-notrefractory",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="BP 82/50, not refractory after IV fluids",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "BP 82/50, not refractory after IV fluids",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_bare_refractory_token_floors(self, tmp_path: object) -> None:
+        # Positive control for the screened token: un-negated "refractory"
+        # in the instability citation's own quote still floors.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-refractory-bare",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="BP 82/50 refractory hypotension, start Levophed",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "BP 82/50 refractory hypotension",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+
+    def test_pre_negated_despite_phrase_still_floors(self, tmp_path: object) -> None:
+        # Guard against over-screening: "not improving despite fluid
+        # resuscitation" is GENUINE refractoriness (the negation binds
+        # "improving", not the refractory phrase). Only the
+        # polarity-ambiguous bare "refractory" token is negation-screened;
+        # the phrase tokens carry their own polarity.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-refract-doubleneg",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=(
+                "BP 82/50 not improving despite fluid resuscitation 1000 mL"
+            ),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": (
+                        "BP 82/50 not improving despite fluid resuscitation 1000 mL"
+                    ),
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+
+    def test_low_confidence_refractory_quote_does_not_floor(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #99 P2: qualifier (3) requires the fluid-refractory quote
+        # to be its OWN >=0.8 citation. A high-conf bare-hypotension citation
+        # must not let a separate low-conf 'despite fluid' quote floor the
+        # row — the bare-hypotension assert stands.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-refract-lowconf",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=(
+                "NIBP 79/54 (MAP 63) mmHg, on Levophed; "
+                "BP 82/50 despite fluid resuscitation 1000 mL"
+            ),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.85,
+                },
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "BP 82/50 despite fluid resuscitation 1000 mL",
+                    "source_id": "E1",
+                    "confidence": 0.4,
+                },
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
 
     def test_low_confidence_hemodynamic_still_asserts(self, tmp_path: object) -> None:
         ctx = _row_context(
@@ -2181,9 +2831,12 @@ class TestLlmOverclearGuardrail:
         assert row.final_classification == "INAPPROPRIATE"
         assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
 
-    def test_native_hedge_with_grounded_hemodynamic_stays_review(
+    def test_native_hedge_with_bare_hypotension_converts(
         self, tmp_path: object
     ) -> None:
+        # Owner ruling (#98): a hedge citing only bare hypotension converts —
+        # hypotension without bleeding/ischemia/fluid-refractory evidence is
+        # not a transfusion indication.
         ctx = _row_context(
             audit_id="audit-native-review-hemo",
             classification="NEEDS_REVIEW",
@@ -2202,6 +2855,34 @@ class TestLlmOverclearGuardrail:
                 }
             ],
             reasoning_en="pressor-dependent hypotension, deferring to a human",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_NATIVE_REVIEW_ASSERT_REASON
+
+    def test_native_hedge_with_fluid_refractory_hypotension_stays_review(
+        self, tmp_path: object
+    ) -> None:
+        ctx = _row_context(
+            audit_id="audit-native-review-hemo-refract",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=(
+                "BP 82/50 despite fluid resuscitation 1000 mL, start Levophed"
+            ),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="NEEDS_REVIEW",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "BP 82/50 despite fluid resuscitation 1000 mL",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+            reasoning_en="fluid-refractory hypotension, deferring to a human",
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "NEEDS_REVIEW"

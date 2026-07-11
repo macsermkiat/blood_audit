@@ -23,6 +23,7 @@ from bba.audit_pipeline.bleeding import (
     has_life_threatening_marker,
     parse_max_volume_ml,
     qualified_bleeding_exempt,
+    quote_negates_bleeding,
 )
 
 
@@ -461,6 +462,132 @@ class TestQualifiedBleedingExempt:
         assert qualified_bleeding_exempt(
             [junk, _active_bleed(quote="drain 900 mL", confidence=0.9)]  # type: ignore[list-item]
         )
+
+
+class TestQuoteNegatesBleeding:
+    """``quote_negates_bleeding`` recognises absence-of-bleed prose.
+
+    WHY (Codex PR #99 round 2 / owner ruling #98): qualifier (1) floors a
+    bare-hypotension over-clear to a human only when a grounded
+    ACTIVE_BLEEDING citation is genuine bleeding EVIDENCE. A citation whose
+    grounded quote documents the ABSENCE of bleeding ("no active
+    hemorrhage") is a mislabeled citation — trusting it would route bare
+    hypotension to review, against the ruling that it stays INAPPROPRIATE.
+    A false hit only withholds the floor (the assert stands); it can never
+    auto-clear.
+    """
+
+    @pytest.mark.parametrize(
+        "quote",
+        [
+            "no active hemorrhage seen",
+            "denies bleeding or melena",
+            "bleeding ruled out on scope",
+            "r/o GI bleed",
+            "without further blood loss overnight",
+            "ไม่มีเลือดออก",  # "no bleeding"
+            # Bleed synonyms (Codex PR #99 round 4): a miscoded negated
+            # synonym must not slip past the screen just because the
+            # generic terms miss it.
+            "denies melena",
+            "no hematemesis overnight",
+            "negative for hematochezia",
+            "ไม่มีถ่ายดำ",  # "no melena (black stool)"
+            # Comma-separated denial lists (Codex PR #99 round 5): the
+            # denial verb distributes across the list, so the comma must
+            # not shield later items from the negator.
+            "denies bleeding, melena",
+            "no hematemesis, hematochezia, or melena",
+            "bleeding, melena denied",
+            # A contrastive AFTER the term still lets a trailing negator
+            # void it: this bleed is documented as over.
+            "melena noted but now resolved",
+            "bleeding resolved after packing",
+            "bleeding no longer present",
+            # The rescue binds only its OWN negator (Codex PR #99 round
+            # 9): an unrelated "not controlled" about pain must not
+            # cancel the bleed denial in the same window.
+            "bleeding denied, pain not controlled",
+            # Label-value denials (Codex PR #99 round 8): checklist-style
+            # notes deny with a bare value after a separator.
+            "GI bleeding: no",
+            "active bleeding - no",
+            "bleeding: none",
+            "melena? negative",
+            "เลือดออก: ไม่มี",  # "bleeding: none"
+        ],
+    )
+    def test_negated_bleed_prose_flags(self, quote: str) -> None:
+        assert quote_negates_bleeding(quote) is True
+
+    @pytest.mark.parametrize(
+        "quote",
+        [
+            # Post-side double negatives (Codex PR #99 round 7): the
+            # negator binds the CONTROL verb, not the bleeding — these
+            # bleeds are ongoing and must stay visible to the floor.
+            "bleeding not controlled after pressure",
+            "bleeding not yet controlled",
+            "bleeding no longer controlled",
+            "เลือดออกไม่หยุด",  # "bleeding does not stop"
+            # Adverb-split double negatives (round 8): still ongoing.
+            "bleeding not yet resolved",
+            "bleeding not completely resolved",
+            "bleeding not fully controlled",
+            # A label-value shape whose value is itself a rescued double
+            # negative stays visible too.
+            "bleeding: not controlled",
+        ],
+    )
+    def test_still_active_double_negative_does_not_flag(self, quote: str) -> None:
+        assert quote_negates_bleeding(quote) is False
+
+    @pytest.mark.parametrize(
+        "quote",
+        [
+            # Contrastive connectors (Codex PR #99 round 6): the denial
+            # binds only up to "but" — what follows is documented ACTIVE
+            # bleeding, so the quote stays usable as accompaniment.
+            "denies hematemesis but melena ongoing",
+            "no hematemesis, hematochezia but melena ongoing",
+            "ไม่มีอาเจียนเป็นเลือด แต่ถ่ายดำ",  # "no hematemesis but melena"
+        ],
+    )
+    def test_contrastive_bleed_clause_does_not_flag(self, quote: str) -> None:
+        assert quote_negates_bleeding(quote) is False
+
+    @pytest.mark.parametrize(
+        "quote",
+        [
+            "intramuscular hematoma with active bleeding at Lt. thigh",
+            "hemorrhagic shock, resuscitation ongoing",
+            "เลือดออกมาก",  # "bleeding heavily"
+            "melena x 3 this morning, ongoing",
+        ],
+    )
+    def test_genuine_bleed_prose_does_not_flag(self, quote: str) -> None:
+        assert quote_negates_bleeding(quote) is False
+
+    def test_one_genuine_mention_outweighs_a_negated_one(self) -> None:
+        # A note often clears one site while another still bleeds; the
+        # genuine mention keeps the quote usable as evidence.
+        assert (
+            quote_negates_bleeding(
+                "no bleeding from drain; active bleeding at Lt. thigh"
+            )
+            is False
+        )
+
+    def test_negation_does_not_leak_across_clause_boundary(self) -> None:
+        # "no" bound to an earlier clause must not void a standing bleed.
+        assert (
+            quote_negates_bleeding("no fever today; bleeding from the wound continues")
+            is False
+        )
+
+    def test_quote_without_bleeding_terms_does_not_flag(self) -> None:
+        # Nothing to negate: the caller's code-level trust decides alone.
+        assert quote_negates_bleeding("NIBP 79/54 (MAP 63) mmHg, on Levophed") is False
 
 
 def test_policy_constants_match_locked_decisions() -> None:

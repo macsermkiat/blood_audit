@@ -23,8 +23,11 @@ __all__ = [
     "LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE",
     "LLM_OVERCLEAR_MIN_BLEED_ML",
     "has_life_threatening_marker",
+    "is_active_bleeding_code",
+    "marker_occurrence_negated",
     "parse_max_volume_ml",
     "qualified_bleeding_exempt",
+    "quote_negates_bleeding",
 ]
 
 LLM_OVERCLEAR_MIN_BLEED_ML: float = 300.0
@@ -112,6 +115,19 @@ def _code_negation_qualified(upper_code: str) -> bool:
     )
 
 
+def is_active_bleeding_code(code: str) -> bool:
+    """True iff ``code`` is ACTIVE_BLEEDING-family with no negation qualifier.
+
+    Shared with the replay guardrail's hemodynamic-accompaniment check
+    (owner ruling on #98): a hypotension citation only floors to review when
+    real bleeding evidence accompanies it, judged by the same code-family
+    rules as the exemption itself."""
+    upper = code.upper()
+    return upper.startswith(_ACTIVE_BLEEDING_PREFIX) and not _code_negation_qualified(
+        upper
+    )
+
+
 # Prose negators that turn a life-threatening marker into a documented
 # ABSENCE of the emergency ("no active hemorrhage"). Scanned in a short,
 # clause-bounded window before each marker occurrence (Codex PR #97 P2).
@@ -184,6 +200,77 @@ _BLEEDING_CONTEXT_TERMS: tuple[str, ...] = (
 )
 _MARKER_CONTEXT_WINDOW_CHARS = 40
 
+# Bleed-synonym terms recognised ONLY by the negation screen
+# (:func:`quote_negates_bleeding`, Codex PR #99 round 4): "denies melena"
+# miscoded as ACTIVE_BLEEDING must not pass as accompaniment just because
+# the generic terms miss the synonym. Kept OUT of
+# :data:`_BLEEDING_CONTEXT_TERMS` deliberately — adding them there would
+# widen the life-threatening-marker exemption ("uncontrolled melena"
+# auto-clearing), and prose auto-clear surface is a committee decision.
+# A false hit here only withholds the hemodynamic floor (assert stands).
+_BLEEDING_NEGATION_SCREEN_TERMS: tuple[str, ...] = _BLEEDING_CONTEXT_TERMS + (
+    "melena",
+    "hematemesis",
+    "haematemesis",
+    "hematochezia",
+    "haematochezia",
+    "hemoptysis",
+    "haemoptysis",
+    "epistaxis",
+    "ถ่ายดำ",  # melena ("black stool")
+)
+
+# Clause boundaries for the accompaniment screen ONLY (Codex PR #99 round
+# 5): a clinical denial distributes across a comma list ("denies bleeding,
+# melena"), so the comma must not shield later items from the negator.
+# The marker screens above deliberately KEEP the comma boundary — there a
+# false negation hit would wrongly assert a genuine major bleed ("no fever
+# today, hemorrhagic shock"), while here it merely withholds the
+# hemodynamic floor and the ruling's assert stands. The window is wider
+# than the marker screens' for the same reason: a three-item denial list
+# ("no hematemesis, hematochezia, or melena") outruns 30 chars.
+_DENIAL_LIST_BOUNDARIES: tuple[str, ...] = (";", ".", "\n")
+_DENIAL_LIST_WINDOW_CHARS = 60
+
+# Contrastive connectors cut the PRE side only (Codex PR #99 round 6):
+# in "denies hematemesis but melena ongoing" the denial binds up to the
+# connector — what follows is a documented ACTIVE bleed the floor must
+# see. Asymmetric by design: a contrastive AFTER a term still lets a
+# trailing negator void it ("melena noted but now resolved" is a bleed
+# documented as over), so the post side keeps flowing across "but".
+_DENIAL_PRE_BOUNDARIES: tuple[str, ...] = _DENIAL_LIST_BOUNDARIES + (
+    " but ",
+    "however",
+    "แต่",  # Thai "but"
+)
+
+# Post-side double negatives that mean the bleed is ONGOING, not absent
+# (Codex PR #99 round 7): in "bleeding not controlled" the negator binds
+# the control verb, not the bleeding. When this matches in the
+# clause-bounded post window, the post negation is a false read and the
+# term stays visible to the floor. Up to two intervening adverbs are
+# tolerated ("not yet resolved", "not completely controlled" — round 8).
+# Accompaniment screen only — applying the rescue to the marker screens
+# would widen the exemption / auto-clear surface, which is
+# committee-owned. Bounded repetition, linear time.
+_POST_STILL_ACTIVE_RE = re.compile(
+    r"(?:not|never|no longer)(?:\s+\w+){0,2}\s+"
+    r"(?:controlled|stopped|stopping|resolved|resolving|abated|subsided)"
+    r"|not\s+under\s+control"
+    r"|ไม่หยุด"  # "... does not stop" (also matches ยังไม่หยุด)
+)
+
+# Label-value denials (Codex PR #99 round 8): checklist-style notes deny
+# with a bare value after a separator ("GI bleeding: no", "melena? neg").
+# Anchored at the term occurrence: the rest of the term's word, an
+# optional separator, then a denial value at a word boundary — so
+# "bleeding: normal saline" ("no" mid-word) never matches. Accompaniment
+# screen only, same fail direction as the rest of the denial scan.
+_LABEL_VALUE_DENIAL_RE = re.compile(
+    r"^\w*\s*[:=\-–?]\s*(?:no|none|neg|negative|denied|absent|nil|ไม่มี|ไม่พบ)\b"
+)
+_LABEL_VALUE_WINDOW_CHARS = 40
+
 
 def parse_max_volume_ml(text: str) -> float | None:
     """Return the largest documented blood-loss volume in ``text`` as mL.
@@ -229,7 +316,7 @@ def has_life_threatening_marker(text: str) -> bool:
         start = 0
         while (idx := lowered.find(marker, start)) != -1:
             end = idx + len(marker)
-            if not _marker_occurrence_negated(lowered, idx, end) and (
+            if not marker_occurrence_negated(lowered, idx, end) and (
                 marker not in _CONTEXT_REQUIRED_MARKERS
                 or _bleeding_context_near(lowered, idx, end)
             ):
@@ -262,12 +349,38 @@ def _bleeding_context_near(lowered: str, start: int, end: int) -> bool:
     return any(term in pre or term in post for term in _BLEEDING_CONTEXT_TERMS)
 
 
-def _marker_occurrence_negated(lowered: str, start: int, end: int) -> bool:
+def marker_occurrence_negated(lowered: str, start: int, end: int) -> bool:
     """True iff a negator voids the ``lowered[start:end]`` marker occurrence —
-    either preceding it or trailing it within the same clause."""
-    pre = lowered[max(0, start - _MARKER_NEGATION_WINDOW_CHARS) : start]
+    either preceding it or trailing it within the same clause.
+
+    Public seam shared by this module's marker/quote screens and the replay
+    guardrail's fluid-refractory check (Codex PR #99 round 4: "not
+    refractory after IV fluids" must not read as refractoriness), so every
+    negation read uses the same negator tokens and clause windows."""
+    return _occurrence_negated(
+        lowered, start, end, _MARKER_CLAUSE_BOUNDARIES, _MARKER_POST_CLAUSE_BOUNDARIES
+    )
+
+
+def _occurrence_negated(
+    lowered: str,
+    start: int,
+    end: int,
+    pre_boundaries: tuple[str, ...],
+    post_boundaries: tuple[str, ...],
+    window: int = _MARKER_NEGATION_WINDOW_CHARS,
+    post_rescue: re.Pattern[str] | None = None,
+) -> bool:
+    """Negator scan around ``lowered[start:end]`` with caller-chosen clause
+    boundaries — the marker screens keep the comma boundary, the
+    accompaniment screen drops it (see :data:`_DENIAL_LIST_BOUNDARIES`).
+    A ``post_rescue`` match overrides a post-side negator hit ONLY for the
+    negator occurrences its match span covers (still-active double
+    negatives, rounds 7-9): an unrelated "not controlled" about pain must
+    not cancel a "bleeding denied" in the same window."""
+    pre = lowered[max(0, start - window) : start]
     cut = max(
-        (pre.rfind(boundary) for boundary in _MARKER_CLAUSE_BOUNDARIES),
+        (pre.rfind(boundary) for boundary in pre_boundaries),
         default=-1,
     )
     if cut != -1:
@@ -275,18 +388,79 @@ def _marker_occurrence_negated(lowered: str, start: int, end: int) -> bool:
     if any(token in pre for token in _MARKER_NEGATION_TOKENS):
         return True
 
-    post = lowered[end : end + _MARKER_NEGATION_WINDOW_CHARS]
+    post = lowered[end : end + window]
     cut = min(
-        (
-            found
-            for boundary in _MARKER_POST_CLAUSE_BOUNDARIES
-            if (found := post.find(boundary)) != -1
-        ),
+        (found for boundary in post_boundaries if (found := post.find(boundary)) != -1),
         default=-1,
     )
     if cut != -1:
         post = post[:cut]
-    return any(token in post for token in _MARKER_POST_NEGATION_TOKENS)
+    if post_rescue is None:
+        return any(token in post for token in _MARKER_POST_NEGATION_TOKENS)
+    rescued_spans = tuple(match.span() for match in post_rescue.finditer(post))
+    for token in _MARKER_POST_NEGATION_TOKENS:
+        t_start = 0
+        while (t_idx := post.find(token, t_start)) != -1:
+            if not any(s <= t_idx < e for s, e in rescued_spans):
+                return True
+            t_start = t_idx + 1
+    return False
+
+
+def quote_negates_bleeding(quote: str) -> bool:
+    """True iff ``quote`` mentions bleeding only in negation-voided form —
+    it documents the ABSENCE of a bleed ("no active hemorrhage", "r/o GI
+    bleed", "ไม่มีเลือดออก"), not evidence of one.
+
+    WHY (Codex PR #99 round 2 / owner ruling #98): the replay guardrail's
+    hemodynamic-accompaniment check trusts an ACTIVE_BLEEDING-family
+    citation as qualifier-(1) bleeding evidence on code + confidence alone;
+    a mislabeled citation whose grounded quote actually negates bleeding
+    must not float a bare-hypotension over-clear to review. Reuses the same
+    negator / clause-window machinery as the life-threatening-marker screen
+    so exemption and accompaniment read prose identically, over the
+    synonym-extended term list (:data:`_BLEEDING_NEGATION_SCREEN_TERMS` —
+    "denies melena" counts, Codex PR #99 round 4) with denial-list
+    boundaries (round 5: the negator distributes across "denies bleeding,
+    melena"; ";", ".", "\\n" still cut). A quote with no
+    bleeding term returns ``False`` — this screen only rejects positively
+    negated prose; code-level trust stays the caller's decision. One
+    non-negated bleeding mention keeps the quote usable (a note often
+    clears one site while another still bleeds). Errs fail-closed for the
+    floor: a false hit merely withholds it (the assert stands); it can
+    never auto-clear.
+
+    Post-side double negatives whose negator binds a control verb
+    ("bleeding not controlled", "bleeding not yet resolved",
+    "เลือดออกไม่หยุด" — the bleed is ONGOING) are rescued via
+    :data:`_POST_STILL_ACTIVE_RE` (rounds 7-8) and stay visible to the
+    floor. Checklist-style label-value denials ("GI bleeding: no",
+    round 8) read as negated via :data:`_LABEL_VALUE_DENIAL_RE`.
+    """
+    lowered = quote.lower()
+    found_negated = False
+    for term in _BLEEDING_NEGATION_SCREEN_TERMS:
+        start = 0
+        while (idx := lowered.find(term, start)) != -1:
+            end = idx + len(term)
+            negated = _occurrence_negated(
+                lowered,
+                idx,
+                end,
+                _DENIAL_PRE_BOUNDARIES,
+                _DENIAL_LIST_BOUNDARIES,
+                window=_DENIAL_LIST_WINDOW_CHARS,
+                post_rescue=_POST_STILL_ACTIVE_RE,
+            ) or bool(
+                _LABEL_VALUE_DENIAL_RE.match(
+                    lowered[end : end + _LABEL_VALUE_WINDOW_CHARS]
+                )
+            )
+            if not negated:
+                return False
+            found_negated = True
+            start = end
+    return found_negated
 
 
 def qualified_bleeding_exempt(indications: Iterable[Mapping[str, object]]) -> bool:
