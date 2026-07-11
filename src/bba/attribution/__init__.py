@@ -47,8 +47,15 @@ from bba.attribution.scorecards import (
 )
 from bba.attribution.verdicts import (
     HUMAN_LABEL_TO_CLASSIFICATION,
+    SupportsVerdict,
+    VerdictProjector,
+    VerdictReconciliation,
     VerdictSource,
     human_label_verdict_source,
+    needs_review_verdict_projector,
+    pipeline_verdict_source,
+    reconcile_verdict_sources,
+    strict_verdict_projector,
 )
 
 
@@ -65,8 +72,11 @@ __all__ = [
     "RankingResult",
     "RankingTable",
     "SupportsReqno",
+    "SupportsVerdict",
     "UNATTRIBUTED_DEPARTMENT_ID",
     "UNATTRIBUTED_DOCTOR_ID",
+    "VerdictProjector",
+    "VerdictReconciliation",
     "VerdictSource",
     "build_department_scorecards",
     "build_doctor_scorecards",
@@ -76,9 +86,13 @@ __all__ = [
     "load_reqno_to_doctor",
     "make_physician_resolver",
     "make_ward_resolver",
+    "needs_review_verdict_projector",
+    "pipeline_verdict_source",
     "rank_department_scorecards",
     "rank_doctor_scorecards",
     "rank_top_n",
+    "reconcile_verdict_sources",
+    "strict_verdict_projector",
     "write_ranking_csv",
     "write_rankings_html",
 ]
