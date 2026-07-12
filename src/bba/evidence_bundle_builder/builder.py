@@ -36,8 +36,11 @@ from bba.evidence_bundle_builder.ranking import (
     split_focus_notes_5_5,
 )
 from bba.evidence_bundle_builder.salience import med_salience
+from bba.vitals_extractor.administration import scan_administration
 from bba.vitals_extractor.hemodynamic import scan_hemodynamics
 from bba.vitals_extractor.models import (
+    AdministrationFinding,
+    AdministrationSummary,
     HemodynamicSummary,
     PeriopFinding,
     PeriopSummary,
@@ -111,20 +114,20 @@ finalized against the pilot worst-case bundle measurement (issue #76 Task #3)
 before any clinical use."""
 
 EXEMPT_FROM_DROP: frozenset[EvidenceSource] = frozenset(
-    {"Hemodynamic", "Periop", "Lab"}
+    {"Administration", "Hemodynamic", "Periop", "Lab"}
 )
-"""Sources the whole-item truncation pass must NEVER drop (issue #76, Case 107).
+"""Sources the whole-item truncation pass must NEVER drop (issues #76/#107).
 
 These are the load-bearing decision signals: ``Lab`` (Hb) is the decision-time
 anemia value the deterministic classifier itself keys on, ``Hemodynamic``
 is the pinned MAP/vasopressor summary that was starved in Case 2 / REQNO
-68012352, and ``Periop`` is the pinned surgical-context/EBL summary the LLM
-skimmed past on Case 107 / REQNO 68074627. All are bounded in count (Hb by the
-7-day lookback window; the Hemodynamic and Periop summaries are one item each
-with at most three findings), so exempting them cannot make the bundle grow
-without limit. If the exempt set plus the anchor envelope alone still exceeds
-the cap, :func:`_enforce_char_cap` fails loud rather than silently shedding a
-load-bearing signal.
+68012352, ``Periop`` is the pinned surgical-context/EBL summary the LLM skimmed
+past on Case 107 / REQNO 68074627, and ``Administration`` is the affirmative-only
+administration summary. All are bounded in count (Hb by the 7-day lookback
+window; each synthesized summary is one item with at most three findings), so
+exempting them cannot make the bundle grow without limit. If the exempt set plus
+the anchor envelope alone still exceeds the cap, :func:`_enforce_char_cap` fails
+loud rather than silently shedding a load-bearing signal.
 
 Invariant: ``EXEMPT_FROM_DROP`` and :data:`DROP_PRIORITY` partition the
 ``EvidenceSource`` literal — disjoint, and together total."""
@@ -140,7 +143,8 @@ DROP_PRIORITY: tuple[EvidenceSource, ...] = (
 first. ``IPDADMPROGRESS`` and ``IPDNRFOCUSDT`` are long supportive narratives
 that the LLM can audit without; ``MED`` is contextual; ``Vitals`` is the
 bedside state; ``Diagnosis`` is the encounter context (dropped last). ``Lab``
-and ``Hemodynamic`` are absent because they are exempt (:data:`EXEMPT_FROM_DROP`).
+and all three pinned summaries are absent because they are exempt
+(:data:`EXEMPT_FROM_DROP`).
 
 Independent of the source EMISSION order (which is fixed by the canonical-
 ID assignment); without a separate drop priority, a dense MED list would
@@ -463,6 +467,37 @@ def _periop_payload(summary: PeriopSummary, anchor_dt: datetime) -> dict[str, An
     return payload
 
 
+def _administration_finding_entry(
+    finding: AdministrationFinding, anchor_dt: datetime
+) -> dict[str, Any]:
+    """Fact-only dict for an administration finding and its provenance."""
+    return {
+        "category": finding.category,
+        "snippet": finding.snippet,
+        "source": finding.source,
+        "lag_min": _lag_min(finding.at, anchor_dt),
+    }
+
+
+def _administration_payload(
+    summary: AdministrationSummary, anchor_dt: datetime
+) -> dict[str, Any]:
+    """Render affirmative administration facts without verdict language.
+
+    FACT-ONLY by contract: a true affirmative-marker flag and the verbatim
+    provenance findings, nothing else. Absence is never emitted as evidence and
+    never represents non-administration. Caller emits this only when
+    ``summary.is_empty`` is False.
+    """
+    return {
+        "has_affirmative_marker": True,
+        "findings": [
+            _administration_finding_entry(finding, anchor_dt)
+            for finding in summary.findings
+        ],
+    }
+
+
 def _build_vitals_notes(
     progress: Sequence[ProgressNote], focus: Sequence[FocusNote]
 ) -> tuple[VitalsNote, ...]:
@@ -745,6 +780,7 @@ def _assign_ids(
     *,
     hemo_summary: HemodynamicSummary,
     periop_summary: PeriopSummary,
+    administration_summary: AdministrationSummary | None,
     diagnoses: Sequence[DiagnosisRecord],
     progress: Sequence[ProgressNote],
     focus: Sequence[FocusNote],
@@ -756,11 +792,12 @@ def _assign_ids(
 ) -> tuple[EvidenceItem, ...]:
     """Construct the items list with sequential E1...EN IDs in canonical order.
 
-    Canonical order = source order (Hemodynamic, Diagnosis, IPDADMPROGRESS,
-    IPDNRFOCUSDT, MED, Lab, Vitals) → within each source, a deterministic sort
-    key. The per-source sort keys are picked so input shuffles map to the same
-    kept set AND the same per-source emission order, satisfying the stable-IDs
-    AC (E1..EN are byte-stable across re-runs of the same input)."""
+    Canonical order = source order (Hemodynamic, Periop, Administration,
+    Diagnosis, IPDADMPROGRESS, IPDNRFOCUSDT, MED, Lab, Vitals) → within each
+    source, a deterministic sort key. The per-source sort keys are picked so
+    input shuffles map to the same kept set AND the same per-source emission
+    order, satisfying the stable-IDs AC (E1..EN are byte-stable across re-runs
+    of the same input)."""
     items: list[EvidenceItem] = []
     counter = 0
 
@@ -794,6 +831,19 @@ def _assign_ids(
                 source="Periop",
                 timestamp_utc=None,
                 payload=_periop_payload(periop_summary, anchor_dt),
+            )
+        )
+
+    # Administration summary THIRD (issue #107): affirmative facts only, with
+    # no negative representation or verdict impact. An empty summary adds no
+    # item and leaves all downstream IDs unchanged.
+    if administration_summary is not None and not administration_summary.is_empty:
+        items.append(
+            EvidenceItem(
+                id=_next_id(),
+                source="Administration",
+                timestamp_utc=None,
+                payload=_administration_payload(administration_summary, anchor_dt),
             )
         )
 
@@ -1051,10 +1101,18 @@ def build_evidence_bundle(
     # notes the LLM also receives in full, so the pinned summary never asserts
     # a fact absent from a shipped item.
     periop_summary = scan_periop(vitals_notes)
+    # Administration evidence exists solely for the RBC reserve-ahead gate
+    # (#109). Platelet prompts must stay byte-identical, so platelet bundles
+    # skip the scan entirely and expose None (not scanned), distinct from an
+    # empty RBC summary (scanned, no affirmative marker found).
+    administration_summary = (
+        scan_administration(vitals_notes) if inputs.component == "red_cell" else None
+    )
 
     items = _assign_ids(
         hemo_summary=hemo_summary,
         periop_summary=periop_summary,
+        administration_summary=administration_summary,
         diagnoses=inputs.diagnoses,
         progress=progress,
         focus=focus,
@@ -1074,6 +1132,7 @@ def build_evidence_bundle(
         canonical_json=canonical_json,
         bundle_hash=bundle_hash(canonical_json),
         periop_summary=periop_summary,
+        administration_summary=administration_summary,
     )
 
 

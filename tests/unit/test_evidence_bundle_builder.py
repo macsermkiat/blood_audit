@@ -2755,6 +2755,96 @@ class TestPeriopSummaryItem:
         assert bundle.periop_summary.is_empty is True
 
 
+class TestAdministrationSummaryItem:
+    """The pinned, affirmative-only Administration item (issue #107).
+
+    The item raises documented administration facts to a high-salience bundle
+    position without adding any negative representation or verdict impact.
+    Empty summaries remain unknown and emit no item.
+    """
+
+    def test_administration_emitted_after_periop(self) -> None:
+        focus = (
+            _focus(
+                offset_hours=3,
+                text="Post-op s/p ORIF Lt femur\nให้เลือดแล้ว ผู้ป่วยอาการคงที่",
+            ),
+        )
+        bundle = _build_minimal(focus_notes=focus)
+        periop_index = next(
+            i for i, item in enumerate(bundle.items) if item.source == "Periop"
+        )
+        administration_index = next(
+            i for i, item in enumerate(bundle.items) if item.source == "Administration"
+        )
+        administration = bundle.items[administration_index]
+        assert administration_index == periop_index + 1
+        assert administration.id == "E2"
+        assert administration.timestamp_utc is None
+
+    def test_administration_payload_shape_is_fact_only(self) -> None:
+        focus = (_focus(offset_hours=2, text="PRC 2 units transfused"),)
+        bundle = _build_minimal(focus_notes=focus)
+        administration = next(
+            item for item in bundle.items if item.source == "Administration"
+        )
+        assert set(administration.payload) == {
+            "has_affirmative_marker",
+            "findings",
+        }
+        assert administration.payload["has_affirmative_marker"] is True
+        finding = administration.payload["findings"][0]
+        assert finding["category"] == "unit_count"
+        assert "PRC 2 units" in finding["snippet"]
+        assert finding["source"] == "IPDNRFOCUSDT"
+        assert finding["lag_min"] == 120
+
+    def test_no_item_on_benign_notes_and_downstream_ids_unchanged(self) -> None:
+        progress = (_progress(offset_hours=-1, text="O: patient comfortable"),)
+        focus = (_focus(offset_hours=1, text="FOCUS: pain controlled"),)
+        bundle = _build_minimal(progress_notes=progress, focus_notes=focus)
+        assert all(item.source != "Administration" for item in bundle.items)
+        assert [(item.id, item.source) for item in bundle.items] == [
+            ("E1", "Diagnosis"),
+            ("E2", "IPDADMPROGRESS"),
+            ("E3", "IPDNRFOCUSDT"),
+        ]
+
+    def test_bundle_exposes_administration_summary_handle(self) -> None:
+        focus = (_focus(offset_hours=-1, text="ให้ LPRC 2 unit"),)
+        bundle = _build_minimal(focus_notes=focus)
+        assert bundle.administration_summary is not None
+        assert bundle.administration_summary.has_affirmative_marker is True
+        administration = next(
+            item for item in bundle.items if item.source == "Administration"
+        )
+        assert administration.payload["has_affirmative_marker"] is True
+        assert "administration_summary" not in bundle.canonical_json
+
+    def test_empty_handle_means_unknown_and_emits_no_item(self) -> None:
+        bundle = _build_minimal(
+            focus_notes=(_focus(offset_hours=-1, text="เตรียมให้เลือด"),)
+        )
+        assert bundle.administration_summary is not None
+        assert bundle.administration_summary.is_empty is True
+        assert all(item.source != "Administration" for item in bundle.items)
+
+    def test_platelet_component_skips_administration_scan(self) -> None:
+        focus = (_focus(offset_hours=-1, text="ให้ SDP 1 unit"),)
+        bundle = _build_minimal(component="platelet", focus_notes=focus)
+        assert all(item.source != "Administration" for item in bundle.items)
+        assert bundle.administration_summary is None
+
+    def test_equivalent_red_cell_component_emits_administration(self) -> None:
+        # LPRC, not SDP: the RBC scan's cues key on red-cell products only,
+        # so this red_cell-vs-platelet comparison uses an RBC administration.
+        focus = (_focus(offset_hours=-1, text="ให้ LPRC 1 unit"),)
+        bundle = _build_minimal(component="red_cell", focus_notes=focus)
+        assert any(item.source == "Administration" for item in bundle.items)
+        assert bundle.administration_summary is not None
+        assert bundle.administration_summary.has_affirmative_marker is True
+
+
 class TestExemptTierPartition:
     """EXEMPT_FROM_DROP and DROP_PRIORITY must partition EvidenceSource.
 

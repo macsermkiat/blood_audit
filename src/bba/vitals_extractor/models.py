@@ -208,6 +208,52 @@ class PeriopSummary(BaseModel):
         )
 
 
+class AdministrationFinding(BaseModel):
+    """One affirmative administration fact from the window scan (issue #107).
+
+    Pure provenance, no interpretation: the ``category`` of signal, the verbatim
+    ``snippet`` it was found in, and where (``at`` = tz-aware UTC note timestamp,
+    ``source`` = origin table). The scan keeps at most one finding per category,
+    so a summary carries at most three findings.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    category: Literal["gave_blood", "unit_count", "post_transfusion"]
+    snippet: str
+    at: AwareDatetime
+    source: Literal["IPDADMPROGRESS", "IPDNRFOCUSDT"]
+
+
+class AdministrationSummary(BaseModel):
+    """Fact-only affirmative administration evidence across a note window.
+
+    Produced by
+    :func:`bba.vitals_extractor.administration.scan_administration` and surfaced
+    to the LLM as a pinned, truncation-exempt evidence item. It records only
+    affirmative chart markers that blood administration occurred, together with
+    their verbatim provenance.
+
+    BINDING GUARDRAIL: this model carries facts only. There is deliberately no
+    verdict/appropriateness field and no "not transfused" representation. An
+    empty summary means UNKNOWN, never non-administration; absence of a marker
+    cannot deny transfusion. Do not add such a field or representation.
+
+    ``has_affirmative_marker`` defaults ``False`` and ``findings`` is empty when
+    the scan found no qualifying affirmative marker.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    has_affirmative_marker: bool = False
+    findings: tuple[AdministrationFinding, ...] = ()
+
+    @property
+    def is_empty(self) -> bool:
+        """True when administration remains unknown because no marker was found."""
+        return not self.has_affirmative_marker
+
+
 LLMFallback = Callable[[str], VitalSigns]
 """Callable boundary for the LLM fallback step.
 

@@ -43,7 +43,7 @@ from bba.cohort_detector import CohortAssignment
 from bba.hb_lookup import HbLookupResult
 from bba.platelet_lookup.models import PlateletLookupResult
 from bba.prompt_builder import EvidenceChunk
-from bba.vitals_extractor import PeriopSummary, VitalsResult
+from bba.vitals_extractor import AdministrationSummary, PeriopSummary, VitalsResult
 
 
 class BatchRunState(StrEnum):
@@ -189,6 +189,12 @@ class PipelineRowContext(BaseModel):
     # intra-op transfusion. Defaults to None so a context built without a
     # peri-op scan simply leaves the guardrail inert (no false escalations).
     periop_summary: PeriopSummary | None = None
+
+    # Deterministic affirmative administration signal carried through from
+    # EvidenceBundle for the future reserve-ahead asymmetric gate (#109).
+    # Inert in this phase: nothing reads it yet. None/empty means unknown,
+    # never non-administration.
+    administration_summary: AdministrationSummary | None = None
 
     # Operator-supplied kill-switch for the missing-Hb positive-evidence
     # pre-check (MTP / peri-procedural auto-APPROPRIATE on no documented

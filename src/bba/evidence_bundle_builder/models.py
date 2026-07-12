@@ -49,7 +49,7 @@ from bba.vitals_extractor.bounds import (
     SBP_MAX,
     SBP_MIN,
 )
-from bba.vitals_extractor.models import PeriopSummary
+from bba.vitals_extractor.models import AdministrationSummary, PeriopSummary
 
 
 # =============================================================================
@@ -59,6 +59,7 @@ from bba.vitals_extractor.models import PeriopSummary
 EvidenceSource = Literal[
     "Hemodynamic",
     "Periop",
+    "Administration",
     "Diagnosis",
     "IPDADMPROGRESS",
     "IPDNRFOCUSDT",
@@ -84,7 +85,11 @@ INSUFFICIENT_EVIDENCE because the structured procedure rows were empty and it
 trusted that absence over a post-op nursing note already in the bundle — a model
 attention miss. Pinning the signal high makes it un-skippable. Like Hemodynamic
 it carries no appropriateness language and never gates the classifier (whose
-procedure bypass keys on structured timing, not on this scan)."""
+procedure bypass keys on structured timing, not on this scan).
+
+``Administration`` (issue #107) is THIRD: an affirmative-only, pinned,
+fact-only summary recovered from the same shipped narrative. It can confirm
+administration but never deny it; absence of a marker remains unknown."""
 
 
 HbSource = Literal["HEMATOLOGY", "POCT"]
@@ -362,6 +367,9 @@ class EvidenceInputs(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     anchor: OrderAnchor
+    # Administration evidence exists solely for the RBC reserve-ahead gate
+    # (#109). The red-cell default preserves every existing RBC caller.
+    component: Literal["red_cell", "platelet"] = "red_cell"
     diagnoses: tuple[DiagnosisRecord, ...] = ()
     progress_notes: tuple[ProgressNote, ...] = ()
     focus_notes: tuple[FocusNote, ...] = ()
@@ -455,6 +463,13 @@ class EvidenceBundle(BaseModel):
     # ``bundle_hash``. A bundle reconstructed from stored bytes carries the
     # default (None); the guardrail then simply has no signal to act on.
     periop_summary: PeriopSummary | None = None
+
+    # Deterministic affirmative administration signal scanned from the SAME
+    # shipped note set. This is a convenience handle for the future replay
+    # gate — it is NOT serialized into ``canonical_json`` and does NOT
+    # participate in ``bundle_hash``. The pinned Administration ITEM does,
+    # exactly as the pinned Periop item does.
+    administration_summary: AdministrationSummary | None = None
 
     @field_validator("bundle_hash")
     @classmethod
