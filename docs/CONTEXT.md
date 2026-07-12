@@ -3405,3 +3405,20 @@ body, or future Phase-1 modules):
 
 Add a concept here when a module exposes it as part of its interface. Update
 when a concept's shape changes; remove when it leaves the codebase.
+
+## Administration confirmation / reserve-ahead router (#105 Phase 5)
+
+The pilot export records every blood order at `BDVSTST=4` (dispensed) and
+never records status 5 (transfused); `USETIME` is populated for only 128/300
+orders. Administration therefore cannot be confirmed from structured status
+data, and reserve-ahead orders must not be treated as completed transfusions.
+
+Default-off `feature_flags.RESERVE_AHEAD_ROUTER_ENABLED` routes
+`preop_defer_llm` cases to `RESERVE_AHEAD_REVIEW`. Its asymmetric result gate
+accepts grounded affirmative administration evidence, including the fact-only
+`scan_administration` extractor; without confirmation it stores
+`PREOP_RESERVATION_UNCONFIRMED` (`needs_human_review=False`), projects it to
+Unresolved, and excludes it from inappropriate-transfusion attribution.
+
+See `docs/administration-confirmation-plan.md` for the data request, gate
+contract, pilot enablement, and regeneration runbook.
