@@ -18,21 +18,26 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 
-from bba.vitals_extractor.components import BLOOD_COMPONENT
+from bba.vitals_extractor.components import BLOOD_COMPONENT, RBC_COMPONENT
 from bba.vitals_extractor.models import (
     AdministrationFinding,
     AdministrationSummary,
     VitalsNote,
 )
 
+# Affirmative cues key on RED-CELL products only (Codex round 5 on PR #112):
+# this scan runs for red-cell bundles, where a charted FFP/platelet/cryo
+# administration does not confirm the reserved red cells were given. The
+# negative guard below stays on the broad component set (broader guard = more
+# false negatives, which are safe).
 _GAVE_BLOOD_RE = re.compile(
-    rf"(?:ให้เลือด|ให้\s*{BLOOD_COMPONENT})",
+    rf"(?:ให้เลือด|ให้\s*{RBC_COMPONENT})",
     re.IGNORECASE,
 )
 _UNIT_COUNT = r"\d+\s*(?:units?|ยูนิต|ถุง)"
 _UNIT_COUNT_RE = re.compile(
-    rf"{BLOOD_COMPONENT}[^\n]{{0,40}}?{_UNIT_COUNT}"
-    rf"|{_UNIT_COUNT}[^\n]{{0,40}}?{BLOOD_COMPONENT}",
+    rf"{RBC_COMPONENT}[^\n]{{0,40}}?{_UNIT_COUNT}"
+    rf"|{_UNIT_COUNT}[^\n]{{0,40}}?{RBC_COMPONENT}",
     re.IGNORECASE,
 )
 _POST_TRANSFUSION_RE = re.compile(

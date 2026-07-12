@@ -132,6 +132,11 @@ class TestNonMarkers:
             "LPRC 2 units",
             "order LPRC 2 units",
             "แพทย์ order PRC 2 units",
+            # Non-red-cell products given do not confirm the reserved red
+            # cells were given (Codex round 5 on PR #112).
+            "ให้ FFP 2 units",
+            "ให้ SDP 1 unit",
+            "platelets 6 units given",
         ],
     )
     def test_non_marker_does_not_count(self, text: str) -> None:

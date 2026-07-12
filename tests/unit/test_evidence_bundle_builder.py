@@ -2836,7 +2836,9 @@ class TestAdministrationSummaryItem:
         assert bundle.administration_summary is None
 
     def test_equivalent_red_cell_component_emits_administration(self) -> None:
-        focus = (_focus(offset_hours=-1, text="ให้ SDP 1 unit"),)
+        # LPRC, not SDP: the RBC scan's cues key on red-cell products only,
+        # so this red_cell-vs-platelet comparison uses an RBC administration.
+        focus = (_focus(offset_hours=-1, text="ให้ LPRC 1 unit"),)
         bundle = _build_minimal(component="red_cell", focus_notes=focus)
         assert any(item.source == "Administration" for item in bundle.items)
         assert bundle.administration_summary is not None
