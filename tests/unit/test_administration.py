@@ -205,6 +205,21 @@ class TestIssue117ResidualCitations:
         quote = "2/9/68 Hb=7.6 ,Hct=23.3 ,Plt= 354000, PTT=36 --> LPRC 1 unit"
         assert administration_citation_has_negative_context(line, quote) is True
 
+    # Codex #118 P1 (round 3): the ^ anchor must still fire when the chunk is
+    # rendered with the pilot "Focus note: <first line>" prefix. _citation_lines
+    # splits on \n and returns the individual arrow line ("- 2/9/68 ..."), so ^
+    # anchors to that line's start, not to the "Focus note:" prefix (which sits
+    # on the FIRST line of the multi-line chunk).
+    def test_case_68055153_arrow_guard_survives_focus_note_prefix(self) -> None:
+        source = (
+            "Focus note: D: Pt.case CLTI right foot, Post-op\r\n"
+            "- (3) 2nd-5th Rt.toe amputation (30/8/68) POD 6\r\n"
+            "- 2/9/68 Hb=7.6 ,Hct=23.3 ,Plt= 354000, PTT=36 --> LPRC 1 unit\r\n"
+            "- 3/9/68 Lab INR=1.48"
+        )
+        quote = "2/9/68 Hb=7.6 ,Hct=23.3 ,Plt= 354000, PTT=36 --> LPRC 1 unit"
+        assert administration_citation_has_negative_context(source, quote) is True
+
     # -- PRESERVE: genuine administrations must still confirm --------------
     @pytest.mark.parametrize(
         "line",
