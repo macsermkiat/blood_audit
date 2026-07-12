@@ -384,7 +384,7 @@ issue (no re-anchor) from the reserve-ahead case.
 `bba.hb_lookup.anchor.EvidenceAnchor` — frozen dataclass `(anchor_utc, reason,
 gap_hours, display)` specifying where the per-source evidence windows should be
 centred. `reason` is `"order_datetime"` for the common case (windows track the
-order) or `"transfusion_reanchor"` when an elective pre-reserved order was issued
+order) or `"issue_reanchor"` when an elective pre-reserved order was issued
 materially later than it was reserved. `gap_hours` is the issue-minus-order lag in
 hours (0.0 when not re-anchored); `display` is the issue anchor's local-time
 string for the review page (`""` when not re-anchored).

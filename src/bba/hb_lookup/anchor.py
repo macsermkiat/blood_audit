@@ -87,9 +87,10 @@ class EvidenceAnchor:
     ``anchor_utc`` is the tz-aware UTC datetime the Hb lookback, notes, CBC,
     meds and vitals windows are computed relative to. ``reason`` is
     ``"order_datetime"`` for the common case (windows track the order) or
-    ``"transfusion_reanchor"`` when an elective pre-reserved order was issued
+    ``"issue_reanchor"`` when an elective pre-reserved order was issued
     materially later than it was reserved and the windows moved onto that
-    issue datetime. ``gap_hours`` is the issue-minus-order lag in hours (0.0
+    issue datetime (the PICK/USE source event proves issue/dispense, not
+    administration). ``gap_hours`` is the issue-minus-order lag in hours (0.0
     when not re-anchored); ``display`` is the issue anchor's local-time string
     for the review page ("" when not re-anchored).
     """
@@ -111,7 +112,7 @@ def resolve_evidence_anchor(
     The order anchor wins unless an ``issue_datetime`` candidate (PICK/USE)
     lands ``threshold`` or more after the order — the reserve-ahead elective
     case. Only ``issue_datetime`` candidates re-anchor: the blood-bank
-    *visit* timestamp tracks the reservation, not the transfusion, so it must
+    *visit* timestamp tracks the reservation, not the issue event, so it must
     never move the windows. The first qualifying issue candidate wins (the
     builder orders the issue datetime ahead of the blood-bank fallback).
     """
@@ -122,7 +123,7 @@ def resolve_evidence_anchor(
         if gap >= threshold:
             return EvidenceAnchor(
                 anchor_utc=candidate.anchor_utc,
-                reason="transfusion_reanchor",
+                reason="issue_reanchor",
                 gap_hours=gap.total_seconds() / 3600.0,
                 display=candidate.display,
             )

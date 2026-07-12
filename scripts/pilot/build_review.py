@@ -51,7 +51,7 @@ _DEFAULT_ICD10 = (
 )
 ICD10_DICT_CSV = Path(os.environ.get("BBA_PILOT_ICD10_CSV", str(_DEFAULT_ICD10)))
 
-# Per-source windowing rules around the transfusion anchor.
+# Per-source windowing rules around the evidence anchor.
 WINDOW_PROC_DAYS = 7
 WINDOW_HB_DAYS = 7
 # Re-anchored reserve-ahead orders only: extend the Hb history upper bound this
@@ -735,14 +735,14 @@ def main() -> None:
             bdv.get("REQDATE"), bdv.get("REQTIME")
         ) or parse_hosxp_datetime(bdv.get("BDVSTDATE"), bdv.get("BDVSTTIME"))
         # Reserve-ahead elective orders re-window all evidence (Hb, notes, CBC,
-        # meds, procedures) onto the transfusion (USE) datetime; the displayed
+        # meds, procedures) onto the issue (PICK/USE) datetime; the displayed
         # order anchor above stays REQTIME. Mirror the pipeline's re-anchor so
         # the highlighted in-window rows match what the gate actually scored.
         # Non-reanchored cases keep window_anchor == order anchor unchanged.
         evidence_anchor_reason = (
             det.get("evidence_anchor_reason") or "order_datetime"
         ).strip()
-        reanchored = evidence_anchor_reason == "transfusion_reanchor"
+        reanchored = evidence_anchor_reason == "issue_reanchor"
         evidence_anchor_dt = parse_report_datetime(
             det.get("evidence_anchor_datetime_local")
         )
@@ -1177,18 +1177,19 @@ def main() -> None:
         upcoming_disp = fmt_upcoming_procedure(det.get("upcoming_procedure_hours"))
         # The deterministic gate resolves Hb backward, so its reason stays
         # "order_datetime" even on re-anchored orders; relabel it to match the
-        # transfusion anchor the Hb lookup datetime above actually reflects.
+        # issue anchor the Hb lookup datetime above actually reflects.
         hb_lookup_reason_disp = det.get("hb_anchor_reason") or "order_datetime"
         if reanchored and hb_lookup_reason_disp == "order_datetime":
-            hb_lookup_reason_disp = "transfusion_reanchor"
+            hb_lookup_reason_disp = "issue_reanchor"
         meta_items = [
             f"<div><b>HN:</b> <code>{esc(hn)}</code></div>",
             f"<div><b>AN:</b> <code>{esc(an)}</code></div>",
             f"<div><b>Order anchor:</b> {esc(anchor_date)} {esc(anchor_time)}</div>",
-            f"<div><b>Transfusion datetime (issued):</b> {esc(det.get('transfusion_datetime_local') or '—')}</div>",
+            f"<div><b>Dispense datetime (BDVST PICK):</b> {esc(det.get('dispense_datetime_local') or '—')}</div>",
+            f"<div><b>Use datetime (BDVSTDT USE):</b> {esc(det.get('use_datetime_local') or '—')}</div>",
             *(
                 [
-                    "<div><b><abbr title='Blood reserved this many hours before it was issued; all evidence windows (Hb, notes, CBC, meds, procedures) below are re-anchored onto the transfusion datetime instead of the reservation order anchor'>Evidence re-anchored to transfusion</abbr>:</b> "
+                    "<div><b><abbr title='Blood reserved this many hours before it was issued; all evidence windows (Hb, notes, CBC, meds, procedures) below are re-anchored onto the issue datetime instead of the reservation order anchor'>Evidence re-anchored to issue</abbr>:</b> "
                     f"{esc(det.get('evidence_anchor_datetime_local') or '—')} "
                     f"(+{esc(det.get('reanchor_gap_hours') or '—')}h after order)</div>"
                 ]
@@ -1781,10 +1782,10 @@ def main() -> None:
     head = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>KCMH RBC audit — human review</title>
+<title>KCMH RBC order appropriateness audit — human review</title>
 <style>{css}</style></head><body>
-<h1>KCMH RBC Transfusion Audit — Human Review</h1>
-<p>{n_cases} RBC transfusion orders. Deterministic: local rule-based verdict.
+<h1>KCMH RBC Order Appropriateness Audit — Human Review</h1>
+<p>{n_cases} RBC orders. Deterministic: local rule-based verdict.
 LLM: Anthropic Batch classification on structured evidence only.
 {n_mismatches} verdict mismatches flagged.</p>
 <p class='kbd-hint' id='kbd-hint'>Keyboard: <kbd>j</kbd> next · <kbd>k</kbd> prev · <kbd>e</kbd> mark reviewed · <kbd>f</kbd> filter · <kbd>E</kbd> expand all · <kbd>x</kbd> expand case <button onclick='dismissKbdHint()' style='font-size:0.7rem;padding:1px 6px;margin-left:8px'>Dismiss</button></p>
@@ -1815,7 +1816,7 @@ LLM: Anthropic Batch classification on structured evidence only.
 <details style='margin:16px 0;'><summary><b>Glossary — verdict classes and classifier codes</b></summary>
 <div class='glossary-body'>
 <dl>
-<dt>APPROPRIATE</dt><dd>Transfusion meets evidence-based indications (Hb below threshold or qualifying bypass).</dd>
+<dt>APPROPRIATE</dt><dd>Order meets evidence-based indications (Hb below threshold or qualifying bypass).</dd>
 <dt>POTENTIALLY_INAPPROPRIATE</dt><dd>Hb above threshold and no qualifying bypass was identified; warrants clinician review.</dd>
 <dt>NEEDS_REVIEW</dt><dd>Classifier could not confidently classify; manual review required (e.g. haemodilution, single borderline Hb).</dd>
 <dt>INSUFFICIENT_EVIDENCE</dt><dd>LLM could not find enough structured evidence to classify.</dd>
