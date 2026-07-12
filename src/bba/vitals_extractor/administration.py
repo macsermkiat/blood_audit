@@ -73,13 +73,15 @@ _NEGATIVE_CONTEXT_RE = re.compile(
     # completed unit it degrades to a (safe, false-negative-biased) unconfirmed
     # rather than a false confirmation. (#117 case 68046079)
     rf"|ก่อนให้เลือด"
-    # Retrospective history-summary arrow: a dated history line whose "-->"
-    # records a PAST transfusion decision ("- 2/9/68 ...PTT=36 --> LPRC 1
-    # unit"), not administration of the reserved unit. The DD/MM/YY date is
-    # anchored to the START of the line (after an optional bullet) so a date
-    # appearing mid-sentence ("anemia on 12/07/68 --> ...ให้แล้ว", a live
-    # connective) is not caught. (#117 case 68055153)
-    rf"|^[-\s*]*\d{{1,2}}/\d{{1,2}}/\d{{2,4}}[^\n]{{0,100}}?-->\s*(?:ได้\s*)?(?:{RBC_COMPONENT}|เลือด)"
+    # Retrospective lab-trend arrow: a dated history line reporting lab values
+    # that then arrows to a PAST transfusion decision ("- 2/9/68 Hb=7.6 ...
+    # PTT=36 --> LPRC 1 unit"), not administration of the reserved unit. Kept
+    # deliberately narrow to that lab-summary shape (leading DD/MM/YY date AND
+    # a lab token before the arrow) so a live dated connective that documents a
+    # current administration ("12/07/68 anemia --> LPRC 1 unit ให้แล้ว") is not
+    # caught. (#117 case 68055153)
+    rf"|^[-\s*]*\d{{1,2}}/\d{{1,2}}/\d{{2,4}}[^\n]{{0,120}}?(?:Hb|Hct|Plt|PTT|INR|WBC|CBC)"
+    rf"[^\n]{{0,80}}?-->\s*(?:ได้\s*)?(?:{RBC_COMPONENT}|เลือด)"
     rf"|\bno\s+(?:{BLOOD_COMPONENT}|blood\b|transfusion\b(?!\s+reaction))"
     r"|\bnot\s+(?:yet\s+)?(?:given|transfused|received)\b"
     r"|ปฏิเสธ|\b(?:refused|declined)\b"

@@ -276,6 +276,14 @@ class TestIssue117ResidualCitations:
         source = f"Progress: {quote}"
         assert administration_citation_has_negative_context(source, quote) is False
 
+    # Codex #118 P2 (round 2): a line-start dated arrow that is a LIVE current
+    # administration (no lab-trend values before the arrow, "ให้แล้ว" after)
+    # must still confirm; only the lab-summary shape is guarded.
+    def test_linestart_dated_current_arrow_is_not_negative_context(self) -> None:
+        quote = "12/07/68 anemia --> เลือด LPRC 1 unit ให้แล้วเสร็จสิ้น"
+        source = quote
+        assert administration_citation_has_negative_context(source, quote) is False
+
 
 class TestNonMarkers:
     @pytest.mark.parametrize(
