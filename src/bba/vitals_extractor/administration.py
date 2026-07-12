@@ -59,7 +59,9 @@ _NEGATIVE_CONTEXT_RE = re.compile(
 # A bare component+count line is ambiguous: "order LPRC 2 units" restates the
 # very order being audited and must not confirm administration (it would beg
 # the question the #109 gate exists to answer). The unit_count cue therefore
-# also requires administered wording on the same line; ให้-prefixed forms are
+# also requires administered wording in the SAME ;/,-delimited clause as the
+# component-count match (a verb bound to a different clause, e.g. "order PRC
+# 2 units; patient received Lasix", must not count); ให้-prefixed forms are
 # already covered by the gave_blood cue.
 _ADMINISTERED_VERB_RE = re.compile(
     r"(?:ให้|ได้รับ|\bgiven\b|\btransfused\b|\breceived\b)",
@@ -97,9 +99,11 @@ def scan_administration(notes: Sequence[VitalsNote]) -> AdministrationSummary:
                     match = cue_re.search(line)
                     if match is None:
                         continue
-                    if (
-                        category == "unit_count"
-                        and _ADMINISTERED_VERB_RE.search(line) is None
+                    if category == "unit_count" and (
+                        _ADMINISTERED_VERB_RE.search(
+                            _clause_around(line, match.start(), match.end())
+                        )
+                        is None
                     ):
                         continue
                     found[category] = _finding(
@@ -115,6 +119,14 @@ def scan_administration(notes: Sequence[VitalsNote]) -> AdministrationSummary:
         has_affirmative_marker=bool(findings),
         findings=findings,
     )
+
+
+def _clause_around(line: str, start: int, end: int) -> str:
+    """The ``;``/``,``-delimited clause of ``line`` containing ``[start, end)``."""
+    lo = max(line.rfind(";", 0, start), line.rfind(",", 0, start)) + 1
+    ends = [p for p in (line.find(";", end), line.find(",", end)) if p != -1]
+    hi = min(ends) if ends else len(line)
+    return line[lo:hi]
 
 
 def _finding(

@@ -137,6 +137,9 @@ class TestNonMarkers:
             "ให้ FFP 2 units",
             "ให้ SDP 1 unit",
             "platelets 6 units given",
+            # An administered verb bound to something OTHER than the
+            # component-count span must not count (Codex round 6 on PR #112).
+            "order PRC 2 units; patient received Lasix after that dose today",
         ],
     )
     def test_non_marker_does_not_count(self, text: str) -> None:
