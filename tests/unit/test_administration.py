@@ -15,6 +15,8 @@ from bba.vitals_extractor import (
     AdministrationFinding,
     AdministrationSummary,
     VitalsNote,
+    administration_citation_has_negative_context,
+    administration_citation_supports_red_cell,
     scan_administration,
 )
 
@@ -96,6 +98,33 @@ class TestNegativeContextGuard:
         assert summary.has_affirmative_marker is True
         gave = next(f for f in summary.findings if f.category == "gave_blood")
         assert "ให้เลือดแล้ว" in gave.snippet
+
+    def test_case_68026306_dispatch_citation_is_negative_context(self) -> None:
+        quote = "ดูแลประสามงานธนาคารเลือด ส่ง LPRC 4 unit ไป cath lab"
+        source = f"Nursing record: {quote}"
+
+        assert administration_citation_has_negative_context(source, quote) is True
+
+    def test_genuine_administration_citation_is_not_negative_context(self) -> None:
+        quote = "ได้รับ LPRC 1 unit at OR"
+        source = f"Nursing record: {quote} ผู้ป่วยอาการคงที่"
+
+        assert administration_citation_has_negative_context(source, quote) is False
+
+    @pytest.mark.parametrize(
+        ("line", "expected"),
+        [
+            ("ดูแลให้ได้รับ Cryo 10 unit and FFP 2 unit", False),
+            ("Blood loss in OR 400 ml", False),
+            ("ได้รับ LPRC 1 unit at OR", True),
+            ("no complication ขณะได้รับเลือด", True),
+            ("หลังให้เลือด ผู้ป่วยอาการคงที่", True),
+        ],
+    )
+    def test_red_cell_citation_requirement(self, line: str, expected: bool) -> None:
+        source = f"Nursing record: {line}"
+
+        assert administration_citation_supports_red_cell(source, line) is expected
 
     def test_transplant_does_not_trigger_word_bounded_plan_guard(self) -> None:
         summary = scan_administration(

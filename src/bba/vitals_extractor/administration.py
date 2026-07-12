@@ -45,7 +45,8 @@ _POST_TRANSFUSION_RE = re.compile(
     re.IGNORECASE,
 )
 _NEGATIVE_CONTEXT_RE = re.compile(
-    rf"(?:ไม่(?:ได้)?(?:ให้|รับ)|งดให้|จะให้|เตรียม|แผน|\bplan\b|ส่ง\S*ไป|\bG/?M\b|จอง"
+    rf"(?:ไม่(?:ได้)?(?:ให้|รับ)|งดให้|จะให้|เตรียม|แผน|\bplan\b"
+    rf"|ส่ง[^\n]{{0,80}}?ไป|\bG/?M\b|จอง"
     rf"|\bno\s+(?:{BLOOD_COMPONENT}|blood\b|transfusion\b(?!\s+reaction))"
     r"|\bnot\s+(?:yet\s+)?(?:given|transfused|received)\b"
     r"|ปฏิเสธ|\b(?:refused|declined)\b"
@@ -74,6 +75,54 @@ _CUES = (
     ("post_transfusion", _POST_TRANSFUSION_RE),
 )
 _SNIPPET_RADIUS = 60
+_RED_CELL_CITATION_RE = re.compile(
+    rf"(?:ให้เลือด|ได้รับเลือด|หลังให้เลือด|{RBC_COMPONENT})",
+    re.IGNORECASE,
+)
+
+
+def _citation_lines(source_text: str, quote: str) -> tuple[str, ...]:
+    """Return every source line containing an exact citation occurrence."""
+    if not quote:
+        return ()
+    lines: list[str] = []
+    start = 0
+    while (match_start := source_text.find(quote, start)) != -1:
+        line_start = source_text.rfind("\n", 0, match_start) + 1
+        line_end = source_text.find("\n", match_start + len(quote))
+        if line_end == -1:
+            line_end = len(source_text)
+        lines.append(source_text[line_start:line_end])
+        start = match_start + 1
+    return tuple(lines)
+
+
+def administration_citation_has_negative_context(source_text: str, quote: str) -> bool:
+    """Return whether a grounded quote occurs on a non-administration line.
+
+    Citation grounding proves that words exist in a source, not that those
+    words document administration. Reuse the scan's false-negative-biased
+    line guard so reservation, planning, and dispatch citations cannot become
+    a separate path around :func:`scan_administration`.
+    """
+    return any(
+        _NEGATIVE_CONTEXT_RE.search(line) is not None
+        for line in _citation_lines(source_text, quote)
+    )
+
+
+def administration_citation_supports_red_cell(source_text: str, quote: str) -> bool:
+    """Return whether every cited line identifies red-cell administration.
+
+    For an RBC order, FFP/cryo/platelet administration and component-free
+    blood-loss text do not confirm that the reserved red cells were given.
+    Generic Thai give/receive-blood or post-transfusion wording is accepted
+    because the audited order supplies the red-cell component context.
+    Ambiguous repeated quotes fail closed if any occurrence lacks a red-cell
+    marker.
+    """
+    lines = _citation_lines(source_text, quote)
+    return bool(lines) and all(_RED_CELL_CITATION_RE.search(line) for line in lines)
 
 
 def scan_administration(notes: Sequence[VitalsNote]) -> AdministrationSummary:

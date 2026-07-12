@@ -31,7 +31,11 @@ from bba.vitals_extractor.bounds import (
     is_rr_valid,
     is_sbp_valid,
 )
-from bba.vitals_extractor.administration import scan_administration
+from bba.vitals_extractor.administration import (
+    administration_citation_has_negative_context,
+    administration_citation_supports_red_cell,
+    scan_administration,
+)
 from bba.vitals_extractor.extractor import extract_vitals_from_text
 from bba.vitals_extractor.hemodynamic import scan_hemodynamics
 from bba.vitals_extractor.models import (
@@ -76,6 +80,8 @@ __all__ = [
     "VitalsFlag",
     "VitalsNote",
     "VitalsResult",
+    "administration_citation_has_negative_context",
+    "administration_citation_supports_red_cell",
     "extract_vitals",
     "extract_vitals_from_text",
     "is_bt_valid",
