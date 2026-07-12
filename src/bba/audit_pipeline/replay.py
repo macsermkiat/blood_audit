@@ -69,7 +69,11 @@ from bba.quote_grounder.layers import (
     nfc_normalize,
 )
 from bba.quote_grounder.models import EvidenceSource
-from bba.vitals_extractor import PeriopSummary
+from bba.vitals_extractor import (
+    PeriopSummary,
+    administration_citation_has_negative_context,
+    administration_citation_supports_red_cell,
+)
 
 
 Verifier = Callable[[BatchSubmissionResult, PipelineRowContext], bool]
@@ -533,7 +537,14 @@ def _grounded_administration_evidence(
         source = find_cited_source(evidence["source_id"], sources)
         if source is None:
             continue
-        if contiguous_match(nfc_normalize(evidence["quote"]), source.text):
+        quote = nfc_normalize(evidence["quote"])
+        if contiguous_match(
+            quote, source.text
+        ) and not administration_citation_has_negative_context(source.text, quote):
+            if context.component != "platelet" and not (
+                administration_citation_supports_red_cell(source.text, quote)
+            ):
+                continue
             grounded.append(evidence)
     return tuple(grounded)
 

@@ -1856,6 +1856,96 @@ class TestReserveAheadGate:
         assert row.final_classification == "PREOP_RESERVATION_UNCONFIRMED"
         assert row.review_reason == PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON
 
+    def test_grounded_dispatch_citation_does_not_confirm_administration(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Case 68026306: grounding dispatch text is not proof it was given."""
+        from bba import feature_flags
+
+        dispatch = "ดูแลประสามงานธนาคารเลือด ส่ง LPRC 4 unit ไป cath lab"
+        ctx = _row_context(
+            audit_id="audit-68026306-dispatch",
+            hb_value=12.9,
+            cohort_label=CohortLabel.CARDIAC_SURGERY,
+            cohort_threshold=7.5,
+            upcoming_procedure_hours=24.0,
+            evidence_text=f"Nursing record: {dispatch}",
+        )
+        monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", True)
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="NEEDS_REVIEW",
+            reasoning_en="Reservation evidence does not prove administration.",
+            extra_input={
+                "administration_evidence": [
+                    {
+                        "quote": dispatch,
+                        "source_id": "E1",
+                        "marker_type": "unit_numbers",
+                    }
+                ],
+                "administration_claimed": False,
+                "reservation_assessment": "INSUFFICIENT_EVIDENCE",
+            },
+        )
+
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+
+        assert row.final_classification == "PREOP_RESERVATION_UNCONFIRMED"
+        assert row.review_reason == PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON
+        assert row.reservation_assessment == "INSUFFICIENT_EVIDENCE"
+
+    @pytest.mark.parametrize(
+        ("quote", "marker_type"),
+        [
+            (
+                "ดูแลให้ได้รับ Cryo 10 unit iv free flow and FFP 2 unit",
+                "component_given",
+            ),
+            ("Blood loss in OR 400 ml", "intraop_transfusion"),
+        ],
+    )
+    def test_non_red_cell_citation_does_not_confirm_red_cell_administration(
+        self,
+        tmp_path: object,
+        monkeypatch: pytest.MonkeyPatch,
+        quote: str,
+        marker_type: str,
+    ) -> None:
+        """Cases 68018473/68013566: the cited line must concern red cells."""
+        from bba import feature_flags
+
+        ctx = _row_context(
+            audit_id=f"audit-non-rbc-{marker_type}",
+            hb_value=12.9,
+            cohort_label=CohortLabel.CARDIAC_SURGERY,
+            cohort_threshold=7.5,
+            upcoming_procedure_hours=24.0,
+            evidence_text=f"Nursing record: {quote}",
+        )
+        monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", True)
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="NEEDS_REVIEW",
+            reasoning_en="The citation does not document red-cell administration.",
+            extra_input={
+                "administration_evidence": [
+                    {
+                        "quote": quote,
+                        "source_id": "E1",
+                        "marker_type": marker_type,
+                    }
+                ],
+                "administration_claimed": True,
+                "reservation_assessment": "INSUFFICIENT_EVIDENCE",
+            },
+        )
+
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+
+        assert row.final_classification == "PREOP_RESERVATION_UNCONFIRMED"
+        assert row.review_reason == PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON
+
     def test_unconfirmed_replay_is_idempotent(
         self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
     ) -> None:
