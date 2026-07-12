@@ -327,6 +327,40 @@ class TestTaskModeSwitching:
         lower = prompt.lower()
         assert "override" in lower
 
+    def test_reserve_ahead_review_template_renders(self) -> None:
+        prompt = system_prompt_for(
+            task_mode="RESERVE_AHEAD_REVIEW", cohort_threshold=7.5
+        )
+        assert "Task mode: RESERVE_AHEAD_REVIEW" in prompt
+        assert "7.5 g/dL" in prompt
+
+    def test_reserve_ahead_requires_cohort_threshold(self) -> None:
+        with pytest.raises(ValidationError, match="cohort_threshold is required"):
+            PromptBuildRequest(
+                task_mode="RESERVE_AHEAD_REVIEW",
+                evidence_chunks=(_chunk(),),
+            )
+
+    def test_reserve_ahead_prompt_pins_administration_evidence_contract(
+        self,
+    ) -> None:
+        prompt = system_prompt_for(
+            task_mode="RESERVE_AHEAD_REVIEW", cohort_threshold=7.5
+        )
+        expected_items = (
+            "1. a ให้เลือด entry",
+            "2. a named blood component given",
+            "3. transfused unit numbers",
+            "4. intra-operative transfusion",
+            "5. post-transfusion vitals or a transfusion reaction check",
+        )
+        for item in expected_items:
+            assert item in prompt
+        assert "Absence of a ให้เลือด note is NOT evidence of non-transfusion" in prompt
+        assert "administration as unconfirmed" in prompt
+        assert "APPROPRIATE / INAPPROPRIATE / INSUFFICIENT_EVIDENCE" in prompt
+        assert "NEVER emit any other classification value" in prompt
+
     def test_unknown_task_mode_rejected(self) -> None:
         with pytest.raises((UnknownTaskModeError, ValueError, ValidationError)):
             system_prompt_for(

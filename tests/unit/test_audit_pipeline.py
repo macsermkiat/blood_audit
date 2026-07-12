@@ -69,6 +69,9 @@ from bba.audit_pipeline.replay import (
     PERIOP_CONTRADICTION_REVIEW_REASON,
     PERIOP_GUARDRAIL_MIN_EBL_ML,
     PERIOP_OVERCLEAR_WINDOW_HOURS,
+    _administration_claimed_from_result,
+    _administration_evidence_from_result,
+    _reservation_assessment_from_result,
     llm_overclear_suspect,
     periop_contradiction,
     split_leaked_summaries,
@@ -345,6 +348,7 @@ def _row_context(
     evidence_text: str = "Hb 7.5 with symptomatic chest pain",
     periop_summary: PeriopSummary | None = None,
     procedure_proximity_hours: float | None = None,
+    upcoming_procedure_hours: float | None = None,
     sbp: float = 110.0,
     hr: float = 85.0,
 ) -> PipelineRowContext:
@@ -440,6 +444,7 @@ def _row_context(
         vitals_result=vitals,
         cohort_assignment=cohort,
         procedure_proximity_hours=procedure_proximity_hours,
+        upcoming_procedure_hours=upcoming_procedure_hours,
         crystalloid_liters_prior_4h=0.0,
         hn_hash=f"hn_hash_{audit_id}",
         an_hash=f"an_hash_{audit_id}",
@@ -1534,6 +1539,7 @@ def _periop_llm_response(
     reasoning_en: str = "model rationale",
     reasoning_th: str = "th",
     omit_input_keys: tuple[str, ...] = (),
+    extra_input: dict[str, object] | None = None,
 ) -> RawBatchResponse:
     """One grounded LLM result carrying ``classification`` for ``audit_id``.
 
@@ -1549,6 +1555,7 @@ def _periop_llm_response(
         "negative_evidence": negative_evidence or [],
         "reasoning_summary_en": reasoning_en,
         "reasoning_summary_th": reasoning_th,
+        **(extra_input or {}),
     }
     input_payload = {k: v for k, v in input_payload.items() if k not in omit_input_keys}
     return RawBatchResponse(
@@ -1604,6 +1611,110 @@ def _apply_single_row(
     rows = audit_store.read_audit_results(run_id="run-periop")
     assert len(rows) == 1
     return rows[0]
+
+
+class TestReserveAheadInterimSemantics:
+    def test_flag_off_case_68026306_replays_with_existing_b1_bytes(
+        self, tmp_path: object
+    ) -> None:
+        ctx = _row_context(
+            audit_id="audit-68026306-flag-off",
+            hb_value=12.9,
+            cohort_label=CohortLabel.CARDIAC_SURGERY,
+            cohort_threshold=7.5,
+            upcoming_procedure_hours=24.0,
+            evidence_text="Crossmatch 4 LPRC for upcoming TAVI",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            reasoning_en="Reservation is appropriate for planned TAVI.",
+        )
+
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+
+        assert row.rule_classification == "NEEDS_REVIEW"
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+        assert "reservation_assessment" not in row.model_dump_json()
+
+    def test_flag_on_case_68026306_exempts_b1_and_persists_assessment(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from bba import feature_flags
+        from bba.audit_pipeline.replay import _classify_from_context
+
+        ctx = _row_context(
+            audit_id="audit-68026306-flag-on",
+            hb_value=12.9,
+            cohort_label=CohortLabel.CARDIAC_SURGERY,
+            cohort_threshold=7.5,
+            upcoming_procedure_hours=24.0,
+            evidence_text="Crossmatch 4 LPRC for upcoming TAVI",
+        )
+        classifier_result = _classify_from_context(ctx)
+        assert classifier_result.rationale == "preop_defer_llm"
+        monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", True)
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            reasoning_en="Reservation is appropriate for planned TAVI.",
+            extra_input={
+                "administration_evidence": [],
+                "administration_claimed": False,
+                "reservation_assessment": "APPROPRIATE",
+            },
+        )
+
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+
+        assert row.rule_classification == "NEEDS_REVIEW"
+        assert row.final_classification == "APPROPRIATE"
+        assert row.review_reason is None
+        assert row.reservation_assessment == "APPROPRIATE"
+
+    def test_administration_fields_extract_from_well_formed_payload(self) -> None:
+        response = _periop_llm_response(
+            audit_id="audit-admin-extract",
+            classification="APPROPRIATE",
+            extra_input={
+                "administration_evidence": [
+                    {
+                        "quote": "ให้เลือด LPRC unit A123",
+                        "source_id": "E2",
+                        "marker_type": "gave_blood",
+                    }
+                ],
+                "administration_claimed": True,
+                "reservation_assessment": "APPROPRIATE",
+            },
+        )
+        result = response.results[0]
+
+        assert _administration_evidence_from_result(result) == (
+            {
+                "quote": "ให้เลือด LPRC unit A123",
+                "source_id": "E2",
+                "marker_type": "gave_blood",
+            },
+        )
+        assert _administration_claimed_from_result(result) is True
+        assert _reservation_assessment_from_result(result) == "APPROPRIATE"
+
+    @pytest.mark.parametrize(
+        "administration_evidence",
+        [None, "not-a-list", ["not-an-object"], [{"quote": "missing fields"}]],
+    )
+    def test_malformed_administration_evidence_fails_closed(
+        self, administration_evidence: object
+    ) -> None:
+        response = _periop_llm_response(
+            audit_id="audit-admin-malformed",
+            classification="APPROPRIATE",
+            extra_input={"administration_evidence": administration_evidence},
+        )
+
+        assert _administration_evidence_from_result(response.results[0]) == ()
 
 
 class TestPeriopContradictionPredicate:

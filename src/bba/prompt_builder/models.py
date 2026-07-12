@@ -50,7 +50,12 @@ from pydantic import (
 # =============================================================================
 
 
-TaskMode = Literal["HB_7_10_REVIEW", "HB_GT_10_OVERRIDE", "PLATELET_REVIEW"]
+TaskMode = Literal[
+    "HB_7_10_REVIEW",
+    "HB_GT_10_OVERRIDE",
+    "RESERVE_AHEAD_REVIEW",
+    "PLATELET_REVIEW",
+]
 """The LLM-eligible audit branches.
 
 Mirrors the deterministic-engine outputs that route into the LLM stage
@@ -61,7 +66,12 @@ response contract; Stage C2 pipeline wiring).
 
 
 TASK_MODES: frozenset[str] = frozenset(
-    {"HB_7_10_REVIEW", "HB_GT_10_OVERRIDE", "PLATELET_REVIEW"}
+    {
+        "HB_7_10_REVIEW",
+        "HB_GT_10_OVERRIDE",
+        "RESERVE_AHEAD_REVIEW",
+        "PLATELET_REVIEW",
+    }
 )
 """Runtime-introspectable copy of :data:`TaskMode` for defensive checks
 outside Pydantic's literal validation (e.g. the
@@ -246,8 +256,10 @@ class FewShotExample(BaseModel):
     assistant_output: str = Field(min_length=1)
 
 
-_RBC_TASK_MODES: frozenset[str] = frozenset({"HB_7_10_REVIEW", "HB_GT_10_OVERRIDE"})
-"""The two RBC audit branches that require a ``cohort_threshold``."""
+_RBC_TASK_MODES: frozenset[str] = frozenset(
+    {"HB_7_10_REVIEW", "HB_GT_10_OVERRIDE", "RESERVE_AHEAD_REVIEW"}
+)
+"""The RBC audit branches that require a ``cohort_threshold``."""
 
 
 class PromptBuildRequest(BaseModel):

@@ -1609,7 +1609,12 @@ def main() -> None:
             if ctx.cohort_assignment.threshold is not None
             else 7.0
         )
-        task_mode = rbc_task_mode(ctx.hb_result.value_g_dl)
+        cres = classifier_results[ctx.order.audit_id]
+        reserve_ahead = (
+            feature_flags.RESERVE_AHEAD_ROUTER_ENABLED
+            and cres.rationale == "preop_defer_llm"
+        )
+        task_mode = rbc_task_mode(ctx.hb_result.value_g_dl, reserve_ahead=reserve_ahead)
         prompt = build_prompt(
             PromptBuildRequest(
                 task_mode=task_mode,

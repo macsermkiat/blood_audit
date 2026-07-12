@@ -1,6 +1,6 @@
 """System-prompt template + task-mode switch.
 
-Three task modes:
+Four task modes:
 
 * ``HB_7_10_REVIEW`` — gray-zone RBC case. The LLM reads the ±24-h note
   window for Tier-1 indications (active bleeding, hemodynamic instability,
@@ -9,6 +9,10 @@ Three task modes:
 * ``HB_GT_10_OVERRIDE`` — Hb >= 10 RBC case (the engine's ``hb_ge_10``
   boundary; dispatch is inclusive at exactly 10.0). The LLM looks for
   Tier-1 override conditions. Requires ``cohort_threshold``.
+* ``RESERVE_AHEAD_REVIEW`` — pre-operative crossmatch reservation. The LLM
+  judges reservation appropriateness and reports affirmative administration
+  evidence without inferring administration from silence. Requires
+  ``cohort_threshold``.
 * ``PLATELET_REVIEW`` — platelet transfusion audit against the Chula DRAFT
   policy (AABB/ICTMG 2025). Does NOT use ``cohort_threshold``; call
   :func:`platelet_system_prompt` directly (or :func:`system_prompt_for`
@@ -36,7 +40,7 @@ from bba.prompt_builder.models import (
 
 # Private set for the RBC path (modes that require cohort_threshold).
 _RBC_TASK_MODES: Final[frozenset[str]] = frozenset(
-    {"HB_7_10_REVIEW", "HB_GT_10_OVERRIDE"}
+    {"HB_7_10_REVIEW", "HB_GT_10_OVERRIDE", "RESERVE_AHEAD_REVIEW"}
 )
 
 
@@ -189,9 +193,37 @@ _HB_GT_10_OVERRIDE_TEMPLATE: Final[str] = (
 )
 
 
+_RESERVE_AHEAD_REVIEW_TEMPLATE: Final[str] = (
+    _BASE_PREAMBLE
+    + "\n\nTask mode: RESERVE_AHEAD_REVIEW (pre-operative reservation review).\n\n"
+    "This order is a PRE-OPERATIVE CROSSMATCH RESERVATION for an upcoming "
+    "procedure, dispensed ahead of time — NOT an established completed "
+    "transfusion. The hospital's data cannot confirm administration because "
+    "status 5 is never recorded. Cohort threshold for this patient: "
+    "{cohort_threshold} g/dL (deterministic input — do not re-derive).\n\n"
+    "RESERVATION ASSESSMENT. Decide whether RESERVING blood was appropriate "
+    "for the planned procedure given the Hb relative to the "
+    "{cohort_threshold} g/dL cohort threshold, the procedure, and the patient "
+    "state. Return exactly one of APPROPRIATE / INAPPROPRIATE / "
+    "INSUFFICIENT_EVIDENCE. This classification refers to the reservation "
+    "decision. NEVER emit any other classification value.\n\n"
+    "ADMINISTRATION EVIDENCE. Cite ONLY affirmative documented administration "
+    "evidence, using verbatim quotes in the administration_evidence tool field:\n"
+    "  1. a ให้เลือด entry;\n"
+    "  2. a named blood component given;\n"
+    "  3. transfused unit numbers;\n"
+    "  4. intra-operative transfusion;\n"
+    "  5. post-transfusion vitals or a transfusion reaction check.\n\n"
+    "Absence of a ให้เลือด note is NOT evidence of non-transfusion — when you "
+    "find no affirmative evidence, report administration as unconfirmed rather "
+    "than inferring that blood was or was not given."
+)
+
+
 _TEMPLATES: Final[dict[str, str]] = {
     "HB_7_10_REVIEW": _HB_7_10_REVIEW_TEMPLATE,
     "HB_GT_10_OVERRIDE": _HB_GT_10_OVERRIDE_TEMPLATE,
+    "RESERVE_AHEAD_REVIEW": _RESERVE_AHEAD_REVIEW_TEMPLATE,
 }
 
 
