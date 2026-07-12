@@ -670,6 +670,21 @@ class TestMelenaDoesNotQualify:
     @pytest.mark.parametrize(
         "quote",
         [
+            "denies hematemesis but melena 500 mL",
+            "ไม่มีอาเจียนเป็นเลือด แต่ถ่ายดำ 500 ml",
+        ],
+    )
+    def test_contrastive_melena_stays_disqualified(self, quote: str) -> None:
+        # Codex PR #103 round 3: the denial binds up to the contrastive
+        # connector — what follows is documented PRESENT melena, so its
+        # stool figure must not reopen the >300 mL path.
+        assert not qualified_bleeding_exempt(
+            [_active_bleed(quote=quote, confidence=0.9)]
+        )
+
+    @pytest.mark.parametrize(
+        "quote",
+        [
             "melena not controlled 500 mL",
             "melena not resolved 500 mL",
             "ถ่ายดำไม่หยุด 500 ml",

@@ -245,16 +245,22 @@ _MARKER_CONTEXT_WINDOW_CHARS = 40
 # widen the life-threatening-marker exemption ("uncontrolled melena"
 # auto-clearing), and prose auto-clear surface is a committee decision.
 # A false hit here only withholds the hemodynamic floor (assert stands).
-_BLEEDING_NEGATION_SCREEN_TERMS: tuple[str, ...] = _BLEEDING_CONTEXT_TERMS + (
-    "melena",
-    "hematemesis",
-    "haematemesis",
-    "hematochezia",
-    "haematochezia",
-    "hemoptysis",
-    "haemoptysis",
-    "epistaxis",
-    "ถ่ายดำ",  # melena ("black stool")
+# Includes every _MELENA_TERMS synonym (Codex PR #103 round 3): the floor's
+# melena arm vetoes on this screen, so a synonym it cannot see ("tarry
+# stool" affirmed next to a denied generic bleed term) would wrongly veto a
+# genuine hemorrhagic-shock accompaniment.
+_BLEEDING_NEGATION_SCREEN_TERMS: tuple[str, ...] = (
+    _BLEEDING_CONTEXT_TERMS
+    + _MELENA_TERMS
+    + (
+        "hematemesis",
+        "haematemesis",
+        "hematochezia",
+        "haematochezia",
+        "hemoptysis",
+        "haemoptysis",
+        "epistaxis",
+    )
 )
 
 # Clause boundaries for the accompaniment screen ONLY (Codex PR #99 round
@@ -276,6 +282,18 @@ _DENIAL_LIST_WINDOW_CHARS = 60
 # trailing negator void it ("melena noted but now resolved" is a bleed
 # documented as over), so the post side keeps flowing across "but".
 _DENIAL_PRE_BOUNDARIES: tuple[str, ...] = _DENIAL_LIST_BOUNDARIES + (
+    " but ",
+    "however",
+    "แต่",  # Thai "but"
+)
+
+# Pre boundaries for the melena volume disqualifier (Codex PR #103 round 3):
+# the marker boundaries (comma kept — a denial list only withholds the
+# exemption, fail-closed) PLUS the contrastive connectors, because in
+# "denies hematemesis but melena 500 mL" the denial binds up to the "but" —
+# what follows is documented PRESENT melena whose stool figure must not
+# reopen the >300 mL path.
+_MELENA_PRE_BOUNDARIES: tuple[str, ...] = _MARKER_CLAUSE_BOUNDARIES + (
     " but ",
     "however",
     "แต่",  # Thai "but"
@@ -711,7 +729,10 @@ def quote_indicates_melena(text: str) -> bool:
     distributing across a comma list ("no hematemesis, melena") still reads
     as melena PRESENT here, which only withholds the volume exemption —
     fail-closed for the auto-clear surface, same direction as the marker
-    screens. Post-side still-active double negatives ("melena not
+    screens. Contrastive connectors cut the pre-side lookback (round 3):
+    in "denies hematemesis but melena 500 mL" the denial binds up to the
+    "but", so the melena is PRESENT and its stool figure stays out of the
+    volume path. Post-side still-active double negatives ("melena not
     controlled", Codex PR #103 round 2) are rescued via
     :data:`_POST_STILL_ACTIVE_RE`: the melena is ONGOING, so the volume
     disqualifier must stay engaged — here the rescue NARROWS the auto-clear
@@ -734,7 +755,7 @@ def quote_indicates_melena(text: str) -> bool:
                 lowered,
                 idx,
                 end,
-                _MARKER_CLAUSE_BOUNDARIES,
+                _MELENA_PRE_BOUNDARIES,
                 _MARKER_POST_CLAUSE_BOUNDARIES,
                 post_rescue=_POST_STILL_ACTIVE_RE,
             ):

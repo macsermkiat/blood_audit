@@ -2327,6 +2327,36 @@ class TestLlmOverclearGuardrail:
         assert row.final_classification == "INAPPROPRIATE"
         assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
 
+    def test_affirmed_melena_synonym_with_denied_bleed_still_floors(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #103 round 3: the floor's quote_negates_bleeding veto
+        # must recognize every _MELENA_TERMS synonym. An affirmed
+        # coffee-ground emesis next to a denied GENERIC bleed term is a
+        # documented hemorrhagic-shock picture — the denial of the other
+        # term must not veto the melena accompaniment.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-melena-syn",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="coffee-ground emesis x2, no gross bleeding; BP 82/50",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "coffee-ground emesis x2, no gross bleeding; BP 82/50",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+
     def test_still_active_melena_instability_citation_floors(
         self, tmp_path: object
     ) -> None:
