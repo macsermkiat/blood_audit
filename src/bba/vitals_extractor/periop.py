@@ -32,6 +32,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 
+from bba.vitals_extractor.components import BLOOD_COMPONENT
 from bba.vitals_extractor.models import (
     PeriopFinding,
     PeriopSummary,
@@ -65,10 +66,9 @@ _EBL_RE = re.compile(
 # not misread as a transfusion. The marker requirement excludes the ward
 # transfusion order being audited (no marker) from begging the question.
 _INTRAOP_MARKER = r"(?:intra[\s-]?op(?:erative)?|ในห้องผ่าตัด|ระหว่างผ่าตัด)"
-_BLOOD_COMPONENT = r"(?:LPRC|PRBC|PRC|FFP|platelets?|SDP|cryo(?:precipitate)?)"
 _INTRAOP_TX_RE = re.compile(
-    rf"{_INTRAOP_MARKER}[^\n]{{0,40}}?{_BLOOD_COMPONENT}"
-    rf"|{_BLOOD_COMPONENT}[^\n]{{0,40}}?{_INTRAOP_MARKER}",
+    rf"{_INTRAOP_MARKER}[^\n]{{0,40}}?{BLOOD_COMPONENT}"
+    rf"|{BLOOD_COMPONENT}[^\n]{{0,40}}?{_INTRAOP_MARKER}",
     re.IGNORECASE,
 )
 

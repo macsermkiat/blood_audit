@@ -31,9 +31,12 @@ from bba.vitals_extractor.bounds import (
     is_rr_valid,
     is_sbp_valid,
 )
+from bba.vitals_extractor.administration import scan_administration
 from bba.vitals_extractor.extractor import extract_vitals_from_text
 from bba.vitals_extractor.hemodynamic import scan_hemodynamics
 from bba.vitals_extractor.models import (
+    AdministrationFinding,
+    AdministrationSummary,
     HemodynamicSummary,
     LLMFallback,
     PeriopFinding,
@@ -49,6 +52,8 @@ from bba.vitals_extractor.periop import scan_periop
 from bba.vitals_extractor.pipeline import extract_vitals
 
 __all__ = [
+    "AdministrationFinding",
+    "AdministrationSummary",
     "BT_MAX",
     "BT_MIN",
     "DBP_MAX",
@@ -79,6 +84,7 @@ __all__ = [
     "is_map_valid",
     "is_rr_valid",
     "is_sbp_valid",
+    "scan_administration",
     "scan_hemodynamics",
     "scan_periop",
 ]

@@ -624,12 +624,40 @@ def _render_periop(payload: dict[str, Any]) -> str:
     return line
 
 
+def _render_administration(payload: dict[str, Any]) -> str:
+    """Render affirmative administration facts without appropriateness wording.
+
+    The high-salience line exists so the LLM cannot skim past documented
+    administration facts. It confirms only what the snippets affirm and never
+    represents absence as non-administration.
+    """
+    if not payload.get("has_affirmative_marker"):
+        return ""
+    line = "ADMINISTRATION EVIDENCE: documented=YES"
+    quotes: list[str] = []
+    for finding in payload.get("findings") or ():
+        snippet = (finding.get("snippet") or "").strip()
+        if not snippet:
+            continue
+        prov_bits = [str(finding.get("source") or "")]
+        lag = finding.get("lag_min")
+        if lag is not None:
+            prov_bits.append(_fmt_lag(int(lag)))
+        prov = ", ".join(bit for bit in prov_bits if bit)
+        quotes.append(f'"{snippet}"' + (f" ({prov})" if prov else ""))
+    if quotes:
+        line += " | evidence: " + "; ".join(quotes)
+    return line
+
+
 def _render_payload(source: str, payload: dict[str, Any]) -> str:
     """Render a structured EvidenceItem payload as one line for the LLM."""
     if source == "Hemodynamic":
         return _render_hemodynamic(payload)
     if source == "Periop":
         return _render_periop(payload)
+    if source == "Administration":
+        return _render_administration(payload)
     if source == "IPDADMPROGRESS":
         sections = payload.get("sections") or ()
         rendered = "; ".join(
@@ -1471,6 +1499,7 @@ def main() -> None:
                 evidence_bundle_hash=bundle.bundle_hash,
                 evidence_chunks=tuple(chunks),
                 periop_summary=bundle.periop_summary,
+                administration_summary=bundle.administration_summary,
                 enable_missing_hb_positive_evidence=ENABLE_MISSING_HB_POSITIVE_EVIDENCE,
             )
         )
