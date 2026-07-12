@@ -129,7 +129,8 @@ REPORT_FIELDNAMES = [
     "upcoming_procedure_hours",
     "crystalloid_liters_prior_4h",
     "anc_value",
-    "transfusion_datetime_local",
+    "dispense_datetime_local",
+    "use_datetime_local",
     "returned_blood_datetime_local",
     "classification",
     "rationale",
@@ -528,11 +529,12 @@ def main() -> None:
     bdvst_by_reqno = {r["REQNO"]: r for r in bdvst}
 
     products_by_reqno: dict[str, list[str]] = {}
-    # Best available issue/collection display per REQNO. Prefer BDVST
-    # PICKDATE/PICKTIME when exported, then BDVSTDT USEDATE/USETIME, then a
-    # date-only USEDATE marker so the review page does not hide date evidence.
+    # Separate dispense and use displays per REQNO. Dispense comes from the
+    # parent BDVST PICKDATE/PICKTIME; use comes from the earliest full BDVSTDT
+    # USEDATE/USETIME, with a date-only marker when no full datetime exists.
+    dispense_dt_by_reqno: dict[str, str] = {}
     use_dt_by_reqno: dict[str, str] = {}
-    exact_issue_anchor_by_reqno: dict[str, datetime] = {}
+    exact_use_dt_by_reqno: dict[str, datetime] = {}
     for r in bdvstdt:
         reqno = r["REQNO"]
         products_by_reqno.setdefault(reqno, []).append((r.get("BDTYPE") or "").strip())
@@ -540,20 +542,12 @@ def main() -> None:
         parent = bdvst_by_reqno.get(reqno, {})
         pick_date = (parent.get("PICKDATE") or "").strip().split(" ")[0]
         pick_time_raw = (parent.get("PICKTIME") or "").strip()
-        pick_dt = (
-            _combine(_parse_hosxp_date(pick_date), _parse_time(pick_time_raw))
-            if pick_date and pick_time_raw
-            else None
-        )
-        if pick_dt is not None:
-            candidate = _fmt_local_datetime(pick_date, pick_time_raw)
-            if (
-                reqno not in exact_issue_anchor_by_reqno
-                or pick_dt < exact_issue_anchor_by_reqno[reqno]
-            ):
-                exact_issue_anchor_by_reqno[reqno] = pick_dt
-                use_dt_by_reqno[reqno] = candidate
-            continue
+        if reqno not in dispense_dt_by_reqno:
+            dispense_dt_by_reqno[reqno] = (
+                _fmt_local_datetime(pick_date, pick_time_raw)
+                if pick_date and pick_time_raw
+                else ""
+            )
 
         use_date = (r.get("USEDATE") or "").strip().split(" ")[0]
         use_time_raw = (r.get("USETIME") or "").strip()
@@ -562,12 +556,16 @@ def main() -> None:
             candidate = f"{use_date} {use_time}"
             use_dt = _combine(_parse_hosxp_date(use_date), _parse_time(use_time_raw))
             if use_dt is not None and (
-                reqno not in exact_issue_anchor_by_reqno
-                or use_dt < exact_issue_anchor_by_reqno[reqno]
+                reqno not in exact_use_dt_by_reqno
+                or use_dt < exact_use_dt_by_reqno[reqno]
             ):
-                exact_issue_anchor_by_reqno[reqno] = use_dt
+                exact_use_dt_by_reqno[reqno] = use_dt
                 use_dt_by_reqno[reqno] = candidate
-        elif use_date and reqno not in use_dt_by_reqno:
+        if (
+            use_date
+            and reqno not in exact_use_dt_by_reqno
+            and reqno not in use_dt_by_reqno
+        ):
             use_dt_by_reqno[reqno] = f"{use_date} (time missing)"
 
     diag_by_an: dict[str, list[str]] = {}
@@ -801,7 +799,7 @@ def main() -> None:
                 "evidence_anchor_datetime_local": evidence_anchor.display,
                 "reanchor_gap_hours": (
                     f"{evidence_anchor.gap_hours:.1f}"
-                    if evidence_anchor.reason == "transfusion_reanchor"
+                    if evidence_anchor.reason == "issue_reanchor"
                     else ""
                 ),
                 "products_ordered": "|".join(order.products_ordered),
@@ -821,7 +819,8 @@ def main() -> None:
                 "upcoming_procedure_hours": upcoming_h,
                 "crystalloid_liters_prior_4h": crystalloid_liters,
                 "anc_value": anc,
-                "transfusion_datetime_local": use_dt_by_reqno.get(order.reqno, ""),
+                "dispense_datetime_local": dispense_dt_by_reqno.get(order.reqno, ""),
+                "use_datetime_local": use_dt_by_reqno.get(order.reqno, ""),
                 "returned_blood_datetime_local": _earliest_return_datetime_local(
                     trans_rows
                 ),

@@ -1063,7 +1063,7 @@ def main() -> None:
             candidates=candidates_by_reqno.get(order.reqno, []),
         )
         ev_anchor = evidence_anchor.anchor_utc
-        reanchored = evidence_anchor.reason == "transfusion_reanchor"
+        reanchored = evidence_anchor.reason == "issue_reanchor"
         anchor_by_id[order.audit_id] = evidence_anchor
         # Display noun for hours-before-anchor flags. For re-anchored orders the
         # windows hang off the transfusion datetime, so "before order" would be

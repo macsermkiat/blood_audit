@@ -42,7 +42,7 @@ class TestReanchorsOnLateIssue:
             display="2025-01-20 08:00",
         )
         ev = resolve_evidence_anchor(order_datetime=ORDER, candidates=[issue])
-        assert ev.reason == "transfusion_reanchor"
+        assert ev.reason == "issue_reanchor"
         assert ev.anchor_utc == issue.anchor_utc
         assert ev.gap_hours == 132.0
         assert ev.display == "2025-01-20 08:00"
@@ -50,7 +50,7 @@ class TestReanchorsOnLateIssue:
     def test_exactly_threshold_reanchors(self) -> None:
         issue = _candidate(delta=timedelta(hours=24), reason="issue_datetime")
         ev = resolve_evidence_anchor(order_datetime=ORDER, candidates=[issue])
-        assert ev.reason == "transfusion_reanchor"
+        assert ev.reason == "issue_reanchor"
         assert ev.gap_hours == 24.0
 
 
@@ -82,11 +82,11 @@ class TestKeepsOrderAnchor:
 
 
 class TestOnlyIssueDatetimeReanchors:
-    """The blood-bank visit tracks the reservation, never the transfusion."""
+    """The blood-bank visit tracks the reservation, never the issue event."""
 
     def test_blood_bank_fallback_does_not_reanchor(self) -> None:
         # Even a far-future blood-bank visit timestamp must not re-anchor:
-        # only PICK/USE (issue_datetime) marks the transfusion event.
+        # only PICK/USE (issue_datetime) marks the issue event.
         bank = _candidate(delta=timedelta(days=5), reason="blood_bank_visit_fallback")
         ev = resolve_evidence_anchor(order_datetime=ORDER, candidates=[bank])
         assert ev.reason == "order_datetime"
@@ -100,7 +100,7 @@ class TestOnlyIssueDatetimeReanchors:
             delta=timedelta(days=6), reason="blood_bank_visit_fallback", display="bank"
         )
         ev = resolve_evidence_anchor(order_datetime=ORDER, candidates=[issue, bank])
-        assert ev.reason == "transfusion_reanchor"
+        assert ev.reason == "issue_reanchor"
         assert ev.display == "issue"
 
 
