@@ -37,7 +37,7 @@ class TestAffirmativeMarkers:
             ("ให้เลือดแล้ว", "gave_blood", "ให้เลือด"),
             ("ให้ LPRC 2 unit", "gave_blood", "ให้ LPRC"),
             ("PRC 2 units transfused", "unit_count", "PRC 2 units"),
-            ("2 ยูนิต LPRC", "unit_count", "2 ยูนิต LPRC"),
+            ("ได้รับ 2 ยูนิต LPRC", "unit_count", "2 ยูนิต LPRC"),
             ("post-transfusion no reaction", "post_transfusion", "post-transfusion"),
             ("หลังให้เลือด อาการคงที่", "post_transfusion", "หลังให้เลือด"),
             ("transfusion reaction absent", "post_transfusion", "transfusion reaction"),
@@ -66,6 +66,19 @@ class TestNegativeContextGuard:
             "ส่ง LPRC ไป cath lab",
             "G/M LPRC 2 unit",
             "จอง LPRC 2 u",
+            "ไม่ได้ให้เลือด",
+            "ไม่ให้เลือด",
+            "ยังไม่ได้ให้ LPRC",
+            "งดให้เลือด",
+            "no PRC 2 units transfused",
+            "LPRC not given",
+            "no history of transfusion reaction",
+            "ประวัติ transfusion reaction",
+            "pre-transfusion check completed",
+            "ไม่ได้รับ LPRC 2 units",
+            "LPRC 2 units not received",
+            "ปฏิเสธการให้เลือด",
+            "patient refused PRC 2 units",
         ],
     )
     def test_guarded_line_does_not_count(self, text: str) -> None:
@@ -91,6 +104,20 @@ class TestNegativeContextGuard:
         assert summary.has_affirmative_marker is True
         assert any(f.category == "gave_blood" for f in summary.findings)
 
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "post transfusion no fever",
+            "no transfusion reaction",
+        ],
+    )
+    def test_post_transfusion_reaction_checks_are_not_suppressed(
+        self, text: str
+    ) -> None:
+        summary = scan_administration([_note("IPDNRFOCUSDT", 5, text)])
+        assert summary.has_affirmative_marker is True
+        assert any(f.category == "post_transfusion" for f in summary.findings)
+
 
 class TestNonMarkers:
     @pytest.mark.parametrize(
@@ -100,6 +127,11 @@ class TestNonMarkers:
             "intra-op blood loss 1500 ml",
             "crossmatch for OR",
             "เลือด 2 unit",
+            # A bare or order-restating component+count is the audited order
+            # itself, not administration (Codex round 2 on PR #112).
+            "LPRC 2 units",
+            "order LPRC 2 units",
+            "แพทย์ order PRC 2 units",
         ],
     )
     def test_non_marker_does_not_count(self, text: str) -> None:

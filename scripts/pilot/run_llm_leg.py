@@ -1036,6 +1036,7 @@ def main() -> None:
                         an_hash=an_hash,
                         products=order.products_ordered,
                     ),
+                    component="platelet",
                     diagnoses=plt_diagnoses,
                     progress_notes=plt_progress_for_bundle,
                     focus_notes=plt_focus_for_bundle,

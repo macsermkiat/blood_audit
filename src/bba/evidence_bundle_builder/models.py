@@ -367,6 +367,9 @@ class EvidenceInputs(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     anchor: OrderAnchor
+    # Administration evidence exists solely for the RBC reserve-ahead gate
+    # (#109). The red-cell default preserves every existing RBC caller.
+    component: Literal["red_cell", "platelet"] = "red_cell"
     diagnoses: tuple[DiagnosisRecord, ...] = ()
     progress_notes: tuple[ProgressNote, ...] = ()
     focus_notes: tuple[FocusNote, ...] = ()

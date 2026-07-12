@@ -6,10 +6,11 @@ is NEVER evidence of non-transfusion. An empty result therefore means that
 administration is unconfirmed, not that blood was not administered.
 
 Precision is deliberately favoured over recall. A cue on a newline-delimited
-line carrying planning, preparation, reservation, or transport language is
-discarded by a strict negative-context guard. This bias toward false negatives
-is safe by design because a missed marker remains merely unconfirmed, whereas a
-false affirmative marker could incorrectly assert that administration occurred.
+line carrying negation, withholding, planning, preparation, reservation, or
+transport language is discarded by a strict negative-context guard. This bias
+toward false negatives is safe by design because a missed marker remains merely
+unconfirmed, whereas a false affirmative marker could incorrectly assert that
+administration occurred.
 """
 
 from __future__ import annotations
@@ -39,7 +40,24 @@ _POST_TRANSFUSION_RE = re.compile(
     re.IGNORECASE,
 )
 _NEGATIVE_CONTEXT_RE = re.compile(
-    r"(?:จะให้|เตรียม|แผน|\bplan\b|ส่ง\S*ไป|\bG/?M\b|จอง)",
+    rf"(?:ไม่(?:ได้)?(?:ให้|รับ)|งดให้|จะให้|เตรียม|แผน|\bplan\b|ส่ง\S*ไป|\bG/?M\b|จอง"
+    rf"|\bno\s+(?:{BLOOD_COMPONENT}|blood\b|transfusion\b(?!\s+reaction))"
+    r"|\bnot\s+(?:given|transfused|received)\b"
+    r"|ปฏิเสธ|\b(?:refused|declined)\b"
+    # History screens and pre-transfusion checks mention reactions without
+    # documenting administration (Codex round 3 on PR #112). A bare
+    # post-transfusion "no transfusion reaction" line remains affirmative.
+    r"|\bhistory\b|ประวัติ|\bpre[\s-]?transfusion\b)",
+    re.IGNORECASE,
+)
+
+# A bare component+count line is ambiguous: "order LPRC 2 units" restates the
+# very order being audited and must not confirm administration (it would beg
+# the question the #109 gate exists to answer). The unit_count cue therefore
+# also requires administered wording on the same line; ให้-prefixed forms are
+# already covered by the gave_blood cue.
+_ADMINISTERED_VERB_RE = re.compile(
+    r"(?:ให้|ได้รับ|\bgiven\b|\btransfused\b|\breceived\b)",
     re.IGNORECASE,
 )
 
@@ -72,13 +90,19 @@ def scan_administration(notes: Sequence[VitalsNote]) -> AdministrationSummary:
                     if category in found:
                         continue
                     match = cue_re.search(line)
-                    if match is not None:
-                        found[category] = _finding(
-                            category,
-                            note,
-                            line_start + match.start(),
-                            line_start + match.end(),
-                        )
+                    if match is None:
+                        continue
+                    if (
+                        category == "unit_count"
+                        and _ADMINISTERED_VERB_RE.search(line) is None
+                    ):
+                        continue
+                    found[category] = _finding(
+                        category,
+                        note,
+                        line_start + match.start(),
+                        line_start + match.end(),
+                    )
             line_start += len(line) + 1
 
     findings = tuple(found[c] for c, _ in _CUES if c in found)

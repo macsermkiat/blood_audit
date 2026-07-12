@@ -780,7 +780,7 @@ def _assign_ids(
     *,
     hemo_summary: HemodynamicSummary,
     periop_summary: PeriopSummary,
-    administration_summary: AdministrationSummary,
+    administration_summary: AdministrationSummary | None,
     diagnoses: Sequence[DiagnosisRecord],
     progress: Sequence[ProgressNote],
     focus: Sequence[FocusNote],
@@ -837,7 +837,7 @@ def _assign_ids(
     # Administration summary THIRD (issue #107): affirmative facts only, with
     # no negative representation or verdict impact. An empty summary adds no
     # item and leaves all downstream IDs unchanged.
-    if not administration_summary.is_empty:
+    if administration_summary is not None and not administration_summary.is_empty:
         items.append(
             EvidenceItem(
                 id=_next_id(),
@@ -1101,10 +1101,13 @@ def build_evidence_bundle(
     # notes the LLM also receives in full, so the pinned summary never asserts
     # a fact absent from a shipped item.
     periop_summary = scan_periop(vitals_notes)
-    # Same shipped-narrative subset feeds the affirmative administration scan:
-    # every pinned finding remains a strict subset of evidence the LLM also
-    # receives in full. Absence remains unknown and emits no item.
-    administration_summary = scan_administration(vitals_notes)
+    # Administration evidence exists solely for the RBC reserve-ahead gate
+    # (#109). Platelet prompts must stay byte-identical, so platelet bundles
+    # skip the scan entirely and expose None (not scanned), distinct from an
+    # empty RBC summary (scanned, no affirmative marker found).
+    administration_summary = (
+        scan_administration(vitals_notes) if inputs.component == "red_cell" else None
+    )
 
     items = _assign_ids(
         hemo_summary=hemo_summary,

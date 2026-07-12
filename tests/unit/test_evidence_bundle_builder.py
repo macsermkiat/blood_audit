@@ -2829,6 +2829,19 @@ class TestAdministrationSummaryItem:
         assert bundle.administration_summary.is_empty is True
         assert all(item.source != "Administration" for item in bundle.items)
 
+    def test_platelet_component_skips_administration_scan(self) -> None:
+        focus = (_focus(offset_hours=-1, text="ให้ SDP 1 unit"),)
+        bundle = _build_minimal(component="platelet", focus_notes=focus)
+        assert all(item.source != "Administration" for item in bundle.items)
+        assert bundle.administration_summary is None
+
+    def test_equivalent_red_cell_component_emits_administration(self) -> None:
+        focus = (_focus(offset_hours=-1, text="ให้ SDP 1 unit"),)
+        bundle = _build_minimal(component="red_cell", focus_notes=focus)
+        assert any(item.source == "Administration" for item in bundle.items)
+        assert bundle.administration_summary is not None
+        assert bundle.administration_summary.has_affirmative_marker is True
+
 
 class TestExemptTierPartition:
     """EXEMPT_FROM_DROP and DROP_PRIORITY must partition EvidenceSource.
