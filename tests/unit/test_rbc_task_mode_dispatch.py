@@ -6,11 +6,17 @@ from datetime import UTC, datetime
 
 import pytest
 
+from bba import feature_flags
 from bba.audit_orders import AuditOrder
 from bba.audit_pipeline.models import BatchRun, BatchRunState, PipelineRowContext
-from bba.audit_pipeline.pipeline import _build_submission_requests, rbc_task_mode
+from bba.audit_pipeline.pipeline import (
+    _build_submission_requests,
+    _classifier_inputs_for,
+    rbc_task_mode,
+)
 from bba.audit_pipeline.resume import _rebuild_submission_requests
 from bba.cohort_detector import CohortAssignment, CohortLabel
+from bba.deterministic_classifier import classify
 from bba.hb_lookup import HbLookupResult
 from bba.platelet_lookup.models import PlateletLookupResult
 from bba.prompt_builder import EvidenceChunk
@@ -117,6 +123,11 @@ def test_rbc_task_mode_keeps_missing_hb_in_gray_zone():
     assert rbc_task_mode(None) == "HB_7_10_REVIEW"
 
 
+def test_rbc_task_mode_selects_reserve_ahead_without_changing_default() -> None:
+    assert rbc_task_mode(12.9) == "HB_GT_10_OVERRIDE"
+    assert rbc_task_mode(12.9, reserve_ahead=True) == "RESERVE_AHEAD_REVIEW"
+
+
 def test_pipeline_dispatches_high_hb_rbc_to_override():
     """Ticket #93 broke live high-Hb dispatch and threshold pass-through."""
     requests = _build_submission_requests(
@@ -160,6 +171,41 @@ def test_pipeline_high_hb_preop_reserve_still_uses_override():
     assert request.prompt.task_mode == "HB_GT_10_OVERRIDE"
 
 
+def test_flag_off_preop_dispatch_is_byte_identical_with_classifier_threaded() -> None:
+    ctx = _rbc_ctx("audit-rbc-flag-off", 12.9, upcoming_procedure_hours=24.0)
+    classifier_result = classify(_classifier_inputs_for(ctx))
+    assert feature_flags.RESERVE_AHEAD_ROUTER_ENABLED is False
+    before = _build_submission_requests([ctx], run_id="run-rbc-task-mode")[
+        0
+    ].model_dump_json()
+    threaded = _build_submission_requests(
+        [ctx],
+        run_id="run-rbc-task-mode",
+        classifier_results={ctx.order.audit_id: classifier_result},
+    )[0].model_dump_json()
+
+    assert threaded == before
+    assert "HB_GT_10_OVERRIDE" in threaded
+
+
+def test_pipeline_routes_real_preop_classifier_result_when_flag_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = _rbc_ctx("audit-rbc-case-68026306", 12.9, upcoming_procedure_hours=24.0)
+    classifier_result = classify(_classifier_inputs_for(ctx))
+    assert classifier_result.rationale == "preop_defer_llm"
+    monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", True)
+
+    request = _build_submission_requests(
+        [ctx],
+        run_id="run-rbc-task-mode",
+        classifier_results={ctx.order.audit_id: classifier_result},
+    )[0]
+
+    assert request.task_mode == "RESERVE_AHEAD_REVIEW"
+    assert request.prompt.task_mode == "RESERVE_AHEAD_REVIEW"
+
+
 def test_resume_dispatches_high_hb_rbc_to_override():
     """Ticket #93 also hard-coded resumed high-Hb RBC rows to gray-zone mode."""
     ctx = _rbc_ctx("audit-rbc-resume-high", 12.3)
@@ -185,6 +231,44 @@ def test_resume_routes_exact_threshold_rbc_to_override():
 
     assert request.task_mode == "HB_GT_10_OVERRIDE"
     assert request.prompt.task_mode == "HB_GT_10_OVERRIDE"
+
+
+def test_resume_flag_off_does_not_reclassify(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import bba.audit_pipeline.resume as resume_module
+
+    ctx = _rbc_ctx("audit-rbc-resume-flag-off", 12.9, upcoming_procedure_hours=24.0)
+
+    def fail_if_called(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("flag-off resume must not call classify")
+
+    monkeypatch.setattr(resume_module, "classify", fail_if_called)
+    request = _rebuild_submission_requests(
+        run=_batch_run(ctx.order.audit_id),
+        contexts={ctx.order.audit_id: ctx},
+        audit_ids=(ctx.order.audit_id,),
+    )[0]
+
+    assert request.task_mode == "HB_GT_10_OVERRIDE"
+
+
+def test_resume_routes_real_preop_classifier_result_when_flag_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = _rbc_ctx(
+        "audit-rbc-resume-case-68026306", 12.9, upcoming_procedure_hours=24.0
+    )
+    monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", True)
+
+    request = _rebuild_submission_requests(
+        run=_batch_run(ctx.order.audit_id),
+        contexts={ctx.order.audit_id: ctx},
+        audit_ids=(ctx.order.audit_id,),
+    )[0]
+
+    assert request.task_mode == "RESERVE_AHEAD_REVIEW"
+    assert request.prompt.task_mode == "RESERVE_AHEAD_REVIEW"
 
 
 def test_platelet_dispatch_never_uses_rbc_selector():

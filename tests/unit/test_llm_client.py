@@ -2013,53 +2013,113 @@ class TestPlateletReviewToolSchema:
                     f"(task_mode={mode!r}); RBC path must be byte-identical"
                 )
 
-    def test_conforming_platelet_response_parses_without_schema_mismatch(
-        self,
-    ) -> None:
-        # A model response that conforms to the platelet tool schema must
-        # parse via parse_platelet_structured_response without SCHEMA_MISMATCH
-        # and must yield grounded PlateletHardSignals — the live leg round-trip.
-        conforming_content = [
-            {
-                "type": "tool_use",
-                "id": "tool_01",
-                "name": "classify_transfusion_order",
-                "input": {
-                    "classification": "APPROPRIATE",
-                    "indications": [
-                        {
-                            "code": "C1.active_bleeding",
-                            "quote": "Active GI bleed documented.",
-                            "source_id": "E1",
-                            "confidence": 0.92,
-                        }
-                    ],
-                    "negative_evidence": [],
-                    "reasoning_summary_en": "Active GI bleed grounded from E1.",
-                    "reasoning_summary_th": "พบเลือดออกทางเดินอาหารเฉียบพลันจาก E1",
-                    "active_bleeding": True,
-                    "procedure_indication": False,
-                    "prophylactic_marrow_failure": False,
-                },
-            }
-        ]
-        result = BatchSubmissionResult(
-            custom_id="plt-001",
-            model_id=SONNET_MODEL_ID,
-            raw_response_json={"content": conforming_content},
-            request_json={"model": SONNET_MODEL_ID},
-            response_headers={"anthropic-version": "2023-06-01"},
-            request_timestamp=datetime(2026, 7, 1, 10, 0, 0, tzinfo=UTC),
-            latency_ms=100,
-            anthropic_version="2023-06-01",
+
+def _reserve_ahead_request() -> BatchSubmissionRequest:
+    from bba.prompt_builder import EvidenceChunk, PromptBuildRequest, build_prompt
+
+    prompt = build_prompt(
+        PromptBuildRequest(
+            task_mode="RESERVE_AHEAD_REVIEW",
+            cohort_threshold=7.5,
+            evidence_chunks=(
+                EvidenceChunk(
+                    evidence_id="E1", source="IPDNRFOCUSDT", text="M/G for TAVI"
+                ),
+            ),
         )
-        outcome = parse_platelet_structured_response(result)
-        assert not outcome.parse_failure, (
-            f"Expected successful parse but got "
-            f"parse_failure_reason={outcome.parse_failure_reason!r}; "
-            "the tool schema and parser must agree on the three boolean fields"
-        )
-        assert outcome.platelet_hard_signals is not None
-        assert outcome.platelet_hard_signals.active_bleeding is True
-        assert outcome.platelet_hard_signals.procedure_indication is False
-        assert outcome.platelet_hard_signals.prophylactic_marrow_failure is False
+    )
+    return BatchSubmissionRequest(
+        audit_id="reserve-001",
+        run_id="run-reserve",
+        task_mode="RESERVE_AHEAD_REVIEW",
+        prompt=prompt,
+    )
+
+
+def test_reserve_ahead_tool_schema_selected_without_changing_existing_modes() -> None:
+    reserve_schema = build_anthropic_request(
+        _reserve_ahead_request(),
+        model=SONNET_MODEL_ID,
+        prompt_cache_enabled=True,
+    )["tools"][0]["input_schema"]
+    props = reserve_schema["properties"]
+    assert props["administration_claimed"]["type"] == "boolean"
+    assert props["reservation_assessment"]["enum"] == [
+        "APPROPRIATE",
+        "INAPPROPRIATE",
+        "INSUFFICIENT_EVIDENCE",
+    ]
+    marker_schema = props["administration_evidence"]["items"]
+    assert marker_schema["required"] == ["quote", "source_id", "marker_type"]
+    assert marker_schema["properties"]["marker_type"]["enum"] == [
+        "gave_blood",
+        "component_given",
+        "unit_numbers",
+        "intraop_transfusion",
+        "post_transfusion_check",
+    ]
+    for field in (
+        "administration_evidence",
+        "administration_claimed",
+        "reservation_assessment",
+    ):
+        assert field in reserve_schema["required"]
+        for mode in ("HB_7_10_REVIEW", "HB_GT_10_OVERRIDE", "PLATELET_REVIEW"):
+            schema = build_anthropic_request(
+                _platelet_request()
+                if mode == "PLATELET_REVIEW"
+                else _request(audit_id=f"existing-{mode}", task_mode=mode),
+                model=SONNET_MODEL_ID,
+                prompt_cache_enabled=True,
+            )["tools"][0]["input_schema"]
+            assert field not in schema["properties"]
+
+
+def test_conforming_platelet_response_parses_without_schema_mismatch() -> None:
+    # A model response that conforms to the platelet tool schema must
+    # parse via parse_platelet_structured_response without SCHEMA_MISMATCH
+    # and must yield grounded PlateletHardSignals — the live leg round-trip.
+    conforming_content = [
+        {
+            "type": "tool_use",
+            "id": "tool_01",
+            "name": "classify_transfusion_order",
+            "input": {
+                "classification": "APPROPRIATE",
+                "indications": [
+                    {
+                        "code": "C1.active_bleeding",
+                        "quote": "Active GI bleed documented.",
+                        "source_id": "E1",
+                        "confidence": 0.92,
+                    }
+                ],
+                "negative_evidence": [],
+                "reasoning_summary_en": "Active GI bleed grounded from E1.",
+                "reasoning_summary_th": "พบเลือดออกทางเดินอาหารเฉียบพลันจาก E1",
+                "active_bleeding": True,
+                "procedure_indication": False,
+                "prophylactic_marrow_failure": False,
+            },
+        }
+    ]
+    result = BatchSubmissionResult(
+        custom_id="plt-001",
+        model_id=SONNET_MODEL_ID,
+        raw_response_json={"content": conforming_content},
+        request_json={"model": SONNET_MODEL_ID},
+        response_headers={"anthropic-version": "2023-06-01"},
+        request_timestamp=datetime(2026, 7, 1, 10, 0, 0, tzinfo=UTC),
+        latency_ms=100,
+        anthropic_version="2023-06-01",
+    )
+    outcome = parse_platelet_structured_response(result)
+    assert not outcome.parse_failure, (
+        f"Expected successful parse but got "
+        f"parse_failure_reason={outcome.parse_failure_reason!r}; "
+        "the tool schema and parser must agree on the three boolean fields"
+    )
+    assert outcome.platelet_hard_signals is not None
+    assert outcome.platelet_hard_signals.active_bleeding is True
+    assert outcome.platelet_hard_signals.procedure_indication is False
+    assert outcome.platelet_hard_signals.prophylactic_marrow_failure is False

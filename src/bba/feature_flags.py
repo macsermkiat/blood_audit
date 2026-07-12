@@ -10,6 +10,9 @@ PLATELET_LLM_ENABLED
     Gates the platelet-LLM leg of the audit pipeline (Stage C2 wiring).
     When False, platelet orders are handled by the deterministic gate only.
     Default: False.
+RESERVE_AHEAD_ROUTER_ENABLED
+    Gates reserve-ahead RBC prompt routing and replay semantics. When False,
+    RBC dispatch and replay remain unchanged. Default: False.
 """
 
 from __future__ import annotations
@@ -24,4 +27,12 @@ through the LLM client. The flag is defined here and defaulted to False so
 the RBC path is byte-identical regardless of the platelet feature state.
 """
 
-__all__: Sequence[str] = ("PLATELET_LLM_ENABLED",)
+RESERVE_AHEAD_ROUTER_ENABLED: bool = False
+"""Enable reserve-ahead RBC routing and replay semantics (default: OFF).
+
+Issue #108 reads this flag at live dispatch, resume rebuild, pilot dispatch,
+and replay. It stays False until the #109 gate makes the end-to-end semantics
+safe to enable outside tests.
+"""
+
+__all__: Sequence[str] = ("PLATELET_LLM_ENABLED", "RESERVE_AHEAD_ROUTER_ENABLED")

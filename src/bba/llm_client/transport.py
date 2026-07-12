@@ -109,6 +109,8 @@ def build_anthropic_request(
                 "input_schema": (
                     _PLATELET_TOOL_INPUT_SCHEMA
                     if request.task_mode == "PLATELET_REVIEW"
+                    else _RESERVE_AHEAD_TOOL_INPUT_SCHEMA
+                    if request.task_mode == "RESERVE_AHEAD_REVIEW"
                     else _TOOL_INPUT_SCHEMA
                 ),
             },
@@ -211,6 +213,46 @@ _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
         "active_bleeding",
         "procedure_indication",
         "prophylactic_marrow_failure",
+    ],
+}
+
+
+_RESERVE_AHEAD_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
+    "type": "object",
+    "properties": {
+        **_TOOL_INPUT_SCHEMA["properties"],
+        "administration_evidence": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "quote": {"type": "string"},
+                    "source_id": {"type": "string"},
+                    "marker_type": {
+                        "type": "string",
+                        "enum": [
+                            "gave_blood",
+                            "component_given",
+                            "unit_numbers",
+                            "intraop_transfusion",
+                            "post_transfusion_check",
+                        ],
+                    },
+                },
+                "required": ["quote", "source_id", "marker_type"],
+            },
+        },
+        "administration_claimed": {"type": "boolean"},
+        "reservation_assessment": {
+            "type": "string",
+            "enum": ["APPROPRIATE", "INAPPROPRIATE", "INSUFFICIENT_EVIDENCE"],
+        },
+    },
+    "required": [
+        *_TOOL_INPUT_SCHEMA["required"],
+        "administration_evidence",
+        "administration_claimed",
+        "reservation_assessment",
     ],
 }
 

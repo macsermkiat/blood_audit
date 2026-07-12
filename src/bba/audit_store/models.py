@@ -24,7 +24,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Annotated, Any, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, field_serializer
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_serializer
 
 
 Classification = Literal[
@@ -34,6 +34,8 @@ Classification = Literal[
     "INSUFFICIENT_EVIDENCE",
     "POTENTIALLY_INAPPROPRIATE",
 ]
+
+ReservationAssessment = Literal["APPROPRIATE", "INAPPROPRIATE", "INSUFFICIENT_EVIDENCE"]
 
 
 # The blood-component axis of an audit row (Phase 2). ``red_cell`` is the
@@ -242,6 +244,9 @@ class AuditRow(BaseModel):
     reasoning_summary_en: str
     needs_human_review: bool
     review_reason: str | None
+    reservation_assessment: ReservationAssessment | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     # Reproducibility metadata
     model_id: str

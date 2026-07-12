@@ -37,6 +37,7 @@ import hashlib
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 
+from bba import feature_flags
 from bba.audit_pipeline.models import (
     AuditPipelineConfig,
     BatchRun,
@@ -44,11 +45,11 @@ from bba.audit_pipeline.models import (
     PipelineRowContext,
     ResumeReport,
 )
-from bba.audit_pipeline.pipeline import rbc_task_mode
+from bba.audit_pipeline.pipeline import _classifier_inputs_for, rbc_task_mode
 from bba.audit_pipeline.state_machine import is_terminal, transition
 from bba.audit_pipeline.store import BatchRunStore
 from bba.audit_store import AuditStore, LlmCall
-from bba.deterministic_classifier import ClassifierResult
+from bba.deterministic_classifier import ClassifierResult, classify
 from bba.llm_client.models import (
     AnthropicTransport,
     BatchSubmissionRequest,
@@ -349,7 +350,14 @@ def _rebuild_submission_requests(
             )
         else:
             # RBC / default: mirrors live submission via the shared selector.
-            task_mode = rbc_task_mode(ctx.hb_result.value_g_dl)
+            reserve_ahead = False
+            if feature_flags.RESERVE_AHEAD_ROUTER_ENABLED:
+                reserve_ahead = (
+                    classify(_classifier_inputs_for(ctx)).rationale == "preop_defer_llm"
+                )
+            task_mode = rbc_task_mode(
+                ctx.hb_result.value_g_dl, reserve_ahead=reserve_ahead
+            )
             threshold = (
                 ctx.cohort_assignment.threshold
                 if ctx.cohort_assignment.threshold is not None

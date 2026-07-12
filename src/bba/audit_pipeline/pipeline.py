@@ -29,7 +29,7 @@ HIGH #5).
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -327,7 +327,10 @@ def _run_batch_chunk(
     # BatchRun only covers the clean (non-injection) contexts.
     injection_sink: list[PipelineRowContext] = []
     requests = _build_submission_requests(
-        chunk_contexts, run_id=run_id, injection_sink=injection_sink
+        chunk_contexts,
+        run_id=run_id,
+        classifier_results=classifier_results,
+        injection_sink=injection_sink,
     )
 
     for inj_ctx in injection_sink:
@@ -836,8 +839,13 @@ def _batch_id_for(run_id: str, chunk: Sequence[PipelineRowContext]) -> str:
     return f"batch-{digest}"
 
 
-def rbc_task_mode(hb_value_g_dl: float | None) -> TaskMode:
-    """Select the RBC task mode from the measured Hb value.
+def rbc_task_mode(
+    hb_value_g_dl: float | None, *, reserve_ahead: bool = False
+) -> TaskMode:
+    """Select the RBC task mode from reserve-ahead status and measured Hb.
+
+    ``reserve_ahead=True`` selects ``RESERVE_AHEAD_REVIEW``. Otherwise the
+    existing Hb-keyed behavior is unchanged:
 
     ``HB_GT_10_OVERRIDE`` at or above ``HB_GT_10_THRESHOLD`` (10.0),
     matching the deterministic engine exactly: its ``hb_ge_10`` branch
@@ -845,15 +853,17 @@ def rbc_task_mode(hb_value_g_dl: float | None) -> TaskMode:
     ``hb_7_to_10`` gray zone is strictly below 10.0
     (:mod:`bba.deterministic_classifier.classifier`). A missing Hb
     (None) cannot establish Hb >= 10 and stays on the gray-zone
-    prompt. Keys on Hb, NOT rule_classification, so a pre-op reserve
-    at Hb 12.3 (rule NEEDS_REVIEW via preop_defer_llm) still gets the
-    override prompt.
+    prompt. The callers derive ``reserve_ahead`` from the default-off feature
+    flag AND the deterministic ``preop_defer_llm`` rationale; the router does
+    not duplicate that policy predicate.
 
     Single source of truth for the production pipeline, the resume
     rebuild path (:mod:`bba.audit_pipeline.resume`) and the pilot
     runner (scripts/pilot/run_llm_leg.py) — three-way drift across
     those call sites is what caused the #93 dispatch bug.
     """
+    if reserve_ahead:
+        return "RESERVE_AHEAD_REVIEW"
     if hb_value_g_dl is not None and hb_value_g_dl >= HB_GT_10_THRESHOLD:
         return "HB_GT_10_OVERRIDE"
     return "HB_7_10_REVIEW"
@@ -863,6 +873,7 @@ def _build_submission_requests(
     chunk: Sequence[PipelineRowContext],
     *,
     run_id: str,
+    classifier_results: Mapping[str, ClassifierResult] | None = None,
     injection_sink: list[PipelineRowContext] | None = None,
 ) -> list[BatchSubmissionRequest]:
     """Build :class:`BatchSubmissionRequest` objects for ``chunk``.
@@ -913,7 +924,19 @@ def _build_submission_requests(
                 )
             )
         else:
-            task_mode = rbc_task_mode(context.hb_result.value_g_dl)
+            classifier_result = (
+                classifier_results.get(context.order.audit_id)
+                if classifier_results is not None
+                else None
+            )
+            reserve_ahead = (
+                feature_flags.RESERVE_AHEAD_ROUTER_ENABLED
+                and classifier_result is not None
+                and classifier_result.rationale == "preop_defer_llm"
+            )
+            task_mode = rbc_task_mode(
+                context.hb_result.value_g_dl, reserve_ahead=reserve_ahead
+            )
             prompt = build_prompt(
                 PromptBuildRequest(
                     task_mode=task_mode,

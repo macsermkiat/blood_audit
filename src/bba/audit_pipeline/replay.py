@@ -32,6 +32,7 @@ from datetime import date
 from typing import Final, NamedTuple
 from zoneinfo import ZoneInfo
 
+from bba import feature_flags
 from bba.audit_pipeline.bleeding import (
     LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE,
     bleeding_quote_is_stale,
@@ -43,7 +44,7 @@ from bba.audit_pipeline.bleeding import (
 )
 from bba.audit_pipeline.models import PipelineRowContext, PipelineRunResult
 from bba.audit_store import AuditRow, AuditStore, LlmCall
-from bba.audit_store.models import Classification
+from bba.audit_store.models import Classification, ReservationAssessment
 from bba.cohort_detector import CohortLabel
 from bba.deterministic_classifier import (
     PERIOP_MIN_EBL_ML,
@@ -1044,6 +1045,11 @@ def _build_audit_row(
         )
 
     winning_result = winner.result
+    reserve_ahead = (
+        context.component != "platelet"
+        and feature_flags.RESERVE_AHEAD_ROUTER_ENABLED
+        and classifier_result.rationale == "preop_defer_llm"
+    )
     # For platelet rows, parse via parse_platelet_structured_response which
     # enforces the three hard-signal booleans.  A schema mismatch (missing or
     # malformed bools) fails closed to NEEDS_REVIEW regardless of the returned
@@ -1104,8 +1110,14 @@ def _build_audit_row(
     # structured extractor and no prose exemption path. Checked after peri-op
     # so that earlier winner remains authoritative; the LLM reasoning and
     # indications are preserved for auditability.
-    elif context.component != "platelet" and llm_overclear_suspect(
-        final_classification, rule_classification, context
+    # Interim #108 reserve-ahead semantics: the model's APPROPRIATE value judges
+    # the reservation decision, so the transfusion-focused B1 high-Hb assertion
+    # must not rewrite it. The default-off flag keeps this branch unreachable in
+    # every runtime path until #109 adds the administration-confirmation gate.
+    elif (
+        context.component != "platelet"
+        and not reserve_ahead
+        and llm_overclear_suspect(final_classification, rule_classification, context)
     ):
         if not _rbc_payload_well_formed(winning_result):
             final_classification = "NEEDS_REVIEW"
@@ -1233,6 +1245,11 @@ def _build_audit_row(
         reasoning_summary_en=summary_en,
         needs_human_review=final_classification == "NEEDS_REVIEW",
         review_reason=review_reason,
+        reservation_assessment=(
+            _reservation_assessment_from_result(winning_result)
+            if reserve_ahead
+            else None
+        ),
         model_id=winning_result.model_id,
         prompt_hash=context.prompt_hash,
         evidence_bundle_hash=context.evidence_bundle_hash,
@@ -1490,6 +1507,93 @@ def _negative_evidence_from_result(
     if not isinstance(ne, Sequence) or isinstance(ne, str | bytes):
         return ()
     return tuple(item for item in ne if isinstance(item, str))
+
+
+_ADMINISTRATION_MARKER_TYPES: Final[frozenset[str]] = frozenset(
+    {
+        "gave_blood",
+        "component_given",
+        "unit_numbers",
+        "intraop_transfusion",
+        "post_transfusion_check",
+    }
+)
+_RESERVATION_ASSESSMENTS: Final[frozenset[str]] = frozenset(
+    {"APPROPRIATE", "INAPPROPRIATE", "INSUFFICIENT_EVIDENCE"}
+)
+
+
+def _reserve_ahead_input_payload(
+    result: BatchSubmissionResult,
+) -> Mapping[str, object] | None:
+    """Return the tool input mapping, or ``None`` on any envelope drift."""
+    content = result.raw_response_json.get("content", [])
+    if not isinstance(content, Sequence) or isinstance(content, str | bytes):
+        return None
+    if not content:
+        return None
+    first = content[0]
+    if not isinstance(first, Mapping) or first.get("type") != "tool_use":
+        return None
+    input_payload = first.get("input")
+    return input_payload if isinstance(input_payload, Mapping) else None
+
+
+def _administration_evidence_from_result(
+    result: BatchSubmissionResult,
+) -> tuple[dict[str, str], ...]:
+    """Defensively extract schema-shaped affirmative-administration citations.
+
+    Missing or malformed payloads fail closed to an empty tuple. A single bad
+    entry invalidates the whole field so partial schema drift cannot be mistaken
+    for a trustworthy affirmative citation by the #109 gate.
+    """
+    input_payload = _reserve_ahead_input_payload(result)
+    if input_payload is None:
+        return ()
+    evidence = input_payload.get("administration_evidence")
+    if not isinstance(evidence, Sequence) or isinstance(evidence, str | bytes):
+        return ()
+    extracted: list[dict[str, str]] = []
+    for item in evidence:
+        if not isinstance(item, Mapping):
+            return ()
+        quote = item.get("quote")
+        source_id = item.get("source_id")
+        marker_type = item.get("marker_type")
+        if (
+            not isinstance(quote, str)
+            or not isinstance(source_id, str)
+            or not isinstance(marker_type, str)
+            or marker_type not in _ADMINISTRATION_MARKER_TYPES
+        ):
+            return ()
+        extracted.append(
+            {"quote": quote, "source_id": source_id, "marker_type": marker_type}
+        )
+    return tuple(extracted)
+
+
+def _administration_claimed_from_result(result: BatchSubmissionResult) -> bool:
+    """Extract ``administration_claimed``; malformed or missing means False."""
+    input_payload = _reserve_ahead_input_payload(result)
+    if input_payload is None:
+        return False
+    claimed = input_payload.get("administration_claimed")
+    return claimed if isinstance(claimed, bool) else False
+
+
+def _reservation_assessment_from_result(
+    result: BatchSubmissionResult,
+) -> ReservationAssessment | None:
+    """Extract the three-valued reservation assessment, failing closed."""
+    input_payload = _reserve_ahead_input_payload(result)
+    if input_payload is None:
+        return None
+    assessment = input_payload.get("reservation_assessment")
+    if not isinstance(assessment, str) or assessment not in _RESERVATION_ASSESSMENTS:
+        return None
+    return assessment  # type: ignore[return-value]
 
 
 # =============================================================================
