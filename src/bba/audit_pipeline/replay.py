@@ -616,13 +616,20 @@ def _qualified_hemodynamic_floor(
             continue
         if _fluid_refractory_language(quote.lower()):
             return True
-        # Qualifier (1) melena arm (Codex PR #103): the prompt steers
-        # melena + shock to this citation code, so the bleeding
+        # Qualifier (1) melena arm (Codex PR #103 rounds 1-2): the prompt
+        # steers melena + shock to this citation code, so the bleeding
         # accompaniment lives in the instability quote itself.
-        # quote_indicates_melena is negation-aware; the staleness screen
-        # matches the family-code arm so the two cannot diverge.
-        if quote_indicates_melena(quote) and not bleeding_quote_is_stale(
-            quote, order_date
+        # quote_indicates_melena is negation-aware but keeps the marker
+        # screens' comma boundary; on THIS surface a denied melena floating
+        # the assert to review is the fail-open direction, so the
+        # denial-list read of the family-code arm applies too
+        # (quote_negates_bleeding — "denies bleeding, melena" must not
+        # floor), with the same staleness screen, so the arms cannot
+        # diverge.
+        if (
+            quote_indicates_melena(quote)
+            and not quote_negates_bleeding(quote)
+            and not bleeding_quote_is_stale(quote, order_date)
         ):
             return True
     return False

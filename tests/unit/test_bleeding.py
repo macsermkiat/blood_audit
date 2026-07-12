@@ -667,6 +667,23 @@ class TestMelenaDoesNotQualify:
             [_active_bleed(quote="no hematemesis, melena; EBL 500 mL", confidence=0.9)]
         )
 
+    @pytest.mark.parametrize(
+        "quote",
+        [
+            "melena not controlled 500 mL",
+            "melena not resolved 500 mL",
+            "ถ่ายดำไม่หยุด 500 ml",
+        ],
+    )
+    def test_still_active_melena_stays_disqualified(self, quote: str) -> None:
+        # Codex PR #103 round 2: a post-side double negative means the
+        # melena is ONGOING, not absent — the still-active rescue keeps the
+        # volume disqualifier engaged, or the "not" would falsely reopen the
+        # >300 mL path on a stool figure.
+        assert not qualified_bleeding_exempt(
+            [_active_bleed(quote=quote, confidence=0.9)]
+        )
+
 
 class TestBleedingQuoteIsStale:
     """``bleeding_quote_is_stale`` gates the hemodynamic-floor accompaniment.

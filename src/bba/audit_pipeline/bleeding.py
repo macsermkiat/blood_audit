@@ -287,9 +287,11 @@ _DENIAL_PRE_BOUNDARIES: tuple[str, ...] = _DENIAL_LIST_BOUNDARIES + (
 # clause-bounded post window, the post negation is a false read and the
 # term stays visible to the floor. Up to two intervening adverbs are
 # tolerated ("not yet resolved", "not completely controlled" — round 8).
-# Accompaniment screen only — applying the rescue to the marker screens
-# would widen the exemption / auto-clear surface, which is
-# committee-owned. Bounded repetition, linear time.
+# Accompaniment screen + the melena volume disqualifier (PR #103 round 2)
+# only — in both, a rescued term stays PRESENT, which withholds a floor
+# skip / the volume exemption (fail-closed). Applying the rescue to the
+# marker screens would instead widen the exemption / auto-clear surface,
+# which is committee-owned. Bounded repetition, linear time.
 _POST_STILL_ACTIVE_RE = re.compile(
     r"(?:not|never|no longer)(?:\s+\w+){0,2}\s+"
     r"(?:controlled|stopped|stopping|resolved|resolving|abated|subsided)"
@@ -701,27 +703,41 @@ def quote_indicates_melena(text: str) -> bool:
     """True iff ``text`` documents melena / coffee-ground / tarry (non-fresh,
     digested blood) in non-negated form.
 
-    Each :data:`_MELENA_TERMS` occurrence is screened through
-    :func:`marker_occurrence_negated` — the same per-occurrence negator read
-    as the life-threatening-marker screen — so an explicit denial ("denies
-    melena; fresh PR bleeding 500 mL", Codex PR #103) does not suppress the
-    volume path of a genuine co-documented fresh bleed. The marker screen's
-    comma boundary is kept deliberately: a denial distributing across a comma
-    list ("no hematemesis, melena") still reads as melena PRESENT here, which
-    only withholds the volume exemption — fail-closed for the auto-clear
-    surface, same direction as the marker screens.
+    Each :data:`_MELENA_TERMS` occurrence is screened with the same
+    per-occurrence negator read as the life-threatening-marker screen, so an
+    explicit denial ("denies melena; fresh PR bleeding 500 mL", Codex PR
+    #103) does not suppress the volume path of a genuine co-documented fresh
+    bleed. The marker screen's comma boundary is kept deliberately: a denial
+    distributing across a comma list ("no hematemesis, melena") still reads
+    as melena PRESENT here, which only withholds the volume exemption —
+    fail-closed for the auto-clear surface, same direction as the marker
+    screens. Post-side still-active double negatives ("melena not
+    controlled", Codex PR #103 round 2) are rescued via
+    :data:`_POST_STILL_ACTIVE_RE`: the melena is ONGOING, so the volume
+    disqualifier must stay engaged — here the rescue NARROWS the auto-clear
+    surface, the safe direction (unlike the marker screens, where it would
+    widen it).
 
     Public seam shared with the replay guardrail's hemodynamic floor: the
     prompt routes melena + shock to a HEMODYNAMIC_INSTABILITY citation, so
     the floor reads melena out of the instability citation's own quote as
-    its hemorrhagic-shock accompaniment.
+    its hemorrhagic-shock accompaniment (screened there through
+    :func:`quote_negates_bleeding`, whose denial-list boundaries match the
+    family-code arm).
     """
     lowered = text.lower()
     for term in _MELENA_TERMS:
         start = 0
         while (idx := lowered.find(term, start)) != -1:
             end = idx + len(term)
-            if not marker_occurrence_negated(lowered, idx, end):
+            if not _occurrence_negated(
+                lowered,
+                idx,
+                end,
+                _MARKER_CLAUSE_BOUNDARIES,
+                _MARKER_POST_CLAUSE_BOUNDARIES,
+                post_rescue=_POST_STILL_ACTIVE_RE,
+            ):
                 return True
             start = end
     return False

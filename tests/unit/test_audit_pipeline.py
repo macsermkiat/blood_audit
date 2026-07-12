@@ -2294,6 +2294,68 @@ class TestLlmOverclearGuardrail:
         assert row.final_classification == "INAPPROPRIATE"
         assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
 
+    def test_denial_list_melena_instability_citation_asserts(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #103 round 2: a comma-distributed denial inside the
+        # instability quote ("denies bleeding, melena") is a documented
+        # ABSENCE. quote_indicates_melena keeps the marker screens' comma
+        # boundary, so the floor applies the family-code arm's denial-list
+        # read (quote_negates_bleeding) on top — denied melena must not
+        # float a bare-hypotension over-clear to review.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-melena-denial",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="denies bleeding, melena; NIBP 79/54 (MAP 63), on Levophed",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": (
+                        "denies bleeding, melena; NIBP 79/54 (MAP 63), on Levophed"
+                    ),
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_still_active_melena_instability_citation_floors(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #103 round 2: "melena not controlled" is an ONGOING
+        # melena (the negator binds the control verb) — the still-active
+        # rescue keeps it visible as hemorrhagic-shock accompaniment, so
+        # the row floors to human review.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-melena-active",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="melena not controlled; BP 82/50, start Levophed",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "melena not controlled; BP 82/50, start Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+
     def test_hypotension_with_negated_bleed_citation_asserts(
         self, tmp_path: object
     ) -> None:
