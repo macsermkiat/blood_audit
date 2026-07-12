@@ -140,6 +140,8 @@ class TestNonMarkers:
             # An administered verb bound to something OTHER than the
             # component-count span must not count (Codex round 6 on PR #112).
             "order PRC 2 units; patient received Lasix after that dose today",
+            "order PRC 2 units. patient received Lasix after that dose today",
+            "not yet received PRC 2 units",
         ],
     )
     def test_non_marker_does_not_count(self, text: str) -> None:

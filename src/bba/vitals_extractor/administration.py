@@ -47,7 +47,7 @@ _POST_TRANSFUSION_RE = re.compile(
 _NEGATIVE_CONTEXT_RE = re.compile(
     rf"(?:ไม่(?:ได้)?(?:ให้|รับ)|งดให้|จะให้|เตรียม|แผน|\bplan\b|ส่ง\S*ไป|\bG/?M\b|จอง"
     rf"|\bno\s+(?:{BLOOD_COMPONENT}|blood\b|transfusion\b(?!\s+reaction))"
-    r"|\bnot\s+(?:given|transfused|received)\b"
+    r"|\bnot\s+(?:yet\s+)?(?:given|transfused|received)\b"
     r"|ปฏิเสธ|\b(?:refused|declined)\b"
     # History screens and pre-transfusion checks mention reactions without
     # documenting administration (Codex round 3 on PR #112). A bare
@@ -121,10 +121,16 @@ def scan_administration(notes: Sequence[VitalsNote]) -> AdministrationSummary:
     )
 
 
+_CLAUSE_DELIMITERS = (";", ",", ".")
+
+
 def _clause_around(line: str, start: int, end: int) -> str:
-    """The ``;``/``,``-delimited clause of ``line`` containing ``[start, end)``."""
-    lo = max(line.rfind(";", 0, start), line.rfind(",", 0, start)) + 1
-    ends = [p for p in (line.find(";", end), line.find(",", end)) if p != -1]
+    """The clause of ``line`` containing ``[start, end)``.
+
+    Clauses are delimited by ``;``/``,``/``.`` so an administered verb in a
+    neighbouring clause or sentence never binds to the component count."""
+    lo = max(line.rfind(d, 0, start) for d in _CLAUSE_DELIMITERS) + 1
+    ends = [p for d in _CLAUSE_DELIMITERS if (p := line.find(d, end)) != -1]
     hi = min(ends) if ends else len(line)
     return line[lo:hi]
 
