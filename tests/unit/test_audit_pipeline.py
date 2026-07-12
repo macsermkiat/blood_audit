@@ -60,6 +60,7 @@ from bba.audit_orders import AuditOrder
 from bba.audit_store import AuditRow, LlmCall
 from bba.audit_store.models import Classification
 from bba.audit_pipeline.replay import (
+    ADMINISTRATION_CONTRADICTION_REVIEW_REASON,
     EMPTY_REASONING_REVIEW_REASON,
     LLM_NATIVE_REVIEW_ASSERT_REASON,
     LLM_OVERCLEAR_ASSERT_REASON,
@@ -69,8 +70,10 @@ from bba.audit_pipeline.replay import (
     PERIOP_CONTRADICTION_REVIEW_REASON,
     PERIOP_GUARDRAIL_MIN_EBL_ML,
     PERIOP_OVERCLEAR_WINDOW_HOURS,
+    PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON,
     _administration_claimed_from_result,
     _administration_evidence_from_result,
+    _classification_from_result,
     _reservation_assessment_from_result,
     llm_overclear_suspect,
     periop_contradiction,
@@ -103,6 +106,7 @@ from bba.cohort_detector import CohortAssignment, CohortLabel
 from bba.hb_lookup import DeltaHbWindow, HbLookupResult
 from bba.prompt_builder import EvidenceChunk
 from bba.vitals_extractor import (
+    AdministrationSummary,
     PeriopFinding,
     PeriopSummary,
     SourceProvenance,
@@ -347,6 +351,7 @@ def _row_context(
     cohort_threshold: float | None = 7.0,
     evidence_text: str = "Hb 7.5 with symptomatic chest pain",
     periop_summary: PeriopSummary | None = None,
+    administration_summary: AdministrationSummary | None = None,
     procedure_proximity_hours: float | None = None,
     upcoming_procedure_hours: float | None = None,
     sbp: float = 110.0,
@@ -457,6 +462,7 @@ def _row_context(
         evidence_bundle_hash=f"bundle_hash_{audit_id}",
         evidence_chunks=evidence_chunks,
         periop_summary=periop_summary,
+        administration_summary=administration_summary,
     )
 
 
@@ -1613,7 +1619,7 @@ def _apply_single_row(
     return rows[0]
 
 
-class TestReserveAheadInterimSemantics:
+class TestReserveAheadGate:
     def test_flag_off_case_68026306_replays_with_existing_b1_bytes(
         self, tmp_path: object
     ) -> None:
@@ -1637,8 +1643,15 @@ class TestReserveAheadInterimSemantics:
         assert row.final_classification == "INAPPROPRIATE"
         assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
         assert "reservation_assessment" not in row.model_dump_json()
+        # Byte-level golden from the #108 flag-off row. The new store literal,
+        # gate, reason slugs, and side-field logic must not alter serialization.
+        import hashlib
 
-    def test_flag_on_case_68026306_exempts_b1_and_persists_assessment(
+        assert hashlib.sha256(row.model_dump_json().encode()).hexdigest() == (
+            "77ca731682d441a07c5fbf2752d59913c3e6d84a32d200096be501e212869209"
+        )
+
+    def test_no_administration_is_terminal_unconfirmed_and_persists_assessment(
         self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from bba import feature_flags
@@ -1669,9 +1682,233 @@ class TestReserveAheadInterimSemantics:
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
 
         assert row.rule_classification == "NEEDS_REVIEW"
+        assert row.final_classification == "PREOP_RESERVATION_UNCONFIRMED"
+        assert row.review_reason == PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON
+        assert row.needs_human_review is False
+        assert row.reservation_assessment == "APPROPRIATE"
+
+    def test_grounded_administration_citation_flows_to_model_verdict(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from bba import feature_flags
+        from bba.audit_pipeline.replay import _classify_from_context
+
+        ctx = _row_context(
+            audit_id="audit-68026306-grounded",
+            hb_value=12.9,
+            cohort_label=CohortLabel.CARDIAC_SURGERY,
+            cohort_threshold=7.5,
+            upcoming_procedure_hours=24.0,
+            evidence_text="Nursing record: ให้เลือด LPRC unit A123 completed",
+        )
+        assert _classify_from_context(ctx).rationale == "preop_defer_llm"
+        monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", True)
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            extra_input={
+                "administration_evidence": [
+                    {
+                        "quote": "ให้เลือด LPRC unit A123",
+                        "source_id": "E1",
+                        "marker_type": "gave_blood",
+                    }
+                ],
+                "administration_claimed": True,
+                "reservation_assessment": "APPROPRIATE",
+            },
+        )
+
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+
         assert row.final_classification == "APPROPRIATE"
         assert row.review_reason is None
         assert row.reservation_assessment == "APPROPRIATE"
+
+    def test_extractor_marker_flows_to_model_verdict(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from bba import feature_flags
+
+        ctx = _row_context(
+            audit_id="audit-68026306-extractor",
+            hb_value=12.9,
+            cohort_label=CohortLabel.CARDIAC_SURGERY,
+            cohort_threshold=7.5,
+            upcoming_procedure_hours=24.0,
+            administration_summary=AdministrationSummary(has_affirmative_marker=True),
+        )
+        monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", True)
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            extra_input={
+                "administration_evidence": [],
+                "administration_claimed": False,
+                "reservation_assessment": "APPROPRIATE",
+            },
+        )
+
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+
+        assert row.final_classification == "APPROPRIATE"
+        assert row.review_reason is None
+
+    @pytest.mark.parametrize("administration_claimed", [True, False])
+    def test_structured_intraop_confirmation_or_contradiction(
+        self,
+        tmp_path: object,
+        monkeypatch: pytest.MonkeyPatch,
+        administration_claimed: bool,
+    ) -> None:
+        from bba import feature_flags
+
+        ctx = _row_context(
+            audit_id=f"audit-68026306-intraop-{administration_claimed}",
+            hb_value=12.9,
+            cohort_label=CohortLabel.CARDIAC_SURGERY,
+            cohort_threshold=7.5,
+            upcoming_procedure_hours=24.0,
+            periop_summary=PeriopSummary(intraop_transfusion=True),
+        )
+        monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", True)
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            extra_input={
+                "administration_evidence": [],
+                "administration_claimed": administration_claimed,
+                "reservation_assessment": "APPROPRIATE",
+            },
+        )
+
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+
+        if administration_claimed:
+            assert row.final_classification == "APPROPRIATE"
+            assert row.review_reason is None
+        else:
+            assert row.final_classification == "NEEDS_REVIEW"
+            assert row.review_reason == ADMINISTRATION_CONTRADICTION_REVIEW_REASON
+            assert row.needs_human_review is True
+
+    def test_qualifying_ebl_confirms_administration(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from bba import feature_flags
+
+        ctx = _row_context(
+            audit_id="audit-68026306-ebl",
+            hb_value=12.9,
+            cohort_label=CohortLabel.CARDIAC_SURGERY,
+            cohort_threshold=7.5,
+            upcoming_procedure_hours=24.0,
+            periop_summary=PeriopSummary(blood_loss_ml=PERIOP_GUARDRAIL_MIN_EBL_ML),
+        )
+        monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", True)
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            extra_input={
+                "administration_evidence": [],
+                "administration_claimed": True,
+                "reservation_assessment": "APPROPRIATE",
+            },
+        )
+
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+
+        assert row.final_classification == "APPROPRIATE"
+        assert row.review_reason is None
+
+    def test_ungrounded_administration_citation_is_discounted(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from bba import feature_flags
+
+        ctx = _row_context(
+            audit_id="audit-68026306-ungrounded",
+            hb_value=12.9,
+            cohort_label=CohortLabel.CARDIAC_SURGERY,
+            cohort_threshold=7.5,
+            upcoming_procedure_hours=24.0,
+            evidence_text="Crossmatch 4 LPRC for upcoming TAVI",
+        )
+        monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", True)
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            extra_input={
+                "administration_evidence": [
+                    {
+                        "quote": "ให้เลือด LPRC unit hallucinated",
+                        "source_id": "E1",
+                        "marker_type": "gave_blood",
+                    }
+                ],
+                "administration_claimed": True,
+                "reservation_assessment": "APPROPRIATE",
+            },
+        )
+
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+
+        assert row.final_classification == "PREOP_RESERVATION_UNCONFIRMED"
+        assert row.review_reason == PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON
+
+    def test_unconfirmed_replay_is_idempotent(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from pathlib import Path
+
+        from bba import feature_flags
+        from bba.audit_store import AuditStore, AuditStoreConfig
+
+        assert isinstance(tmp_path, Path)
+        ctx = _row_context(
+            audit_id="audit-68026306-idempotent",
+            hb_value=12.9,
+            cohort_label=CohortLabel.CARDIAC_SURGERY,
+            cohort_threshold=7.5,
+            upcoming_procedure_hours=24.0,
+        )
+        monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", True)
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            extra_input={
+                "administration_evidence": [],
+                "administration_claimed": False,
+                "reservation_assessment": "APPROPRIATE",
+            },
+        )
+        audit_store = AuditStore(
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
+        )
+
+        for _ in range(2):
+            apply_batch_results(
+                response,
+                audit_store=audit_store,
+                run_id="run-reserve-idempotent",
+                contexts={ctx.order.audit_id: ctx},
+            )
+        rows = audit_store.read_audit_results(run_id="run-reserve-idempotent")
+
+        assert len(rows) == 1
+        assert rows[0].final_classification == "PREOP_RESERVATION_UNCONFIRMED"
+        assert rows[0].review_reason == PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON
+
+    def test_model_cannot_emit_store_only_unconfirmed_value(self) -> None:
+        response = _periop_llm_response(
+            audit_id="audit-model-hallucinated-unconfirmed",
+            classification="PREOP_RESERVATION_UNCONFIRMED",
+        )
+
+        parsed = _classification_from_result(response.results[0])
+
+        assert parsed.classification == "NEEDS_REVIEW"
+        assert parsed.parse_failure_reason == "classification_out_of_set"
 
     def test_administration_fields_extract_from_well_formed_payload(self) -> None:
         response = _periop_llm_response(

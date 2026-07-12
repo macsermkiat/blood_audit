@@ -40,11 +40,12 @@ _BUCKET_OF: Mapping[str, Bucket] = {
     "NEEDS_REVIEW": "unresolved",
     "INSUFFICIENT_EVIDENCE": "unresolved",
     "POTENTIALLY_INAPPROPRIATE": "unresolved",
+    "PREOP_RESERVATION_UNCONFIRMED": "unresolved",
 }
 """Collapse of every pipeline / human classification into the 3 committee
 buckets. ``unresolved`` pools the two non-committal deterministic verdicts
-plus ``POTENTIALLY_INAPPROPRIATE`` (a high-Hb pre-verdict that routes to the
-LLM and is never a confident terminal call)."""
+plus the store-only ``POTENTIALLY_INAPPROPRIATE`` and
+``PREOP_RESERVATION_UNCONFIRMED`` labels."""
 
 BUCKETS: tuple[Bucket, ...] = ("appropriate", "inappropriate", "unresolved")
 """Canonical bucket order for rendering a full 3×3 matrix (no missing cells)."""

@@ -16,7 +16,17 @@ from unittest.mock import MagicMock
 import pytest
 
 from bba.audit_store import AuditRow
-from bba.report_generator import MixedRunMetadataError, build_report_inputs
+from bba.report_generator import (
+    MissingResolverError,
+    MixedRunMetadataError,
+    build_report_inputs,
+    default_classification_projector,
+)
+
+
+def test_default_projector_rejects_preop_reservation_unconfirmed() -> None:
+    with pytest.raises(MissingResolverError, match="pool it into Unresolved"):
+        default_classification_projector("PREOP_RESERVATION_UNCONFIRMED")
 
 
 def _row(

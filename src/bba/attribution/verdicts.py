@@ -156,8 +156,9 @@ class SupportsVerdict(Protocol):
 
     ``final_classification`` is typed ``str`` (not
     :data:`~bba.report_generator.models.Classification`) because the
-    audit store's own ``Classification`` is *five*-valued — it adds
-    ``POTENTIALLY_INAPPROPRIATE`` — and narrowing that onto the report
+    audit store's own ``Classification`` adds store-only values —
+    ``POTENTIALLY_INAPPROPRIATE`` and
+    ``PREOP_RESERVATION_UNCONFIRMED`` — and narrowing those onto the report
     generator's four values is the ``projector``'s job below.
     """
 
@@ -176,16 +177,16 @@ generator's 4-value :data:`~bba.report_generator.models.Classification`."""
 _REPORT_CLASSIFICATIONS: frozenset[str] = frozenset(
     {"APPROPRIATE", "INAPPROPRIATE", "NEEDS_REVIEW", "INSUFFICIENT_EVIDENCE"}
 )
-"""The four values the ranking layer can bucket. The audit store adds a
-fifth, ``POTENTIALLY_INAPPROPRIATE`` (see
-:data:`bba.audit_store.models.Classification`), which is not one of these."""
+"""The four values the ranking layer can bucket. Store-only values are not
+members and must be projected explicitly."""
 
 
 def strict_verdict_projector(value: str) -> Classification:
     """Identity on the four report classifications; fail loud on anything
-    else — including the audit-store-only ``POTENTIALLY_INAPPROPRIATE``.
+    else — including the audit-store-only ``POTENTIALLY_INAPPROPRIATE`` and
+    ``PREOP_RESERVATION_UNCONFIRMED``.
 
-    The default so no build silently buckets the fifth value: mapping it is
+    The default so no build silently buckets a store-only value: mapping it is
     a clinical decision (mirrors
     :func:`bba.report_generator.builder.default_classification_projector`).
     Callers that want it pooled into Unresolved pass
@@ -196,20 +197,21 @@ def strict_verdict_projector(value: str) -> Classification:
     raise ValueError(
         f"final_classification {value!r} is not one of the four report "
         f"classifications {sorted(_REPORT_CLASSIFICATIONS)}; if this is the "
-        "audit-store-only 'POTENTIALLY_INAPPROPRIATE', pass "
+        "audit-store-only 'POTENTIALLY_INAPPROPRIATE' or "
+        "'PREOP_RESERVATION_UNCONFIRMED', pass "
         "needs_review_verdict_projector to pool it into Unresolved"
     )
 
 
 def needs_review_verdict_projector(value: str) -> Classification:
     """Like :func:`strict_verdict_projector` but maps the audit-store-only
-    ``POTENTIALLY_INAPPROPRIATE`` onto ``NEEDS_REVIEW`` — which the ranking
-    buckets into Unresolved, consistent with
-    :data:`bba.verification.models._BUCKET_OF` (that label is a high-Hb /
-    above-ceiling pre-verdict, never a confident terminal call, so it must
-    not be ranked as confidently Inappropriate).
+    store-only verdicts onto ``NEEDS_REVIEW``, which the ranking buckets into
+    Unresolved, consistent with :data:`bba.verification.models._BUCKET_OF`.
     """
-    if value == "POTENTIALLY_INAPPROPRIATE":
+    if value in (
+        "POTENTIALLY_INAPPROPRIATE",
+        "PREOP_RESERVATION_UNCONFIRMED",
+    ):
         return "NEEDS_REVIEW"
     return strict_verdict_projector(value)
 
@@ -228,10 +230,10 @@ def pipeline_verdict_source(
     ``reqno`` appears once). They are materialized once here, so the
     returned source is re-callable even if a generator is passed.
 
-    ``projector`` narrows each order's five-valued audit
+    ``projector`` narrows each order's audit-store
     ``final_classification`` onto the ranking layer's four values. The
-    default fails loud on ``POTENTIALLY_INAPPROPRIATE``; pass
-    :func:`needs_review_verdict_projector` to pool it into Unresolved.
+    default fails loud on store-only values; pass
+    :func:`needs_review_verdict_projector` to pool them into Unresolved.
 
     Fail-loud contract (mirrors
     :func:`bba.attribution.order_doctor_map.load_reqno_to_doctor`): the

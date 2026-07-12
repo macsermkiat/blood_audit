@@ -43,6 +43,7 @@ from bba.attribution import (
     rank_doctor_scorecards,
     rank_top_n,
     reconcile_verdict_sources,
+    strict_verdict_projector,
     write_ranking_csv,
     write_rankings_html,
 )
@@ -396,6 +397,40 @@ class TestPipelineVerdictSource:
             rows, projector=needs_review_verdict_projector
         )()
         assert verdicts == {"68000001": "NEEDS_REVIEW"}
+
+    def test_strict_projector_names_preop_reservation_unconfirmed(self) -> None:
+        with pytest.raises(ValueError, match="PREOP_RESERVATION_UNCONFIRMED"):
+            strict_verdict_projector("PREOP_RESERVATION_UNCONFIRMED")
+
+    def test_needs_review_projector_pools_preop_reservation_unconfirmed(
+        self,
+    ) -> None:
+        rows = [_audit_row("68000001", "PREOP_RESERVATION_UNCONFIRMED")]
+        verdicts = pipeline_verdict_source(
+            rows, projector=needs_review_verdict_projector
+        )()
+        assert verdicts == {"68000001": "NEEDS_REVIEW"}
+
+    def test_pooled_preop_reservation_totals_reconcile_as_unresolved(self) -> None:
+        rows = [
+            _audit_row("68000001", "APPROPRIATE"),
+            _audit_row("68000002", "INAPPROPRIATE"),
+            _audit_row("68000003", "PREOP_RESERVATION_UNCONFIRMED"),
+        ]
+        verdicts = pipeline_verdict_source(
+            rows, projector=needs_review_verdict_projector
+        )()
+
+        result = build_rankings(
+            verdicts=verdicts,
+            reqno_to_doctor={},
+            dct_registry={},
+        )
+
+        assert result.totals.appropriate == 1
+        assert result.totals.inappropriate == 1
+        assert result.totals.unresolved == 1
+        assert result.totals.total == len(rows)
 
     def test_unknown_classification_fails_loud_under_both_projectors(self) -> None:
         rows = [_audit_row("68000001", "MADE_UP_LABEL")]
