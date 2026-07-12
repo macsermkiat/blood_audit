@@ -876,6 +876,19 @@ def main() -> None:
     if not BUNDLE.exists():
         sys.exit(f"bundle not found: {BUNDLE} (run sample_bundle.py first)")
 
+    # Phase 5 (#110): the pilot LLM leg runs with the reserve-ahead router
+    # enabled so preop_defer_llm cases dispatch to RESERVE_AHEAD_REVIEW and the
+    # asymmetric administration-confirmation gate synthesizes
+    # PREOP_RESERVATION_UNCONFIRMED. This is the first flagged-on run anywhere;
+    # the live pipeline/resume default in bba.feature_flags stays OFF. Because
+    # this process does both batch submit and result application, the flag is
+    # constant across the two (the operational no-toggle constraint holds).
+    # An operator can force an A/B flag-off run via
+    # BBA_PILOT_RESERVE_AHEAD_ROUTER=0.
+    feature_flags.RESERVE_AHEAD_ROUTER_ENABLED = (
+        os.environ.get("BBA_PILOT_RESERVE_AHEAD_ROUTER", "1") != "0"
+    )
+
     AUDIT_STORE_ROOT.mkdir(parents=True, exist_ok=True)
     (
         inputs,
