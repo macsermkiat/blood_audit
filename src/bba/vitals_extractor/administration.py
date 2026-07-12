@@ -58,11 +58,14 @@ _NEGATIVE_CONTEXT_RE = re.compile(
     # Patient counselling ("แจ้งให้ผู้ป่วยทราบ...การให้เลือด") and the
     # prospective bedside complication-watch instruction ("Observe complication
     # ขณะให้เลือด...") are transfusion education/monitoring text, not
-    # administration. The complication cue is anchored on the ขณะ(ให้|ได้รับ)
-    # instruction form so it never suppresses a completed "no complication
-    # post-transfusion" note that carries its own affirmative marker. (#117
-    # case 68046079)
-    rf"|แจ้ง[^\n]{{0,20}}?ทราบ|Observe\s+complication\s+ขณะ(?:ให้|ได้รับ)"
+    # administration. The counselling cue requires the ผู้ป่วย (patient) object
+    # so a "แจ้งแพทย์ทราบ" (notified the doctor) note beside a real
+    # administration is not suppressed; the complication cue is anchored on the
+    # ขณะ(ให้|ได้รับ) instruction form so it never suppresses a completed "no
+    # complication post-transfusion" note that carries its own affirmative
+    # marker. (#117 case 68046079)
+    rf"|แจ้ง[^\n]{{0,10}}?ผู้ป่วย[^\n]{{0,15}}?ทราบ"
+    rf"|Observe\s+complication\s+ขณะ(?:ให้|ได้รับ)"
     # A "ก่อนให้เลือด" (before-transfusion) reference is a pre-transfusion
     # baseline — a V/S reading or a premed order given BEFORE the unit — not
     # evidence the reserved unit was administered. Like every guard here it is
@@ -70,12 +73,13 @@ _NEGATIVE_CONTEXT_RE = re.compile(
     # completed unit it degrades to a (safe, false-negative-biased) unconfirmed
     # rather than a false confirmation. (#117 case 68046079)
     rf"|ก่อนให้เลือด"
-    # Retrospective history-summary arrow: a dated lab line whose "-->" records
-    # a PAST transfusion decision ("2/9/68 ...PTT=36 --> LPRC 1 unit"), not
-    # administration of the reserved unit. Anchored on a leading DD/MM/YY date
-    # so a bare "-->" used as a live connective is not caught. (#117 case
-    # 68055153)
-    rf"|\d{{1,2}}/\d{{1,2}}/\d{{2,4}}[^\n]{{0,100}}?-->\s*(?:ได้\s*)?(?:{RBC_COMPONENT}|เลือด)"
+    # Retrospective history-summary arrow: a dated history line whose "-->"
+    # records a PAST transfusion decision ("- 2/9/68 ...PTT=36 --> LPRC 1
+    # unit"), not administration of the reserved unit. The DD/MM/YY date is
+    # anchored to the START of the line (after an optional bullet) so a date
+    # appearing mid-sentence ("anemia on 12/07/68 --> ...ให้แล้ว", a live
+    # connective) is not caught. (#117 case 68055153)
+    rf"|^[-\s*]*\d{{1,2}}/\d{{1,2}}/\d{{2,4}}[^\n]{{0,100}}?-->\s*(?:ได้\s*)?(?:{RBC_COMPONENT}|เลือด)"
     rf"|\bno\s+(?:{BLOOD_COMPONENT}|blood\b|transfusion\b(?!\s+reaction))"
     r"|\bnot\s+(?:yet\s+)?(?:given|transfused|received)\b"
     r"|ปฏิเสธ|\b(?:refused|declined)\b"

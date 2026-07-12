@@ -262,6 +262,20 @@ class TestIssue117ResidualCitations:
             [_note("IPDNRFOCUSDT", 0, line)]
         ).has_affirmative_marker
 
+    # Codex #118 P2: the counselling cue requires ผู้ป่วย, so "แจ้งแพทย์ทราบ"
+    # (notified the doctor) next to a genuine administration must still confirm.
+    def test_notify_doctor_beside_administration_still_confirms(self) -> None:
+        quote = "แจ้งแพทย์ทราบ ได้รับ LPRC 1 unit at OR"
+        source = f"Nursing record: {quote}"
+        assert administration_citation_has_negative_context(source, quote) is False
+
+    # Codex #118 P2: a date mid-sentence (not at line start) is a live "-->"
+    # connective, not a dated history entry, so it must still confirm.
+    def test_midline_dated_arrow_is_not_negative_context(self) -> None:
+        quote = "anemia on 12/07/68 --> เลือด LPRC 1 unit ให้แล้วเสร็จสิ้น"
+        source = f"Progress: {quote}"
+        assert administration_citation_has_negative_context(source, quote) is False
+
 
 class TestNonMarkers:
     @pytest.mark.parametrize(
