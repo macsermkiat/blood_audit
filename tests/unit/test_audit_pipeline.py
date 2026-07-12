@@ -2317,6 +2317,186 @@ class TestLlmOverclearGuardrail:
         assert row.final_classification == "NEEDS_REVIEW"
         assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
 
+    def test_melena_shock_instability_citation_floors(self, tmp_path: object) -> None:
+        # Codex PR #103: the prompt routes melena + shock to a
+        # HEMODYNAMIC_INSTABILITY citation instead of ACTIVE_BLEEDING (owner
+        # ruling: melena is digested blood), so the hemorrhagic-shock
+        # accompaniment arrives inside the instability citation's own quote.
+        # It must still floor to human review — "with shock we care" — not
+        # fall through both the exemption and the floor to an assert.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-melena",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="melena x 3 this morning; BP 82/50, start Levophed",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "melena x 3 this morning; BP 82/50, start Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+
+    def test_negated_melena_instability_citation_asserts(
+        self, tmp_path: object
+    ) -> None:
+        # The melena arm is negation-aware: a denied melena inside the
+        # instability quote is a documented ABSENCE, not hemorrhagic-shock
+        # accompaniment — the bare-hypotension assert stands (ruling #98).
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-melena-neg",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="denies melena; NIBP 79/54 (MAP 63) mmHg, on Levophed",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "denies melena; NIBP 79/54 (MAP 63) mmHg, on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_stale_dated_melena_instability_citation_asserts(
+        self, tmp_path: object
+    ) -> None:
+        # Same temporal screen as the family-code arm (case 68080335): a
+        # melena mention governed by a stale date anchor (1/5/69 BE ==
+        # 2026-05-01, 15 days before the 2026-05-16 order) is an old
+        # episode, not the current hemorrhagic picture — assert stands.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-melena-stale",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="NIBP 79/54 (MAP 63) mmHg, on Levophed; Hx.1/5/69: melena",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": (
+                        "NIBP 79/54 (MAP 63) mmHg, on Levophed; Hx.1/5/69: melena"
+                    ),
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_denial_list_melena_instability_citation_asserts(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #103 round 2: a comma-distributed denial inside the
+        # instability quote ("denies bleeding, melena") is a documented
+        # ABSENCE. quote_indicates_melena keeps the marker screens' comma
+        # boundary, so the floor applies the family-code arm's denial-list
+        # read (quote_negates_bleeding) on top — denied melena must not
+        # float a bare-hypotension over-clear to review.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-melena-denial",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="denies bleeding, melena; NIBP 79/54 (MAP 63), on Levophed",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": (
+                        "denies bleeding, melena; NIBP 79/54 (MAP 63), on Levophed"
+                    ),
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_affirmed_melena_synonym_with_denied_bleed_still_floors(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #103 round 3: the floor's quote_negates_bleeding veto
+        # must recognize every _MELENA_TERMS synonym. An affirmed
+        # coffee-ground emesis next to a denied GENERIC bleed term is a
+        # documented hemorrhagic-shock picture — the denial of the other
+        # term must not veto the melena accompaniment.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-melena-syn",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="coffee-ground emesis x2, no gross bleeding; BP 82/50",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "coffee-ground emesis x2, no gross bleeding; BP 82/50",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+
+    def test_still_active_melena_instability_citation_floors(
+        self, tmp_path: object
+    ) -> None:
+        # Codex PR #103 round 2: "melena not controlled" is an ONGOING
+        # melena (the negator binds the control verb) — the still-active
+        # rescue keeps it visible as hemorrhagic-shock accompaniment, so
+        # the row floors to human review.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-melena-active",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="melena not controlled; BP 82/50, start Levophed",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "melena not controlled; BP 82/50, start Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+
     def test_hypotension_with_negated_bleed_citation_asserts(
         self, tmp_path: object
     ) -> None:

@@ -30,6 +30,7 @@ __all__ = [
     "marker_occurrence_negated",
     "parse_max_volume_ml",
     "qualified_bleeding_exempt",
+    "quote_indicates_melena",
     "quote_negates_bleeding",
 ]
 
@@ -89,6 +90,29 @@ note field, far below this; the cap only guards against a future regex edit
 reintroducing super-linear scanning on an attacker-influenced quote length."""
 
 _LITRE_UNITS: frozenset[str] = frozenset({"l", "liter", "liters"})
+
+# Digested / non-fresh blood — melena, coffee-ground emesis, tarry stool.
+# Owner ruling: melena is old blood (an upper-GI bleed already digested),
+# NOT active hemorrhage, and its charted "volume" is a stool volume, not
+# active blood loss. So a melena-only quote must NOT qualify the standalone
+# major-bleed exemption on the >300 mL volume test — it clears only via a
+# documented life-threatening / shock marker (the shock pathway) or a
+# qualifying low Hb (the sub-threshold pathway), both handled elsewhere.
+# Melena + documented hypotension is a hemorrhagic-shock picture that still
+# floors to human review ("with shock we care"): the prompt routes that
+# combination to a HEMODYNAMIC_INSTABILITY citation, and the replay floor
+# reads these terms out of the instability citation's own quote as its
+# bleeding accompaniment (Codex PR #103).
+_MELENA_TERMS: tuple[str, ...] = (
+    "melena",
+    "melaena",
+    "tarry stool",
+    "tarry black",
+    "coffee ground",
+    "coffee-ground",
+    "ถ่ายดำ",  # black/tarry stool = melena
+    "อุจจาระดำ",  # black stool = melena
+)
 
 # Conservative, high-confidence-gated prose markers of a life-threatening or
 # uncontrolled bleed. Deliberately narrow (spec #89 risk note): benign
@@ -221,16 +245,22 @@ _MARKER_CONTEXT_WINDOW_CHARS = 40
 # widen the life-threatening-marker exemption ("uncontrolled melena"
 # auto-clearing), and prose auto-clear surface is a committee decision.
 # A false hit here only withholds the hemodynamic floor (assert stands).
-_BLEEDING_NEGATION_SCREEN_TERMS: tuple[str, ...] = _BLEEDING_CONTEXT_TERMS + (
-    "melena",
-    "hematemesis",
-    "haematemesis",
-    "hematochezia",
-    "haematochezia",
-    "hemoptysis",
-    "haemoptysis",
-    "epistaxis",
-    "ถ่ายดำ",  # melena ("black stool")
+# Includes every _MELENA_TERMS synonym (Codex PR #103 round 3): the floor's
+# melena arm vetoes on this screen, so a synonym it cannot see ("tarry
+# stool" affirmed next to a denied generic bleed term) would wrongly veto a
+# genuine hemorrhagic-shock accompaniment.
+_BLEEDING_NEGATION_SCREEN_TERMS: tuple[str, ...] = (
+    _BLEEDING_CONTEXT_TERMS
+    + _MELENA_TERMS
+    + (
+        "hematemesis",
+        "haematemesis",
+        "hematochezia",
+        "haematochezia",
+        "hemoptysis",
+        "haemoptysis",
+        "epistaxis",
+    )
 )
 
 # Clause boundaries for the accompaniment screen ONLY (Codex PR #99 round
@@ -257,15 +287,29 @@ _DENIAL_PRE_BOUNDARIES: tuple[str, ...] = _DENIAL_LIST_BOUNDARIES + (
     "แต่",  # Thai "but"
 )
 
+# Pre boundaries for the melena volume disqualifier (Codex PR #103 round 3):
+# the marker boundaries (comma kept — a denial list only withholds the
+# exemption, fail-closed) PLUS the contrastive connectors, because in
+# "denies hematemesis but melena 500 mL" the denial binds up to the "but" —
+# what follows is documented PRESENT melena whose stool figure must not
+# reopen the >300 mL path.
+_MELENA_PRE_BOUNDARIES: tuple[str, ...] = _MARKER_CLAUSE_BOUNDARIES + (
+    " but ",
+    "however",
+    "แต่",  # Thai "but"
+)
+
 # Post-side double negatives that mean the bleed is ONGOING, not absent
 # (Codex PR #99 round 7): in "bleeding not controlled" the negator binds
 # the control verb, not the bleeding. When this matches in the
 # clause-bounded post window, the post negation is a false read and the
 # term stays visible to the floor. Up to two intervening adverbs are
 # tolerated ("not yet resolved", "not completely controlled" — round 8).
-# Accompaniment screen only — applying the rescue to the marker screens
-# would widen the exemption / auto-clear surface, which is
-# committee-owned. Bounded repetition, linear time.
+# Accompaniment screen + the melena volume disqualifier (PR #103 round 2)
+# only — in both, a rescued term stays PRESENT, which withholds a floor
+# skip / the volume exemption (fail-closed). Applying the rescue to the
+# marker screens would instead widen the exemption / auto-clear surface,
+# which is committee-owned. Bounded repetition, linear time.
 _POST_STILL_ACTIVE_RE = re.compile(
     r"(?:not|never|no longer)(?:\s+\w+){0,2}\s+"
     r"(?:controlled|stopped|stopping|resolved|resolving|abated|subsided)"
@@ -596,7 +640,11 @@ def qualified_bleeding_exempt(
     (``RISK`` / ``HISTORY`` / ``NOT_ACTIVE``); its own ``confidence`` >=
     :data:`LLM_OVERCLEAR_MIN_BLEED_CONFIDENCE`; and either a parsed volume
     strictly > :data:`LLM_OVERCLEAR_MIN_BLEED_ML` OR a life-threatening
-    marker in its ``quote``.
+    marker in its ``quote``. A melena / coffee-ground / tarry quote
+    (:func:`quote_indicates_melena`) is disqualified from the volume path —
+    digested blood is not active hemorrhage and its charted volume is stool,
+    not blood loss (owner ruling) — so it clears only on a life-threatening /
+    shock marker.
 
     When ``order_date`` (source-wall-clock calendar date of the order) is
     given, quote spans governed by a date anchor more than
@@ -653,10 +701,64 @@ def qualified_bleeding_exempt(
         # non-blood-loss figure. Bounded by the ACTIVE_BLEEDING code family +
         # the >=0.8 confidence gate above; tracked as a follow-up, not fixed
         # here (a context-aware parser is out of scope for T1).
-        volume = parse_max_volume_ml(screened)
+        # Owner ruling: melena is digested/old blood, not active hemorrhage,
+        # and its charted volume is stool, not blood loss — so a melena quote
+        # is disqualified from the >300 mL volume path. It still clears on a
+        # documented life-threatening / shock marker (the shock pathway); a
+        # qualifying low Hb is a separate exemption upstream.
+        volume = (
+            None if quote_indicates_melena(screened) else parse_max_volume_ml(screened)
+        )
         if (
             volume is not None and volume > LLM_OVERCLEAR_MIN_BLEED_ML
         ) or has_life_threatening_marker(screened):
             return True
 
+    return False
+
+
+def quote_indicates_melena(text: str) -> bool:
+    """True iff ``text`` documents melena / coffee-ground / tarry (non-fresh,
+    digested blood) in non-negated form.
+
+    Each :data:`_MELENA_TERMS` occurrence is screened with the same
+    per-occurrence negator read as the life-threatening-marker screen, so an
+    explicit denial ("denies melena; fresh PR bleeding 500 mL", Codex PR
+    #103) does not suppress the volume path of a genuine co-documented fresh
+    bleed. The marker screen's comma boundary is kept deliberately: a denial
+    distributing across a comma list ("no hematemesis, melena") still reads
+    as melena PRESENT here, which only withholds the volume exemption —
+    fail-closed for the auto-clear surface, same direction as the marker
+    screens. Contrastive connectors cut the pre-side lookback (round 3):
+    in "denies hematemesis but melena 500 mL" the denial binds up to the
+    "but", so the melena is PRESENT and its stool figure stays out of the
+    volume path. Post-side still-active double negatives ("melena not
+    controlled", Codex PR #103 round 2) are rescued via
+    :data:`_POST_STILL_ACTIVE_RE`: the melena is ONGOING, so the volume
+    disqualifier must stay engaged — here the rescue NARROWS the auto-clear
+    surface, the safe direction (unlike the marker screens, where it would
+    widen it).
+
+    Public seam shared with the replay guardrail's hemodynamic floor: the
+    prompt routes melena + shock to a HEMODYNAMIC_INSTABILITY citation, so
+    the floor reads melena out of the instability citation's own quote as
+    its hemorrhagic-shock accompaniment (screened there through
+    :func:`quote_negates_bleeding`, whose denial-list boundaries match the
+    family-code arm).
+    """
+    lowered = text.lower()
+    for term in _MELENA_TERMS:
+        start = 0
+        while (idx := lowered.find(term, start)) != -1:
+            end = idx + len(term)
+            if not _occurrence_negated(
+                lowered,
+                idx,
+                end,
+                _MELENA_PRE_BOUNDARIES,
+                _MARKER_POST_CLAUSE_BOUNDARIES,
+                post_rescue=_POST_STILL_ACTIVE_RE,
+            ):
+                return True
+            start = end
     return False

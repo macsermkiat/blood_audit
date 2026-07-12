@@ -1410,6 +1410,22 @@ class TestRbcClearCutPromptSemantics:
         )
 
     @pytest.mark.parametrize("mode", _RBC_MODES)
+    def test_active_bleeding_rule_excludes_melena(self, mode: str) -> None:
+        # Owner ruling (case 68037502): melena is digested/old blood, not
+        # active hemorrhage. The prompt must say so, and route it to
+        # HEMODYNAMIC_INSTABILITY / SUB_THRESHOLD_HB, so the model stops
+        # citing ACTIVE_BLEEDING for melena at gray-zone Hb without shock.
+        prompt = system_prompt_for(task_mode=mode, cohort_threshold=7.5)
+        lowered = prompt.lower()
+        assert "melena" in lowered, (
+            f"{mode} prompt must name melena as digested/non-active blood so "
+            "the model does not over-call it as ACTIVE_BLEEDING"
+        )
+        assert "coffee-ground" in lowered or "coffee ground" in lowered, (
+            f"{mode} prompt must name coffee-ground (digested blood) alongside melena"
+        )
+
+    @pytest.mark.parametrize("mode", _RBC_MODES)
     def test_small_bleed_disqualifiers_enumerated(self, mode: str) -> None:
         prompt = system_prompt_for(task_mode=mode, cohort_threshold=7.5).lower()
         for phrase in (
@@ -1519,8 +1535,12 @@ class TestRbcPromptHashGolden:
     # rule now requires the qualifying volume/marker to belong to the CURRENT
     # bleeding episode. Blessed by
     # test_qualifying_volume_must_be_current_episode.
+    # Re-pinned for the melena ruling: the ACTIVE_BLEEDING rule now states
+    # melena / coffee-ground / tarry stool is digested (old) blood, not active
+    # hemorrhage, qualifying only with shock or a sub-threshold Hb. Blessed by
+    # test_active_bleeding_rule_excludes_melena.
     RBC_HB_7_10_75_EMPTY_EVIDENCE = (
-        "b85268af77957e40cfd9e875f612922d5f579332400777378f62ad1e3818aeec"
+        "a4c361e5fbc02bdefffbf697408667c97a10a1ac3318dbb7ed97de6daca7f6f8"
     )
     # Re-pinned for #93 boundary alignment: dispatch routes Hb >= 10.0 to this
     # template (engine ``hb_ge_10``), so its prose states the inclusive
@@ -1529,8 +1549,9 @@ class TestRbcPromptHashGolden:
     # test_gt_10_override_states_inclusive_boundary.
     # Re-pinned for case 68080335 (stale-dated volume) — same shared
     # ACTIVE_BLEEDING rule edit as the gray-zone golden above.
+    # Re-pinned for the melena ruling — same shared ACTIVE_BLEEDING rule edit.
     RBC_HB_GT_10_75_EMPTY_EVIDENCE = (
-        "cfb6b9fd78557e232a4996a7dd4e2ab65368f7c8bfe81f2ecdf9d33f90c18dd9"
+        "4b81a7989fe4ffa1b2a896a07a46c169546c6bf259bad418270597598aeca1d5"
     )
 
     def test_hb_7_10_review_cohort_7_5_hash_is_pinned(self) -> None:

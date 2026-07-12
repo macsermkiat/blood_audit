@@ -596,6 +596,110 @@ class TestStaleDatedVolumeGate:
         )
 
 
+class TestMelenaDoesNotQualify:
+    """Melena is digested/old blood, not active hemorrhage (owner ruling).
+
+    WHY (case 68037502): the model cited ACTIVE_BLEEDING for melena at a
+    gray-zone Hb with no shock. Melena's charted "volume" is stool, not blood
+    loss, so it must NOT satisfy the >300 mL volume path of the standalone
+    exemption. It still clears on a documented life-threatening / shock marker
+    (the shock pathway); a qualifying low Hb is a separate exemption upstream.
+    """
+
+    @pytest.mark.parametrize(
+        "quote",
+        [
+            "ถ่ายเป็น Melena 400 ml",
+            "melena approx 500 mL overnight",
+            "coffee-ground emesis 400 mL",
+            "tarry black stool 600 ml",
+            "ถ่ายดำ 400 ml",
+        ],
+    )
+    def test_melena_volume_does_not_exempt(self, quote: str) -> None:
+        assert not qualified_bleeding_exempt(
+            [_active_bleed(quote=quote, confidence=0.9)]
+        )
+
+    def test_melena_with_shock_marker_still_exempts(self) -> None:
+        # "With shock we care": a documented hemorrhagic-shock marker clears
+        # even a melena quote (the shock pathway, not the volume path).
+        assert qualified_bleeding_exempt(
+            [_active_bleed(quote="melena with hemorrhagic shock", confidence=0.9)]
+        )
+
+    def test_fresh_blood_volume_still_exempts(self) -> None:
+        # The disqualifier is melena-specific: fresh/active blood with a
+        # qualifying volume is unaffected.
+        assert qualified_bleeding_exempt(
+            [_active_bleed(quote="fresh PR bleeding 400 mL", confidence=0.9)]
+        )
+
+    def test_melena_and_fresh_hematochezia_volume_disqualified(self) -> None:
+        # Conservative simplification: a quote naming melena is disqualified
+        # from the volume path even when a fresh term co-occurs — the volume
+        # cannot be safely attributed to active loss. Documented as a known
+        # limitation; the shock/Hb pathways still apply.
+        assert not qualified_bleeding_exempt(
+            [_active_bleed(quote="melena and hematochezia 500 mL", confidence=0.9)]
+        )
+
+    @pytest.mark.parametrize(
+        "quote",
+        [
+            "denies melena; fresh PR bleeding 500 mL",
+            "no melena; fresh PR bleeding 500 mL",
+            "ไม่มีถ่ายดำ fresh PR bleeding 500 mL",
+        ],
+    )
+    def test_negated_melena_does_not_suppress_fresh_volume(self, quote: str) -> None:
+        # Codex PR #103: the disqualifier is negation-aware — an explicit
+        # melena denial must not strip the volume path from a co-documented
+        # current fresh bleed in the same quote.
+        assert qualified_bleeding_exempt([_active_bleed(quote=quote, confidence=0.9)])
+
+    def test_comma_denial_list_melena_stays_disqualified(self) -> None:
+        # The marker screen's comma boundary is kept: a comma-distributed
+        # denial ("no hematemesis, melena") still reads melena as present
+        # here, which only withholds the volume exemption — fail-closed for
+        # the auto-clear surface, same direction as the marker screens.
+        assert not qualified_bleeding_exempt(
+            [_active_bleed(quote="no hematemesis, melena; EBL 500 mL", confidence=0.9)]
+        )
+
+    @pytest.mark.parametrize(
+        "quote",
+        [
+            "denies hematemesis but melena 500 mL",
+            "ไม่มีอาเจียนเป็นเลือด แต่ถ่ายดำ 500 ml",
+        ],
+    )
+    def test_contrastive_melena_stays_disqualified(self, quote: str) -> None:
+        # Codex PR #103 round 3: the denial binds up to the contrastive
+        # connector — what follows is documented PRESENT melena, so its
+        # stool figure must not reopen the >300 mL path.
+        assert not qualified_bleeding_exempt(
+            [_active_bleed(quote=quote, confidence=0.9)]
+        )
+
+    @pytest.mark.parametrize(
+        "quote",
+        [
+            "melena not controlled 500 mL",
+            "melena not resolved 500 mL",
+            "ถ่ายดำไม่หยุด 500 ml",
+        ],
+    )
+    def test_still_active_melena_stays_disqualified(self, quote: str) -> None:
+        # Codex PR #103 round 2: a post-side double negative means the
+        # melena is ONGOING, not absent — the still-active rescue keeps the
+        # volume disqualifier engaged, or the "not" would falsely reopen the
+        # >300 mL path on a stool figure.
+        assert not qualified_bleeding_exempt(
+            [_active_bleed(quote=quote, confidence=0.9)]
+        )
+
+
 class TestBleedingQuoteIsStale:
     """``bleeding_quote_is_stale`` gates the hemodynamic-floor accompaniment.
 
