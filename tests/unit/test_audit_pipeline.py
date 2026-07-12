@@ -1946,6 +1946,136 @@ class TestReserveAheadGate:
         assert row.final_classification == "PREOP_RESERVATION_UNCONFIRMED"
         assert row.review_reason == PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON
 
+    def test_issue117_education_and_transport_citations_do_not_confirm(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Case 68046079: FFP-education note + transport-to-OR must not confirm.
+
+        Both grounded citations (a pre-transfusion baseline V/S and a
+        porter-to-OR dispatch) are red-cell-bearing lines, so only the #117
+        negative-context guards keep them from confirming administration of the
+        reserved red cells. Fails before the guard (lands NEEDS_REVIEW)."""
+        from bba import feature_flags
+
+        transport = "- ให้นำ LPRC 2 unit , FFP 2 unit IV to OR"
+        pre_vitals = (
+            "- ดูเเลเจาะ lab INR PT PTT พรุ่งนี้เช้า + ติดตามผล R:  at 00.15น. "
+            "V/Sก่อนให้เลือด BT = 37.7  C  PR = 109  bpm"
+        )
+        ctx = _row_context(
+            audit_id="audit-68046079",
+            hb_value=12.9,
+            cohort_label=CohortLabel.CARDIAC_SURGERY,
+            cohort_threshold=7.5,
+            upcoming_procedure_hours=24.0,
+            evidence_text=f"Nursing record:\n{transport}\n{pre_vitals}",
+        )
+        monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", True)
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="NEEDS_REVIEW",
+            reasoning_en="Education and transport text do not prove administration.",
+            extra_input={
+                "administration_evidence": [
+                    {
+                        "quote": "ให้นำ LPRC 2 unit , FFP 2 unit IV to OR",
+                        "source_id": "E1",
+                        "marker_type": "unit_numbers",
+                    },
+                    {
+                        "quote": "at 00.15น. V/Sก่อนให้เลือด BT = 37.7  C",
+                        "source_id": "E1",
+                        "marker_type": "post_transfusion_check",
+                    },
+                ],
+                "administration_claimed": True,
+                "reservation_assessment": "INSUFFICIENT_EVIDENCE",
+            },
+        )
+
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+
+        assert row.final_classification == "PREOP_RESERVATION_UNCONFIRMED"
+        assert row.review_reason == PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON
+
+    def test_issue117_history_arrow_citation_does_not_confirm(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Case 68055153: a dated history-summary arrow ("... --> LPRC 1 unit")
+        records a PAST transfusion, not administration of the reserved unit."""
+        from bba import feature_flags
+
+        line = "- 2/9/68 Hb=7.6 ,Hct=23.3 ,Plt= 354000, PTT=36 --> LPRC 1 unit"
+        ctx = _row_context(
+            audit_id="audit-68055153",
+            hb_value=12.9,
+            cohort_label=CohortLabel.CARDIAC_SURGERY,
+            cohort_threshold=7.5,
+            upcoming_procedure_hours=24.0,
+            evidence_text=f"Nursing record:\n{line}",
+        )
+        monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", True)
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="NEEDS_REVIEW",
+            reasoning_en="A history-summary arrow is not current administration.",
+            extra_input={
+                "administration_evidence": [
+                    {
+                        "quote": "2/9/68 Hb=7.6 ,Hct=23.3 ,Plt= 354000, PTT=36 --> LPRC 1 unit",
+                        "source_id": "E1",
+                        "marker_type": "unit_numbers",
+                    }
+                ],
+                "administration_claimed": True,
+                "reservation_assessment": "INSUFFICIENT_EVIDENCE",
+            },
+        )
+
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+
+        assert row.final_classification == "PREOP_RESERVATION_UNCONFIRMED"
+        assert row.review_reason == PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON
+
+    def test_issue117_reversed_crossmatch_citation_does_not_confirm(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Case 68080335: reversed crossmatch shorthand ("M/G LPRC 2Unit ...")
+        is a group-and-match reservation step, not administration."""
+        from bba import feature_flags
+
+        line = "* Notify ผล Lab ดูเเล M/G LPRC 2Unit ได้เเล้วให้เลย"
+        ctx = _row_context(
+            audit_id="audit-68080335",
+            hb_value=12.9,
+            cohort_label=CohortLabel.CARDIAC_SURGERY,
+            cohort_threshold=7.5,
+            upcoming_procedure_hours=24.0,
+            evidence_text=f"Nursing record:\n{line}",
+        )
+        monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", True)
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="NEEDS_REVIEW",
+            reasoning_en="Crossmatch-ready shorthand is not administration.",
+            extra_input={
+                "administration_evidence": [
+                    {
+                        "quote": "M/G LPRC 2Unit ได้เเล้วให้เลย",
+                        "source_id": "E1",
+                        "marker_type": "unit_numbers",
+                    }
+                ],
+                "administration_claimed": True,
+                "reservation_assessment": "INSUFFICIENT_EVIDENCE",
+            },
+        )
+
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+
+        assert row.final_classification == "PREOP_RESERVATION_UNCONFIRMED"
+        assert row.review_reason == PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON
+
     def test_unconfirmed_replay_is_idempotent(
         self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
     ) -> None:

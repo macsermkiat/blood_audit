@@ -148,6 +148,121 @@ class TestNegativeContextGuard:
         assert any(f.category == "post_transfusion" for f in summary.findings)
 
 
+class TestIssue117ResidualCitations:
+    """Snippet-level pins for the three reserve-ahead residuals (#117).
+
+    Each REJECT case is the exact narrative line that falsely confirmed
+    administration through the extractor or a grounded LLM citation; each
+    PRESERVE case is a genuine red-cell administration that MUST still confirm.
+    The PRESERVE cases encode WHY the new guards are narrow: the fix rejects
+    counselling / dispatch / crossmatch / pre-transfusion / history-arrow text
+    WITHOUT a blanket "ได้ LPRC" rejection that would erase real transfusions.
+    """
+
+    # -- 68046079: education FFP note + transport-to-OR --------------------
+    def test_case_68046079_counselling_line_is_not_a_marker(self) -> None:
+        line = (
+            "A : - แจ้งให้ผู้ป่วยทราบถึงความจำเป็นในการให้เลือด วิธีการให้เลือด "
+            "อาการและภาวะแทรกซ้อนที่อาจจะเกิดขึ้นได้ขณะและหลังให้เลือดตามความจำเป็น"
+        )
+        assert scan_administration([_note("IPDNRFOCUSDT", 0, line)]).is_empty is True
+
+    def test_case_68046079_complication_watch_line_is_not_a_marker(self) -> None:
+        line = (
+            "- Observe complication ขณะให้เลือด ได้แก่ มีผื่นคัน ไข้สูง หนาวสั่น "
+            "ถ้ามีอาการแพ้เลือด ให้หยุดการให้เลือรายงานแพทย์ทันที"
+        )
+        assert scan_administration([_note("IPDNRFOCUSDT", 5, line)]).is_empty is True
+
+    def test_case_68046079_transport_to_or_is_not_a_marker(self) -> None:
+        line = "- ให้นำ LPRC 2 unit , FFP 2 unit IV to OR"
+        assert scan_administration([_note("IPDNRFOCUSDT", 10, line)]).is_empty is True
+        assert (
+            administration_citation_has_negative_context(f"Nursing: {line}", line)
+            is True
+        )
+
+    def test_case_68046079_pre_transfusion_vitals_is_negative_context(self) -> None:
+        line = (
+            "- ดูเเลเจาะ lab INR PT PTT พรุ่งนี้เช้า + ติดตามผล R:  at 00.15น. "
+            "V/Sก่อนให้เลือด BT = 37.7  C  PR = 109  bpm"
+        )
+        quote = "at 00.15น. V/Sก่อนให้เลือด BT = 37.7  C"
+        assert administration_citation_has_negative_context(line, quote) is True
+
+    # -- 68080335: reversed crossmatch shorthand ---------------------------
+    def test_case_68080335_reversed_crossmatch_is_not_a_marker(self) -> None:
+        line = "* Notify ผล Lab ดูเเล M/G LPRC 2Unit ได้เเล้วให้เลย"
+        assert scan_administration([_note("IPDNRFOCUSDT", 0, line)]).is_empty is True
+        assert (
+            administration_citation_has_negative_context(f"Nursing: {line}", line)
+            is True
+        )
+
+    # -- 68055153: retrospective history-summary arrow ---------------------
+    def test_case_68055153_history_arrow_is_negative_context(self) -> None:
+        line = "- 2/9/68 Hb=7.6 ,Hct=23.3 ,Plt= 354000, PTT=36 --> LPRC 1 unit"
+        quote = "2/9/68 Hb=7.6 ,Hct=23.3 ,Plt= 354000, PTT=36 --> LPRC 1 unit"
+        assert administration_citation_has_negative_context(line, quote) is True
+
+    # -- PRESERVE: genuine administrations must still confirm --------------
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "ให้เลือด LPRC 2 unit v drip in 3 hr at 15.00 น.",
+        ],
+    )
+    def test_genuine_administration_still_marks(self, line: str) -> None:
+        assert scan_administration(
+            [_note("IPDNRFOCUSDT", 0, line)]
+        ).has_affirmative_marker
+
+    @pytest.mark.parametrize(
+        "quote",
+        [
+            # near-identical in FORM to 68080335's rejected history citation,
+            # but a current intra-HD / at-OR administration: must NOT be guarded.
+            "ได้ LPRC 1 unit iv intra HD",
+            "ได้รับ LPRC 1 unit at OR",
+        ],
+    )
+    def test_genuine_administration_citation_survives(self, quote: str) -> None:
+        source = f"Nursing record: {quote} ผู้ป่วยอาการคงที่"
+        assert administration_citation_has_negative_context(source, quote) is False
+
+    def test_reversed_crossmatch_guard_does_not_match_milligrams(self) -> None:
+        # \bM/G\b requires the slash, so "mg" (milligrams) never trips it.
+        quote = "Gentamicin 400 mg iv drip in 1 hr"
+        source = f"Nursing record: {quote}"
+        assert administration_citation_has_negative_context(source, quote) is False
+
+    # The complication cue is anchored on the prospective "ขณะ(ให้|ได้รับ)"
+    # instruction form: a COMPLETED "no complication post-transfusion" note
+    # that carries its own affirmative marker must still confirm.
+    def test_completed_post_transfusion_complication_note_still_marks(self) -> None:
+        line = (
+            "Observe complication post-transfusion: none, ได้รับเลือด LPRC 1 unit เรียบร้อย"
+        )
+        assert scan_administration(
+            [_note("IPDNRFOCUSDT", 0, line)]
+        ).has_affirmative_marker
+
+    # The history-arrow cue requires a leading DD/MM/YY date: a bare "-->" used
+    # as a live "therefore" connective must NOT be treated as negative context.
+    def test_undated_arrow_connective_is_not_negative_context(self) -> None:
+        quote = "anemia --> เลือด LPRC 1 unit ให้แล้วเสร็จสิ้น 15.00 น."
+        source = f"Progress: {quote}"
+        assert administration_citation_has_negative_context(source, quote) is False
+
+    # "นำ ... ไปให้ผู้ป่วย" (carry to give TO the patient) is administration,
+    # not dispatch: the ไป/to guard is word-bounded so "ไปให้" does not trip it.
+    def test_carry_to_give_to_patient_still_marks(self) -> None:
+        line = "นำ LPRC 1 unit ไปให้ผู้ป่วย ได้รับเลือดครบถ้วน"
+        assert scan_administration(
+            [_note("IPDNRFOCUSDT", 0, line)]
+        ).has_affirmative_marker
+
+
 class TestNonMarkers:
     @pytest.mark.parametrize(
         "text",
