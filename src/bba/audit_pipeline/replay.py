@@ -142,6 +142,9 @@ PERIOP_CONTRADICTION_REVIEW_REASON = "periop_signal_contradiction"
 Distinct from ``hallucination_suspect`` (verifier rejected every attempt)
 so a reviewer dashboard can triage the two failure modes separately."""
 
+PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON = "preop_reservation_unconfirmed"
+ADMINISTRATION_CONTRADICTION_REVIEW_REASON = "administration_signal_contradiction"
+
 _PERIOP_CONTRADICTION_CLASSES: frozenset[Classification] = frozenset(
     {"INSUFFICIENT_EVIDENCE", "POTENTIALLY_INAPPROPRIATE"}
 )
@@ -508,6 +511,30 @@ def _grounded_indications(
             continue
         if contiguous_match(nfc_normalize(quote), source.text):
             grounded.append(indication)
+    return tuple(grounded)
+
+
+def _grounded_administration_evidence(
+    result: BatchSubmissionResult,
+    context: PipelineRowContext,
+) -> tuple[dict[str, str], ...]:
+    """Keep administration citations grounded in the row's evidence bundle.
+
+    Uses the same NFC-normalized cited-source contiguous matching as indication
+    grounding. Missing, malformed, unknown-source, and non-matching citations
+    fail closed to an empty tuple.
+    """
+    sources = tuple(
+        EvidenceSource(source_id=chunk.evidence_id, text=nfc_normalize(chunk.text))
+        for chunk in context.evidence_chunks
+    )
+    grounded: list[dict[str, str]] = []
+    for evidence in _administration_evidence_from_result(result):
+        source = find_cited_source(evidence["source_id"], sources)
+        if source is None:
+            continue
+        if contiguous_match(nfc_normalize(evidence["quote"]), source.text):
+            grounded.append(evidence)
     return tuple(grounded)
 
 
@@ -1083,6 +1110,44 @@ def _build_audit_row(
     negative_evidence = _negative_evidence_from_result(winning_result)
     confidence = _confidence_from_attempts(indications)
     escalated = any("opus" in record.result.model_id for record in attempts)
+    # Reserve-ahead asymmetric gate (#109): replaces the interim #108 exemption.
+    _gate_terminal = False
+    if reserve_ahead:
+        grounded_admin = _grounded_administration_evidence(winning_result, context)
+        intraop = (
+            context.periop_summary is not None
+            and context.periop_summary.intraop_transfusion
+        )
+        ebl_ok = (
+            context.periop_summary is not None
+            and context.periop_summary.blood_loss_ml is not None
+            and context.periop_summary.blood_loss_ml >= PERIOP_GUARDRAIL_MIN_EBL_ML
+        )
+        extractor_marker = (
+            context.administration_summary is not None
+            and context.administration_summary.has_affirmative_marker
+        )
+        structured_admin = intraop or ebl_ok
+        admin_confirmed = bool(grounded_admin) or extractor_marker or structured_admin
+        if not admin_confirmed:
+            final_classification = "PREOP_RESERVATION_UNCONFIRMED"
+            review_reason = PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON
+            _gate_terminal = True
+        elif structured_admin and not _administration_claimed_from_result(
+            winning_result
+        ):
+            # The reserve-ahead prompt explicitly asks whether administration was
+            # documented, so administration_claimed=False is the model's explicit
+            # refusal to claim it. Structured intra-op/EBL evidence conflicts with
+            # that answer and reaches a human rather than being silently resolved.
+            # The confirmation predicate has precedence: structured evidence first
+            # sets admin_confirmed=True; this overlay only re-routes to review.
+            final_classification = "NEEDS_REVIEW"
+            review_reason = ADMINISTRATION_CONTRADICTION_REVIEW_REASON
+            _gate_terminal = True
+        # Otherwise administration is confirmed without contradiction. The
+        # reservation-appropriateness verdict flows through the normal chain;
+        # reserve_ahead continues to exempt only the B1 high-Hb assertion.
     # Peri-op contradiction guardrail (Case 107): a hard deterministic
     # peri-op signal overrides a non-committal / soft-negative LLM verdict.
     # We rewrite the classification + review_reason but keep verifier_pass,
@@ -1093,7 +1158,9 @@ def _build_audit_row(
     # (:meth:`PipelineRowContext.for_platelet`), so both are gated OFF platelet
     # rows (Stage B MED-2). The platelet leg has its own over-clear guardrail
     # below.
-    if context.component != "platelet" and periop_contradiction(
+    if _gate_terminal:
+        pass
+    elif context.component != "platelet" and periop_contradiction(
         final_classification, context
     ):
         final_classification = "NEEDS_REVIEW"
@@ -1110,10 +1177,9 @@ def _build_audit_row(
     # structured extractor and no prose exemption path. Checked after peri-op
     # so that earlier winner remains authoritative; the LLM reasoning and
     # indications are preserved for auditability.
-    # Interim #108 reserve-ahead semantics: the model's APPROPRIATE value judges
+    # For a gate-confirmed reserve-ahead row, the model's APPROPRIATE value judges
     # the reservation decision, so the transfusion-focused B1 high-Hb assertion
-    # must not rewrite it. The default-off flag keeps this branch unreachable in
-    # every runtime path until #109 adds the administration-confirmation gate.
+    # must not rewrite it.
     elif (
         context.component != "platelet"
         and not reserve_ahead
@@ -1689,6 +1755,7 @@ def _confidence_from_attempts(
 
 
 __all__ = [
+    "ADMINISTRATION_CONTRADICTION_REVIEW_REASON",
     "EMPTY_REASONING_REVIEW_REASON",
     "LLM_NATIVE_REVIEW_ASSERT_REASON",
     "LLM_OVERCLEAR_ASSERT_REASON",
@@ -1696,6 +1763,7 @@ __all__ = [
     "LLM_OVERCLEAR_UNSTABLE_HR",
     "LLM_OVERCLEAR_UNSTABLE_SBP",
     "PERIOP_CONTRADICTION_REVIEW_REASON",
+    "PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON",
     "PERIOP_GUARDRAIL_MIN_EBL_ML",
     "PERIOP_OVERCLEAR_WINDOW_HOURS",
     "Verifier",

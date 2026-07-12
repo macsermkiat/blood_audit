@@ -180,6 +180,15 @@ _REVIEW_REASON_LABELS: dict[str, str] = {
         "Peri-operative hard signal contradicts the LLM verdict — kept "
         "NEEDS_REVIEW for a human (the intended residual)"
     ),
+    "preop_reservation_unconfirmed": (
+        "Reserve-ahead pre-op crossmatch with no affirmative administration "
+        "evidence — terminal, excluded from transfusion attribution; not queued "
+        "for human review"
+    ),
+    "administration_signal_contradiction": (
+        "Structured intra-op/EBL evidence indicates administration but the model "
+        "did not claim it — escalated to human review"
+    ),
     "hallucination_suspect": (
         "Quote verifier rejected every attempt — the cited quotes did not "
         "ground in the evidence bundle"
@@ -223,6 +232,9 @@ _CLS_DISPLAY: dict[str, str] = {
     "APPROPRIATE": "Appropriate",
     "NEEDS_REVIEW": "Needs review",
     "POTENTIALLY_INAPPROPRIATE": "Potentially inappropriate",
+    "PREOP_RESERVATION_UNCONFIRMED": (
+        "Administration unconfirmed (pre-op reservation)"
+    ),
     "INAPPROPRIATE": "Inappropriate",
     "INSUFFICIENT_EVIDENCE": "Insufficient evidence",
     "EXCLUDED": "Excluded",
@@ -1135,6 +1147,10 @@ def main() -> None:
             _nav_tag = ""
         elif det_class.upper() == (llm_final or "").upper():
             _nav_tag = ""
+        # This store-only terminal verdict makes no transfusion claim, so a
+        # deterministic-vs-LLM transfusion disagreement is not meaningful.
+        elif (llm_final or "").upper() == "PREOP_RESERVATION_UNCONFIRMED":
+            _nav_tag = ""
         elif {"POTENTIALLY_INAPPROPRIATE", "APPROPRIATE"} <= {
             det_class.upper(),
             (llm_final or "").upper(),
@@ -1669,6 +1685,7 @@ def main() -> None:
     .cls-potentially_inappropriate { background: var(--err-bg);  color: var(--err-fg); }
     .cls-needs_review { background: var(--warn-bg); color: var(--warn-fg); }
     .cls-insufficient_evidence { background: var(--neu-bg);  color: var(--neu-fg); }
+    .cls-preop_reservation_unconfirmed { background: var(--info-bg); color: var(--info-fg); }
     .cls-excluded { background: var(--info-bg); color: var(--info-fg); }
     .conf { font-size: 0.75rem; font-weight: 400; color: var(--s-muted); }
     .rationale { font-size: 0.8125rem; color: var(--s-muted); margin-top: 4px; }
@@ -1809,6 +1826,7 @@ LLM: Anthropic Batch classification on structured evidence only.
   <span class="cls cls-appropriate">Appropriate</span>
   <span class="cls cls-needs_review">Needs review</span>
   <span class="cls cls-potentially_inappropriate">Potentially inappropriate</span>
+  <span class="cls cls-preop_reservation_unconfirmed">Administration unconfirmed (pre-op reservation)</span>
   <span class="cls cls-insufficient_evidence">Insufficient evidence</span>
   <span class="cls cls-excluded">Excluded</span>
 </div>

@@ -32,6 +32,7 @@ class TestBucketOf:
             ("NEEDS_REVIEW", "unresolved"),
             ("INSUFFICIENT_EVIDENCE", "unresolved"),
             ("POTENTIALLY_INAPPROPRIATE", "unresolved"),
+            ("PREOP_RESERVATION_UNCONFIRMED", "unresolved"),
         ],
     )
     def test_maps_every_classification(self, label: str, bucket: str) -> None:

@@ -59,12 +59,11 @@ sensible default (:func:`default_indication_codes_extractor`)."""
 
 
 ClassificationProjector = Callable[[AuditClassification], ReportClassification]
-"""Project the audit-store's 5-value :class:`Classification` literal onto
+"""Project the audit-store's :class:`Classification` literal onto
 the report-generator's 4-value literal. The default
 (:func:`default_classification_projector`) is identity on the four shared
-values and raises on the audit-store-only ``"POTENTIALLY_INAPPROPRIATE"``
-— callers that want a non-default treatment (e.g., bucket as
-``NEEDS_REVIEW``) inject their own."""
+values and raises on audit-store-only values — callers that want a non-default
+treatment (e.g., bucket as ``NEEDS_REVIEW``) inject their own."""
 
 
 class MissingResolverError(ReportGenerationError):
@@ -104,7 +103,7 @@ def default_classification_projector(
     value: AuditClassification,
 ) -> ReportClassification:
     """Identity on the four shared classifications; raise on the audit-
-    store-only ``"POTENTIALLY_INAPPROPRIATE"``.
+    store-only classifications.
 
     Failing loud is the right default because mapping
     ``POTENTIALLY_INAPPROPRIATE`` is a clinical decision (the PRD does
@@ -117,6 +116,12 @@ def default_classification_projector(
             "to map this onto the report-generator's 4-value Classification "
             "(APPROPRIATE / INAPPROPRIATE / NEEDS_REVIEW / "
             "INSUFFICIENT_EVIDENCE)"
+        )
+    if value == "PREOP_RESERVATION_UNCONFIRMED":
+        raise MissingResolverError(
+            "audit_store row carries final_classification="
+            "'PREOP_RESERVATION_UNCONFIRMED'; inject a projector to pool it "
+            "into Unresolved"
         )
     # The remaining four audit-store classifications are exactly the
     # report-generator's literal members; the narrowed return is safe.
