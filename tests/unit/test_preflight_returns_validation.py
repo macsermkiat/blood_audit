@@ -315,6 +315,56 @@ def test_notes_in_window_none_keeps_all() -> None:
     assert PF.notes_in_window((a, b), None) == (a, b)
 
 
+def test_explaining_sibling_matches_not_returned_unit_in_window() -> None:
+    from datetime import date as _date
+
+    sibs = (
+        PF.SiblingUnit("O1", _date(2025, 4, 2), is_returned=False, status="2"),
+        PF.SiblingUnit("O2", _date(2025, 4, 2), is_returned=True, status="3"),
+    )
+    match = PF.explaining_sibling((_date(2025, 3, 29), _date(2025, 4, 2)), sibs)
+    assert match is not None and match.reqno == "O1"
+
+
+def test_explaining_sibling_ignores_returned_or_out_of_window() -> None:
+    from datetime import date as _date
+
+    window = (_date(2025, 3, 29), _date(2025, 4, 2))
+    # returned sibling (a second standby) is not an administration source
+    assert (
+        PF.explaining_sibling(
+            window, (PF.SiblingUnit("O", _date(2025, 4, 1), True, "3"),)
+        )
+        is None
+    )
+    # not-returned but dispensed outside the window
+    assert (
+        PF.explaining_sibling(
+            window, (PF.SiblingUnit("O", _date(2025, 4, 20), False, "2"),)
+        )
+        is None
+    )
+    # no window -> no attribution
+    assert (
+        PF.explaining_sibling(
+            None, (PF.SiblingUnit("O", _date(2025, 4, 1), False, "2"),)
+        )
+        is None
+    )
+
+
+def test_explaining_sibling_picks_earliest_deterministically() -> None:
+    from datetime import date as _date
+
+    window = (_date(2025, 4, 1), _date(2025, 4, 5))
+    sibs = (
+        PF.SiblingUnit("LATE", _date(2025, 4, 4), False, "2"),
+        PF.SiblingUnit("EARLY", _date(2025, 4, 2), False, "5"),
+    )
+    match = PF.explaining_sibling(window, sibs)
+    assert match is not None and match.reqno == "EARLY"
+
+
 def test_windowed_recall_drops_out_of_window_administration() -> None:
     # A real administration note 16 days after the return window is a different
     # transfusion in the same admission and must not flag the returned order.

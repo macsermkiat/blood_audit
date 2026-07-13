@@ -229,6 +229,45 @@ def notes_in_window(
     return tuple(n for n in notes if lo <= n.timestamp.date() <= hi)
 
 
+@dataclass(frozen=True)
+class SiblingUnit:
+    """One ledger unit of a DIFFERENT order in the same admission."""
+
+    reqno: str
+    dispense_date: date | None
+    is_returned: bool
+    status: str
+
+
+def explaining_sibling(
+    window: tuple[date, date] | None, sibling_units: Sequence[SiblingUnit]
+) -> SiblingUnit | None:
+    """A sibling order's NOT-returned unit dispensed inside ``window``, or None.
+
+    When a screened (all-returned) order carries an in-window administration
+    note, a not-returned unit of a *different* order in the same admission,
+    dispensed while the screened standby units were out, is the parsimonious
+    source of that note — so the note is attributed there rather than to the
+    returned order (the automated form of the 68019920 -> 68020779
+    adjudication). Conservative: fires only on a concrete dispensed-not-returned
+    unit, and every attribution is reported for human audit. Returns the
+    earliest-dispensed matching unit (deterministic).
+    """
+    if window is None:
+        return None
+    lo, hi = window
+    matches = [
+        u
+        for u in sibling_units
+        if u.dispense_date is not None
+        and lo <= u.dispense_date <= hi
+        and not u.is_returned
+    ]
+    if not matches:
+        return None
+    return sorted(matches, key=lambda u: (u.dispense_date, u.reqno))[0]
+
+
 def recommendation(
     *,
     screened_count: int,
@@ -284,6 +323,16 @@ class InvariantViolation:
 
 
 @dataclass(frozen=True)
+class NoteAttribution:
+    """A windowed recall hit attributed to a different same-admission order."""
+
+    reqno: str
+    attributed_to: str
+    dispensed: str
+    status: str
+
+
+@dataclass(frozen=True)
 class PreflightResult:
     bdvsttrans_source: str
     orders_total: int
@@ -304,6 +353,8 @@ class PreflightResult:
     reissue_findings: list[ReissueFinding]
     recall_conflicts: list[RecallConflict]
     recall_conflicts_windowed: list[RecallConflict]
+    recall_conflicts_windowed_net: list[RecallConflict]
+    note_attributions: list[NoteAttribution]
     invariant_violations: list[InvariantViolation]
     recommendation: str
     screened_reqnos: list[str] = field(default_factory=list)
@@ -395,6 +446,30 @@ def _all_returned(trans_rows: Sequence[Mapping[str, str]]) -> bool:
     return bool(trans_rows) and nonreturned_unit_count(trans_rows) == 0
 
 
+def _sibling_units_for(
+    an: str,
+    own_reqno: str,
+    reqnos_by_an: Mapping[str, set[str]],
+    trans_by_reqno: Mapping[str, list[dict[str, str]]],
+) -> list[SiblingUnit]:
+    """Ledger units of every OTHER order in ``an`` (same admission)."""
+    units: list[SiblingUnit] = []
+    for reqno in reqnos_by_an.get(an, set()):
+        if reqno == own_reqno:
+            continue
+        for u in trans_by_reqno.get(reqno, []):
+            status = str(u.get("UNITSTAT") or "").strip()
+            units.append(
+                SiblingUnit(
+                    reqno=reqno,
+                    dispense_date=parse_ledger_date(u.get("PAYDATE")),
+                    is_returned=status == _RETURNED_STATUS,
+                    status=status,
+                )
+            )
+    return units
+
+
 def run_preflight() -> PreflightResult:
     if not BUNDLE.exists():
         sys.exit(f"bundle not found: {BUNDLE} (run sample_bundle.py first)")
@@ -404,6 +479,15 @@ def run_preflight() -> PreflightResult:
     diag = _read_csv("Diagnosis.csv")
     progress = _read_optional_csv("IPDADMPROGRESS.csv")
     focus = _read_optional_csv("IPDNRFOCUSDT.csv")
+    # Same-admission related orders (sidecar) power windowed-recall attribution:
+    # an in-window note is attributed to a neighbouring dispensed-not-returned
+    # order rather than the returned one. Optional -> attribution just no-ops.
+    related = _read_optional_csv("BDVST_RELATED.csv")
+    reqnos_by_an: dict[str, set[str]] = {}
+    for r in [*bdvst, *related]:
+        an_v, rq = (r.get("AN") or "").strip(), (r.get("REQNO") or "").strip()
+        if an_v and rq:
+            reqnos_by_an.setdefault(an_v, set()).add(rq)
 
     bdvsttrans_path = _resolve_bdvsttrans_path()
     if not bdvsttrans_path.exists():
@@ -455,6 +539,8 @@ def run_preflight() -> PreflightResult:
     screened_reqnos: list[str] = []
     screened_notes: dict[str, Sequence[VitalsNote]] = {}
     screened_notes_windowed: dict[str, Sequence[VitalsNote]] = {}
+    window_by_reqno: dict[str, tuple[date, date] | None] = {}
+    sibling_units_by_reqno: dict[str, list[SiblingUnit]] = {}
     screened_without_notes = 0
     hard_fallthroughs: list[HardFallthrough] = []
     reissue_findings: list[ReissueFinding] = []
@@ -509,6 +595,10 @@ def run_preflight() -> PreflightResult:
             + [parse_ledger_date(r.get("RTNDATE")) for r in trans_rows]
         )
         screened_notes_windowed[order.reqno] = notes_in_window(notes, window)
+        window_by_reqno[order.reqno] = window
+        sibling_units_by_reqno[order.reqno] = _sibling_units_for(
+            order.an or "", order.reqno, reqnos_by_an, trans_by_reqno
+        )
 
         if is_reissue(summary):
             reissue_findings.append(
@@ -537,6 +627,28 @@ def run_preflight() -> PreflightResult:
     recall_conflicts_windowed = list(
         administration_recall_conflicts(screened_notes_windowed)
     )
+    # Auto-attribution: demote a windowed conflict when a NOT-returned unit of a
+    # different order in the same admission was dispensed inside the window (the
+    # generalised 68019920 -> 68020779 adjudication). The net count drives the
+    # gate; each attribution is reported for human audit.
+    recall_conflicts_windowed_net: list[RecallConflict] = []
+    note_attributions: list[NoteAttribution] = []
+    for conflict in recall_conflicts_windowed:
+        sibling = explaining_sibling(
+            window_by_reqno.get(conflict.reqno),
+            sibling_units_by_reqno.get(conflict.reqno, ()),
+        )
+        if sibling is None:
+            recall_conflicts_windowed_net.append(conflict)
+        else:
+            note_attributions.append(
+                NoteAttribution(
+                    reqno=conflict.reqno,
+                    attributed_to=sibling.reqno,
+                    dispensed=str(sibling.dispense_date),
+                    status=sibling.status,
+                )
+            )
 
     return PreflightResult(
         bdvsttrans_source=str(bdvsttrans_path),
@@ -558,15 +670,18 @@ def run_preflight() -> PreflightResult:
         reissue_findings=reissue_findings,
         recall_conflicts=recall_conflicts,
         recall_conflicts_windowed=recall_conflicts_windowed,
+        recall_conflicts_windowed_net=recall_conflicts_windowed_net,
+        note_attributions=note_attributions,
         invariant_violations=invariant_violations,
-        # The windowed recall is the accurate "does THIS order hide a
-        # transfusion" measure and drives the gate; the admission-wide count is
-        # reported alongside it for transparency (it over-flags on shared AN).
+        # NET windowed recall (after same-admission attribution) is the accurate
+        # "does THIS order hide a transfusion" measure and drives the gate; the
+        # windowed-pre-attribution and admission-wide counts are reported for
+        # transparency (both over-flag separate transfusions on a shared AN).
         recommendation=recommendation(
             screened_count=len(screened_reqnos),
             notes_available=notes_available,
             reissue_count=len(reissue_findings),
-            recall_conflicts=len(recall_conflicts_windowed),
+            recall_conflicts=len(recall_conflicts_windowed_net),
             invariant_violations=len(invariant_violations),
         ),
         screened_reqnos=screened_reqnos,
@@ -652,28 +767,32 @@ def print_report(result: PreflightResult) -> None:
 
     print("\n-- 2. Administration-note recall (screened set) --")
     print(
-        "  WINDOWED recall (drives the gate): notes restricted to the order's "
-        f"dispense->return interval +/-{_RECALL_WINDOW_PAD_DAYS}d, so a separate "
-        "later transfusion in the same admission is not misattributed."
+        f"  Notes windowed to the order's dispense->return interval "
+        f"+/-{_RECALL_WINDOW_PAD_DAYS}d; an in-window hit is then attributed to a "
+        "same-admission neighbour that was dispensed-not-returned in the window."
     )
+    net = result.recall_conflicts_windowed_net
     print(
-        f"    windowed conflicts   : {len(result.recall_conflicts_windowed)} / "
-        f"{result.screened} "
-        f"({_pct(len(result.recall_conflicts_windowed), result.screened)})"
+        f"    NET windowed conflicts (drives gate): {len(net)} / "
+        f"{result.screened} ({_pct(len(net), result.screened)})"
     )
-    for rc in result.recall_conflicts_windowed:
+    for rc in net:
         print(f"      CONFLICT reqno={rc.reqno} categories={list(rc.categories)}")
         for snip in rc.snippets:
             print(f"          {snip}")
     print(
-        "  ADMISSION-WIDE recall (context; mirrors the pilot leg's note window, "
-        "over-flags on shared AN):"
+        f"    auto-attributed to a sibling order  : {len(result.note_attributions)}"
+        "  (in-window note explained by another order -> NOT a true conflict)"
     )
+    for na in result.note_attributions:
+        print(
+            f"      reqno={na.reqno} -> sibling {na.attributed_to} "
+            f"(dispensed {na.dispensed}, status {na.status} not-returned)"
+        )
     print(
-        f"    admission-wide hits  : {len(result.recall_conflicts)} / "
-        f"{result.screened} "
-        f"({_pct(len(result.recall_conflicts), result.screened)})"
-        f"  [reqnos {', '.join(rc.reqno for rc in result.recall_conflicts) or 'none'}]"
+        f"    windowed (pre-attribution): {len(result.recall_conflicts_windowed)}"
+        f"   | admission-wide (context): {len(result.recall_conflicts)} "
+        f"[{', '.join(rc.reqno for rc in result.recall_conflicts) or 'none'}]"
     )
 
     print("\n-- 3. Invariant: no screened order contains a non-returned unit --")
@@ -693,8 +812,10 @@ def print_report(result: PreflightResult) -> None:
 
 def _signoff_text(result: PreflightResult) -> str:
     reissue_n = len(result.reissue_findings)
+    recall_net = len(result.recall_conflicts_windowed_net)
     recall_w = len(result.recall_conflicts_windowed)
     recall_a = len(result.recall_conflicts)
+    attributed_n = len(result.note_attributions)
     invariant_ok = not result.invariant_violations
     lines = [
         f"Real all-returned count : {result.raw_all_returned_total} in the "
@@ -710,15 +831,17 @@ def _signoff_text(result: PreflightResult) -> str:
             if result.reissue_findings
             else "."
         ),
-        f"Administration recall   : {recall_w} / {result.screened} screened orders "
-        f"({_pct(recall_w, result.screened)}) carry an affirmative ให้เลือด note "
-        f"WITHIN the dispense->return window (+/-{_RECALL_WINDOW_PAD_DAYS}d)"
+        f"Administration recall   : {recall_net} / {result.screened} screened orders "
+        f"({_pct(recall_net, result.screened)}) carry an affirmative ให้เลือด note "
+        f"in the dispense->return window (+/-{_RECALL_WINDOW_PAD_DAYS}d) NOT explained "
+        "by another same-admission order"
         + (
-            f" (reqnos {', '.join(rc.reqno for rc in result.recall_conflicts_windowed)})."
-            if result.recall_conflicts_windowed
-            else " — windowed recall is clean."
+            f" (reqnos {', '.join(rc.reqno for rc in result.recall_conflicts_windowed_net)})."
+            if result.recall_conflicts_windowed_net
+            else " — net recall is clean."
         )
-        + f" [admission-wide, pre-windowing: {recall_a}]",
+        + f" [{attributed_n} auto-attributed to a sibling order; windowed pre-"
+        f"attribution {recall_w}; admission-wide {recall_a}]",
         f"Invariant               : {'HOLDS' if invariant_ok else 'VIOLATED'} — "
         f"{'zero' if invariant_ok else str(len(result.invariant_violations))} "
         "screened order(s) contain a non-returned unit.",
@@ -742,11 +865,12 @@ def _recommendation_rationale(result: PreflightResult) -> str:
                 "no note sources were loaded, so administration recall is "
                 "unassessable (a hidden transfusion would go undetected)"
             )
-        if result.recall_conflicts_windowed:
+        if result.recall_conflicts_windowed_net:
             reasons.append(
-                f"{len(result.recall_conflicts_windowed)} screened order(s) carry "
+                f"{len(result.recall_conflicts_windowed_net)} screened order(s) carry "
                 "an affirmative administration note within the dispense->return "
-                "window (possible hidden transfusion)"
+                "window not explained by another same-admission order (possible "
+                "hidden transfusion)"
             )
         if result.invariant_violations:
             reasons.append(
