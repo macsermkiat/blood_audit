@@ -7,7 +7,10 @@ Completeness fails CLOSED (spec #119, decision 5 + Codex completeness finding):
 any blank, non-numeric, zero, or negative ``UNITAMT`` line — or the absence of
 any line at all — makes the whole order ``inconclusive``. The ordered amount is
 never computed from only the parseable lines, because a reduced threshold could
-let a partially-exported ledger read as complete.
+let a partially-exported ledger read as complete. ``ledger_complete`` means the
+ledger COVERS the order (``units_total >= ordered_unit_amount``); the stricter
+EXACT-count requirement that guards the not-transfused screen against a reissue
+lives in :meth:`ReturnsSummary.disposition`, not here (spec #119 NARROW).
 """
 
 from __future__ import annotations

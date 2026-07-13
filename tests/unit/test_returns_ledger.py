@@ -29,14 +29,35 @@ def test_all_returned_is_not_transfused() -> None:
     assert summary.disposition == "not_transfused"
 
 
-def test_all_returned_with_ledger_exceeding_order_still_not_transfused() -> None:
-    # units_total may exceed the ordered amount (a reissued unit). Completeness
-    # only requires the ledger to cover the order, so all-returned still reads
-    # not_transfused.
+def test_all_returned_over_dispensed_is_inconclusive() -> None:
+    # units_total exceeding the ordered amount is a visible reissue / over-
+    # dispense. The ledger still COVERS the order (ledger_complete stays True),
+    # but the not-transfused screen additionally requires an EXACT count match:
+    # a partial export could be hiding a transfused replacement unit that no
+    # count-based guard can see. So an over-dispensed all-returned order falls
+    # through to normal judgment instead of being screened not_transfused
+    # (spec #119 NARROW go-live decision).
     summary = summarize_returns([_unit("3"), _unit("3"), _unit("3")], ["2"])
 
+    assert summary.units_total == 3
+    assert summary.ordered_unit_amount == 2
     assert summary.ledger_complete is True
-    assert summary.disposition == "not_transfused"
+    assert summary.disposition == "inconclusive"
+
+
+def test_transfused_over_dispensed_stays_transfused() -> None:
+    # The exact-count requirement is SCOPED to the not-transfused screen. An
+    # over-dispensed order with a non-returned unit already confirms a
+    # transfusion; over-dispense there is benign clinical top-up, not a hidden-
+    # transfusion risk. It stays transfused (preserving its peri-op exemption /
+    # normal judgment), NOT demoted to inconclusive (spec #119 NARROW: the guard
+    # must not strip PERIOP_TRANSFUSION_EXEMPT from peri-op transfusions).
+    summary = summarize_returns([_unit("3"), _unit("2"), _unit("2")], ["2"])
+
+    assert summary.units_total == 3
+    assert summary.ordered_unit_amount == 2
+    assert summary.ledger_complete is True
+    assert summary.disposition == "transfused"
 
 
 def test_one_non_returned_unit_is_transfused() -> None:

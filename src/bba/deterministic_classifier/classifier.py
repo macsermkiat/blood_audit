@@ -177,10 +177,14 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
     cohort = inputs.cohort_assignment
     threshold = cohort.threshold
 
-    # A complete all-returned ledger proves that no transfusion occurred and
-    # therefore dominates every clinical/Hb tier. Structured intra-operative
-    # transfusion or major blood loss contradicts that negative disposition;
-    # fail loud by leaving the order in the legacy decision chain.
+    # An all-returned ledger that EXACTLY accounts for the order
+    # (returns_disposition == "not_transfused") proves that no transfusion
+    # occurred and therefore dominates every clinical/Hb tier. (An over-
+    # dispensed all-returned ledger is ledger_complete but NOT exact, so it
+    # derives "inconclusive" upstream and never reaches this exit — spec #119
+    # NARROW.) Structured intra-operative transfusion or major blood loss
+    # contradicts the negative disposition; fail loud by leaving the order in
+    # the legacy decision chain.
     hard_transfusion_contradiction = inputs.periop_intraop_transfusion or (
         inputs.periop_blood_loss_ml is not None
         and inputs.periop_blood_loss_ml >= PERIOP_MIN_EBL_ML
