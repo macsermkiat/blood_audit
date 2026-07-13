@@ -117,7 +117,7 @@ from bba.ingest.date_parser import parse_kcmh_english_date
 from bba.ingest.models import ParsedTimeOfDay
 from bba.llm_client import AnthropicBatchTransport, BatchSubmissionRequest
 from bba.prompt_builder import EvidenceChunk, PromptBuildRequest, build_prompt
-from bba.vitals_extractor import PeriopSummary, extract_vitals, scan_periop
+from bba.vitals_extractor import PeriopSummary, extract_vitals
 
 from _anchor_candidates import build_anchor_candidates
 from _hosxp_dt import _combine, _parse_hosxp_date, _parse_time
@@ -305,18 +305,22 @@ def _platelet_returns_result(
     """Returns-ledger short-circuit for a platelet order (spec #119).
 
     Mirrors ``pipeline.run_pipeline``'s platelet branch AND
-    ``run_pipeline._platelet_returns_result`` (the deterministic leg) so both
-    pilot legs screen the same platelet orders. Peri-op IS fed — matching
-    production's tested contract (``test_platelet_dispatch`` feeds a
-    ``periop_summary`` and expects ``PERIOP_TRANSFUSION_EXEMPT``) — so BOTH
-    terminals are reachable and the hard intra-op/EBL contradiction guard stays
-    active (an all-returned platelet whose notes chart an intra-op transfusion
-    or EBL >= PERIOP_MIN_EBL_ML falls through instead of being falsely cleared).
-    ``procedure_proximity_hours``/``upcoming_procedure_hours`` are ``None``
-    (matching :meth:`PipelineRowContext.for_platelet`). The caller scans peri-op
-    admission-wide (same input the deterministic leg uses), so both legs reach
-    the SAME terminal for a given order — deliberately conservative vs the
-    windowed bundle the RBC LLM path uses, to keep det/model in lockstep.
+    ``run_pipeline._platelet_returns_result`` (the deterministic leg): the same
+    pure ``classify()`` decision, so both legs agree given the same peri-op.
+    Peri-op IS fed — matching production's tested contract
+    (``test_platelet_dispatch`` feeds a ``periop_summary`` and expects
+    ``PERIOP_TRANSFUSION_EXEMPT``) — so BOTH terminals are reachable and the hard
+    intra-op/EBL contradiction guard stays active (an all-returned platelet whose
+    notes chart an intra-op transfusion or EBL >= PERIOP_MIN_EBL_ML falls through
+    instead of being falsely cleared). ``procedure_proximity_hours``/
+    ``upcoming_procedure_hours`` are ``None`` (matching
+    :meth:`PipelineRowContext.for_platelet`).
+
+    This leg's caller passes the bundle's WINDOWED ``periop_summary`` (mirroring
+    production and the RBC LLM path), so a remote same-admission surgery cannot
+    exempt an unrelated transfusion. The deterministic leg scans peri-op
+    admission-wide (the accepted #123 Risk #3); the two legs can therefore differ
+    only on that same documented det/model split.
 
     Returns the :class:`ClassifierResult` iff it is a returns terminal, else
     ``None``. Off, or with no ledger coverage, returns ``None`` so the leg
@@ -1120,34 +1124,6 @@ def main() -> None:
                 observations=plt_obs,
                 anchor_utc=order.order_datetime,
             )
-            # Returns-ledger short-circuit FIRST (mirror pipeline.run_pipeline's
-            # platelet branch): an all-returned platelet order is deterministic-
-            # final and must NOT be LLM-submitted — exactly like the RBC returns
-            # terminal. The deterministic leg (run_pipeline.py) persists its
-            # RETURNED_NOT_TRANSFUSED row; here we simply skip submission, the
-            # same handling the INSUFFICIENT_EVIDENCE terminal gets below. Peri-op
-            # is scanned admission-wide — identical input to the deterministic
-            # leg — so both legs reach the same terminal and stay in lockstep.
-            # Gated on RETURNS_LEDGER_ENABLED so a flag-off run submits the same
-            # set.
-            if RETURNS_LEDGER_ENABLED:
-                plt_returns_summary = summarize_returns(
-                    bdvsttrans_by_reqno.get(order.reqno, []),
-                    unitamt_lines_by_reqno.get(order.reqno, []),
-                )
-                plt_returns_periop = scan_periop(
-                    vitals_notes_for(progress, focus, order.an, order.order_datetime)
-                )
-                if (
-                    _platelet_returns_result(
-                        audit_id=order.audit_id,
-                        order_datetime=order.order_datetime,
-                        returns_summary=plt_returns_summary,
-                        periop=plt_returns_periop,
-                    )
-                    is not None
-                ):
-                    continue
             # Deterministic platelet gate: INSUFFICIENT_EVIDENCE is terminal
             # (same contract as the pipeline library).  POTENTIALLY_INAPPROPRIATE
             # and NEEDS_REVIEW route onward to the LLM.
@@ -1276,6 +1252,30 @@ def main() -> None:
                     vitals=plt_vital_records,
                 )
             )
+            # Returns-ledger short-circuit (mirror pipeline.run_pipeline's platelet
+            # branch): an all-returned (or peri-op-exempt) platelet order is
+            # deterministic-final and must NOT be LLM-submitted — the deterministic
+            # leg (run_pipeline.py) persists its terminal row; here we skip
+            # submission, the same handling INSUFFICIENT_EVIDENCE gets above. Uses
+            # the bundle's WINDOWED periop_summary (not admission-wide), so a
+            # remote same-admission surgery cannot exempt an unrelated transfusion
+            # — mirroring production and the RBC LLM path. The deterministic leg
+            # scans peri-op admission-wide (the accepted #123 Risk #3), so the two
+            # legs can differ only on that same documented split. Gated on
+            # RETURNS_LEDGER_ENABLED so a flag-off run submits the identical set.
+            if RETURNS_LEDGER_ENABLED and (
+                _platelet_returns_result(
+                    audit_id=order.audit_id,
+                    order_datetime=order.order_datetime,
+                    returns_summary=summarize_returns(
+                        bdvsttrans_by_reqno.get(order.reqno, []),
+                        unitamt_lines_by_reqno.get(order.reqno, []),
+                    ),
+                    periop=bundle.periop_summary,
+                )
+                is not None
+            ):
+                continue
             plt_chunks: list[EvidenceChunk] = []
             for item in bundle.items:
                 text = _render_payload(item.source, dict(item.payload))

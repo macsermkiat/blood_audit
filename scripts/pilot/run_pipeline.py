@@ -767,10 +767,12 @@ def main() -> None:
             )
             # Returns-ledger short-circuit FIRST (mirror pipeline.run_pipeline's
             # platelet branch): an all-returned platelet order skips the platelet
-            # gate exactly like the RBC path. Peri-op is scanned (admission-wide,
-            # same as the RBC leg) so the hard intra-op/EBL contradiction guard
-            # stays active. Gated on RETURNS_LEDGER_ENABLED, so a flag-off run
-            # never reads the ledger and this row is byte-identical.
+            # gate exactly like the RBC path. Peri-op is scanned admission-wide
+            # (same as this leg's RBC path — the accepted #123 Risk #3), so the
+            # hard intra-op/EBL contradiction guard stays active; the model leg
+            # uses the windowed bundle summary instead. Gated on
+            # RETURNS_LEDGER_ENABLED, so a flag-off run never reads the ledger and
+            # this row is byte-identical.
             plt_returns_summary: ReturnsSummary | None = None
             plt_periop: PeriopSummary | None = None
             if RETURNS_LEDGER_ENABLED:

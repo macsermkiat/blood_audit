@@ -17,11 +17,14 @@ are reachable and, crucially, the hard intra-op/EBL contradiction guard stays
 active (an all-returned platelet whose notes chart an intra-op transfusion or
 EBL >= PERIOP_MIN_EBL_ML falls through instead of being falsely cleared).
 
-Both legs scan peri-op admission-wide from the SAME input, so they reach the
-same terminal for a given order. The seam under test is each leg's module-level
-``_platelet_returns_result`` helper plus its ``_RETURNS_TERMINAL_CLASSIFICATIONS``
-set; both legs are exercised against identical cases so a future edit to one leg
-that drops lockstep fails here.
+The two legs feed peri-op from different windows (the deterministic leg scans
+admission-wide — the accepted #123 Risk #3 — while the model leg passes the
+bundle's windowed ``periop_summary``, mirroring production), but the pure
+``classify()`` decision is identical given the same peri-op. The seam under test
+is each leg's module-level ``_platelet_returns_result`` helper plus its
+``_RETURNS_TERMINAL_CLASSIFICATIONS`` set; both legs are exercised against
+identical (directly-constructed ``PeriopSummary``) cases so the shared decision
+logic stays in lockstep and a future edit to one leg's helper fails here.
 """
 
 from __future__ import annotations
