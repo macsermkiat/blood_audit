@@ -596,6 +596,37 @@ class TestBuildScorecards:
         assert ranked.bucket_rate == pytest.approx(0.5)
         assert ranked.returned_not_transfused_count == 1
 
+    def test_periop_transfusion_exempt_is_reported_but_excluded_from_rates(
+        self,
+    ) -> None:
+        verdicts = {
+            "r1": "INAPPROPRIATE",
+            "r2": "NEEDS_REVIEW",
+            "r3": "PERIOP_TRANSFUSION_EXEMPT",
+            "r4": "RETURNED_NOT_TRANSFUSED",
+        }
+        cards = build_doctor_scorecards(
+            verdicts,
+            {"r1": "302389", "r2": "302389", "r3": "302389", "r4": "302389"},
+            self._REGISTRY,
+        )
+        (card,) = cards
+        # Both excluded terminals are held out of the scorable denominator.
+        assert card.total_orders == 2
+        assert card.inappropriate_count == 1
+        assert card.needs_review_count == 1
+        assert card.periop_transfusion_exempt_count == 1
+        assert card.returned_not_transfused_count == 1
+        (ranked,) = rank_top_n(
+            cards,
+            "inappropriate",
+            group_id=lambda c: c.physician_id,
+            group_name=lambda c: c.physician_name,
+            min_orders=1,
+        )
+        assert ranked.bucket_rate == pytest.approx(0.5)
+        assert ranked.periop_transfusion_exempt_count == 1
+
 
 # ---------------------------------------------------------------------------
 # rank_top_n
@@ -757,7 +788,8 @@ class TestWriteRankingCsv:
         lines = text.splitlines()
         assert lines[0] == (
             "rank,group_id,group_name,total_orders,appropriate,"
-            "inappropriate,unresolved,returned_not_transfused,bucket,"
+            "inappropriate,unresolved,returned_not_transfused,"
+            "periop_transfusion_exempt,bucket,"
             "bucket_count,bucket_rate,"
             "meets_min_orders"
         )
@@ -854,6 +886,8 @@ class TestWriteRankingsHtml:
         ).read_text(encoding="utf-8")
         assert "Returned, not transfused" not in html
         assert "returned/not-transfused excluded" not in html
+        assert "Peri-op transfusion (exempt)" not in html
+        assert "peri-op-exempt excluded" not in html
 
     def test_flag_on_includes_returns_presentation(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -871,6 +905,8 @@ class TestWriteRankingsHtml:
         ).read_text(encoding="utf-8")
         assert "Returned, not transfused" in html
         assert "returned/not-transfused excluded" in html
+        assert "Peri-op transfusion (exempt)" in html
+        assert "peri-op-exempt excluded" in html
 
 
 # ---------------------------------------------------------------------------

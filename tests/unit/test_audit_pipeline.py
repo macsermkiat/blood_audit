@@ -512,6 +512,135 @@ class TestReturnedNotTransfusedTerminal:
         assert row.model_id == "deterministic"
 
 
+class TestPeriopTransfusionExemptTerminal:
+    @pytest.mark.parametrize("hb_value", [None, 11.0])
+    def test_confirmed_transfusion_in_periop_is_terminal_without_llm(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch, hb_value: float | None
+    ) -> None:
+        from pathlib import Path
+
+        import bba.feature_flags as feature_flags
+        from bba.audit_store import AuditStore, AuditStoreConfig
+
+        assert isinstance(tmp_path, Path)
+        monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", True)
+        # Transfused disposition (a non-returned unit) + a reserve-ahead
+        # upcoming procedure -> peri-op envelope -> exempt terminal, even at
+        # Hb 11.0 which would otherwise be POTENTIALLY_INAPPROPRIATE.
+        ctx = _row_context(
+            audit_id=f"periop-exempt-{hb_value}",
+            hb_value=hb_value,
+            upcoming_procedure_hours=24.0,
+            returns_summary=ReturnsSummary(
+                units_total=1,
+                units_returned=0,
+                units_transfused=1,
+                ordered_unit_amount=1,
+                ledger_complete=True,
+            ),
+        )
+        store = AuditStore(
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
+        )
+        result = run_pipeline(
+            [ctx],
+            transport=CassetteTransport(interactions=()),
+            audit_store=store,
+            batch_run_store=InMemoryBatchRunStore(),
+            llm_config=LlmClientConfig(code_version="v0.1.0+test"),
+            pipeline_config=AuditPipelineConfig(
+                db_url="sqlite:///:memory:", code_version="v0.1.0+test"
+            ),
+            run_id="run-periop-exempt",
+        )
+        assert result.audit_ids_persisted == (ctx.order.audit_id,)
+        (row,) = store.read_audit_results(run_id="run-periop-exempt")
+        assert row.final_classification == "PERIOP_TRANSFUSION_EXEMPT"
+        assert row.needs_human_review is False
+        assert row.model_id == "deterministic"
+
+    def test_confirmed_transfusion_without_periop_is_not_exempt(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A confirmed transfusion with NO peri-op signal: the pipeline's
+        # classifier-input wiring computes returns_periop_context=False, so the
+        # order is NOT exempt and classify() falls through to the normal tier
+        # (Hb 11.0 -> POTENTIALLY_INAPPROPRIATE, which routes onward to the LLM).
+        import bba.feature_flags as feature_flags
+        from bba.audit_pipeline.pipeline import _classifier_inputs_for
+        from bba.deterministic_classifier import classify
+
+        monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", True)
+        ctx = _row_context(
+            audit_id="transfused-ward",
+            hb_value=11.0,
+            returns_summary=ReturnsSummary(
+                units_total=1,
+                units_returned=0,
+                units_transfused=1,
+                ordered_unit_amount=1,
+                ledger_complete=True,
+            ),
+        )
+        inputs = _classifier_inputs_for(ctx)
+        assert inputs.returns_disposition == "transfused"
+        assert inputs.returns_periop_context is False
+        assert classify(inputs).classification == "POTENTIALLY_INAPPROPRIATE"
+
+    def test_wiring_computes_periop_context_from_upcoming_procedure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A reserve-ahead upcoming procedure alone drives the envelope True at
+        # the pipeline wiring seam, so the transfused order becomes exempt.
+        import bba.feature_flags as feature_flags
+        from bba.audit_pipeline.pipeline import _classifier_inputs_for
+        from bba.deterministic_classifier import classify
+
+        monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", True)
+        ctx = _row_context(
+            audit_id="transfused-standby",
+            hb_value=11.0,
+            upcoming_procedure_hours=48.0,
+            returns_summary=ReturnsSummary(
+                units_total=1,
+                units_returned=0,
+                units_transfused=1,
+                ordered_unit_amount=1,
+                ledger_complete=True,
+            ),
+        )
+        inputs = _classifier_inputs_for(ctx)
+        assert inputs.returns_periop_context is True
+        assert classify(inputs).classification == "PERIOP_TRANSFUSION_EXEMPT"
+
+    def test_remote_upcoming_procedure_does_not_exempt(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A transfused order whose only signal is a REMOTE upcoming procedure
+        # (far outside the reserve-ahead window) is not peri-op context, so the
+        # order is judged normally rather than wrongly exempted.
+        import bba.feature_flags as feature_flags
+        from bba.audit_pipeline.pipeline import _classifier_inputs_for
+        from bba.deterministic_classifier import classify
+
+        monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", True)
+        ctx = _row_context(
+            audit_id="transfused-remote",
+            hb_value=11.0,
+            upcoming_procedure_hours=24.0 * 30,  # ~30 days out
+            returns_summary=ReturnsSummary(
+                units_total=1,
+                units_returned=0,
+                units_transfused=1,
+                ordered_unit_amount=1,
+                ledger_complete=True,
+            ),
+        )
+        inputs = _classifier_inputs_for(ctx)
+        assert inputs.returns_periop_context is False
+        assert classify(inputs).classification == "POTENTIALLY_INAPPROPRIATE"
+
+
 # =============================================================================
 # AC ② — State-machine transitions
 #

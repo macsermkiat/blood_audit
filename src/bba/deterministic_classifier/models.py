@@ -74,6 +74,7 @@ class BypassReason(StrEnum):
     MTP = "mtp"
     HEMODILUTION_FLAGGED = "hemodilution_flagged"
     RETURNED_NOT_TRANSFUSED = "returned_not_transfused"
+    PERIOP_TRANSFUSION_EXEMPT = "periop_transfusion_exempt"
     NONE = "none"
 
 
@@ -156,6 +157,7 @@ class ClassifierInputs(BaseModel):
     returns_disposition: Literal[
         "not_transfused", "transfused", "inconclusive"
     ] = "inconclusive"
+    returns_periop_context: bool = False
 
 
 class ClassifierResult(BaseModel):

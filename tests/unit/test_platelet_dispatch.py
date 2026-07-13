@@ -221,6 +221,38 @@ def test_platelet_returned_order_is_terminal(
     assert row.needs_human_review is False
 
 
+def test_platelet_periop_transfusion_is_terminal(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", True)
+    ctx = _platelet_ctx(
+        "audit-plt-periop",
+        platelet_count=150.0,
+        periop_summary=PeriopSummary(surgical_context=True),
+        returns_summary=ReturnsSummary(
+            units_total=1,
+            units_returned=0,
+            units_transfused=1,
+            ordered_unit_amount=1,
+            ledger_complete=True,
+        ),
+    )
+    store = _audit_store(tmp_path)
+    result = run_pipeline(
+        [ctx],
+        transport=CassetteTransport(interactions=()),
+        audit_store=store,
+        batch_run_store=InMemoryBatchRunStore(),
+        llm_config=_LLM_CONFIG,
+        pipeline_config=_PIPELINE_CONFIG,
+        run_id="run-plt-periop",
+    )
+    assert result.audit_ids_persisted == (ctx.order.audit_id,)
+    (row,) = store.read_audit_results(run_id="run-plt-periop")
+    assert row.final_classification == "PERIOP_TRANSFUSION_EXEMPT"
+    assert row.needs_human_review is False
+
+
 # ───────────────────────── Test 3 ─────────────────────────
 
 

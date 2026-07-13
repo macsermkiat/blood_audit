@@ -34,6 +34,11 @@ def test_default_projector_rejects_returned_not_transfused() -> None:
         default_classification_projector("RETURNED_NOT_TRANSFUSED")
 
 
+def test_default_projector_rejects_periop_transfusion_exempt() -> None:
+    with pytest.raises(MissingResolverError, match="excluded, non-scorable"):
+        default_classification_projector("PERIOP_TRANSFUSION_EXEMPT")
+
+
 def _row(
     *,
     audit_id: str = "audit-001",

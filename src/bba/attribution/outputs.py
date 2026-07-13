@@ -38,9 +38,13 @@ _BASE_RANKING_CSV_COLUMNS: tuple[str, ...] = (
     "bucket_rate",
     "meets_min_orders",
 )
+_RETURNS_CSV_COLUMNS: tuple[str, ...] = (
+    "returned_not_transfused",
+    "periop_transfusion_exempt",
+)
 RANKING_CSV_COLUMNS: tuple[str, ...] = (
     _BASE_RANKING_CSV_COLUMNS[:7]
-    + (("returned_not_transfused",) if RETURNS_LEDGER_ENABLED else ())
+    + (_RETURNS_CSV_COLUMNS if RETURNS_LEDGER_ENABLED else ())
     + _BASE_RANKING_CSV_COLUMNS[7:]
 )
 
@@ -48,7 +52,7 @@ RANKING_CSV_COLUMNS: tuple[str, ...] = (
 def _ranking_csv_columns() -> tuple[str, ...]:
     return (
         _BASE_RANKING_CSV_COLUMNS[:7]
-        + (("returned_not_transfused",) if RETURNS_LEDGER_ENABLED else ())
+        + (_RETURNS_CSV_COLUMNS if RETURNS_LEDGER_ENABLED else ())
         + _BASE_RANKING_CSV_COLUMNS[7:]
     )
 
@@ -80,6 +84,7 @@ def _row_cells(row: RankedRow) -> list[str]:
     ]
     if RETURNS_LEDGER_ENABLED:
         values.append(row.returned_not_transfused_count)
+        values.append(row.periop_transfusion_exempt_count)
     values.extend(
         (row.bucket, row.bucket_count, row.bucket_rate, row.meets_min_orders)
     )
@@ -116,6 +121,7 @@ p.totals { font-size: 0.9rem; }
 def _render_table(table: RankingTable) -> str:
     returns_header = (
         '<th class="num">Returned, not transfused</th>'
+        '<th class="num">Peri-op transfusion (exempt)</th>'
         if RETURNS_LEDGER_ENABLED
         else ""
     )
@@ -133,6 +139,7 @@ def _render_table(table: RankingTable) -> str:
         threshold_mark = "yes" if row.meets_min_orders else "no"
         returns_cell = (
             f'<td class="num">{row.returned_not_transfused_count}</td>'
+            f'<td class="num">{row.periop_transfusion_exempt_count}</td>'
             if RETURNS_LEDGER_ENABLED
             else ""
         )
@@ -181,6 +188,7 @@ def write_rankings_html(
     )
     returns_total = (
         f"; {totals.returned_not_transfused} returned/not-transfused excluded"
+        f"; {totals.periop_transfusion_exempt} peri-op-exempt excluded"
         if RETURNS_LEDGER_ENABLED
         else ""
     )

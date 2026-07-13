@@ -45,11 +45,13 @@ _BUCKET_OF: Mapping[str, VerificationBucket] = {
     "POTENTIALLY_INAPPROPRIATE": "unresolved",
     "PREOP_RESERVATION_UNCONFIRMED": "unresolved",
     "RETURNED_NOT_TRANSFUSED": "excluded",
+    "PERIOP_TRANSFUSION_EXEMPT": "excluded",
 }
 """Registration of every pipeline / human classification.
 
-``excluded`` is deliberately outside :data:`BUCKETS`, so returned orders are
-registered but omitted from the scored 3×3 committee matrix.
+``excluded`` is deliberately outside :data:`BUCKETS`, so returned and
+peri-op-exempt orders are registered but omitted from the scored 3×3
+committee matrix.
 """
 
 BUCKETS: tuple[Bucket, ...] = ("appropriate", "inappropriate", "unresolved")

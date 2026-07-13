@@ -71,3 +71,70 @@ def test_pilot_flag_off_forces_inconclusive(monkeypatch) -> None:
         ledger_complete=True,
     )
     assert pilot._returns_disposition_for_classifier(summary) == "inconclusive"
+
+
+def test_pilot_classifier_path_emits_periop_exempt_terminal(monkeypatch) -> None:
+    pilot = _load_pilot()
+    monkeypatch.setattr(pilot, "RETURNS_LEDGER_ENABLED", True)
+    summary = ReturnsSummary(
+        units_total=2,
+        units_returned=0,
+        units_transfused=2,
+        ordered_unit_amount=2,
+        ledger_complete=True,
+    )
+    result = classify(
+        ClassifierInputs(
+            audit_id="pilot-periop-exempt",
+            hb_result=HbLookupResult(
+                value_g_dl=11.0,
+                datetime_utc=datetime(2026, 7, 13, tzinfo=UTC),
+                source="HEMATOLOGY",
+                freshness="fresh",
+                delta_hb_bypass=False,
+                delta_hb_windows=(),
+                needs_review_single_low_hb=False,
+            ),
+            cohort_assignment=CohortAssignment(
+                label=CohortLabel.DEFAULT,
+                threshold=7.0,
+                evidence_code=None,
+                evidence_name=None,
+            ),
+            order_datetime=datetime(2026, 7, 13, tzinfo=UTC),
+            procedure_proximity_hours=None,
+            upcoming_procedure_hours=48.0,
+            crystalloid_liters_prior_4h=0.0,
+            returns_disposition=pilot._returns_disposition_for_classifier(summary),
+            returns_periop_context=pilot._returns_periop_context_for_classifier(
+                summary,
+                surgical_context=False,
+                intraop_transfusion=False,
+                procedure_proximity_hours=None,
+                upcoming_procedure_hours=48.0,
+            ),
+        )
+    )
+    assert result.classification == "PERIOP_TRANSFUSION_EXEMPT"
+
+
+def test_pilot_periop_context_flag_off_forces_false(monkeypatch) -> None:
+    pilot = _load_pilot()
+    monkeypatch.setattr(pilot, "RETURNS_LEDGER_ENABLED", False)
+    summary = ReturnsSummary(
+        units_total=1,
+        units_returned=0,
+        units_transfused=1,
+        ordered_unit_amount=1,
+        ledger_complete=True,
+    )
+    assert (
+        pilot._returns_periop_context_for_classifier(
+            summary,
+            surgical_context=True,
+            intraop_transfusion=True,
+            procedure_proximity_hours=1.0,
+            upcoming_procedure_hours=1.0,
+        )
+        is False
+    )

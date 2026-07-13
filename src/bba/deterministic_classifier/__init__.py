@@ -26,6 +26,7 @@ from bba.deterministic_classifier.classifier import (
     PRE_OP_CROSSMATCH_WINDOW_HOURS,
     UNIVERSAL_LOW_HB_APPROPRIATE_THRESHOLD,
     classify,
+    periop_envelope,
 )
 from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import (
@@ -51,5 +52,6 @@ __all__ = [
     "ClassifierResult",
     "classify",
     "is_blood_requiring_procedure",
+    "periop_envelope",
     "total_crystalloid_liters",
 ]

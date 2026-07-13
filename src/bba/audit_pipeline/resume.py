@@ -353,7 +353,10 @@ def _rebuild_submission_requests(
             reserve_ahead = False
             if feature_flags.RESERVE_AHEAD_ROUTER_ENABLED:
                 classifier_inputs = _classifier_inputs_for(ctx).model_copy(
-                    update={"returns_disposition": "inconclusive"}
+                    update={
+                        "returns_disposition": "inconclusive",
+                        "returns_periop_context": False,
+                    }
                 )
                 reserve_ahead = (
                     classify(classifier_inputs).rationale == "preop_defer_llm"

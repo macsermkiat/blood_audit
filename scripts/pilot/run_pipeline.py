@@ -35,7 +35,11 @@ from bba.cohort_detector import (
     OperativeEvent,
     assign_cohort,
 )
-from bba.deterministic_classifier import classify, is_blood_requiring_procedure
+from bba.deterministic_classifier import (
+    classify,
+    is_blood_requiring_procedure,
+    periop_envelope,
+)
 from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import ClassifierInputs
 from bba.feature_flags import RETURNS_LEDGER_ENABLED
@@ -163,6 +167,30 @@ def _returns_disposition_for_classifier(
     if RETURNS_LEDGER_ENABLED and returns_summary is not None:
         return returns_summary.disposition
     return "inconclusive"
+
+
+def _returns_periop_context_for_classifier(
+    returns_summary: ReturnsSummary | None,
+    *,
+    surgical_context: bool,
+    intraop_transfusion: bool,
+    procedure_proximity_hours: float | None,
+    upcoming_procedure_hours: float | None,
+) -> bool:
+    """Return the gated peri-op envelope passed into the pure classifier (#123).
+
+    Mirrors :func:`_returns_disposition_for_classifier` — off, or with no
+    ledger coverage, the classifier sees ``False`` so the exemption cannot
+    fire and today's output is unchanged.
+    """
+    if RETURNS_LEDGER_ENABLED and returns_summary is not None:
+        return periop_envelope(
+            surgical_context=surgical_context,
+            intraop_transfusion=intraop_transfusion,
+            procedure_proximity_hours=procedure_proximity_hours,
+            upcoming_procedure_hours=upcoming_procedure_hours,
+        )
+    return False
 
 csv.field_size_limit(sys.maxsize)
 
@@ -797,6 +825,13 @@ def main() -> None:
                 periop_intraop_transfusion=periop.intraop_transfusion,
                 periop_surgical_context=periop.surgical_context,
                 returns_disposition=_returns_disposition_for_classifier(returns_summary),
+                returns_periop_context=_returns_periop_context_for_classifier(
+                    returns_summary,
+                    surgical_context=periop.surgical_context,
+                    intraop_transfusion=periop.intraop_transfusion,
+                    procedure_proximity_hours=proximity_h,
+                    upcoming_procedure_hours=upcoming_h,
+                ),
             )
         )
 

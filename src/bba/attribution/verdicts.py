@@ -181,10 +181,13 @@ members and must be projected explicitly."""
 
 
 def strict_verdict_projector(value: str) -> str:
-    """Identity on scorable report values and the explicit excluded value.
+    """Identity on scorable report values and the explicit excluded values.
 
-    Fail loud on other store-only values, including
-    ``POTENTIALLY_INAPPROPRIATE`` and ``PREOP_RESERVATION_UNCONFIRMED``.
+    The excluded values (``RETURNED_NOT_TRANSFUSED``,
+    ``PERIOP_TRANSFUSION_EXEMPT``) pass through so the ranking layer can hold
+    them in their own non-scorable counters. Fail loud on other store-only
+    values, including ``POTENTIALLY_INAPPROPRIATE`` and
+    ``PREOP_RESERVATION_UNCONFIRMED``.
 
     The default so no build silently buckets a store-only value: mapping it is
     a clinical decision (mirrors
@@ -194,7 +197,7 @@ def strict_verdict_projector(value: str) -> str:
     """
     if value in _REPORT_CLASSIFICATIONS:
         return value
-    if value == "RETURNED_NOT_TRANSFUSED":
+    if value in ("RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"):
         return value
     raise ValueError(
         f"final_classification {value!r} is not one of the four report "
