@@ -85,9 +85,7 @@ def _row_cells(row: RankedRow) -> list[str]:
     if RETURNS_LEDGER_ENABLED:
         values.append(row.returned_not_transfused_count)
         values.append(row.periop_transfusion_exempt_count)
-    values.extend(
-        (row.bucket, row.bucket_count, row.bucket_rate, row.meets_min_orders)
-    )
+    values.extend((row.bucket, row.bucket_count, row.bucket_rate, row.meets_min_orders))
     return [_format_cell(value) for value in values]
 
 

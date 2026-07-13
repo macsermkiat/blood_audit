@@ -963,7 +963,9 @@ def main() -> None:
                 periop_blood_loss_ml=periop.blood_loss_ml,
                 periop_intraop_transfusion=periop.intraop_transfusion,
                 periop_surgical_context=periop.surgical_context,
-                returns_disposition=_returns_disposition_for_classifier(returns_summary),
+                returns_disposition=_returns_disposition_for_classifier(
+                    returns_summary
+                ),
                 returns_periop_context=_returns_periop_context_for_classifier(
                     returns_summary,
                     surgical_context=periop.surgical_context,

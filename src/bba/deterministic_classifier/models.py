@@ -154,9 +154,9 @@ class ClassifierInputs(BaseModel):
     periop_blood_loss_ml: int | None = None
     periop_intraop_transfusion: bool = False
     periop_surgical_context: bool = False
-    returns_disposition: Literal[
-        "not_transfused", "transfused", "inconclusive"
-    ] = "inconclusive"
+    returns_disposition: Literal["not_transfused", "transfused", "inconclusive"] = (
+        "inconclusive"
+    )
     returns_periop_context: bool = False
 
 

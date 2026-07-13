@@ -42,7 +42,9 @@ def _count_classifications(
     }
     for classification in classifications:
         if classification not in counts:
-            raise ValueError(f"unsupported attribution classification {classification!r}")
+            raise ValueError(
+                f"unsupported attribution classification {classification!r}"
+            )
         counts[classification] += 1
     return counts
 

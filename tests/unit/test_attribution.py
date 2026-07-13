@@ -805,11 +805,14 @@ class TestWriteRankingCsv:
             "bba.attribution.outputs.RETURNS_LEDGER_ENABLED", False, raising=False
         )
         out = write_ranking_csv((_ranked_row(),), tmp_path / "doctors.csv")
-        assert out.read_bytes() == (
-            "rank,group_id,group_name,total_orders,appropriate,inappropriate,"
-            "unresolved,bucket,bucket_count,bucket_rate,meets_min_orders\n"
-            "1,302389,\u0e1e\u0e0d.\u0e2a***** \u0e27*****,6,2,3,1,inappropriate,3,0.5,true\n"
-        ).encode()
+        assert (
+            out.read_bytes()
+            == (
+                "rank,group_id,group_name,total_orders,appropriate,inappropriate,"
+                "unresolved,bucket,bucket_count,bucket_rate,meets_min_orders\n"
+                "1,302389,\u0e1e\u0e0d.\u0e2a***** \u0e27*****,6,2,3,1,inappropriate,3,0.5,true\n"
+            ).encode()
+        )
 
     def test_rate_formatting_strips_trailing_zeros(self, tmp_path: Path) -> None:
         # Mirrors bba.report_generator.csv_writer float conventions so the

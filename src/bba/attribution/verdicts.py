@@ -251,8 +251,13 @@ def pipeline_verdict_source(
     """
     materialized = tuple(rows)
 
-    def read() -> Mapping[str, Classification]:
-        verdicts: dict[str, Classification] = {}
+    # Values are str, not Classification: the projector passes the two excluded
+    # values (RETURNED_NOT_TRANSFUSED, PERIOP_TRANSFUSION_EXEMPT) through, and
+    # those are not members of report_generator's four-value Classification.
+    # This matches the VerdictSource contract (Mapping[str, str]); the ranking
+    # layer buckets the four scorable values and holds the excluded ones apart.
+    def read() -> Mapping[str, str]:
+        verdicts: dict[str, str] = {}
         for row in materialized:
             reqno = row.reqno.strip()
             if reqno == "":
