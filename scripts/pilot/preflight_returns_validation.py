@@ -12,25 +12,20 @@ It answers four questions the spec's completeness note (spec #119) requires
 before go-live:
 
 1. **Reissue / partial-coverage prevalence** on the screened set — orders whose
-   BDVSTTRANS unit count disagrees with the ordered quantity. A visible reissue
-   means replacement units were dispensed, which is the residual over-screen
-   risk Codex confirmed: a partial export could also be *hiding* a transfused
-   replacement unit that no count-based guard can detect.
-2. **Administration-note recall** on the screened orders — does any all-returned
-   order carry an affirmative ``ให้เลือด`` administration note that the
-   ``RETURNED_NOT_TRANSFUSED`` terminal would hide? Any hit is a CONFLICT.
-3. **Invariant** — zero orders containing a non-returned unit are screened as
-   not-transfused (a property of ``summarize_returns``, re-derived here straight
-   from the raw ledger rows so it cannot false-pass off the same counters).
-4. A short written **sign-off summary** with a go / narrow / hold recommendation.
+   BDVSTTRANS unit count disagrees with the ordered quantity (a visible reissue;
+   a partial export could also be *hiding* a transfused replacement unit that no
+   count-based guard can detect — the residual over-screen risk Codex confirmed).
+2. **Administration-note recall** — does a screened order carry an affirmative
+   ``ให้เลือด`` note the terminal would hide? Reported both admission-wide and
+   WINDOWED to the order's dispense->return interval (the windowed count drives
+   the gate; admission-wide over-flags separate transfusions in a long stay).
+3. **Invariant** — zero screened orders contain a non-returned unit, re-derived
+   from the raw ledger rows so it cannot false-pass off ``summarize_returns``.
+4. A short **sign-off summary** with a go / narrow / hold recommendation.
 
-The disposition count is reconciled in layers so the "real 55-order count"
-(deferred from #122/#123/#124) is auditable:
-
-    raw all-returned (all 300 orders)
-      -> among audited (build_audit_orders included) orders
-        -> ledger-complete (summarize_returns ``not_transfused``)
-          -> actually screened (no hard intra-op / EBL contradiction)
+The count is reconciled in layers so the "real 55-order count" (deferred from
+#122/#123/#124) is auditable: raw all-returned (300) -> among audited orders ->
+ledger-complete ``not_transfused`` -> screened (no hard intra-op/EBL guard hit).
 
 Environment variables:
 
@@ -51,6 +46,7 @@ import sys
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from bba.audit_orders import (
@@ -76,6 +72,12 @@ CODE_VERSION = "pilot-mini"
 # constant summarize_returns uses. Re-stated here so the invariant check reads
 # the raw rows independently of the summary's own counters.
 _RETURNED_STATUS = "3"
+
+# Windowed-recall padding (days) around an order's dispense->return interval.
+# An administration of THIS order's standby units is charted while the units are
+# out; ±2 days tolerates late/next-shift charting without reaching the separate
+# transfusions that make up the rest of a weeks-long admission.
+_RECALL_WINDOW_PAD_DAYS = 2
 
 # The partial returns ledger lives outside the repo, alongside the other raw
 # HOSxP exports (mirrors sample_bundle.py's ``../Bloodbank/data`` convention).
@@ -185,6 +187,48 @@ def administration_recall_conflicts(
     return tuple(conflicts)
 
 
+def parse_ledger_date(raw: str | None) -> date | None:
+    """Parse a BDVSTTRANS PAYDATE/RTNDATE (``'March 31, 2025, 3:29 PM'``).
+
+    Returns ``None`` on any unrecognised/blank value so the caller fails SAFE —
+    an unwindowable order keeps its full admission-wide notes rather than
+    silently dropping a possible administration.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return None
+    for fmt in ("%B %d, %Y, %I:%M %p", "%B %d, %Y"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def recall_window(
+    anchor_dates: Sequence[date | None], *, pad_days: int = _RECALL_WINDOW_PAD_DAYS
+) -> tuple[date, date] | None:
+    """Padded ``[earliest, latest]`` window over an order's dispense/return dates.
+
+    ``None`` when no anchor date is parseable — the caller then falls back to the
+    admission-wide notes (fail-safe: never narrow a window we cannot place).
+    """
+    dates = [d for d in anchor_dates if d is not None]
+    if not dates:
+        return None
+    return (min(dates) - timedelta(days=pad_days), max(dates) + timedelta(days=pad_days))
+
+
+def notes_in_window(
+    notes: Sequence[VitalsNote], window: tuple[date, date] | None
+) -> tuple[VitalsNote, ...]:
+    """Notes whose date falls in ``window``; all notes when ``window`` is None."""
+    if window is None:
+        return tuple(notes)
+    lo, hi = window
+    return tuple(n for n in notes if lo <= n.timestamp.date() <= hi)
+
+
 def recommendation(
     *,
     screened_count: int,
@@ -259,6 +303,7 @@ class PreflightResult:
     disposition_counts: dict[str, int]
     reissue_findings: list[ReissueFinding]
     recall_conflicts: list[RecallConflict]
+    recall_conflicts_windowed: list[RecallConflict]
     invariant_violations: list[InvariantViolation]
     recommendation: str
     screened_reqnos: list[str] = field(default_factory=list)
@@ -409,6 +454,7 @@ def run_preflight() -> PreflightResult:
     platelet_all_returned = 0
     screened_reqnos: list[str] = []
     screened_notes: dict[str, Sequence[VitalsNote]] = {}
+    screened_notes_windowed: dict[str, Sequence[VitalsNote]] = {}
     screened_without_notes = 0
     hard_fallthroughs: list[HardFallthrough] = []
     reissue_findings: list[ReissueFinding] = []
@@ -455,6 +501,14 @@ def run_preflight() -> PreflightResult:
         screened_notes[order.reqno] = notes
         if not notes:
             screened_without_notes += 1
+        # Windowed recall: restrict notes to this order's dispense->return
+        # interval so a later, separate transfusion elsewhere in a weeks-long
+        # admission is not misattributed to the returned standby units.
+        window = recall_window(
+            [parse_ledger_date(r.get("PAYDATE")) for r in trans_rows]
+            + [parse_ledger_date(r.get("RTNDATE")) for r in trans_rows]
+        )
+        screened_notes_windowed[order.reqno] = notes_in_window(notes, window)
 
         if is_reissue(summary):
             reissue_findings.append(
@@ -480,6 +534,9 @@ def run_preflight() -> PreflightResult:
             )
 
     recall_conflicts = list(administration_recall_conflicts(screened_notes))
+    recall_conflicts_windowed = list(
+        administration_recall_conflicts(screened_notes_windowed)
+    )
 
     return PreflightResult(
         bdvsttrans_source=str(bdvsttrans_path),
@@ -500,12 +557,16 @@ def run_preflight() -> PreflightResult:
         disposition_counts=dict(disposition_counts),
         reissue_findings=reissue_findings,
         recall_conflicts=recall_conflicts,
+        recall_conflicts_windowed=recall_conflicts_windowed,
         invariant_violations=invariant_violations,
+        # The windowed recall is the accurate "does THIS order hide a
+        # transfusion" measure and drives the gate; the admission-wide count is
+        # reported alongside it for transparency (it over-flags on shared AN).
         recommendation=recommendation(
             screened_count=len(screened_reqnos),
             notes_available=notes_available,
             reissue_count=len(reissue_findings),
-            recall_conflicts=len(recall_conflicts),
+            recall_conflicts=len(recall_conflicts_windowed),
             invariant_violations=len(invariant_violations),
         ),
         screened_reqnos=screened_reqnos,
@@ -591,19 +652,29 @@ def print_report(result: PreflightResult) -> None:
 
     print("\n-- 2. Administration-note recall (screened set) --")
     print(
-        "  notes are admission-scoped (mirrors the pilot deterministic leg's "
-        "note window); in a multi-order admission a sibling order's note can "
-        "surface, so treat each hit as a candidate for clinician adjudication."
+        "  WINDOWED recall (drives the gate): notes restricted to the order's "
+        f"dispense->return interval +/-{_RECALL_WINDOW_PAD_DAYS}d, so a separate "
+        "later transfusion in the same admission is not misattributed."
     )
     print(
-        f"  affirmative ให้เลือด notes on screened orders: "
-        f"{len(result.recall_conflicts)} / {result.screened} "
-        f"({_pct(len(result.recall_conflicts), result.screened)})"
+        f"    windowed conflicts   : {len(result.recall_conflicts_windowed)} / "
+        f"{result.screened} "
+        f"({_pct(len(result.recall_conflicts_windowed), result.screened)})"
     )
-    for rc in result.recall_conflicts:
+    for rc in result.recall_conflicts_windowed:
         print(f"      CONFLICT reqno={rc.reqno} categories={list(rc.categories)}")
         for snip in rc.snippets:
             print(f"          {snip}")
+    print(
+        "  ADMISSION-WIDE recall (context; mirrors the pilot leg's note window, "
+        "over-flags on shared AN):"
+    )
+    print(
+        f"    admission-wide hits  : {len(result.recall_conflicts)} / "
+        f"{result.screened} "
+        f"({_pct(len(result.recall_conflicts), result.screened)})"
+        f"  [reqnos {', '.join(rc.reqno for rc in result.recall_conflicts) or 'none'}]"
+    )
 
     print("\n-- 3. Invariant: no screened order contains a non-returned unit --")
     if result.invariant_violations:
@@ -622,7 +693,8 @@ def print_report(result: PreflightResult) -> None:
 
 def _signoff_text(result: PreflightResult) -> str:
     reissue_n = len(result.reissue_findings)
-    recall_n = len(result.recall_conflicts)
+    recall_w = len(result.recall_conflicts_windowed)
+    recall_a = len(result.recall_conflicts)
     invariant_ok = not result.invariant_violations
     lines = [
         f"Real all-returned count : {result.raw_all_returned_total} in the "
@@ -638,14 +710,15 @@ def _signoff_text(result: PreflightResult) -> str:
             if result.reissue_findings
             else "."
         ),
-        f"Administration recall   : {recall_n} / {result.screened} screened orders "
-        f"({_pct(recall_n, result.screened)}) carry an affirmative ให้เลือด note "
-        "the RETURNED_NOT_TRANSFUSED terminal would hide"
+        f"Administration recall   : {recall_w} / {result.screened} screened orders "
+        f"({_pct(recall_w, result.screened)}) carry an affirmative ให้เลือด note "
+        f"WITHIN the dispense->return window (+/-{_RECALL_WINDOW_PAD_DAYS}d)"
         + (
-            f" (reqnos {', '.join(rc.reqno for rc in result.recall_conflicts)})."
-            if result.recall_conflicts
-            else " — recall is clean."
-        ),
+            f" (reqnos {', '.join(rc.reqno for rc in result.recall_conflicts_windowed)})."
+            if result.recall_conflicts_windowed
+            else " — windowed recall is clean."
+        )
+        + f" [admission-wide, pre-windowing: {recall_a}]",
         f"Invariant               : {'HOLDS' if invariant_ok else 'VIOLATED'} — "
         f"{'zero' if invariant_ok else str(len(result.invariant_violations))} "
         "screened order(s) contain a non-returned unit.",
@@ -669,10 +742,11 @@ def _recommendation_rationale(result: PreflightResult) -> str:
                 "no note sources were loaded, so administration recall is "
                 "unassessable (a hidden transfusion would go undetected)"
             )
-        if result.recall_conflicts:
+        if result.recall_conflicts_windowed:
             reasons.append(
-                f"{len(result.recall_conflicts)} screened order(s) carry an "
-                "affirmative administration note (possible hidden transfusion)"
+                f"{len(result.recall_conflicts_windowed)} screened order(s) carry "
+                "an affirmative administration note within the dispense->return "
+                "window (possible hidden transfusion)"
             )
         if result.invariant_violations:
             reasons.append(
