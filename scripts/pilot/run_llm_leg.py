@@ -1124,19 +1124,11 @@ def main() -> None:
                 observations=plt_obs,
                 anchor_utc=order.order_datetime,
             )
-            # Deterministic platelet gate: INSUFFICIENT_EVIDENCE is terminal
-            # (same contract as the pipeline library).  POTENTIALLY_INAPPROPRIATE
-            # and NEEDS_REVIEW route onward to the LLM.
-            plt_clf = classify_platelet(
-                PlateletClassifierInputs(
-                    audit_id=order.audit_id,
-                    platelet_count=plt_result.value_k_ul,
-                )
-            )
-            if plt_clf.classification == "INSUFFICIENT_EVIDENCE":
-                # Terminal: no LLM submission; deterministic-final row would be
-                # persisted by the pipeline library but is out-of-scope here.
-                continue
+            # The evidence bundle (below) is built for EVERY platelet order,
+            # including those with no usable count, so the returns short-circuit
+            # can screen returns-first with the bundle's windowed peri-op — the
+            # INSUFFICIENT_EVIDENCE gate now runs AFTER it (see below), matching
+            # production / the deterministic leg's returns-before-gate precedence.
             hn_hash = _hash(order.hn)
             an_hash = _hash(order.an)
             anchor_by_id[order.audit_id] = EvidenceAnchor(
@@ -1252,17 +1244,20 @@ def main() -> None:
                     vitals=plt_vital_records,
                 )
             )
-            # Returns-ledger short-circuit (mirror pipeline.run_pipeline's platelet
-            # branch): an all-returned (or peri-op-exempt) platelet order is
-            # deterministic-final and must NOT be LLM-submitted — the deterministic
-            # leg (run_pipeline.py) persists its terminal row; here we skip
-            # submission, the same handling INSUFFICIENT_EVIDENCE gets above. Uses
-            # the bundle's WINDOWED periop_summary (not admission-wide), so a
-            # remote same-admission surgery cannot exempt an unrelated transfusion
-            # — mirroring production and the RBC LLM path. The deterministic leg
-            # scans peri-op admission-wide (the accepted #123 Risk #3), so the two
-            # legs can differ only on that same documented split. Gated on
-            # RETURNS_LEDGER_ENABLED so a flag-off run submits the identical set.
+            # Returns-ledger short-circuit FIRST — BEFORE the platelet gate below
+            # (mirror pipeline.run_pipeline's platelet branch: the returns terminal
+            # precedes classify_platelet). An all-returned (or peri-op-exempt)
+            # platelet order is deterministic-final and must NOT be LLM-submitted;
+            # the deterministic leg (run_pipeline.py) persists its terminal row,
+            # here we skip submission. Because this runs before the gate, an
+            # all-returned platelet with NO usable count is still screened by the
+            # ledger (the Codex P2 fix). Uses the bundle's WINDOWED periop_summary
+            # (not admission-wide), so a remote same-admission surgery cannot
+            # exempt an unrelated transfusion — mirroring production and the RBC
+            # LLM path. The deterministic leg scans peri-op admission-wide (the
+            # accepted #123 Risk #3), so the two legs can differ only on that same
+            # documented split. Gated on RETURNS_LEDGER_ENABLED so a flag-off run
+            # submits the identical set.
             if RETURNS_LEDGER_ENABLED and (
                 _platelet_returns_result(
                     audit_id=order.audit_id,
@@ -1275,6 +1270,20 @@ def main() -> None:
                 )
                 is not None
             ):
+                continue
+            # Deterministic platelet gate: INSUFFICIENT_EVIDENCE is terminal (same
+            # contract as the pipeline library). POTENTIALLY_INAPPROPRIATE and
+            # NEEDS_REVIEW route onward to the LLM. Runs AFTER the returns check so
+            # a returns terminal wins over the platelet gate (production precedence).
+            plt_clf = classify_platelet(
+                PlateletClassifierInputs(
+                    audit_id=order.audit_id,
+                    platelet_count=plt_result.value_k_ul,
+                )
+            )
+            if plt_clf.classification == "INSUFFICIENT_EVIDENCE":
+                # Terminal: no LLM submission; deterministic-final row would be
+                # persisted by the pipeline library but is out-of-scope here.
                 continue
             plt_chunks: list[EvidenceChunk] = []
             for item in bundle.items:
