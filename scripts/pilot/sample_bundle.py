@@ -98,21 +98,21 @@ BDVSTDT_COLS = [
     "ITEMNO",
     "UNITAMT",
 ]
+# BDVSTTRANS is a unit-level returns ledger keyed by REQNO (not HN/AN, which the
+# real file does not carry). Casing here matches the raw file so the pilot's
+# _normalize_bdvsttrans (which uppercases) and build_review's _field(...,
+# "REQNO", "Reqno") both resolve the columns.
 BDVSTTRANS_COLS = [
-    "HN",
-    "AN",
-    "BDTYPE",
-    "GIVEDATE",
-    "GIVETIME",
-    "PAYDATE",
-    "PAYTIME",
-    "RTNDATE",
-    "RTNTIME",
-    "OFFDATE",
-    "QTYUSE",
-    "UNITSTAT",
-    "PAYOUTFLAG",
-    "PAYCOMM",
+    "Reqno",
+    "Bdtype",
+    "Unitstat",
+    "Paydate",
+    "Paytime",
+    "Rtndate",
+    "Rtntime",
+    "Offdate",
+    "Qtyuse",
+    "Payoutflag",
 ]
 
 
@@ -205,7 +205,6 @@ def main() -> None:
     sample = rng.sample(candidates, N)
     sample_reqnos = {r for _, r, _ in sample}
     sample_pairs = {(h, a) for h, _, a in sample}
-    sample_hns = {hn for hn, _, _ in sample}
     sample_ans = {a for _, _, a in sample}
     print("\nSampled RBC (HN, REQNO, AN):")
     for s in sample:
@@ -273,12 +272,10 @@ def main() -> None:
     # the RBC-only sets — behaviour is byte-identical to the original code.
     plt_reqnos_sampled: set[str] = {r for _, r, _ in platelet_sample}
     plt_ans: set[str] = {a for _, _, a in platelet_sample}
-    plt_hns: set[str] = {hn for hn, _, _ in platelet_sample}
     plt_pairs: set[tuple[str, str]] = {(h, a) for h, _, a in platelet_sample}
 
     all_reqnos = sample_reqnos | plt_reqnos_sampled
     all_ans = sample_ans | plt_ans
-    all_hns = sample_hns | plt_hns
     all_pairs = sample_pairs | plt_pairs
 
     related_reqnos = set(all_reqnos)
@@ -361,10 +358,7 @@ def main() -> None:
         _filter(
             "BDVSTTRANS.csv",
             "BDVSTTRANS.csv",
-            lambda r: (
-                (r.get("AN") or r.get("An")) in all_ans
-                or (r.get("HN") or r.get("Hn")) in all_hns
-            ),
+            lambda r: (r.get("Reqno") or r.get("REQNO")) in all_reqnos,
             cols=BDVSTTRANS_COLS,
         )
 
