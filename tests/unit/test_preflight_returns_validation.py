@@ -55,7 +55,9 @@ def _load_preflight() -> ModuleType:
 PF = _load_preflight()
 
 
-def _summary(disposition: str, *, units: int = 2, ordered: int | None = 2) -> ReturnsSummary:
+def _summary(
+    disposition: str, *, units: int = 2, ordered: int | None = 2
+) -> ReturnsSummary:
     """Build a ReturnsSummary whose derived disposition is ``disposition``."""
     if disposition == "not_transfused":
         return ReturnsSummary(
@@ -73,7 +75,9 @@ def _summary(disposition: str, *, units: int = 2, ordered: int | None = 2) -> Re
             ledger_complete=True,
         )
     # inconclusive
-    return ReturnsSummary(units_total=units, units_returned=units, ledger_complete=False)
+    return ReturnsSummary(
+        units_total=units, units_returned=units, ledger_complete=False
+    )
 
 
 def _note(text: str, *, at: datetime | None = None) -> VitalsNote:
@@ -237,7 +241,9 @@ def _neutral_inputs(
     )
 
 
-@pytest.mark.parametrize("disposition", ["not_transfused", "transfused", "inconclusive"])
+@pytest.mark.parametrize(
+    "disposition", ["not_transfused", "transfused", "inconclusive"]
+)
 @pytest.mark.parametrize("intraop", [False, True])
 @pytest.mark.parametrize("ebl", [None, 499, 500])
 def test_screened_predicate_matches_real_classifier(disposition, intraop, ebl) -> None:
@@ -351,7 +357,9 @@ def test_notes_in_window_filters_by_date() -> None:
 
     inside = _note("ให้เลือด LPRC 1 unit", at=datetime(2025, 8, 24, tzinfo=UTC))
     outside = _note("ให้เลือด LPRC 1 unit", at=datetime(2025, 9, 10, tzinfo=UTC))
-    kept = PF.notes_in_window((inside, outside), (_date(2025, 8, 21), _date(2025, 8, 26)))
+    kept = PF.notes_in_window(
+        (inside, outside), (_date(2025, 8, 21), _date(2025, 8, 26))
+    )
     assert kept == (inside,)
 
 

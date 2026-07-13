@@ -153,8 +153,11 @@ def is_screened_returned_not_transfused(
     Equals ``classify(...).classification == "RETURNED_NOT_TRANSFUSED"`` for the
     returns exit (pinned by ``test_screened_predicate_matches_real_classifier``).
     """
-    return summary.disposition == "not_transfused" and not hard_transfusion_contradiction(
-        intraop_transfusion=intraop_transfusion, blood_loss_ml=blood_loss_ml
+    return (
+        summary.disposition == "not_transfused"
+        and not hard_transfusion_contradiction(
+            intraop_transfusion=intraop_transfusion, blood_loss_ml=blood_loss_ml
+        )
     )
 
 
@@ -234,7 +237,10 @@ def recall_window(
     dates = [d for d in anchor_dates if d is not None]
     if not dates:
         return None
-    return (min(dates) - timedelta(days=pad_days), max(dates) + timedelta(days=pad_days))
+    return (
+        min(dates) - timedelta(days=pad_days),
+        max(dates) + timedelta(days=pad_days),
+    )
 
 
 def notes_in_window(
@@ -526,7 +532,9 @@ def run_preflight() -> PreflightResult:
 
     diag_by_an: dict[str, list[str]] = {}
     for r in diag:
-        diag_by_an.setdefault(r.get("AN", ""), []).append((r.get("ICD10") or "").strip())
+        diag_by_an.setdefault(r.get("AN", ""), []).append(
+            (r.get("ICD10") or "").strip()
+        )
 
     filter_result = build_audit_orders(
         _build_inputs(bdvst, products_by_reqno, diag_by_an),
@@ -540,9 +548,7 @@ def run_preflight() -> PreflightResult:
         1 for r in bdvst if _all_returned(trans_by_reqno.get(r["REQNO"], []))
     )
     raw_all_returned_included = sum(
-        1
-        for reqno in included_reqnos
-        if _all_returned(trans_by_reqno.get(reqno, []))
+        1 for reqno in included_reqnos if _all_returned(trans_by_reqno.get(reqno, []))
     )
     raw_all_returned_excluded = raw_all_returned_total - raw_all_returned_included
 
@@ -738,8 +744,10 @@ def print_report(result: PreflightResult) -> None:
     print(f"bundle          : {BUNDLE}")
     print(f"returns ledger  : {result.bdvsttrans_source}")
     if result.bdvsttrans_source == str(_RAW_BDVSTTRANS_DEFAULT):
-        print("  (note: bundle carries no BDVSTTRANS.csv; joined the raw partial "
-              "export by REQNO)")
+        print(
+            "  (note: bundle carries no BDVSTTRANS.csv; joined the raw partial "
+            "export by REQNO)"
+        )
 
     print("\n-- Coverage (a validation gate must have something to validate) --")
     print(
@@ -764,7 +772,9 @@ def print_report(result: PreflightResult) -> None:
         f"  audited (build_audit_orders included)    : {result.orders_included}"
         f"  (excluded {result.orders_excluded}; red-cell {result.orders_red_cell})"
     )
-    print(f"  raw all-returned, all orders             : {result.raw_all_returned_total}")
+    print(
+        f"  raw all-returned, all orders             : {result.raw_all_returned_total}"
+    )
     print(
         f"    of which excluded from the audit       : {result.raw_all_returned_excluded}"
     )
@@ -925,9 +935,7 @@ def _recommendation_rationale(result: PreflightResult) -> str:
                 "hidden transfusion)"
             )
         if result.invariant_violations:
-            reasons.append(
-                f"{len(result.invariant_violations)} invariant violation(s)"
-            )
+            reasons.append(f"{len(result.invariant_violations)} invariant violation(s)")
         return (
             "  Do NOT flip RETURNS_LEDGER_ENABLED on yet. "
             + "; ".join(reasons)
