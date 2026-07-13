@@ -828,9 +828,16 @@ class TestInMemoryBatchRunStore:
 
 
 class TestResumeOnStartup:
-    def test_resume_classifier_inputs_force_returns_inconclusive(
+    def test_resume_classifier_inputs_use_real_returns_disposition(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # Ticket #124: resume no longer FORCES returns_disposition="inconclusive"
+        # (the #122/#123 placeholder). It composes classifier inputs through the
+        # same production composer the live run uses, so the real ledger
+        # disposition threads into the resume rebuild — proving lockstep across
+        # run / resume. A run started before enablement is not silently combined
+        # with post-enablement semantics because the flag is required constant
+        # across submit + resume and a fresh run identity is required to enable.
         import bba.audit_pipeline.resume as resume_module
         import bba.feature_flags as feature_flags
 
@@ -862,6 +869,57 @@ class TestResumeOnStartup:
             code_version="v0.1.0+test",
             audit_ids=(ctx.order.audit_id,),
             anthropic_batch_id="msgbatch_resume_returned",
+            submitted_at=_RUN_TS,
+            updated_at=_RUN_TS,
+        )
+
+        requests = resume_module._rebuild_submission_requests(
+            run=run,
+            contexts={ctx.order.audit_id: ctx},
+            audit_ids=run.audit_ids,
+        )
+
+        assert len(requests) == 1
+        assert seen_dispositions == ["not_transfused"]
+
+    def test_resume_flag_off_forces_inconclusive_disposition(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Ticket #124 flag-off byte identity: with RETURNS_LEDGER_ENABLED off,
+        # the shared composer yields "inconclusive" even when the context carries
+        # a fully-returned ledger, so resume's task-mode selection is unchanged
+        # from today (enabling the flag is the only behavior change).
+        import bba.audit_pipeline.resume as resume_module
+        import bba.feature_flags as feature_flags
+
+        seen_dispositions: list[str] = []
+        real_classify = resume_module.classify
+
+        def capture_disposition(inputs):  # type: ignore[no-untyped-def]
+            seen_dispositions.append(inputs.returns_disposition)
+            return real_classify(inputs)
+
+        monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", False)
+        monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", True)
+        monkeypatch.setattr(resume_module, "classify", capture_disposition)
+        ctx = _row_context(
+            audit_id="resume-returned-flagoff",
+            hb_value=8.5,
+            upcoming_procedure_hours=24.0,
+            returns_summary=ReturnsSummary(
+                units_total=1,
+                units_returned=1,
+                ordered_unit_amount=1,
+                ledger_complete=True,
+            ),
+        )
+        run = BatchRun(
+            batch_id="batch-resume-returned-flagoff",
+            state=BatchRunState.SUBMITTED,
+            run_id="run-resume-returned-flagoff",
+            code_version="v0.1.0+test",
+            audit_ids=(ctx.order.audit_id,),
+            anthropic_batch_id="msgbatch_resume_returned_flagoff",
             submitted_at=_RUN_TS,
             updated_at=_RUN_TS,
         )
