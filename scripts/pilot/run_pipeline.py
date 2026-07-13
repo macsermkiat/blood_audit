@@ -30,12 +30,15 @@ from bba.audit_orders import (
     build_audit_orders,
 )
 from bba.cohort_detector import (
+    CohortAssignment,
     CohortInputs,
+    CohortLabel,
     MedEvent,
     OperativeEvent,
     assign_cohort,
 )
 from bba.deterministic_classifier import (
+    ClassifierResult,
     classify,
     is_blood_requiring_procedure,
     periop_envelope,
@@ -44,6 +47,7 @@ from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import ClassifierInputs
 from bba.feature_flags import RETURNS_LEDGER_ENABLED
 from bba.hb_lookup import (
+    HbLookupResult,
     HbObservation,
     parse_hb_value,
     resolve_evidence_anchor,
@@ -60,7 +64,7 @@ from bba.platelet_lookup import (
     parse_platelet_count,
 )
 from bba.returns_ledger import ReturnsSummary, summarize_returns
-from bba.vitals_extractor import scan_periop
+from bba.vitals_extractor import PeriopSummary, scan_periop
 
 from _anchor_candidates import build_anchor_candidates
 from _hosxp_dt import (
@@ -191,6 +195,95 @@ def _returns_periop_context_for_classifier(
             upcoming_procedure_hours=upcoming_procedure_hours,
         )
     return False
+
+
+# Returns-ledger terminals that short-circuit the platelet gate, mirroring
+# ``bba.audit_pipeline.pipeline._RETURNS_TERMINAL_CLASSIFICATIONS`` (spec #119).
+# Returns are component-agnostic, so an all-returned platelet order skips the
+# platelet gate exactly like the RBC path. Kept as a local mirror (not an
+# import) for the same reason the leg mirrors the classifier-input helpers.
+_RETURNS_TERMINAL_CLASSIFICATIONS = frozenset(
+    {"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"}
+)
+
+# Inert Hb / cohort sentinels for the platelet returns-terminal check. A
+# platelet order has no Hb or cohort, but ``classify`` requires both on
+# :class:`ClassifierInputs`; its returns branch reads neither value (only
+# ``cohort.threshold`` for the discarded result field), so these placeholders —
+# copied from :meth:`PipelineRowContext.for_platelet` — never affect the
+# outcome. See :func:`_platelet_returns_result`.
+_PLATELET_SENTINEL_HB = HbLookupResult(
+    value_g_dl=None,
+    datetime_utc=None,
+    source=None,
+    freshness="missing",
+    delta_hb_bypass=False,
+    delta_hb_windows=(),
+    needs_review_single_low_hb=False,
+)
+_PLATELET_SENTINEL_COHORT = CohortAssignment(
+    label=CohortLabel.UNKNOWN,
+    threshold=None,
+    evidence_code=None,
+    evidence_name=None,
+)
+
+
+def _platelet_returns_result(
+    *,
+    audit_id: str,
+    order_datetime: datetime,
+    returns_summary: ReturnsSummary | None,
+    periop: PeriopSummary | None,
+) -> ClassifierResult | None:
+    """Returns-ledger short-circuit for a platelet order (spec #119).
+
+    Mirrors ``pipeline.run_pipeline``'s platelet branch: run the RBC classifier
+    on the order's returns disposition + peri-op envelope and, if it yields a
+    returns terminal, use that instead of the platelet gate. Peri-op IS fed —
+    matching production's tested contract (``test_platelet_dispatch`` feeds a
+    ``periop_summary`` and expects ``PERIOP_TRANSFUSION_EXEMPT``) — so BOTH
+    terminals are reachable and, crucially, the hard intra-op/EBL contradiction
+    guard stays active: an all-returned platelet whose notes chart an intra-op
+    transfusion or EBL >= PERIOP_MIN_EBL_ML falls through instead of being
+    falsely cleared. ``procedure_proximity_hours``/``upcoming_procedure_hours``
+    are ``None`` (matching :meth:`PipelineRowContext.for_platelet`), so the
+    envelope rests only on surgical_context / intra-op transfusion.
+
+    Returns the :class:`ClassifierResult` iff it is a returns terminal, else
+    ``None``. Off, or with no ledger coverage, returns ``None`` so the platelet
+    path is byte-identical to today.
+    """
+    if not (RETURNS_LEDGER_ENABLED and returns_summary is not None):
+        return None
+    surgical_context = periop.surgical_context if periop else False
+    intraop_transfusion = periop.intraop_transfusion if periop else False
+    result = classify(
+        ClassifierInputs(
+            audit_id=audit_id,
+            hb_result=_PLATELET_SENTINEL_HB,
+            cohort_assignment=_PLATELET_SENTINEL_COHORT,
+            order_datetime=order_datetime,
+            procedure_proximity_hours=None,
+            upcoming_procedure_hours=None,
+            crystalloid_liters_prior_4h=0.0,
+            periop_blood_loss_ml=periop.blood_loss_ml if periop else None,
+            periop_intraop_transfusion=intraop_transfusion,
+            periop_surgical_context=surgical_context,
+            returns_disposition=_returns_disposition_for_classifier(returns_summary),
+            returns_periop_context=_returns_periop_context_for_classifier(
+                returns_summary,
+                surgical_context=surgical_context,
+                intraop_transfusion=intraop_transfusion,
+                procedure_proximity_hours=None,
+                upcoming_procedure_hours=None,
+            ),
+        )
+    )
+    if result.classification in _RETURNS_TERMINAL_CLASSIFICATIONS:
+        return result
+    return None
+
 
 csv.field_size_limit(sys.maxsize)
 
@@ -672,12 +765,40 @@ def main() -> None:
                 observations=plt_obs,
                 anchor_utc=order.order_datetime,
             )
-            plt_clf = classify_platelet(
-                PlateletClassifierInputs(
-                    audit_id=order.audit_id,
-                    platelet_count=plt_result.value_k_ul,
+            # Returns-ledger short-circuit FIRST (mirror pipeline.run_pipeline's
+            # platelet branch): an all-returned platelet order skips the platelet
+            # gate exactly like the RBC path. Peri-op is scanned (admission-wide,
+            # same as the RBC leg) so the hard intra-op/EBL contradiction guard
+            # stays active. Gated on RETURNS_LEDGER_ENABLED, so a flag-off run
+            # never reads the ledger and this row is byte-identical.
+            plt_returns_summary: ReturnsSummary | None = None
+            plt_periop: PeriopSummary | None = None
+            if RETURNS_LEDGER_ENABLED:
+                plt_returns_summary = summarize_returns(
+                    bdvsttrans_by_reqno.get(order.reqno, []),
+                    unitamt_lines_by_reqno.get(order.reqno, []),
                 )
+                plt_periop = scan_periop(
+                    vitals_notes_for(progress, focus, order.an, order.order_datetime)
+                )
+            plt_returns_result = _platelet_returns_result(
+                audit_id=order.audit_id,
+                order_datetime=order.order_datetime,
+                returns_summary=plt_returns_summary,
+                periop=plt_periop,
             )
+            if plt_returns_result is not None:
+                plt_classification = plt_returns_result.classification
+                plt_rationale = plt_returns_result.rationale
+            else:
+                plt_clf = classify_platelet(
+                    PlateletClassifierInputs(
+                        audit_id=order.audit_id,
+                        platelet_count=plt_result.value_k_ul,
+                    )
+                )
+                plt_classification = plt_clf.classification
+                plt_rationale = plt_clf.rationale
             plt_disp = (
                 f"{plt_result.value_k_ul:.0f}"
                 if plt_result.value_k_ul is not None
@@ -687,23 +808,39 @@ def main() -> None:
                 f"{order.reqno:<10} {order.an[:20]:<22} "
                 f"{'platelet':<24} "
                 f"PLT={plt_disp:<5} {plt_result.freshness:<14} "
-                f"{'n/a':<5} {plt_clf.classification:<26} {plt_clf.rationale}"
+                f"{'n/a':<5} {plt_classification:<26} {plt_rationale}"
             )
-            rows.append(
-                {
-                    "reqno": order.reqno,
-                    "an": order.an,
-                    "order_datetime_utc": order.order_datetime.isoformat(),
-                    "anchor_imputed": order.anchor_imputed,
-                    "products_ordered": "|".join(order.products_ordered),
-                    "diagnosis_codes_n": len(order.diagnosis_codes),
-                    "component": "platelet",
-                    "platelet_count_k_ul": plt_result.value_k_ul,
-                    "platelet_freshness": plt_result.freshness,
-                    "classification": plt_clf.classification,
-                    "rationale": plt_clf.rationale,
-                }
-            )
+            plt_row: dict[str, Any] = {
+                "reqno": order.reqno,
+                "an": order.an,
+                "order_datetime_utc": order.order_datetime.isoformat(),
+                "anchor_imputed": order.anchor_imputed,
+                "products_ordered": "|".join(order.products_ordered),
+                "diagnosis_codes_n": len(order.diagnosis_codes),
+                "component": "platelet",
+                "platelet_count_k_ul": plt_result.value_k_ul,
+                "platelet_freshness": plt_result.freshness,
+                "classification": plt_classification,
+                "rationale": plt_rationale,
+            }
+            if RETURNS_LEDGER_ENABLED and plt_returns_summary is not None:
+                plt_row.update(
+                    {
+                        "returns_disposition": plt_returns_summary.disposition,
+                        "returns_units_total": plt_returns_summary.units_total,
+                        "returns_units_returned": plt_returns_summary.units_returned,
+                        "returns_units_transfused": (
+                            plt_returns_summary.units_transfused
+                        ),
+                        "returns_ordered_unit_amount": (
+                            plt_returns_summary.ordered_unit_amount
+                            if plt_returns_summary.ordered_unit_amount is not None
+                            else ""
+                        ),
+                        "returns_ledger_complete": plt_returns_summary.ledger_complete,
+                    }
+                )
+            rows.append(plt_row)
             continue
 
         # --- Red-cell path (Phase 1, component="red_cell") ---

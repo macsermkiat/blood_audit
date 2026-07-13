@@ -68,12 +68,15 @@ from bba.audit_pipeline.pipeline import _persist_injection_flagged_row, rbc_task
 from bba.audit_pipeline.replay import apply_batch_results
 from bba.audit_store import AuditStore, AuditStoreConfig
 from bba.cohort_detector import (
+    CohortAssignment,
     CohortInputs,
+    CohortLabel,
     MedEvent,
     OperativeEvent,
     assign_cohort,
 )
 from bba.deterministic_classifier import (
+    ClassifierResult,
     classify,
     is_blood_requiring_procedure,
     periop_envelope,
@@ -96,6 +99,7 @@ from bba.evidence_bundle_builder import (
 )
 from bba.hb_lookup import (
     EvidenceAnchor,
+    HbLookupResult,
     HbObservation,
     parse_hb_value,
     resolve_evidence_anchor,
@@ -113,7 +117,7 @@ from bba.ingest.date_parser import parse_kcmh_english_date
 from bba.ingest.models import ParsedTimeOfDay
 from bba.llm_client import AnthropicBatchTransport, BatchSubmissionRequest
 from bba.prompt_builder import EvidenceChunk, PromptBuildRequest, build_prompt
-from bba.vitals_extractor import extract_vitals
+from bba.vitals_extractor import PeriopSummary, extract_vitals, scan_periop
 
 from _anchor_candidates import build_anchor_candidates
 from _hosxp_dt import _combine, _parse_hosxp_date, _parse_time
@@ -257,6 +261,96 @@ def _returns_periop_context_for_classifier(
             upcoming_procedure_hours=upcoming_procedure_hours,
         )
     return False
+
+
+# Returns-ledger terminals that short-circuit the platelet gate, mirroring
+# ``bba.audit_pipeline.pipeline._RETURNS_TERMINAL_CLASSIFICATIONS`` (spec #119).
+# Returns are component-agnostic, so an all-returned platelet order is
+# deterministic-final and must NOT be LLM-submitted — kept in lockstep with the
+# deterministic leg (``run_pipeline.py``) so both legs screen the same orders.
+_RETURNS_TERMINAL_CLASSIFICATIONS = frozenset(
+    {"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"}
+)
+
+# Inert Hb / cohort sentinels for the platelet returns-terminal check. A
+# platelet order has no Hb or cohort, but ``classify`` requires both on
+# :class:`ClassifierInputs`; its returns branch reads neither value (only
+# ``cohort.threshold`` for the discarded result field), so these placeholders —
+# copied from :meth:`PipelineRowContext.for_platelet` — never affect the
+# outcome. See :func:`_platelet_returns_result`.
+_PLATELET_SENTINEL_HB = HbLookupResult(
+    value_g_dl=None,
+    datetime_utc=None,
+    source=None,
+    freshness="missing",
+    delta_hb_bypass=False,
+    delta_hb_windows=(),
+    needs_review_single_low_hb=False,
+)
+_PLATELET_SENTINEL_COHORT = CohortAssignment(
+    label=CohortLabel.UNKNOWN,
+    threshold=None,
+    evidence_code=None,
+    evidence_name=None,
+)
+
+
+def _platelet_returns_result(
+    *,
+    audit_id: str,
+    order_datetime: datetime,
+    returns_summary: ReturnsSummary | None,
+    periop: PeriopSummary | None,
+) -> ClassifierResult | None:
+    """Returns-ledger short-circuit for a platelet order (spec #119).
+
+    Mirrors ``pipeline.run_pipeline``'s platelet branch AND
+    ``run_pipeline._platelet_returns_result`` (the deterministic leg) so both
+    pilot legs screen the same platelet orders. Peri-op IS fed — matching
+    production's tested contract (``test_platelet_dispatch`` feeds a
+    ``periop_summary`` and expects ``PERIOP_TRANSFUSION_EXEMPT``) — so BOTH
+    terminals are reachable and the hard intra-op/EBL contradiction guard stays
+    active (an all-returned platelet whose notes chart an intra-op transfusion
+    or EBL >= PERIOP_MIN_EBL_ML falls through instead of being falsely cleared).
+    ``procedure_proximity_hours``/``upcoming_procedure_hours`` are ``None``
+    (matching :meth:`PipelineRowContext.for_platelet`). The caller scans peri-op
+    admission-wide (same input the deterministic leg uses), so both legs reach
+    the SAME terminal for a given order — deliberately conservative vs the
+    windowed bundle the RBC LLM path uses, to keep det/model in lockstep.
+
+    Returns the :class:`ClassifierResult` iff it is a returns terminal, else
+    ``None``. Off, or with no ledger coverage, returns ``None`` so the leg
+    submits the identical set to today.
+    """
+    if not (RETURNS_LEDGER_ENABLED and returns_summary is not None):
+        return None
+    surgical_context = periop.surgical_context if periop else False
+    intraop_transfusion = periop.intraop_transfusion if periop else False
+    result = classify(
+        ClassifierInputs(
+            audit_id=audit_id,
+            hb_result=_PLATELET_SENTINEL_HB,
+            cohort_assignment=_PLATELET_SENTINEL_COHORT,
+            order_datetime=order_datetime,
+            procedure_proximity_hours=None,
+            upcoming_procedure_hours=None,
+            crystalloid_liters_prior_4h=0.0,
+            periop_blood_loss_ml=periop.blood_loss_ml if periop else None,
+            periop_intraop_transfusion=intraop_transfusion,
+            periop_surgical_context=surgical_context,
+            returns_disposition=_returns_disposition_for_classifier(returns_summary),
+            returns_periop_context=_returns_periop_context_for_classifier(
+                returns_summary,
+                surgical_context=surgical_context,
+                intraop_transfusion=intraop_transfusion,
+                procedure_proximity_hours=None,
+                upcoming_procedure_hours=None,
+            ),
+        )
+    )
+    if result.classification in _RETURNS_TERMINAL_CLASSIFICATIONS:
+        return result
+    return None
 
 
 csv.field_size_limit(sys.maxsize)
@@ -1026,6 +1120,34 @@ def main() -> None:
                 observations=plt_obs,
                 anchor_utc=order.order_datetime,
             )
+            # Returns-ledger short-circuit FIRST (mirror pipeline.run_pipeline's
+            # platelet branch): an all-returned platelet order is deterministic-
+            # final and must NOT be LLM-submitted — exactly like the RBC returns
+            # terminal. The deterministic leg (run_pipeline.py) persists its
+            # RETURNED_NOT_TRANSFUSED row; here we simply skip submission, the
+            # same handling the INSUFFICIENT_EVIDENCE terminal gets below. Peri-op
+            # is scanned admission-wide — identical input to the deterministic
+            # leg — so both legs reach the same terminal and stay in lockstep.
+            # Gated on RETURNS_LEDGER_ENABLED so a flag-off run submits the same
+            # set.
+            if RETURNS_LEDGER_ENABLED:
+                plt_returns_summary = summarize_returns(
+                    bdvsttrans_by_reqno.get(order.reqno, []),
+                    unitamt_lines_by_reqno.get(order.reqno, []),
+                )
+                plt_returns_periop = scan_periop(
+                    vitals_notes_for(progress, focus, order.an, order.order_datetime)
+                )
+                if (
+                    _platelet_returns_result(
+                        audit_id=order.audit_id,
+                        order_datetime=order.order_datetime,
+                        returns_summary=plt_returns_summary,
+                        periop=plt_returns_periop,
+                    )
+                    is not None
+                ):
+                    continue
             # Deterministic platelet gate: INSUFFICIENT_EVIDENCE is terminal
             # (same contract as the pipeline library).  POTENTIALLY_INAPPROPRIATE
             # and NEEDS_REVIEW route onward to the LLM.
