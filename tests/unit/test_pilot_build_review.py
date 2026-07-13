@@ -8,7 +8,9 @@ import pytest
 
 
 def _load_build_review() -> ModuleType:
-    script = Path(__file__).resolve().parents[2] / "scripts" / "pilot" / "build_review.py"
+    script = (
+        Path(__file__).resolve().parents[2] / "scripts" / "pilot" / "build_review.py"
+    )
     spec = importlib.util.spec_from_file_location("pilot_build_review_test", script)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

@@ -1010,9 +1010,7 @@ def _classify_from_context(context: "PipelineRowContext") -> ClassifierResult:
             returns_periop_context=(
                 periop_envelope(
                     surgical_context=periop.surgical_context if periop else False,
-                    intraop_transfusion=periop.intraop_transfusion
-                    if periop
-                    else False,
+                    intraop_transfusion=periop.intraop_transfusion if periop else False,
                     procedure_proximity_hours=context.procedure_proximity_hours,
                     upcoming_procedure_hours=context.upcoming_procedure_hours,
                 )

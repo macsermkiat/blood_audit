@@ -27,6 +27,8 @@ from bba.attribution.scorecards import (
     build_department_scorecards,
     build_doctor_scorecards,
 )
+
+
 def _bucket_totals(verdicts: Mapping[str, str]) -> BucketTotals:
     """Collapse raw verdicts into the 3-bucket totals used for
     reconciliation (the 300 human labels must land on 162/32/106)."""

@@ -366,8 +366,7 @@ def _rebuild_submission_requests(
             reserve_ahead = False
             if feature_flags.RESERVE_AHEAD_ROUTER_ENABLED:
                 reserve_ahead = (
-                    classify(_classifier_inputs_for(ctx)).rationale
-                    == "preop_defer_llm"
+                    classify(_classifier_inputs_for(ctx)).rationale == "preop_defer_llm"
                 )
             task_mode = rbc_task_mode(
                 ctx.hb_result.value_g_dl, reserve_ahead=reserve_ahead
