@@ -350,16 +350,24 @@ def _rebuild_submission_requests(
             )
         else:
             # RBC / default: mirrors live submission via the shared selector.
+            # Compose classifier inputs through the SAME production composer the
+            # live pipeline uses (``_classifier_inputs_for``) with NO returns
+            # override (spec #119, ticket #124). #122/#123 forced
+            # returns_disposition="inconclusive" + returns_periop_context=False
+            # here; #124 removes that force so resume re-derives returns routing
+            # identically to run/replay — no divergence across run / resume /
+            # legs. A returned/exempt order is terminal at submission time and is
+            # therefore never in ``audit_ids`` here, so it is never re-submitted;
+            # for any order that WAS submitted (non-terminal), the real returns
+            # disposition yields the same classifier rationale as the forced
+            # "inconclusive" did, so the rebuilt prompt stays byte-identical.
+            # Flag-off, ``_classifier_inputs_for`` already yields inconclusive /
+            # False, so today's task-mode selection is unchanged.
             reserve_ahead = False
             if feature_flags.RESERVE_AHEAD_ROUTER_ENABLED:
-                classifier_inputs = _classifier_inputs_for(ctx).model_copy(
-                    update={
-                        "returns_disposition": "inconclusive",
-                        "returns_periop_context": False,
-                    }
-                )
                 reserve_ahead = (
-                    classify(classifier_inputs).rationale == "preop_defer_llm"
+                    classify(_classifier_inputs_for(ctx)).rationale
+                    == "preop_defer_llm"
                 )
             task_mode = rbc_task_mode(
                 ctx.hb_result.value_g_dl, reserve_ahead=reserve_ahead

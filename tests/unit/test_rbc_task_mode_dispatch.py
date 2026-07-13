@@ -20,6 +20,7 @@ from bba.deterministic_classifier import classify
 from bba.hb_lookup import HbLookupResult
 from bba.platelet_lookup.models import PlateletLookupResult
 from bba.prompt_builder import EvidenceChunk
+from bba.returns_ledger import ReturnsSummary
 from bba.vitals_extractor import SourceProvenance, VitalSigns, VitalsResult
 
 
@@ -269,6 +270,78 @@ def test_resume_routes_real_preop_classifier_result_when_flag_enabled(
 
     assert request.task_mode == "RESERVE_AHEAD_REVIEW"
     assert request.prompt.task_mode == "RESERVE_AHEAD_REVIEW"
+
+
+_ALL_RETURNED = ReturnsSummary(
+    units_total=2,
+    units_returned=2,
+    ordered_unit_amount=2,
+    ledger_complete=True,
+)
+
+
+def test_resume_reserve_ahead_reflects_real_returns_disposition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ticket #124: resume must re-derive returns routing from the context's
+    returns_summary, NOT the #122/#123 forced ``inconclusive``.
+
+    A fully-returned order carrying an upcoming procedure would, under the old
+    force, be re-classified as ``preop_defer_llm`` and mis-dispatched to
+    RESERVE_AHEAD_REVIEW on resume. With the real disposition threaded, the
+    classifier returns the terminal RETURNED_NOT_TRANSFUSED (rationale is not
+    ``preop_defer_llm``), so reserve-ahead is off and the rebuild agrees with
+    live dispatch. Encodes AC "resume re-derives the same terminal routing".
+    """
+    monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", True)
+    monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", True)
+    ctx = _rbc_ctx(
+        "audit-rbc-resume-returned", 12.9, upcoming_procedure_hours=24.0
+    ).model_copy(update={"returns_summary": _ALL_RETURNED})
+
+    # The production composer that resume defers to now sees the real
+    # disposition (proving the force is gone).
+    assert _classifier_inputs_for(ctx).returns_disposition == "not_transfused"
+    assert classify(_classifier_inputs_for(ctx)).rationale == "returned_not_transfused"
+
+    live_task_mode = _build_submission_requests(
+        [ctx],
+        run_id="run-rbc-task-mode",
+        classifier_results={ctx.order.audit_id: classify(_classifier_inputs_for(ctx))},
+    )[0].task_mode
+    resume_task_mode = _rebuild_submission_requests(
+        run=_batch_run(ctx.order.audit_id),
+        contexts={ctx.order.audit_id: ctx},
+        audit_ids=(ctx.order.audit_id,),
+    )[0].task_mode
+
+    # No divergence across run / resume for the same returns-bearing context.
+    assert resume_task_mode == live_task_mode == "HB_GT_10_OVERRIDE"
+
+
+def test_resume_flag_off_ignores_returns_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ticket #124 flag-off byte identity: with RETURNS_LEDGER_ENABLED off, a
+    context carrying a returns_summary must be inert — the composer yields
+    ``inconclusive`` and resume keeps today's task-mode selection (the same the
+    #122/#123 force produced), so enabling the flag is the only behavior change.
+    """
+    monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", False)
+    monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", True)
+    ctx = _rbc_ctx(
+        "audit-rbc-resume-returned-flagoff", 12.9, upcoming_procedure_hours=24.0
+    ).model_copy(update={"returns_summary": _ALL_RETURNED})
+
+    assert _classifier_inputs_for(ctx).returns_disposition == "inconclusive"
+    request = _rebuild_submission_requests(
+        run=_batch_run(ctx.order.audit_id),
+        contexts={ctx.order.audit_id: ctx},
+        audit_ids=(ctx.order.audit_id,),
+    )[0]
+
+    # Unchanged from pre-#124: the preop reserve-ahead path still fires.
+    assert request.task_mode == "RESERVE_AHEAD_REVIEW"
 
 
 def test_platelet_dispatch_never_uses_rbc_selector():

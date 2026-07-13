@@ -73,9 +73,15 @@ from bba.cohort_detector import (
     OperativeEvent,
     assign_cohort,
 )
-from bba.deterministic_classifier import classify, is_blood_requiring_procedure
+from bba.deterministic_classifier import (
+    classify,
+    is_blood_requiring_procedure,
+    periop_envelope,
+)
 from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import ClassifierInputs
+from bba.feature_flags import RETURNS_LEDGER_ENABLED
+from bba.returns_ledger import ReturnsSummary, summarize_returns
 from bba.evidence_bundle_builder import (
     DiagnosisRecord,
     EvidenceInputs,
@@ -136,7 +142,18 @@ ONLY_REQNOS = frozenset(
 ENABLE_MISSING_HB_POSITIVE_EVIDENCE = os.environ.get(
     "BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE", ""
 ).strip().lower() in ("1", "true", "yes", "on")
-CODE_VERSION = "pilot-mini"
+# Run/code identity (spec #119 §G, ticket #124). The audit_store is idempotent
+# on (run_id, audit_id, code_version), so enabling the returns ledger must not
+# silently reuse a flag-off run's committed rows. Folding the flag into
+# CODE_VERSION makes enabling it a DISTINCT code identity, so a re-run recomputes
+# every affected verdict instead of keeping stale pre-feature rows (AC "reusing a
+# stale identity does not leave pre-feature rows in place"). Flag-off keeps the
+# original "pilot-mini" identity, so a flag-off run is byte-identical to today.
+# The flag is captured once at import and never toggled mid-run, so it is
+# constant across this process's batch submit and result apply. A changed
+# BDVSTTRANS ledger still needs a fresh BBA_PILOT_RUN_ID (it does not alter the
+# code identity); production folds the ledger into run identity separately (#121).
+CODE_VERSION = "pilot-mini+returns" if RETURNS_LEDGER_ENABLED else "pilot-mini"
 TZ_LOCAL = "Asia/Bangkok"
 INCPT_OPERATION_GROUPS = {"110", "111"}
 
@@ -184,6 +201,63 @@ CRYSTALLOID_KEYWORDS = (
     "d5%",
     "5% dextrose",
 )
+
+# Deterministic-final classifications: the pilot LLM leg never submits these to
+# the model — they are terminal at the classifier. Mirrors
+# ``bba.audit_pipeline.pipeline._DETERMINISTIC_FINAL_CLASSIFICATIONS`` (the
+# production composer) so the model leg stays in lockstep with the live pipeline
+# (spec #119, ticket #124). RETURNED_NOT_TRANSFUSED / PERIOP_TRANSFUSION_EXEMPT
+# are the two returns-ledger terminals; without them here a returned/exempt row
+# would be appended to ``llm_contexts`` and wrongly earn an LLM verdict.
+DETERMINISTIC_FINAL = frozenset(
+    {
+        "APPROPRIATE",
+        "INSUFFICIENT_EVIDENCE",
+        "INAPPROPRIATE",
+        "RETURNED_NOT_TRANSFUSED",
+        "PERIOP_TRANSFUSION_EXEMPT",
+    }
+)
+
+
+def _returns_disposition_for_classifier(returns_summary: ReturnsSummary | None) -> str:
+    """Return the gated disposition passed into the pure classifier.
+
+    Mirrors ``run_pipeline._returns_disposition_for_classifier`` and
+    ``pipeline._classifier_inputs_for`` so all four classifier-input sites stay
+    in lockstep (spec #119, ticket #124). Off, or with no ledger coverage, the
+    classifier sees ``"inconclusive"`` and today's output is unchanged.
+    """
+    if RETURNS_LEDGER_ENABLED and returns_summary is not None:
+        return returns_summary.disposition
+    return "inconclusive"
+
+
+def _returns_periop_context_for_classifier(
+    returns_summary: ReturnsSummary | None,
+    *,
+    surgical_context: bool,
+    intraop_transfusion: bool,
+    procedure_proximity_hours: float | None,
+    upcoming_procedure_hours: float | None,
+) -> bool:
+    """Return the gated peri-op envelope passed into the pure classifier (#123/#124).
+
+    Reuses :func:`bba.deterministic_classifier.periop_envelope` with its own
+    6h/72h window constants — identical to the deterministic leg and the
+    production composer — so a remote surgery cannot exempt an unrelated
+    transfusion. Off, or with no ledger coverage, returns ``False`` so the
+    exemption cannot fire and today's output is unchanged.
+    """
+    if RETURNS_LEDGER_ENABLED and returns_summary is not None:
+        return periop_envelope(
+            surgical_context=surgical_context,
+            intraop_transfusion=intraop_transfusion,
+            procedure_proximity_hours=procedure_proximity_hours,
+            upcoming_procedure_hours=upcoming_procedure_hours,
+        )
+    return False
+
 
 csv.field_size_limit(sys.maxsize)
 
@@ -808,10 +882,28 @@ def _build_inputs():
     }
 
     products_by_reqno: dict[str, list[str]] = {}
+    # Ordered unit amount per REQNO, one raw UNITAMT string per BDVSTDT detail
+    # line; summarize_returns parses these fail-closed (spec #119, ticket #124).
+    unitamt_lines_by_reqno: dict[str, list[str]] = {}
     for r in bdvstdt:
-        products_by_reqno.setdefault(r["REQNO"], []).append(
-            (r.get("BDTYPE") or "").strip()
+        reqno = r["REQNO"]
+        products_by_reqno.setdefault(reqno, []).append((r.get("BDTYPE") or "").strip())
+        unitamt_lines_by_reqno.setdefault(reqno, []).append(
+            (r.get("UNITAMT") or "").strip()
         )
+
+    # Returns-ledger index: BDVSTTRANS joins audited orders by REQNO exactly
+    # (spec #119, ticket #124). One row per dispensed physical unit. Read ONLY
+    # when RETURNS_LEDGER_ENABLED, so a flag-off run never opens the optional
+    # ledger and stays byte-identical to today even if the file is malformed.
+    # Keys are uppercased so summarize_returns reads UNITSTAT; the index keys on
+    # the raw REQNO to match order.reqno and every other REQNO index (a one-sided
+    # strip would silently miss the join).
+    bdvsttrans_by_reqno: dict[str, list[dict[str, str]]] = {}
+    if RETURNS_LEDGER_ENABLED:
+        for raw in _read_optional_csv("BDVSTTRANS.csv"):
+            row = {k.upper(): v for k, v in raw.items()}
+            bdvsttrans_by_reqno.setdefault(row.get("REQNO") or "", []).append(row)
 
     bdvst_by_reqno = {r["REQNO"]: r for r in bdvst}
     candidates_by_reqno = build_anchor_candidates(
@@ -866,6 +958,8 @@ def _build_inputs():
         focus,
         diag_name_by_code,
         candidates_by_reqno,
+        bdvsttrans_by_reqno,
+        unitamt_lines_by_reqno,
     )
 
 
@@ -903,6 +997,8 @@ def main() -> None:
         focus,
         diag_name_by_code,
         candidates_by_reqno,
+        bdvsttrans_by_reqno,
+        unitamt_lines_by_reqno,
     ) = _build_inputs()
 
     fr = build_audit_orders(inputs, AuditOrdersConfig(code_version=CODE_VERSION))
@@ -1493,6 +1589,17 @@ def main() -> None:
             print(f"  WARN: empty chunks for {order.reqno}; skipping LLM submit")
             continue
 
+        # Returns-ledger read path (spec #119, ticket #124), behind the flag.
+        # Off -> no ledger read, returns_summary stays None and the classifier
+        # sees "inconclusive", so the LLM leg's submission set is byte-identical
+        # to today. Joined by REQNO exactly, mirroring the deterministic leg.
+        returns_summary: ReturnsSummary | None = None
+        if RETURNS_LEDGER_ENABLED:
+            returns_summary = summarize_returns(
+                bdvsttrans_by_reqno.get(order.reqno, []),
+                unitamt_lines_by_reqno.get(order.reqno, []),
+            )
+
         contexts.append(
             PipelineRowContext(
                 order=order,
@@ -1515,10 +1622,10 @@ def main() -> None:
                 periop_summary=bundle.periop_summary,
                 administration_summary=bundle.administration_summary,
                 enable_missing_hb_positive_evidence=ENABLE_MISSING_HB_POSITIVE_EVIDENCE,
+                returns_summary=returns_summary,
             )
         )
 
-    DETERMINISTIC_FINAL = {"APPROPRIATE", "INSUFFICIENT_EVIDENCE", "INAPPROPRIATE"}
     # Two deliberately separate maps (Codex round-6 P1):
     #   * ``classifier_results`` holds ONLY RBC ``ClassifierResult`` entries and
     #     is handed to ``apply_batch_results``. Platelet contexts are excluded so
@@ -1576,6 +1683,16 @@ def main() -> None:
                 if periop
                 else False,
                 periop_surgical_context=periop.surgical_context if periop else False,
+                returns_disposition=_returns_disposition_for_classifier(
+                    ctx.returns_summary
+                ),
+                returns_periop_context=_returns_periop_context_for_classifier(
+                    ctx.returns_summary,
+                    surgical_context=periop.surgical_context if periop else False,
+                    intraop_transfusion=periop.intraop_transfusion if periop else False,
+                    procedure_proximity_hours=ctx.procedure_proximity_hours,
+                    upcoming_procedure_hours=ctx.upcoming_procedure_hours,
+                ),
             )
         )
         classifier_results[ctx.order.audit_id] = cres
