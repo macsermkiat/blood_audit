@@ -13,6 +13,10 @@ PLATELET_LLM_ENABLED
 RESERVE_AHEAD_ROUTER_ENABLED
     Gates reserve-ahead RBC prompt routing and replay semantics. When False,
     RBC dispatch and replay remain unchanged. Default: False.
+RETURNS_LEDGER_ENABLED
+    Gates the BDVSTTRANS returns-ledger disposition read path. When False, the
+    pilot report is byte-identical to today; no verdict logic changes. Default:
+    False.
 """
 
 from __future__ import annotations
@@ -35,4 +39,17 @@ and replay. It stays False until the #109 gate makes the end-to-end semantics
 safe to enable outside tests.
 """
 
-__all__: Sequence[str] = ("PLATELET_LLM_ENABLED", "RESERVE_AHEAD_ROUTER_ENABLED")
+RETURNS_LEDGER_ENABLED: bool = False
+"""Enable the BDVSTTRANS returns-ledger disposition read path (default: OFF).
+
+Ticket #120 (spec #119) wires the REQNO-exact returns join, the returns_ledger
+summary, and the new report columns behind this flag. With it OFF the pilot
+report is byte-identical to today; no verdict logic changes in #120. The
+disposition router that consumes the summary lands in #122/#123.
+"""
+
+__all__: Sequence[str] = (
+    "PLATELET_LLM_ENABLED",
+    "RESERVE_AHEAD_ROUTER_ENABLED",
+    "RETURNS_LEDGER_ENABLED",
+)

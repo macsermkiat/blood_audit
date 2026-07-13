@@ -34,6 +34,8 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from bba.feature_flags import RETURNS_LEDGER_ENABLED
+
 WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
 BUNDLE = WORK / "bundle"
 LLM_REPORT = WORK / "llm_report.json"
@@ -856,15 +858,20 @@ def main() -> None:
             for r in line_items
             if r.get("BDTYPE")
         }
-        trans_rows = [
-            r
-            for r in bdvsttrans
-            if (_field(r, "AN", "An") == an or _field(r, "HN", "Hn") == hn)
-            and (
-                not ordered_products
-                or _field(r, "BDTYPE", "Bdtype").strip().upper() in ordered_products
-            )
-        ]
+        if RETURNS_LEDGER_ENABLED:
+            # BDVSTTRANS joins by REQNO exactly (spec #119), so a multi-order
+            # admission shows only this order's unit rows.
+            trans_rows = [r for r in bdvsttrans if _field(r, "REQNO", "Reqno") == reqno]
+        else:
+            trans_rows = [
+                r
+                for r in bdvsttrans
+                if (_field(r, "AN", "An") == an or _field(r, "HN", "Hn") == hn)
+                and (
+                    not ordered_products
+                    or _field(r, "BDTYPE", "Bdtype").strip().upper() in ordered_products
+                )
+            ]
         trans_rows.sort(
             key=lambda r: (
                 fmt_dt(

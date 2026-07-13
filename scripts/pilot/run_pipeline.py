@@ -38,6 +38,7 @@ from bba.cohort_detector import (
 from bba.deterministic_classifier import classify, is_blood_requiring_procedure
 from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import ClassifierInputs
+from bba.feature_flags import RETURNS_LEDGER_ENABLED
 from bba.hb_lookup import (
     HbObservation,
     parse_hb_value,
@@ -54,6 +55,7 @@ from bba.platelet_lookup import (
     lookup_platelet,
     parse_platelet_count,
 )
+from bba.returns_ledger import ReturnsSummary, summarize_returns
 from bba.vitals_extractor import scan_periop
 
 from _anchor_candidates import build_anchor_candidates
@@ -139,6 +141,18 @@ REPORT_FIELDNAMES = [
     "component",
     "platelet_count_k_ul",
     "platelet_freshness",
+]
+
+# Returns-ledger disposition columns (spec #119, ticket #120). Appended to the
+# report schema ONLY when RETURNS_LEDGER_ENABLED is on, so a flag-off run
+# reproduces the base schema — and today's report.csv — byte-for-byte.
+RETURNS_LEDGER_FIELDNAMES = [
+    "returns_disposition",
+    "returns_units_total",
+    "returns_units_returned",
+    "returns_units_transfused",
+    "returns_ordered_unit_amount",
+    "returns_ledger_complete",
 ]
 
 csv.field_size_limit(sys.maxsize)
@@ -460,33 +474,6 @@ def _normalize_bdvsttrans(raw: list[dict[str, str]]) -> list[dict[str, str]]:
     return [{k.upper(): v for k, v in r.items()} for r in raw]
 
 
-def _bdvsttrans_rows_for_order(
-    rows: list[dict[str, str]],
-    *,
-    hn: str,
-    an: str,
-    products_ordered: tuple[str, ...],
-) -> list[dict[str, str]]:
-    """Return likely transaction rows for this order.
-
-    BDVSTTRANS does not carry REQNO in the HOSxP dictionary, so this is an
-    admission-scoped display join: same AN/HN and ordered blood product.
-    The HTML review page still renders the raw rows so reviewers can judge
-    ambiguous multi-order admissions directly.
-    """
-    products = {p.strip().upper() for p in products_ordered}
-    out: list[dict[str, str]] = []
-    for r in rows:
-        row_an = (r.get("AN") or "").strip()
-        row_hn = (r.get("HN") or "").strip()
-        row_type = (r.get("BDTYPE") or "").strip().upper()
-        if row_type and products and row_type not in products:
-            continue
-        if row_an == an or row_hn == hn:
-            out.append(r)
-    return out
-
-
 def _earliest_return_datetime_local(rows: list[dict[str, str]]) -> str:
     """Return earliest BDVSTTRANS return timestamp, or empty string."""
     candidates: list[str] = []
@@ -528,7 +515,20 @@ def main() -> None:
 
     bdvst_by_reqno = {r["REQNO"]: r for r in bdvst}
 
+    # Returns-ledger index: BDVSTTRANS joins audited orders by REQNO exactly
+    # (spec #119). One row per dispensed physical unit. Consumed only on the
+    # RETURNS_LEDGER_ENABLED path below; inert when the flag is off.
+    bdvsttrans_by_reqno: dict[str, list[dict[str, str]]] = {}
+    for r in bdvsttrans:
+        # Key on the raw REQNO to match order.reqno and every other REQNO index
+        # in this script (bdvst_by_reqno, unitamt_lines_by_reqno); a one-sided
+        # strip here would silently miss the join.
+        bdvsttrans_by_reqno.setdefault(r.get("REQNO") or "", []).append(r)
+
     products_by_reqno: dict[str, list[str]] = {}
+    # Ordered unit amount per REQNO, one raw UNITAMT string per BDVSTDT detail
+    # line. summarize_returns parses these fail-closed (spec #119).
+    unitamt_lines_by_reqno: dict[str, list[str]] = {}
     # Separate dispense and use displays per REQNO. Dispense comes from the
     # parent BDVST PICKDATE/PICKTIME; use comes from the earliest full BDVSTDT
     # USEDATE/USETIME, with a date-only marker when no full datetime exists.
@@ -538,6 +538,9 @@ def main() -> None:
     for r in bdvstdt:
         reqno = r["REQNO"]
         products_by_reqno.setdefault(reqno, []).append((r.get("BDTYPE") or "").strip())
+        unitamt_lines_by_reqno.setdefault(reqno, []).append(
+            (r.get("UNITAMT") or "").strip()
+        )
 
         parent = bdvst_by_reqno.get(reqno, {})
         pick_date = (parent.get("PICKDATE") or "").strip().split(" ")[0]
@@ -691,12 +694,18 @@ def main() -> None:
             crystalloid_events, order.order_datetime
         )
         anc = _latest_anc(lab, order.an, order.order_datetime)
-        trans_rows = _bdvsttrans_rows_for_order(
-            bdvsttrans,
-            hn=order.hn,
-            an=order.an,
-            products_ordered=order.products_ordered,
-        )
+
+        # Returns-ledger read path (spec #119, ticket #120), behind the flag.
+        # Off -> no ledger read, returned datetime stays "" and the returns
+        # columns are omitted, so report.csv is byte-identical to today.
+        returns_summary: ReturnsSummary | None = None
+        returned_dt = ""
+        if RETURNS_LEDGER_ENABLED:
+            trans_rows = bdvsttrans_by_reqno.get(order.reqno, [])
+            returns_summary = summarize_returns(
+                trans_rows, unitamt_lines_by_reqno.get(order.reqno, [])
+            )
+            returned_dt = _earliest_return_datetime_local(trans_rows)
 
         cohort = assign_cohort(
             CohortInputs(
@@ -707,10 +716,11 @@ def main() -> None:
                 procedure_events=op_events,
                 diagnosis_codes=order.diagnosis_codes,
                 med_events=med_events,
-                # MTP cluster arm is unfed in the pilot: BDVSTTRANS has no
-                # REQNO, so there is no precise per-order RBC-unit history to
-                # build BloodOrderEvent records from. See README "MTP arm is
-                # unfed". detect_mtp_pattern therefore never fires here.
+                # MTP cluster arm is unfed in the pilot: BDVSTTRANS now carries
+                # REQNO (used above for the returns ledger), but this ticket
+                # does not build per-order BloodOrderEvent records from it, so
+                # detect_mtp_pattern still never fires here. See README "MTP arm
+                # is unfed".
                 blood_orders=(),
                 anc_value=anc,
             )
@@ -789,47 +799,59 @@ def main() -> None:
             f"{clf.classification:<26} {clf.rationale}"
         )
 
-        rows.append(
-            {
-                "reqno": order.reqno,
-                "an": order.an,
-                "order_datetime_utc": order.order_datetime.isoformat(),
-                "anchor_imputed": order.anchor_imputed,
-                "evidence_anchor_reason": evidence_anchor.reason,
-                "evidence_anchor_datetime_local": evidence_anchor.display,
-                "reanchor_gap_hours": (
-                    f"{evidence_anchor.gap_hours:.1f}"
-                    if evidence_anchor.reason == "issue_reanchor"
-                    else ""
-                ),
-                "products_ordered": "|".join(order.products_ordered),
-                "diagnosis_codes_n": len(order.diagnosis_codes),
-                "hb_anchor_datetime_local": hb_anchor_display,
-                "hb_anchor_reason": hb_anchor_reason,
-                "hb_value_g_dl": hb.value_g_dl,
-                "hb_freshness": hb.freshness,
-                "hb_source": hb.source,
-                "hb_delta_bypass": hb.delta_hb_bypass,
-                "hb_needs_review_single_low": hb.needs_review_single_low_hb,
-                "cohort_label": cohort.label.value,
-                "cohort_threshold": cohort.threshold,
-                "cohort_evidence_code": cohort.evidence_code,
-                "cohort_evidence_name": cohort.evidence_name,
-                "procedure_proximity_hours": proximity_h,
-                "upcoming_procedure_hours": upcoming_h,
-                "crystalloid_liters_prior_4h": crystalloid_liters,
-                "anc_value": anc,
-                "dispense_datetime_local": dispense_dt_by_reqno.get(order.reqno, ""),
-                "use_datetime_local": use_dt_by_reqno.get(order.reqno, ""),
-                "returned_blood_datetime_local": _earliest_return_datetime_local(
-                    trans_rows
-                ),
-                "classification": clf.classification,
-                "rationale": clf.rationale,
-                "bypass_reason": clf.bypass_reason.value,
-                "component": "red_cell",
-            }
-        )
+        row: dict[str, Any] = {
+            "reqno": order.reqno,
+            "an": order.an,
+            "order_datetime_utc": order.order_datetime.isoformat(),
+            "anchor_imputed": order.anchor_imputed,
+            "evidence_anchor_reason": evidence_anchor.reason,
+            "evidence_anchor_datetime_local": evidence_anchor.display,
+            "reanchor_gap_hours": (
+                f"{evidence_anchor.gap_hours:.1f}"
+                if evidence_anchor.reason == "issue_reanchor"
+                else ""
+            ),
+            "products_ordered": "|".join(order.products_ordered),
+            "diagnosis_codes_n": len(order.diagnosis_codes),
+            "hb_anchor_datetime_local": hb_anchor_display,
+            "hb_anchor_reason": hb_anchor_reason,
+            "hb_value_g_dl": hb.value_g_dl,
+            "hb_freshness": hb.freshness,
+            "hb_source": hb.source,
+            "hb_delta_bypass": hb.delta_hb_bypass,
+            "hb_needs_review_single_low": hb.needs_review_single_low_hb,
+            "cohort_label": cohort.label.value,
+            "cohort_threshold": cohort.threshold,
+            "cohort_evidence_code": cohort.evidence_code,
+            "cohort_evidence_name": cohort.evidence_name,
+            "procedure_proximity_hours": proximity_h,
+            "upcoming_procedure_hours": upcoming_h,
+            "crystalloid_liters_prior_4h": crystalloid_liters,
+            "anc_value": anc,
+            "dispense_datetime_local": dispense_dt_by_reqno.get(order.reqno, ""),
+            "use_datetime_local": use_dt_by_reqno.get(order.reqno, ""),
+            "returned_blood_datetime_local": returned_dt,
+            "classification": clf.classification,
+            "rationale": clf.rationale,
+            "bypass_reason": clf.bypass_reason.value,
+            "component": "red_cell",
+        }
+        if RETURNS_LEDGER_ENABLED and returns_summary is not None:
+            row.update(
+                {
+                    "returns_disposition": returns_summary.disposition,
+                    "returns_units_total": returns_summary.units_total,
+                    "returns_units_returned": returns_summary.units_returned,
+                    "returns_units_transfused": returns_summary.units_transfused,
+                    "returns_ordered_unit_amount": (
+                        returns_summary.ordered_unit_amount
+                        if returns_summary.ordered_unit_amount is not None
+                        else ""
+                    ),
+                    "returns_ledger_complete": returns_summary.ledger_complete,
+                }
+            )
+        rows.append(row)
 
     # Append excluded cases as sparse rows so build_review.py can surface
     # the exclusion reason (e.g. "obstetric") instead of showing "—".
@@ -843,8 +865,11 @@ def main() -> None:
     # only) report.csv so build_review.py can open it. Stable fieldnames
     # also keep the schema consistent across runs (one column won't
     # disappear if every case happens to have e.g. anc_value=None).
+    fieldnames = REPORT_FIELDNAMES + (
+        RETURNS_LEDGER_FIELDNAMES if RETURNS_LEDGER_ENABLED else []
+    )
     with out_csv.open("w", encoding="utf-8", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=REPORT_FIELDNAMES, extrasaction="ignore")
+        w = csv.DictWriter(fh, fieldnames=fieldnames, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
     print(f"\nFull report written to {out_csv} ({len(rows)} rows)")
