@@ -595,6 +595,58 @@ class TestFiveViewsRender:
         assert scorecard.total_orders == 0
         assert scorecard.average_confidence == 0.0
 
+    def test_returned_not_transfused_is_displayed_but_excluded_from_total(
+        self,
+        config: DashboardConfig,
+        context_in_care_team: RouteContext,
+        audit_store: AuditStore,
+    ) -> None:
+        returned = _audit_row(
+            audit_id="audit-001",
+            run_id="run-returned",
+            final_classification="RETURNED_NOT_TRANSFUSED",
+        )
+        audit_store.write(
+            returned,
+            (_llm_call(audit_id="audit-001", run_id="run-returned"),),
+        )
+        scorecard = get_ward_scorecard(config, context_in_care_team, "ward-001")
+        assert scorecard.total_orders == 0
+        assert scorecard.returned_not_transfused_count == 1
+        assert (
+            scorecard.appropriate_count
+            + scorecard.inappropriate_count
+            + scorecard.needs_review_count
+            + scorecard.insufficient_evidence_count
+            == scorecard.total_orders
+        )
+
+    def test_periop_transfusion_exempt_is_displayed_but_excluded_from_total(
+        self,
+        config: DashboardConfig,
+        context_in_care_team: RouteContext,
+        audit_store: AuditStore,
+    ) -> None:
+        exempt = _audit_row(
+            audit_id="audit-001",
+            run_id="run-periop",
+            final_classification="PERIOP_TRANSFUSION_EXEMPT",
+        )
+        audit_store.write(
+            exempt,
+            (_llm_call(audit_id="audit-001", run_id="run-periop"),),
+        )
+        scorecard = get_ward_scorecard(config, context_in_care_team, "ward-001")
+        assert scorecard.total_orders == 0
+        assert scorecard.periop_transfusion_exempt_count == 1
+        assert (
+            scorecard.appropriate_count
+            + scorecard.inappropriate_count
+            + scorecard.needs_review_count
+            + scorecard.insufficient_evidence_count
+            == scorecard.total_orders
+        )
+
     def test_physician_scorecard_view_renders_with_synthetic_data(
         self,
         config: DashboardConfig,
@@ -1195,6 +1247,35 @@ class TestRouteSmoke:
     def test_get_ward_scorecard_returns_200(self, client: Any) -> None:
         response = client.get("/scorecard/ward/ward-001")
         assert response.status_code == 200
+
+    @pytest.mark.parametrize(
+        "path",
+        ["/scorecard/ward/ward-001", "/scorecard/physician/phys-001"],
+    )
+    def test_flag_off_scorecards_match_pre_returns_markup(
+        self,
+        client: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        path: str,
+    ) -> None:
+        monkeypatch.setattr(
+            "bba.dashboard.app.RETURNS_LEDGER_ENABLED", False, raising=False
+        )
+        response = client.get(path)
+        assert response.status_code == 200
+        assert "RETURNED_NOT_TRANSFUSED (excluded)" not in response.text
+        assert "PERIOP_TRANSFUSION_EXEMPT (excluded)" not in response.text
+
+    def test_flag_on_scorecard_includes_returns_markup(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "bba.dashboard.app.RETURNS_LEDGER_ENABLED", True, raising=False
+        )
+        response = client.get("/scorecard/ward/ward-001")
+        assert response.status_code == 200
+        assert "RETURNED_NOT_TRANSFUSED (excluded)" in response.text
+        assert "PERIOP_TRANSFUSION_EXEMPT (excluded)" in response.text
 
     def test_get_physician_scorecard_returns_200(self, client: Any) -> None:
         response = client.get("/scorecard/physician/phys-001")

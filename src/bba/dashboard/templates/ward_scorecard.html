@@ -10,7 +10,9 @@
       <dt class="text-slate-500">INAPPROPRIATE</dt><dd>{{ scorecard.inappropriate_count }}</dd>
       <dt class="text-slate-500">NEEDS_REVIEW</dt><dd>{{ scorecard.needs_review_count }}</dd>
       <dt class="text-slate-500">INSUFFICIENT_EVIDENCE</dt><dd>{{ scorecard.insufficient_evidence_count }}</dd>
-      <dt class="text-slate-500">avg confidence</dt><dd>{{ "%.2f"|format(scorecard.average_confidence) }}</dd>
+{% if returns_ledger_enabled %}      <dt class="text-slate-500">RETURNED_NOT_TRANSFUSED (excluded)</dt><dd>{{ scorecard.returned_not_transfused_count }}</dd>
+      <dt class="text-slate-500">PERIOP_TRANSFUSION_EXEMPT (excluded)</dt><dd>{{ scorecard.periop_transfusion_exempt_count }}</dd>
+{% endif %}      <dt class="text-slate-500">avg confidence</dt><dd>{{ "%.2f"|format(scorecard.average_confidence) }}</dd>
     </dl>
   </div>
 </section>

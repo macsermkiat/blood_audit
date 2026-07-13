@@ -27,25 +27,29 @@ from bba.attribution.scorecards import (
     build_department_scorecards,
     build_doctor_scorecards,
 )
-from bba.report_generator.models import Classification
-
-
-def _bucket_totals(verdicts: Mapping[str, Classification]) -> BucketTotals:
+def _bucket_totals(verdicts: Mapping[str, str]) -> BucketTotals:
     """Collapse raw verdicts into the 3-bucket totals used for
     reconciliation (the 300 human labels must land on 162/32/106)."""
     appropriate = sum(1 for c in verdicts.values() if c == "APPROPRIATE")
     inappropriate = sum(1 for c in verdicts.values() if c == "INAPPROPRIATE")
+    returned = sum(1 for c in verdicts.values() if c == "RETURNED_NOT_TRANSFUSED")
+    periop_exempt = sum(
+        1 for c in verdicts.values() if c == "PERIOP_TRANSFUSION_EXEMPT"
+    )
+    scorable_total = len(verdicts) - returned - periop_exempt
     return BucketTotals(
         appropriate=appropriate,
         inappropriate=inappropriate,
-        unresolved=len(verdicts) - appropriate - inappropriate,
-        total=len(verdicts),
+        unresolved=scorable_total - appropriate - inappropriate,
+        returned_not_transfused=returned,
+        periop_transfusion_exempt=periop_exempt,
+        total=scorable_total,
     )
 
 
 def build_rankings(
     *,
-    verdicts: Mapping[str, Classification],
+    verdicts: Mapping[str, str],
     reqno_to_doctor: Mapping[str, str],
     dct_registry: Mapping[str, DoctorRecord],
     bucket: Bucket = "inappropriate",

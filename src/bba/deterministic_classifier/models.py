@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
@@ -72,6 +73,8 @@ class BypassReason(StrEnum):
     PERIOP_EVIDENCE = "periop_evidence"
     MTP = "mtp"
     HEMODILUTION_FLAGGED = "hemodilution_flagged"
+    RETURNED_NOT_TRANSFUSED = "returned_not_transfused"
+    PERIOP_TRANSFUSION_EXEMPT = "periop_transfusion_exempt"
     NONE = "none"
 
 
@@ -151,6 +154,10 @@ class ClassifierInputs(BaseModel):
     periop_blood_loss_ml: int | None = None
     periop_intraop_transfusion: bool = False
     periop_surgical_context: bool = False
+    returns_disposition: Literal[
+        "not_transfused", "transfused", "inconclusive"
+    ] = "inconclusive"
+    returns_periop_context: bool = False
 
 
 class ClassifierResult(BaseModel):

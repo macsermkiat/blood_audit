@@ -68,14 +68,23 @@ from bba.audit_pipeline.pipeline import _persist_injection_flagged_row, rbc_task
 from bba.audit_pipeline.replay import apply_batch_results
 from bba.audit_store import AuditStore, AuditStoreConfig
 from bba.cohort_detector import (
+    CohortAssignment,
     CohortInputs,
+    CohortLabel,
     MedEvent,
     OperativeEvent,
     assign_cohort,
 )
-from bba.deterministic_classifier import classify, is_blood_requiring_procedure
+from bba.deterministic_classifier import (
+    ClassifierResult,
+    classify,
+    is_blood_requiring_procedure,
+    periop_envelope,
+)
 from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import ClassifierInputs
+from bba.feature_flags import RETURNS_LEDGER_ENABLED
+from bba.returns_ledger import ReturnsSummary, summarize_returns
 from bba.evidence_bundle_builder import (
     DiagnosisRecord,
     EvidenceInputs,
@@ -90,6 +99,7 @@ from bba.evidence_bundle_builder import (
 )
 from bba.hb_lookup import (
     EvidenceAnchor,
+    HbLookupResult,
     HbObservation,
     parse_hb_value,
     resolve_evidence_anchor,
@@ -107,7 +117,7 @@ from bba.ingest.date_parser import parse_kcmh_english_date
 from bba.ingest.models import ParsedTimeOfDay
 from bba.llm_client import AnthropicBatchTransport, BatchSubmissionRequest
 from bba.prompt_builder import EvidenceChunk, PromptBuildRequest, build_prompt
-from bba.vitals_extractor import extract_vitals
+from bba.vitals_extractor import PeriopSummary, extract_vitals
 
 from _anchor_candidates import build_anchor_candidates
 from _hosxp_dt import _combine, _parse_hosxp_date, _parse_time
@@ -136,7 +146,18 @@ ONLY_REQNOS = frozenset(
 ENABLE_MISSING_HB_POSITIVE_EVIDENCE = os.environ.get(
     "BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE", ""
 ).strip().lower() in ("1", "true", "yes", "on")
-CODE_VERSION = "pilot-mini"
+# Run/code identity (spec #119 §G, ticket #124). The audit_store is idempotent
+# on (run_id, audit_id, code_version), so enabling the returns ledger must not
+# silently reuse a flag-off run's committed rows. Folding the flag into
+# CODE_VERSION makes enabling it a DISTINCT code identity, so a re-run recomputes
+# every affected verdict instead of keeping stale pre-feature rows (AC "reusing a
+# stale identity does not leave pre-feature rows in place"). Flag-off keeps the
+# original "pilot-mini" identity, so a flag-off run is byte-identical to today.
+# The flag is captured once at import and never toggled mid-run, so it is
+# constant across this process's batch submit and result apply. A changed
+# BDVSTTRANS ledger still needs a fresh BBA_PILOT_RUN_ID (it does not alter the
+# code identity); production folds the ledger into run identity separately (#121).
+CODE_VERSION = "pilot-mini+returns" if RETURNS_LEDGER_ENABLED else "pilot-mini"
 TZ_LOCAL = "Asia/Bangkok"
 INCPT_OPERATION_GROUPS = {"110", "111"}
 
@@ -184,6 +205,157 @@ CRYSTALLOID_KEYWORDS = (
     "d5%",
     "5% dextrose",
 )
+
+# Deterministic-final classifications: the pilot LLM leg never submits these to
+# the model — they are terminal at the classifier. Mirrors
+# ``bba.audit_pipeline.pipeline._DETERMINISTIC_FINAL_CLASSIFICATIONS`` (the
+# production composer) so the model leg stays in lockstep with the live pipeline
+# (spec #119, ticket #124). RETURNED_NOT_TRANSFUSED / PERIOP_TRANSFUSION_EXEMPT
+# are the two returns-ledger terminals; without them here a returned/exempt row
+# would be appended to ``llm_contexts`` and wrongly earn an LLM verdict.
+DETERMINISTIC_FINAL = frozenset(
+    {
+        "APPROPRIATE",
+        "INSUFFICIENT_EVIDENCE",
+        "INAPPROPRIATE",
+        "RETURNED_NOT_TRANSFUSED",
+        "PERIOP_TRANSFUSION_EXEMPT",
+    }
+)
+
+
+def _returns_disposition_for_classifier(returns_summary: ReturnsSummary | None) -> str:
+    """Return the gated disposition passed into the pure classifier.
+
+    Mirrors ``run_pipeline._returns_disposition_for_classifier`` and
+    ``pipeline._classifier_inputs_for`` so all four classifier-input sites stay
+    in lockstep (spec #119, ticket #124). Off, or with no ledger coverage, the
+    classifier sees ``"inconclusive"`` and today's output is unchanged.
+    """
+    if RETURNS_LEDGER_ENABLED and returns_summary is not None:
+        return returns_summary.disposition
+    return "inconclusive"
+
+
+def _returns_periop_context_for_classifier(
+    returns_summary: ReturnsSummary | None,
+    *,
+    surgical_context: bool,
+    intraop_transfusion: bool,
+    procedure_proximity_hours: float | None,
+    upcoming_procedure_hours: float | None,
+) -> bool:
+    """Return the gated peri-op envelope passed into the pure classifier (#123/#124).
+
+    Reuses :func:`bba.deterministic_classifier.periop_envelope` with its own
+    6h/72h window constants — identical to the deterministic leg and the
+    production composer — so a remote surgery cannot exempt an unrelated
+    transfusion. Off, or with no ledger coverage, returns ``False`` so the
+    exemption cannot fire and today's output is unchanged.
+    """
+    if RETURNS_LEDGER_ENABLED and returns_summary is not None:
+        return periop_envelope(
+            surgical_context=surgical_context,
+            intraop_transfusion=intraop_transfusion,
+            procedure_proximity_hours=procedure_proximity_hours,
+            upcoming_procedure_hours=upcoming_procedure_hours,
+        )
+    return False
+
+
+# Returns-ledger terminals that short-circuit the platelet gate, mirroring
+# ``bba.audit_pipeline.pipeline._RETURNS_TERMINAL_CLASSIFICATIONS`` (spec #119).
+# Returns are component-agnostic, so an all-returned platelet order is
+# deterministic-final and must NOT be LLM-submitted — kept in lockstep with the
+# deterministic leg (``run_pipeline.py``) so both legs screen the same orders.
+_RETURNS_TERMINAL_CLASSIFICATIONS = frozenset(
+    {"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"}
+)
+
+# Inert Hb / cohort sentinels for the platelet returns-terminal check. A
+# platelet order has no Hb or cohort, but ``classify`` requires both on
+# :class:`ClassifierInputs`; its returns branch reads neither value (only
+# ``cohort.threshold`` for the discarded result field), so these placeholders —
+# copied from :meth:`PipelineRowContext.for_platelet` — never affect the
+# outcome. See :func:`_platelet_returns_result`.
+_PLATELET_SENTINEL_HB = HbLookupResult(
+    value_g_dl=None,
+    datetime_utc=None,
+    source=None,
+    freshness="missing",
+    delta_hb_bypass=False,
+    delta_hb_windows=(),
+    needs_review_single_low_hb=False,
+)
+_PLATELET_SENTINEL_COHORT = CohortAssignment(
+    label=CohortLabel.UNKNOWN,
+    threshold=None,
+    evidence_code=None,
+    evidence_name=None,
+)
+
+
+def _platelet_returns_result(
+    *,
+    audit_id: str,
+    order_datetime: datetime,
+    returns_summary: ReturnsSummary | None,
+    periop: PeriopSummary | None,
+) -> ClassifierResult | None:
+    """Returns-ledger short-circuit for a platelet order (spec #119).
+
+    Mirrors ``pipeline.run_pipeline``'s platelet branch AND
+    ``run_pipeline._platelet_returns_result`` (the deterministic leg): the same
+    pure ``classify()`` decision, so both legs agree given the same peri-op.
+    Peri-op IS fed — matching production's tested contract
+    (``test_platelet_dispatch`` feeds a ``periop_summary`` and expects
+    ``PERIOP_TRANSFUSION_EXEMPT``) — so BOTH terminals are reachable and the hard
+    intra-op/EBL contradiction guard stays active (an all-returned platelet whose
+    notes chart an intra-op transfusion or EBL >= PERIOP_MIN_EBL_ML falls through
+    instead of being falsely cleared). ``procedure_proximity_hours``/
+    ``upcoming_procedure_hours`` are ``None`` (matching
+    :meth:`PipelineRowContext.for_platelet`).
+
+    This leg's caller passes the bundle's WINDOWED ``periop_summary`` (mirroring
+    production and the RBC LLM path), so a remote same-admission surgery cannot
+    exempt an unrelated transfusion. The deterministic leg scans peri-op
+    admission-wide (the accepted #123 Risk #3); the two legs can therefore differ
+    only on that same documented det/model split.
+
+    Returns the :class:`ClassifierResult` iff it is a returns terminal, else
+    ``None``. Off, or with no ledger coverage, returns ``None`` so the leg
+    submits the identical set to today.
+    """
+    if not (RETURNS_LEDGER_ENABLED and returns_summary is not None):
+        return None
+    surgical_context = periop.surgical_context if periop else False
+    intraop_transfusion = periop.intraop_transfusion if periop else False
+    result = classify(
+        ClassifierInputs(
+            audit_id=audit_id,
+            hb_result=_PLATELET_SENTINEL_HB,
+            cohort_assignment=_PLATELET_SENTINEL_COHORT,
+            order_datetime=order_datetime,
+            procedure_proximity_hours=None,
+            upcoming_procedure_hours=None,
+            crystalloid_liters_prior_4h=0.0,
+            periop_blood_loss_ml=periop.blood_loss_ml if periop else None,
+            periop_intraop_transfusion=intraop_transfusion,
+            periop_surgical_context=surgical_context,
+            returns_disposition=_returns_disposition_for_classifier(returns_summary),
+            returns_periop_context=_returns_periop_context_for_classifier(
+                returns_summary,
+                surgical_context=surgical_context,
+                intraop_transfusion=intraop_transfusion,
+                procedure_proximity_hours=None,
+                upcoming_procedure_hours=None,
+            ),
+        )
+    )
+    if result.classification in _RETURNS_TERMINAL_CLASSIFICATIONS:
+        return result
+    return None
+
 
 csv.field_size_limit(sys.maxsize)
 
@@ -808,10 +980,28 @@ def _build_inputs():
     }
 
     products_by_reqno: dict[str, list[str]] = {}
+    # Ordered unit amount per REQNO, one raw UNITAMT string per BDVSTDT detail
+    # line; summarize_returns parses these fail-closed (spec #119, ticket #124).
+    unitamt_lines_by_reqno: dict[str, list[str]] = {}
     for r in bdvstdt:
-        products_by_reqno.setdefault(r["REQNO"], []).append(
-            (r.get("BDTYPE") or "").strip()
+        reqno = r["REQNO"]
+        products_by_reqno.setdefault(reqno, []).append((r.get("BDTYPE") or "").strip())
+        unitamt_lines_by_reqno.setdefault(reqno, []).append(
+            (r.get("UNITAMT") or "").strip()
         )
+
+    # Returns-ledger index: BDVSTTRANS joins audited orders by REQNO exactly
+    # (spec #119, ticket #124). One row per dispensed physical unit. Read ONLY
+    # when RETURNS_LEDGER_ENABLED, so a flag-off run never opens the optional
+    # ledger and stays byte-identical to today even if the file is malformed.
+    # Keys are uppercased so summarize_returns reads UNITSTAT; the index keys on
+    # the raw REQNO to match order.reqno and every other REQNO index (a one-sided
+    # strip would silently miss the join).
+    bdvsttrans_by_reqno: dict[str, list[dict[str, str]]] = {}
+    if RETURNS_LEDGER_ENABLED:
+        for raw in _read_optional_csv("BDVSTTRANS.csv"):
+            row = {k.upper(): v for k, v in raw.items()}
+            bdvsttrans_by_reqno.setdefault(row.get("REQNO") or "", []).append(row)
 
     bdvst_by_reqno = {r["REQNO"]: r for r in bdvst}
     candidates_by_reqno = build_anchor_candidates(
@@ -866,6 +1056,8 @@ def _build_inputs():
         focus,
         diag_name_by_code,
         candidates_by_reqno,
+        bdvsttrans_by_reqno,
+        unitamt_lines_by_reqno,
     )
 
 
@@ -903,6 +1095,8 @@ def main() -> None:
         focus,
         diag_name_by_code,
         candidates_by_reqno,
+        bdvsttrans_by_reqno,
+        unitamt_lines_by_reqno,
     ) = _build_inputs()
 
     fr = build_audit_orders(inputs, AuditOrdersConfig(code_version=CODE_VERSION))
@@ -930,19 +1124,11 @@ def main() -> None:
                 observations=plt_obs,
                 anchor_utc=order.order_datetime,
             )
-            # Deterministic platelet gate: INSUFFICIENT_EVIDENCE is terminal
-            # (same contract as the pipeline library).  POTENTIALLY_INAPPROPRIATE
-            # and NEEDS_REVIEW route onward to the LLM.
-            plt_clf = classify_platelet(
-                PlateletClassifierInputs(
-                    audit_id=order.audit_id,
-                    platelet_count=plt_result.value_k_ul,
-                )
-            )
-            if plt_clf.classification == "INSUFFICIENT_EVIDENCE":
-                # Terminal: no LLM submission; deterministic-final row would be
-                # persisted by the pipeline library but is out-of-scope here.
-                continue
+            # The evidence bundle (below) is built for EVERY platelet order,
+            # including those with no usable count, so the returns short-circuit
+            # can screen returns-first with the bundle's windowed peri-op — the
+            # INSUFFICIENT_EVIDENCE gate now runs AFTER it (see below), matching
+            # production / the deterministic leg's returns-before-gate precedence.
             hn_hash = _hash(order.hn)
             an_hash = _hash(order.an)
             anchor_by_id[order.audit_id] = EvidenceAnchor(
@@ -1058,6 +1244,47 @@ def main() -> None:
                     vitals=plt_vital_records,
                 )
             )
+            # Returns-ledger short-circuit FIRST — BEFORE the platelet gate below
+            # (mirror pipeline.run_pipeline's platelet branch: the returns terminal
+            # precedes classify_platelet). An all-returned (or peri-op-exempt)
+            # platelet order is deterministic-final and must NOT be LLM-submitted;
+            # the deterministic leg (run_pipeline.py) persists its terminal row,
+            # here we skip submission. Because this runs before the gate, an
+            # all-returned platelet with NO usable count is still screened by the
+            # ledger (the Codex P2 fix). Uses the bundle's WINDOWED periop_summary
+            # (not admission-wide), so a remote same-admission surgery cannot
+            # exempt an unrelated transfusion — mirroring production and the RBC
+            # LLM path. The deterministic leg scans peri-op admission-wide (the
+            # accepted #123 Risk #3), so the two legs can differ only on that same
+            # documented split. Gated on RETURNS_LEDGER_ENABLED so a flag-off run
+            # submits the identical set.
+            if RETURNS_LEDGER_ENABLED and (
+                _platelet_returns_result(
+                    audit_id=order.audit_id,
+                    order_datetime=order.order_datetime,
+                    returns_summary=summarize_returns(
+                        bdvsttrans_by_reqno.get(order.reqno, []),
+                        unitamt_lines_by_reqno.get(order.reqno, []),
+                    ),
+                    periop=bundle.periop_summary,
+                )
+                is not None
+            ):
+                continue
+            # Deterministic platelet gate: INSUFFICIENT_EVIDENCE is terminal (same
+            # contract as the pipeline library). POTENTIALLY_INAPPROPRIATE and
+            # NEEDS_REVIEW route onward to the LLM. Runs AFTER the returns check so
+            # a returns terminal wins over the platelet gate (production precedence).
+            plt_clf = classify_platelet(
+                PlateletClassifierInputs(
+                    audit_id=order.audit_id,
+                    platelet_count=plt_result.value_k_ul,
+                )
+            )
+            if plt_clf.classification == "INSUFFICIENT_EVIDENCE":
+                # Terminal: no LLM submission; deterministic-final row would be
+                # persisted by the pipeline library but is out-of-scope here.
+                continue
             plt_chunks: list[EvidenceChunk] = []
             for item in bundle.items:
                 text = _render_payload(item.source, dict(item.payload))
@@ -1493,6 +1720,17 @@ def main() -> None:
             print(f"  WARN: empty chunks for {order.reqno}; skipping LLM submit")
             continue
 
+        # Returns-ledger read path (spec #119, ticket #124), behind the flag.
+        # Off -> no ledger read, returns_summary stays None and the classifier
+        # sees "inconclusive", so the LLM leg's submission set is byte-identical
+        # to today. Joined by REQNO exactly, mirroring the deterministic leg.
+        returns_summary: ReturnsSummary | None = None
+        if RETURNS_LEDGER_ENABLED:
+            returns_summary = summarize_returns(
+                bdvsttrans_by_reqno.get(order.reqno, []),
+                unitamt_lines_by_reqno.get(order.reqno, []),
+            )
+
         contexts.append(
             PipelineRowContext(
                 order=order,
@@ -1515,10 +1753,10 @@ def main() -> None:
                 periop_summary=bundle.periop_summary,
                 administration_summary=bundle.administration_summary,
                 enable_missing_hb_positive_evidence=ENABLE_MISSING_HB_POSITIVE_EVIDENCE,
+                returns_summary=returns_summary,
             )
         )
 
-    DETERMINISTIC_FINAL = {"APPROPRIATE", "INSUFFICIENT_EVIDENCE", "INAPPROPRIATE"}
     # Two deliberately separate maps (Codex round-6 P1):
     #   * ``classifier_results`` holds ONLY RBC ``ClassifierResult`` entries and
     #     is handed to ``apply_batch_results``. Platelet contexts are excluded so
@@ -1576,6 +1814,16 @@ def main() -> None:
                 if periop
                 else False,
                 periop_surgical_context=periop.surgical_context if periop else False,
+                returns_disposition=_returns_disposition_for_classifier(
+                    ctx.returns_summary
+                ),
+                returns_periop_context=_returns_periop_context_for_classifier(
+                    ctx.returns_summary,
+                    surgical_context=periop.surgical_context if periop else False,
+                    intraop_transfusion=periop.intraop_transfusion if periop else False,
+                    procedure_proximity_hours=ctx.procedure_proximity_hours,
+                    upcoming_procedure_hours=ctx.upcoming_procedure_hours,
+                ),
             )
         )
         classifier_results[ctx.order.audit_id] = cres

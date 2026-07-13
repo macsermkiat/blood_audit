@@ -89,6 +89,7 @@ from bba.deterministic_classifier import (
     ClassifierInputs,
     ClassifierResult,
     classify,
+    periop_envelope,
     total_crystalloid_liters,
 )
 from bba.hb_lookup import DeltaHbWindow, HbLookupResult
@@ -212,6 +213,8 @@ def _inputs(
     periop_blood_loss_ml: int | None = None,
     periop_intraop_transfusion: bool = False,
     periop_surgical_context: bool = False,
+    returns_disposition: str = "inconclusive",
+    returns_periop_context: bool = False,
 ) -> ClassifierInputs:
     return ClassifierInputs(
         audit_id="audit-test-0001",
@@ -225,7 +228,170 @@ def _inputs(
         periop_blood_loss_ml=periop_blood_loss_ml,
         periop_intraop_transfusion=periop_intraop_transfusion,
         periop_surgical_context=periop_surgical_context,
+        returns_disposition=returns_disposition,  # type: ignore[arg-type]
+        returns_periop_context=returns_periop_context,
     )
+
+
+class TestReturnedNotTransfused:
+    def test_precedes_missing_hb_and_universal_low_hb(self) -> None:
+        for hb_value in (None, 6.0):
+            result = classify(
+                _inputs(
+                    hb=_hb(hb_value),
+                    cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                    returns_disposition="not_transfused",
+                )
+            )
+            assert result.classification == "RETURNED_NOT_TRANSFUSED"
+            assert result.bypass_reason == BypassReason.RETURNED_NOT_TRANSFUSED
+            assert result.rationale == "returned_not_transfused"
+
+    @pytest.mark.parametrize(
+        "contradiction",
+        [
+            {"periop_intraop_transfusion": True},
+            {"periop_blood_loss_ml": PERIOP_MIN_EBL_ML},
+        ],
+    )
+    def test_hard_transfusion_contradiction_falls_through(
+        self, contradiction: dict[str, object]
+    ) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(6.0),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                returns_disposition="not_transfused",
+                **contradiction,  # type: ignore[arg-type]
+            )
+        )
+        assert result.classification == "APPROPRIATE"
+        assert result.rationale == "hb_lt_7_universal"
+
+    @pytest.mark.parametrize("disposition", ["transfused", "inconclusive"])
+    def test_other_dispositions_reproduce_legacy_path(self, disposition: str) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(11.0),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                returns_disposition=disposition,
+            )
+        )
+        assert result.classification == "POTENTIALLY_INAPPROPRIATE"
+        assert result.bypass_reason == BypassReason.NONE
+
+
+class TestPeriopEnvelope:
+    def test_false_when_no_signal(self) -> None:
+        assert (
+            periop_envelope(
+                surgical_context=False,
+                intraop_transfusion=False,
+                procedure_proximity_hours=None,
+                upcoming_procedure_hours=None,
+            )
+            is False
+        )
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"surgical_context": True},
+            {"intraop_transfusion": True},
+            {"procedure_proximity_hours": 3.0},
+            {"upcoming_procedure_hours": 48.0},
+        ],
+    )
+    def test_true_on_any_single_signal(self, kwargs: dict[str, object]) -> None:
+        base: dict[str, object] = {
+            "surgical_context": False,
+            "intraop_transfusion": False,
+            "procedure_proximity_hours": None,
+            "upcoming_procedure_hours": None,
+        }
+        base.update(kwargs)
+        assert periop_envelope(**base) is True  # type: ignore[arg-type]
+
+    def test_upcoming_procedure_catches_standby(self) -> None:
+        # The reserve-ahead standby (e.g. TAVI) has no intra-op marker; it is
+        # caught purely by its upcoming procedure within the crossmatch window.
+        assert (
+            periop_envelope(
+                surgical_context=False,
+                intraop_transfusion=False,
+                procedure_proximity_hours=None,
+                upcoming_procedure_hours=PRE_OP_CROSSMATCH_WINDOW_HOURS,
+            )
+            is True
+        )
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"procedure_proximity_hours": PERI_PROCEDURAL_WINDOW_HOURS + 1.0},
+            {"upcoming_procedure_hours": PRE_OP_CROSSMATCH_WINDOW_HOURS + 1.0},
+        ],
+    )
+    def test_false_for_remote_procedure_outside_window(
+        self, kwargs: dict[str, object]
+    ) -> None:
+        # A remote surgery/procedure (weeks away) is neither peri-procedural nor
+        # a reserve-ahead reservation and must NOT create a peri-op context,
+        # else an unrelated ward transfusion is wrongly exempted.
+        base: dict[str, object] = {
+            "surgical_context": False,
+            "intraop_transfusion": False,
+            "procedure_proximity_hours": None,
+            "upcoming_procedure_hours": None,
+        }
+        base.update(kwargs)
+        assert periop_envelope(**base) is False  # type: ignore[arg-type]
+
+
+class TestPeriopTransfusionExempt:
+    def test_transfused_periop_precedes_missing_hb_and_universal_low_hb(self) -> None:
+        for hb_value in (None, 6.0, 11.0):
+            result = classify(
+                _inputs(
+                    hb=_hb(hb_value),
+                    cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                    returns_disposition="transfused",
+                    returns_periop_context=True,
+                )
+            )
+            assert result.classification == "PERIOP_TRANSFUSION_EXEMPT"
+            assert result.bypass_reason == BypassReason.PERIOP_TRANSFUSION_EXEMPT
+            assert result.rationale == "periop_transfusion_exempt"
+
+    def test_transfused_non_periop_is_judged_normally(self) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(11.0),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                returns_disposition="transfused",
+                returns_periop_context=False,
+            )
+        )
+        assert result.classification == "POTENTIALLY_INAPPROPRIATE"
+        assert result.bypass_reason == BypassReason.NONE
+
+    @pytest.mark.parametrize("disposition", ["not_transfused", "inconclusive"])
+    def test_periop_context_without_transfused_disposition_does_not_exempt(
+        self, disposition: str
+    ) -> None:
+        # The exemption is scoped to CONFIRMED transfusions. A peri-op context
+        # on a not_transfused / inconclusive order must not exempt it: the
+        # not_transfused order takes the returned exit, and inconclusive falls
+        # through to the legacy chain.
+        result = classify(
+            _inputs(
+                hb=_hb(11.0),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                returns_disposition=disposition,
+                returns_periop_context=True,
+            )
+        )
+        assert result.classification != "PERIOP_TRANSFUSION_EXEMPT"
 
 
 # =============================================================================
@@ -1211,6 +1377,8 @@ class TestMonotonicityProperty:
     _ORDERING: dict[str, int] = {
         "APPROPRIATE": 0,
         "INSUFFICIENT_EVIDENCE": 1,  # not Hb-tier-ordered; allowed at hb=None only
+        "RETURNED_NOT_TRANSFUSED": 1,
+        "PERIOP_TRANSFUSION_EXEMPT": 1,
         "NEEDS_REVIEW": 2,
         "POTENTIALLY_INAPPROPRIATE": 3,
     }
@@ -1457,6 +1625,8 @@ class TestCanonicalClassificationContract:
             "NEEDS_REVIEW",
             "POTENTIALLY_INAPPROPRIATE",
             "INSUFFICIENT_EVIDENCE",
+            "RETURNED_NOT_TRANSFUSED",
+            "PERIOP_TRANSFUSION_EXEMPT",
         }
     )
 

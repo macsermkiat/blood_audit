@@ -49,7 +49,11 @@ def build_matrix(
         verdict = verdicts[reqno]
         if scope != "all" and verdict.mechanism != scope:
             continue
-        key = (bucket_of(labels[reqno]), bucket_of(verdict.classification))
+        truth = bucket_of(labels[reqno])
+        predicted = bucket_of(verdict.classification)
+        if truth == "excluded" or predicted == "excluded":
+            continue
+        key = (truth, predicted)
         counts[key] = counts.get(key, 0) + 1
     cells = tuple(
         ConfusionCell(
@@ -85,10 +89,15 @@ def find_regressions(
     ``after`` bucket != appropriate. Sorted for deterministic output."""
     regressions: list[str] = []
     for reqno in sorted(set(labels) & set(before) & set(after)):
-        if bucket_of(labels[reqno]) != "appropriate":
+        truth = bucket_of(labels[reqno])
+        before_bucket = bucket_of(before[reqno].classification)
+        after_bucket = bucket_of(after[reqno].classification)
+        if "excluded" in (truth, before_bucket, after_bucket):
             continue
-        was_correct = bucket_of(before[reqno].classification) == "appropriate"
-        now_wrong = bucket_of(after[reqno].classification) != "appropriate"
+        if truth != "appropriate":
+            continue
+        was_correct = before_bucket == "appropriate"
+        now_wrong = after_bucket != "appropriate"
         if was_correct and now_wrong:
             regressions.append(reqno)
     return tuple(regressions)
@@ -100,6 +109,8 @@ def _llm_volume(labels: Mapping[str, str], verdicts: Mapping[str, CaseVerdict]) 
         1
         for reqno in _scored_reqnos(labels, verdicts)
         if verdicts[reqno].mechanism == "llm"
+        and bucket_of(labels[reqno]) != "excluded"
+        and bucket_of(verdicts[reqno].classification) != "excluded"
     )
 
 

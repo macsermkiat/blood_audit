@@ -32,6 +32,8 @@ class SupportsClassificationCounts(Protocol):
     inappropriate_count: int
     needs_review_count: int
     insufficient_evidence_count: int
+    returned_not_transfused_count: int
+    periop_transfusion_exempt_count: int
 
 
 _S = TypeVar("_S", bound=SupportsClassificationCounts)
@@ -113,6 +115,8 @@ def rank_top_n(
                 appropriate_count=card.appropriate_count,
                 inappropriate_count=card.inappropriate_count,
                 unresolved_count=_unresolved_count(card),
+                returned_not_transfused_count=card.returned_not_transfused_count,
+                periop_transfusion_exempt_count=card.periop_transfusion_exempt_count,
                 bucket=bucket,
                 bucket_count=count,
                 bucket_rate=_rate(count, card.total_orders),

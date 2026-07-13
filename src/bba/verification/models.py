@@ -34,24 +34,31 @@ MatrixScope = Literal["deterministic", "llm", "all"]
 """Scope of a :class:`ConfusionMatrix`: one mechanism, or the pooled total."""
 
 
-_BUCKET_OF: Mapping[str, Bucket] = {
+VerificationBucket = Literal["appropriate", "inappropriate", "unresolved", "excluded"]
+
+
+_BUCKET_OF: Mapping[str, VerificationBucket] = {
     "APPROPRIATE": "appropriate",
     "INAPPROPRIATE": "inappropriate",
     "NEEDS_REVIEW": "unresolved",
     "INSUFFICIENT_EVIDENCE": "unresolved",
     "POTENTIALLY_INAPPROPRIATE": "unresolved",
     "PREOP_RESERVATION_UNCONFIRMED": "unresolved",
+    "RETURNED_NOT_TRANSFUSED": "excluded",
+    "PERIOP_TRANSFUSION_EXEMPT": "excluded",
 }
-"""Collapse of every pipeline / human classification into the 3 committee
-buckets. ``unresolved`` pools the two non-committal deterministic verdicts
-plus the store-only ``POTENTIALLY_INAPPROPRIATE`` and
-``PREOP_RESERVATION_UNCONFIRMED`` labels."""
+"""Registration of every pipeline / human classification.
+
+``excluded`` is deliberately outside :data:`BUCKETS`, so returned and
+peri-op-exempt orders are registered but omitted from the scored 3×3
+committee matrix.
+"""
 
 BUCKETS: tuple[Bucket, ...] = ("appropriate", "inappropriate", "unresolved")
 """Canonical bucket order for rendering a full 3×3 matrix (no missing cells)."""
 
 
-def bucket_of(classification: str) -> Bucket:
+def bucket_of(classification: str) -> VerificationBucket:
     """Map a classification label to its committee bucket.
 
     Fail-loud: an unrecognized label raises rather than silently landing in

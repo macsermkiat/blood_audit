@@ -24,39 +24,43 @@ from bba.attribution.models import (
     DoctorRecord,
 )
 from bba.dashboard.models import PhysicianScorecard, WardScorecard
-from bba.report_generator.models import Classification
 
 
 def _count_classifications(
-    classifications: list[Classification],
-) -> dict[Classification, int]:
+    classifications: list[str],
+) -> dict[str, int]:
     """Zero-initialised label counts, mirroring
     :func:`bba.report_generator.aggregate._count_classifications` so the
     two aggregation surfaces cannot drift on label handling."""
-    counts: dict[Classification, int] = {
+    counts = {
         "APPROPRIATE": 0,
         "INAPPROPRIATE": 0,
         "NEEDS_REVIEW": 0,
         "INSUFFICIENT_EVIDENCE": 0,
+        "RETURNED_NOT_TRANSFUSED": 0,
+        "PERIOP_TRANSFUSION_EXEMPT": 0,
     }
     for classification in classifications:
+        if classification not in counts:
+            raise ValueError(f"unsupported attribution classification {classification!r}")
         counts[classification] += 1
     return counts
 
 
 def build_doctor_scorecards(
-    verdicts: Mapping[str, Classification],
+    verdicts: Mapping[str, str],
     reqno_to_doctor: Mapping[str, str],
     dct_registry: Mapping[str, DoctorRecord],
 ) -> tuple[PhysicianScorecard, ...]:
     """One :class:`PhysicianScorecard` per distinct ordering doctor.
 
-    Orders without attribution land on :data:`UNATTRIBUTED_DOCTOR_ID`
-    so ``sum(total_orders) == len(verdicts)`` always holds — the
-    reconciliation invariant the integration test asserts. Output is
-    sorted by ``physician_id`` for byte-stable artifacts.
+    Orders without attribution land on :data:`UNATTRIBUTED_DOCTOR_ID`.
+    ``total_orders`` is the scorable denominator; returned/not-transfused
+    and peri-op-exempt orders remain visible in their own counters but are
+    excluded from it. Output is sorted by ``physician_id`` for byte-stable
+    artifacts.
     """
-    groups: dict[str, list[Classification]] = {}
+    groups: dict[str, list[str]] = {}
     for reqno, classification in verdicts.items():
         doctor = reqno_to_doctor.get(reqno, UNATTRIBUTED_DOCTOR_ID)
         groups.setdefault(doctor, []).append(classification)
@@ -74,11 +78,15 @@ def build_doctor_scorecards(
                 physician_id=doctor,
                 physician_name=name,
                 ward_id=ward_id,
-                total_orders=len(groups[doctor]),
+                total_orders=len(groups[doctor])
+                - counts["RETURNED_NOT_TRANSFUSED"]
+                - counts["PERIOP_TRANSFUSION_EXEMPT"],
                 appropriate_count=counts["APPROPRIATE"],
                 inappropriate_count=counts["INAPPROPRIATE"],
                 needs_review_count=counts["NEEDS_REVIEW"],
                 insufficient_evidence_count=counts["INSUFFICIENT_EVIDENCE"],
+                returned_not_transfused_count=counts["RETURNED_NOT_TRANSFUSED"],
+                periop_transfusion_exempt_count=counts["PERIOP_TRANSFUSION_EXEMPT"],
                 average_confidence=0.0,
             )
         )
@@ -86,7 +94,7 @@ def build_doctor_scorecards(
 
 
 def build_department_scorecards(
-    verdicts: Mapping[str, Classification],
+    verdicts: Mapping[str, str],
     reqno_to_doctor: Mapping[str, str],
     dct_registry: Mapping[str, DoctorRecord],
 ) -> tuple[WardScorecard, ...]:
@@ -97,7 +105,7 @@ def build_department_scorecards(
     :data:`UNATTRIBUTED_DEPARTMENT_ID`. Same conservation and sorting
     guarantees as :func:`build_doctor_scorecards`.
     """
-    groups: dict[str, list[Classification]] = {}
+    groups: dict[str, list[str]] = {}
     names: dict[str, str] = {}
     for reqno, classification in verdicts.items():
         doctor = reqno_to_doctor.get(reqno)
@@ -117,11 +125,15 @@ def build_department_scorecards(
             WardScorecard(
                 ward_id=dept,
                 ward_name=names.get(dept, dept),
-                total_orders=len(groups[dept]),
+                total_orders=len(groups[dept])
+                - counts["RETURNED_NOT_TRANSFUSED"]
+                - counts["PERIOP_TRANSFUSION_EXEMPT"],
                 appropriate_count=counts["APPROPRIATE"],
                 inappropriate_count=counts["INAPPROPRIATE"],
                 needs_review_count=counts["NEEDS_REVIEW"],
                 insufficient_evidence_count=counts["INSUFFICIENT_EVIDENCE"],
+                returned_not_transfused_count=counts["RETURNED_NOT_TRANSFUSED"],
+                periop_transfusion_exempt_count=counts["PERIOP_TRANSFUSION_EXEMPT"],
                 average_confidence=0.0,
             )
         )

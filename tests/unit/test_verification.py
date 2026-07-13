@@ -33,6 +33,8 @@ class TestBucketOf:
             ("INSUFFICIENT_EVIDENCE", "unresolved"),
             ("POTENTIALLY_INAPPROPRIATE", "unresolved"),
             ("PREOP_RESERVATION_UNCONFIRMED", "unresolved"),
+            ("RETURNED_NOT_TRANSFUSED", "excluded"),
+            ("PERIOP_TRANSFUSION_EXEMPT", "excluded"),
         ],
     )
     def test_maps_every_classification(self, label: str, bucket: str) -> None:
@@ -66,6 +68,28 @@ class TestBuildMatrix:
         }
         matrix = build_matrix(labels, verdicts)
         assert matrix.total == 1
+
+    def test_returned_not_transfused_is_excluded_from_matrix(self) -> None:
+        labels = {"r1": "INAPPROPRIATE"}
+        verdicts = {
+            "r1": CaseVerdict(
+                reqno="r1",
+                classification="RETURNED_NOT_TRANSFUSED",
+                mechanism="deterministic",
+            )
+        }
+        assert build_matrix(labels, verdicts).total == 0
+
+    def test_periop_transfusion_exempt_is_excluded_from_matrix(self) -> None:
+        labels = {"r1": "INAPPROPRIATE"}
+        verdicts = {
+            "r1": CaseVerdict(
+                reqno="r1",
+                classification="PERIOP_TRANSFUSION_EXEMPT",
+                mechanism="deterministic",
+            )
+        }
+        assert build_matrix(labels, verdicts).total == 0
 
     def test_scope_splits_by_mechanism(self) -> None:
         labels = {"d": "APPROPRIATE", "l": "INAPPROPRIATE"}
@@ -162,6 +186,31 @@ class TestCompareRuns:
         assert comparison.llm_volume_before == 0
         assert comparison.llm_volume_after == 1
         assert comparison.llm_volume_delta == 1
+
+    def test_llm_volume_excludes_excluded_truth_or_prediction(self) -> None:
+        labels = {
+            "truth-excluded": "RETURNED_NOT_TRANSFUSED",
+            "prediction-excluded": "APPROPRIATE",
+            "scored": "APPROPRIATE",
+        }
+        verdicts = {
+            "truth-excluded": CaseVerdict(
+                reqno="truth-excluded",
+                classification="APPROPRIATE",
+                mechanism="llm",
+            ),
+            "prediction-excluded": CaseVerdict(
+                reqno="prediction-excluded",
+                classification="RETURNED_NOT_TRANSFUSED",
+                mechanism="llm",
+            ),
+            "scored": CaseVerdict(
+                reqno="scored", classification="NEEDS_REVIEW", mechanism="llm"
+            ),
+        }
+        comparison = compare_runs(labels, verdicts, verdicts)
+        assert comparison.llm_volume_before == 1
+        assert comparison.llm_volume_after == 1
 
     def test_regression_is_a_correct_appropriate_flipped_away(self) -> None:
         labels = {"good": "APPROPRIATE"}

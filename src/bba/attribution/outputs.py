@@ -21,10 +21,11 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from bba.attribution.models import RankedRow, RankingResult, RankingTable
+from bba.feature_flags import RETURNS_LEDGER_ENABLED
 from bba.report_generator.csv_writer import CSV_ENCODING, CSV_NEWLINE
 
 
-RANKING_CSV_COLUMNS: tuple[str, ...] = (
+_BASE_RANKING_CSV_COLUMNS: tuple[str, ...] = (
     "rank",
     "group_id",
     "group_name",
@@ -37,6 +38,23 @@ RANKING_CSV_COLUMNS: tuple[str, ...] = (
     "bucket_rate",
     "meets_min_orders",
 )
+_RETURNS_CSV_COLUMNS: tuple[str, ...] = (
+    "returned_not_transfused",
+    "periop_transfusion_exempt",
+)
+RANKING_CSV_COLUMNS: tuple[str, ...] = (
+    _BASE_RANKING_CSV_COLUMNS[:7]
+    + (_RETURNS_CSV_COLUMNS if RETURNS_LEDGER_ENABLED else ())
+    + _BASE_RANKING_CSV_COLUMNS[7:]
+)
+
+
+def _ranking_csv_columns() -> tuple[str, ...]:
+    return (
+        _BASE_RANKING_CSV_COLUMNS[:7]
+        + (_RETURNS_CSV_COLUMNS if RETURNS_LEDGER_ENABLED else ())
+        + _BASE_RANKING_CSV_COLUMNS[7:]
+    )
 
 
 def _format_cell(value: object) -> str:
@@ -55,29 +73,29 @@ def _format_cell(value: object) -> str:
 
 
 def _row_cells(row: RankedRow) -> list[str]:
-    return [
-        _format_cell(value)
-        for value in (
-            row.rank,
-            row.group_id,
-            row.group_name,
-            row.total_orders,
-            row.appropriate_count,
-            row.inappropriate_count,
-            row.unresolved_count,
-            row.bucket,
-            row.bucket_count,
-            row.bucket_rate,
-            row.meets_min_orders,
-        )
+    values: list[object] = [
+        row.rank,
+        row.group_id,
+        row.group_name,
+        row.total_orders,
+        row.appropriate_count,
+        row.inappropriate_count,
+        row.unresolved_count,
     ]
+    if RETURNS_LEDGER_ENABLED:
+        values.append(row.returned_not_transfused_count)
+        values.append(row.periop_transfusion_exempt_count)
+    values.extend(
+        (row.bucket, row.bucket_count, row.bucket_rate, row.meets_min_orders)
+    )
+    return [_format_cell(value) for value in values]
 
 
 def write_ranking_csv(rows: Sequence[RankedRow], path: Path) -> Path:
     """Write one ranking table to ``path`` and return it."""
     buf = io.StringIO()
     writer = csv.writer(buf, lineterminator=CSV_NEWLINE)
-    writer.writerow(RANKING_CSV_COLUMNS)
+    writer.writerow(_ranking_csv_columns())
     for row in rows:
         writer.writerow(_row_cells(row))
     path.write_text(buf.getvalue(), encoding=CSV_ENCODING, newline="")
@@ -101,10 +119,17 @@ p.totals { font-size: 0.9rem; }
 
 
 def _render_table(table: RankingTable) -> str:
+    returns_header = (
+        '<th class="num">Returned, not transfused</th>'
+        '<th class="num">Peri-op transfusion (exempt)</th>'
+        if RETURNS_LEDGER_ENABLED
+        else ""
+    )
     header_cells = (
         '<th>Rank</th><th>Code</th><th>Name</th><th class="num">Orders (N)</th>'
         '<th class="num">Appropriate</th><th class="num">Inappropriate</th>'
         '<th class="num">Unresolved</th>'
+        f"{returns_header}"
         f'<th class="num">{html.escape(table.bucket)} rate</th>'
         f"<th>N &ge; {table.min_orders}</th>"
     )
@@ -112,6 +137,12 @@ def _render_table(table: RankingTable) -> str:
     for row in table.rows:
         css_class = "" if row.meets_min_orders else ' class="below-threshold"'
         threshold_mark = "yes" if row.meets_min_orders else "no"
+        returns_cell = (
+            f'<td class="num">{row.returned_not_transfused_count}</td>'
+            f'<td class="num">{row.periop_transfusion_exempt_count}</td>'
+            if RETURNS_LEDGER_ENABLED
+            else ""
+        )
         body_rows.append(
             f"<tr{css_class}>"
             f'<td class="num">{row.rank}</td>'
@@ -121,6 +152,7 @@ def _render_table(table: RankingTable) -> str:
             f'<td class="num">{row.appropriate_count}</td>'
             f'<td class="num">{row.inappropriate_count}</td>'
             f'<td class="num">{row.unresolved_count}</td>'
+            f"{returns_cell}"
             f'<td class="num">{_format_cell(row.bucket_rate)}</td>'
             f"<td>{threshold_mark}</td>"
             "</tr>"
@@ -154,11 +186,17 @@ def write_rankings_html(
         "Unresolved = needs-review + insufficient-evidence; cohort "
         "totals below cover all groups, including omitted ones."
     )
+    returns_total = (
+        f"; {totals.returned_not_transfused} returned/not-transfused excluded"
+        f"; {totals.periop_transfusion_exempt} peri-op-exempt excluded"
+        if RETURNS_LEDGER_ENABLED
+        else ""
+    )
     totals_line = (
         f"Cohort totals: {totals.total} orders &mdash; "
         f"{totals.appropriate} appropriate / "
         f"{totals.inappropriate} inappropriate / "
-        f"{totals.unresolved} unresolved."
+        f"{totals.unresolved} unresolved{returns_total}."
     )
     document = (
         "<!DOCTYPE html>\n"

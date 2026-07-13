@@ -82,6 +82,8 @@ class RankedRow(BaseModel):
     appropriate_count: int = Field(ge=0)
     inappropriate_count: int = Field(ge=0)
     unresolved_count: int = Field(ge=0)
+    returned_not_transfused_count: int = Field(default=0, ge=0)
+    periop_transfusion_exempt_count: int = Field(default=0, ge=0)
     bucket: Bucket
     bucket_count: int = Field(ge=0)
     bucket_rate: float = Field(ge=0.0, le=1.0)
@@ -114,6 +116,8 @@ class BucketTotals(BaseModel):
     appropriate: int = Field(ge=0)
     inappropriate: int = Field(ge=0)
     unresolved: int = Field(ge=0)
+    returned_not_transfused: int = Field(default=0, ge=0)
+    periop_transfusion_exempt: int = Field(default=0, ge=0)
     total: int = Field(ge=0)
 
 

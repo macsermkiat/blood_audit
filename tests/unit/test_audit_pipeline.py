@@ -105,6 +105,7 @@ from bba.audit_pipeline import (
 from bba.cohort_detector import CohortAssignment, CohortLabel
 from bba.hb_lookup import DeltaHbWindow, HbLookupResult
 from bba.prompt_builder import EvidenceChunk
+from bba.returns_ledger import ReturnsSummary
 from bba.vitals_extractor import (
     AdministrationSummary,
     PeriopFinding,
@@ -356,6 +357,7 @@ def _row_context(
     upcoming_procedure_hours: float | None = None,
     sbp: float = 110.0,
     hr: float = 85.0,
+    returns_summary: ReturnsSummary | None = None,
 ) -> PipelineRowContext:
     """Build a PipelineRowContext whose upstream data drives the
     deterministic_classifier to produce the requested ``classification``.
@@ -463,7 +465,180 @@ def _row_context(
         evidence_chunks=evidence_chunks,
         periop_summary=periop_summary,
         administration_summary=administration_summary,
+        returns_summary=returns_summary,
     )
+
+
+class TestReturnedNotTransfusedTerminal:
+    @pytest.mark.parametrize("hb_value", [None, 8.5])
+    def test_persists_without_llm_or_hb_fabrication_error(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch, hb_value: float | None
+    ) -> None:
+        from pathlib import Path
+
+        import bba.feature_flags as feature_flags
+        from bba.audit_store import AuditStore, AuditStoreConfig
+
+        assert isinstance(tmp_path, Path)
+        monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", True)
+        ctx = _row_context(
+            audit_id=f"returned-{hb_value}",
+            hb_value=hb_value,
+            returns_summary=ReturnsSummary(
+                units_total=1,
+                units_returned=1,
+                ordered_unit_amount=1,
+                ledger_complete=True,
+            ),
+        )
+        store = AuditStore(
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
+        )
+        result = run_pipeline(
+            [ctx],
+            transport=CassetteTransport(interactions=()),
+            audit_store=store,
+            batch_run_store=InMemoryBatchRunStore(),
+            llm_config=LlmClientConfig(code_version="v0.1.0+test"),
+            pipeline_config=AuditPipelineConfig(
+                db_url="sqlite:///:memory:", code_version="v0.1.0+test"
+            ),
+            run_id="run-returned",
+        )
+        assert result.audit_ids_persisted == (ctx.order.audit_id,)
+        (row,) = store.read_audit_results(run_id="run-returned")
+        assert row.final_classification == "RETURNED_NOT_TRANSFUSED"
+        assert row.needs_human_review is False
+        assert row.model_id == "deterministic"
+
+
+class TestPeriopTransfusionExemptTerminal:
+    @pytest.mark.parametrize("hb_value", [None, 11.0])
+    def test_confirmed_transfusion_in_periop_is_terminal_without_llm(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch, hb_value: float | None
+    ) -> None:
+        from pathlib import Path
+
+        import bba.feature_flags as feature_flags
+        from bba.audit_store import AuditStore, AuditStoreConfig
+
+        assert isinstance(tmp_path, Path)
+        monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", True)
+        # Transfused disposition (a non-returned unit) + a reserve-ahead
+        # upcoming procedure -> peri-op envelope -> exempt terminal, even at
+        # Hb 11.0 which would otherwise be POTENTIALLY_INAPPROPRIATE.
+        ctx = _row_context(
+            audit_id=f"periop-exempt-{hb_value}",
+            hb_value=hb_value,
+            upcoming_procedure_hours=24.0,
+            returns_summary=ReturnsSummary(
+                units_total=1,
+                units_returned=0,
+                units_transfused=1,
+                ordered_unit_amount=1,
+                ledger_complete=True,
+            ),
+        )
+        store = AuditStore(
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
+        )
+        result = run_pipeline(
+            [ctx],
+            transport=CassetteTransport(interactions=()),
+            audit_store=store,
+            batch_run_store=InMemoryBatchRunStore(),
+            llm_config=LlmClientConfig(code_version="v0.1.0+test"),
+            pipeline_config=AuditPipelineConfig(
+                db_url="sqlite:///:memory:", code_version="v0.1.0+test"
+            ),
+            run_id="run-periop-exempt",
+        )
+        assert result.audit_ids_persisted == (ctx.order.audit_id,)
+        (row,) = store.read_audit_results(run_id="run-periop-exempt")
+        assert row.final_classification == "PERIOP_TRANSFUSION_EXEMPT"
+        assert row.needs_human_review is False
+        assert row.model_id == "deterministic"
+
+    def test_confirmed_transfusion_without_periop_is_not_exempt(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A confirmed transfusion with NO peri-op signal: the pipeline's
+        # classifier-input wiring computes returns_periop_context=False, so the
+        # order is NOT exempt and classify() falls through to the normal tier
+        # (Hb 11.0 -> POTENTIALLY_INAPPROPRIATE, which routes onward to the LLM).
+        import bba.feature_flags as feature_flags
+        from bba.audit_pipeline.pipeline import _classifier_inputs_for
+        from bba.deterministic_classifier import classify
+
+        monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", True)
+        ctx = _row_context(
+            audit_id="transfused-ward",
+            hb_value=11.0,
+            returns_summary=ReturnsSummary(
+                units_total=1,
+                units_returned=0,
+                units_transfused=1,
+                ordered_unit_amount=1,
+                ledger_complete=True,
+            ),
+        )
+        inputs = _classifier_inputs_for(ctx)
+        assert inputs.returns_disposition == "transfused"
+        assert inputs.returns_periop_context is False
+        assert classify(inputs).classification == "POTENTIALLY_INAPPROPRIATE"
+
+    def test_wiring_computes_periop_context_from_upcoming_procedure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A reserve-ahead upcoming procedure alone drives the envelope True at
+        # the pipeline wiring seam, so the transfused order becomes exempt.
+        import bba.feature_flags as feature_flags
+        from bba.audit_pipeline.pipeline import _classifier_inputs_for
+        from bba.deterministic_classifier import classify
+
+        monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", True)
+        ctx = _row_context(
+            audit_id="transfused-standby",
+            hb_value=11.0,
+            upcoming_procedure_hours=48.0,
+            returns_summary=ReturnsSummary(
+                units_total=1,
+                units_returned=0,
+                units_transfused=1,
+                ordered_unit_amount=1,
+                ledger_complete=True,
+            ),
+        )
+        inputs = _classifier_inputs_for(ctx)
+        assert inputs.returns_periop_context is True
+        assert classify(inputs).classification == "PERIOP_TRANSFUSION_EXEMPT"
+
+    def test_remote_upcoming_procedure_does_not_exempt(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A transfused order whose only signal is a REMOTE upcoming procedure
+        # (far outside the reserve-ahead window) is not peri-op context, so the
+        # order is judged normally rather than wrongly exempted.
+        import bba.feature_flags as feature_flags
+        from bba.audit_pipeline.pipeline import _classifier_inputs_for
+        from bba.deterministic_classifier import classify
+
+        monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", True)
+        ctx = _row_context(
+            audit_id="transfused-remote",
+            hb_value=11.0,
+            upcoming_procedure_hours=24.0 * 30,  # ~30 days out
+            returns_summary=ReturnsSummary(
+                units_total=1,
+                units_returned=0,
+                units_transfused=1,
+                ordered_unit_amount=1,
+                ledger_complete=True,
+            ),
+        )
+        inputs = _classifier_inputs_for(ctx)
+        assert inputs.returns_periop_context is False
+        assert classify(inputs).classification == "POTENTIALLY_INAPPROPRIATE"
 
 
 # =============================================================================
@@ -653,6 +828,111 @@ class TestInMemoryBatchRunStore:
 
 
 class TestResumeOnStartup:
+    def test_resume_classifier_inputs_use_real_returns_disposition(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Ticket #124: resume no longer FORCES returns_disposition="inconclusive"
+        # (the #122/#123 placeholder). It composes classifier inputs through the
+        # same production composer the live run uses, so the real ledger
+        # disposition threads into the resume rebuild — proving lockstep across
+        # run / resume. A run started before enablement is not silently combined
+        # with post-enablement semantics because the flag is required constant
+        # across submit + resume and a fresh run identity is required to enable.
+        import bba.audit_pipeline.resume as resume_module
+        import bba.feature_flags as feature_flags
+
+        seen_dispositions: list[str] = []
+        real_classify = resume_module.classify
+
+        def capture_disposition(inputs):  # type: ignore[no-untyped-def]
+            seen_dispositions.append(inputs.returns_disposition)
+            return real_classify(inputs)
+
+        monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", True)
+        monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", True)
+        monkeypatch.setattr(resume_module, "classify", capture_disposition)
+        ctx = _row_context(
+            audit_id="resume-returned",
+            hb_value=8.5,
+            upcoming_procedure_hours=24.0,
+            returns_summary=ReturnsSummary(
+                units_total=1,
+                units_returned=1,
+                ordered_unit_amount=1,
+                ledger_complete=True,
+            ),
+        )
+        run = BatchRun(
+            batch_id="batch-resume-returned",
+            state=BatchRunState.SUBMITTED,
+            run_id="run-resume-returned",
+            code_version="v0.1.0+test",
+            audit_ids=(ctx.order.audit_id,),
+            anthropic_batch_id="msgbatch_resume_returned",
+            submitted_at=_RUN_TS,
+            updated_at=_RUN_TS,
+        )
+
+        requests = resume_module._rebuild_submission_requests(
+            run=run,
+            contexts={ctx.order.audit_id: ctx},
+            audit_ids=run.audit_ids,
+        )
+
+        assert len(requests) == 1
+        assert seen_dispositions == ["not_transfused"]
+
+    def test_resume_flag_off_forces_inconclusive_disposition(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Ticket #124 flag-off byte identity: with RETURNS_LEDGER_ENABLED off,
+        # the shared composer yields "inconclusive" even when the context carries
+        # a fully-returned ledger, so resume's task-mode selection is unchanged
+        # from today (enabling the flag is the only behavior change).
+        import bba.audit_pipeline.resume as resume_module
+        import bba.feature_flags as feature_flags
+
+        seen_dispositions: list[str] = []
+        real_classify = resume_module.classify
+
+        def capture_disposition(inputs):  # type: ignore[no-untyped-def]
+            seen_dispositions.append(inputs.returns_disposition)
+            return real_classify(inputs)
+
+        monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", False)
+        monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", True)
+        monkeypatch.setattr(resume_module, "classify", capture_disposition)
+        ctx = _row_context(
+            audit_id="resume-returned-flagoff",
+            hb_value=8.5,
+            upcoming_procedure_hours=24.0,
+            returns_summary=ReturnsSummary(
+                units_total=1,
+                units_returned=1,
+                ordered_unit_amount=1,
+                ledger_complete=True,
+            ),
+        )
+        run = BatchRun(
+            batch_id="batch-resume-returned-flagoff",
+            state=BatchRunState.SUBMITTED,
+            run_id="run-resume-returned-flagoff",
+            code_version="v0.1.0+test",
+            audit_ids=(ctx.order.audit_id,),
+            anthropic_batch_id="msgbatch_resume_returned_flagoff",
+            submitted_at=_RUN_TS,
+            updated_at=_RUN_TS,
+        )
+
+        requests = resume_module._rebuild_submission_requests(
+            run=run,
+            contexts={ctx.order.audit_id: ctx},
+            audit_ids=run.audit_ids,
+        )
+
+        assert len(requests) == 1
+        assert seen_dispositions == ["inconclusive"]
+
     def test_submitted_batch_is_polled(self) -> None:
         """A SUBMITTED row is the resume's primary target. Polling
         Anthropic for its batch_id is what advances the state."""

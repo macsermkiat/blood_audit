@@ -58,6 +58,7 @@ from bba.dashboard.models import (
     SortDirection,
     WardScorecard,
 )
+from bba.feature_flags import RETURNS_LEDGER_ENABLED
 from bba.review_actions import PhiAccessInput
 
 
@@ -222,8 +223,14 @@ def _aggregate_classifications(
     confidence average (rather than raising) — operators legitimately
     check wards / physicians with no audited orders today.
     """
-    total = len(rows)
-    avg_confidence = sum(r.confidence for r in rows) / total if total > 0 else 0.0
+    excluded_classifications = ("RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT")
+    scorable_rows = tuple(
+        r for r in rows if r.final_classification not in excluded_classifications
+    )
+    total = len(scorable_rows)
+    avg_confidence = (
+        sum(r.confidence for r in scorable_rows) / total if total > 0 else 0.0
+    )
     return {
         "total_orders": total,
         "appropriate_count": _count_classification(rows, "APPROPRIATE"),
@@ -231,6 +238,12 @@ def _aggregate_classifications(
         "needs_review_count": _count_classification(rows, "NEEDS_REVIEW"),
         "insufficient_evidence_count": _count_classification(
             rows, "INSUFFICIENT_EVIDENCE"
+        ),
+        "returned_not_transfused_count": _count_classification(
+            rows, "RETURNED_NOT_TRANSFUSED"
+        ),
+        "periop_transfusion_exempt_count": _count_classification(
+            rows, "PERIOP_TRANSFUSION_EXEMPT"
         ),
         "average_confidence": avg_confidence,
     }
@@ -377,6 +390,8 @@ def get_ward_scorecard(
         inappropriate_count=int(aggs["inappropriate_count"]),
         needs_review_count=int(aggs["needs_review_count"]),
         insufficient_evidence_count=int(aggs["insufficient_evidence_count"]),
+        returned_not_transfused_count=int(aggs["returned_not_transfused_count"]),
+        periop_transfusion_exempt_count=int(aggs["periop_transfusion_exempt_count"]),
         average_confidence=float(aggs["average_confidence"]),
     )
 
@@ -425,6 +440,8 @@ def get_physician_scorecard(
         inappropriate_count=int(aggs["inappropriate_count"]),
         needs_review_count=int(aggs["needs_review_count"]),
         insufficient_evidence_count=int(aggs["insufficient_evidence_count"]),
+        returned_not_transfused_count=int(aggs["returned_not_transfused_count"]),
+        periop_transfusion_exempt_count=int(aggs["periop_transfusion_exempt_count"]),
         average_confidence=float(aggs["average_confidence"]),
     )
 
@@ -649,7 +666,12 @@ def create_app(config: DashboardConfig) -> FastAPI:
     ) -> HTMLResponse:
         scorecard = get_ward_scorecard(config, context, ward_id)
         return templates.TemplateResponse(
-            request, "ward_scorecard.html", {"scorecard": scorecard}
+            request,
+            "ward_scorecard.html",
+            {
+                "scorecard": scorecard,
+                "returns_ledger_enabled": RETURNS_LEDGER_ENABLED,
+            },
         )
 
     @app.get("/scorecard/physician/{physician_id}", response_class=HTMLResponse)
@@ -663,7 +685,12 @@ def create_app(config: DashboardConfig) -> FastAPI:
         except PhysicianAccessDeniedError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         return templates.TemplateResponse(
-            request, "physician_scorecard.html", {"scorecard": scorecard}
+            request,
+            "physician_scorecard.html",
+            {
+                "scorecard": scorecard,
+                "returns_ledger_enabled": RETURNS_LEDGER_ENABLED,
+            },
         )
 
     @app.get("/pipeline-health", response_class=HTMLResponse)

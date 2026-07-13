@@ -39,7 +39,7 @@ import openpyxl
 from bba.report_generator.models import Classification
 
 
-VerdictSource = Callable[[], Mapping[str, Classification]]
+VerdictSource = Callable[[], Mapping[str, str]]
 """Zero-argument callable yielding ``reqno -> Classification``."""
 
 
@@ -169,9 +169,8 @@ class SupportsVerdict(Protocol):
     def final_classification(self) -> str: ...
 
 
-VerdictProjector = Callable[[str], Classification]
-"""Narrow an audit-store ``final_classification`` string onto the report
-generator's 4-value :data:`~bba.report_generator.models.Classification`."""
+VerdictProjector = Callable[[str], str]
+"""Project an audit-store verdict for attribution aggregation."""
 
 
 _REPORT_CLASSIFICATIONS: frozenset[str] = frozenset(
@@ -181,9 +180,13 @@ _REPORT_CLASSIFICATIONS: frozenset[str] = frozenset(
 members and must be projected explicitly."""
 
 
-def strict_verdict_projector(value: str) -> Classification:
-    """Identity on the four report classifications; fail loud on anything
-    else — including the audit-store-only ``POTENTIALLY_INAPPROPRIATE`` and
+def strict_verdict_projector(value: str) -> str:
+    """Identity on scorable report values and the explicit excluded values.
+
+    The excluded values (``RETURNED_NOT_TRANSFUSED``,
+    ``PERIOP_TRANSFUSION_EXEMPT``) pass through so the ranking layer can hold
+    them in their own non-scorable counters. Fail loud on other store-only
+    values, including ``POTENTIALLY_INAPPROPRIATE`` and
     ``PREOP_RESERVATION_UNCONFIRMED``.
 
     The default so no build silently buckets a store-only value: mapping it is
@@ -193,7 +196,9 @@ def strict_verdict_projector(value: str) -> Classification:
     :func:`needs_review_verdict_projector`.
     """
     if value in _REPORT_CLASSIFICATIONS:
-        return value  # type: ignore[return-value]  # membership narrows to Classification
+        return value
+    if value in ("RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"):
+        return value
     raise ValueError(
         f"final_classification {value!r} is not one of the four report "
         f"classifications {sorted(_REPORT_CLASSIFICATIONS)}; if this is the "
@@ -203,7 +208,7 @@ def strict_verdict_projector(value: str) -> Classification:
     )
 
 
-def needs_review_verdict_projector(value: str) -> Classification:
+def needs_review_verdict_projector(value: str) -> str:
     """Like :func:`strict_verdict_projector` but maps the audit-store-only
     store-only verdicts onto ``NEEDS_REVIEW``, which the ranking buckets into
     Unresolved, consistent with :data:`bba.verification.models._BUCKET_OF`.
