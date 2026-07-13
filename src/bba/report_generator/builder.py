@@ -123,6 +123,12 @@ def default_classification_projector(
             "'PREOP_RESERVATION_UNCONFIRMED'; inject a projector to pool it "
             "into Unresolved"
         )
+    if value == "RETURNED_NOT_TRANSFUSED":
+        raise MissingResolverError(
+            "audit_store row carries final_classification="
+            "'RETURNED_NOT_TRANSFUSED'; inject an explicit projector for this "
+            "excluded, non-scorable terminal classification"
+        )
     # The remaining four audit-store classifications are exactly the
     # report-generator's literal members; the narrowed return is safe.
     return value

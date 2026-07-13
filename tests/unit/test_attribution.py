@@ -570,6 +570,32 @@ class TestBuildScorecards:
         ids = [c.physician_id for c in cards]
         assert ids == sorted(ids)
 
+    def test_returned_not_transfused_is_reported_but_excluded_from_rates(self) -> None:
+        verdicts = {
+            "r1": "INAPPROPRIATE",
+            "r2": "NEEDS_REVIEW",
+            "r3": "RETURNED_NOT_TRANSFUSED",
+        }
+        cards = build_doctor_scorecards(
+            verdicts,
+            {"r1": "302389", "r2": "302389", "r3": "302389"},
+            self._REGISTRY,
+        )
+        (card,) = cards
+        assert card.total_orders == 2
+        assert card.inappropriate_count == 1
+        assert card.needs_review_count == 1
+        assert card.returned_not_transfused_count == 1
+        (ranked,) = rank_top_n(
+            cards,
+            "inappropriate",
+            group_id=lambda c: c.physician_id,
+            group_name=lambda c: c.physician_name,
+            min_orders=1,
+        )
+        assert ranked.bucket_rate == pytest.approx(0.5)
+        assert ranked.returned_not_transfused_count == 1
+
 
 # ---------------------------------------------------------------------------
 # rank_top_n
@@ -720,19 +746,38 @@ def _ranked_row(
 
 
 class TestWriteRankingCsv:
-    def test_writes_header_and_rows_with_unix_newlines(self, tmp_path: Path) -> None:
+    def test_writes_header_and_rows_with_unix_newlines(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "bba.attribution.outputs.RETURNS_LEDGER_ENABLED", True, raising=False
+        )
         out = write_ranking_csv((_ranked_row(),), tmp_path / "doctors.csv")
         text = out.read_text(encoding="utf-8")
         lines = text.splitlines()
         assert lines[0] == (
             "rank,group_id,group_name,total_orders,appropriate,"
-            "inappropriate,unresolved,bucket,bucket_count,bucket_rate,"
+            "inappropriate,unresolved,returned_not_transfused,bucket,"
+            "bucket_count,bucket_rate,"
             "meets_min_orders"
         )
         assert lines[1].startswith("1,302389,")
         assert "\r\n" not in text
         assert "0.5" in lines[1]
         assert "true" in lines[1]
+
+    def test_flag_off_matches_pre_returns_csv_bytes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "bba.attribution.outputs.RETURNS_LEDGER_ENABLED", False, raising=False
+        )
+        out = write_ranking_csv((_ranked_row(),), tmp_path / "doctors.csv")
+        assert out.read_bytes() == (
+            "rank,group_id,group_name,total_orders,appropriate,inappropriate,"
+            "unresolved,bucket,bucket_count,bucket_rate,meets_min_orders\n"
+            "1,302389,\u0e1e\u0e0d.\u0e2a***** \u0e27*****,6,2,3,1,inappropriate,3,0.5,true\n"
+        ).encode()
 
     def test_rate_formatting_strips_trailing_zeros(self, tmp_path: Path) -> None:
         # Mirrors bba.report_generator.csv_writer float conventions so the
@@ -792,6 +837,40 @@ class TestWriteRankingsHtml:
         html = out.read_text(encoding="utf-8")
         assert "<script>alert(1)</script>" not in html
         assert "&lt;script&gt;" in html
+
+    def test_flag_off_omits_returns_presentation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "bba.attribution.outputs.RETURNS_LEDGER_ENABLED", False, raising=False
+        )
+        result = build_rankings(
+            verdicts={"r1": "INAPPROPRIATE"},
+            reqno_to_doctor={"r1": "302389"},
+            dct_registry={},
+        )
+        html = write_rankings_html(
+            result, tmp_path / "rankings.html", verdict_source_label="test"
+        ).read_text(encoding="utf-8")
+        assert "Returned, not transfused" not in html
+        assert "returned/not-transfused excluded" not in html
+
+    def test_flag_on_includes_returns_presentation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "bba.attribution.outputs.RETURNS_LEDGER_ENABLED", True, raising=False
+        )
+        result = build_rankings(
+            verdicts={"r1": "INAPPROPRIATE"},
+            reqno_to_doctor={"r1": "302389"},
+            dct_registry={},
+        )
+        html = write_rankings_html(
+            result, tmp_path / "rankings.html", verdict_source_label="test"
+        ).read_text(encoding="utf-8")
+        assert "Returned, not transfused" in html
+        assert "returned/not-transfused excluded" in html
 
 
 # ---------------------------------------------------------------------------

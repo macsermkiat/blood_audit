@@ -43,6 +43,7 @@ from bba.cohort_detector import CohortAssignment
 from bba.hb_lookup import HbLookupResult
 from bba.platelet_lookup.models import PlateletLookupResult
 from bba.prompt_builder import EvidenceChunk
+from bba.returns_ledger import ReturnsSummary
 from bba.vitals_extractor import AdministrationSummary, PeriopSummary, VitalsResult
 
 
@@ -196,6 +197,10 @@ class PipelineRowContext(BaseModel):
     # never non-administration.
     administration_summary: AdministrationSummary | None = None
 
+    # Structured blood-bank unit disposition. None preserves every legacy
+    # caller and stays inert unless the returns-ledger feature flag is enabled.
+    returns_summary: ReturnsSummary | None = None
+
     # Operator-supplied kill-switch for the missing-Hb positive-evidence
     # pre-check (MTP / peri-procedural auto-APPROPRIATE on no documented
     # Hb). Defaults to False because the policy is SEED pending clinical
@@ -235,6 +240,7 @@ class PipelineRowContext(BaseModel):
         evidence_bundle_hash: str,
         evidence_chunks: "tuple[EvidenceChunk, ...]" = (),
         periop_summary: "PeriopSummary | None" = None,
+        returns_summary: "ReturnsSummary | None" = None,
         platelet_mtp_suppressed: bool = False,
         enable_missing_hb_positive_evidence: bool = False,
     ) -> "PipelineRowContext":
@@ -293,6 +299,7 @@ class PipelineRowContext(BaseModel):
             evidence_bundle_hash=evidence_bundle_hash,
             evidence_chunks=evidence_chunks,
             periop_summary=periop_summary,
+            returns_summary=returns_summary,
             component="platelet",
             platelet_result=platelet_result,
             platelet_mtp_suppressed=platelet_mtp_suppressed,

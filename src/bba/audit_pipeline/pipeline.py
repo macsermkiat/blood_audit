@@ -79,7 +79,12 @@ if TYPE_CHECKING:
 # LLM for a positive-evidence call (PRD §6); APPROPRIATE and
 # INSUFFICIENT_EVIDENCE are final at the deterministic layer.
 _DETERMINISTIC_FINAL_CLASSIFICATIONS = frozenset(
-    {"APPROPRIATE", "INSUFFICIENT_EVIDENCE", "INAPPROPRIATE"}
+    {
+        "APPROPRIATE",
+        "INSUFFICIENT_EVIDENCE",
+        "INAPPROPRIATE",
+        "RETURNED_NOT_TRANSFUSED",
+    }
 )
 
 # Platelet gate verdicts that route onward to the platelet LLM leg (Stage C2).
@@ -157,14 +162,27 @@ def run_pipeline(
     llm_required: list[tuple[PipelineRowContext, ClassifierResult]] = []
     for ctx in active_contexts:
         if ctx.component == "platelet":
-            plt_inputs = PlateletClassifierInputs(
-                audit_id=ctx.order.audit_id,
-                platelet_count=ctx.platelet_result.value_k_ul
-                if ctx.platelet_result is not None
-                else None,
-                enable_missing_platelet_defer=pipeline_config.enable_missing_platelet_defer,
-            )
-            platelet_classified.append((ctx, classify_platelet(plt_inputs)))
+            returns_result = classify(_classifier_inputs_for(ctx))
+            if returns_result.classification == "RETURNED_NOT_TRANSFUSED":
+                platelet_classified.append(
+                    (
+                        ctx,
+                        PlateletClassifierResult(
+                            classification="RETURNED_NOT_TRANSFUSED",
+                            review_ceiling=None,
+                            rationale=returns_result.rationale,
+                        ),
+                    )
+                )
+            else:
+                plt_inputs = PlateletClassifierInputs(
+                    audit_id=ctx.order.audit_id,
+                    platelet_count=ctx.platelet_result.value_k_ul
+                    if ctx.platelet_result is not None
+                    else None,
+                    enable_missing_platelet_defer=pipeline_config.enable_missing_platelet_defer,
+                )
+                platelet_classified.append((ctx, classify_platelet(plt_inputs)))
         else:
             result = classify(_classifier_inputs_for(ctx))
             classified.append((ctx, result))
@@ -182,10 +200,10 @@ def run_pipeline(
         ):
             persisted.append(ctx.order.audit_id)
 
-    # Persist deterministic-final platelet rows (INSUFFICIENT_EVIDENCE only).
+    # Persist deterministic-final platelet rows.
     # POTENTIALLY_INAPPROPRIATE and NEEDS_REVIEW route onward (Stage C wires LLM).
     for ctx, plt_result in platelet_classified:
-        if plt_result.classification == "INSUFFICIENT_EVIDENCE":
+        if plt_result.classification in _DETERMINISTIC_FINAL_CLASSIFICATIONS:
             if _persist_deterministic_platelet_row(
                 ctx,
                 classifier_result=plt_result,
@@ -506,6 +524,7 @@ def _deterministic_audit_row(
             BypassReason.MTP,
             BypassReason.PERI_PROCEDURAL_6H,
             BypassReason.PERIOP_EVIDENCE,
+            BypassReason.RETURNED_NOT_TRANSFUSED,
         }
     )
     classifier = classifier_result
@@ -700,7 +719,11 @@ def _platelet_marker_call(
         prompt_cache_id=None,
         request_json={
             "rationale": classifier_result.rationale,
-            "bypass_reason": "none",
+            "bypass_reason": (
+                BypassReason.RETURNED_NOT_TRANSFUSED.value
+                if classifier_result.classification == "RETURNED_NOT_TRANSFUSED"
+                else "none"
+            ),
             "component": "platelet",
         },
         response_json={
@@ -1003,6 +1026,12 @@ def _classifier_inputs_for(context: PipelineRowContext) -> ClassifierInputs:
         periop_blood_loss_ml=periop.blood_loss_ml if periop else None,
         periop_intraop_transfusion=periop.intraop_transfusion if periop else False,
         periop_surgical_context=periop.surgical_context if periop else False,
+        returns_disposition=(
+            context.returns_summary.disposition
+            if feature_flags.RETURNS_LEDGER_ENABLED
+            and context.returns_summary is not None
+            else "inconclusive"
+        ),
     )
 
 
