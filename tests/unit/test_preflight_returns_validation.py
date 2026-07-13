@@ -269,6 +269,67 @@ def test_recall_ignores_planning_and_reservation_notes() -> None:
     assert conflicts == ()
 
 
+# --- windowed recall (temporal attribution) ----------------------------------
+
+
+def test_parse_ledger_date_us_long_format() -> None:
+    from datetime import date as _date
+
+    assert PF.parse_ledger_date("March 31, 2025, 3:29 PM") == _date(2025, 3, 31)
+    assert PF.parse_ledger_date("July 9, 2025, 12:00 AM") == _date(2025, 7, 9)
+
+
+def test_parse_ledger_date_returns_none_on_garbage_or_blank() -> None:
+    # Fail SAFE: an unparseable date leaves the order unwindowable -> caller
+    # keeps the full admission notes rather than dropping a possible marker.
+    assert PF.parse_ledger_date("") is None
+    assert PF.parse_ledger_date("2025-03-31") is None  # ISO is not this column's format
+    assert PF.parse_ledger_date(None) is None
+
+
+def test_recall_window_pads_min_and_max() -> None:
+    from datetime import date as _date
+
+    window = PF.recall_window(
+        [_date(2025, 8, 23), None, _date(2025, 8, 24)], pad_days=2
+    )
+    assert window == (_date(2025, 8, 21), _date(2025, 8, 26))
+
+
+def test_recall_window_none_when_no_parseable_date() -> None:
+    assert PF.recall_window([None, None]) is None
+
+
+def test_notes_in_window_filters_by_date() -> None:
+    from datetime import date as _date
+
+    inside = _note("ให้เลือด LPRC 1 unit", at=datetime(2025, 8, 24, tzinfo=UTC))
+    outside = _note("ให้เลือด LPRC 1 unit", at=datetime(2025, 9, 10, tzinfo=UTC))
+    kept = PF.notes_in_window((inside, outside), (_date(2025, 8, 21), _date(2025, 8, 26)))
+    assert kept == (inside,)
+
+
+def test_notes_in_window_none_keeps_all() -> None:
+    a = _note("x", at=datetime(2025, 1, 1, tzinfo=UTC))
+    b = _note("y", at=datetime(2030, 1, 1, tzinfo=UTC))
+    assert PF.notes_in_window((a, b), None) == (a, b)
+
+
+def test_windowed_recall_drops_out_of_window_administration() -> None:
+    # A real administration note 16 days after the return window is a different
+    # transfusion in the same admission and must not flag the returned order.
+    from datetime import date as _date
+
+    late = _note(
+        "ให้เลือด LPRC 1 unit iv drip in 4 hr", at=datetime(2025, 7, 26, tzinfo=UTC)
+    )
+    window = PF.recall_window([_date(2025, 7, 9), _date(2025, 7, 10)])
+    windowed = {"R": PF.notes_in_window((late,), window)}
+    assert PF.administration_recall_conflicts(windowed) == ()
+    # …but admission-wide (no window) still sees it.
+    assert len(PF.administration_recall_conflicts({"R": (late,)})) == 1
+
+
 # --- recommendation gate -----------------------------------------------------
 
 
