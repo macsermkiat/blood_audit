@@ -34,6 +34,7 @@ class TestBucketOf:
             ("POTENTIALLY_INAPPROPRIATE", "unresolved"),
             ("PREOP_RESERVATION_UNCONFIRMED", "unresolved"),
             ("RETURNED_NOT_TRANSFUSED", "excluded"),
+            ("PERIOP_TRANSFUSION_EXEMPT", "excluded"),
         ],
     )
     def test_maps_every_classification(self, label: str, bucket: str) -> None:
@@ -74,6 +75,17 @@ class TestBuildMatrix:
             "r1": CaseVerdict(
                 reqno="r1",
                 classification="RETURNED_NOT_TRANSFUSED",
+                mechanism="deterministic",
+            )
+        }
+        assert build_matrix(labels, verdicts).total == 0
+
+    def test_periop_transfusion_exempt_is_excluded_from_matrix(self) -> None:
+        labels = {"r1": "INAPPROPRIATE"}
+        verdicts = {
+            "r1": CaseVerdict(
+                reqno="r1",
+                classification="PERIOP_TRANSFUSION_EXEMPT",
                 mechanism="deterministic",
             )
         }

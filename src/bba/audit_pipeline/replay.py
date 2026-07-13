@@ -980,7 +980,11 @@ def _classify_from_context(context: "PipelineRowContext") -> ClassifierResult:
     Mirrors :func:`bba.audit_pipeline.pipeline._classifier_inputs_for`
     so the resume / property paths get the same classifier result
     the main pipeline does."""
-    from bba.deterministic_classifier import ClassifierInputs, classify
+    from bba.deterministic_classifier import (
+        ClassifierInputs,
+        classify,
+        periop_envelope,
+    )
     from bba import feature_flags
 
     periop = context.periop_summary
@@ -1002,6 +1006,19 @@ def _classify_from_context(context: "PipelineRowContext") -> ClassifierResult:
                 if feature_flags.RETURNS_LEDGER_ENABLED
                 and context.returns_summary is not None
                 else "inconclusive"
+            ),
+            returns_periop_context=(
+                periop_envelope(
+                    surgical_context=periop.surgical_context if periop else False,
+                    intraop_transfusion=periop.intraop_transfusion
+                    if periop
+                    else False,
+                    procedure_proximity_hours=context.procedure_proximity_hours,
+                    upcoming_procedure_hours=context.upcoming_procedure_hours,
+                )
+                if feature_flags.RETURNS_LEDGER_ENABLED
+                and context.returns_summary is not None
+                else False
             ),
         )
     )

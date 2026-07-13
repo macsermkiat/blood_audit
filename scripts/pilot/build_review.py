@@ -247,6 +247,8 @@ def _display_cls(cls: str | None) -> str:
     normalized = (cls or "").upper()
     if RETURNS_LEDGER_ENABLED and normalized == "RETURNED_NOT_TRANSFUSED":
         return "Returned — not transfused (excluded)"
+    if RETURNS_LEDGER_ENABLED and normalized == "PERIOP_TRANSFUSION_EXEMPT":
+        return "Peri-op transfusion — exempt (excluded)"
     return _CLS_DISPLAY.get(normalized, cls or "Excluded")
 
 
@@ -1809,12 +1811,17 @@ def main() -> None:
     returns_legend_html = (
         '  <span class="cls cls-returned_not_transfused">'
         "Returned — not transfused (excluded)</span>\n"
+        '  <span class="cls cls-periop_transfusion_exempt">'
+        "Peri-op transfusion — exempt (excluded)</span>\n"
         if RETURNS_LEDGER_ENABLED
         else ""
     )
     returns_glossary_html = (
         "<dt>RETURNED_NOT_TRANSFUSED</dt><dd>All dispensed units were returned; "
         "excluded from scoring and review.</dd>\n"
+        "<dt>PERIOP_TRANSFUSION_EXEMPT</dt><dd>Confirmed transfusion in a "
+        "surgical/procedural context; exempt from judgment and excluded from "
+        "scoring and review.</dd>\n"
         if RETURNS_LEDGER_ENABLED
         else ""
     )

@@ -66,6 +66,9 @@ def test_flag_off_review_omits_returns_presentation(
     assert "cls-returned_not_transfused" not in rendered
     assert "<dt>RETURNED_NOT_TRANSFUSED</dt>" not in rendered
     assert "Returned \u2014 not transfused (excluded)" not in rendered
+    assert "cls-periop_transfusion_exempt" not in rendered
+    assert "<dt>PERIOP_TRANSFUSION_EXEMPT</dt>" not in rendered
+    assert "Peri-op transfusion \u2014 exempt (excluded)" not in rendered
 
 
 def test_flag_on_review_includes_returns_presentation(
@@ -78,3 +81,6 @@ def test_flag_on_review_includes_returns_presentation(
     assert "cls-returned_not_transfused" in rendered
     assert "<dt>RETURNED_NOT_TRANSFUSED</dt>" in rendered
     assert "Returned \u2014 not transfused (excluded)" in rendered
+    assert "cls-periop_transfusion_exempt" in rendered
+    assert "<dt>PERIOP_TRANSFUSION_EXEMPT</dt>" in rendered
+    assert "Peri-op transfusion \u2014 exempt (excluded)" in rendered

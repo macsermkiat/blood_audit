@@ -129,6 +129,12 @@ def default_classification_projector(
             "'RETURNED_NOT_TRANSFUSED'; inject an explicit projector for this "
             "excluded, non-scorable terminal classification"
         )
+    if value == "PERIOP_TRANSFUSION_EXEMPT":
+        raise MissingResolverError(
+            "audit_store row carries final_classification="
+            "'PERIOP_TRANSFUSION_EXEMPT'; inject an explicit projector for this "
+            "excluded, non-scorable terminal classification"
+        )
     # The remaining four audit-store classifications are exactly the
     # report-generator's literal members; the narrowed return is safe.
     return value

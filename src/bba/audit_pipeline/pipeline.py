@@ -57,6 +57,7 @@ from bba.deterministic_classifier import (
     ClassifierResult,
     HB_GT_10_THRESHOLD,
     classify,
+    periop_envelope,
 )
 from bba.llm_client.models import (
     AnthropicTransport,
@@ -84,8 +85,28 @@ _DETERMINISTIC_FINAL_CLASSIFICATIONS = frozenset(
         "INSUFFICIENT_EVIDENCE",
         "INAPPROPRIATE",
         "RETURNED_NOT_TRANSFUSED",
+        "PERIOP_TRANSFUSION_EXEMPT",
     }
 )
+
+# Deterministic returns-ledger terminals produced by the RBC classifier
+# (:func:`bba.deterministic_classifier.classify`) that must also short-circuit
+# the platelet gate — returns are component-agnostic, so an all-returned or
+# peri-op-exempt platelet order skips the platelet LLM leg exactly like the RBC
+# path. Kept separate from :data:`_DETERMINISTIC_FINAL_CLASSIFICATIONS` so only
+# these two returns terminals (never APPROPRIATE / INAPPROPRIATE) divert away
+# from ``classify_platelet``.
+_RETURNS_TERMINAL_CLASSIFICATIONS = frozenset(
+    {"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"}
+)
+
+# Returns-terminal classification -> its structured bypass-reason value, for the
+# deterministic-platelet marker call's request_json. A platelet result carries
+# no BypassReason of its own, so the reason is recovered from the classification.
+_RETURNS_TERMINAL_BYPASS: dict[str, str] = {
+    "RETURNED_NOT_TRANSFUSED": BypassReason.RETURNED_NOT_TRANSFUSED.value,
+    "PERIOP_TRANSFUSION_EXEMPT": BypassReason.PERIOP_TRANSFUSION_EXEMPT.value,
+}
 
 # Platelet gate verdicts that route onward to the platelet LLM leg (Stage C2).
 # INSUFFICIENT_EVIDENCE is deterministic-final (persisted above); everything
@@ -163,12 +184,12 @@ def run_pipeline(
     for ctx in active_contexts:
         if ctx.component == "platelet":
             returns_result = classify(_classifier_inputs_for(ctx))
-            if returns_result.classification == "RETURNED_NOT_TRANSFUSED":
+            if returns_result.classification in _RETURNS_TERMINAL_CLASSIFICATIONS:
                 platelet_classified.append(
                     (
                         ctx,
                         PlateletClassifierResult(
-                            classification="RETURNED_NOT_TRANSFUSED",
+                            classification=returns_result.classification,
                             review_ceiling=None,
                             rationale=returns_result.rationale,
                         ),
@@ -525,6 +546,7 @@ def _deterministic_audit_row(
             BypassReason.PERI_PROCEDURAL_6H,
             BypassReason.PERIOP_EVIDENCE,
             BypassReason.RETURNED_NOT_TRANSFUSED,
+            BypassReason.PERIOP_TRANSFUSION_EXEMPT,
         }
     )
     classifier = classifier_result
@@ -719,10 +741,8 @@ def _platelet_marker_call(
         prompt_cache_id=None,
         request_json={
             "rationale": classifier_result.rationale,
-            "bypass_reason": (
-                BypassReason.RETURNED_NOT_TRANSFUSED.value
-                if classifier_result.classification == "RETURNED_NOT_TRANSFUSED"
-                else "none"
+            "bypass_reason": _RETURNS_TERMINAL_BYPASS.get(
+                classifier_result.classification, "none"
             ),
             "component": "platelet",
         },
@@ -1031,6 +1051,17 @@ def _classifier_inputs_for(context: PipelineRowContext) -> ClassifierInputs:
             if feature_flags.RETURNS_LEDGER_ENABLED
             and context.returns_summary is not None
             else "inconclusive"
+        ),
+        returns_periop_context=(
+            periop_envelope(
+                surgical_context=periop.surgical_context if periop else False,
+                intraop_transfusion=periop.intraop_transfusion if periop else False,
+                procedure_proximity_hours=context.procedure_proximity_hours,
+                upcoming_procedure_hours=context.upcoming_procedure_hours,
+            )
+            if feature_flags.RETURNS_LEDGER_ENABLED
+            and context.returns_summary is not None
+            else False
         ),
     )
 

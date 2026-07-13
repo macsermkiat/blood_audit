@@ -223,8 +223,9 @@ def _aggregate_classifications(
     confidence average (rather than raising) — operators legitimately
     check wards / physicians with no audited orders today.
     """
+    excluded_classifications = ("RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT")
     scorable_rows = tuple(
-        r for r in rows if r.final_classification != "RETURNED_NOT_TRANSFUSED"
+        r for r in rows if r.final_classification not in excluded_classifications
     )
     total = len(scorable_rows)
     avg_confidence = (
@@ -240,6 +241,9 @@ def _aggregate_classifications(
         ),
         "returned_not_transfused_count": _count_classification(
             rows, "RETURNED_NOT_TRANSFUSED"
+        ),
+        "periop_transfusion_exempt_count": _count_classification(
+            rows, "PERIOP_TRANSFUSION_EXEMPT"
         ),
         "average_confidence": avg_confidence,
     }
@@ -387,6 +391,7 @@ def get_ward_scorecard(
         needs_review_count=int(aggs["needs_review_count"]),
         insufficient_evidence_count=int(aggs["insufficient_evidence_count"]),
         returned_not_transfused_count=int(aggs["returned_not_transfused_count"]),
+        periop_transfusion_exempt_count=int(aggs["periop_transfusion_exempt_count"]),
         average_confidence=float(aggs["average_confidence"]),
     )
 
@@ -436,6 +441,7 @@ def get_physician_scorecard(
         needs_review_count=int(aggs["needs_review_count"]),
         insufficient_evidence_count=int(aggs["insufficient_evidence_count"]),
         returned_not_transfused_count=int(aggs["returned_not_transfused_count"]),
+        periop_transfusion_exempt_count=int(aggs["periop_transfusion_exempt_count"]),
         average_confidence=float(aggs["average_confidence"]),
     )
 

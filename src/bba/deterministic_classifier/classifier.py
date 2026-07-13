@@ -114,6 +114,53 @@ Sub-500 mL losses are routine and do not, on their own, justify a
 transfusion or contradict an "insufficient evidence" verdict."""
 
 
+def periop_envelope(
+    *,
+    surgical_context: bool,
+    intraop_transfusion: bool,
+    procedure_proximity_hours: float | None,
+    upcoming_procedure_hours: float | None,
+) -> bool:
+    """Peri-operative envelope for the returns-ledger exemption (#123).
+
+    ``True`` when a confirmed transfusion sits in a surgical / procedural
+    context, so it is exempt from appropriateness judgment (anaesthesia
+    frequently does not chart the indication and scoring it would be
+    unfair). The envelope fires on ANY of:
+
+    * a surgery is charted (``surgical_context``);
+    * a charted intra-operative transfusion (``intraop_transfusion``);
+    * a blood-requiring procedure within the peri-procedural window
+      (``procedure_proximity_hours <= PERI_PROCEDURAL_WINDOW_HOURS``);
+    * a reserve-ahead upcoming procedure within the pre-op crossmatch
+      window (``upcoming_procedure_hours <= PRE_OP_CROSSMATCH_WINDOW_HOURS``
+      — this catches the pre-op standby case, e.g. TAVI, flagged by its
+      procedure rather than an intra-op marker).
+
+    The proximity / upcoming terms are windowed with the SAME bounds the
+    classifier applies to these signals for its own peri-procedural and
+    pre-op-crossmatch gates (single source of truth), because
+    ``procedure_proximity_hours`` / ``upcoming_procedure_hours`` are only
+    "no operative event found in the caller's lookback / lookahead window",
+    not "nearby": a remote surgery weeks away is neither peri-procedural nor
+    a reserve-ahead reservation, and must not exempt an unrelated ward
+    transfusion. This is a pure predicate, computed at the flag-gated wiring
+    sites and passed to :func:`classify` as ``returns_periop_context`` so the
+    classifier stays a pure function of its inputs.
+    """
+    peri_procedural = (
+        procedure_proximity_hours is not None
+        and procedure_proximity_hours <= PERI_PROCEDURAL_WINDOW_HOURS
+    )
+    reserve_ahead = (
+        upcoming_procedure_hours is not None
+        and upcoming_procedure_hours <= PRE_OP_CROSSMATCH_WINDOW_HOURS
+    )
+    return bool(
+        surgical_context or intraop_transfusion or peri_procedural or reserve_ahead
+    )
+
+
 def classify(inputs: ClassifierInputs) -> ClassifierResult:
     """Return the deterministic classification for ``inputs``.
 
@@ -147,6 +194,22 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
             bypass_reason=BypassReason.RETURNED_NOT_TRANSFUSED,
             cohort_threshold=threshold,
             rationale="returned_not_transfused",
+        )
+
+    # A confirmed transfusion (a unit not returned, or an explicit
+    # transfused-status unit) inside a peri-operative envelope is exempt from
+    # appropriateness judgment — anaesthesia frequently does not chart the
+    # indication, so scoring it would be unfair. Hb-independent and dominates
+    # every clinical tier, exactly like the returned exit above. A confirmed
+    # transfusion with NO peri-op context falls through and is judged normally
+    # (it can still be POTENTIALLY_INAPPROPRIATE). The envelope is computed at
+    # the flag-gated wiring sites (see :func:`periop_envelope`).
+    if inputs.returns_disposition == "transfused" and inputs.returns_periop_context:
+        return ClassifierResult(
+            classification="PERIOP_TRANSFUSION_EXEMPT",
+            bypass_reason=BypassReason.PERIOP_TRANSFUSION_EXEMPT,
+            cohort_threshold=threshold,
+            rationale="periop_transfusion_exempt",
         )
 
     # 1. Hb missing — positive-evidence pre-pass (SEED pending clinical
@@ -374,4 +437,5 @@ __all__ = (
     "PRE_OP_CROSSMATCH_WINDOW_HOURS",
     "UNIVERSAL_LOW_HB_APPROPRIATE_THRESHOLD",
     "classify",
+    "periop_envelope",
 )

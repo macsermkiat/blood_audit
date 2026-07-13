@@ -33,12 +33,16 @@ def _bucket_totals(verdicts: Mapping[str, str]) -> BucketTotals:
     appropriate = sum(1 for c in verdicts.values() if c == "APPROPRIATE")
     inappropriate = sum(1 for c in verdicts.values() if c == "INAPPROPRIATE")
     returned = sum(1 for c in verdicts.values() if c == "RETURNED_NOT_TRANSFUSED")
-    scorable_total = len(verdicts) - returned
+    periop_exempt = sum(
+        1 for c in verdicts.values() if c == "PERIOP_TRANSFUSION_EXEMPT"
+    )
+    scorable_total = len(verdicts) - returned - periop_exempt
     return BucketTotals(
         appropriate=appropriate,
         inappropriate=inappropriate,
         unresolved=scorable_total - appropriate - inappropriate,
         returned_not_transfused=returned,
+        periop_transfusion_exempt=periop_exempt,
         total=scorable_total,
     )
 
