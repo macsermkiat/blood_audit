@@ -130,6 +130,25 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
     cohort = inputs.cohort_assignment
     threshold = cohort.threshold
 
+    # A complete all-returned ledger proves that no transfusion occurred and
+    # therefore dominates every clinical/Hb tier. Structured intra-operative
+    # transfusion or major blood loss contradicts that negative disposition;
+    # fail loud by leaving the order in the legacy decision chain.
+    hard_transfusion_contradiction = inputs.periop_intraop_transfusion or (
+        inputs.periop_blood_loss_ml is not None
+        and inputs.periop_blood_loss_ml >= PERIOP_MIN_EBL_ML
+    )
+    if (
+        inputs.returns_disposition == "not_transfused"
+        and not hard_transfusion_contradiction
+    ):
+        return ClassifierResult(
+            classification="RETURNED_NOT_TRANSFUSED",
+            bypass_reason=BypassReason.RETURNED_NOT_TRANSFUSED,
+            cohort_threshold=threshold,
+            rationale="returned_not_transfused",
+        )
+
     # 1. Hb missing — positive-evidence pre-pass (SEED pending clinical
     #    sign-off). Gated behind ``inputs.enable_missing_hb_positive_evidence``,
     #    which defaults to False. When OFF the original PRD spec applies

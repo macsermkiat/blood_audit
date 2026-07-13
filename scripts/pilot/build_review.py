@@ -244,7 +244,10 @@ _CLS_DISPLAY: dict[str, str] = {
 
 
 def _display_cls(cls: str | None) -> str:
-    return _CLS_DISPLAY.get((cls or "").upper(), cls or "Excluded")
+    normalized = (cls or "").upper()
+    if RETURNS_LEDGER_ENABLED and normalized == "RETURNED_NOT_TRANSFUSED":
+        return "Returned — not transfused (excluded)"
+    return _CLS_DISPLAY.get(normalized, cls or "Excluded")
 
 
 def fmt_time(raw: Any) -> str:
@@ -1803,6 +1806,18 @@ def main() -> None:
         for i, (m, tag) in enumerate(zip(manifest_rows, case_mismatch_tags))
     )
     n_mismatches = sum(1 for t in case_mismatch_tags if t)
+    returns_legend_html = (
+        '  <span class="cls cls-returned_not_transfused">'
+        "Returned — not transfused (excluded)</span>\n"
+        if RETURNS_LEDGER_ENABLED
+        else ""
+    )
+    returns_glossary_html = (
+        "<dt>RETURNED_NOT_TRANSFUSED</dt><dd>All dispensed units were returned; "
+        "excluded from scoring and review.</dd>\n"
+        if RETURNS_LEDGER_ENABLED
+        else ""
+    )
     head = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1834,7 +1849,7 @@ LLM: Anthropic Batch classification on structured evidence only.
   <span class="cls cls-needs_review">Needs review</span>
   <span class="cls cls-potentially_inappropriate">Potentially inappropriate</span>
   <span class="cls cls-preop_reservation_unconfirmed">Administration unconfirmed (pre-op reservation)</span>
-  <span class="cls cls-insufficient_evidence">Insufficient evidence</span>
+{returns_legend_html}  <span class="cls cls-insufficient_evidence">Insufficient evidence</span>
   <span class="cls cls-excluded">Excluded</span>
 </div>
 {summary_html}
@@ -1845,7 +1860,7 @@ LLM: Anthropic Batch classification on structured evidence only.
 <dt>POTENTIALLY_INAPPROPRIATE</dt><dd>Hb above threshold and no qualifying bypass was identified; warrants clinician review.</dd>
 <dt>NEEDS_REVIEW</dt><dd>Classifier could not confidently classify; manual review required (e.g. haemodilution, single borderline Hb).</dd>
 <dt>INSUFFICIENT_EVIDENCE</dt><dd>LLM could not find enough structured evidence to classify.</dd>
-<dt>EXCLUDED</dt><dd>Case excluded from audit scope (e.g. paediatric, non-RBC product).</dd>
+{returns_glossary_html}<dt>EXCLUDED</dt><dd>Case excluded from audit scope (e.g. paediatric, non-RBC product).</dd>
 <dt style='margin-top:14px;font-style:italic;'>Rationale codes</dt><dd></dd>
 <dt>hb_lt_7_universal</dt><dd>Hb &lt; 7.0 g/dL — below the universal threshold; no bypass required.</dd>
 <dt>hb_lt_threshold</dt><dd>Hb below the cohort-specific threshold.</dd>

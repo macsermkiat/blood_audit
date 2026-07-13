@@ -155,6 +155,15 @@ RETURNS_LEDGER_FIELDNAMES = [
     "returns_ledger_complete",
 ]
 
+
+def _returns_disposition_for_classifier(
+    returns_summary: ReturnsSummary | None,
+) -> str:
+    """Return the gated disposition passed into the pure classifier."""
+    if RETURNS_LEDGER_ENABLED and returns_summary is not None:
+        return returns_summary.disposition
+    return "inconclusive"
+
 csv.field_size_limit(sys.maxsize)
 
 
@@ -787,6 +796,7 @@ def main() -> None:
                 periop_blood_loss_ml=periop.blood_loss_ml,
                 periop_intraop_transfusion=periop.intraop_transfusion,
                 periop_surgical_context=periop.surgical_context,
+                returns_disposition=_returns_disposition_for_classifier(returns_summary),
             )
         )
 

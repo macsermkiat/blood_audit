@@ -105,6 +105,7 @@ from bba.audit_pipeline import (
 from bba.cohort_detector import CohortAssignment, CohortLabel
 from bba.hb_lookup import DeltaHbWindow, HbLookupResult
 from bba.prompt_builder import EvidenceChunk
+from bba.returns_ledger import ReturnsSummary
 from bba.vitals_extractor import (
     AdministrationSummary,
     PeriopFinding,
@@ -356,6 +357,7 @@ def _row_context(
     upcoming_procedure_hours: float | None = None,
     sbp: float = 110.0,
     hr: float = 85.0,
+    returns_summary: ReturnsSummary | None = None,
 ) -> PipelineRowContext:
     """Build a PipelineRowContext whose upstream data drives the
     deterministic_classifier to produce the requested ``classification``.
@@ -463,7 +465,51 @@ def _row_context(
         evidence_chunks=evidence_chunks,
         periop_summary=periop_summary,
         administration_summary=administration_summary,
+        returns_summary=returns_summary,
     )
+
+
+class TestReturnedNotTransfusedTerminal:
+    @pytest.mark.parametrize("hb_value", [None, 8.5])
+    def test_persists_without_llm_or_hb_fabrication_error(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch, hb_value: float | None
+    ) -> None:
+        from pathlib import Path
+
+        import bba.feature_flags as feature_flags
+        from bba.audit_store import AuditStore, AuditStoreConfig
+
+        assert isinstance(tmp_path, Path)
+        monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", True)
+        ctx = _row_context(
+            audit_id=f"returned-{hb_value}",
+            hb_value=hb_value,
+            returns_summary=ReturnsSummary(
+                units_total=1,
+                units_returned=1,
+                ordered_unit_amount=1,
+                ledger_complete=True,
+            ),
+        )
+        store = AuditStore(
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
+        )
+        result = run_pipeline(
+            [ctx],
+            transport=CassetteTransport(interactions=()),
+            audit_store=store,
+            batch_run_store=InMemoryBatchRunStore(),
+            llm_config=LlmClientConfig(code_version="v0.1.0+test"),
+            pipeline_config=AuditPipelineConfig(
+                db_url="sqlite:///:memory:", code_version="v0.1.0+test"
+            ),
+            run_id="run-returned",
+        )
+        assert result.audit_ids_persisted == (ctx.order.audit_id,)
+        (row,) = store.read_audit_results(run_id="run-returned")
+        assert row.final_classification == "RETURNED_NOT_TRANSFUSED"
+        assert row.needs_human_review is False
+        assert row.model_id == "deterministic"
 
 
 # =============================================================================
@@ -653,6 +699,53 @@ class TestInMemoryBatchRunStore:
 
 
 class TestResumeOnStartup:
+    def test_resume_classifier_inputs_force_returns_inconclusive(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import bba.audit_pipeline.resume as resume_module
+        import bba.feature_flags as feature_flags
+
+        seen_dispositions: list[str] = []
+        real_classify = resume_module.classify
+
+        def capture_disposition(inputs):  # type: ignore[no-untyped-def]
+            seen_dispositions.append(inputs.returns_disposition)
+            return real_classify(inputs)
+
+        monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", True)
+        monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", True)
+        monkeypatch.setattr(resume_module, "classify", capture_disposition)
+        ctx = _row_context(
+            audit_id="resume-returned",
+            hb_value=8.5,
+            upcoming_procedure_hours=24.0,
+            returns_summary=ReturnsSummary(
+                units_total=1,
+                units_returned=1,
+                ordered_unit_amount=1,
+                ledger_complete=True,
+            ),
+        )
+        run = BatchRun(
+            batch_id="batch-resume-returned",
+            state=BatchRunState.SUBMITTED,
+            run_id="run-resume-returned",
+            code_version="v0.1.0+test",
+            audit_ids=(ctx.order.audit_id,),
+            anthropic_batch_id="msgbatch_resume_returned",
+            submitted_at=_RUN_TS,
+            updated_at=_RUN_TS,
+        )
+
+        requests = resume_module._rebuild_submission_requests(
+            run=run,
+            contexts={ctx.order.audit_id: ctx},
+            audit_ids=run.audit_ids,
+        )
+
+        assert len(requests) == 1
+        assert seen_dispositions == ["inconclusive"]
+
     def test_submitted_batch_is_polled(self) -> None:
         """A SUBMITTED row is the resume's primary target. Polling
         Anthropic for its batch_id is what advances the state."""

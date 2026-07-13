@@ -250,6 +250,7 @@ class WardScorecard(BaseModel):
     inappropriate_count: int
     needs_review_count: int
     insufficient_evidence_count: int
+    returned_not_transfused_count: int = 0
     average_confidence: float
 
 
@@ -266,6 +267,7 @@ class PhysicianScorecard(BaseModel):
     inappropriate_count: int
     needs_review_count: int
     insufficient_evidence_count: int
+    returned_not_transfused_count: int = 0
     average_confidence: float
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import bba.feature_flags as feature_flags
+import pytest
 from bba.audit_orders import AuditOrder
 from bba.audit_pipeline import (
     AuditPipelineConfig,
@@ -33,6 +34,7 @@ from bba.llm_client.models import (
 from bba.platelet_guardrail import PLATELET_OVERCLEAR_REVIEW_REASON
 from bba.platelet_lookup.models import PlateletLookupResult
 from bba.prompt_builder import EvidenceChunk
+from bba.returns_ledger import ReturnsSummary
 from bba.vitals_extractor import PeriopSummary
 
 _RUN_TS = datetime(2026, 5, 16, 12, 0, 0, tzinfo=UTC)
@@ -64,6 +66,7 @@ def _platelet_ctx(
     platelet_mtp_suppressed: bool = False,
     evidence_chunks: tuple[EvidenceChunk, ...] = (),
     periop_summary: PeriopSummary | None = None,
+    returns_summary: ReturnsSummary | None = None,
 ) -> PipelineRowContext:
     plt_result = (
         PlateletLookupResult(
@@ -92,6 +95,7 @@ def _platelet_ctx(
         evidence_bundle_hash=f"bh_{audit_id}",
         evidence_chunks=evidence_chunks,
         periop_summary=periop_summary,
+        returns_summary=returns_summary,
         platelet_mtp_suppressed=platelet_mtp_suppressed,
     )
 
@@ -185,6 +189,36 @@ def test_platelet_insufficient_evidence_round_trip(tmp_path):
     assert row.component == "platelet"
     assert row.platelet_value is None
     assert row.platelet_freshness == "missing"
+
+
+def test_platelet_returned_order_is_terminal(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", True)
+    ctx = _platelet_ctx(
+        "audit-plt-returned",
+        platelet_count=150.0,
+        returns_summary=ReturnsSummary(
+            units_total=1,
+            units_returned=1,
+            ordered_unit_amount=1,
+            ledger_complete=True,
+        ),
+    )
+    store = _audit_store(tmp_path)
+    result = run_pipeline(
+        [ctx],
+        transport=CassetteTransport(interactions=()),
+        audit_store=store,
+        batch_run_store=InMemoryBatchRunStore(),
+        llm_config=_LLM_CONFIG,
+        pipeline_config=_PIPELINE_CONFIG,
+        run_id="run-plt-returned",
+    )
+    assert result.audit_ids_persisted == (ctx.order.audit_id,)
+    (row,) = store.read_audit_results(run_id="run-plt-returned")
+    assert row.final_classification == "RETURNED_NOT_TRANSFUSED"
+    assert row.needs_human_review is False
 
 
 # ───────────────────────── Test 3 ─────────────────────────

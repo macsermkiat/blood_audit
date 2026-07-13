@@ -352,8 +352,11 @@ def _rebuild_submission_requests(
             # RBC / default: mirrors live submission via the shared selector.
             reserve_ahead = False
             if feature_flags.RESERVE_AHEAD_ROUTER_ENABLED:
+                classifier_inputs = _classifier_inputs_for(ctx).model_copy(
+                    update={"returns_disposition": "inconclusive"}
+                )
                 reserve_ahead = (
-                    classify(_classifier_inputs_for(ctx)).rationale == "preop_defer_llm"
+                    classify(classifier_inputs).rationale == "preop_defer_llm"
                 )
             task_mode = rbc_task_mode(
                 ctx.hb_result.value_g_dl, reserve_ahead=reserve_ahead
