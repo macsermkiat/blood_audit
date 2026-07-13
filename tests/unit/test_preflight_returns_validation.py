@@ -55,7 +55,9 @@ def _load_preflight() -> ModuleType:
 PF = _load_preflight()
 
 
-def _summary(disposition: str, *, units: int = 2, ordered: int | None = 2) -> ReturnsSummary:
+def _summary(
+    disposition: str, *, units: int = 2, ordered: int | None = 2
+) -> ReturnsSummary:
     """Build a ReturnsSummary whose derived disposition is ``disposition``."""
     if disposition == "not_transfused":
         return ReturnsSummary(
@@ -73,7 +75,9 @@ def _summary(disposition: str, *, units: int = 2, ordered: int | None = 2) -> Re
             ledger_complete=True,
         )
     # inconclusive
-    return ReturnsSummary(units_total=units, units_returned=units, ledger_complete=False)
+    return ReturnsSummary(
+        units_total=units, units_returned=units, ledger_complete=False
+    )
 
 
 def _note(text: str, *, at: datetime | None = None) -> VitalsNote:
@@ -108,6 +112,52 @@ def test_is_reissue_false_when_ordered_unknown() -> None:
         units_total=2, units_returned=2, ordered_unit_amount=None, ledger_complete=False
     )
     assert PF.is_reissue(s) is False
+
+
+# --- is_over_dispense_guard_excluded (NARROW transparency) --------------------
+
+
+def test_over_dispense_guard_excluded_true_for_over_dispensed_all_returned() -> None:
+    # All units returned but the ledger count exceeds the ordered amount: the
+    # disposition guard derives this inconclusive (spec #119 NARROW), so it is
+    # excluded from the screen. The pre-flight surfaces it so the sign-off still
+    # documents which orders the guard dropped.
+    s = ReturnsSummary(
+        units_total=3, units_returned=3, ordered_unit_amount=2, ledger_complete=True
+    )
+    assert s.disposition == "inconclusive"
+    assert PF.is_over_dispense_guard_excluded(s) is True
+
+
+def test_over_dispense_guard_excluded_false_for_exact_all_returned() -> None:
+    # An exactly-accounted all-returned order IS screened (not_transfused), so it
+    # is not a guard exclusion.
+    s = ReturnsSummary(
+        units_total=2, units_returned=2, ordered_unit_amount=2, ledger_complete=True
+    )
+    assert s.disposition == "not_transfused"
+    assert PF.is_over_dispense_guard_excluded(s) is False
+
+
+def test_over_dispense_guard_excluded_false_for_transfused() -> None:
+    # A non-returned unit means transfused; over-dispense there is benign and
+    # stays transfused, so it is not a not-transfused-screen exclusion.
+    s = ReturnsSummary(
+        units_total=3,
+        units_returned=1,
+        units_transfused=0,
+        ordered_unit_amount=2,
+        ledger_complete=True,
+    )
+    assert s.disposition == "transfused"
+    assert PF.is_over_dispense_guard_excluded(s) is False
+
+
+def test_over_dispense_guard_excluded_false_for_incomplete() -> None:
+    # An incomplete ledger is inconclusive for coverage reasons, not the
+    # over-dispense guard; it is not counted as a NARROW exclusion.
+    s = ReturnsSummary(units_total=1, units_returned=1, ledger_complete=False)
+    assert PF.is_over_dispense_guard_excluded(s) is False
 
 
 # --- hard_transfusion_contradiction / screened predicate ---------------------
@@ -191,7 +241,9 @@ def _neutral_inputs(
     )
 
 
-@pytest.mark.parametrize("disposition", ["not_transfused", "transfused", "inconclusive"])
+@pytest.mark.parametrize(
+    "disposition", ["not_transfused", "transfused", "inconclusive"]
+)
 @pytest.mark.parametrize("intraop", [False, True])
 @pytest.mark.parametrize("ebl", [None, 499, 500])
 def test_screened_predicate_matches_real_classifier(disposition, intraop, ebl) -> None:
@@ -305,7 +357,9 @@ def test_notes_in_window_filters_by_date() -> None:
 
     inside = _note("ให้เลือด LPRC 1 unit", at=datetime(2025, 8, 24, tzinfo=UTC))
     outside = _note("ให้เลือด LPRC 1 unit", at=datetime(2025, 9, 10, tzinfo=UTC))
-    kept = PF.notes_in_window((inside, outside), (_date(2025, 8, 21), _date(2025, 8, 26)))
+    kept = PF.notes_in_window(
+        (inside, outside), (_date(2025, 8, 21), _date(2025, 8, 26))
+    )
     assert kept == (inside,)
 
 

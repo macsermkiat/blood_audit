@@ -27,7 +27,10 @@ class ReturnsSummary(BaseModel):
     Each ledger row is one physical, dispensed blood unit. The summary counts
     returned (``Unitstat==3``) and transfused (``Unitstat==5``) units, records
     the ordered unit amount summed from the order's BDVSTDT ``UNITAMT`` lines,
-    and reports whether the ledger completely covers the order.
+    and reports whether the ledger COVERS the order (``ledger_complete`` =
+    ``units_total >= ordered_unit_amount``). The stricter exact-count check that
+    keeps an over-dispensed reissue out of the not-transfused screen lives in
+    :meth:`disposition`.
 
     ``disposition`` is derived (see :meth:`disposition`):
 
@@ -55,5 +58,16 @@ class ReturnsSummary(BaseModel):
         if not self.ledger_complete:
             return "inconclusive"
         if self.units_returned == self.units_total:
+            # All-returned screens as not_transfused only when the ledger EXACTLY
+            # accounts for the order. An over-dispensed all-returned order (a
+            # reissue) is suspect — a partial export could hide a transfused
+            # replacement unit that no count-based guard can see — so it falls
+            # through to judgment instead (spec #119 NARROW go-live). The
+            # transfused branch below keeps the looser >= completeness rule: a
+            # seen non-returned unit already confirms a transfusion, and
+            # over-dispense there is benign clinical top-up, not a hidden-
+            # transfusion risk, so its peri-op exemption is preserved.
+            if self.units_total != self.ordered_unit_amount:
+                return "inconclusive"
             return "not_transfused"
         return "transfused"
