@@ -11,6 +11,13 @@ swaps in full-cohort pipeline verdicts without touching anything else.
 from __future__ import annotations
 
 from bba.attribution.dct_registry import load_dct_registry
+from bba.attribution.lab_stats import (
+    GroupLabStats,
+    OrderLabValue,
+    aggregate_department_lab_stats,
+    aggregate_doctor_lab_stats,
+    load_order_labs,
+)
 from bba.attribution.models import (
     UNATTRIBUTED_DEPARTMENT_ID,
     UNATTRIBUTED_DOCTOR_ID,
@@ -66,7 +73,9 @@ __all__ = [
     "DEFAULT_TOP_N",
     "Dimension",
     "DoctorRecord",
+    "GroupLabStats",
     "HUMAN_LABEL_TO_CLASSIFICATION",
+    "OrderLabValue",
     "RANKING_CSV_COLUMNS",
     "RankedRow",
     "RankingResult",
@@ -78,11 +87,14 @@ __all__ = [
     "VerdictProjector",
     "VerdictReconciliation",
     "VerdictSource",
+    "aggregate_department_lab_stats",
+    "aggregate_doctor_lab_stats",
     "build_department_scorecards",
     "build_doctor_scorecards",
     "build_rankings",
     "human_label_verdict_source",
     "load_dct_registry",
+    "load_order_labs",
     "load_reqno_to_doctor",
     "make_physician_resolver",
     "make_ward_resolver",

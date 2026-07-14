@@ -16,6 +16,7 @@ collapse (Unresolved = NEEDS_REVIEW + INSUFFICIENT_EVIDENCE, per PRD
 
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -28,12 +29,17 @@ from bba.attribution import (
     UNATTRIBUTED_DEPARTMENT_ID,
     UNATTRIBUTED_DOCTOR_ID,
     DoctorRecord,
+    GroupLabStats,
+    OrderLabValue,
     RankedRow,
+    aggregate_department_lab_stats,
+    aggregate_doctor_lab_stats,
     build_department_scorecards,
     build_doctor_scorecards,
     build_rankings,
     human_label_verdict_source,
     load_dct_registry,
+    load_order_labs,
     load_reqno_to_doctor,
     make_physician_resolver,
     make_ward_resolver,
@@ -48,6 +54,29 @@ from bba.attribution import (
     write_rankings_html,
 )
 from bba.dashboard.models import PhysicianScorecard
+
+
+_REPORT_LAB_COLUMNS = ("reqno", "component", "hb_value_g_dl", "hb_freshness")
+
+
+def _write_report_csv(path: Path, rows: list[dict[str, str]]) -> Path:
+    """Write a minimal report.csv carrying only the columns the lab loader
+    reads (the real file is ~50 columns wide; DictReader ignores the rest)."""
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(_REPORT_LAB_COLUMNS))
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+    return path
+
+
+def _red_cell(reqno: str, hb: str, *, freshness: str = "fresh") -> dict[str, str]:
+    return {
+        "reqno": reqno,
+        "component": "red_cell",
+        "hb_value_g_dl": hb,
+        "hb_freshness": freshness,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -791,7 +820,7 @@ class TestWriteRankingCsv:
             "inappropriate,unresolved,returned_not_transfused,"
             "periop_transfusion_exempt,bucket,"
             "bucket_count,bucket_rate,"
-            "meets_min_orders"
+            "meets_min_orders,mean_hb_g_dl,hb_order_n"
         )
         assert lines[1].startswith("1,302389,")
         assert "\r\n" not in text
@@ -805,12 +834,15 @@ class TestWriteRankingCsv:
             "bba.attribution.outputs.RETURNS_LEDGER_ENABLED", False, raising=False
         )
         out = write_ranking_csv((_ranked_row(),), tmp_path / "doctors.csv")
+        # The mean-trigger columns are appended unconditionally; a row with no
+        # lab sample renders an empty mean cell and n=0 (spec #131/#133).
         assert (
             out.read_bytes()
             == (
                 "rank,group_id,group_name,total_orders,appropriate,inappropriate,"
-                "unresolved,bucket,bucket_count,bucket_rate,meets_min_orders\n"
-                "1,302389,\u0e1e\u0e0d.\u0e2a***** \u0e27*****,6,2,3,1,inappropriate,3,0.5,true\n"
+                "unresolved,bucket,bucket_count,bucket_rate,meets_min_orders,"
+                "mean_hb_g_dl,hb_order_n\n"
+                "1,302389,\u0e1e\u0e0d.\u0e2a***** \u0e27*****,6,2,3,1,inappropriate,3,0.5,true,,0\n"
             ).encode()
         )
 
@@ -1112,3 +1144,279 @@ class TestRealDataReconciliation:
         assert len(result.departments.rows) == min(10, bucket_positive)
         for table in (result.doctors, result.departments):
             assert [r.rank for r in table.rows] == list(range(1, len(table.rows) + 1))
+
+
+# ---------------------------------------------------------------------------
+# lab_stats — per-order lab join for the mean pre-transfusion trigger (#133)
+# ---------------------------------------------------------------------------
+
+
+class TestGroupLabStats:
+    def test_empty_group_has_no_mean(self) -> None:
+        stats = GroupLabStats()
+        assert stats.mean_hb is None
+        assert stats.hb_order_n == 0
+
+    def test_populated_group_carries_mean_and_n(self) -> None:
+        stats = GroupLabStats(mean_hb=8.4, hb_order_n=5)
+        assert stats.mean_hb == 8.4
+        assert stats.hb_order_n == 5
+
+    def test_mean_without_sample_fails_loud(self) -> None:
+        # n == 0 must imply mean is None — a 0.0 trigger on no data would
+        # misrepresent the group as transfusing at an unknown-low threshold.
+        with pytest.raises(ValueError, match="invariant"):
+            GroupLabStats(mean_hb=8.0, hb_order_n=0)
+
+    def test_sample_without_mean_fails_loud(self) -> None:
+        with pytest.raises(ValueError, match="invariant"):
+            GroupLabStats(mean_hb=None, hb_order_n=2)
+
+
+class TestLoadOrderLabs:
+    def test_loads_red_cell_hb_keyed_by_reqno(self, tmp_path: Path) -> None:
+        path = _write_report_csv(
+            tmp_path / "report.csv",
+            [_red_cell("68000001", "8.4"), _red_cell("68000002", "9.1")],
+        )
+        labs = load_order_labs(path)
+        assert labs["68000001"].hb_value_g_dl == 8.4
+        assert labs["68000002"].hb_value_g_dl == 9.1
+
+    def test_blank_or_unknown_component_contributes_no_hb(self, tmp_path: Path) -> None:
+        # A plausible numeric Hb on a non-red-cell row must not count —
+        # strict component match, not merely "row not empty".
+        path = _write_report_csv(
+            tmp_path / "report.csv",
+            [
+                {
+                    "reqno": "68000001",
+                    "component": "",
+                    "hb_value_g_dl": "8.4",
+                    "hb_freshness": "fresh",
+                },
+                {
+                    "reqno": "68000002",
+                    "component": "platelet",
+                    "hb_value_g_dl": "9.1",
+                    "hb_freshness": "fresh",
+                },
+            ],
+        )
+        labs = load_order_labs(path)
+        assert labs["68000001"].hb_value_g_dl is None
+        assert labs["68000002"].hb_value_g_dl is None
+
+    def test_missing_freshness_sentinel_excluded(self, tmp_path: Path) -> None:
+        path = _write_report_csv(
+            tmp_path / "report.csv",
+            [_red_cell("68000001", "8.4", freshness="missing")],
+        )
+        assert load_order_labs(path)["68000001"].hb_value_g_dl is None
+
+    def test_out_of_range_value_excluded(self, tmp_path: Path) -> None:
+        # Below 2 and above 25 g/dL are corrupt readings, not triggers.
+        path = _write_report_csv(
+            tmp_path / "report.csv",
+            [_red_cell("68000001", "1.5"), _red_cell("68000002", "30.0")],
+        )
+        labs = load_order_labs(path)
+        assert labs["68000001"].hb_value_g_dl is None
+        assert labs["68000002"].hb_value_g_dl is None
+
+    def test_unparseable_and_non_finite_tolerated_as_absent(
+        self, tmp_path: Path
+    ) -> None:
+        path = _write_report_csv(
+            tmp_path / "report.csv",
+            [
+                _red_cell("68000001", "n/a"),
+                _red_cell("68000002", "inf"),
+                _red_cell("68000003", "nan"),
+            ],
+        )
+        labs = load_order_labs(path)
+        assert labs["68000001"].hb_value_g_dl is None
+        assert labs["68000002"].hb_value_g_dl is None
+        assert labs["68000003"].hb_value_g_dl is None
+
+    def test_missing_required_column_fails_loud(self, tmp_path: Path) -> None:
+        bad = tmp_path / "report.csv"
+        bad.write_text("reqno,component,hb_value_g_dl\n68000001,red_cell,8.4\n")
+        with pytest.raises(ValueError, match="hb_freshness"):
+            load_order_labs(bad)
+
+    def test_conflicting_duplicate_reqno_fails_loud(self, tmp_path: Path) -> None:
+        path = _write_report_csv(
+            tmp_path / "report.csv",
+            [_red_cell("68000001", "8.4"), _red_cell("68000001", "9.9")],
+        )
+        with pytest.raises(ValueError, match="two different lab records"):
+            load_order_labs(path)
+
+    def test_identical_duplicate_reqno_tolerated(self, tmp_path: Path) -> None:
+        path = _write_report_csv(
+            tmp_path / "report.csv",
+            [_red_cell("68000001", "8.4"), _red_cell("68000001", "8.4")],
+        )
+        assert load_order_labs(path)["68000001"].hb_value_g_dl == 8.4
+
+    def test_rows_without_reqno_are_skipped(self, tmp_path: Path) -> None:
+        path = _write_report_csv(
+            tmp_path / "report.csv",
+            [_red_cell("", "8.4"), _red_cell("68000002", "9.1")],
+        )
+        labs = load_order_labs(path)
+        assert "" not in labs
+        assert labs["68000002"].hb_value_g_dl == 9.1
+
+
+# A two-doctor / shared-department scenario exercising the scorable-cohort
+# restriction, the unattributed fallback, and an out-of-cohort lab row.
+def _mean_hb_scenario() -> tuple[
+    dict[str, str], dict[str, str], dict[str, DoctorRecord], dict[str, OrderLabValue]
+]:
+    verdicts = {
+        "r1": "INAPPROPRIATE",  # d1
+        "r2": "APPROPRIATE",  # d1
+        "r3": "INAPPROPRIATE",  # d2
+        "r4": "RETURNED_NOT_TRANSFUSED",  # d1 — non-scorable, hb must not count
+        "r5": "INAPPROPRIATE",  # unattributed doctor / department
+    }
+    reqno_to_doctor = {"r1": "d1", "r2": "d1", "r3": "d2", "r4": "d1"}
+    dct_registry = {
+        "d1": DoctorRecord(
+            dct="d1", display_name="D1", deptlct="DEPT", deptname="Dept X"
+        ),
+        "d2": DoctorRecord(
+            dct="d2", display_name="D2", deptlct="DEPT", deptname="Dept X"
+        ),
+    }
+    order_labs = {
+        "r1": OrderLabValue(reqno="r1", component="red_cell", hb_value_g_dl=8.0),
+        "r2": OrderLabValue(reqno="r2", component="red_cell", hb_value_g_dl=10.0),
+        "r3": OrderLabValue(reqno="r3", component="red_cell", hb_value_g_dl=7.0),
+        "r4": OrderLabValue(reqno="r4", component="red_cell", hb_value_g_dl=12.0),
+        "r5": OrderLabValue(reqno="r5", component="red_cell", hb_value_g_dl=6.0),
+        "r99": OrderLabValue(reqno="r99", component="red_cell", hb_value_g_dl=25.0),
+    }
+    return verdicts, reqno_to_doctor, dct_registry, order_labs
+
+
+class TestAggregateLabStats:
+    def test_doctor_means_exclude_non_scorable_and_out_of_cohort(self) -> None:
+        verdicts, reqno_to_doctor, _registry, order_labs = _mean_hb_scenario()
+        stats = aggregate_doctor_lab_stats(verdicts, reqno_to_doctor, order_labs)
+        # d1: r1(8) + r2(10); the returned r4(12) and out-of-cohort r99 excluded.
+        assert stats["d1"].mean_hb == pytest.approx(9.0)
+        assert stats["d1"].hb_order_n == 2
+        assert stats["d2"].mean_hb == pytest.approx(7.0)
+        assert stats["d2"].hb_order_n == 1
+        assert stats[UNATTRIBUTED_DOCTOR_ID].mean_hb == pytest.approx(6.0)
+        assert stats[UNATTRIBUTED_DOCTOR_ID].hb_order_n == 1
+
+    def test_department_means_pool_over_the_shared_department(self) -> None:
+        verdicts, reqno_to_doctor, registry, order_labs = _mean_hb_scenario()
+        stats = aggregate_department_lab_stats(
+            verdicts, reqno_to_doctor, registry, order_labs
+        )
+        # DEPT pools d1's r1,r2 and d2's r3 (returned r4 excluded): (8+10+7)/3.
+        assert stats["DEPT"].mean_hb == pytest.approx(25.0 / 3.0)
+        assert stats["DEPT"].hb_order_n == 3
+        assert stats[UNATTRIBUTED_DEPARTMENT_ID].mean_hb == pytest.approx(6.0)
+        assert stats[UNATTRIBUTED_DEPARTMENT_ID].hb_order_n == 1
+
+
+class TestBuildRankingsMeanHb:
+    def test_assembly_threads_mean_hb_onto_both_tables(self) -> None:
+        verdicts, reqno_to_doctor, registry, order_labs = _mean_hb_scenario()
+        result = build_rankings(
+            verdicts=verdicts,
+            reqno_to_doctor=reqno_to_doctor,
+            dct_registry=registry,
+            order_labs=order_labs,
+            min_orders=1,
+        )
+        doctors = {row.group_id: row for row in result.doctors.rows}
+        assert doctors["d1"].mean_hb == pytest.approx(9.0)
+        assert doctors["d1"].hb_order_n == 2
+        # n never exceeds Orders (N): d1's returned order is out of both.
+        assert doctors["d1"].hb_order_n <= doctors["d1"].total_orders
+        assert doctors["d2"].mean_hb == pytest.approx(7.0)
+        assert doctors[UNATTRIBUTED_DOCTOR_ID].mean_hb == pytest.approx(6.0)
+
+        departments = {row.group_id: row for row in result.departments.rows}
+        assert departments["DEPT"].mean_hb == pytest.approx(25.0 / 3.0)
+        assert departments["DEPT"].hb_order_n == 3
+
+    def test_omitting_order_labs_leaves_mean_fields_defaulted(self) -> None:
+        # Existing callers pass no lab mapping and must be unaffected.
+        verdicts, reqno_to_doctor, registry, _labs = _mean_hb_scenario()
+        result = build_rankings(
+            verdicts=verdicts,
+            reqno_to_doctor=reqno_to_doctor,
+            dct_registry=registry,
+            min_orders=1,
+        )
+        for table in (result.doctors, result.departments):
+            for row in table.rows:
+                assert row.mean_hb is None
+                assert row.hb_order_n == 0
+
+    def test_rank_top_n_without_group_stats_defaults_mean(self) -> None:
+        card = PhysicianScorecard(
+            physician_id="d1",
+            physician_name="D1",
+            ward_id="DEPT",
+            total_orders=3,
+            appropriate_count=1,
+            inappropriate_count=2,
+            needs_review_count=0,
+            insufficient_evidence_count=0,
+            average_confidence=0.0,
+        )
+        rows = rank_doctor_scorecards((card,), "inappropriate", min_orders=1)
+        assert rows[0].mean_hb is None
+        assert rows[0].hb_order_n == 0
+
+
+class TestMeanHbOutput:
+    def test_csv_appends_populated_mean_and_count(self, tmp_path: Path) -> None:
+        verdicts, reqno_to_doctor, registry, order_labs = _mean_hb_scenario()
+        result = build_rankings(
+            verdicts=verdicts,
+            reqno_to_doctor=reqno_to_doctor,
+            dct_registry=registry,
+            order_labs=order_labs,
+            min_orders=1,
+        )
+        out = write_ranking_csv(result.doctors.rows, tmp_path / "doctors.csv")
+        text = out.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        assert lines[0].endswith(",mean_hb_g_dl,hb_order_n")
+        d1_line = next(line for line in lines[1:] if line.split(",")[1] == "d1")
+        # d1 mean is 9.0 over 2 orders — raw values appended at the end.
+        assert d1_line.endswith(",9.0,2")
+
+    def test_html_renders_mean_with_n_and_emdash_and_caveat(
+        self, tmp_path: Path
+    ) -> None:
+        verdicts, reqno_to_doctor, registry, order_labs = _mean_hb_scenario()
+        # d2 orders only platelets? No — give a doctor with no usable Hb by
+        # dropping its lab so the em-dash path renders.
+        order_labs = dict(order_labs)
+        del order_labs["r3"]  # d2 now has no usable Hb -> em-dash
+        result = build_rankings(
+            verdicts=verdicts,
+            reqno_to_doctor=reqno_to_doctor,
+            dct_registry=registry,
+            order_labs=order_labs,
+            min_orders=1,
+        )
+        html = write_rankings_html(
+            result, tmp_path / "r.html", verdict_source_label="test"
+        ).read_text(encoding="utf-8")
+        assert "Mean Hb (g/dL)" in html
+        assert "9.0 (n=2)" in html  # d1
+        assert "&mdash;" in html  # d2, no usable Hb
+        assert "mean pre-transfusion" in html  # caveat sentence

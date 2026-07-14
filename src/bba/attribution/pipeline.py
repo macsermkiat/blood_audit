@@ -10,6 +10,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from bba.attribution.lab_stats import (
+    OrderLabValue,
+    aggregate_department_lab_stats,
+    aggregate_doctor_lab_stats,
+)
 from bba.attribution.models import (
     Bucket,
     BucketTotals,
@@ -57,6 +62,7 @@ def build_rankings(
     bucket: Bucket = "inappropriate",
     n: int = DEFAULT_TOP_N,
     min_orders: int = DEFAULT_MIN_ORDERS,
+    order_labs: Mapping[str, OrderLabValue] | None = None,
 ) -> RankingResult:
     """Build both top-N ranking tables plus the reconciliation totals.
 
@@ -64,18 +70,38 @@ def build_rankings(
     metric, consistent with ``inappropriate_rate`` being the ranked
     quantity everywhere else in the report generator. All three bucket
     counts still travel on every row.
+
+    When ``order_labs`` (the per-order lab join from ``report.csv``) is
+    supplied, the mean pre-transfusion trigger is aggregated here — over
+    the same scorable verdict cohort — and threaded onto both tables' rows;
+    omitting it leaves the mean fields at their defaults so existing
+    callers are unaffected.
     """
+    doctor_stats = (
+        aggregate_doctor_lab_stats(verdicts, reqno_to_doctor, order_labs)
+        if order_labs is not None
+        else None
+    )
+    department_stats = (
+        aggregate_department_lab_stats(
+            verdicts, reqno_to_doctor, dct_registry, order_labs
+        )
+        if order_labs is not None
+        else None
+    )
     doctors = rank_doctor_scorecards(
         build_doctor_scorecards(verdicts, reqno_to_doctor, dct_registry),
         bucket,
         n=n,
         min_orders=min_orders,
+        group_stats=doctor_stats,
     )
     departments = rank_department_scorecards(
         build_department_scorecards(verdicts, reqno_to_doctor, dct_registry),
         bucket,
         n=n,
         min_orders=min_orders,
+        group_stats=department_stats,
     )
     return RankingResult(
         doctors=RankingTable(
