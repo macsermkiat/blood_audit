@@ -98,21 +98,29 @@ BDVSTDT_COLS = [
     "ITEMNO",
     "UNITAMT",
 ]
-# BDVSTTRANS is a unit-level returns ledger keyed by REQNO (not HN/AN, which the
-# real file does not carry). Casing here matches the raw file so the pilot's
-# _normalize_bdvsttrans (which uppercases) and build_review's _field(...,
-# "REQNO", "Reqno") both resolve the columns.
+# BDVSTTRANS is a unit-level returns ledger keyed by REQNO. The complete export
+# also carries HN/AN identifiers, per-unit DNRNO/SEQNO (the physical-unit key
+# summarize_returns dedups lifecycle rows on), and GIVEDATE/GIVETIME (the
+# transfusion time, present iff UNITSTAT=5). Names match the raw UPPERCASE
+# header; _filter resolves them case-insensitively so a header-casing change
+# does not silently blank the columns.
 BDVSTTRANS_COLS = [
-    "Reqno",
-    "Bdtype",
-    "Unitstat",
-    "Paydate",
-    "Paytime",
-    "Rtndate",
-    "Rtntime",
-    "Offdate",
-    "Qtyuse",
-    "Payoutflag",
+    "REQNO",
+    "HN",
+    "AN",
+    "BDTYPE",
+    "DNRNO",
+    "SEQNO",
+    "UNITSTAT",
+    "PAYDATE",
+    "PAYTIME",
+    "RTNDATE",
+    "RTNTIME",
+    "GIVEDATE",
+    "GIVETIME",
+    "OFFDATE",
+    "QTYUSE",
+    "PAYOUTFLAG",
 ]
 
 
@@ -129,7 +137,13 @@ def _filter(src_name: str, dst_name: str, predicate, *, cols=None) -> int:
                 n_in += 1
                 if predicate(row):
                     n_out += 1
-                    writer.writerow({c: row.get(c, "") for c in out_header})
+                    # Resolve each requested column case-insensitively so a col
+                    # list survives a raw-export header casing change (the
+                    # complete BDVSTTRANS ships UPPERCASE headers).
+                    lower = {k.lower(): v for k, v in row.items()}
+                    writer.writerow(
+                        {c: row.get(c, lower.get(c.lower(), "")) for c in out_header}
+                    )
     print(f"  {src_name:32s} -> {dst_name:24s} {n_out:>8d}/{n_in:<8d}")
     return n_out
 
