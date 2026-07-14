@@ -92,6 +92,18 @@ def _resolve_verdicts() -> tuple[Mapping[str, str], str]:
                 "BBA_VERDICT_SOURCE=pipeline requires BBA_AUDIT_STORE_DIR or "
                 "BBA_DATA_DIR to locate the audit store"
             )
+        # Require an explicit single run scope. Without BBA_RUN_ID the store read
+        # spans every committed run/version, and pipeline_verdict_source only
+        # rejects a REQNO carrying *different* verdicts — disjoint partial reruns
+        # (or duplicate same-verdict rows) would silently merge into one ranking.
+        # The scorecard must be built from one run, mirroring the report builder's
+        # single-run/version contract.
+        if not RUN_ID:
+            raise SystemExit(
+                "BBA_VERDICT_SOURCE=pipeline requires BBA_RUN_ID to scope the "
+                "read to a single run; ranking across mixed runs would silently "
+                "merge disjoint verdicts"
+            )
         audit_store_dir = Path(_AUDIT_STORE_RAW)
         if not audit_store_dir.exists():
             raise SystemExit(
