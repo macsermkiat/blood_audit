@@ -84,7 +84,7 @@ from bba.deterministic_classifier import (
 from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import ClassifierInputs
 from bba.feature_flags import RETURNS_LEDGER_ENABLED
-from bba.returns_ledger import ReturnsSummary, summarize_returns
+from bba.returns_ledger import ReturnsSummary, rows_for_admission, summarize_returns
 from bba.evidence_bundle_builder import (
     DiagnosisRecord,
     EvidenceInputs,
@@ -1263,7 +1263,9 @@ def main() -> None:
                     audit_id=order.audit_id,
                     order_datetime=order.order_datetime,
                     returns_summary=summarize_returns(
-                        bdvsttrans_by_reqno.get(order.reqno, []),
+                        rows_for_admission(
+                            bdvsttrans_by_reqno.get(order.reqno, []), order.an
+                        ),
                         unitamt_lines_by_reqno.get(order.reqno, []),
                     ),
                     periop=bundle.periop_summary,
@@ -1727,7 +1729,7 @@ def main() -> None:
         returns_summary: ReturnsSummary | None = None
         if RETURNS_LEDGER_ENABLED:
             returns_summary = summarize_returns(
-                bdvsttrans_by_reqno.get(order.reqno, []),
+                rows_for_admission(bdvsttrans_by_reqno.get(order.reqno, []), order.an),
                 unitamt_lines_by_reqno.get(order.reqno, []),
             )
 

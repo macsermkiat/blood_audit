@@ -14,7 +14,7 @@ tests pin the small, pure decision functions it is built from:
   ``summarize_returns`` produced).
 * ``administration_recall_conflicts`` — the ให้เลือด administration-note recall
   harness over the screened orders.
-* ``recommendation`` — the deterministic go / narrow / hold gate.
+* ``recommendation`` — the deterministic go / hold gate.
 """
 
 from __future__ import annotations
@@ -114,50 +114,19 @@ def test_is_reissue_false_when_ordered_unknown() -> None:
     assert PF.is_reissue(s) is False
 
 
-# --- is_over_dispense_guard_excluded (NARROW transparency) --------------------
+# --- relaxed over-dispense guard (complete-ledger go-live) --------------------
 
 
-def test_over_dispense_guard_excluded_true_for_over_dispensed_all_returned() -> None:
-    # All units returned but the ledger count exceeds the ordered amount: the
-    # disposition guard derives this inconclusive (spec #119 NARROW), so it is
-    # excluded from the screen. The pre-flight surfaces it so the sign-off still
-    # documents which orders the guard dropped.
+def test_over_dispensed_all_returned_now_screens_not_transfused() -> None:
+    # With a guaranteed-complete ledger an over-dispensed all-returned order
+    # genuinely had ALL its units returned, so it screens not_transfused — the
+    # earlier NARROW exact-count guard is relaxed (spec #119 complete-ledger
+    # go-live). It is still surfaced as a reissue for the sign-off.
     s = ReturnsSummary(
         units_total=3, units_returned=3, ordered_unit_amount=2, ledger_complete=True
     )
-    assert s.disposition == "inconclusive"
-    assert PF.is_over_dispense_guard_excluded(s) is True
-
-
-def test_over_dispense_guard_excluded_false_for_exact_all_returned() -> None:
-    # An exactly-accounted all-returned order IS screened (not_transfused), so it
-    # is not a guard exclusion.
-    s = ReturnsSummary(
-        units_total=2, units_returned=2, ordered_unit_amount=2, ledger_complete=True
-    )
     assert s.disposition == "not_transfused"
-    assert PF.is_over_dispense_guard_excluded(s) is False
-
-
-def test_over_dispense_guard_excluded_false_for_transfused() -> None:
-    # A non-returned unit means transfused; over-dispense there is benign and
-    # stays transfused, so it is not a not-transfused-screen exclusion.
-    s = ReturnsSummary(
-        units_total=3,
-        units_returned=1,
-        units_transfused=0,
-        ordered_unit_amount=2,
-        ledger_complete=True,
-    )
-    assert s.disposition == "transfused"
-    assert PF.is_over_dispense_guard_excluded(s) is False
-
-
-def test_over_dispense_guard_excluded_false_for_incomplete() -> None:
-    # An incomplete ledger is inconclusive for coverage reasons, not the
-    # over-dispense guard; it is not counted as a NARROW exclusion.
-    s = ReturnsSummary(units_total=1, units_returned=1, ledger_complete=False)
-    assert PF.is_over_dispense_guard_excluded(s) is False
+    assert PF.is_reissue(s) is True
 
 
 # --- hard_transfusion_contradiction / screened predicate ---------------------
@@ -283,6 +252,36 @@ def test_nonreturned_unit_count_handles_blank_and_missing() -> None:
     assert PF.nonreturned_unit_count(rows) == 2
 
 
+def test_nonreturned_unit_count_treats_incompatible_as_non_transfusion() -> None:
+    # Unitstat=7 (crossmatch-incompatible) was never given, so it does NOT count
+    # as evidence of a transfusion: an all-returned-or-incompatible order has zero
+    # non-returned units and can screen not_transfused (spec #119 "fix status 7").
+    rows = [{"UNITSTAT": "3"}, {"UNITSTAT": "7"}]
+    assert PF.nonreturned_unit_count(rows) == 0
+
+
+def test_nonreturned_unit_count_collapses_lifecycle_rows() -> None:
+    # A unit dispensed then returned is ONE physical unit (shared full key
+    # DNRNO/SEQNO/BDTYPE); collapsed to its terminal returned status it is not a
+    # non-returned unit, so the dispense row does not inflate the invariant count.
+    rows = [
+        {"UNITSTAT": "2", "DNRNO": "U1", "SEQNO": "0", "BDTYPE": "LDPRC2"},
+        {"UNITSTAT": "3", "DNRNO": "U1", "SEQNO": "0", "BDTYPE": "LDPRC2"},
+    ]
+    assert PF.nonreturned_unit_count(rows) == 0
+
+
+def test_nonreturned_unit_count_fails_closed_on_partial_key() -> None:
+    # A dispense + return sharing only DNRNO (no SEQNO/BDTYPE) must NOT collapse:
+    # the dispensed unit stays counted so the invariant catches a possible
+    # transfusion rather than silently clearing it.
+    rows = [
+        {"UNITSTAT": "2", "DNRNO": "U1"},
+        {"UNITSTAT": "3", "DNRNO": "U1"},
+    ]
+    assert PF.nonreturned_unit_count(rows) == 1
+
+
 def test_invariant_holds_for_summarize_not_transfused() -> None:
     """A summarize_returns not_transfused disposition implies zero non-returned units.
 
@@ -324,7 +323,17 @@ def test_recall_ignores_planning_and_reservation_notes() -> None:
 # --- windowed recall (temporal attribution) ----------------------------------
 
 
-def test_parse_ledger_date_us_long_format() -> None:
+def test_parse_ledger_date_iso_format() -> None:
+    # The complete production export uses ISO datetimes with fractional seconds.
+    from datetime import date as _date
+
+    assert PF.parse_ledger_date("2025-03-31 15:29:00.000") == _date(2025, 3, 31)
+    assert PF.parse_ledger_date("2025-07-09 00:00:00.000") == _date(2025, 7, 9)
+    assert PF.parse_ledger_date("2025-03-31") == _date(2025, 3, 31)
+
+
+def test_parse_ledger_date_us_long_format_still_accepted() -> None:
+    # The earlier partial export's US long datetime remains parseable.
     from datetime import date as _date
 
     assert PF.parse_ledger_date("March 31, 2025, 3:29 PM") == _date(2025, 3, 31)
@@ -335,7 +344,7 @@ def test_parse_ledger_date_returns_none_on_garbage_or_blank() -> None:
     # Fail SAFE: an unparseable date leaves the order unwindowable -> caller
     # keeps the full admission notes rather than dropping a possible marker.
     assert PF.parse_ledger_date("") is None
-    assert PF.parse_ledger_date("2025-03-31") is None  # ISO is not this column's format
+    assert PF.parse_ledger_date("not a date") is None
     assert PF.parse_ledger_date(None) is None
 
 
@@ -407,6 +416,125 @@ def test_explaining_sibling_ignores_returned_or_out_of_window() -> None:
     )
 
 
+def test_explaining_sibling_matches_on_give_date_when_dispensed_earlier() -> None:
+    # A sibling transfused (GIVEDATE) inside the window explains the note even if
+    # it was dispensed before the window opened (spec #119 GIVEDATE anchor).
+    from datetime import date as _date
+
+    window = (_date(2025, 4, 1), _date(2025, 4, 5))
+    sib = PF.SiblingUnit(
+        "O1",
+        _date(2025, 3, 20),
+        is_returned=False,
+        status="5",
+        give_date=_date(2025, 4, 3),
+    )
+    match = PF.explaining_sibling(window, (sib,))
+    assert match is not None and match.reqno == "O1"
+
+
+def test_recall_conflict_note_dates_are_json_serializable() -> None:
+    # RecallConflict.note_dates holds datetime.date objects; _write_artifact
+    # json.dumps(asdict(result), ...) must not crash on them. Guard the exact
+    # encoder options _write_artifact uses (default=str) so the machine-readable
+    # HOLD/GO artifact is always written.
+    import json
+    from dataclasses import asdict
+    from datetime import date as _date
+
+    conflict = PF.RecallConflict(
+        reqno="R1",
+        categories=("gave_blood",),
+        snippets=("x",),
+        note_dates=(_date(2025, 4, 2),),
+    )
+    dumped = json.dumps(asdict(conflict), ensure_ascii=False, default=str)
+    assert "2025-04-02" in dumped
+
+
+def test_recall_conflict_records_marker_note_dates() -> None:
+    # Attribution is note-specific, so the conflict must carry the date(s) of the
+    # notes that actually flagged — not just the padded order window.
+    conflicts = PF.administration_recall_conflicts(
+        {
+            "R1": (
+                _note("nothing here", at=datetime(2025, 4, 1, tzinfo=UTC)),
+                _note(
+                    "ให้เลือด LPRC 1 unit iv drip in 4 hr",
+                    at=datetime(2025, 4, 5, tzinfo=UTC),
+                ),
+            )
+        }
+    )
+    from datetime import date as _date
+
+    assert len(conflicts) == 1
+    assert conflicts[0].note_dates == (_date(2025, 4, 5),)
+
+
+def test_sibling_units_scope_to_admission_and_dedup() -> None:
+    # A sibling REQNO can appear under >1 admission in the complete export, and
+    # its rows may be lifecycle rows of one physical unit. _sibling_units_for must
+    # (a) drop rows of a foreign AN and (b) collapse (DNRNO,SEQNO,BDTYPE) rows to
+    # one physical unit at its terminal status.
+    reqnos_by_an = {"ANx": {"OWN", "SIB"}}
+    trans_by_reqno = {
+        "SIB": [
+            # this admission: dispensed then returned -> one returned unit
+            {
+                "AN": "ANx",
+                "DNRNO": "D1",
+                "SEQNO": "0",
+                "BDTYPE": "LDPRC2",
+                "UNITSTAT": "2",
+                "PAYDATE": "2025-04-01 00:00:00.000",
+            },
+            {
+                "AN": "ANx",
+                "DNRNO": "D1",
+                "SEQNO": "0",
+                "BDTYPE": "LDPRC2",
+                "UNITSTAT": "3",
+                "PAYDATE": "2025-04-01 00:00:00.000",
+            },
+            # a DIFFERENT admission's dispensed unit must be excluded
+            {
+                "AN": "ANy",
+                "DNRNO": "D9",
+                "SEQNO": "0",
+                "BDTYPE": "LDPRC2",
+                "UNITSTAT": "2",
+                "PAYDATE": "2025-04-02 00:00:00.000",
+            },
+        ]
+    }
+    units = PF._sibling_units_for("ANx", "OWN", reqnos_by_an, trans_by_reqno)
+    assert len(units) == 1  # foreign-AN row excluded; lifecycle rows collapsed
+    assert units[0].is_returned is True  # terminal returned -> not a source
+    assert units[0].status == "3"
+
+
+def test_sibling_incompatible_unit_is_not_a_source() -> None:
+    # A crossmatch-incompatible (Unitstat=7) sibling was never given, so it must
+    # not be treated as a transfusion source that suppresses a recall conflict.
+    reqnos_by_an = {"ANx": {"OWN", "SIB"}}
+    trans_by_reqno = {
+        "SIB": [
+            {
+                "AN": "ANx",
+                "DNRNO": "D1",
+                "SEQNO": "0",
+                "BDTYPE": "LDPRC2",
+                "UNITSTAT": "7",
+                "PAYDATE": "2025-04-01 00:00:00.000",
+            }
+        ]
+    }
+    units = PF._sibling_units_for("ANx", "OWN", reqnos_by_an, trans_by_reqno)
+    assert len(units) == 1
+    assert units[0].is_returned is True  # incompatible -> not a transfusion source
+
+
 def test_explaining_sibling_picks_earliest_deterministically() -> None:
     from datetime import date as _date
 
@@ -442,7 +570,6 @@ def test_recommendation_go_when_all_clean() -> None:
         PF.recommendation(
             screened_count=41,
             notes_available=True,
-            reissue_count=0,
             recall_conflicts=0,
             invariant_violations=0,
         )
@@ -450,16 +577,18 @@ def test_recommendation_go_when_all_clean() -> None:
     )
 
 
-def test_recommendation_narrow_when_only_reissue() -> None:
+def test_recommendation_go_even_with_reissue_on_complete_ledger() -> None:
+    # A reissue / over-dispense is no longer a gate trigger: on a complete ledger
+    # an over-dispensed all-returned order is safe to screen, and any transfusion
+    # it might hide is caught by the recall check (spec #119 complete-ledger).
     assert (
         PF.recommendation(
             screened_count=41,
             notes_available=True,
-            reissue_count=2,
             recall_conflicts=0,
             invariant_violations=0,
         )
-        == "NARROW"
+        == "GO"
     )
 
 
@@ -468,7 +597,6 @@ def test_recommendation_hold_when_recall_conflict() -> None:
         PF.recommendation(
             screened_count=41,
             notes_available=True,
-            reissue_count=0,
             recall_conflicts=3,
             invariant_violations=0,
         )
@@ -481,7 +609,6 @@ def test_recommendation_hold_when_invariant_violated() -> None:
         PF.recommendation(
             screened_count=41,
             notes_available=True,
-            reissue_count=0,
             recall_conflicts=0,
             invariant_violations=1,
         )
@@ -496,7 +623,6 @@ def test_recommendation_hold_when_nothing_screened() -> None:
         PF.recommendation(
             screened_count=0,
             notes_available=True,
-            reissue_count=0,
             recall_conflicts=0,
             invariant_violations=0,
         )
@@ -510,7 +636,6 @@ def test_recommendation_hold_when_notes_missing() -> None:
         PF.recommendation(
             screened_count=41,
             notes_available=False,
-            reissue_count=0,
             recall_conflicts=0,
             invariant_violations=0,
         )

@@ -21,7 +21,7 @@ before go-live:
    the gate; admission-wide over-flags separate transfusions in a long stay).
 3. **Invariant** — zero screened orders contain a non-returned unit, re-derived
    from the raw ledger rows so it cannot false-pass off ``summarize_returns``.
-4. A short **sign-off summary** with a go / narrow / hold recommendation.
+4. A short **sign-off summary** with a go / hold recommendation.
 
 The count is reconciled in layers so the "real 55-order count" (deferred from
 #122/#123/#124) is auditable: raw all-returned (300) -> among audited orders ->
@@ -55,7 +55,13 @@ from bba.audit_orders import (
     build_audit_orders,
 )
 from bba.deterministic_classifier import PERIOP_MIN_EBL_ML
-from bba.returns_ledger import ReturnsSummary, summarize_returns
+from bba.returns_ledger import (
+    ReturnsSummary,
+    physical_units,
+    rows_for_admission,
+    summarize_returns,
+    terminal_status,
+)
 from bba.vitals_extractor import VitalsNote, scan_periop
 from bba.vitals_extractor.administration import scan_administration
 
@@ -72,6 +78,12 @@ CODE_VERSION = "pilot-mini"
 # constant summarize_returns uses. Re-stated here so the invariant check reads
 # the raw rows independently of the summary's own counters.
 _RETURNED_STATUS = "3"
+
+# Non-transfusion terminal statuses: a physical unit that ended returned (3) or
+# crossmatch-incompatible (7) was never given (spec #119 complete-ledger ingest,
+# "fix status 7" decision). The invariant counts a screened order's units NOT in
+# this set as evidence of a transfusion the terminal would hide.
+_NON_TRANSFUSION_STATUSES = frozenset({"3", "7"})
 
 # Windowed-recall padding (days) around an order's dispense->return interval.
 # An administration of THIS order's standby units is charted while the units are
@@ -94,35 +106,19 @@ _RAW_BDVSTTRANS_DEFAULT = (
 
 
 def is_reissue(summary: ReturnsSummary) -> bool:
-    """Whether a ledger-complete order's unit count disagrees with the order.
+    """Whether a ledger-complete order has more physical units than ordered.
 
-    A complete ledger with more physical units than were ordered signals a
-    reissued / replacement unit. On the screened set (all complete) this is the
-    visible face of the residual risk that a partial export could instead be
-    *hiding* a transfused replacement unit (spec #119 Risk 1).
+    A reissue / over-dispense. With a guaranteed-complete ledger an
+    over-dispensed all-returned order genuinely had ALL its units returned, so
+    this is now INFORMATIONAL (surfaced for the sign-off) rather than a go-live
+    blocker — the earlier partial-export hidden-unit risk that made it a NARROW
+    trigger is gone (spec #119 complete-ledger go-live). ``units_total`` counts
+    distinct physical units after lifecycle-row collapsing.
     """
     return (
         summary.ledger_complete
         and summary.ordered_unit_amount is not None
         and summary.units_total != summary.ordered_unit_amount
-    )
-
-
-def is_over_dispense_guard_excluded(summary: ReturnsSummary) -> bool:
-    """An all-returned order the disposition guard now excludes from the screen.
-
-    A ledger-complete order whose units are ALL returned but whose count
-    exceeds the ordered amount is an over-dispensed reissue: ``summarize_returns``
-    derives it ``inconclusive`` (spec #119 NARROW), so it never reaches the
-    screened ``not_transfused`` set. Surfaced separately so the clinician
-    sign-off still documents which orders the NARROW guard excluded, rather than
-    silently folding them into the inconclusive bucket.
-    """
-    return (
-        summary.ledger_complete
-        and summary.units_total > 0
-        and summary.units_returned == summary.units_total
-        and summary.disposition == "inconclusive"
     )
 
 
@@ -162,26 +158,36 @@ def is_screened_returned_not_transfused(
 
 
 def nonreturned_unit_count(trans_rows: Sequence[Mapping[str, str]]) -> int:
-    """Count ledger rows whose ``UNITSTAT`` is not the returned status.
+    """Count physical units whose terminal status implies a transfusion.
 
-    Re-derived straight from the raw rows (not from ``ReturnsSummary``'s
-    counters) so the "no screened order contains a non-returned unit" invariant
-    is an independent check, not a tautology over the same aggregation.
+    Collapses lifecycle rows to one terminal status per physical unit
+    (:func:`physical_units`) and counts those NOT in the non-transfusion set
+    (returned=3 or crossmatch-incompatible=7). Re-derived from the raw rows,
+    not from ``ReturnsSummary``'s counters, so the "no screened order hides a
+    transfusion" invariant is an independent check rather than a tautology over
+    the same aggregation.
     """
     return sum(
         1
-        for r in trans_rows
-        if str(r.get("UNITSTAT") or "").strip() != _RETURNED_STATUS
+        for status in physical_units(trans_rows)
+        if status not in _NON_TRANSFUSION_STATUSES
     )
 
 
 @dataclass(frozen=True)
 class RecallConflict:
-    """A screened order carrying an affirmative administration note."""
+    """A screened order carrying an affirmative administration note.
+
+    ``note_dates`` are the dates of the individual notes that carry an
+    affirmative marker, so sibling attribution can be NOTE-specific (a sibling
+    must be active near the conflicting note, not merely somewhere in the order
+    window).
+    """
 
     reqno: str
     categories: tuple[str, ...]
     snippets: tuple[str, ...]
+    note_dates: tuple[date, ...] = ()
 
 
 def administration_recall_conflicts(
@@ -192,25 +198,42 @@ def administration_recall_conflicts(
     Any affirmative red-cell administration marker on a screened (all-returned)
     order is a CONFLICT: the ``RETURNED_NOT_TRANSFUSED`` terminal would hide a
     charted administration. Delegates recall to the shipped, precision-favoured
-    :func:`scan_administration`.
+    :func:`scan_administration`. Each conflict also records the dates of the
+    individual notes that carry a marker (re-scanned per note) so attribution can
+    match a sibling to the note's date, not just the padded order window.
     """
     conflicts: list[RecallConflict] = []
     for reqno in sorted(screened_notes):
-        summary = scan_administration(screened_notes[reqno])
+        notes = screened_notes[reqno]
+        summary = scan_administration(notes)
         if summary.has_affirmative_marker:
+            note_dates = tuple(
+                sorted(
+                    {
+                        n.timestamp.date()
+                        for n in notes
+                        if scan_administration([n]).has_affirmative_marker
+                    }
+                )
+            )
             conflicts.append(
                 RecallConflict(
                     reqno=reqno,
                     categories=tuple(f.category for f in summary.findings),
                     snippets=tuple(f.snippet for f in summary.findings),
+                    note_dates=note_dates,
                 )
             )
     return tuple(conflicts)
 
 
 def parse_ledger_date(raw: str | None) -> date | None:
-    """Parse a BDVSTTRANS PAYDATE/RTNDATE (``'March 31, 2025, 3:29 PM'``).
+    """Parse a BDVSTTRANS PAYDATE/RTNDATE/GIVEDATE date component.
 
+    The complete production export uses ISO datetimes
+    (``'2025-03-31 15:29:00.000'``); an earlier partial export used a US long
+    datetime (``'March 31, 2025, 3:29 PM'``). Both are accepted — the ISO form
+    is parsed like ``_parse_hosxp_date`` (date component before the space).
     Returns ``None`` on any unrecognised/blank value so the caller fails SAFE —
     an unwindowable order keeps its full admission-wide notes rather than
     silently dropping a possible administration.
@@ -218,6 +241,10 @@ def parse_ledger_date(raw: str | None) -> date | None:
     text = (raw or "").strip()
     if not text:
         return None
+    try:
+        return date.fromisoformat(text.split(" ", 1)[0])
+    except ValueError:
+        pass
     for fmt in ("%B %d, %Y, %I:%M %p", "%B %d, %Y"):
         try:
             return datetime.strptime(text, fmt).date()
@@ -255,71 +282,86 @@ def notes_in_window(
 
 @dataclass(frozen=True)
 class SiblingUnit:
-    """One ledger unit of a DIFFERENT order in the same admission."""
+    """One ledger unit of a DIFFERENT order in the same admission.
+
+    ``give_date`` is the unit's transfusion date (GIVEDATE, present iff the unit
+    was transfused, UNITSTAT=5) — a second anchor that catches a sibling
+    transfused during the screened order's standby window even when it was
+    dispensed earlier.
+    """
 
     reqno: str
     dispense_date: date | None
     is_returned: bool
     status: str
+    give_date: date | None = None
 
 
 def explaining_sibling(
     window: tuple[date, date] | None, sibling_units: Sequence[SiblingUnit]
 ) -> SiblingUnit | None:
-    """A sibling order's NOT-returned unit dispensed inside ``window``, or None.
+    """A sibling order's NOT-returned unit active inside ``window``, or None.
 
     When a screened (all-returned) order carries an in-window administration
     note, a not-returned unit of a *different* order in the same admission,
-    dispensed while the screened standby units were out, is the parsimonious
-    source of that note — so the note is attributed there rather than to the
-    returned order (the automated form of the 68019920 -> 68020779
-    adjudication). Conservative: fires only on a concrete dispensed-not-returned
-    unit, and every attribution is reported for human audit. Returns the
-    earliest-dispensed matching unit (deterministic).
+    dispensed OR transfused while the screened standby units were out, is the
+    parsimonious source of that note — so the note is attributed there rather
+    than to the returned order (the automated form of the 68019920 -> 68020779
+    adjudication). Conservative: fires only on a concrete not-returned unit, and
+    every attribution is reported for human audit. Returns the earliest-anchored
+    matching unit (deterministic).
     """
     if window is None:
         return None
     lo, hi = window
+
+    def _in_window(d: date | None) -> bool:
+        return d is not None and lo <= d <= hi
+
     matches = [
         u
         for u in sibling_units
-        if u.dispense_date is not None
-        and lo <= u.dispense_date <= hi
-        and not u.is_returned
+        if not u.is_returned
+        and (_in_window(u.dispense_date) or _in_window(u.give_date))
     ]
     if not matches:
         return None
-    return sorted(matches, key=lambda u: (u.dispense_date, u.reqno))[0]
+
+    def _anchor(u: SiblingUnit) -> date:
+        return u.dispense_date or u.give_date or date.max
+
+    return sorted(matches, key=lambda u: (_anchor(u), u.reqno))[0]
 
 
 def recommendation(
     *,
     screened_count: int,
     notes_available: bool,
-    reissue_count: int,
     recall_conflicts: int,
     invariant_violations: int,
 ) -> str:
-    """Deterministic go / narrow / hold gate for the clinician sign-off.
+    """Deterministic go / hold gate for the clinician sign-off.
 
     Absence of evidence is NOT clean (Codex critical): an empty/misjoined ledger
     screens nothing, and missing note exports make recall vacuous — neither may
-    read as GO. So GO/NARROW require actual coverage first:
+    read as GO. So GO requires actual coverage first:
 
     * HOLD when there is nothing to validate (``screened_count == 0``) or recall
       cannot be assessed (``notes_available`` is False), OR when recall is not
       clean / the invariant is violated (a screened order may hide a real
       transfusion — correctness-threatening).
-    * NARROW when coverage exists, recall is clean and the invariant holds but a
-      reissue signal is present — go live only on the count-agreeing orders.
-    * GO only when there is coverage AND every check is clean.
+    * GO when there is coverage AND every check is clean.
+
+    A reissue / over-dispense signal is no longer a gate trigger: with a
+    guaranteed-complete ledger an over-dispensed all-returned order genuinely had
+    all its units returned (spec #119 complete-ledger go-live relaxed the NARROW
+    guard). Reissues are still reported for the sign-off, and any transfusion one
+    might hide is caught by the recall check above.
     """
     if screened_count == 0 or not notes_available:
         return "HOLD"
     if recall_conflicts > 0 or invariant_violations > 0:
         return "HOLD"
-    if reissue_count > 0:
-        return "NARROW"
     return "GO"
 
 
@@ -348,12 +390,17 @@ class InvariantViolation:
 
 @dataclass(frozen=True)
 class NoteAttribution:
-    """A windowed recall hit attributed to a different same-admission order."""
+    """A windowed recall hit attributed to a different same-admission order.
+
+    One record per conflicting note DATE that a sibling explains, so a conflict
+    is only suppressed when EVERY affirmative note date is attributed.
+    """
 
     reqno: str
     attributed_to: str
     dispensed: str
     status: str
+    note_date: str
 
 
 @dataclass(frozen=True)
@@ -382,9 +429,6 @@ class PreflightResult:
     invariant_violations: list[InvariantViolation]
     recommendation: str
     screened_reqnos: list[str] = field(default_factory=list)
-    # Over-dispensed all-returned orders the NARROW guard excludes from the
-    # screen (they derive `inconclusive`, so they never enter `screened`).
-    over_dispense_guard_excluded: list[ReissueFinding] = field(default_factory=list)
 
 
 # --- bundle loading (read-only) ----------------------------------------------
@@ -479,19 +523,51 @@ def _sibling_units_for(
     reqnos_by_an: Mapping[str, set[str]],
     trans_by_reqno: Mapping[str, list[dict[str, str]]],
 ) -> list[SiblingUnit]:
-    """Ledger units of every OTHER order in ``an`` (same admission)."""
+    """Physical units of every OTHER order in ``an`` (same admission).
+
+    A sibling only qualifies as an administration source if it is a real
+    transfusion, so this mirrors the disposition semantics: rows are scoped to
+    ``an`` (a REQNO can recur under several admissions in the complete export),
+    deduped to one physical unit per ``(DNRNO, SEQNO, BDTYPE)``, and a unit whose
+    terminal status is returned or crossmatch-incompatible is marked
+    ``is_returned`` so it can never explain (suppress) a recall conflict.
+    """
     units: list[SiblingUnit] = []
     for reqno in reqnos_by_an.get(an, set()):
         if reqno == own_reqno:
             continue
-        for u in trans_by_reqno.get(reqno, []):
-            status = str(u.get("UNITSTAT") or "").strip()
+        groups: dict[tuple[object, ...], list[dict[str, str]]] = {}
+        order: list[tuple[object, ...]] = []
+        # Scope to THIS admission first (a REQNO can recur across admissions).
+        for idx, u in enumerate(rows_for_admission(trans_by_reqno.get(reqno, []), an)):
+            dnrno = str(u.get("DNRNO") or "").strip()
+            seqno = str(u.get("SEQNO") or "").strip()
+            bdtype = str(u.get("BDTYPE") or "").strip()
+            # Fail closed on a partial key exactly like physical_units(): a row
+            # missing any component is its own unit, so a returned row can never
+            # be grouped with a transfused one and mis-read as a not-returned
+            # source that suppresses a conflict.
+            key: tuple[object, ...] = (
+                (dnrno, seqno, bdtype) if (dnrno and seqno and bdtype) else (None, idx)
+            )
+            if key not in groups:
+                groups[key] = []
+                order.append(key)
+            groups[key].append(u)
+        for key in order:
+            rows = groups[key]
+            term = terminal_status([str(r.get("UNITSTAT") or "").strip() for r in rows])
+            pay_dates = [d for r in rows if (d := parse_ledger_date(r.get("PAYDATE")))]
+            give_dates = [
+                d for r in rows if (d := parse_ledger_date(r.get("GIVEDATE")))
+            ]
             units.append(
                 SiblingUnit(
                     reqno=reqno,
-                    dispense_date=parse_ledger_date(u.get("PAYDATE")),
-                    is_returned=status == _RETURNED_STATUS,
-                    status=status,
+                    dispense_date=min(pay_dates) if pay_dates else None,
+                    is_returned=term in _NON_TRANSFUSION_STATUSES,
+                    status=term,
+                    give_date=min(give_dates) if give_dates else None,
                 )
             )
     return units
@@ -506,9 +582,12 @@ def run_preflight() -> PreflightResult:
     diag = _read_csv("Diagnosis.csv")
     progress = _read_optional_csv("IPDADMPROGRESS.csv")
     focus = _read_optional_csv("IPDNRFOCUSDT.csv")
-    # Same-admission related orders (sidecar) power windowed-recall attribution:
-    # an in-window note is attributed to a neighbouring dispensed-not-returned
-    # order rather than the returned one. Optional -> attribution just no-ops.
+    # Same-admission related orders power windowed-recall attribution: an
+    # in-window note is attributed to a neighbouring not-returned order rather
+    # than the returned one. The complete BDVSTTRANS export carries AN directly,
+    # so the ledger is the primary AN->REQNO source (below); the bundle's BDVST
+    # and the optional BDVST_RELATED sidecar are merged in as a fallback for
+    # orders absent from the ledger. Both optional -> attribution just no-ops.
     related = _read_optional_csv("BDVST_RELATED.csv")
     reqnos_by_an: dict[str, set[str]] = {}
     for r in [*bdvst, *related]:
@@ -520,6 +599,12 @@ def run_preflight() -> PreflightResult:
     if not bdvsttrans_path.exists():
         sys.exit(f"BDVSTTRANS ledger not found: {bdvsttrans_path}")
     trans_by_reqno = _load_bdvsttrans_by_reqno(bdvsttrans_path)
+    # AN-direct join from the ledger itself (complete export has HN/AN present).
+    for reqno, ledger_rows in trans_by_reqno.items():
+        for r in ledger_rows:
+            an_v = (r.get("AN") or "").strip()
+            if an_v:
+                reqnos_by_an.setdefault(an_v, set()).add(reqno)
 
     products_by_reqno: dict[str, list[str]] = {}
     unitamt_lines_by_reqno: dict[str, list[str]] = {}
@@ -566,16 +651,17 @@ def run_preflight() -> PreflightResult:
     screened_reqnos: list[str] = []
     screened_notes: dict[str, Sequence[VitalsNote]] = {}
     screened_notes_windowed: dict[str, Sequence[VitalsNote]] = {}
-    window_by_reqno: dict[str, tuple[date, date] | None] = {}
     sibling_units_by_reqno: dict[str, list[SiblingUnit]] = {}
     screened_without_notes = 0
     hard_fallthroughs: list[HardFallthrough] = []
     reissue_findings: list[ReissueFinding] = []
-    over_dispense_guard_excluded: list[ReissueFinding] = []
     invariant_violations: list[InvariantViolation] = []
 
     for order in filter_result.included:
-        trans_rows = trans_by_reqno.get(order.reqno, [])
+        # Scope to this order's admission: a REQNO can recur across admissions in
+        # the complete export, so a REQNO-only lookup could feed foreign units to
+        # this order's disposition, windowing, and invariant.
+        trans_rows = rows_for_admission(trans_by_reqno.get(order.reqno, []), order.an)
         summary = summarize_returns(
             trans_rows, unitamt_lines_by_reqno.get(order.reqno, [])
         )
@@ -590,17 +676,6 @@ def run_preflight() -> PreflightResult:
         orders_red_cell += 1
         disposition_counts[summary.disposition] += 1
         if summary.disposition != "not_transfused":
-            # Surface the over-dispensed all-returned orders the NARROW guard
-            # excludes from the screen, so the sign-off documents the excluded
-            # reissues instead of silently folding them into `inconclusive`.
-            if is_over_dispense_guard_excluded(summary):
-                over_dispense_guard_excluded.append(
-                    ReissueFinding(
-                        reqno=order.reqno,
-                        units_total=summary.units_total,
-                        ordered_unit_amount=summary.ordered_unit_amount,
-                    )
-                )
             continue
         not_transfused += 1
 
@@ -634,7 +709,6 @@ def run_preflight() -> PreflightResult:
             + [parse_ledger_date(r.get("RTNDATE")) for r in trans_rows]
         )
         screened_notes_windowed[order.reqno] = notes_in_window(notes, window)
-        window_by_reqno[order.reqno] = window
         sibling_units_by_reqno[order.reqno] = _sibling_units_for(
             order.an or "", order.reqno, reqnos_by_an, trans_by_reqno
         )
@@ -667,27 +741,39 @@ def run_preflight() -> PreflightResult:
         administration_recall_conflicts(screened_notes_windowed)
     )
     # Auto-attribution: demote a windowed conflict when a NOT-returned unit of a
-    # different order in the same admission was dispensed inside the window (the
-    # generalised 68019920 -> 68020779 adjudication). The net count drives the
-    # gate; each attribution is reported for human audit.
+    # different order in the same admission was active NEAR THE CONFLICTING NOTE
+    # (the generalised 68019920 -> 68020779 adjudication). The window is anchored
+    # on the conflicting note's own date(s) — not merely the order's
+    # dispense->return interval — so an unrelated sibling elsewhere in the padded
+    # window cannot suppress a genuine note. The net count drives the gate; each
+    # attribution is reported for human audit.
     recall_conflicts_windowed_net: list[RecallConflict] = []
     note_attributions: list[NoteAttribution] = []
     for conflict in recall_conflicts_windowed:
-        sibling = explaining_sibling(
-            window_by_reqno.get(conflict.reqno),
-            sibling_units_by_reqno.get(conflict.reqno, ()),
-        )
-        if sibling is None:
-            recall_conflicts_windowed_net.append(conflict)
-        else:
-            note_attributions.append(
-                NoteAttribution(
-                    reqno=conflict.reqno,
-                    attributed_to=sibling.reqno,
-                    dispensed=str(sibling.dispense_date),
-                    status=sibling.status,
+        siblings = sibling_units_by_reqno.get(conflict.reqno, ())
+        # Attribute PER conflicting note date: a sibling near an early note must
+        # not suppress a later unexplained note. Each affirmative note date needs
+        # its OWN explaining sibling (windowed to that date) or the conflict is
+        # not suppressed. No parseable note date -> cannot note-anchor -> keep
+        # the conflict (safe).
+        per_note: list[tuple[date, SiblingUnit | None]] = [
+            (d, explaining_sibling(recall_window([d]), siblings))
+            for d in conflict.note_dates
+        ]
+        if conflict.note_dates and all(sib is not None for _, sib in per_note):
+            for note_date, sib in per_note:
+                assert sib is not None  # guarded by the all(...) above
+                note_attributions.append(
+                    NoteAttribution(
+                        reqno=conflict.reqno,
+                        attributed_to=sib.reqno,
+                        dispensed=str(sib.dispense_date or sib.give_date),
+                        status=sib.status,
+                        note_date=str(note_date),
+                    )
                 )
-            )
+        else:
+            recall_conflicts_windowed_net.append(conflict)
 
     return PreflightResult(
         bdvsttrans_source=str(bdvsttrans_path),
@@ -719,12 +805,10 @@ def run_preflight() -> PreflightResult:
         recommendation=recommendation(
             screened_count=len(screened_reqnos),
             notes_available=notes_available,
-            reissue_count=len(reissue_findings),
             recall_conflicts=len(recall_conflicts_windowed_net),
             invariant_violations=len(invariant_violations),
         ),
         screened_reqnos=screened_reqnos,
-        over_dispense_guard_excluded=over_dispense_guard_excluded,
     )
 
 
@@ -792,16 +876,6 @@ def print_report(result: PreflightResult) -> None:
     )
     print(f"  ==> SCREENED as RETURNED_NOT_TRANSFUSED   : {result.screened}")
     print(f"  disposition counts (red-cell audited)    : {result.disposition_counts}")
-    print(
-        f"  over-dispense guard excluded (NARROW)    : "
-        f"{len(result.over_dispense_guard_excluded)}"
-        "  (all-returned but ledger count != ordered -> inconclusive, NOT screened)"
-    )
-    for ex in result.over_dispense_guard_excluded:
-        print(
-            f"      excluded reqno={ex.reqno} ledger_units={ex.units_total} "
-            f"ordered={ex.ordered_unit_amount}"
-        )
     for hf in result.hard_fallthroughs:
         print(
             f"      fall-through reqno={hf.reqno} "
@@ -840,8 +914,8 @@ def print_report(result: PreflightResult) -> None:
     )
     for na in result.note_attributions:
         print(
-            f"      reqno={na.reqno} -> sibling {na.attributed_to} "
-            f"(dispensed {na.dispensed}, status {na.status} not-returned)"
+            f"      reqno={na.reqno} note {na.note_date} -> sibling "
+            f"{na.attributed_to} (active {na.dispensed}, status {na.status})"
         )
     print(
         f"    windowed (pre-attribution): {len(result.recall_conflicts_windowed)}"
@@ -877,17 +951,10 @@ def _signoff_text(result: PreflightResult) -> str:
         f"among the {result.orders_included} audited orders; "
         f"{result.not_transfused} ledger-complete; {result.screened} screened as "
         "RETURNED_NOT_TRANSFUSED after the hard intra-op/EBL guard.",
-        f"NARROW guard excluded   : {len(result.over_dispense_guard_excluded)} "
-        "all-returned order(s) whose ledger unit count != ordered (over-dispensed "
-        "reissue) -> inconclusive, NOT screened"
-        + (
-            f" (reqnos {', '.join(ex.reqno for ex in result.over_dispense_guard_excluded)})."
-            if result.over_dispense_guard_excluded
-            else "."
-        ),
         f"Reissue prevalence      : {reissue_n} / {result.screened} screened orders "
-        f"({_pct(reissue_n, result.screened)}) have a ledger unit count that "
-        "disagrees with the ordered quantity"
+        f"({_pct(reissue_n, result.screened)}) have more physical units than "
+        "ordered (over-dispensed all-returned; informational on a complete ledger, "
+        "not a go-live blocker)"
         + (
             f" (reqnos {', '.join(rf.reqno for rf in result.reissue_findings)})."
             if result.reissue_findings
@@ -939,16 +1006,8 @@ def _recommendation_rationale(result: PreflightResult) -> str:
         return (
             "  Do NOT flip RETURNS_LEDGER_ENABLED on yet. "
             + "; ".join(reasons)
-            + ". Adjudicate the flagged orders with the blood bank and request a "
-            "guaranteed-complete ledger before go-live, or NARROW the screen to "
-            "exclude the flagged reqnos."
-        )
-    if result.recommendation == "NARROW":
-        return (
-            "  Recall is clean and the invariant holds, but "
-            f"{len(result.reissue_findings)} screened order(s) show a reissue "
-            "signal. Consider going live only on the count-agreeing screened "
-            "orders (exclude the reissue reqnos) pending a complete export."
+            + ". Adjudicate the flagged orders with the blood bank before go-live, "
+            "or exclude the flagged reqnos from the screen."
         )
     return (
         "  All checks clean on this bundle. Safe to flip the flag for a FRESH "
@@ -968,7 +1027,14 @@ def _write_artifact(result: PreflightResult) -> Path:
         "signoff_summary": _signoff_text(result),
         "periop_min_ebl_ml": PERIOP_MIN_EBL_ML,
     }
-    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    # RecallConflict.note_dates holds datetime.date objects (kept as dates so the
+    # attribution windowing can compare them); the stdlib JSON encoder cannot
+    # serialize date, so stringify any date to its ISO form when writing the
+    # machine-readable artifact rather than crashing the report.
+    out.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
     return out
 
 

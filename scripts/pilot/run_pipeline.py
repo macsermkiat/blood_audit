@@ -63,7 +63,7 @@ from bba.platelet_lookup import (
     lookup_platelet,
     parse_platelet_count,
 )
-from bba.returns_ledger import ReturnsSummary, summarize_returns
+from bba.returns_ledger import ReturnsSummary, rows_for_admission, summarize_returns
 from bba.vitals_extractor import PeriopSummary, scan_periop
 
 from _anchor_candidates import build_anchor_candidates
@@ -777,7 +777,9 @@ def main() -> None:
             plt_periop: PeriopSummary | None = None
             if RETURNS_LEDGER_ENABLED:
                 plt_returns_summary = summarize_returns(
-                    bdvsttrans_by_reqno.get(order.reqno, []),
+                    rows_for_admission(
+                        bdvsttrans_by_reqno.get(order.reqno, []), order.an
+                    ),
                     unitamt_lines_by_reqno.get(order.reqno, []),
                 )
                 plt_periop = scan_periop(
@@ -877,7 +879,12 @@ def main() -> None:
         returns_summary: ReturnsSummary | None = None
         returned_dt = ""
         if RETURNS_LEDGER_ENABLED:
-            trans_rows = bdvsttrans_by_reqno.get(order.reqno, [])
+            # Scope to THIS order's admission: a REQNO can recur across
+            # admissions in the complete export, so an unscoped read could feed a
+            # foreign admission's returned units and false-clear the order.
+            trans_rows = rows_for_admission(
+                bdvsttrans_by_reqno.get(order.reqno, []), order.an
+            )
             returns_summary = summarize_returns(
                 trans_rows, unitamt_lines_by_reqno.get(order.reqno, [])
             )
