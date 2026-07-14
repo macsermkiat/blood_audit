@@ -79,6 +79,12 @@ BDVST_CSV = Path(
 DCT_CSV = Path(os.environ.get("BBA_DCT_CSV", str(_BLOODBANK / "raw" / "DCT.csv")))
 WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
 
+# The returns terminals the ranking layer holds out of the scorable denominator
+# (spec #119). A scope containing only these has nothing to rank.
+_EXCLUDED_FROM_SCORING = frozenset(
+    {"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"}
+)
+
 
 def _resolve_verdicts() -> tuple[Mapping[str, str], str]:
     """Return ``(verdicts, source_label)`` for the selected verdict source.
@@ -130,20 +136,19 @@ def _resolve_verdicts() -> tuple[Mapping[str, str], str]:
             # store metadata (code_version_slug), NOT on AuditRow, so use
             # read_run_records to see it and fail loud on a mixed run (mirrors the
             # report builder's MixedRunMetadataError) rather than silently merging
-            # disjoint audit sets.
-            records = [
-                (row, slug)
-                for row, slug in store.read_run_records(run_id=RUN_ID)
-                if row.component == "red_cell"
-            ]
+            # disjoint audit sets. Check the slug set over the FULL record set
+            # BEFORE filtering to red_cell — else a version whose rows are all
+            # non-red-cell would be filtered away and the mixed run slip through
+            # (report_generator.builder does the same order).
+            records = store.read_run_records(run_id=RUN_ID)
             slugs = {slug for _, slug in records}
             if len(slugs) > 1:
                 raise SystemExit(
-                    f"run_id {RUN_ID!r} has red_cell rows from multiple code "
-                    f"versions {sorted(slugs)}; set BBA_CODE_VERSION to scope the "
+                    f"run_id {RUN_ID!r} has rows from multiple code versions "
+                    f"{sorted(slugs)}; set BBA_CODE_VERSION to scope the "
                     "scorecard to one version"
                 )
-            rows = [row for row, _ in records]
+            rows = [row for row, _ in records if row.component == "red_cell"]
         # POTENTIALLY_INAPPROPRIATE / PREOP_RESERVATION_UNCONFIRMED -> Unresolved;
         # the excluded returns terminals pass through for the ranking layer to
         # hold apart from the scorable denominator.
@@ -156,6 +161,18 @@ def _resolve_verdicts() -> tuple[Mapping[str, str], str]:
                 f"requested scope (run_id={RUN_ID!r}, "
                 f"code_version={CODE_VERSION_FILTER!r}); run the pipeline for this "
                 "run before re-baselining scorecards"
+            )
+        # An all-returns-excluded scope (every red_cell order is
+        # RETURNED_NOT_TRANSFUSED / PERIOP_TRANSFUSION_EXEMPT) has zero scorable
+        # rows: build_rankings would drop them all and emit a 0-order scorecard.
+        # Fail loud instead of writing a misleading empty artifact (mirrors the
+        # report builder rejecting an all-nonscorable returns run).
+        if all(v in _EXCLUDED_FROM_SCORING for v in verdicts.values()):
+            raise SystemExit(
+                f"every red_cell order in scope (run_id={RUN_ID!r}, "
+                f"code_version={CODE_VERSION_FILTER!r}) is a returns-excluded "
+                "terminal (RETURNED_NOT_TRANSFUSED / PERIOP_TRANSFUSION_EXEMPT); "
+                "there are no scorable rows to rank"
             )
         label = (
             f"{len(verdicts)}-order red_cell pipeline verdicts "
