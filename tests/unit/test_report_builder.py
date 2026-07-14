@@ -85,6 +85,56 @@ class TestReturnsTerminalsExcludedFromReport:
                 physician_resolver=lambda _r: "phys-1",
             )
 
+    def test_terminal_row_footer_divergence_still_fails_loud(
+        self, tmp_path: Path
+    ) -> None:
+        # Run-level integrity is validated over the FULL red_cell set BEFORE
+        # terminals are dropped: a returns-terminal row from a different run
+        # metadata (policy_version) is mixed-run corruption that must fail loud,
+        # not be silently filtered away (Codex P2).
+        rows = (
+            _row(audit_id="scored", final_classification="INAPPROPRIATE"),
+            _row(
+                audit_id="returned",
+                final_classification="RETURNED_NOT_TRANSFUSED",
+                policy_version="OTHER-policy-9.9",
+            ),
+        )
+        with pytest.raises(MixedRunMetadataError, match="policy_version"):
+            build_report_inputs(
+                run_id="run-aaa",
+                audit_store=_store_returning(*rows),
+                output_dir=tmp_path,
+                ward_resolver=lambda _r: "ward-1",
+                physician_resolver=lambda _r: "phys-1",
+            )
+
+    def test_terminal_row_month_divergence_still_fails_loud(
+        self, tmp_path: Path
+    ) -> None:
+        # Same for the single-month invariant: a terminal row in a different
+        # local month must raise, not be dropped before the month check.
+        rows = (
+            _row(
+                audit_id="scored",
+                final_classification="INAPPROPRIATE",
+                order_datetime=datetime(2026, 5, 10, 8, 0, 0, tzinfo=UTC),
+            ),
+            _row(
+                audit_id="exempt",
+                final_classification="PERIOP_TRANSFUSION_EXEMPT",
+                order_datetime=datetime(2026, 6, 10, 8, 0, 0, tzinfo=UTC),
+            ),
+        )
+        with pytest.raises(MixedRunMetadataError, match="multiple Asia/Bangkok"):
+            build_report_inputs(
+                run_id="run-aaa",
+                audit_store=_store_returning(*rows),
+                output_dir=tmp_path,
+                ward_resolver=lambda _r: "ward-1",
+                physician_resolver=lambda _r: "phys-1",
+            )
+
 
 def _row(
     *,

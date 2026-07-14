@@ -213,24 +213,31 @@ def build_report_inputs(
             "a platelet-only run"
         )
 
-    # Drop the non-scorable returns terminals before projection. With the
-    # returns-ledger router enabled (spec #119 go-live) a run's audit_store can
-    # carry RETURNED_NOT_TRANSFUSED / PERIOP_TRANSFUSION_EXEMPT
-    # final_classifications; these are non-events / OR-exempt, excluded from
-    # scoring exactly as they are excluded from attribution rates. The default
-    # projector fails loud on them, so they are filtered here rather than
-    # projected onto one of the four report-scorable values.
-    rows = tuple(
+    # Validate run-level integrity over the FULL red_cell set BEFORE dropping
+    # any rows. The reproducibility footer and single-local-month invariants
+    # must hold across every committed red_cell AuditRow, including the returns
+    # terminals: a terminal row carrying a divergent policy_version / model_id /
+    # prompt_hash or a different local month is the same mixed-run corruption
+    # these checks exist to fail loud on, and dropping it first would mask it.
+    footer = _reconstruct_footer(rows)
+    month = _infer_month(rows)
+
+    # Drop the non-scorable returns terminals for projection / scoring only.
+    # With the returns-ledger router enabled (spec #119 go-live) a run's
+    # audit_store can carry RETURNED_NOT_TRANSFUSED / PERIOP_TRANSFUSION_EXEMPT
+    # final_classifications; these are non-events / OR-exempt, excluded from the
+    # report exactly as they are excluded from attribution rates, and the
+    # default projector fails loud on them.
+    scorable_rows = tuple(
         row for row in rows if row.final_classification not in _EXCLUDED_NONSCORABLE
     )
-    if not rows:
+    if not scorable_rows:
         raise EmptyInputError(
             f"audit_store red_cell rows for run_id={run_id!r} are all "
             "non-scorable returns terminals (RETURNED_NOT_TRANSFUSED / "
             "PERIOP_TRANSFUSION_EXEMPT); there is no scorable order to report"
         )
 
-    footer = _reconstruct_footer(rows)
     monthly_rows = tuple(
         _project_row(
             row,
@@ -239,9 +246,8 @@ def build_report_inputs(
             indication_codes_extractor=indication_codes_extractor,
             classification_projector=classification_projector,
         )
-        for row in rows
+        for row in scorable_rows
     )
-    month = _infer_month(monthly_rows)
     physician_ids = _resolve_physician_ids_for_own_view(
         monthly_rows, physician_ids_for_own_view
     )
@@ -397,9 +403,13 @@ def _project_row(
     )
 
 
-def _infer_month(rows: Sequence[MonthlyReportRow]) -> date:
+def _infer_month(rows: Sequence[AuditRow]) -> date:
     """Return the Asia/Bangkok local-month-first-of-month shared by every
     row. Raise :class:`MixedRunMetadataError` on any disagreement.
+
+    Runs over the full red_cell audit set (including any non-scorable returns
+    terminals) so a divergent-month terminal row is caught, not silently
+    dropped, before scorable rows are projected.
 
     Using the same :data:`REPORT_TZ` as
     :func:`bba.report_generator.aggregate.filter_rows_for_month` keeps
