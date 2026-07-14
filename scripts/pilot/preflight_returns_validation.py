@@ -55,7 +55,12 @@ from bba.audit_orders import (
     build_audit_orders,
 )
 from bba.deterministic_classifier import PERIOP_MIN_EBL_ML
-from bba.returns_ledger import ReturnsSummary, physical_units, summarize_returns
+from bba.returns_ledger import (
+    ReturnsSummary,
+    physical_units,
+    summarize_returns,
+    terminal_status,
+)
 from bba.vitals_extractor import VitalsNote, scan_periop
 from bba.vitals_extractor.administration import scan_administration
 
@@ -170,11 +175,18 @@ def nonreturned_unit_count(trans_rows: Sequence[Mapping[str, str]]) -> int:
 
 @dataclass(frozen=True)
 class RecallConflict:
-    """A screened order carrying an affirmative administration note."""
+    """A screened order carrying an affirmative administration note.
+
+    ``note_dates`` are the dates of the individual notes that carry an
+    affirmative marker, so sibling attribution can be NOTE-specific (a sibling
+    must be active near the conflicting note, not merely somewhere in the order
+    window).
+    """
 
     reqno: str
     categories: tuple[str, ...]
     snippets: tuple[str, ...]
+    note_dates: tuple[date, ...] = ()
 
 
 def administration_recall_conflicts(
@@ -185,17 +197,30 @@ def administration_recall_conflicts(
     Any affirmative red-cell administration marker on a screened (all-returned)
     order is a CONFLICT: the ``RETURNED_NOT_TRANSFUSED`` terminal would hide a
     charted administration. Delegates recall to the shipped, precision-favoured
-    :func:`scan_administration`.
+    :func:`scan_administration`. Each conflict also records the dates of the
+    individual notes that carry a marker (re-scanned per note) so attribution can
+    match a sibling to the note's date, not just the padded order window.
     """
     conflicts: list[RecallConflict] = []
     for reqno in sorted(screened_notes):
-        summary = scan_administration(screened_notes[reqno])
+        notes = screened_notes[reqno]
+        summary = scan_administration(notes)
         if summary.has_affirmative_marker:
+            note_dates = tuple(
+                sorted(
+                    {
+                        n.timestamp.date()
+                        for n in notes
+                        if scan_administration([n]).has_affirmative_marker
+                    }
+                )
+            )
             conflicts.append(
                 RecallConflict(
                     reqno=reqno,
                     categories=tuple(f.category for f in summary.findings),
                     snippets=tuple(f.snippet for f in summary.findings),
+                    note_dates=note_dates,
                 )
             )
     return tuple(conflicts)
@@ -492,20 +517,50 @@ def _sibling_units_for(
     reqnos_by_an: Mapping[str, set[str]],
     trans_by_reqno: Mapping[str, list[dict[str, str]]],
 ) -> list[SiblingUnit]:
-    """Ledger units of every OTHER order in ``an`` (same admission)."""
+    """Physical units of every OTHER order in ``an`` (same admission).
+
+    A sibling only qualifies as an administration source if it is a real
+    transfusion, so this mirrors the disposition semantics: rows are scoped to
+    ``an`` (a REQNO can recur under several admissions in the complete export),
+    deduped to one physical unit per ``(DNRNO, SEQNO, BDTYPE)``, and a unit whose
+    terminal status is returned or crossmatch-incompatible is marked
+    ``is_returned`` so it can never explain (suppress) a recall conflict.
+    """
     units: list[SiblingUnit] = []
     for reqno in reqnos_by_an.get(an, set()):
         if reqno == own_reqno:
             continue
+        groups: dict[tuple[str, str, str], list[dict[str, str]]] = {}
+        order: list[tuple[str, str, str]] = []
         for u in trans_by_reqno.get(reqno, []):
-            status = str(u.get("UNITSTAT") or "").strip()
+            # Scope to THIS admission: the complete export reuses some REQNOs
+            # across admissions, so an unfiltered lookup would pull a foreign
+            # admission's units into the attribution.
+            if (u.get("AN") or "").strip() != an:
+                continue
+            key = (
+                str(u.get("DNRNO") or "").strip(),
+                str(u.get("SEQNO") or "").strip(),
+                str(u.get("BDTYPE") or "").strip(),
+            )
+            if key not in groups:
+                groups[key] = []
+                order.append(key)
+            groups[key].append(u)
+        for key in order:
+            rows = groups[key]
+            term = terminal_status([str(r.get("UNITSTAT") or "").strip() for r in rows])
+            pay_dates = [d for r in rows if (d := parse_ledger_date(r.get("PAYDATE")))]
+            give_dates = [
+                d for r in rows if (d := parse_ledger_date(r.get("GIVEDATE")))
+            ]
             units.append(
                 SiblingUnit(
                     reqno=reqno,
-                    dispense_date=parse_ledger_date(u.get("PAYDATE")),
-                    is_returned=status == _RETURNED_STATUS,
-                    status=status,
-                    give_date=parse_ledger_date(u.get("GIVEDATE")),
+                    dispense_date=min(pay_dates) if pay_dates else None,
+                    is_returned=term in _NON_TRANSFUSION_STATUSES,
+                    status=term,
+                    give_date=min(give_dates) if give_dates else None,
                 )
             )
     return units
@@ -589,7 +644,6 @@ def run_preflight() -> PreflightResult:
     screened_reqnos: list[str] = []
     screened_notes: dict[str, Sequence[VitalsNote]] = {}
     screened_notes_windowed: dict[str, Sequence[VitalsNote]] = {}
-    window_by_reqno: dict[str, tuple[date, date] | None] = {}
     sibling_units_by_reqno: dict[str, list[SiblingUnit]] = {}
     screened_without_notes = 0
     hard_fallthroughs: list[HardFallthrough] = []
@@ -645,7 +699,6 @@ def run_preflight() -> PreflightResult:
             + [parse_ledger_date(r.get("RTNDATE")) for r in trans_rows]
         )
         screened_notes_windowed[order.reqno] = notes_in_window(notes, window)
-        window_by_reqno[order.reqno] = window
         sibling_units_by_reqno[order.reqno] = _sibling_units_for(
             order.an or "", order.reqno, reqnos_by_an, trans_by_reqno
         )
@@ -678,14 +731,19 @@ def run_preflight() -> PreflightResult:
         administration_recall_conflicts(screened_notes_windowed)
     )
     # Auto-attribution: demote a windowed conflict when a NOT-returned unit of a
-    # different order in the same admission was dispensed inside the window (the
-    # generalised 68019920 -> 68020779 adjudication). The net count drives the
-    # gate; each attribution is reported for human audit.
+    # different order in the same admission was active NEAR THE CONFLICTING NOTE
+    # (the generalised 68019920 -> 68020779 adjudication). The window is anchored
+    # on the conflicting note's own date(s) — not merely the order's
+    # dispense->return interval — so an unrelated sibling elsewhere in the padded
+    # window cannot suppress a genuine note. The net count drives the gate; each
+    # attribution is reported for human audit.
     recall_conflicts_windowed_net: list[RecallConflict] = []
     note_attributions: list[NoteAttribution] = []
     for conflict in recall_conflicts_windowed:
+        # No parseable note date -> cannot note-anchor -> do NOT suppress (safe).
+        note_window = recall_window(list(conflict.note_dates))
         sibling = explaining_sibling(
-            window_by_reqno.get(conflict.reqno),
+            note_window,
             sibling_units_by_reqno.get(conflict.reqno, ()),
         )
         if sibling is None:

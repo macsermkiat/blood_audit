@@ -214,6 +214,39 @@ def test_aliquots_with_different_seqno_are_distinct_units() -> None:
     assert summary.disposition == "not_transfused"
 
 
+def test_distinct_bdtype_units_are_not_collapsed() -> None:
+    # Two distinct products of one donation (or a unit's irradiation relabel)
+    # can share (DNRNO, SEQNO) but differ in BDTYPE. They must NOT collapse: a
+    # dispensed/presumed-transfused unit (2) must never be masked behind a
+    # different product's return (3), which would falsely clear the transfusion.
+    summary = summarize_returns(
+        [
+            _unit("2", DNRNO="D1", SEQNO="0", BDTYPE="SDRF"),
+            _unit("3", DNRNO="D1", SEQNO="0", BDTYPE="SDRF2"),
+        ],
+        ["2"],
+    )
+
+    assert summary.units_total == 2
+    assert summary.units_returned == 1
+    assert summary.disposition == "transfused"
+
+
+def test_same_bdtype_lifecycle_still_collapses() -> None:
+    # A true same-item lifecycle (identical DNRNO/SEQNO/BDTYPE, dispense then
+    # return) still collapses to one returned unit.
+    summary = summarize_returns(
+        [
+            _unit("2", DNRNO="D1", SEQNO="0", BDTYPE="LDPRC2"),
+            _unit("3", DNRNO="D1", SEQNO="0", BDTYPE="LDPRC2"),
+        ],
+        ["1"],
+    )
+
+    assert summary.units_total == 1
+    assert summary.disposition == "not_transfused"
+
+
 def test_transfused_wins_over_return_row_for_same_unit() -> None:
     # A unit carrying both a transfused (5) and a return (3) row was given; the
     # terminal precedence keeps it transfused so a real transfusion is never

@@ -14,7 +14,7 @@ tests pin the small, pure decision functions it is built from:
   ``summarize_returns`` produced).
 * ``administration_recall_conflicts`` — the ให้เลือด administration-note recall
   harness over the screened orders.
-* ``recommendation`` — the deterministic go / narrow / hold gate.
+* ``recommendation`` — the deterministic go / hold gate.
 """
 
 from __future__ import annotations
@@ -412,10 +412,97 @@ def test_explaining_sibling_matches_on_give_date_when_dispensed_earlier() -> Non
 
     window = (_date(2025, 4, 1), _date(2025, 4, 5))
     sib = PF.SiblingUnit(
-        "O1", _date(2025, 3, 20), is_returned=False, status="5", give_date=_date(2025, 4, 3)
+        "O1",
+        _date(2025, 3, 20),
+        is_returned=False,
+        status="5",
+        give_date=_date(2025, 4, 3),
     )
     match = PF.explaining_sibling(window, (sib,))
     assert match is not None and match.reqno == "O1"
+
+
+def test_recall_conflict_records_marker_note_dates() -> None:
+    # Attribution is note-specific, so the conflict must carry the date(s) of the
+    # notes that actually flagged — not just the padded order window.
+    conflicts = PF.administration_recall_conflicts(
+        {
+            "R1": (
+                _note("nothing here", at=datetime(2025, 4, 1, tzinfo=UTC)),
+                _note(
+                    "ให้เลือด LPRC 1 unit iv drip in 4 hr",
+                    at=datetime(2025, 4, 5, tzinfo=UTC),
+                ),
+            )
+        }
+    )
+    from datetime import date as _date
+
+    assert len(conflicts) == 1
+    assert conflicts[0].note_dates == (_date(2025, 4, 5),)
+
+
+def test_sibling_units_scope_to_admission_and_dedup() -> None:
+    # A sibling REQNO can appear under >1 admission in the complete export, and
+    # its rows may be lifecycle rows of one physical unit. _sibling_units_for must
+    # (a) drop rows of a foreign AN and (b) collapse (DNRNO,SEQNO,BDTYPE) rows to
+    # one physical unit at its terminal status.
+    reqnos_by_an = {"ANx": {"OWN", "SIB"}}
+    trans_by_reqno = {
+        "SIB": [
+            # this admission: dispensed then returned -> one returned unit
+            {
+                "AN": "ANx",
+                "DNRNO": "D1",
+                "SEQNO": "0",
+                "BDTYPE": "LDPRC2",
+                "UNITSTAT": "2",
+                "PAYDATE": "2025-04-01 00:00:00.000",
+            },
+            {
+                "AN": "ANx",
+                "DNRNO": "D1",
+                "SEQNO": "0",
+                "BDTYPE": "LDPRC2",
+                "UNITSTAT": "3",
+                "PAYDATE": "2025-04-01 00:00:00.000",
+            },
+            # a DIFFERENT admission's dispensed unit must be excluded
+            {
+                "AN": "ANy",
+                "DNRNO": "D9",
+                "SEQNO": "0",
+                "BDTYPE": "LDPRC2",
+                "UNITSTAT": "2",
+                "PAYDATE": "2025-04-02 00:00:00.000",
+            },
+        ]
+    }
+    units = PF._sibling_units_for("ANx", "OWN", reqnos_by_an, trans_by_reqno)
+    assert len(units) == 1  # foreign-AN row excluded; lifecycle rows collapsed
+    assert units[0].is_returned is True  # terminal returned -> not a source
+    assert units[0].status == "3"
+
+
+def test_sibling_incompatible_unit_is_not_a_source() -> None:
+    # A crossmatch-incompatible (Unitstat=7) sibling was never given, so it must
+    # not be treated as a transfusion source that suppresses a recall conflict.
+    reqnos_by_an = {"ANx": {"OWN", "SIB"}}
+    trans_by_reqno = {
+        "SIB": [
+            {
+                "AN": "ANx",
+                "DNRNO": "D1",
+                "SEQNO": "0",
+                "BDTYPE": "LDPRC2",
+                "UNITSTAT": "7",
+                "PAYDATE": "2025-04-01 00:00:00.000",
+            }
+        ]
+    }
+    units = PF._sibling_units_for("ANx", "OWN", reqnos_by_an, trans_by_reqno)
+    assert len(units) == 1
+    assert units[0].is_returned is True  # incompatible -> not a transfusion source
 
 
 def test_explaining_sibling_picks_earliest_deterministically() -> None:

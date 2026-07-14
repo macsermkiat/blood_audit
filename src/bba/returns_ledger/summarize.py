@@ -37,8 +37,14 @@ _INCOMPAT_STATUS = "7"
 _TERMINAL_PRECEDENCE = (_TRANSFUSED_STATUS, _RETURNED_STATUS, _INCOMPAT_STATUS, "2")
 
 
-def _terminal_status(statuses: Sequence[str]) -> str:
-    """The most-final disposition among one physical unit's lifecycle rows."""
+def terminal_status(statuses: Sequence[str]) -> str:
+    """The most-final disposition among one physical unit's lifecycle rows.
+
+    Precedence :data:`_TERMINAL_PRECEDENCE` (transfused > returned > incompatible
+    > dispensed); any other status falls back to first-seen. Public so callers
+    that dedup ledger rows themselves (e.g. the pre-flight's sibling attribution)
+    reuse the exact same rule instead of re-deriving it.
+    """
     for status in _TERMINAL_PRECEDENCE:
         if status in statuses:
             return status
@@ -51,23 +57,31 @@ def _terminal_status(statuses: Sequence[str]) -> str:
 def physical_units(trans_rows: Sequence[Mapping[str, str]]) -> list[str]:
     """Collapse ledger rows to one terminal ``UNITSTAT`` per physical unit.
 
-    Groups rows sharing a non-blank ``(DNRNO, SEQNO)`` — the physical-unit key
-    in the complete export — and reduces each group to its terminal status
-    (:func:`_terminal_status`). A row with a BLANK ``DNRNO`` is treated as its
-    own unit (never collapsed), so identifier-free rows fall back to
-    one-row-per-unit counting. Order is preserved for determinism.
+    Groups rows sharing a non-blank ``(DNRNO, SEQNO, BDTYPE)`` — the
+    physical-unit key in the complete export — and reduces each group to its
+    terminal status (:func:`_terminal_status`). ``BDTYPE`` is part of the key
+    because ``(DNRNO, SEQNO)`` alone collides across distinct products of one
+    donation (e.g. split ``SDRF``/``SDRF2`` units, or a pooled ``LDPC1..4``) and
+    across a unit's irradiation relabel (``X`` vs ``X+I``); keying on ``BDTYPE``
+    keeps genuinely-distinct units apart so a presumed-transfused unit can never
+    be masked behind another product's return (a false ``not_transfused``). Only
+    true same-item lifecycle rows (identical DNRNO/SEQNO/BDTYPE, e.g. a
+    dispense + a later return) collapse. A row with a BLANK ``DNRNO`` is its own
+    unit (never collapsed), so identifier-free rows fall back to one-row-per-unit
+    counting. Order is preserved for determinism.
     """
-    groups: dict[tuple[object, object], list[str]] = {}
-    order: list[tuple[object, object]] = []
+    groups: dict[tuple[object, ...], list[str]] = {}
+    order: list[tuple[object, ...]] = []
     for idx, row in enumerate(trans_rows):
         dnrno = str(row.get("DNRNO") or "").strip()
         seqno = str(row.get("SEQNO") or "").strip()
-        key: tuple[object, object] = (dnrno, seqno) if dnrno else (None, idx)
+        bdtype = str(row.get("BDTYPE") or "").strip()
+        key: tuple[object, ...] = (dnrno, seqno, bdtype) if dnrno else (None, idx)
         if key not in groups:
             groups[key] = []
             order.append(key)
         groups[key].append(str(row.get("UNITSTAT") or "").strip())
-    return [_terminal_status(groups[key]) for key in order]
+    return [terminal_status(groups[key]) for key in order]
 
 
 def _parse_ordered_amount(unitamt_lines: list[str]) -> int | None:
