@@ -126,6 +126,8 @@ def rank_top_n(
                 meets_min_orders=card.total_orders >= min_orders,
                 mean_hb=stats.mean_hb if stats is not None else None,
                 hb_order_n=stats.hb_order_n if stats is not None else 0,
+                mean_platelet=stats.mean_platelet if stats is not None else None,
+                platelet_order_n=stats.platelet_order_n if stats is not None else 0,
             )
         )
     return tuple(rows)
