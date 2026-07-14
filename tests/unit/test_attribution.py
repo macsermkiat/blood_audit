@@ -71,9 +71,7 @@ def _write_report_csv(path: Path, rows: list[dict[str, str]]) -> Path:
     reads (the real file is ~50 columns wide; DictReader ignores the rest).
     Missing per-row keys are written blank (csv.DictWriter restval)."""
     with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(
-            f, fieldnames=list(_REPORT_LAB_COLUMNS), restval=""
-        )
+        writer = csv.DictWriter(f, fieldnames=list(_REPORT_LAB_COLUMNS), restval="")
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
@@ -1617,9 +1615,9 @@ class TestMeanPlateletIntegration:
         assert "Mean platelet" in html
         # No platelet sample anywhere -> the platelet column is all em-dash.
         assert "(n=" in html  # Hb column still populated
-        csv_out = write_ranking_csv(
-            result.doctors.rows, tmp_path / "d.csv"
-        ).read_text(encoding="utf-8")
+        csv_out = write_ranking_csv(result.doctors.rows, tmp_path / "d.csv").read_text(
+            encoding="utf-8"
+        )
         # Every data row ends with empty mean_platelet + platelet_order_n 0.
         for line in csv_out.splitlines()[1:]:
             assert line.endswith(",,0")
