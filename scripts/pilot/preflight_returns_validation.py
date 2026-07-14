@@ -1027,7 +1027,14 @@ def _write_artifact(result: PreflightResult) -> Path:
         "signoff_summary": _signoff_text(result),
         "periop_min_ebl_ml": PERIOP_MIN_EBL_ML,
     }
-    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    # RecallConflict.note_dates holds datetime.date objects (kept as dates so the
+    # attribution windowing can compare them); the stdlib JSON encoder cannot
+    # serialize date, so stringify any date to its ISO form when writing the
+    # machine-readable artifact rather than crashing the report.
+    out.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
     return out
 
 

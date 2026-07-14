@@ -433,6 +433,25 @@ def test_explaining_sibling_matches_on_give_date_when_dispensed_earlier() -> Non
     assert match is not None and match.reqno == "O1"
 
 
+def test_recall_conflict_note_dates_are_json_serializable() -> None:
+    # RecallConflict.note_dates holds datetime.date objects; _write_artifact
+    # json.dumps(asdict(result), ...) must not crash on them. Guard the exact
+    # encoder options _write_artifact uses (default=str) so the machine-readable
+    # HOLD/GO artifact is always written.
+    import json
+    from dataclasses import asdict
+    from datetime import date as _date
+
+    conflict = PF.RecallConflict(
+        reqno="R1",
+        categories=("gave_blood",),
+        snippets=("x",),
+        note_dates=(_date(2025, 4, 2),),
+    )
+    dumped = json.dumps(asdict(conflict), ensure_ascii=False, default=str)
+    assert "2025-04-02" in dumped
+
+
 def test_recall_conflict_records_marker_note_dates() -> None:
     # Attribution is note-specific, so the conflict must carry the date(s) of the
     # notes that actually flagged — not just the padded order window.
