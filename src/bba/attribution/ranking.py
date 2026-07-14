@@ -13,9 +13,10 @@ from the plan); changing it is a clinical-review decision.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Protocol, TypeVar
 
+from bba.attribution.lab_stats import GroupLabStats
 from bba.attribution.models import Bucket, RankedRow
 from bba.dashboard.models import PhysicianScorecard, WardScorecard
 
@@ -67,6 +68,7 @@ def rank_top_n(
     group_name: Callable[[_S], str],
     n: int = DEFAULT_TOP_N,
     min_orders: int = DEFAULT_MIN_ORDERS,
+    group_stats: Mapping[str, GroupLabStats] | None = None,
 ) -> tuple[RankedRow, ...]:
     """Rank ``scorecards`` by ``bucket`` and return the top ``n`` rows.
 
@@ -106,6 +108,7 @@ def rank_top_n(
     rows: list[RankedRow] = []
     for rank, card in enumerate((qualified + unqualified)[:n], start=1):
         count = _bucket_count(card, bucket)
+        stats = group_stats.get(group_id(card)) if group_stats is not None else None
         rows.append(
             RankedRow(
                 rank=rank,
@@ -121,6 +124,8 @@ def rank_top_n(
                 bucket_count=count,
                 bucket_rate=_rate(count, card.total_orders),
                 meets_min_orders=card.total_orders >= min_orders,
+                mean_hb=stats.mean_hb if stats is not None else None,
+                hb_order_n=stats.hb_order_n if stats is not None else 0,
             )
         )
     return tuple(rows)
@@ -132,6 +137,7 @@ def rank_doctor_scorecards(
     *,
     n: int = DEFAULT_TOP_N,
     min_orders: int = DEFAULT_MIN_ORDERS,
+    group_stats: Mapping[str, GroupLabStats] | None = None,
 ) -> tuple[RankedRow, ...]:
     """Doctor-dimension convenience wrapper over :func:`rank_top_n`."""
     return rank_top_n(
@@ -141,6 +147,7 @@ def rank_doctor_scorecards(
         group_name=lambda c: c.physician_name,
         n=n,
         min_orders=min_orders,
+        group_stats=group_stats,
     )
 
 
@@ -150,6 +157,7 @@ def rank_department_scorecards(
     *,
     n: int = DEFAULT_TOP_N,
     min_orders: int = DEFAULT_MIN_ORDERS,
+    group_stats: Mapping[str, GroupLabStats] | None = None,
 ) -> tuple[RankedRow, ...]:
     """Department-dimension convenience wrapper over :func:`rank_top_n`."""
     return rank_top_n(
@@ -159,4 +167,5 @@ def rank_department_scorecards(
         group_name=lambda c: c.ward_name,
         n=n,
         min_orders=min_orders,
+        group_stats=group_stats,
     )

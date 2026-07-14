@@ -31,6 +31,9 @@ Environment variables:
   ``../Bloodbank/data/encrypted/BDVST.csv`` relative to the repo root).
 * ``BBA_DCT_CSV`` — DCT.csv doctor registry (default:
   ``../Bloodbank/data/raw/DCT.csv``).
+* ``BBA_PILOT_REPORT_CSV`` — per-order pipeline report CSV supplying the mean
+  pre-transfusion trigger (default: ``report.csv`` in the work dir). Required;
+  a missing file fails loud.
 * ``BBA_PILOT_WORK_DIR`` — output directory (default: ``/tmp/bba_mini``).
 
 Outputs (in the work dir): ``doctor_ranking.csv``,
@@ -48,6 +51,7 @@ from bba.attribution import (
     build_rankings,
     human_label_verdict_source,
     load_dct_registry,
+    load_order_labs,
     load_reqno_to_doctor,
     needs_review_verdict_projector,
     pipeline_verdict_source,
@@ -78,6 +82,11 @@ BDVST_CSV = Path(
 )
 DCT_CSV = Path(os.environ.get("BBA_DCT_CSV", str(_BLOODBANK / "raw" / "DCT.csv")))
 WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
+# Per-order lab source for the mean pre-transfusion trigger columns (spec
+# #131): the pipeline report CSV, defaulting alongside the other pilot
+# outputs. Required — a missing source must fail loud, never silently blank
+# every doctor's trigger.
+REPORT_CSV = Path(os.environ.get("BBA_PILOT_REPORT_CSV", str(WORK / "report.csv")))
 
 # The returns terminals the ranking layer holds out of the scorable denominator
 # (spec #119). A scope containing only these has nothing to rank.
@@ -196,6 +205,7 @@ def main() -> int:
     for path, label in (
         (BDVST_CSV, "BDVST export (BBA_BDVST_CSV)"),
         (DCT_CSV, "DCT registry (BBA_DCT_CSV)"),
+        (REPORT_CSV, "per-order lab source (BBA_PILOT_REPORT_CSV)"),
     ):
         if not path.exists():
             print(f"missing {label}: {path}", file=sys.stderr)
@@ -207,6 +217,7 @@ def main() -> int:
         verdicts=verdicts,
         reqno_to_doctor=load_reqno_to_doctor(BDVST_CSV),
         dct_registry=load_dct_registry(DCT_CSV),
+        order_labs=load_order_labs(REPORT_CSV),
     )
 
     doctor_csv = write_ranking_csv(result.doctors.rows, WORK / "doctor_ranking.csv")

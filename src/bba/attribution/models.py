@@ -88,6 +88,13 @@ class RankedRow(BaseModel):
     bucket_count: int = Field(ge=0)
     bucket_rate: float = Field(ge=0.0, le=1.0)
     meets_min_orders: bool
+    mean_hb: float | None = None
+    """Mean pre-transfusion Hb (g/dL) over the group's scorable red-cell
+    orders; ``None`` when ``hb_order_n == 0``. Populated from the per-order
+    lab join at assembly; defaulted so existing callers are unaffected."""
+    hb_order_n: int = Field(default=0, ge=0)
+    """Number of scorable red-cell orders the ``mean_hb`` is based on;
+    never exceeds ``total_orders``."""
 
 
 class RankingTable(BaseModel):

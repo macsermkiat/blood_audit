@@ -10,6 +10,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from bba.attribution.lab_stats import (
+    OrderLabValue,
+    aggregate_department_lab_stats,
+    aggregate_doctor_lab_stats,
+    missing_lab_reqnos,
+)
 from bba.attribution.models import (
     Bucket,
     BucketTotals,
@@ -57,6 +63,7 @@ def build_rankings(
     bucket: Bucket = "inappropriate",
     n: int = DEFAULT_TOP_N,
     min_orders: int = DEFAULT_MIN_ORDERS,
+    order_labs: Mapping[str, OrderLabValue] | None = None,
 ) -> RankingResult:
     """Build both top-N ranking tables plus the reconciliation totals.
 
@@ -64,18 +71,55 @@ def build_rankings(
     metric, consistent with ``inappropriate_rate`` being the ranked
     quantity everywhere else in the report generator. All three bucket
     counts still travel on every row.
+
+    When ``order_labs`` (the per-order lab join from ``report.csv``) is
+    supplied, the mean pre-transfusion trigger is aggregated here — over
+    the same scorable verdict cohort — and threaded onto both tables' rows;
+    omitting it leaves the mean fields at their defaults so existing
+    callers are unaffected.
     """
+    if order_labs is not None:
+        # Fail loud before aggregating (guards both the doctor and department
+        # paths): a scorable REQNO absent from the lab source means a stale,
+        # header-only, or wrong-run report.csv, and a partial join must never
+        # be presented as a trigger (spec #131, "fail loudly if the per-order
+        # lab source is missing"). A legitimately absent Hb still carries a
+        # report row with hb_freshness == "missing".
+        missing = missing_lab_reqnos(verdicts, order_labs)
+        if missing:
+            raise ValueError(
+                f"per-order lab source has no row for {len(missing)} scorable "
+                f"REQNO(s) (e.g. {missing[:5]}); a stale, header-only, or "
+                "wrong-run report.csv cannot back the mean trigger columns — "
+                "refusing to present a partial join. Every scorable order must "
+                "have a report row (a genuinely absent value still carries "
+                "freshness == 'missing')."
+            )
+    doctor_stats = (
+        aggregate_doctor_lab_stats(verdicts, reqno_to_doctor, order_labs)
+        if order_labs is not None
+        else None
+    )
+    department_stats = (
+        aggregate_department_lab_stats(
+            verdicts, reqno_to_doctor, dct_registry, order_labs
+        )
+        if order_labs is not None
+        else None
+    )
     doctors = rank_doctor_scorecards(
         build_doctor_scorecards(verdicts, reqno_to_doctor, dct_registry),
         bucket,
         n=n,
         min_orders=min_orders,
+        group_stats=doctor_stats,
     )
     departments = rank_department_scorecards(
         build_department_scorecards(verdicts, reqno_to_doctor, dct_registry),
         bucket,
         n=n,
         min_orders=min_orders,
+        group_stats=department_stats,
     )
     return RankingResult(
         doctors=RankingTable(
