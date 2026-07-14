@@ -1,4 +1,4 @@
-"""Pandera schemas (version v1) for the 12 HOSxP CSV tables.
+"""Pandera schemas (version v1) for the 13 HOSxP CSV tables.
 
 The schemas are the authoritative description of expected columns. Their joint
 sha256 fingerprint feeds into ``run_id``, so a silent schema bump (forgetting
@@ -85,6 +85,29 @@ _REGISTRY_V1: Mapping[CSVTable, DataFrameSchema] = {
         {
             "BDVSTST": _str(nullable=False),
             "NAME": _str(),
+        }
+    ),
+    # BDVSTTRANS — the unit-level returns ledger (spec #119). One row per
+    # physical-unit transaction; joined to orders by REQNO. Only the columns the
+    # returns-ledger disposition + windowed-recall need are declared (the export
+    # ships ~72 columns; the rest are projected away by the normalize allow-list).
+    # Physical-unit dedup keys on (DNRNO, SEQNO, BDTYPE); UNITSTAT drives the
+    # disposition; AN/HN join the admission; PAY/RTN/GIVE dates window recall.
+    "BDVSTTRANS": DataFrameSchema(
+        {
+            "REQNO": _str(nullable=False),
+            "HN": _str(),
+            "AN": _str(),
+            "DNRNO": _str(),
+            "SEQNO": _str(),
+            "BDTYPE": _str(),
+            "UNITSTAT": _str(),
+            "PAYDATE": _str(),
+            "PAYTIME": _str(),
+            "RTNDATE": _str(),
+            "RTNTIME": _str(),
+            "GIVEDATE": _str(),
+            "GIVETIME": _str(),
         }
     ),
     "BDTYPE": DataFrameSchema(
@@ -211,7 +234,7 @@ def get_schema(table: CSVTable) -> DataFrameSchema:
 
 
 def all_tables() -> tuple[CSVTable, ...]:
-    """Return the canonical tuple of all 12 required CSV tables.
+    """Return the canonical tuple of all 13 required CSV tables.
 
     The order matches the :data:`bba.ingest.models.CSVTable` literal so callers
     can rely on a stable iteration order across releases.
