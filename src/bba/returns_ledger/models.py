@@ -22,22 +22,27 @@ Disposition = Literal["not_transfused", "transfused", "inconclusive"]
 
 
 class ReturnsSummary(BaseModel):
-    """Per-order aggregation over one REQNO's BDVSTTRANS unit rows.
+    """Per-order aggregation over one REQNO's BDVSTTRANS physical units.
 
-    Each ledger row is one physical, dispensed blood unit. The summary counts
-    returned (``Unitstat==3``) and transfused (``Unitstat==5``) units, records
-    the ordered unit amount summed from the order's BDVSTDT ``UNITAMT`` lines,
-    and reports whether the ledger COVERS the order (``ledger_complete`` =
-    ``units_total >= ordered_unit_amount``). The stricter exact-count check that
-    keeps an over-dispensed reissue out of the not-transfused screen lives in
-    :meth:`disposition`.
+    ``units_total`` counts DISTINCT physical units, not raw ledger rows: the
+    complete production export records a unit's lifecycle as multiple rows
+    (dispense + return, aliquots) keyed apart by ``SEQNO``, so
+    :func:`summarize_returns` collapses rows sharing ``(DNRNO, SEQNO)`` to one
+    unit at its terminal status before counting (spec #119 complete-ledger
+    ingest). The summary counts returned (terminal ``Unitstat==3``), transfused
+    (``==5``) and crossmatch-incompatible (``==7``) units, records the ordered
+    unit amount summed from the order's BDVSTDT ``UNITAMT`` lines, and reports
+    whether the ledger COVERS the order (``ledger_complete`` =
+    ``units_total >= ordered_unit_amount``).
 
     ``disposition`` is derived (see :meth:`disposition`):
 
-    - ``not_transfused`` only when the ledger is complete and every unit was
-      returned;
+    - ``not_transfused`` when the ledger is complete and every unit reached a
+      non-transfusion terminal (returned OR incompatible — an Incompat unit was
+      never given);
     - ``transfused`` when the ledger is complete and at least one unit is
-      non-returned (or any unit is explicitly transfused);
+      neither returned nor incompatible (dispensed/presumed-given, or an
+      explicit transfused-status unit);
     - ``inconclusive`` otherwise (fail-closed).
 
     "Returned" keys on the returned status code, never on the presence of a
@@ -49,25 +54,27 @@ class ReturnsSummary(BaseModel):
     units_total: int = 0
     units_returned: int = 0
     units_transfused: int = 0
+    # Crossmatch-incompatible units (terminal ``Unitstat==7``). Never
+    # transfused, so they count toward the not-transfused screen alongside
+    # returned units. Internal to the disposition; not a report column.
+    units_incompat: int = 0
     ordered_unit_amount: int | None = None
     ledger_complete: bool = False
 
     @property
     def disposition(self) -> Disposition:
-        """Derived disposition; ``inconclusive`` unless the ledger is complete."""
+        """Derived disposition; ``inconclusive`` unless the ledger is complete.
+
+        With a guaranteed-complete ledger an over-dispensed all-returned order
+        genuinely has ALL its units returned — the patient received nothing — so
+        it screens ``not_transfused`` (spec #119 complete-ledger go-live relaxes
+        the earlier NARROW exact-count guard, which only existed to hedge against
+        a hidden transfused replacement unit on a PARTIAL export). A unit that
+        was crossmatch-incompatible (``Unitstat==7``) was never transfused, so it
+        counts toward the not-transfused screen alongside returned units.
+        """
         if not self.ledger_complete:
             return "inconclusive"
-        if self.units_returned == self.units_total:
-            # All-returned screens as not_transfused only when the ledger EXACTLY
-            # accounts for the order. An over-dispensed all-returned order (a
-            # reissue) is suspect — a partial export could hide a transfused
-            # replacement unit that no count-based guard can see — so it falls
-            # through to judgment instead (spec #119 NARROW go-live). The
-            # transfused branch below keeps the looser >= completeness rule: a
-            # seen non-returned unit already confirms a transfusion, and
-            # over-dispense there is benign clinical top-up, not a hidden-
-            # transfusion risk, so its peri-op exemption is preserved.
-            if self.units_total != self.ordered_unit_amount:
-                return "inconclusive"
+        if self.units_returned + self.units_incompat == self.units_total:
             return "not_transfused"
         return "transfused"

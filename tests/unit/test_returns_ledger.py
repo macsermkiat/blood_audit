@@ -12,7 +12,12 @@ from bba.returns_ledger import ReturnsSummary, summarize_returns
 
 
 def _unit(status: str, **extra: str) -> dict[str, str]:
-    """One BDVSTTRANS unit row with an UPPERCASE ``UNITSTAT`` (as normalized)."""
+    """One BDVSTTRANS unit row with an UPPERCASE ``UNITSTAT`` (as normalized).
+
+    Rows carry no ``DNRNO`` by default, so each row is its own physical unit
+    (identifier-free fallback). Tests that exercise lifecycle-row collapsing
+    pass an explicit ``DNRNO``/``SEQNO``.
+    """
     return {"UNITSTAT": status, **extra}
 
 
@@ -29,20 +34,27 @@ def test_all_returned_is_not_transfused() -> None:
     assert summary.disposition == "not_transfused"
 
 
-def test_all_returned_over_dispensed_is_inconclusive() -> None:
-    # units_total exceeding the ordered amount is a visible reissue / over-
-    # dispense. The ledger still COVERS the order (ledger_complete stays True),
-    # but the not-transfused screen additionally requires an EXACT count match:
-    # a partial export could be hiding a transfused replacement unit that no
-    # count-based guard can see. So an over-dispensed all-returned order falls
-    # through to normal judgment instead of being screened not_transfused
-    # (spec #119 NARROW go-live decision).
-    summary = summarize_returns([_unit("3"), _unit("3"), _unit("3")], ["2"])
+def test_all_returned_over_dispensed_is_not_transfused() -> None:
+    # An over-dispensed all-returned order (more distinct units returned than
+    # ordered — a reissue) genuinely had ALL its units returned, so with a
+    # guaranteed-complete ledger the patient received nothing: it screens
+    # not_transfused. This RELAXES the earlier NARROW exact-count guard, which
+    # only existed to hedge against a hidden transfused replacement unit on a
+    # PARTIAL export (spec #119 complete-ledger go-live). Each row carries a
+    # distinct DNRNO so they are three physical units, not one collapsed unit.
+    summary = summarize_returns(
+        [
+            _unit("3", DNRNO="A", SEQNO="0"),
+            _unit("3", DNRNO="B", SEQNO="0"),
+            _unit("3", DNRNO="C", SEQNO="0"),
+        ],
+        ["2"],
+    )
 
     assert summary.units_total == 3
     assert summary.ordered_unit_amount == 2
     assert summary.ledger_complete is True
-    assert summary.disposition == "inconclusive"
+    assert summary.disposition == "not_transfused"
 
 
 def test_transfused_over_dispensed_stays_transfused() -> None:
@@ -163,6 +175,103 @@ def test_missing_unitamt_lines_fails_closed() -> None:
     assert summary.ordered_unit_amount is None
     assert summary.ledger_complete is False
     assert summary.disposition == "inconclusive"
+
+
+def test_dispense_then_return_of_one_unit_collapses_to_returned() -> None:
+    # The complete export records a unit's lifecycle as two rows sharing
+    # (DNRNO, SEQNO): a dispense (Unitstat=2) and a later return (Unitstat=3).
+    # These are ONE physical unit, not two; collapsed to its terminal status it
+    # is returned, so a one-unit order reads not_transfused. Without dedup the
+    # dispense row would inflate units_total to 2 and mislabel the order
+    # transfused (the safe-direction bug the complete-ledger ingest fixes).
+    summary = summarize_returns(
+        [
+            _unit("2", DNRNO="10068045545", SEQNO="0"),
+            _unit("3", DNRNO="10068045545", SEQNO="0"),
+        ],
+        ["1"],
+    )
+
+    assert summary.units_total == 1
+    assert summary.units_returned == 1
+    assert summary.disposition == "not_transfused"
+
+
+def test_aliquots_with_different_seqno_are_distinct_units() -> None:
+    # Split aliquots of one donor bag share DNRNO but differ by SEQNO; they are
+    # DISTINCT physical units and must not be collapsed. Two returned aliquots of
+    # a 2-unit order read not_transfused.
+    summary = summarize_returns(
+        [
+            _unit("3", DNRNO="10068045545", SEQNO="0"),
+            _unit("3", DNRNO="10068045545", SEQNO="1"),
+        ],
+        ["2"],
+    )
+
+    assert summary.units_total == 2
+    assert summary.units_returned == 2
+    assert summary.disposition == "not_transfused"
+
+
+def test_transfused_wins_over_return_row_for_same_unit() -> None:
+    # A unit carrying both a transfused (5) and a return (3) row was given; the
+    # terminal precedence keeps it transfused so a real transfusion is never
+    # downgraded to returned (fail safe against a false not_transfused clear).
+    summary = summarize_returns(
+        [
+            _unit("5", DNRNO="U1", SEQNO="0"),
+            _unit("3", DNRNO="U1", SEQNO="0"),
+        ],
+        ["1"],
+    )
+
+    assert summary.units_total == 1
+    assert summary.units_transfused == 1
+    assert summary.units_returned == 0
+    assert summary.disposition == "transfused"
+
+
+def test_incompatible_unit_is_not_transfused() -> None:
+    # Unitstat=7 is crossmatch-incompatible: the unit was never given. An order
+    # whose only units are returned and incompatible received no blood, so it
+    # screens not_transfused (spec #119 complete-ledger: status 7 counts toward
+    # the not-transfused screen, not toward transfusion).
+    summary = summarize_returns(
+        [
+            _unit("3", DNRNO="U1", SEQNO="0"),
+            _unit("7", DNRNO="U2", SEQNO="0"),
+        ],
+        ["2"],
+    )
+
+    assert summary.units_total == 2
+    assert summary.units_returned == 1
+    assert summary.units_incompat == 1
+    assert summary.disposition == "not_transfused"
+
+
+def test_all_incompatible_is_not_transfused() -> None:
+    # Every unit was incompatible and none given: no transfusion from this order.
+    summary = summarize_returns([_unit("7", DNRNO="U1", SEQNO="0")], ["1"])
+
+    assert summary.units_incompat == 1
+    assert summary.disposition == "not_transfused"
+
+
+def test_incompatible_plus_dispensed_is_transfused() -> None:
+    # A dispensed-not-returned unit (Unitstat=2) is presumed given; the presence
+    # of a separate incompatible unit does not clear it. The order is transfused.
+    summary = summarize_returns(
+        [
+            _unit("7", DNRNO="U1", SEQNO="0"),
+            _unit("2", DNRNO="U2", SEQNO="0"),
+        ],
+        ["2"],
+    )
+
+    assert summary.units_incompat == 1
+    assert summary.disposition == "transfused"
 
 
 def test_summary_is_immutable() -> None:
