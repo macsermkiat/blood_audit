@@ -113,11 +113,17 @@ def _resolve_verdicts() -> tuple[Mapping[str, str], str]:
             AuditStoreConfig(root_dir=audit_store_dir, code_version=str(code_version()))
         )
         if CODE_VERSION_FILTER is not None:
-            rows = list(
-                store.read_audit_results(
+            # Scope to the physician scorecard's component (red_cell), matching
+            # the shipped report/dashboard paths (report_generator.builder filters
+            # component == "red_cell"); platelet AuditRows must not dilute the
+            # doctor/department inappropriate-rate denominator.
+            rows = [
+                r
+                for r in store.read_audit_results(
                     run_id=RUN_ID, code_version=CODE_VERSION_FILTER
                 )
-            )
+                if r.component == "red_cell"
+            ]
         else:
             # Even scoped to one run_id, a --run-id-override re-commit after a
             # code bump can land rows from >1 code_version. The version lives in
@@ -125,12 +131,16 @@ def _resolve_verdicts() -> tuple[Mapping[str, str], str]:
             # read_run_records to see it and fail loud on a mixed run (mirrors the
             # report builder's MixedRunMetadataError) rather than silently merging
             # disjoint audit sets.
-            records = store.read_run_records(run_id=RUN_ID)
+            records = [
+                (row, slug)
+                for row, slug in store.read_run_records(run_id=RUN_ID)
+                if row.component == "red_cell"
+            ]
             slugs = {slug for _, slug in records}
             if len(slugs) > 1:
                 raise SystemExit(
-                    f"run_id {RUN_ID!r} has rows from multiple code versions "
-                    f"{sorted(slugs)}; set BBA_CODE_VERSION to scope the "
+                    f"run_id {RUN_ID!r} has red_cell rows from multiple code "
+                    f"versions {sorted(slugs)}; set BBA_CODE_VERSION to scope the "
                     "scorecard to one version"
                 )
             rows = [row for row, _ in records]
@@ -142,12 +152,13 @@ def _resolve_verdicts() -> tuple[Mapping[str, str], str]:
         )()
         if not verdicts:
             raise SystemExit(
-                "audit store returned no committed audit rows for the requested "
-                f"scope (run_id={RUN_ID!r}, code_version={CODE_VERSION_FILTER!r}); "
-                "run the pipeline for this run before re-baselining scorecards"
+                "audit store returned no committed red_cell audit rows for the "
+                f"requested scope (run_id={RUN_ID!r}, "
+                f"code_version={CODE_VERSION_FILTER!r}); run the pipeline for this "
+                "run before re-baselining scorecards"
             )
         label = (
-            f"{len(verdicts)}-order pipeline verdicts "
+            f"{len(verdicts)}-order red_cell pipeline verdicts "
             f"(audit store, run_id={RUN_ID or 'ALL'}, "
             f"code_version={CODE_VERSION_FILTER or 'ALL'})"
         )
