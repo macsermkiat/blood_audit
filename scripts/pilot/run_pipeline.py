@@ -67,6 +67,7 @@ from bba.returns_ledger import ReturnsSummary, rows_for_admission, summarize_ret
 from bba.vitals_extractor import PeriopSummary, scan_periop
 
 from _anchor_candidates import build_anchor_candidates
+from _bdvsttrans_source import load_bdvsttrans_rows
 from _hosxp_dt import (
     _combine,
     _fmt_hosxp_time,
@@ -599,11 +600,6 @@ def _normalize_optract(raw: list[dict[str, str]]) -> dict[str, dict[str, str]]:
     return out
 
 
-def _normalize_bdvsttrans(raw: list[dict[str, str]]) -> list[dict[str, str]]:
-    """Normalize optional BDVSTTRANS rows to uppercase keys."""
-    return [{k.upper(): v for k, v in r.items()} for r in raw]
-
-
 def _earliest_return_datetime_local(rows: list[dict[str, str]]) -> str:
     """Return earliest BDVSTTRANS return timestamp, or empty string."""
     candidates: list[str] = []
@@ -633,7 +629,10 @@ def main() -> None:
         _read_preferred_optional_csv("INCPT_OPRTACT.csv", "INCPT.csv")
     )
     optract_dict = _normalize_optract(_read_optional_csv("OPRTACT.csv"))
-    bdvsttrans = _normalize_bdvsttrans(_read_optional_csv("BDVSTTRANS.csv"))
+    # Returns ledger: the canonical export at $BBA_BDVSTTRANS_CSV when set, else
+    # the bundle copy. Read only when the flag is on (byte-identical off, and a
+    # flag-off run never opens the possibly-large canonical file).
+    bdvsttrans = load_bdvsttrans_rows(BUNDLE) if RETURNS_LEDGER_ENABLED else []
     icd9 = _read_csv("ICD9CM.csv")
     icd9_dict = {
         (r.get("Icd9cm") or "").strip().replace(".", ""): {

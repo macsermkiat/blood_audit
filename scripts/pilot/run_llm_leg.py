@@ -120,6 +120,7 @@ from bba.prompt_builder import EvidenceChunk, PromptBuildRequest, build_prompt
 from bba.vitals_extractor import PeriopSummary, extract_vitals
 
 from _anchor_candidates import build_anchor_candidates
+from _bdvsttrans_source import load_bdvsttrans_rows
 from _hosxp_dt import _combine, _parse_hosxp_date, _parse_time
 from _periop_notes import vitals_notes_for
 
@@ -997,10 +998,11 @@ def _build_inputs():
     # Keys are uppercased so summarize_returns reads UNITSTAT; the index keys on
     # the raw REQNO to match order.reqno and every other REQNO index (a one-sided
     # strip would silently miss the join).
+    # Source: the canonical export at $BBA_BDVSTTRANS_CSV when set, else the
+    # bundle copy (rows already UPPERCASE-keyed by the shared loader).
     bdvsttrans_by_reqno: dict[str, list[dict[str, str]]] = {}
     if RETURNS_LEDGER_ENABLED:
-        for raw in _read_optional_csv("BDVSTTRANS.csv"):
-            row = {k.upper(): v for k, v in raw.items()}
+        for row in load_bdvsttrans_rows(BUNDLE):
             bdvsttrans_by_reqno.setdefault(row.get("REQNO") or "", []).append(row)
 
     bdvst_by_reqno = {r["REQNO"]: r for r in bdvst}
