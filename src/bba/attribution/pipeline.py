@@ -14,6 +14,7 @@ from bba.attribution.lab_stats import (
     OrderLabValue,
     aggregate_department_lab_stats,
     aggregate_doctor_lab_stats,
+    missing_lab_reqnos,
 )
 from bba.attribution.models import (
     Bucket,
@@ -77,6 +78,23 @@ def build_rankings(
     omitting it leaves the mean fields at their defaults so existing
     callers are unaffected.
     """
+    if order_labs is not None:
+        # Fail loud before aggregating (guards both the doctor and department
+        # paths): a scorable REQNO absent from the lab source means a stale,
+        # header-only, or wrong-run report.csv, and a partial join must never
+        # be presented as a trigger (spec #131, "fail loudly if the per-order
+        # lab source is missing"). A legitimately absent Hb still carries a
+        # report row with hb_freshness == "missing".
+        missing = missing_lab_reqnos(verdicts, order_labs)
+        if missing:
+            raise ValueError(
+                f"per-order lab source has no row for {len(missing)} scorable "
+                f"REQNO(s) (e.g. {missing[:5]}); a stale, header-only, or "
+                "wrong-run report.csv cannot back the mean trigger columns — "
+                "refusing to present a partial join. Every scorable order must "
+                "have a report row (a genuinely absent value still carries "
+                "freshness == 'missing')."
+            )
     doctor_stats = (
         aggregate_doctor_lab_stats(verdicts, reqno_to_doctor, order_labs)
         if order_labs is not None

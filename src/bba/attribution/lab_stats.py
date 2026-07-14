@@ -157,6 +157,26 @@ def load_order_labs(path: Path) -> Mapping[str, OrderLabValue]:
     return labs
 
 
+def missing_lab_reqnos(
+    verdicts: Mapping[str, str],
+    order_labs: Mapping[str, OrderLabValue],
+) -> list[str]:
+    """Scorable verdict REQNOs with no row at all in the lab source.
+
+    A genuinely absent Hb still gets a ``report.csv`` row (with
+    ``hb_freshness == "missing"``); a *missing row* instead means the
+    source is stale, header-only, or from a different run — a partial join
+    that must not be presented as a trigger. Returned sorted for a stable,
+    diagnosable message. Non-scorable (returns-terminal) REQNOs are exempt:
+    they are held out of the denominator and need no lab row.
+    """
+    return sorted(
+        reqno
+        for reqno, classification in verdicts.items()
+        if classification not in _EXCLUDED_FROM_SCORING and reqno not in order_labs
+    )
+
+
 def _stats_from_hb(hb_values: list[float]) -> GroupLabStats:
     """Collapse a group's usable Hb values into its :class:`GroupLabStats`,
     preserving the ``n == 0`` iff ``mean is None`` invariant."""

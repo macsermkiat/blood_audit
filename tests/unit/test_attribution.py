@@ -1402,10 +1402,13 @@ class TestMeanHbOutput:
         self, tmp_path: Path
     ) -> None:
         verdicts, reqno_to_doctor, registry, order_labs = _mean_hb_scenario()
-        # d2 orders only platelets? No — give a doctor with no usable Hb by
-        # dropping its lab so the em-dash path renders.
+        # d2's row is present but carries no usable Hb (unusable value, not a
+        # missing row) so the em-dash path renders without tripping the
+        # lab-coverage gate.
         order_labs = dict(order_labs)
-        del order_labs["r3"]  # d2 now has no usable Hb -> em-dash
+        order_labs["r3"] = OrderLabValue(
+            reqno="r3", component="red_cell", hb_value_g_dl=None
+        )
         result = build_rankings(
             verdicts=verdicts,
             reqno_to_doctor=reqno_to_doctor,
@@ -1420,3 +1423,20 @@ class TestMeanHbOutput:
         assert "9.0 (n=2)" in html  # d1
         assert "&mdash;" in html  # d2, no usable Hb
         assert "mean pre-transfusion" in html  # caveat sentence
+
+    def test_assembly_fails_loud_when_scorable_reqno_has_no_lab_row(self) -> None:
+        # A scorable REQNO absent from the lab source (stale / header-only /
+        # wrong-run report.csv) must fail loud, not silently blank the column
+        # (spec #131 user story 10). A present-but-unusable value is fine and
+        # covered elsewhere; this is a *missing row*.
+        verdicts, reqno_to_doctor, registry, order_labs = _mean_hb_scenario()
+        order_labs = dict(order_labs)
+        del order_labs["r1"]  # scorable INAPPROPRIATE order, row now absent
+        with pytest.raises(ValueError, match="scorable REQNO"):
+            build_rankings(
+                verdicts=verdicts,
+                reqno_to_doctor=reqno_to_doctor,
+                dct_registry=registry,
+                order_labs=order_labs,
+                min_orders=1,
+            )
