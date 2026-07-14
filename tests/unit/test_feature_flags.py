@@ -1,7 +1,10 @@
-"""The returns-ledger flag must default OFF and be part of the flag contract.
+"""The returns-ledger flag contract.
 
-Spec #119 ships the whole returns-ledger behavior behind a default-off flag so a
-run reproduces prior results exactly and enabling the feature is a deliberate act.
+Spec #119 shipped the whole returns-ledger behavior behind a flag so a run could
+reproduce prior results exactly while the feature was validated. The NARROW
+go-live decision (validated by the #125 pre-flight + deterministic-leg smoke)
+enables it by default; the pre-feature behavior is now the monkeypatched
+exception. The other feature flags remain default-off.
 """
 
 from __future__ import annotations
@@ -9,8 +12,11 @@ from __future__ import annotations
 from bba import feature_flags
 
 
-def test_returns_ledger_flag_defaults_off() -> None:
-    assert feature_flags.RETURNS_LEDGER_ENABLED is False
+def test_returns_ledger_flag_defaults_on() -> None:
+    # Go-live (spec #119 NARROW): the returns-ledger disposition router is the
+    # default. A run reproduces the pre-feature behavior only by monkeypatching
+    # this flag back to False.
+    assert feature_flags.RETURNS_LEDGER_ENABLED is True
 
 
 def test_returns_ledger_flag_is_exported() -> None:
@@ -18,6 +24,6 @@ def test_returns_ledger_flag_is_exported() -> None:
 
 
 def test_existing_flags_still_default_off() -> None:
-    # Guard against an accidental default flip when adding the new flag.
+    # The other flags remain default-off; guard against an accidental flip.
     assert feature_flags.PLATELET_LLM_ENABLED is False
     assert feature_flags.RESERVE_AHEAD_ROUTER_ENABLED is False

@@ -17,6 +17,7 @@ import pytest
 
 from bba.audit_store import AuditRow
 from bba.report_generator import (
+    EmptyInputError,
     MissingResolverError,
     MixedRunMetadataError,
     build_report_inputs,
@@ -37,6 +38,102 @@ def test_default_projector_rejects_returned_not_transfused() -> None:
 def test_default_projector_rejects_periop_transfusion_exempt() -> None:
     with pytest.raises(MissingResolverError, match="excluded, non-scorable"):
         default_classification_projector("PERIOP_TRANSFUSION_EXEMPT")
+
+
+class TestReturnsTerminalsExcludedFromReport:
+    """The non-scorable returns terminals must be DROPPED from the report, not
+    crash it.
+
+    With RETURNS_LEDGER_ENABLED on by default (spec #119 go-live) an
+    audit_store can carry RETURNED_NOT_TRANSFUSED / PERIOP_TRANSFUSION_EXEMPT
+    final_classifications. The default report projector fails loud on both
+    (they are not report-scorable values), so the builder must exclude them
+    before projection — exactly as attribution excludes them from rates — or a
+    monthly report run over a go-live audit_store would raise.
+    """
+
+    def test_returns_terminals_excluded_not_raised(self, tmp_path: Path) -> None:
+        rows = (
+            _row(audit_id="scored", final_classification="INAPPROPRIATE"),
+            _row(audit_id="returned", final_classification="RETURNED_NOT_TRANSFUSED"),
+            _row(audit_id="exempt", final_classification="PERIOP_TRANSFUSION_EXEMPT"),
+        )
+        inputs = build_report_inputs(
+            run_id="run-aaa",
+            audit_store=_store_returning(*rows),
+            output_dir=tmp_path,
+            ward_resolver=lambda _r: "ward-1",
+            physician_resolver=lambda _r: "phys-1",
+        )
+        # Only the scorable row survives; the two non-scorable terminals are
+        # dropped rather than projected (which would have raised).
+        assert {r.audit_id for r in inputs.rows} == {"scored"}
+
+    def test_all_returns_terminals_run_raises_empty(self, tmp_path: Path) -> None:
+        # A run whose red_cell rows are ALL non-scorable returns terminals has
+        # nothing to report; fail loud rather than emit an empty/misleading one.
+        rows = (
+            _row(audit_id="r1", final_classification="RETURNED_NOT_TRANSFUSED"),
+            _row(audit_id="r2", final_classification="PERIOP_TRANSFUSION_EXEMPT"),
+        )
+        with pytest.raises(EmptyInputError, match="non-scorable returns"):
+            build_report_inputs(
+                run_id="run-aaa",
+                audit_store=_store_returning(*rows),
+                output_dir=tmp_path,
+                ward_resolver=lambda _r: "ward-1",
+                physician_resolver=lambda _r: "phys-1",
+            )
+
+    def test_terminal_row_footer_divergence_still_fails_loud(
+        self, tmp_path: Path
+    ) -> None:
+        # Run-level integrity is validated over the FULL red_cell set BEFORE
+        # terminals are dropped: a returns-terminal row from a different run
+        # metadata (policy_version) is mixed-run corruption that must fail loud,
+        # not be silently filtered away (Codex P2).
+        rows = (
+            _row(audit_id="scored", final_classification="INAPPROPRIATE"),
+            _row(
+                audit_id="returned",
+                final_classification="RETURNED_NOT_TRANSFUSED",
+                policy_version="OTHER-policy-9.9",
+            ),
+        )
+        with pytest.raises(MixedRunMetadataError, match="policy_version"):
+            build_report_inputs(
+                run_id="run-aaa",
+                audit_store=_store_returning(*rows),
+                output_dir=tmp_path,
+                ward_resolver=lambda _r: "ward-1",
+                physician_resolver=lambda _r: "phys-1",
+            )
+
+    def test_terminal_row_month_divergence_still_fails_loud(
+        self, tmp_path: Path
+    ) -> None:
+        # Same for the single-month invariant: a terminal row in a different
+        # local month must raise, not be dropped before the month check.
+        rows = (
+            _row(
+                audit_id="scored",
+                final_classification="INAPPROPRIATE",
+                order_datetime=datetime(2026, 5, 10, 8, 0, 0, tzinfo=UTC),
+            ),
+            _row(
+                audit_id="exempt",
+                final_classification="PERIOP_TRANSFUSION_EXEMPT",
+                order_datetime=datetime(2026, 6, 10, 8, 0, 0, tzinfo=UTC),
+            ),
+        )
+        with pytest.raises(MixedRunMetadataError, match="multiple Asia/Bangkok"):
+            build_report_inputs(
+                run_id="run-aaa",
+                audit_store=_store_returning(*rows),
+                output_dir=tmp_path,
+                ward_resolver=lambda _r: "ward-1",
+                physician_resolver=lambda _r: "phys-1",
+            )
 
 
 def _row(

@@ -39,13 +39,16 @@ and replay. It stays False until the #109 gate makes the end-to-end semantics
 safe to enable outside tests.
 """
 
-RETURNS_LEDGER_ENABLED: bool = False
-"""Enable the BDVSTTRANS returns-ledger disposition read path (default: OFF).
+RETURNS_LEDGER_ENABLED: bool = True
+"""Enable the BDVSTTRANS returns-ledger disposition read path (default: ON).
 
-Ticket #120 (spec #119) wires the REQNO-exact returns join, the returns_ledger
-summary, and the new report columns behind this flag. With it OFF the pilot
-report is byte-identical to today; no verdict logic changes in #120. The
-disposition router that consumes the summary lands in #122/#123.
+Ticket #120 (spec #119) wired the REQNO-exact returns join, the returns_ledger
+summary, and the new report columns behind this flag; the disposition router
+(RETURNED_NOT_TRANSFUSED + PERIOP_TRANSFUSION_EXEMPT) landed in #122/#123. The
+NARROW go-live decision (over-dispensed reissues excluded from the screen) was
+validated by the #125 pre-flight and the deterministic-leg smoke, so the flag is
+now enabled by default. Tests that need the pre-feature behavior monkeypatch it
+back to False.
 """
 
 __all__: Sequence[str] = (
