@@ -17,6 +17,7 @@ CSVTable = Literal[
     "BDVST",
     "BDVSTDT",
     "BDVSTST",
+    "BDVSTTRANS",
     "BDTYPE",
     "Diagnosis",
     "Lab",

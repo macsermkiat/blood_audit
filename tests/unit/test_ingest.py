@@ -51,6 +51,7 @@ REQUIRED_TABLES: tuple[CSVTable, ...] = (
     "BDVST",
     "BDVSTDT",
     "BDVSTST",
+    "BDVSTTRANS",
     "BDTYPE",
     "Diagnosis",
     "Lab",
@@ -978,7 +979,7 @@ class TestFixtureDrainSmoke:
         # year-filter-drops, empty procedure dates parse-warn, all other tables
         # pass through), and the row-pipeline must handle each cleanly.
         result = ingest(cfg)
-        assert len(result.tables_written) == 12
+        assert len(result.tables_written) == 13
         assert result.skipped_idempotent is False
 
 
@@ -1270,11 +1271,11 @@ class TestSchemaCoverage:
         # Adding a table without bumping the schema version would change the
         # fingerprint and produce a new run_id — but we still want a hard
         # tripwire so a contributor cannot register an extra one silently.
-        # Canonical set: 12 tables — see
-        # docs/ingest-mapping.md. UnUSE_Patient_Background dropped because
-        # the bundle's file with that name is obstetric records, not patient
-        # demographics; audit no longer needs per-row age/sex.
-        assert len(all_tables()) == 12
+        # Canonical set: 13 tables — see docs/ingest-mapping.md. BDVSTTRANS (the
+        # returns ledger, spec #119) is the 13th; UnUSE_Patient_Background stays
+        # dropped because the bundle's file with that name is obstetric records,
+        # not patient demographics; audit no longer needs per-row age/sex.
+        assert len(all_tables()) == 13
 
 
 # =============================================================================

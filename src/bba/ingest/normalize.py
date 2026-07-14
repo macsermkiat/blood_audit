@@ -65,6 +65,11 @@ _CASE_NORMALIZE_TABLES: frozenset[CSVTable] = frozenset(
     {
         "IPTSUMOPRT",
         "ICD9CM",
+        # BDVSTTRANS's raw export ships ALL-CAPS headers, but the pilot bundle
+        # builder historically emitted Title-Case ones; uppercasing before drift
+        # detection makes ingest accept either casing rather than dropping the
+        # ledger's columns as unknown and failing on missing required columns.
+        "BDVSTTRANS",
     }
 )
 # Note: ``INCPT_OPRTACT`` (the pre-joined INCPT ⋈ OPRTACT export from
