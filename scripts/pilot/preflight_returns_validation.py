@@ -389,12 +389,17 @@ class InvariantViolation:
 
 @dataclass(frozen=True)
 class NoteAttribution:
-    """A windowed recall hit attributed to a different same-admission order."""
+    """A windowed recall hit attributed to a different same-admission order.
+
+    One record per conflicting note DATE that a sibling explains, so a conflict
+    is only suppressed when EVERY affirmative note date is attributed.
+    """
 
     reqno: str
     attributed_to: str
     dispensed: str
     status: str
+    note_date: str
 
 
 @dataclass(frozen=True)
@@ -509,6 +514,24 @@ def _build_inputs(
 
 def _all_returned(trans_rows: Sequence[Mapping[str, str]]) -> bool:
     return bool(trans_rows) and nonreturned_unit_count(trans_rows) == 0
+
+
+def _rows_for_admission(
+    rows: Sequence[Mapping[str, str]], an: str | None
+) -> list[dict[str, str]]:
+    """Restrict a REQNO's ledger rows to one admission's AN.
+
+    The complete export reuses some REQNOs across admissions, so a REQNO-only
+    lookup can pull a foreign admission's units into this order's disposition,
+    windowed recall, and invariant — foreign returned/incompatible rows could
+    even satisfy ``ledger_complete`` and derive ``not_transfused`` for an order
+    whose own units were transfused. When the order has no AN, keep all rows
+    (cannot scope); the audited pilot orders all carry an AN, so this only fails
+    open on a malformed order.
+    """
+    if not an:
+        return [dict(r) for r in rows]
+    return [dict(r) for r in rows if (r.get("AN") or "").strip() == an]
 
 
 def _sibling_units_for(
@@ -651,7 +674,10 @@ def run_preflight() -> PreflightResult:
     invariant_violations: list[InvariantViolation] = []
 
     for order in filter_result.included:
-        trans_rows = trans_by_reqno.get(order.reqno, [])
+        # Scope to this order's admission: a REQNO can recur across admissions in
+        # the complete export, so a REQNO-only lookup could feed foreign units to
+        # this order's disposition, windowing, and invariant.
+        trans_rows = _rows_for_admission(trans_by_reqno.get(order.reqno, []), order.an)
         summary = summarize_returns(
             trans_rows, unitamt_lines_by_reqno.get(order.reqno, [])
         )
@@ -740,23 +766,30 @@ def run_preflight() -> PreflightResult:
     recall_conflicts_windowed_net: list[RecallConflict] = []
     note_attributions: list[NoteAttribution] = []
     for conflict in recall_conflicts_windowed:
-        # No parseable note date -> cannot note-anchor -> do NOT suppress (safe).
-        note_window = recall_window(list(conflict.note_dates))
-        sibling = explaining_sibling(
-            note_window,
-            sibling_units_by_reqno.get(conflict.reqno, ()),
-        )
-        if sibling is None:
-            recall_conflicts_windowed_net.append(conflict)
-        else:
-            note_attributions.append(
-                NoteAttribution(
-                    reqno=conflict.reqno,
-                    attributed_to=sibling.reqno,
-                    dispensed=str(sibling.dispense_date),
-                    status=sibling.status,
+        siblings = sibling_units_by_reqno.get(conflict.reqno, ())
+        # Attribute PER conflicting note date: a sibling near an early note must
+        # not suppress a later unexplained note. Each affirmative note date needs
+        # its OWN explaining sibling (windowed to that date) or the conflict is
+        # not suppressed. No parseable note date -> cannot note-anchor -> keep
+        # the conflict (safe).
+        per_note: list[tuple[date, SiblingUnit | None]] = [
+            (d, explaining_sibling(recall_window([d]), siblings))
+            for d in conflict.note_dates
+        ]
+        if conflict.note_dates and all(sib is not None for _, sib in per_note):
+            for note_date, sib in per_note:
+                assert sib is not None  # guarded by the all(...) above
+                note_attributions.append(
+                    NoteAttribution(
+                        reqno=conflict.reqno,
+                        attributed_to=sib.reqno,
+                        dispensed=str(sib.dispense_date or sib.give_date),
+                        status=sib.status,
+                        note_date=str(note_date),
+                    )
                 )
-            )
+        else:
+            recall_conflicts_windowed_net.append(conflict)
 
     return PreflightResult(
         bdvsttrans_source=str(bdvsttrans_path),
@@ -897,8 +930,8 @@ def print_report(result: PreflightResult) -> None:
     )
     for na in result.note_attributions:
         print(
-            f"      reqno={na.reqno} -> sibling {na.attributed_to} "
-            f"(dispensed {na.dispensed}, status {na.status} not-returned)"
+            f"      reqno={na.reqno} note {na.note_date} -> sibling "
+            f"{na.attributed_to} (active {na.dispensed}, status {na.status})"
         )
     print(
         f"    windowed (pre-attribution): {len(result.recall_conflicts_windowed)}"

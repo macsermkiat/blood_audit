@@ -261,14 +261,25 @@ def test_nonreturned_unit_count_treats_incompatible_as_non_transfusion() -> None
 
 
 def test_nonreturned_unit_count_collapses_lifecycle_rows() -> None:
-    # A unit dispensed then returned is ONE physical unit (shared DNRNO/SEQNO);
-    # collapsed to its terminal returned status it is not a non-returned unit, so
-    # the dispense row does not inflate the invariant count.
+    # A unit dispensed then returned is ONE physical unit (shared full key
+    # DNRNO/SEQNO/BDTYPE); collapsed to its terminal returned status it is not a
+    # non-returned unit, so the dispense row does not inflate the invariant count.
     rows = [
-        {"UNITSTAT": "2", "DNRNO": "U1", "SEQNO": "0"},
-        {"UNITSTAT": "3", "DNRNO": "U1", "SEQNO": "0"},
+        {"UNITSTAT": "2", "DNRNO": "U1", "SEQNO": "0", "BDTYPE": "LDPRC2"},
+        {"UNITSTAT": "3", "DNRNO": "U1", "SEQNO": "0", "BDTYPE": "LDPRC2"},
     ]
     assert PF.nonreturned_unit_count(rows) == 0
+
+
+def test_nonreturned_unit_count_fails_closed_on_partial_key() -> None:
+    # A dispense + return sharing only DNRNO (no SEQNO/BDTYPE) must NOT collapse:
+    # the dispensed unit stays counted so the invariant catches a possible
+    # transfusion rather than silently clearing it.
+    rows = [
+        {"UNITSTAT": "2", "DNRNO": "U1"},
+        {"UNITSTAT": "3", "DNRNO": "U1"},
+    ]
+    assert PF.nonreturned_unit_count(rows) == 1
 
 
 def test_invariant_holds_for_summarize_not_transfused() -> None:

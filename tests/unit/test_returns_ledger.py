@@ -186,8 +186,8 @@ def test_dispense_then_return_of_one_unit_collapses_to_returned() -> None:
     # transfused (the safe-direction bug the complete-ledger ingest fixes).
     summary = summarize_returns(
         [
-            _unit("2", DNRNO="10068045545", SEQNO="0"),
-            _unit("3", DNRNO="10068045545", SEQNO="0"),
+            _unit("2", DNRNO="10068045545", SEQNO="0", BDTYPE="LDPRC2"),
+            _unit("3", DNRNO="10068045545", SEQNO="0", BDTYPE="LDPRC2"),
         ],
         ["1"],
     )
@@ -203,8 +203,8 @@ def test_aliquots_with_different_seqno_are_distinct_units() -> None:
     # a 2-unit order read not_transfused.
     summary = summarize_returns(
         [
-            _unit("3", DNRNO="10068045545", SEQNO="0"),
-            _unit("3", DNRNO="10068045545", SEQNO="1"),
+            _unit("3", DNRNO="10068045545", SEQNO="0", BDTYPE="LDPRC2"),
+            _unit("3", DNRNO="10068045545", SEQNO="1", BDTYPE="LDPRC2"),
         ],
         ["2"],
     )
@@ -232,6 +232,24 @@ def test_distinct_bdtype_units_are_not_collapsed() -> None:
     assert summary.disposition == "transfused"
 
 
+def test_partial_key_row_fails_closed_and_is_not_collapsed() -> None:
+    # Fail closed on a malformed line: a row missing any of DNRNO/SEQNO/BDTYPE
+    # must NOT collapse with another row sharing only the donor number, or a
+    # dispensed row could be masked behind a returned one (a false clear). Here
+    # both rows share DNRNO but carry no SEQNO/BDTYPE, so they stay two units and
+    # the dispensed unit keeps the order transfused.
+    summary = summarize_returns(
+        [
+            _unit("2", DNRNO="D1"),
+            _unit("3", DNRNO="D1"),
+        ],
+        ["2"],
+    )
+
+    assert summary.units_total == 2
+    assert summary.disposition == "transfused"
+
+
 def test_same_bdtype_lifecycle_still_collapses() -> None:
     # A true same-item lifecycle (identical DNRNO/SEQNO/BDTYPE, dispense then
     # return) still collapses to one returned unit.
@@ -253,8 +271,8 @@ def test_transfused_wins_over_return_row_for_same_unit() -> None:
     # downgraded to returned (fail safe against a false not_transfused clear).
     summary = summarize_returns(
         [
-            _unit("5", DNRNO="U1", SEQNO="0"),
-            _unit("3", DNRNO="U1", SEQNO="0"),
+            _unit("5", DNRNO="U1", SEQNO="0", BDTYPE="LDPRC2"),
+            _unit("3", DNRNO="U1", SEQNO="0", BDTYPE="LDPRC2"),
         ],
         ["1"],
     )

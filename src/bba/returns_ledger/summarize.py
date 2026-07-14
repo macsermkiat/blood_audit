@@ -59,16 +59,21 @@ def physical_units(trans_rows: Sequence[Mapping[str, str]]) -> list[str]:
 
     Groups rows sharing a non-blank ``(DNRNO, SEQNO, BDTYPE)`` — the
     physical-unit key in the complete export — and reduces each group to its
-    terminal status (:func:`_terminal_status`). ``BDTYPE`` is part of the key
+    terminal status (:func:`terminal_status`). ``BDTYPE`` is part of the key
     because ``(DNRNO, SEQNO)`` alone collides across distinct products of one
     donation (e.g. split ``SDRF``/``SDRF2`` units, or a pooled ``LDPC1..4``) and
     across a unit's irradiation relabel (``X`` vs ``X+I``); keying on ``BDTYPE``
     keeps genuinely-distinct units apart so a presumed-transfused unit can never
     be masked behind another product's return (a false ``not_transfused``). Only
     true same-item lifecycle rows (identical DNRNO/SEQNO/BDTYPE, e.g. a
-    dispense + a later return) collapse. A row with a BLANK ``DNRNO`` is its own
-    unit (never collapsed), so identifier-free rows fall back to one-row-per-unit
-    counting. Order is preserved for determinism.
+    dispense + a later return) collapse.
+
+    Collapsing requires ALL THREE key components present: a row missing any of
+    ``DNRNO``/``SEQNO``/``BDTYPE`` is treated as its own physical unit (never
+    collapsed), so a partial key can never group a dispensed row with a returned
+    one and mask the transfusion (fail closed). The real export fills all three
+    on every row; this only guards a malformed line. Order is preserved for
+    determinism.
     """
     groups: dict[tuple[object, ...], list[str]] = {}
     order: list[tuple[object, ...]] = []
@@ -76,7 +81,12 @@ def physical_units(trans_rows: Sequence[Mapping[str, str]]) -> list[str]:
         dnrno = str(row.get("DNRNO") or "").strip()
         seqno = str(row.get("SEQNO") or "").strip()
         bdtype = str(row.get("BDTYPE") or "").strip()
-        key: tuple[object, ...] = (dnrno, seqno, bdtype) if dnrno else (None, idx)
+        # Only a complete physical-unit key collapses rows; any missing
+        # component falls back to a per-row identifier so distinct rows are
+        # never merged behind a partial key.
+        key: tuple[object, ...] = (
+            (dnrno, seqno, bdtype) if (dnrno and seqno and bdtype) else (None, idx)
+        )
         if key not in groups:
             groups[key] = []
             order.append(key)
