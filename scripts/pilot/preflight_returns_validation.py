@@ -58,6 +58,7 @@ from bba.deterministic_classifier import PERIOP_MIN_EBL_ML
 from bba.returns_ledger import (
     ReturnsSummary,
     physical_units,
+    rows_for_admission,
     summarize_returns,
     terminal_status,
 )
@@ -516,24 +517,6 @@ def _all_returned(trans_rows: Sequence[Mapping[str, str]]) -> bool:
     return bool(trans_rows) and nonreturned_unit_count(trans_rows) == 0
 
 
-def _rows_for_admission(
-    rows: Sequence[Mapping[str, str]], an: str | None
-) -> list[dict[str, str]]:
-    """Restrict a REQNO's ledger rows to one admission's AN.
-
-    The complete export reuses some REQNOs across admissions, so a REQNO-only
-    lookup can pull a foreign admission's units into this order's disposition,
-    windowed recall, and invariant — foreign returned/incompatible rows could
-    even satisfy ``ledger_complete`` and derive ``not_transfused`` for an order
-    whose own units were transfused. When the order has no AN, keep all rows
-    (cannot scope); the audited pilot orders all carry an AN, so this only fails
-    open on a malformed order.
-    """
-    if not an:
-        return [dict(r) for r in rows]
-    return [dict(r) for r in rows if (r.get("AN") or "").strip() == an]
-
-
 def _sibling_units_for(
     an: str,
     own_reqno: str,
@@ -553,18 +536,19 @@ def _sibling_units_for(
     for reqno in reqnos_by_an.get(an, set()):
         if reqno == own_reqno:
             continue
-        groups: dict[tuple[str, str, str], list[dict[str, str]]] = {}
-        order: list[tuple[str, str, str]] = []
-        for u in trans_by_reqno.get(reqno, []):
-            # Scope to THIS admission: the complete export reuses some REQNOs
-            # across admissions, so an unfiltered lookup would pull a foreign
-            # admission's units into the attribution.
-            if (u.get("AN") or "").strip() != an:
-                continue
-            key = (
-                str(u.get("DNRNO") or "").strip(),
-                str(u.get("SEQNO") or "").strip(),
-                str(u.get("BDTYPE") or "").strip(),
+        groups: dict[tuple[object, ...], list[dict[str, str]]] = {}
+        order: list[tuple[object, ...]] = []
+        # Scope to THIS admission first (a REQNO can recur across admissions).
+        for idx, u in enumerate(rows_for_admission(trans_by_reqno.get(reqno, []), an)):
+            dnrno = str(u.get("DNRNO") or "").strip()
+            seqno = str(u.get("SEQNO") or "").strip()
+            bdtype = str(u.get("BDTYPE") or "").strip()
+            # Fail closed on a partial key exactly like physical_units(): a row
+            # missing any component is its own unit, so a returned row can never
+            # be grouped with a transfused one and mis-read as a not-returned
+            # source that suppresses a conflict.
+            key: tuple[object, ...] = (
+                (dnrno, seqno, bdtype) if (dnrno and seqno and bdtype) else (None, idx)
             )
             if key not in groups:
                 groups[key] = []
@@ -677,7 +661,7 @@ def run_preflight() -> PreflightResult:
         # Scope to this order's admission: a REQNO can recur across admissions in
         # the complete export, so a REQNO-only lookup could feed foreign units to
         # this order's disposition, windowing, and invariant.
-        trans_rows = _rows_for_admission(trans_by_reqno.get(order.reqno, []), order.an)
+        trans_rows = rows_for_admission(trans_by_reqno.get(order.reqno, []), order.an)
         summary = summarize_returns(
             trans_rows, unitamt_lines_by_reqno.get(order.reqno, [])
         )

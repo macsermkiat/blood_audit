@@ -8,7 +8,7 @@ not-transfused. Each test states WHY the disposition matters, not just the count
 
 from __future__ import annotations
 
-from bba.returns_ledger import ReturnsSummary, summarize_returns
+from bba.returns_ledger import ReturnsSummary, rows_for_admission, summarize_returns
 
 
 def _unit(status: str, **extra: str) -> dict[str, str]:
@@ -323,6 +323,27 @@ def test_incompatible_plus_dispensed_is_transfused() -> None:
 
     assert summary.units_incompat == 1
     assert summary.disposition == "transfused"
+
+
+def test_rows_for_admission_scopes_by_an() -> None:
+    # A REQNO can recur across admissions in the complete export; scoping to the
+    # order's AN drops a foreign admission's rows so they cannot feed this order's
+    # disposition. Summarized unscoped, the foreign returned unit would wrongly
+    # read all-returned; scoped, only the dispensed own unit remains -> transfused.
+    rows = [
+        {"AN": "A1", "UNITSTAT": "2", "DNRNO": "D1", "SEQNO": "0", "BDTYPE": "LDPRC2"},
+        {"AN": "A2", "UNITSTAT": "3", "DNRNO": "D9", "SEQNO": "0", "BDTYPE": "LDPRC2"},
+    ]
+    scoped = rows_for_admission(rows, "A1")
+    assert [r["UNITSTAT"] for r in scoped] == ["2"]
+    assert summarize_returns(scoped, ["1"]).disposition == "transfused"
+
+
+def test_rows_for_admission_keeps_all_when_no_an() -> None:
+    # An order without an AN cannot be scoped -> keep every row (fail open).
+    rows = [{"AN": "A1", "UNITSTAT": "3"}, {"AN": "A2", "UNITSTAT": "3"}]
+    assert len(rows_for_admission(rows, None)) == 2
+    assert len(rows_for_admission(rows, "")) == 2
 
 
 def test_summary_is_immutable() -> None:

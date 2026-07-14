@@ -54,6 +54,25 @@ def terminal_status(statuses: Sequence[str]) -> str:
     return ""
 
 
+def rows_for_admission(
+    trans_rows: Sequence[Mapping[str, str]], an: str | None
+) -> list[dict[str, str]]:
+    """Restrict a REQNO's ledger rows to one admission's ``AN``.
+
+    A REQNO can recur across admissions in the complete export, so a REQNO-only
+    lookup can feed a foreign admission's units into this order's disposition —
+    foreign returned/incompatible rows could even derive ``not_transfused`` for
+    an order whose own units were transfused. Every consumer that summarizes an
+    order's ledger rows (pre-flight, both pilot legs, production wiring) MUST
+    scope through this first so they stay in lockstep. When the order has no
+    ``an`` the rows are returned unscoped (cannot scope); audited orders always
+    carry an AN, so this only fails open on a malformed order.
+    """
+    if not an:
+        return [dict(r) for r in trans_rows]
+    return [dict(r) for r in trans_rows if str(r.get("AN") or "").strip() == an]
+
+
 def physical_units(trans_rows: Sequence[Mapping[str, str]]) -> list[str]:
     """Collapse ledger rows to one terminal ``UNITSTAT`` per physical unit.
 
