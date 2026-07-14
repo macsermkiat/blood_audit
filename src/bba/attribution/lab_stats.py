@@ -2,18 +2,22 @@
 
 Feature 2 addendum (spec #131): the committee ranking report shows, per
 ordering doctor and per department, the mean *pre-transfusion trigger* —
-the mean Hb the group's red-cell orders were transfused at. The values
-are not recomputed here: the pipeline already emits a per-order Hb
-(``hb_value_g_dl``), its freshness (``hb_freshness``), and the blood
-``component`` in ``report.csv``. This module joins those onto the same
-scorable REQNO cohort the scorecards already count, so a returned /
+the mean Hb the group's red-cell orders were transfused at, and the mean
+platelet count its platelet orders were transfused at. The values are not
+recomputed here: the pipeline already emits per-order Hb / platelet counts
+(``hb_value_g_dl`` / ``platelet_count_k_ul``), their freshness, and the
+blood ``component`` in ``report.csv``. This module joins those onto the
+same scorable REQNO cohort the scorecards already count, so a returned /
 never-transfused or out-of-cohort order can never be presented as a
 trigger, and a group's sample size ``n`` can never exceed its Orders (N).
+The two components are kept strictly separate — a red-cell row never
+contributes to a platelet mean, or vice versa.
 
-Strict reuse of the lookup layer's analytic range (``[2, 25]`` g/dL) means
-a corrupt reading cannot distort a mean, and the loader fails loud on
-schema drift or a conflicting duplicate REQNO — a silently dropped column
-or a concatenated export must never quietly zero out the join.
+Strict reuse of the lookup layer's analytic ranges (Hb ``[2, 25]`` g/dL,
+platelet ``[1, 3000]`` ×10³/µL) means a corrupt reading cannot distort a
+mean, and the loader fails loud on schema drift or a conflicting duplicate
+REQNO — a silently dropped column or a concatenated export must never
+quietly zero out the join.
 """
 
 from __future__ import annotations
@@ -36,6 +40,8 @@ from bba.attribution.models import (
 # re-inventing so this join and the ingest parsers reject the same values.
 from bba.hb_lookup.parse import _MAX_G_DL as _HB_MAX_G_DL
 from bba.hb_lookup.parse import _MIN_G_DL as _HB_MIN_G_DL
+from bba.platelet_lookup.parse import MAX_PLATELET as _PLATELET_MAX_K_UL
+from bba.platelet_lookup.parse import MIN_PLATELET as _PLATELET_MIN_K_UL
 
 # Terminals excluded from the scorable denominator (spec #119). Aggregating
 # only over the complement guarantees n <= Orders (N) for every group,
@@ -46,6 +52,7 @@ _EXCLUDED_FROM_SCORING = frozenset(
 )
 
 _RED_CELL = "red_cell"
+_PLATELET = "platelet"
 _MISSING_FRESHNESS = "missing"
 
 _REQUIRED_COLUMNS: tuple[str, ...] = (
@@ -53,6 +60,8 @@ _REQUIRED_COLUMNS: tuple[str, ...] = (
     "component",
     "hb_value_g_dl",
     "hb_freshness",
+    "platelet_count_k_ul",
+    "platelet_freshness",
 )
 
 
@@ -70,38 +79,60 @@ class OrderLabValue(BaseModel):
     reqno: str = Field(min_length=1)
     component: str
     hb_value_g_dl: float | None = None
+    platelet_count_k_ul: float | None = None
 
 
 class GroupLabStats(BaseModel):
-    """Mean pre-transfusion trigger for one group (doctor or department).
+    """Mean pre-transfusion triggers for one group (doctor or department),
+    kept strictly separate by component.
 
-    Enforces the reporting invariant ``hb_order_n == 0`` iff ``mean_hb is
-    None``: a group with no usable value must render as absent (``—``),
-    never as a misleading ``0.0`` trigger.
+    Enforces, per component, the reporting invariant ``order_n == 0`` iff
+    ``mean is None``: a group with no usable value must render as absent
+    (``—``), never as a misleading ``0.0`` trigger.
     """
 
     model_config = ConfigDict(frozen=True)
 
     mean_hb: float | None = None
     hb_order_n: int = Field(default=0, ge=0)
+    mean_platelet: float | None = None
+    platelet_order_n: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def _mean_iff_sample(self) -> GroupLabStats:
-        if (self.hb_order_n == 0) != (self.mean_hb is None):
-            raise ValueError(
-                "GroupLabStats invariant violated: hb_order_n == 0 must hold "
-                "if and only if mean_hb is None (got "
-                f"hb_order_n={self.hb_order_n}, mean_hb={self.mean_hb!r})"
-            )
+        for label, mean, n in (
+            ("mean_hb/hb_order_n", self.mean_hb, self.hb_order_n),
+            (
+                "mean_platelet/platelet_order_n",
+                self.mean_platelet,
+                self.platelet_order_n,
+            ),
+        ):
+            if (n == 0) != (mean is None):
+                raise ValueError(
+                    f"GroupLabStats invariant violated for {label}: order count "
+                    "== 0 must hold if and only if the mean is None (got "
+                    f"n={n}, mean={mean!r})"
+                )
         return self
 
 
-def _usable_hb(value_raw: str, freshness: str, component: str) -> float | None:
-    """The pre-transfusion Hb a report row contributes, or ``None`` if it
-    must not: a non-red-cell (or blank/unknown) component, a missing
-    freshness sentinel, an unparseable cell, a non-finite number, or a
-    value outside the lookup layer's ``[2, 25]`` g/dL range."""
-    if component != _RED_CELL:
+def _usable_value(
+    value_raw: str,
+    freshness: str,
+    component: str,
+    *,
+    expected_component: str,
+    low: float,
+    high: float,
+) -> float | None:
+    """The pre-transfusion value a report row contributes for one
+    component, or ``None`` if it must not: a component that is not exactly
+    ``expected_component`` (so a red-cell row never leaks into a platelet
+    mean, or vice versa), a missing freshness sentinel, an unparseable
+    cell, a non-finite number, or a value outside the lookup layer's
+    ``[low, high]`` analytic range."""
+    if component != expected_component:
         return None
     if freshness == _MISSING_FRESHNESS:
         return None
@@ -114,7 +145,7 @@ def _usable_hb(value_raw: str, freshness: str, component: str) -> float | None:
         return None
     if not math.isfinite(value):
         return None
-    if not (_HB_MIN_G_DL <= value <= _HB_MAX_G_DL):
+    if not (low <= value <= high):
         return None
     return value
 
@@ -140,10 +171,21 @@ def load_order_labs(path: Path) -> Mapping[str, OrderLabValue]:
             record = OrderLabValue(
                 reqno=reqno,
                 component=component,
-                hb_value_g_dl=_usable_hb(
+                hb_value_g_dl=_usable_value(
                     row["hb_value_g_dl"] or "",
                     (row["hb_freshness"] or "").strip(),
                     component,
+                    expected_component=_RED_CELL,
+                    low=_HB_MIN_G_DL,
+                    high=_HB_MAX_G_DL,
+                ),
+                platelet_count_k_ul=_usable_value(
+                    row["platelet_count_k_ul"] or "",
+                    (row["platelet_freshness"] or "").strip(),
+                    component,
+                    expected_component=_PLATELET,
+                    low=_PLATELET_MIN_K_UL,
+                    high=_PLATELET_MAX_K_UL,
                 ),
             )
             existing = labs.get(reqno)
@@ -177,13 +219,20 @@ def missing_lab_reqnos(
     )
 
 
-def _stats_from_hb(hb_values: list[float]) -> GroupLabStats:
-    """Collapse a group's usable Hb values into its :class:`GroupLabStats`,
-    preserving the ``n == 0`` iff ``mean is None`` invariant."""
-    n = len(hb_values)
-    if n == 0:
-        return GroupLabStats()
-    return GroupLabStats(mean_hb=sum(hb_values) / n, hb_order_n=n)
+def _mean_or_none(values: list[float]) -> float | None:
+    return sum(values) / len(values) if values else None
+
+
+def _stats_from(hb_values: list[float], platelet_values: list[float]) -> GroupLabStats:
+    """Collapse a group's usable Hb and platelet values into its
+    :class:`GroupLabStats`, preserving the per-component ``n == 0`` iff
+    ``mean is None`` invariant."""
+    return GroupLabStats(
+        mean_hb=_mean_or_none(hb_values),
+        hb_order_n=len(hb_values),
+        mean_platelet=_mean_or_none(platelet_values),
+        platelet_order_n=len(platelet_values),
+    )
 
 
 def aggregate_doctor_lab_stats(
@@ -201,15 +250,22 @@ def aggregate_doctor_lab_stats(
     the verdict cohort are never consulted, so ``n <= Orders (N)``.
     """
     hb_by_doctor: dict[str, list[float]] = {}
+    platelet_by_doctor: dict[str, list[float]] = {}
     for reqno, classification in verdicts.items():
         if classification in _EXCLUDED_FROM_SCORING:
             continue
         doctor = reqno_to_doctor.get(reqno, UNATTRIBUTED_DOCTOR_ID)
         hb_by_doctor.setdefault(doctor, [])
+        platelet_by_doctor.setdefault(doctor, [])
         lab = order_labs.get(reqno)
         if lab is not None and lab.hb_value_g_dl is not None:
             hb_by_doctor[doctor].append(lab.hb_value_g_dl)
-    return {doctor: _stats_from_hb(values) for doctor, values in hb_by_doctor.items()}
+        if lab is not None and lab.platelet_count_k_ul is not None:
+            platelet_by_doctor[doctor].append(lab.platelet_count_k_ul)
+    return {
+        doctor: _stats_from(hb_by_doctor[doctor], platelet_by_doctor[doctor])
+        for doctor in hb_by_doctor
+    }
 
 
 def aggregate_department_lab_stats(
@@ -228,6 +284,7 @@ def aggregate_department_lab_stats(
     ids line up with the ranking rows.
     """
     hb_by_dept: dict[str, list[float]] = {}
+    platelet_by_dept: dict[str, list[float]] = {}
     for reqno, classification in verdicts.items():
         if classification in _EXCLUDED_FROM_SCORING:
             continue
@@ -236,10 +293,16 @@ def aggregate_department_lab_stats(
         dept = (
             record.deptlct
             if record is not None and record.deptlct
-            else (UNATTRIBUTED_DEPARTMENT_ID)
+            else UNATTRIBUTED_DEPARTMENT_ID
         )
         hb_by_dept.setdefault(dept, [])
+        platelet_by_dept.setdefault(dept, [])
         lab = order_labs.get(reqno)
         if lab is not None and lab.hb_value_g_dl is not None:
             hb_by_dept[dept].append(lab.hb_value_g_dl)
-    return {dept: _stats_from_hb(values) for dept, values in hb_by_dept.items()}
+        if lab is not None and lab.platelet_count_k_ul is not None:
+            platelet_by_dept[dept].append(lab.platelet_count_k_ul)
+    return {
+        dept: _stats_from(hb_by_dept[dept], platelet_by_dept[dept])
+        for dept in hb_by_dept
+    }

@@ -95,6 +95,14 @@ class RankedRow(BaseModel):
     hb_order_n: int = Field(default=0, ge=0)
     """Number of scorable red-cell orders the ``mean_hb`` is based on;
     never exceeds ``total_orders``."""
+    mean_platelet: float | None = None
+    """Mean pre-transfusion platelet count (×10³/µL) over the group's
+    scorable platelet orders; ``None`` when ``platelet_order_n == 0``.
+    Populated from the same per-order lab join; defaulted so existing
+    callers are unaffected."""
+    platelet_order_n: int = Field(default=0, ge=0)
+    """Number of scorable platelet orders the ``mean_platelet`` is based
+    on; never exceeds ``total_orders``."""
 
 
 class RankingTable(BaseModel):

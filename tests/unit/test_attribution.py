@@ -56,14 +56,24 @@ from bba.attribution import (
 from bba.dashboard.models import PhysicianScorecard
 
 
-_REPORT_LAB_COLUMNS = ("reqno", "component", "hb_value_g_dl", "hb_freshness")
+_REPORT_LAB_COLUMNS = (
+    "reqno",
+    "component",
+    "hb_value_g_dl",
+    "hb_freshness",
+    "platelet_count_k_ul",
+    "platelet_freshness",
+)
 
 
 def _write_report_csv(path: Path, rows: list[dict[str, str]]) -> Path:
     """Write a minimal report.csv carrying only the columns the lab loader
-    reads (the real file is ~50 columns wide; DictReader ignores the rest)."""
+    reads (the real file is ~50 columns wide; DictReader ignores the rest).
+    Missing per-row keys are written blank (csv.DictWriter restval)."""
     with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=list(_REPORT_LAB_COLUMNS))
+        writer = csv.DictWriter(
+            f, fieldnames=list(_REPORT_LAB_COLUMNS), restval=""
+        )
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
@@ -76,6 +86,19 @@ def _red_cell(reqno: str, hb: str, *, freshness: str = "fresh") -> dict[str, str
         "component": "red_cell",
         "hb_value_g_dl": hb,
         "hb_freshness": freshness,
+        "platelet_count_k_ul": "",
+        "platelet_freshness": "missing",
+    }
+
+
+def _platelet(reqno: str, count: str, *, freshness: str = "fresh") -> dict[str, str]:
+    return {
+        "reqno": reqno,
+        "component": "platelet",
+        "hb_value_g_dl": "",
+        "hb_freshness": "missing",
+        "platelet_count_k_ul": count,
+        "platelet_freshness": freshness,
     }
 
 
@@ -820,7 +843,8 @@ class TestWriteRankingCsv:
             "inappropriate,unresolved,returned_not_transfused,"
             "periop_transfusion_exempt,bucket,"
             "bucket_count,bucket_rate,"
-            "meets_min_orders,mean_hb_g_dl,hb_order_n"
+            "meets_min_orders,mean_hb_g_dl,hb_order_n,"
+            "mean_platelet_k_ul,platelet_order_n"
         )
         assert lines[1].startswith("1,302389,")
         assert "\r\n" not in text
@@ -835,14 +859,14 @@ class TestWriteRankingCsv:
         )
         out = write_ranking_csv((_ranked_row(),), tmp_path / "doctors.csv")
         # The mean-trigger columns are appended unconditionally; a row with no
-        # lab sample renders an empty mean cell and n=0 (spec #131/#133).
+        # lab sample renders empty mean cells and n=0 per component (#131/#134).
         assert (
             out.read_bytes()
             == (
                 "rank,group_id,group_name,total_orders,appropriate,inappropriate,"
                 "unresolved,bucket,bucket_count,bucket_rate,meets_min_orders,"
-                "mean_hb_g_dl,hb_order_n\n"
-                "1,302389,\u0e1e\u0e0d.\u0e2a***** \u0e27*****,6,2,3,1,inappropriate,3,0.5,true,,0\n"
+                "mean_hb_g_dl,hb_order_n,mean_platelet_k_ul,platelet_order_n\n"
+                "1,302389,\u0e1e\u0e0d.\u0e2a***** \u0e27*****,6,2,3,1,inappropriate,3,0.5,true,,0,,0\n"
             ).encode()
         )
 
@@ -1393,10 +1417,12 @@ class TestMeanHbOutput:
         out = write_ranking_csv(result.doctors.rows, tmp_path / "doctors.csv")
         text = out.read_text(encoding="utf-8")
         lines = text.splitlines()
-        assert lines[0].endswith(",mean_hb_g_dl,hb_order_n")
+        assert lines[0].endswith(
+            ",mean_hb_g_dl,hb_order_n,mean_platelet_k_ul,platelet_order_n"
+        )
         d1_line = next(line for line in lines[1:] if line.split(",")[1] == "d1")
-        # d1 mean is 9.0 over 2 orders — raw values appended at the end.
-        assert d1_line.endswith(",9.0,2")
+        # d1 Hb mean is 9.0 over 2 orders; no platelet orders -> empty, 0.
+        assert d1_line.endswith(",9.0,2,,0")
 
     def test_html_renders_mean_with_n_and_emdash_and_caveat(
         self, tmp_path: Path
@@ -1440,3 +1466,177 @@ class TestMeanHbOutput:
                 order_labs=order_labs,
                 min_orders=1,
             )
+
+
+# ---------------------------------------------------------------------------
+# Mean platelet column — the second component path (#134)
+# ---------------------------------------------------------------------------
+
+
+class TestGroupLabStatsPlatelet:
+    def test_platelet_mean_without_sample_fails_loud(self) -> None:
+        with pytest.raises(ValueError, match="invariant"):
+            GroupLabStats(mean_platelet=50.0, platelet_order_n=0)
+
+    def test_platelet_sample_without_mean_fails_loud(self) -> None:
+        with pytest.raises(ValueError, match="invariant"):
+            GroupLabStats(mean_platelet=None, platelet_order_n=3)
+
+    def test_hb_and_platelet_pairs_are_independent(self) -> None:
+        stats = GroupLabStats(
+            mean_hb=8.4, hb_order_n=2, mean_platelet=None, platelet_order_n=0
+        )
+        assert stats.mean_hb == 8.4
+        assert stats.mean_platelet is None
+
+
+class TestLoadOrderLabsPlatelet:
+    def test_loads_platelet_count_keyed_by_reqno(self, tmp_path: Path) -> None:
+        path = _write_report_csv(
+            tmp_path / "report.csv", [_platelet("68000001", "45.0")]
+        )
+        rec = load_order_labs(path)["68000001"]
+        assert rec.platelet_count_k_ul == 45.0
+        assert rec.hb_value_g_dl is None  # a platelet row carries no Hb
+
+    def test_red_cell_row_contributes_no_platelet(self, tmp_path: Path) -> None:
+        # Strict component separation: a red-cell row never leaks into the
+        # platelet mean even if it somehow carried a platelet number.
+        path = _write_report_csv(
+            tmp_path / "report.csv",
+            [
+                {
+                    "reqno": "68000001",
+                    "component": "red_cell",
+                    "hb_value_g_dl": "8.4",
+                    "hb_freshness": "fresh",
+                    "platelet_count_k_ul": "200",
+                    "platelet_freshness": "fresh",
+                }
+            ],
+        )
+        rec = load_order_labs(path)["68000001"]
+        assert rec.hb_value_g_dl == 8.4
+        assert rec.platelet_count_k_ul is None
+
+    def test_out_of_range_platelet_excluded(self, tmp_path: Path) -> None:
+        # Below 1 and above 3000 x10^3/uL are corrupt readings.
+        path = _write_report_csv(
+            tmp_path / "report.csv",
+            [_platelet("68000001", "0.5"), _platelet("68000002", "4000")],
+        )
+        labs = load_order_labs(path)
+        assert labs["68000001"].platelet_count_k_ul is None
+        assert labs["68000002"].platelet_count_k_ul is None
+
+    def test_missing_platelet_column_fails_loud(self, tmp_path: Path) -> None:
+        bad = tmp_path / "report.csv"
+        bad.write_text(
+            "reqno,component,hb_value_g_dl,hb_freshness,platelet_count_k_ul\n"
+            "68000001,platelet,,missing,45.0\n"
+        )
+        with pytest.raises(ValueError, match="platelet_freshness"):
+            load_order_labs(bad)
+
+
+# Two doctors sharing a department, mixed red-cell + platelet orders.
+def _mixed_component_scenario() -> tuple[
+    dict[str, str], dict[str, str], dict[str, DoctorRecord], list[dict[str, str]]
+]:
+    verdicts = {
+        "h1": "INAPPROPRIATE",  # d1 red-cell Hb 8
+        "h2": "APPROPRIATE",  # d1 red-cell Hb 10
+        "p1": "INAPPROPRIATE",  # d1 platelet 20
+        "p2": "APPROPRIATE",  # d2 platelet 40
+        "h3": "INAPPROPRIATE",  # d2 red-cell Hb 7
+    }
+    reqno_to_doctor = {"h1": "d1", "h2": "d1", "p1": "d1", "p2": "d2", "h3": "d2"}
+    registry = {
+        "d1": DoctorRecord(
+            dct="d1", display_name="D1", deptlct="DEPT", deptname="Dept X"
+        ),
+        "d2": DoctorRecord(
+            dct="d2", display_name="D2", deptlct="DEPT", deptname="Dept X"
+        ),
+    }
+    report_rows = [
+        _red_cell("h1", "8"),
+        _red_cell("h2", "10"),
+        _platelet("p1", "20"),
+        _platelet("p2", "40"),
+        _red_cell("h3", "7"),
+    ]
+    return verdicts, reqno_to_doctor, registry, report_rows
+
+
+class TestMeanPlateletIntegration:
+    def test_both_means_on_both_tables_from_report_csv(self, tmp_path: Path) -> None:
+        verdicts, reqno_to_doctor, registry, report_rows = _mixed_component_scenario()
+        order_labs = load_order_labs(_write_report_csv(tmp_path / "r.csv", report_rows))
+        result = build_rankings(
+            verdicts=verdicts,
+            reqno_to_doctor=reqno_to_doctor,
+            dct_registry=registry,
+            order_labs=order_labs,
+            min_orders=1,
+        )
+        doctors = {r.group_id: r for r in result.doctors.rows}
+        # Hb and platelet kept strictly separate per doctor.
+        assert doctors["d1"].mean_hb == pytest.approx(9.0)
+        assert doctors["d1"].hb_order_n == 2
+        assert doctors["d1"].mean_platelet == pytest.approx(20.0)
+        assert doctors["d1"].platelet_order_n == 1
+        assert doctors["d2"].mean_hb == pytest.approx(7.0)
+        assert doctors["d2"].mean_platelet == pytest.approx(40.0)
+
+        departments = {r.group_id: r for r in result.departments.rows}
+        assert departments["DEPT"].mean_hb == pytest.approx(25.0 / 3.0)
+        assert departments["DEPT"].hb_order_n == 3
+        assert departments["DEPT"].mean_platelet == pytest.approx(30.0)
+        assert departments["DEPT"].platelet_order_n == 2
+
+    def test_platelet_free_cohort_renders_emdash_everywhere(
+        self, tmp_path: Path
+    ) -> None:
+        # Today's cohort has zero platelet orders -> every platelet cell is
+        # an em-dash (CSV empty / 0), with no error (#134 acceptance).
+        verdicts, reqno_to_doctor, registry, order_labs = _mean_hb_scenario()
+        result = build_rankings(
+            verdicts=verdicts,
+            reqno_to_doctor=reqno_to_doctor,
+            dct_registry=registry,
+            order_labs=order_labs,
+            min_orders=1,
+        )
+        for row in result.doctors.rows:
+            assert row.mean_platelet is None
+            assert row.platelet_order_n == 0
+        html = write_rankings_html(
+            result, tmp_path / "r.html", verdict_source_label="test"
+        ).read_text(encoding="utf-8")
+        assert "Mean platelet" in html
+        # No platelet sample anywhere -> the platelet column is all em-dash.
+        assert "(n=" in html  # Hb column still populated
+        csv_out = write_ranking_csv(
+            result.doctors.rows, tmp_path / "d.csv"
+        ).read_text(encoding="utf-8")
+        # Every data row ends with empty mean_platelet + platelet_order_n 0.
+        for line in csv_out.splitlines()[1:]:
+            assert line.endswith(",,0")
+
+    def test_html_renders_platelet_mean_with_n(self, tmp_path: Path) -> None:
+        verdicts, reqno_to_doctor, registry, report_rows = _mixed_component_scenario()
+        order_labs = load_order_labs(_write_report_csv(tmp_path / "r.csv", report_rows))
+        result = build_rankings(
+            verdicts=verdicts,
+            reqno_to_doctor=reqno_to_doctor,
+            dct_registry=registry,
+            order_labs=order_labs,
+            min_orders=1,
+        )
+        html = write_rankings_html(
+            result, tmp_path / "r.html", verdict_source_label="test"
+        ).read_text(encoding="utf-8")
+        assert "Mean platelet" in html
+        assert "20.0 (n=1)" in html  # d1 platelet
+        assert "mean pre-transfusion platelet" in html  # caveat sentence
