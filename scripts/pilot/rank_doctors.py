@@ -112,23 +112,28 @@ def _resolve_verdicts() -> tuple[Mapping[str, str], str]:
         store = AuditStore(
             AuditStoreConfig(root_dir=audit_store_dir, code_version=str(code_version()))
         )
-        rows = list(
-            store.read_audit_results(run_id=RUN_ID, code_version=CODE_VERSION_FILTER)
-        )
-        # Even scoped to one run_id, a --run-id-override re-commit after a code
-        # bump can land rows from >1 code_version. Without a version filter,
-        # pipeline_verdict_source would silently merge those disjoint audit sets,
-        # so assert a single version here (mirrors the report builder's
-        # MixedRunMetadataError) rather than requiring the operator to always
-        # know the exact BBA_CODE_VERSION.
-        if CODE_VERSION_FILTER is None:
-            versions = {r.code_version for r in rows if r.code_version}
-            if len(versions) > 1:
+        if CODE_VERSION_FILTER is not None:
+            rows = list(
+                store.read_audit_results(
+                    run_id=RUN_ID, code_version=CODE_VERSION_FILTER
+                )
+            )
+        else:
+            # Even scoped to one run_id, a --run-id-override re-commit after a
+            # code bump can land rows from >1 code_version. The version lives in
+            # store metadata (code_version_slug), NOT on AuditRow, so use
+            # read_run_records to see it and fail loud on a mixed run (mirrors the
+            # report builder's MixedRunMetadataError) rather than silently merging
+            # disjoint audit sets.
+            records = store.read_run_records(run_id=RUN_ID)
+            slugs = {slug for _, slug in records}
+            if len(slugs) > 1:
                 raise SystemExit(
                     f"run_id {RUN_ID!r} has rows from multiple code versions "
-                    f"{sorted(versions)}; set BBA_CODE_VERSION to scope the "
+                    f"{sorted(slugs)}; set BBA_CODE_VERSION to scope the "
                     "scorecard to one version"
                 )
+            rows = [row for row, _ in records]
         # POTENTIALLY_INAPPROPRIATE / PREOP_RESERVATION_UNCONFIRMED -> Unresolved;
         # the excluded returns terminals pass through for the ranking layer to
         # hold apart from the scorable denominator.
