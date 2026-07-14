@@ -99,6 +99,15 @@ def default_indication_codes_extractor(row: AuditRow) -> tuple[str, ...]:
     return tuple(codes)
 
 
+_EXCLUDED_NONSCORABLE: frozenset[str] = frozenset(
+    {"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"}
+)
+"""Returns-ledger terminal classifications excluded from the report before
+projection (spec #119). Non-scorable — mirrors their exclusion from attribution
+rates; the default projector fails loud on them so they must be dropped upstream.
+"""
+
+
 def default_classification_projector(
     value: AuditClassification,
 ) -> ReportClassification:
@@ -202,6 +211,23 @@ def build_report_inputs(
             f"audit_store has rows for run_id={run_id!r} but none are "
             "component='red_cell'; the RBC report cannot be generated from "
             "a platelet-only run"
+        )
+
+    # Drop the non-scorable returns terminals before projection. With the
+    # returns-ledger router enabled (spec #119 go-live) a run's audit_store can
+    # carry RETURNED_NOT_TRANSFUSED / PERIOP_TRANSFUSION_EXEMPT
+    # final_classifications; these are non-events / OR-exempt, excluded from
+    # scoring exactly as they are excluded from attribution rates. The default
+    # projector fails loud on them, so they are filtered here rather than
+    # projected onto one of the four report-scorable values.
+    rows = tuple(
+        row for row in rows if row.final_classification not in _EXCLUDED_NONSCORABLE
+    )
+    if not rows:
+        raise EmptyInputError(
+            f"audit_store red_cell rows for run_id={run_id!r} are all "
+            "non-scorable returns terminals (RETURNED_NOT_TRANSFUSED / "
+            "PERIOP_TRANSFUSION_EXEMPT); there is no scorable order to report"
         )
 
     footer = _reconstruct_footer(rows)
