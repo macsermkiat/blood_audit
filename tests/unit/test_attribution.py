@@ -822,6 +822,38 @@ class TestWriteRankingCsv:
         out = write_ranking_csv((row,), tmp_path / "r.csv")
         assert "0.333333" in out.read_text(encoding="utf-8")
 
+    def test_header_and_row_have_equal_column_count_flag_on(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Header names and row values come from one column spec, so their
+        # counts can never disagree — the guard a future appended column
+        # relies on. Assert parity rather than a frozen count.
+        monkeypatch.setattr(
+            "bba.attribution.outputs.RETURNS_LEDGER_ENABLED", True, raising=False
+        )
+        out = write_ranking_csv((_ranked_row(),), tmp_path / "doctors.csv")
+        header, data = out.read_text(encoding="utf-8").splitlines()[:2]
+        assert len(header.split(",")) == len(data.split(","))
+
+    def test_header_and_row_have_equal_column_count_flag_off(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "bba.attribution.outputs.RETURNS_LEDGER_ENABLED", False, raising=False
+        )
+        out = write_ranking_csv((_ranked_row(),), tmp_path / "doctors.csv")
+        header, data = out.read_text(encoding="utf-8").splitlines()[:2]
+        assert len(header.split(",")) == len(data.split(","))
+
+    def test_none_cell_renders_empty(self) -> None:
+        # A None value must render as an empty cell, not the literal
+        # "None". No nullable ranking column exists yet (it arrives with
+        # the mean-trigger columns), so the rendering contract is pinned
+        # directly on the cell formatter.
+        from bba.attribution.outputs import _format_cell
+
+        assert _format_cell(None) == ""
+
 
 class TestWriteRankingsHtml:
     def test_standalone_html_contains_both_tables_and_caveats(

@@ -17,7 +17,7 @@ from __future__ import annotations
 import csv
 import html
 import io
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from bba.attribution.models import RankedRow, RankingResult, RankingTable
@@ -25,41 +25,58 @@ from bba.feature_flags import RETURNS_LEDGER_ENABLED
 from bba.report_generator.csv_writer import CSV_ENCODING, CSV_NEWLINE
 
 
-_BASE_RANKING_CSV_COLUMNS: tuple[str, ...] = (
-    "rank",
-    "group_id",
-    "group_name",
-    "total_orders",
-    "appropriate",
-    "inappropriate",
-    "unresolved",
-    "bucket",
-    "bucket_count",
-    "bucket_rate",
-    "meets_min_orders",
+# A ranking CSV column: its header name paired with the accessor that
+# reads the matching value off a row. The header row and every data row
+# are both produced by walking this one ordered spec, so an appended
+# column can never desync the header from the values (count or order).
+_RankingColumn = tuple[str, Callable[[RankedRow], object]]
+
+_LEADING_COLUMNS: tuple[_RankingColumn, ...] = (
+    ("rank", lambda row: row.rank),
+    ("group_id", lambda row: row.group_id),
+    ("group_name", lambda row: row.group_name),
+    ("total_orders", lambda row: row.total_orders),
+    ("appropriate", lambda row: row.appropriate_count),
+    ("inappropriate", lambda row: row.inappropriate_count),
+    ("unresolved", lambda row: row.unresolved_count),
 )
-_RETURNS_CSV_COLUMNS: tuple[str, ...] = (
-    "returned_not_transfused",
-    "periop_transfusion_exempt",
+_RETURNS_COLUMNS: tuple[_RankingColumn, ...] = (
+    ("returned_not_transfused", lambda row: row.returned_not_transfused_count),
+    ("periop_transfusion_exempt", lambda row: row.periop_transfusion_exempt_count),
 )
-RANKING_CSV_COLUMNS: tuple[str, ...] = (
-    _BASE_RANKING_CSV_COLUMNS[:7]
-    + (_RETURNS_CSV_COLUMNS if RETURNS_LEDGER_ENABLED else ())
-    + _BASE_RANKING_CSV_COLUMNS[7:]
+_TRAILING_COLUMNS: tuple[_RankingColumn, ...] = (
+    ("bucket", lambda row: row.bucket),
+    ("bucket_count", lambda row: row.bucket_count),
+    ("bucket_rate", lambda row: row.bucket_rate),
+    ("meets_min_orders", lambda row: row.meets_min_orders),
 )
+
+
+def _ranking_columns() -> tuple[_RankingColumn, ...]:
+    """The ordered CSV column spec. The returns-disposition columns are
+    included only when the returns ledger is enabled; evaluated per call
+    so a runtime flag flip (and the tests that monkeypatch it) is
+    honoured, matching the prior helper's behaviour."""
+    return (
+        _LEADING_COLUMNS
+        + (_RETURNS_COLUMNS if RETURNS_LEDGER_ENABLED else ())
+        + _TRAILING_COLUMNS
+    )
 
 
 def _ranking_csv_columns() -> tuple[str, ...]:
-    return (
-        _BASE_RANKING_CSV_COLUMNS[:7]
-        + (_RETURNS_CSV_COLUMNS if RETURNS_LEDGER_ENABLED else ())
-        + _BASE_RANKING_CSV_COLUMNS[7:]
-    )
+    return tuple(name for name, _ in _ranking_columns())
+
+
+RANKING_CSV_COLUMNS: tuple[str, ...] = _ranking_csv_columns()
 
 
 def _format_cell(value: object) -> str:
     """Render one CSV cell, mirroring the report CSV writer's float and
-    bool conventions (``0.5`` not ``0.500000``; lowercase bools)."""
+    bool conventions (``0.5`` not ``0.500000``; lowercase bools). A
+    ``None`` renders as an empty cell, not the literal ``"None"``."""
+    if value is None:
+        return ""
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, float):
@@ -73,20 +90,7 @@ def _format_cell(value: object) -> str:
 
 
 def _row_cells(row: RankedRow) -> list[str]:
-    values: list[object] = [
-        row.rank,
-        row.group_id,
-        row.group_name,
-        row.total_orders,
-        row.appropriate_count,
-        row.inappropriate_count,
-        row.unresolved_count,
-    ]
-    if RETURNS_LEDGER_ENABLED:
-        values.append(row.returned_not_transfused_count)
-        values.append(row.periop_transfusion_exempt_count)
-    values.extend((row.bucket, row.bucket_count, row.bucket_rate, row.meets_min_orders))
-    return [_format_cell(value) for value in values]
+    return [_format_cell(accessor(row)) for _, accessor in _ranking_columns()]
 
 
 def write_ranking_csv(rows: Sequence[RankedRow], path: Path) -> Path:
