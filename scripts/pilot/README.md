@@ -46,6 +46,7 @@ build_review.py         →  review.html    (single page for human review)
 | `BBA_PILOT_LLM_MODEL` | `claude-sonnet-5` | Anthropic model id |
 | `BBA_PILOT_RUN_ID` | `pilot-mini` | run_id stamped on audit_store rows |
 | `BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE` | `false` | Opt-in to the missing-Hb MTP / peri-procedural auto-APPROPRIATE pre-check (SEED — set `1`/`true` only after clinical sign-off) |
+| `BBA_PILOT_DECLARED_USETYPE` | `0` (off) | When set to `1`, threads BDVSTDT.USETYPE declared intent into both pilot legs and appends `declared_use_code` / `declared_use_label` to `report.csv` |
 | `BBA_PILOT_ONLY_REQNO` | _(unset)_ | Comma-separated REQNOs: `run_llm_leg.py` processes/submits only those cases and MERGES the fresh records into the existing `llm_report.json` (other cases keep their records). Always pair with a fresh `BBA_PILOT_RUN_ID` — the store is idempotent on `(run_id, audit_id)`, so a reused run id keeps the stale row |
 | `BBA_PILOT_BATCH_MAX_WAIT` | `86400` | Seconds to wait for the Anthropic batch (default = the 24h batch SLA) |
 | `ANTHROPIC_API_KEY` | _(required)_ | Anthropic credentials |

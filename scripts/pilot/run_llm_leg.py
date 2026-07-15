@@ -83,6 +83,12 @@ from bba.deterministic_classifier import (
 )
 from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import ClassifierInputs
+from bba.declared_use import (
+    DeclaredUse,
+    DeclaredUseLabel,
+    collapse_usetype,
+    label_for,
+)
 from bba.feature_flags import RETURNS_LEDGER_ENABLED
 from bba.returns_ledger import ReturnsSummary, rows_for_admission, summarize_returns
 from bba.evidence_bundle_builder import (
@@ -147,18 +153,32 @@ ONLY_REQNOS = frozenset(
 ENABLE_MISSING_HB_POSITIVE_EVIDENCE = os.environ.get(
     "BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE", ""
 ).strip().lower() in ("1", "true", "yes", "on")
+# Declared-use pilot seam (spec #147, ticket #151), read at import so it can fold
+# into CODE_VERSION below; main() sets feature_flags.DECLARED_USETYPE_ENABLED from
+# this same constant. "== '1'" idiom (default OFF) — NOT the reserve-router
+# "!= '0'" idiom. A plain module constant (no feature_flags mutation at import),
+# so importing this module in tests never pollutes the library flag.
+DECLARED_USETYPE_PILOT_ENABLED = (
+    os.environ.get("BBA_PILOT_DECLARED_USETYPE", "0") == "1"
+)
 # Run/code identity (spec #119 §G, ticket #124). The audit_store is idempotent
-# on (run_id, audit_id, code_version), so enabling the returns ledger must not
-# silently reuse a flag-off run's committed rows. Folding the flag into
+# on (run_id, audit_id, code_version), so enabling a seam that changes verdicts
+# must not silently reuse a flag-off run's committed rows. Folding each seam into
 # CODE_VERSION makes enabling it a DISTINCT code identity, so a re-run recomputes
 # every affected verdict instead of keeping stale pre-feature rows (AC "reusing a
-# stale identity does not leave pre-feature rows in place"). Flag-off keeps the
-# original "pilot-mini" identity, so a flag-off run is byte-identical to today.
-# The flag is captured once at import and never toggled mid-run, so it is
-# constant across this process's batch submit and result apply. A changed
-# BDVSTTRANS ledger still needs a fresh BBA_PILOT_RUN_ID (it does not alter the
-# code identity); production folds the ledger into run identity separately (#121).
-CODE_VERSION = "pilot-mini+returns" if RETURNS_LEDGER_ENABLED else "pilot-mini"
+# stale identity does not leave pre-feature rows in place"). Declared-use flips
+# some orders to NEEDS_REVIEW, changing the submission set and verdicts, so it is
+# folded in the same way (Codex P2, PR #156). Flag-off keeps the original
+# "pilot-mini" identity, so a flag-off run is byte-identical to today. The seams
+# are captured once at import and never toggled mid-run, so they are constant
+# across this process's batch submit and result apply. A changed BDVSTTRANS
+# ledger still needs a fresh BBA_PILOT_RUN_ID (it does not alter the code
+# identity); production folds the ledger into run identity separately (#121).
+CODE_VERSION = "pilot-mini"
+if RETURNS_LEDGER_ENABLED:
+    CODE_VERSION += "+returns"
+if DECLARED_USETYPE_PILOT_ENABLED:
+    CODE_VERSION += "+declared"
 TZ_LOCAL = "Asia/Bangkok"
 INCPT_OPERATION_GROUPS = {"110", "111"}
 
@@ -224,6 +244,12 @@ DETERMINISTIC_FINAL = frozenset(
     }
 )
 
+# Mirror bba.audit_pipeline.pipeline._RESERVE_AHEAD_RATIONALES so declared-only
+# deferrals (rationale "preop_defer_llm_declared") dispatch to
+# RESERVE_AHEAD_REVIEW here too. Kept a local mirror for the same reason the
+# leg mirrors the classifier-input helpers.
+_RESERVE_AHEAD_RATIONALES = frozenset({"preop_defer_llm", "preop_defer_llm_declared"})
+
 
 def _returns_disposition_for_classifier(returns_summary: ReturnsSummary | None) -> str:
     """Return the gated disposition passed into the pure classifier.
@@ -236,6 +262,43 @@ def _returns_disposition_for_classifier(returns_summary: ReturnsSummary | None) 
     if RETURNS_LEDGER_ENABLED and returns_summary is not None:
         return returns_summary.disposition
     return "inconclusive"
+
+
+def _declared_use_label_for_classifier(
+    collapsed_code: str | None,
+) -> DeclaredUseLabel | None:
+    """Declared-use LABEL for the pure classifier (gated on the library flag,
+    set from the pilot env seam in main())."""
+    if feature_flags.DECLARED_USETYPE_ENABLED and collapsed_code is not None:
+        return label_for(collapsed_code)
+    return None
+
+
+def _collapsed_usetype_for(values: list[str]) -> str | None:
+    """Collapse an order's USETYPE detail lines, but only when the seam is on.
+
+    ``collapse_usetype`` logs a warning on mixed nonblank codes; skipping the
+    call when the seam is off keeps a flag-off run byte-identical — no new log
+    output even over a mixed-code order.
+    """
+    if not feature_flags.DECLARED_USETYPE_ENABLED:
+        return None
+    return collapse_usetype(values)
+
+
+def _declared_use_record(collapsed_code: str | None) -> DeclaredUse | None:
+    """Declared-use RECORD for the evidence bundle — MAPPED codes only.
+
+    Off, no code, or an unknown code (incl "5") → None, so the bundle stays
+    byte-identical and the LLM never sees an uninterpreted code. The label
+    still reaches the report columns via label_for(); only the bundle fact is
+    withheld for unknown codes.
+    """
+    if not feature_flags.DECLARED_USETYPE_ENABLED or collapsed_code is None:
+        return None
+    if label_for(collapsed_code) == "unknown":
+        return None
+    return DeclaredUse.from_code(collapsed_code)
 
 
 def _returns_periop_context_for_classifier(
@@ -761,7 +824,7 @@ def _render_hemodynamic(payload: dict[str, Any]) -> str:
 
 
 def _render_periop(payload: dict[str, Any]) -> str:
-    """Render the pinned peri-operative summary as one fact-only line (Case 107).
+    """Render the pinned peri-operative summary as fact-only lines (Case 107).
 
     FACT-ONLY by contract (mirrors the builder's payload guardrail): the
     surgical-context flag, the EBL in millilitres, the intra-op-transfusion
@@ -778,23 +841,49 @@ def _render_periop(payload: dict[str, Any]) -> str:
         parts.append(f"blood_loss={ebl} ml")
     if payload.get("intraop_transfusion"):
         parts.append("intra-op transfusion=YES")
-    if not parts:
-        return ""
-    line = "PERI-OP SIGNALS: " + ", ".join(parts)
-    quotes: list[str] = []
-    for f in payload.get("findings") or ():
-        snippet = (f.get("snippet") or "").strip()
-        if not snippet:
-            continue
-        prov_bits = [str(f.get("source") or "")]
-        lag = f.get("lag_min")
-        if lag is not None:
-            prov_bits.append(_fmt_lag(int(lag)))
-        prov = ", ".join(b for b in prov_bits if b)
-        quotes.append(f'"{snippet}"' + (f" ({prov})" if prov else ""))
-    if quotes:
-        line += " | evidence: " + "; ".join(quotes)
-    return line
+    # Note-scan portion renders exactly as before: when no surgical / EBL /
+    # intra-op part fired, it stays empty (old contract: ``if not parts:
+    # return ""``), so evidence quotes never render without a signal part. This
+    # keeps flag-off output byte-identical structurally, not merely by the
+    # scan_periop findings<->flag invariant.
+    signals_line = ""
+    if parts:
+        signals_line = "PERI-OP SIGNALS: " + ", ".join(parts)
+        quotes: list[str] = []
+        for f in payload.get("findings") or ():
+            snippet = (f.get("snippet") or "").strip()
+            if not snippet:
+                continue
+            prov_bits = [str(f.get("source") or "")]
+            lag = f.get("lag_min")
+            if lag is not None:
+                prov_bits.append(_fmt_lag(int(lag)))
+            prov = ", ".join(b for b in prov_bits if b)
+            quotes.append(f'"{snippet}"' + (f" ({prov})" if prov else ""))
+        if quotes:
+            signals_line += " | evidence: " + "; ".join(quotes)
+    declared = payload.get("declared_use")
+    declared_line = ""
+    if declared:
+        declared_line = (
+            "DECLARED INTENT AT ORDER TIME (not confirmation surgery occurred): "
+            f"clinician coded use = {declared['label']} "
+            f"(BDVSTDT.USETYPE, code {declared['code']})"
+        )
+    rendered = [s for s in (signals_line, declared_line) if s]
+    return "\n".join(rendered)
+
+
+def _has_note_derived_periop(payload: dict[str, Any]) -> bool:
+    """True iff the Periop payload carries note-scan evidence (not a
+    declared-use-only item). Keys the quote-or-deny hint so a declared-only
+    item never claims to satisfy the peri-operative indication."""
+    return bool(
+        payload.get("surgical_context")
+        or payload.get("blood_loss_ml") is not None
+        or payload.get("intraop_transfusion")
+        or payload.get("findings")
+    )
 
 
 def _render_administration(payload: dict[str, Any]) -> str:
@@ -984,12 +1073,18 @@ def _build_inputs():
     # Ordered unit amount per REQNO, one raw UNITAMT string per BDVSTDT detail
     # line; summarize_returns parses these fail-closed (spec #119, ticket #124).
     unitamt_lines_by_reqno: dict[str, list[str]] = {}
+    # Join key is (HN, REQNO), never bare REQNO: REQNO recurs across admissions,
+    # so a declaration from another HN must not attach to the audited order.
+    usetype_values_by_hn_reqno: dict[tuple[str, str], list[str]] = {}
     for r in bdvstdt:
         reqno = r["REQNO"]
         products_by_reqno.setdefault(reqno, []).append((r.get("BDTYPE") or "").strip())
         unitamt_lines_by_reqno.setdefault(reqno, []).append(
             (r.get("UNITAMT") or "").strip()
         )
+        usetype_values_by_hn_reqno.setdefault(
+            ((r.get("HN") or "").strip(), reqno), []
+        ).append((r.get("USETYPE") or "").strip())
 
     # Returns-ledger index: BDVSTTRANS joins audited orders by REQNO exactly
     # (spec #119, ticket #124). One row per dispensed physical unit. Read ONLY
@@ -1060,6 +1155,7 @@ def _build_inputs():
         candidates_by_reqno,
         bdvsttrans_by_reqno,
         unitamt_lines_by_reqno,
+        usetype_values_by_hn_reqno,
     )
 
 
@@ -1082,6 +1178,11 @@ def main() -> None:
     feature_flags.RESERVE_AHEAD_ROUTER_ENABLED = (
         os.environ.get("BBA_PILOT_RESERVE_AHEAD_ROUTER", "1") != "0"
     )
+    # Declared-use pilot seam (spec #147, ticket #151). Set the library flag from
+    # the import-time constant (single source of truth; also folded into
+    # CODE_VERSION) so the classifier twins / _classify_from_context fallback
+    # agree with this leg's direct classify() call.
+    feature_flags.DECLARED_USETYPE_ENABLED = DECLARED_USETYPE_PILOT_ENABLED
 
     AUDIT_STORE_ROOT.mkdir(parents=True, exist_ok=True)
     (
@@ -1099,6 +1200,7 @@ def main() -> None:
         candidates_by_reqno,
         bdvsttrans_by_reqno,
         unitamt_lines_by_reqno,
+        usetype_values_by_hn_reqno,
     ) = _build_inputs()
 
     fr = build_audit_orders(inputs, AuditOrdersConfig(code_version=CODE_VERSION))
@@ -1323,6 +1425,11 @@ def main() -> None:
             continue
 
         # --- Red-cell path (Phase 1, component="red_cell") ---
+        # Guarded so a flag-off run never calls collapse_usetype (which warns on
+        # mixed codes) — keeps flag-off byte-identical, no new log output.
+        collapsed_usetype = _collapsed_usetype_for(
+            usetype_values_by_hn_reqno.get(((order.hn or "").strip(), order.reqno), [])
+        )
         # Reserve-ahead elective orders are crossmatched days before they are
         # transfused; re-anchor the evidence windows (Hb lookback, notes, CBC,
         # meds, vitals, INCPT) onto the issue datetime so the model adjudicates
@@ -1553,6 +1660,7 @@ def main() -> None:
                 meds=meds_for_bundle,
                 hb_history=hb_for_bundle,
                 vitals=vital_records,
+                declared_use=_declared_use_record(collapsed_usetype),
             )
         )
 
@@ -1693,7 +1801,10 @@ def main() -> None:
             "- Do not silently drop sub-threshold Hb values from the reasoning;",
             "  ignoring them is the failure mode this policy exists to prevent.",
         ]
-        if any(it.source == "Periop" for it in bundle.items):
+        if any(
+            it.source == "Periop" and _has_note_derived_periop(dict(it.payload))
+            for it in bundle.items
+        ):
             guidance_lines += [
                 "",
                 "PERI-OPERATIVE EVIDENCE — quote-or-deny requirement:",
@@ -1758,6 +1869,7 @@ def main() -> None:
                 administration_summary=bundle.administration_summary,
                 enable_missing_hb_positive_evidence=ENABLE_MISSING_HB_POSITIVE_EVIDENCE,
                 returns_summary=returns_summary,
+                declared_use=_declared_use_label_for_classifier(collapsed_usetype),
             )
         )
 
@@ -1828,6 +1940,9 @@ def main() -> None:
                     procedure_proximity_hours=ctx.procedure_proximity_hours,
                     upcoming_procedure_hours=ctx.upcoming_procedure_hours,
                 ),
+                declared_use=(
+                    ctx.declared_use if feature_flags.DECLARED_USETYPE_ENABLED else None
+                ),
             )
         )
         classifier_results[ctx.order.audit_id] = cres
@@ -1877,7 +1992,7 @@ def main() -> None:
         cres = classifier_results[ctx.order.audit_id]
         reserve_ahead = (
             feature_flags.RESERVE_AHEAD_ROUTER_ENABLED
-            and cres.rationale == "preop_defer_llm"
+            and cres.rationale in _RESERVE_AHEAD_RATIONALES
         )
         task_mode = rbc_task_mode(ctx.hb_result.value_g_dl, reserve_ahead=reserve_ahead)
         prompt = build_prompt(

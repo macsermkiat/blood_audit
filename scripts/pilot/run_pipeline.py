@@ -45,6 +45,7 @@ from bba.deterministic_classifier import (
 )
 from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import ClassifierInputs
+from bba.declared_use import DeclaredUseLabel, collapse_usetype, label_for
 from bba.feature_flags import RETURNS_LEDGER_ENABLED
 from bba.hb_lookup import (
     HbLookupResult,
@@ -86,6 +87,14 @@ BUNDLE = WORK / "bundle"
 ENABLE_MISSING_HB_POSITIVE_EVIDENCE = os.environ.get(
     "BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE", ""
 ).strip().lower() in ("1", "true", "yes", "on")
+# Declared-use pilot seam (spec #147, ticket #151). Default OFF; on-state
+# threads BDVSTDT.USETYPE into the classifier and appends the declared report
+# columns. Uses the "== '1'" idiom (default OFF) — NOT the reserve-router
+# "!= '0'" idiom (which defaults ON). Kept module-local (not a library-flag
+# mutation) so importing this module in tests never pollutes feature_flags.
+DECLARED_USETYPE_PILOT_ENABLED = (
+    os.environ.get("BBA_PILOT_DECLARED_USETYPE", "0") == "1"
+)
 HB_HEM_CODE = "290095"
 HB_POCT_CODE = "500001"
 ANC_CODE = "290093"
@@ -164,6 +173,10 @@ RETURNS_LEDGER_FIELDNAMES = [
     "returns_ledger_complete",
 ]
 
+# Declared-use columns (spec #147, ticket #151). Appended ONLY when the pilot
+# seam is on, so a flag-off run reproduces the base schema byte-for-byte.
+DECLARED_USETYPE_FIELDNAMES = ["declared_use_code", "declared_use_label"]
+
 
 def _returns_disposition_for_classifier(
     returns_summary: ReturnsSummary | None,
@@ -172,6 +185,49 @@ def _returns_disposition_for_classifier(
     if RETURNS_LEDGER_ENABLED and returns_summary is not None:
         return returns_summary.disposition
     return "inconclusive"
+
+
+def _declared_use_label_for_classifier(
+    collapsed_code: str | None,
+) -> DeclaredUseLabel | None:
+    """Return the declared-use LABEL passed into the pure classifier.
+
+    Off, or with no collapsed code, the classifier sees ``None`` so step 6 is
+    unchanged. Non-surgical labels (ward/day_care/unknown) are inert in the
+    classifier (only ``DECLARED_SURGICAL_LABELS`` triggers the defer).
+    """
+    if DECLARED_USETYPE_PILOT_ENABLED and collapsed_code is not None:
+        return label_for(collapsed_code)
+    return None
+
+
+def _collapsed_usetype_for(values: list[str]) -> str | None:
+    """Collapse an order's USETYPE detail lines, but only when the seam is on.
+
+    ``collapse_usetype`` logs a warning on mixed nonblank codes; skipping the
+    call when the seam is off keeps a flag-off run byte-identical — no new log
+    output even over a mixed-code order.
+    """
+    if not DECLARED_USETYPE_PILOT_ENABLED:
+        return None
+    return collapse_usetype(values)
+
+
+def _declared_use_columns(collapsed_code: str | None) -> dict[str, str]:
+    """Descriptive declared-use report columns for a row (empty dict when off).
+
+    USETYPE is a component-agnostic order attribute, so these columns are
+    populated for red-cell AND platelet rows — a blank on a platelet order that
+    was declared for surgery would read as "no declaration" in the opt-in
+    report. This is display only: platelet CLASSIFICATION is untouched (the
+    declared signal never feeds the platelet gate).
+    """
+    if not DECLARED_USETYPE_PILOT_ENABLED:
+        return {}
+    return {
+        "declared_use_code": collapsed_code or "",
+        "declared_use_label": label_for(collapsed_code) if collapsed_code else "",
+    }
 
 
 def _returns_periop_context_for_classifier(
@@ -658,6 +714,11 @@ def main() -> None:
     # Ordered unit amount per REQNO, one raw UNITAMT string per BDVSTDT detail
     # line. summarize_returns parses these fail-closed (spec #119).
     unitamt_lines_by_reqno: dict[str, list[str]] = {}
+    # Declared use per order, keyed by (HN, REQNO) — NEVER bare REQNO: a REQNO
+    # recurs across admissions in the complete export, and a foreign admission's
+    # blank line + one surgical code would otherwise collapse as "not mixed" and
+    # attach a foreign declaration. BDVSTDT carries its own HN.
+    usetype_values_by_hn_reqno: dict[tuple[str, str], list[str]] = {}
     # Separate dispense and use displays per REQNO. Dispense comes from the
     # parent BDVST PICKDATE/PICKTIME; use comes from the earliest full BDVSTDT
     # USEDATE/USETIME, with a date-only marker when no full datetime exists.
@@ -670,6 +731,9 @@ def main() -> None:
         unitamt_lines_by_reqno.setdefault(reqno, []).append(
             (r.get("UNITAMT") or "").strip()
         )
+        usetype_values_by_hn_reqno.setdefault(
+            ((r.get("HN") or "").strip(), reqno), []
+        ).append((r.get("USETYPE") or "").strip())
 
         parent = bdvst_by_reqno.get(reqno, {})
         pick_date = (parent.get("PICKDATE") or "").strip().split(" ")[0]
@@ -757,6 +821,13 @@ def main() -> None:
 
     rows: list[dict[str, Any]] = []
     for order in filter_result.included:
+        # Collapsed declared use for THIS order, keyed by (HN, REQNO). Computed
+        # before the component split so both the red-cell and platelet report
+        # rows carry the descriptive columns (the platelet classifier never
+        # reads it). Guarded so a flag-off run never calls collapse_usetype.
+        collapsed_usetype = _collapsed_usetype_for(
+            usetype_values_by_hn_reqno.get(((order.hn or "").strip(), order.reqno), [])
+        )
         # --- Platelet path (Phase 2, component="platelet") ---
         if order.component == "platelet":
             plt_obs = _build_platelet_observations(lab, order.an)
@@ -843,6 +914,7 @@ def main() -> None:
                         "returns_ledger_complete": plt_returns_summary.ledger_complete,
                     }
                 )
+            plt_row.update(_declared_use_columns(collapsed_usetype))
             rows.append(plt_row)
             continue
 
@@ -979,6 +1051,7 @@ def main() -> None:
                     procedure_proximity_hours=proximity_h,
                     upcoming_procedure_hours=upcoming_h,
                 ),
+                declared_use=_declared_use_label_for_classifier(collapsed_usetype),
             )
         )
 
@@ -1043,6 +1116,7 @@ def main() -> None:
                     "returns_ledger_complete": returns_summary.ledger_complete,
                 }
             )
+        row.update(_declared_use_columns(collapsed_usetype))
         rows.append(row)
 
     # Append excluded cases as sparse rows so build_review.py can surface
@@ -1057,8 +1131,10 @@ def main() -> None:
     # only) report.csv so build_review.py can open it. Stable fieldnames
     # also keep the schema consistent across runs (one column won't
     # disappear if every case happens to have e.g. anc_value=None).
-    fieldnames = REPORT_FIELDNAMES + (
-        RETURNS_LEDGER_FIELDNAMES if RETURNS_LEDGER_ENABLED else []
+    fieldnames = (
+        REPORT_FIELDNAMES
+        + (RETURNS_LEDGER_FIELDNAMES if RETURNS_LEDGER_ENABLED else [])
+        + (DECLARED_USETYPE_FIELDNAMES if DECLARED_USETYPE_PILOT_ENABLED else [])
     )
     with out_csv.open("w", encoding="utf-8", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=fieldnames, extrasaction="ignore")
