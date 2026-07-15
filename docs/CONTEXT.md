@@ -3441,12 +3441,15 @@ a run is scored on the axis a reviewer actually used. `Bucket` and `Mechanism`
 
 ### compare_runs (before/after)
 
-`bba.verification.compare_runs(before, after) → RunComparison` judges the fix on
-its real costs, not one headline: `find_regressions` surfaces the cases the
-after-run made worse, and the comparison carries the LLM-volume delta alongside
-the accuracy move. `build_matrix` / `confusion_by_mechanism` produce the
-`ConfusionMatrix` / `ConfusionCell` grids, split by `MatrixScope` (overall,
-deterministic-only, LLM-only). Full surface: `bba.verification.__all__`.
+`bba.verification.compare_runs(labels, before, after) → RunComparison` judges the
+fix on its real costs, not one headline. `labels` is the human-label map
+(`reqno -> label`); `before` / `after` are the two runs' `reqno -> CaseVerdict`
+maps. `find_regressions(labels, before, after)` surfaces the cases the after-run
+made worse, and the comparison carries the LLM-volume delta alongside the
+accuracy move. `build_matrix(labels, verdicts, *, scope=...)` and
+`confusion_by_mechanism(labels, verdicts)` score a SINGLE run into the
+`ConfusionMatrix` / `ConfusionCell` grids, split by `MatrixScope` (`all`,
+`deterministic`, `llm`). Full surface: `bba.verification.__all__`.
 
 ## Returns-ledger concepts (#120)
 
@@ -3459,13 +3462,18 @@ disposition ROUTER that consumes the summary (`RETURNED_NOT_TRANSFUSED` /
 
 ### summarize_returns and ReturnsSummary
 
-`bba.returns_ledger.summarize_returns(rows) → ReturnsSummary` aggregates one
-REQNO's BDVSTTRANS ledger rows into a frozen summary. `units_total` counts
-DISTINCT physical units, not raw rows: the complete export records a unit's
-lifecycle as multiple rows (dispense + return, aliquots) keyed apart by `SEQNO`,
-so rows sharing `(DNRNO, SEQNO)` collapse to one unit at its terminal status
-before counting. `physical_units` / `rows_for_admission` are the row-scoping
-helpers; `terminal_status` reads a unit's terminal `Unitstat`.
+`bba.returns_ledger.summarize_returns(trans_rows, unitamt_lines) → ReturnsSummary`
+aggregates one REQNO's BDVSTTRANS ledger rows (`trans_rows`) plus the order's
+BDVSTDT `UNITAMT` detail lines (`unitamt_lines`, which give the ordered amount)
+into a frozen summary. `units_total` counts DISTINCT physical units, not raw
+rows: `physical_units(trans_rows)` collapses rows sharing a fully-present
+`(DNRNO, SEQNO, BDTYPE)` key to one unit at its terminal status before counting.
+`BDTYPE` is part of the key so distinct products of one donation (split
+`SDRF`/`SDRF2`, a pooled `LDPC`, or an irradiation relabel) are never merged and
+a presumed-transfused unit can never hide behind another product's return; a row
+missing ANY key component becomes its own unit (fail-closed). `rows_for_admission`
+is the row-scoping helper; `terminal_status` reduces a unit's rows to its
+terminal `Unitstat`.
 
 ### Disposition (derived, fail-closed)
 
