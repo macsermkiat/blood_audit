@@ -121,7 +121,7 @@ open "$BBA_PILOT_WORK_DIR/doctor_rankings.html"
 
 | Subcommand | Status | Notes |
 |------------|--------|-------|
-| `bba ingest <csv>` | Wired | Validates + hashes + normalizes the 12-table HOSxP bundle, then writes the run completion marker (marker-only today; Parquet loader is the intended next storage). |
+| `bba ingest <csv> [--schema-version v1]` | Wired | Validates + hashes + normalizes the 12-table HOSxP bundle, then writes the run completion marker (marker-only today; Parquet loader is the intended next storage). `--schema-version` selects the ingest schema (default `v1`). |
 | `bba audit --input <csv>` | Wired | Run-level idempotent; `--force` overrides with an `audit_log` row. |
 | `bba evaluate --run-id <id>` | Integration seam | Underlying `bba.eval_harness` primitives ship and are tested; the CLI hand-off composes them against the deployment's `audit_store`. Raises `CliError` until wired. |
 | `bba report --run-id <id> --format html\|pdf\|json` | Integration seam | Underlying `bba.report_generator` ships; CLI needs the deployment to source `ReportInputs` from the store. |
@@ -129,6 +129,24 @@ open "$BBA_PILOT_WORK_DIR/doctor_rankings.html"
 | `bba sentinel --weekly\|--quarterly` | Integration seam | `bba.monitoring` primitives ship; CLI needs the deployment's cadence dispatcher. |
 
 The four integration seams **fail loud** with a `CliError` describing the missing glue — they do not fabricate defaults that would silently mis-configure the underlying module.
+
+Examples (Path B; `BBA_DATA_DIR` must be set):
+
+```bash
+# Ingest + audit a bundle. The run_id is derived from the input + code version,
+# so re-running the same bundle is a no-op.
+uv run bba ingest /path/to/hosxp_bundle/BDVST.csv
+uv run bba audit --input /path/to/hosxp_bundle/BDVST.csv
+
+# Confirm a run already completed this session and print its row count (no-op).
+# --run-id and --input are mutually exclusive; --run-id alone never re-runs the
+# pipeline — it errors if that run was never completed:
+uv run bba audit --run-id <run_id>
+
+# Force a re-audit of an already-complete run — writes an audit_log override row
+# instead of no-op'ing (needs --input; --force without --input does not re-run):
+uv run bba audit --input /path/to/hosxp_bundle/BDVST.csv --force
+```
 
 ## Expected input bundle
 
