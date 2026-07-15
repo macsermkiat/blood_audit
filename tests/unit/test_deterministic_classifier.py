@@ -92,6 +92,7 @@ from bba.deterministic_classifier import (
     periop_envelope,
     total_crystalloid_liters,
 )
+from bba.declared_use import DeclaredUseLabel
 from bba.hb_lookup import DeltaHbWindow, HbLookupResult
 
 
@@ -215,6 +216,7 @@ def _inputs(
     periop_surgical_context: bool = False,
     returns_disposition: str = "inconclusive",
     returns_periop_context: bool = False,
+    declared_use: DeclaredUseLabel | None = None,
 ) -> ClassifierInputs:
     return ClassifierInputs(
         audit_id="audit-test-0001",
@@ -230,6 +232,7 @@ def _inputs(
         periop_surgical_context=periop_surgical_context,
         returns_disposition=returns_disposition,  # type: ignore[arg-type]
         returns_periop_context=returns_periop_context,
+        declared_use=declared_use,
     )
 
 
@@ -666,6 +669,151 @@ class TestBypassPathways:
         )
         assert result.classification == "NEEDS_REVIEW"
         assert result.rationale == "preop_defer_llm"
+
+    @pytest.mark.parametrize("declared_use", ["surgery", "type_screen"])
+    def test_declared_surgical_without_structured_op_defers_to_llm(
+        self, declared_use: DeclaredUseLabel
+    ) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(12.2),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                declared_use=declared_use,
+            )
+        )
+
+        assert result.classification == "NEEDS_REVIEW"
+        assert result.bypass_reason == BypassReason.NONE
+        assert result.rationale == "preop_defer_llm_declared"
+
+    @pytest.mark.parametrize("declared_use", [None, "surgery"])
+    def test_structured_preop_slug_wins_over_declared_use(
+        self, declared_use: DeclaredUseLabel | None
+    ) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(12.2),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                upcoming_procedure_hours=24.0,
+                declared_use=declared_use,
+            )
+        )
+
+        assert result.classification == "NEEDS_REVIEW"
+        assert result.rationale == "preop_defer_llm"
+
+    def test_declared_surgical_below_cohort_threshold_still_clears(self) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(7.9),
+                cohort=_cohort(CohortLabel.ORTHO_SURGERY, ORTHO_SURGERY_THRESHOLD),
+                declared_use="surgery",
+            )
+        )
+
+        assert result.classification == "APPROPRIATE"
+        assert result.rationale == "hb_lt_threshold"
+
+    def test_declared_surgical_below_seven_still_clears_at_step_two(self) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(6.9),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                declared_use="surgery",
+            )
+        )
+
+        assert result.classification == "APPROPRIATE"
+        assert result.rationale == "hb_lt_7_universal"
+
+    @pytest.mark.parametrize(
+        ("hb", "cohort", "procedure_proximity_hours", "expected_rationale"),
+        [
+            (
+                _hb(None),
+                _cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                None,
+                "hb_missing",
+            ),
+            (_hb(8.5), _cohort(CohortLabel.MTP, None), None, "bypass_mtp"),
+            (
+                _hb(8.5),
+                _cohort(CohortLabel.UNKNOWN, None),
+                None,
+                "cohort_unknown",
+            ),
+            (
+                _hb(8.5),
+                _cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                4.0,
+                "bypass_peri_procedural",
+            ),
+        ],
+    )
+    def test_steps_before_declared_preop_keep_precedence(
+        self,
+        hb: HbLookupResult,
+        cohort: CohortAssignment,
+        procedure_proximity_hours: float | None,
+        expected_rationale: str,
+    ) -> None:
+        result = classify(
+            _inputs(
+                hb=hb,
+                cohort=cohort,
+                procedure_proximity_hours=procedure_proximity_hours,
+                declared_use="surgery",
+            )
+        )
+
+        assert result.rationale == expected_rationale
+
+    def test_declared_surgical_non_threshold_cohort_falls_through(self) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(8.5),
+                cohort=_cohort(CohortLabel.HEME_MALIGNANCY_ACTIVE, None),
+                declared_use="surgery",
+            )
+        )
+
+        assert result.classification == "NEEDS_REVIEW"
+        assert result.cohort_threshold is None
+        assert result.rationale == "cohort_non_threshold"
+
+    @pytest.mark.parametrize("declared_use", ["ward", "day_care", "unknown", None])
+    def test_non_surgical_declared_use_is_none_equivalent(
+        self, declared_use: DeclaredUseLabel | None
+    ) -> None:
+        baseline = classify(
+            _inputs(
+                hb=_hb(12.2),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+            )
+        )
+        result = classify(
+            _inputs(
+                hb=_hb(12.2),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                declared_use=declared_use,
+            )
+        )
+
+        assert result == baseline
+
+    def test_declared_surgical_preempts_delta_hb_auto_clear(self) -> None:
+        inputs = _inputs(
+            hb=_hb(8.5, delta_bypass=True),
+            cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+        )
+        baseline = classify(inputs)
+        declared = classify(inputs.model_copy(update={"declared_use": "surgery"}))
+
+        assert baseline.classification == "APPROPRIATE"
+        assert baseline.rationale == "bypass_delta_hb"
+        assert declared.classification == "NEEDS_REVIEW"
+        assert declared.bypass_reason == BypassReason.NONE
+        assert declared.rationale == "preop_defer_llm_declared"
 
     def test_delta_hb_bypass_fires(self) -> None:
         """Delta-Hb trigger fired → APPROPRIATE, bypass_reason=DELTA_HB."""

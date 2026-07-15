@@ -40,6 +40,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from bba.audit_orders import AuditOrder
 from bba.audit_store.models import Component, SafeId, UTCDatetime
 from bba.cohort_detector import CohortAssignment
+from bba.declared_use import DeclaredUseLabel
 from bba.hb_lookup import HbLookupResult
 from bba.platelet_lookup.models import PlateletLookupResult
 from bba.prompt_builder import EvidenceChunk
@@ -200,6 +201,8 @@ class PipelineRowContext(BaseModel):
     # Structured blood-bank unit disposition. None preserves every legacy
     # caller and stays inert unless the returns-ledger feature flag is enabled.
     returns_summary: ReturnsSummary | None = None
+
+    declared_use: DeclaredUseLabel | None = None
 
     # Operator-supplied kill-switch for the missing-Hb positive-evidence
     # pre-check (MTP / peri-procedural auto-APPROPRIATE on no documented

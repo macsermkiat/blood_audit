@@ -100,6 +100,8 @@ _RETURNS_TERMINAL_CLASSIFICATIONS = frozenset(
     {"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"}
 )
 
+_RESERVE_AHEAD_RATIONALES = frozenset({"preop_defer_llm", "preop_defer_llm_declared"})
+
 # Returns-terminal classification -> its structured bypass-reason value, for the
 # deterministic-platelet marker call's request_json. A platelet result carries
 # no BypassReason of its own, so the reason is recovered from the classification.
@@ -975,7 +977,7 @@ def _build_submission_requests(
             reserve_ahead = (
                 feature_flags.RESERVE_AHEAD_ROUTER_ENABLED
                 and classifier_result is not None
-                and classifier_result.rationale == "preop_defer_llm"
+                and classifier_result.rationale in _RESERVE_AHEAD_RATIONALES
             )
             task_mode = rbc_task_mode(
                 context.hb_result.value_g_dl, reserve_ahead=reserve_ahead
@@ -1062,6 +1064,9 @@ def _classifier_inputs_for(context: PipelineRowContext) -> ClassifierInputs:
             if feature_flags.RETURNS_LEDGER_ENABLED
             and context.returns_summary is not None
             else False
+        ),
+        declared_use=(
+            context.declared_use if feature_flags.DECLARED_USETYPE_ENABLED else None
         ),
     )
 

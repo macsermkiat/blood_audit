@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -15,11 +16,16 @@ from bba.audit_pipeline.pipeline import (
     rbc_task_mode,
 )
 from bba.audit_pipeline.resume import _rebuild_submission_requests
+from bba.audit_pipeline.replay import PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON
+from bba.audit_pipeline.replay import LLM_OVERCLEAR_ASSERT_REASON
+from bba.audit_store import AuditStore, AuditStoreConfig, Classification
 from bba.cohort_detector import CohortAssignment, CohortLabel
+from bba.declared_use import DeclaredUseLabel
 from bba.deterministic_classifier import classify
 from bba.hb_lookup import HbLookupResult
+from bba.llm_client.models import BatchSubmissionResult, RawBatchResponse
 from bba.platelet_lookup.models import PlateletLookupResult
-from bba.prompt_builder import EvidenceChunk
+from bba.prompt_builder import EvidenceChunk, TaskMode
 from bba.returns_ledger import ReturnsSummary
 from bba.vitals_extractor import SourceProvenance, VitalSigns, VitalsResult
 
@@ -36,6 +42,7 @@ def _rbc_ctx(
     hb_value: float | None,
     *,
     upcoming_procedure_hours: float | None = None,
+    declared_use: DeclaredUseLabel | None = None,
 ) -> PipelineRowContext:
     order = AuditOrder(
         audit_id=audit_id,
@@ -86,6 +93,7 @@ def _rbc_ctx(
         prompt_hash=f"ph_{audit_id}",
         evidence_bundle_hash=f"bh_{audit_id}",
         evidence_chunks=_evidence_chunk(),
+        declared_use=declared_use,
     )
 
 
@@ -207,6 +215,35 @@ def test_pipeline_routes_real_preop_classifier_result_when_flag_enabled(
     assert request.prompt.task_mode == "RESERVE_AHEAD_REVIEW"
 
 
+@pytest.mark.parametrize(
+    ("router_enabled", "expected_task_mode"),
+    [(True, "RESERVE_AHEAD_REVIEW"), (False, "HB_GT_10_OVERRIDE")],
+)
+def test_pipeline_dispatches_declared_preop_by_router_flag(
+    monkeypatch: pytest.MonkeyPatch,
+    router_enabled: bool,
+    expected_task_mode: TaskMode,
+) -> None:
+    ctx = _rbc_ctx(
+        "audit-rbc-declared-pipeline",
+        12.9,
+        declared_use="surgery",
+    )
+    monkeypatch.setattr(feature_flags, "DECLARED_USETYPE_ENABLED", True)
+    monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", router_enabled)
+    classifier_result = classify(_classifier_inputs_for(ctx))
+    assert classifier_result.rationale == "preop_defer_llm_declared"
+
+    request = _build_submission_requests(
+        [ctx],
+        run_id="run-rbc-task-mode",
+        classifier_results={ctx.order.audit_id: classifier_result},
+    )[0]
+
+    assert request.task_mode == expected_task_mode
+    assert request.prompt.task_mode == expected_task_mode
+
+
 def test_resume_dispatches_high_hb_rbc_to_override():
     """Ticket #93 also hard-coded resumed high-Hb RBC rows to gray-zone mode."""
     ctx = _rbc_ctx("audit-rbc-resume-high", 12.3)
@@ -270,6 +307,112 @@ def test_resume_routes_real_preop_classifier_result_when_flag_enabled(
 
     assert request.task_mode == "RESERVE_AHEAD_REVIEW"
     assert request.prompt.task_mode == "RESERVE_AHEAD_REVIEW"
+
+
+@pytest.mark.parametrize(
+    ("router_enabled", "expected_task_mode"),
+    [(True, "RESERVE_AHEAD_REVIEW"), (False, "HB_GT_10_OVERRIDE")],
+)
+def test_resume_dispatches_declared_preop_by_router_flag(
+    monkeypatch: pytest.MonkeyPatch,
+    router_enabled: bool,
+    expected_task_mode: TaskMode,
+) -> None:
+    ctx = _rbc_ctx(
+        "audit-rbc-declared-resume",
+        12.9,
+        declared_use="type_screen",
+    )
+    monkeypatch.setattr(feature_flags, "DECLARED_USETYPE_ENABLED", True)
+    monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", router_enabled)
+
+    request = _rebuild_submission_requests(
+        run=_batch_run(ctx.order.audit_id),
+        contexts={ctx.order.audit_id: ctx},
+        audit_ids=(ctx.order.audit_id,),
+    )[0]
+
+    assert request.task_mode == expected_task_mode
+    assert request.prompt.task_mode == expected_task_mode
+
+
+@pytest.mark.parametrize(
+    ("router_enabled", "expected_classification", "expected_review_reason"),
+    [
+        (
+            True,
+            "PREOP_RESERVATION_UNCONFIRMED",
+            PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON,
+        ),
+        (False, "INAPPROPRIATE", LLM_OVERCLEAR_ASSERT_REASON),
+    ],
+)
+def test_replay_dispatches_declared_preop_by_router_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    router_enabled: bool,
+    expected_classification: Classification,
+    expected_review_reason: str,
+) -> None:
+    from bba.audit_pipeline.replay import apply_batch_results
+
+    ctx = _rbc_ctx(
+        "audit-rbc-declared-replay",
+        12.9,
+        declared_use="surgery",
+    )
+    monkeypatch.setattr(feature_flags, "DECLARED_USETYPE_ENABLED", True)
+    monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", router_enabled)
+    classifier_result = classify(_classifier_inputs_for(ctx))
+    assert classifier_result.rationale == "preop_defer_llm_declared"
+    response = RawBatchResponse(
+        batch_id="msgbatch_declared_replay",
+        results=(
+            BatchSubmissionResult(
+                custom_id=ctx.order.audit_id,
+                model_id="claude-sonnet-5",
+                raw_response_json={
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": "classify_audit",
+                            "input": {
+                                "classification": "APPROPRIATE",
+                                "indications": [],
+                                "negative_evidence": [],
+                                "reasoning_summary_en": "Declared pre-op reservation.",
+                                "reasoning_summary_th": "",
+                                "administration_evidence": [],
+                                "administration_claimed": False,
+                                "reservation_assessment": "APPROPRIATE",
+                            },
+                        }
+                    ],
+                    "stop_reason": "tool_use",
+                },
+                request_json={"messages": []},
+                response_headers={"anthropic-version": "2023-06-01"},
+                request_timestamp=_RUN_TS,
+                latency_ms=100,
+                anthropic_version="2023-06-01",
+            ),
+        ),
+    )
+    store = AuditStore(
+        AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
+    )
+
+    apply_batch_results(
+        response,
+        audit_store=store,
+        run_id="run-declared-replay",
+        contexts={ctx.order.audit_id: ctx},
+        classifier_results={ctx.order.audit_id: classifier_result},
+    )
+
+    (row,) = store.read_audit_results(run_id="run-declared-replay")
+    assert row.final_classification == expected_classification
+    assert row.review_reason == expected_review_reason
 
 
 _ALL_RETURNED = ReturnsSummary(

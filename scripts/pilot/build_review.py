@@ -129,6 +129,11 @@ _RATIONALE_LABELS: dict[str, str] = {
         "paracentesis, arthrocentesis, arterial/central line) are excluded from "
         "this signal."
     ),
+    "preop_defer_llm_declared": (
+        "Declared surgical intent (BDVSTDT.USETYPE = surgery/type-screen) "
+        "routed the order to LLM review with no structured op row; a "
+        "declaration is not a transfusion indication."
+    ),
     "bypass_pre_op_crossmatch": (
         "[legacy] Upcoming procedure within 72 h — auto-classified APPROPRIATE. "
         "Superseded by preop_defer_llm (now routes to LLM review); retained so "
@@ -1879,6 +1884,7 @@ LLM: Anthropic Batch classification on structured evidence only.
 <dt>bypass_mtp</dt><dd>Massive Transfusion Protocol cohort — auto-classified APPROPRIATE.</dd>
 <dt>bypass_peri_procedural</dt><dd>Procedure within 6 h before order — peri-procedural bypass.</dd>
 <dt>preop_defer_llm</dt><dd>Upcoming procedure within 72 h — routed to LLM review, not auto-cleared (a reservation is not an indication). Minor procedures (perm cath, tracheostomy, lumbar puncture, thoracocentesis, paracentesis, arthrocentesis, arterial/central line) are excluded from the peri-op signal.</dd>
+<dt>preop_defer_llm_declared</dt><dd>Declared surgical intent (BDVSTDT.USETYPE = surgery/type-screen) routed the order to LLM review with no structured op row; a declaration is not a transfusion indication.</dd>
 <dt>bypass_pre_op_crossmatch</dt><dd>[legacy] Upcoming procedure within 72 h — auto-classified APPROPRIATE. Superseded by preop_defer_llm; retained for historical reports.</dd>
 <dt>bypass_delta_hb</dt><dd>Rapid Hb drop (delta-Hb trigger) fired — auto-classified APPROPRIATE.</dd>
 <dt>bypass_hemodilution</dt><dd>Haemodilution pattern flagged — Hb unreliable; sent to NEEDS_REVIEW.</dd>

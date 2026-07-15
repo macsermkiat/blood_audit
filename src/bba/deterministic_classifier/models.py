@@ -33,6 +33,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from bba.audit_store import Classification
 from bba.cohort_detector import CohortAssignment
+from bba.declared_use import DeclaredUseLabel
 from bba.hb_lookup import HbLookupResult
 
 
@@ -158,6 +159,7 @@ class ClassifierInputs(BaseModel):
         "inconclusive"
     )
     returns_periop_context: bool = False
+    declared_use: DeclaredUseLabel | None = None
 
 
 class ClassifierResult(BaseModel):
@@ -181,7 +183,8 @@ class ClassifierResult(BaseModel):
     (``"hb_lt_7_universal"``, ``"hb_lt_threshold"``, ``"hb_7_to_10"``,
     ``"hb_ge_10"``, ``"hb_missing"``, ``"hb_missing_defer_llm"``,
     ``"bypass_delta_hb"``, ``"bypass_peri_procedural"``,
-    ``"bypass_pre_op_crossmatch"``, ``"bypass_mtp"``,
+    ``"bypass_pre_op_crossmatch"``, ``"preop_defer_llm"``,
+    ``"preop_defer_llm_declared"``, ``"bypass_mtp"``,
     ``"bypass_mtp_hb_missing"``, ``"bypass_peri_procedural_hb_missing"``,
     ``"bypass_periop_evidence_hb_missing"``,
     ``"bypass_hemodilution"``, ``"cohort_unknown"``). The
