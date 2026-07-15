@@ -1,7 +1,8 @@
 # Declared USETYPE surgical-intent plan
 
-**Status:** IN PROGRESS — specification #147, delivered as a stacked PR series;
-PR-1 adds ingest, vocabulary, and the default-off feature flag.
+**Status:** GO-LIVE PREFLIGHT AVAILABLE — pilot threading is complete and the
+read-only ticket #152 evidence gate is available; production enablement remains
+on hold pending the additional comparisons and clinical sign-off below.
 **Scope:** Interpret the clinician's order-time declared use as a surgical-intent
 signal without changing routing until the later wiring tickets land.
 
@@ -35,9 +36,28 @@ The five-PR stack proceeds as: ingest, vocabulary, and flag; classifier and
 dispatch; bundle and prompts; pilot threading and preflight; then the go-live
 default flip after preflight and clinician sign-off. The deterministic and LLM
 pilot legs now thread declared use behind `BBA_PILOT_DECLARED_USETYPE`, which is
-default-off; ticket #152 retains the go-live gate and default-flip decision.
+default-off; ticket #152 supplies evidence for the later go-live enablement
+decision without changing the library default.
 
-## 5. Risks
+## 5. Go-live evidence gate
+
+Run `scripts/pilot/preflight_declared_usetype.py` against the pilot work bundle.
+It prints the collapsed distribution, mixed-key and cross-HN collision checks,
+the real-input deterministic flip matrix, and the incremental no-operation-row
+population, then writes
+`$BBA_PILOT_WORK_DIR/preflight_declared_usetype.json` by default. Any mixed
+`(HN, REQNO)` or unexpected flip is a HOLD; an empty audited or
+declared-surgical population is also a HOLD. The artifact is read-only and does
+not enable either feature flag.
+
+This artifact is one gate, not complete go-live approval. The remaining
+requirements are a flag-on LLM-leg comparison, an attribution/dashboard delta
+summary, and clinician sign-off on the high-Hb (`hb_ge_10` to defer) and
+delta-Hb (`bypass_delta_hb` to defer) buckets. The library
+`DECLARED_USETYPE_ENABLED` default remains OFF regardless of the preflight
+recommendation.
+
+## 6. Risks
 
 USETYPE is now a hard ingest requirement, so archived exports without it fail
 `validate_header` loudly. The resulting schema-fingerprint and `run_id` bump is
