@@ -165,6 +165,13 @@ DECLARED_USETYPE_PILOT_ENABLED = (
     if _declared_env is not None
     else feature_flags.DECLARED_USETYPE_ENABLED
 )
+_msbos_env = os.environ.get("BBA_PILOT_MSBOS_RESERVATION")
+MSBOS_RESERVATION_PILOT_ENABLED = (
+    _msbos_env == "1"
+    if _msbos_env is not None
+    else feature_flags.MSBOS_RESERVATION_ENABLED
+)
+# Folding MSBOS into CODE_VERSION is deferred to T1 when a producer emits.
 # Run/code identity (spec #119 §G, ticket #124). The audit_store is idempotent
 # on (run_id, audit_id, code_version), so enabling a seam that changes verdicts
 # must not silently reuse a flag-off run's committed rows. Folding each seam into
@@ -1187,6 +1194,7 @@ def main() -> None:
     # CODE_VERSION) so the classifier twins / _classify_from_context fallback
     # agree with this leg's direct classify() call.
     feature_flags.DECLARED_USETYPE_ENABLED = DECLARED_USETYPE_PILOT_ENABLED
+    feature_flags.MSBOS_RESERVATION_ENABLED = MSBOS_RESERVATION_PILOT_ENABLED
 
     AUDIT_STORE_ROOT.mkdir(parents=True, exist_ok=True)
     (

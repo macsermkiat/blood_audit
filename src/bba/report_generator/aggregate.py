@@ -142,6 +142,7 @@ def aggregate_hospital_trend(
             inappropriate=counts["INAPPROPRIATE"],
             needs_review=counts["NEEDS_REVIEW"],
             insufficient_evidence=counts["INSUFFICIENT_EVIDENCE"],
+            over_reservation_count=sum(1 for row in rows if row.over_reservation),
             inappropriate_rate=_rate(counts["INAPPROPRIATE"], total),
         ),
     )
@@ -171,6 +172,9 @@ def aggregate_ward_scorecard(
                 inappropriate=counts["INAPPROPRIATE"],
                 needs_review=counts["NEEDS_REVIEW"],
                 insufficient_evidence=counts["INSUFFICIENT_EVIDENCE"],
+                over_reservation_count=sum(
+                    1 for row in ward_rows if row.over_reservation
+                ),
                 inappropriate_rate=_rate(counts["INAPPROPRIATE"], total),
             )
         )
@@ -299,6 +303,7 @@ def aggregate_cohort_exception(
                 cohort_applied=cohort,
                 total_orders=len(crows),
                 inappropriate=counts["INAPPROPRIATE"],
+                over_reservation_count=sum(1 for row in crows if row.over_reservation),
                 inappropriate_rate=_rate(counts["INAPPROPRIATE"], len(crows)),
             )
         )

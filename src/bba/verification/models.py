@@ -44,6 +44,7 @@ _BUCKET_OF: Mapping[str, VerificationBucket] = {
     "INSUFFICIENT_EVIDENCE": "unresolved",
     "POTENTIALLY_INAPPROPRIATE": "unresolved",
     "PREOP_RESERVATION_UNCONFIRMED": "unresolved",
+    "PREOP_OVER_RESERVATION": "inappropriate",
     "RETURNED_NOT_TRANSFUSED": "excluded",
     "PERIOP_TRANSFUSION_EXEMPT": "excluded",
 }

@@ -37,3 +37,11 @@ def test_declared_usetype_is_default_on_after_golive() -> None:
 
 def test_declared_usetype_flag_is_exported() -> None:
     assert "DECLARED_USETYPE_ENABLED" in feature_flags.__all__
+
+
+def test_msbos_reservation_flag_defaults_off() -> None:
+    assert feature_flags.MSBOS_RESERVATION_ENABLED is False
+
+
+def test_msbos_reservation_flag_is_exported() -> None:
+    assert "MSBOS_RESERVATION_ENABLED" in feature_flags.__all__

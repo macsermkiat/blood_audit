@@ -67,6 +67,7 @@ from bba.dashboard import (
     create_app,
 )
 from bba.dashboard.app import (
+    _aggregate_classifications,
     get_case_detail,
     get_physician_scorecard,
     get_pipeline_health,
@@ -646,6 +647,35 @@ class TestFiveViewsRender:
             + scorecard.insufficient_evidence_count
             == scorecard.total_orders
         )
+
+    def test_preop_over_reservation_conserves_aggregation_and_scorecards(
+        self,
+        config: DashboardConfig,
+        context_in_care_team: RouteContext,
+        context_physician_self: RouteContext,
+        audit_store: AuditStore,
+    ) -> None:
+        row = _audit_row(
+            audit_id="audit-001",
+            run_id="run-over-reservation",
+            final_classification="PREOP_OVER_RESERVATION",
+        )
+        direct = _aggregate_classifications((row,))
+        audit_store.write(
+            row,
+            (_llm_call(audit_id="audit-001", run_id="run-over-reservation"),),
+        )
+
+        ward = get_ward_scorecard(config, context_in_care_team, "ward-001")
+        physician = get_physician_scorecard(config, context_physician_self, "phys-001")
+
+        assert direct["total_orders"] == 1
+        assert direct["inappropriate_count"] == 1
+        assert direct["over_reservation_count"] == 1
+        for card in (ward, physician):
+            assert card.total_orders == 1
+            assert card.inappropriate_count == 1
+            assert card.over_reservation_count == 1
 
     def test_physician_scorecard_view_renders_with_synthetic_data(
         self,

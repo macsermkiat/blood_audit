@@ -52,6 +52,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from pydantic import ValidationError
 
+from bba.audit_store import AuditRow, AuditStore, AuditStoreConfig, LlmCall
 from bba.report_generator import (
     CSV_ENCODING,
     CSV_NEWLINE,
@@ -73,6 +74,7 @@ from bba.report_generator import (
     aggregate_physician_own_view,
     aggregate_pipeline_health,
     aggregate_ward_scorecard,
+    build_report_inputs,
     filter_rows_for_month,
     generate_monthly_report,
     physician_own_view_filename,
@@ -105,6 +107,7 @@ def _row(
     cohort_applied: str = "default",
     indication_codes: tuple[str, ...] = ("anemia_symptomatic",),
     needs_human_review: bool = False,
+    over_reservation: bool = False,
     order_datetime: datetime = MID_MONTH,
     an_hash: str = "an-001",
     hn_hash: str = "hn-001",
@@ -120,6 +123,7 @@ def _row(
         cohort_applied=cohort_applied,
         indication_codes=indication_codes,
         needs_human_review=needs_human_review,
+        over_reservation=over_reservation,
     )
 
 
@@ -147,6 +151,67 @@ def _inputs(
         footer=_footer(),
         output_dir=output_dir,
         physician_ids_for_own_view=physician_ids_for_own_view,
+    )
+
+
+def _stored_audit_row(*, final_classification: str = "APPROPRIATE") -> AuditRow:
+    return AuditRow(
+        audit_id="audit-over-reservation",
+        run_id="run-over-reservation",
+        run_timestamp=MID_MONTH,
+        hn_hash="hn-hash",
+        an_hash="an-hash",
+        reqno="REQ-OVER",
+        order_datetime=MID_MONTH,
+        products_ordered=("LPRC",),
+        hb_value=8.0,
+        hb_datetime=MID_MONTH,
+        hb_freshness="fresh",
+        hb_source="lab",
+        vitals_sbp=None,
+        vitals_hr=None,
+        vitals_timestamp=None,
+        vitals_source=None,
+        prior_rbc_units_24h=0,
+        prior_rbc_units_7d=0,
+        cohort_threshold=7.0,
+        delta_hb_window_results=(),
+        rule_classification="APPROPRIATE",
+        final_classification=final_classification,  # type: ignore[arg-type]
+        cohort_applied="default",
+        indications_json=(),
+        negative_evidence_json=(),
+        confidence=0.9,
+        reasoning_summary_thai="เหตุผล",
+        reasoning_summary_en="reason",
+        needs_human_review=False,
+        review_reason=None,
+        model_id="model-v1",
+        prompt_hash="prompt-hash",
+        evidence_bundle_hash="bundle-hash",
+        redactor_version="redactor-v1",
+        redactor_model_sha="redactor-sha",
+        policy_version="policy-v1",
+        verifier_pass=True,
+        verifier_retries=0,
+        escalated_to_opus=False,
+    )
+
+
+def _stored_llm_call() -> LlmCall:
+    return LlmCall(
+        call_id="call-over-reservation",
+        audit_id="audit-over-reservation",
+        run_id="run-over-reservation",
+        model_id="model-v1",
+        anthropic_version="2024-01-01",
+        prompt_cache_id=None,
+        request_json={},
+        response_json={},
+        request_timestamp=MID_MONTH,
+        latency_ms=1,
+        extended_thinking_blocks=None,
+        cold_storage_uri=None,
     )
 
 
@@ -341,6 +406,21 @@ class TestHospitalTrendAggregation:
         result = aggregate_hospital_trend((), MONTH)
         assert result == ()
 
+    def test_over_reservation_is_inappropriate_and_counted_separately(self) -> None:
+        rows = (
+            _row(
+                audit_id="over",
+                final_classification="INAPPROPRIATE",
+                over_reservation=True,
+            ),
+        )
+
+        (result,) = aggregate_hospital_trend(rows, MONTH)
+
+        assert result.total_orders == 1
+        assert result.inappropriate == 1
+        assert result.over_reservation_count == 1
+
 
 # =============================================================================
 # Per-ward scorecard
@@ -371,6 +451,56 @@ class TestWardScorecardAggregation:
         by_ward = {r.ward_id: r for r in result}
         assert by_ward["WARD-A"].inappropriate_rate == pytest.approx(0.5)
         assert by_ward["WARD-B"].inappropriate_rate == pytest.approx(1.0)
+
+    def test_over_reservation_is_counted_per_ward_and_cohort(self) -> None:
+        rows = (
+            _row(
+                audit_id="over",
+                final_classification="INAPPROPRIATE",
+                over_reservation=True,
+            ),
+        )
+
+        (ward,) = aggregate_ward_scorecard(rows)
+        (cohort,) = aggregate_cohort_exception(rows)
+
+        for result in (ward, cohort):
+            assert result.total_orders == 1
+            assert result.inappropriate == 1
+            assert result.over_reservation_count == 1
+
+
+class TestPreopOverReservationProjection:
+    def test_build_report_inputs_projects_and_marks_raw_verdict(
+        self, tmp_path: Path
+    ) -> None:
+        store = AuditStore(
+            AuditStoreConfig(root_dir=tmp_path / "store", code_version="test-v1")
+        )
+        store.write(
+            _stored_audit_row(final_classification="PREOP_OVER_RESERVATION"),
+            (_stored_llm_call(),),
+        )
+
+        inputs = build_report_inputs(
+            run_id="run-over-reservation",
+            audit_store=store,
+            output_dir=tmp_path / "report",
+            ward_resolver=lambda _row: "WARD-A",
+            physician_resolver=lambda _row: "phys-1",
+        )
+        (projected,) = inputs.rows
+        (trend,) = aggregate_hospital_trend(inputs.rows, inputs.month)
+        (ward,) = aggregate_ward_scorecard(inputs.rows)
+
+        assert projected.final_classification == "INAPPROPRIATE"
+        assert projected.over_reservation is True
+        assert trend.total_orders == 1
+        assert trend.inappropriate == 1
+        assert trend.over_reservation_count == 1
+        assert ward.total_orders == 1
+        assert ward.inappropriate == 1
+        assert ward.over_reservation_count == 1
 
 
 # =============================================================================

@@ -461,6 +461,13 @@ class TestPipelineVerdictSource:
         )()
         assert verdicts == {"68000001": "NEEDS_REVIEW"}
 
+    def test_strict_projector_maps_preop_over_reservation_to_inappropriate(
+        self,
+    ) -> None:
+        rows = [_audit_row("68000001", "PREOP_OVER_RESERVATION")]
+
+        assert pipeline_verdict_source(rows)() == {"68000001": "INAPPROPRIATE"}
+
     def test_pooled_preop_reservation_totals_reconcile_as_unresolved(self) -> None:
         rows = [
             _audit_row("68000001", "APPROPRIATE"),
@@ -676,6 +683,32 @@ class TestBuildScorecards:
         )
         assert ranked.bucket_rate == pytest.approx(0.5)
         assert ranked.periop_transfusion_exempt_count == 1
+
+    def test_preop_over_reservation_conserves_doctor_department_and_ranking(
+        self,
+    ) -> None:
+        verdicts = {"r1": "PREOP_OVER_RESERVATION"}
+        reqno_to_doctor = {"r1": "302389"}
+
+        (doctor,) = build_doctor_scorecards(verdicts, reqno_to_doctor, self._REGISTRY)
+        (department,) = build_department_scorecards(
+            verdicts, reqno_to_doctor, self._REGISTRY
+        )
+        (ranked,) = rank_top_n(
+            (doctor,),
+            "inappropriate",
+            group_id=lambda card: card.physician_id,
+            group_name=lambda card: card.physician_name,
+            min_orders=1,
+        )
+
+        for card in (doctor, department):
+            assert card.total_orders == 1
+            assert card.inappropriate_count == 1
+            assert card.over_reservation_count == 1
+        assert ranked.total_orders == 1
+        assert ranked.inappropriate_count == 1
+        assert ranked.over_reservation_count == 1
 
 
 # ---------------------------------------------------------------------------

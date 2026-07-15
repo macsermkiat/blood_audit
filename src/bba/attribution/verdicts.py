@@ -181,7 +181,10 @@ members and must be projected explicitly."""
 
 
 def strict_verdict_projector(value: str) -> str:
-    """Identity on scorable report values and the explicit excluded values.
+    """Project scorable values and pass through explicit excluded values.
+
+    ``PREOP_OVER_RESERVATION`` projects to ``INAPPROPRIATE`` as the scorable
+    report-level interpretation defined by ticket #162.
 
     The excluded values (``RETURNED_NOT_TRANSFUSED``,
     ``PERIOP_TRANSFUSION_EXEMPT``) pass through so the ranking layer can hold
@@ -199,6 +202,8 @@ def strict_verdict_projector(value: str) -> str:
         return value
     if value in ("RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"):
         return value
+    if value == "PREOP_OVER_RESERVATION":
+        return "INAPPROPRIATE"
     raise ValueError(
         f"final_classification {value!r} is not one of the four report "
         f"classifications {sorted(_REPORT_CLASSIFICATIONS)}; if this is the "

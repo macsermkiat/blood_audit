@@ -220,6 +220,7 @@ class MonthlyReportRow(BaseModel):
     cohort_applied: str = Field(min_length=1)
     indication_codes: tuple[str, ...]
     needs_human_review: bool
+    over_reservation: bool = False
 
 
 # =============================================================================
@@ -244,6 +245,7 @@ class HospitalTrendRow(BaseModel):
     inappropriate: int = Field(ge=0)
     needs_review: int = Field(ge=0)
     insufficient_evidence: int = Field(ge=0)
+    over_reservation_count: int = Field(default=0, ge=0)
     inappropriate_rate: float = Field(ge=0.0, le=1.0)
 
 
@@ -258,6 +260,7 @@ class WardScorecardRow(BaseModel):
     inappropriate: int = Field(ge=0)
     needs_review: int = Field(ge=0)
     insufficient_evidence: int = Field(ge=0)
+    over_reservation_count: int = Field(default=0, ge=0)
     inappropriate_rate: float = Field(ge=0.0, le=1.0)
 
 
@@ -306,6 +309,7 @@ class CohortExceptionRow(BaseModel):
     cohort_applied: str = Field(min_length=1)
     total_orders: int = Field(ge=0)
     inappropriate: int = Field(ge=0)
+    over_reservation_count: int = Field(default=0, ge=0)
     inappropriate_rate: float = Field(ge=0.0, le=1.0)
 
 
