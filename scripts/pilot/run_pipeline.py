@@ -201,6 +201,18 @@ def _declared_use_label_for_classifier(
     return None
 
 
+def _collapsed_usetype_for(values: list[str]) -> str | None:
+    """Collapse an order's USETYPE detail lines, but only when the seam is on.
+
+    ``collapse_usetype`` logs a warning on mixed nonblank codes; skipping the
+    call when the seam is off keeps a flag-off run byte-identical — no new log
+    output even over a mixed-code order.
+    """
+    if not DECLARED_USETYPE_PILOT_ENABLED:
+        return None
+    return collapse_usetype(values)
+
+
 def _declared_use_columns(collapsed_code: str | None) -> dict[str, str]:
     """Descriptive declared-use report columns for a row (empty dict when off).
 
@@ -812,8 +824,8 @@ def main() -> None:
         # Collapsed declared use for THIS order, keyed by (HN, REQNO). Computed
         # before the component split so both the red-cell and platelet report
         # rows carry the descriptive columns (the platelet classifier never
-        # reads it).
-        collapsed_usetype = collapse_usetype(
+        # reads it). Guarded so a flag-off run never calls collapse_usetype.
+        collapsed_usetype = _collapsed_usetype_for(
             usetype_values_by_hn_reqno.get(((order.hn or "").strip(), order.reqno), [])
         )
         # --- Platelet path (Phase 2, component="platelet") ---

@@ -134,6 +134,41 @@ def test_declared_use_columns_are_descriptive_and_component_agnostic(
     assert off._declared_use_columns(None) == {}
 
 
+def test_run_pipeline_collapse_is_skipped_and_silent_when_seam_off(
+    monkeypatch, caplog
+) -> None:
+    # Flag-off byte identity includes log output: a flag-off run over a mixed
+    # USETYPE order must NOT call collapse_usetype (which warns on mixed codes).
+    monkeypatch.delenv("BBA_PILOT_DECLARED_USETYPE", raising=False)
+    off = _load_run_pipeline("pilot_run_pipeline_declared_collapse_off")
+    with caplog.at_level(logging.WARNING):
+        assert off._collapsed_usetype_for(["2", "3"]) is None
+    assert not caplog.records
+
+    monkeypatch.setenv("BBA_PILOT_DECLARED_USETYPE", "1")
+    on = _load_run_pipeline("pilot_run_pipeline_declared_collapse_on")
+    assert on._collapsed_usetype_for(["2"]) == "2"
+    with caplog.at_level(logging.WARNING):
+        assert on._collapsed_usetype_for(["2", "3"]) is None
+    assert caplog.records  # seam on: the mixed-code warning is expected
+
+
+def test_run_llm_collapse_is_skipped_and_silent_when_seam_off(
+    monkeypatch, caplog
+) -> None:
+    mod = _load_run_llm_leg("pilot_run_llm_leg_declared_collapse")
+    monkeypatch.setattr(mod.feature_flags, "DECLARED_USETYPE_ENABLED", False)
+    with caplog.at_level(logging.WARNING):
+        assert mod._collapsed_usetype_for(["2", "3"]) is None
+    assert not caplog.records
+
+    monkeypatch.setattr(mod.feature_flags, "DECLARED_USETYPE_ENABLED", True)
+    assert mod._collapsed_usetype_for(["2"]) == "2"
+    with caplog.at_level(logging.WARNING):
+        assert mod._collapsed_usetype_for(["2", "3"]) is None
+    assert caplog.records
+
+
 def test_run_llm_declared_record_is_gated_and_mapped_only(monkeypatch) -> None:
     mod = _load_run_llm_leg("pilot_run_llm_leg_declared_record")
     monkeypatch.setattr(mod.feature_flags, "DECLARED_USETYPE_ENABLED", True)

@@ -274,6 +274,18 @@ def _declared_use_label_for_classifier(
     return None
 
 
+def _collapsed_usetype_for(values: list[str]) -> str | None:
+    """Collapse an order's USETYPE detail lines, but only when the seam is on.
+
+    ``collapse_usetype`` logs a warning on mixed nonblank codes; skipping the
+    call when the seam is off keeps a flag-off run byte-identical — no new log
+    output even over a mixed-code order.
+    """
+    if not feature_flags.DECLARED_USETYPE_ENABLED:
+        return None
+    return collapse_usetype(values)
+
+
 def _declared_use_record(collapsed_code: str | None) -> DeclaredUse | None:
     """Declared-use RECORD for the evidence bundle — MAPPED codes only.
 
@@ -1413,7 +1425,9 @@ def main() -> None:
             continue
 
         # --- Red-cell path (Phase 1, component="red_cell") ---
-        collapsed_usetype = collapse_usetype(
+        # Guarded so a flag-off run never calls collapse_usetype (which warns on
+        # mixed codes) — keeps flag-off byte-identical, no new log output.
+        collapsed_usetype = _collapsed_usetype_for(
             usetype_values_by_hn_reqno.get(((order.hn or "").strip(), order.reqno), [])
         )
         # Reserve-ahead elective orders are crossmatched days before they are
