@@ -71,6 +71,21 @@ def _load_sample_bundle() -> ModuleType:
     return mod
 
 
+def test_bdvstdt_projection_covers_ingest_schema() -> None:
+    # The documented pilot flow samples BDVSTDT via BDVSTDT_COLS and then
+    # optionally runs `bba ingest` on the sampled bundle (scripts/pilot/README.md).
+    # validate_header requires every declared BDVSTDT column, so the sampler
+    # projection MUST carry them all: a newly required column (e.g. USETYPE)
+    # dropped here would silently break the sampling -> ingest flow.
+    from bba.ingest.schemas import get_schema
+
+    mod = _load_sample_bundle()
+    declared = set(get_schema("BDVSTDT").columns)
+    projected = set(mod.BDVSTDT_COLS)
+    missing = declared - projected
+    assert not missing, f"sampler drops required BDVSTDT columns: {sorted(missing)}"
+
+
 # Synthetic data constants — small enough for tests, large enough for 2-of-N sampling.
 # RBC orders: BDTYPE LPRC (red cell).  Platelet orders: BDTYPE LPPC / LDPPC / SDPF / PC.
 _RBC_ORDERS = [

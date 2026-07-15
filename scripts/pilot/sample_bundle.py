@@ -97,6 +97,10 @@ BDVSTDT_COLS = [
     "BDTYPE",
     "ITEMNO",
     "UNITAMT",
+    # Declared order-time use (spec #147). Required by the BDVSTDT ingest schema,
+    # so the sampled bundle must carry it or `bba ingest` on the sample fails
+    # validate_header. Missing in the source export degrades to "" (inert).
+    "USETYPE",
 ]
 # BDVSTTRANS is a unit-level returns ledger keyed by REQNO. The complete export
 # also carries HN/AN identifiers, per-unit DNRNO/SEQNO (the physical-unit key
