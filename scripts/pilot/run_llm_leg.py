@@ -83,6 +83,12 @@ from bba.deterministic_classifier import (
 )
 from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import ClassifierInputs
+from bba.declared_use import (
+    DeclaredUse,
+    DeclaredUseLabel,
+    collapse_usetype,
+    label_for,
+)
 from bba.feature_flags import RETURNS_LEDGER_ENABLED
 from bba.returns_ledger import ReturnsSummary, rows_for_admission, summarize_returns
 from bba.evidence_bundle_builder import (
@@ -224,6 +230,12 @@ DETERMINISTIC_FINAL = frozenset(
     }
 )
 
+# Mirror bba.audit_pipeline.pipeline._RESERVE_AHEAD_RATIONALES so declared-only
+# deferrals (rationale "preop_defer_llm_declared") dispatch to
+# RESERVE_AHEAD_REVIEW here too. Kept a local mirror for the same reason the
+# leg mirrors the classifier-input helpers.
+_RESERVE_AHEAD_RATIONALES = frozenset({"preop_defer_llm", "preop_defer_llm_declared"})
+
 
 def _returns_disposition_for_classifier(returns_summary: ReturnsSummary | None) -> str:
     """Return the gated disposition passed into the pure classifier.
@@ -236,6 +248,31 @@ def _returns_disposition_for_classifier(returns_summary: ReturnsSummary | None) 
     if RETURNS_LEDGER_ENABLED and returns_summary is not None:
         return returns_summary.disposition
     return "inconclusive"
+
+
+def _declared_use_label_for_classifier(
+    collapsed_code: str | None,
+) -> DeclaredUseLabel | None:
+    """Declared-use LABEL for the pure classifier (gated on the library flag,
+    set from the pilot env seam in main())."""
+    if feature_flags.DECLARED_USETYPE_ENABLED and collapsed_code is not None:
+        return label_for(collapsed_code)
+    return None
+
+
+def _declared_use_record(collapsed_code: str | None) -> DeclaredUse | None:
+    """Declared-use RECORD for the evidence bundle — MAPPED codes only.
+
+    Off, no code, or an unknown code (incl "5") → None, so the bundle stays
+    byte-identical and the LLM never sees an uninterpreted code. The label
+    still reaches the report columns via label_for(); only the bundle fact is
+    withheld for unknown codes.
+    """
+    if not feature_flags.DECLARED_USETYPE_ENABLED or collapsed_code is None:
+        return None
+    if label_for(collapsed_code) == "unknown":
+        return None
+    return DeclaredUse.from_code(collapsed_code)
 
 
 def _returns_periop_context_for_classifier(
@@ -761,7 +798,7 @@ def _render_hemodynamic(payload: dict[str, Any]) -> str:
 
 
 def _render_periop(payload: dict[str, Any]) -> str:
-    """Render the pinned peri-operative summary as one fact-only line (Case 107).
+    """Render the pinned peri-operative summary as fact-only lines (Case 107).
 
     FACT-ONLY by contract (mirrors the builder's payload guardrail): the
     surgical-context flag, the EBL in millilitres, the intra-op-transfusion
@@ -778,23 +815,49 @@ def _render_periop(payload: dict[str, Any]) -> str:
         parts.append(f"blood_loss={ebl} ml")
     if payload.get("intraop_transfusion"):
         parts.append("intra-op transfusion=YES")
-    if not parts:
-        return ""
-    line = "PERI-OP SIGNALS: " + ", ".join(parts)
-    quotes: list[str] = []
-    for f in payload.get("findings") or ():
-        snippet = (f.get("snippet") or "").strip()
-        if not snippet:
-            continue
-        prov_bits = [str(f.get("source") or "")]
-        lag = f.get("lag_min")
-        if lag is not None:
-            prov_bits.append(_fmt_lag(int(lag)))
-        prov = ", ".join(b for b in prov_bits if b)
-        quotes.append(f'"{snippet}"' + (f" ({prov})" if prov else ""))
-    if quotes:
-        line += " | evidence: " + "; ".join(quotes)
-    return line
+    # Note-scan portion renders exactly as before: when no surgical / EBL /
+    # intra-op part fired, it stays empty (old contract: ``if not parts:
+    # return ""``), so evidence quotes never render without a signal part. This
+    # keeps flag-off output byte-identical structurally, not merely by the
+    # scan_periop findings<->flag invariant.
+    signals_line = ""
+    if parts:
+        signals_line = "PERI-OP SIGNALS: " + ", ".join(parts)
+        quotes: list[str] = []
+        for f in payload.get("findings") or ():
+            snippet = (f.get("snippet") or "").strip()
+            if not snippet:
+                continue
+            prov_bits = [str(f.get("source") or "")]
+            lag = f.get("lag_min")
+            if lag is not None:
+                prov_bits.append(_fmt_lag(int(lag)))
+            prov = ", ".join(b for b in prov_bits if b)
+            quotes.append(f'"{snippet}"' + (f" ({prov})" if prov else ""))
+        if quotes:
+            signals_line += " | evidence: " + "; ".join(quotes)
+    declared = payload.get("declared_use")
+    declared_line = ""
+    if declared:
+        declared_line = (
+            "DECLARED INTENT AT ORDER TIME (not confirmation surgery occurred): "
+            f"clinician coded use = {declared['label']} "
+            f"(BDVSTDT.USETYPE, code {declared['code']})"
+        )
+    rendered = [s for s in (signals_line, declared_line) if s]
+    return "\n".join(rendered)
+
+
+def _has_note_derived_periop(payload: dict[str, Any]) -> bool:
+    """True iff the Periop payload carries note-scan evidence (not a
+    declared-use-only item). Keys the quote-or-deny hint so a declared-only
+    item never claims to satisfy the peri-operative indication."""
+    return bool(
+        payload.get("surgical_context")
+        or payload.get("blood_loss_ml") is not None
+        or payload.get("intraop_transfusion")
+        or payload.get("findings")
+    )
 
 
 def _render_administration(payload: dict[str, Any]) -> str:
@@ -984,12 +1047,18 @@ def _build_inputs():
     # Ordered unit amount per REQNO, one raw UNITAMT string per BDVSTDT detail
     # line; summarize_returns parses these fail-closed (spec #119, ticket #124).
     unitamt_lines_by_reqno: dict[str, list[str]] = {}
+    # Join key is (HN, REQNO), never bare REQNO: REQNO recurs across admissions,
+    # so a declaration from another HN must not attach to the audited order.
+    usetype_values_by_hn_reqno: dict[tuple[str, str], list[str]] = {}
     for r in bdvstdt:
         reqno = r["REQNO"]
         products_by_reqno.setdefault(reqno, []).append((r.get("BDTYPE") or "").strip())
         unitamt_lines_by_reqno.setdefault(reqno, []).append(
             (r.get("UNITAMT") or "").strip()
         )
+        usetype_values_by_hn_reqno.setdefault(
+            ((r.get("HN") or "").strip(), reqno), []
+        ).append((r.get("USETYPE") or "").strip())
 
     # Returns-ledger index: BDVSTTRANS joins audited orders by REQNO exactly
     # (spec #119, ticket #124). One row per dispensed physical unit. Read ONLY
@@ -1060,6 +1129,7 @@ def _build_inputs():
         candidates_by_reqno,
         bdvsttrans_by_reqno,
         unitamt_lines_by_reqno,
+        usetype_values_by_hn_reqno,
     )
 
 
@@ -1082,6 +1152,13 @@ def main() -> None:
     feature_flags.RESERVE_AHEAD_ROUTER_ENABLED = (
         os.environ.get("BBA_PILOT_RESERVE_AHEAD_ROUTER", "1") != "0"
     )
+    # Declared-use pilot seam (spec #147, ticket #151). Default OFF. Sets the
+    # library flag so the classifier twins / _classify_from_context fallback agree
+    # with this leg's direct classify() call. "== '1'" idiom (default OFF) — do
+    # NOT copy the reserve-router "!= '0'" idiom above (it defaults ON).
+    feature_flags.DECLARED_USETYPE_ENABLED = (
+        os.environ.get("BBA_PILOT_DECLARED_USETYPE", "0") == "1"
+    )
 
     AUDIT_STORE_ROOT.mkdir(parents=True, exist_ok=True)
     (
@@ -1099,6 +1176,7 @@ def main() -> None:
         candidates_by_reqno,
         bdvsttrans_by_reqno,
         unitamt_lines_by_reqno,
+        usetype_values_by_hn_reqno,
     ) = _build_inputs()
 
     fr = build_audit_orders(inputs, AuditOrdersConfig(code_version=CODE_VERSION))
@@ -1323,6 +1401,9 @@ def main() -> None:
             continue
 
         # --- Red-cell path (Phase 1, component="red_cell") ---
+        collapsed_usetype = collapse_usetype(
+            usetype_values_by_hn_reqno.get(((order.hn or "").strip(), order.reqno), [])
+        )
         # Reserve-ahead elective orders are crossmatched days before they are
         # transfused; re-anchor the evidence windows (Hb lookback, notes, CBC,
         # meds, vitals, INCPT) onto the issue datetime so the model adjudicates
@@ -1553,6 +1634,7 @@ def main() -> None:
                 meds=meds_for_bundle,
                 hb_history=hb_for_bundle,
                 vitals=vital_records,
+                declared_use=_declared_use_record(collapsed_usetype),
             )
         )
 
@@ -1693,7 +1775,10 @@ def main() -> None:
             "- Do not silently drop sub-threshold Hb values from the reasoning;",
             "  ignoring them is the failure mode this policy exists to prevent.",
         ]
-        if any(it.source == "Periop" for it in bundle.items):
+        if any(
+            it.source == "Periop" and _has_note_derived_periop(dict(it.payload))
+            for it in bundle.items
+        ):
             guidance_lines += [
                 "",
                 "PERI-OPERATIVE EVIDENCE — quote-or-deny requirement:",
@@ -1758,6 +1843,7 @@ def main() -> None:
                 administration_summary=bundle.administration_summary,
                 enable_missing_hb_positive_evidence=ENABLE_MISSING_HB_POSITIVE_EVIDENCE,
                 returns_summary=returns_summary,
+                declared_use=_declared_use_label_for_classifier(collapsed_usetype),
             )
         )
 
@@ -1828,6 +1914,9 @@ def main() -> None:
                     procedure_proximity_hours=ctx.procedure_proximity_hours,
                     upcoming_procedure_hours=ctx.upcoming_procedure_hours,
                 ),
+                declared_use=(
+                    ctx.declared_use if feature_flags.DECLARED_USETYPE_ENABLED else None
+                ),
             )
         )
         classifier_results[ctx.order.audit_id] = cres
@@ -1877,7 +1966,7 @@ def main() -> None:
         cres = classifier_results[ctx.order.audit_id]
         reserve_ahead = (
             feature_flags.RESERVE_AHEAD_ROUTER_ENABLED
-            and cres.rationale == "preop_defer_llm"
+            and cres.rationale in _RESERVE_AHEAD_RATIONALES
         )
         task_mode = rbc_task_mode(ctx.hb_result.value_g_dl, reserve_ahead=reserve_ahead)
         prompt = build_prompt(

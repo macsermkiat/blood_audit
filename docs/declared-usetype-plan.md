@@ -33,8 +33,9 @@ warning and produce no signal without raising.
 
 The five-PR stack proceeds as: ingest, vocabulary, and flag; classifier and
 dispatch; bundle and prompts; pilot threading and preflight; then the go-live
-default flip after preflight and clinician sign-off. PR-1 deliberately stops
-before any consumer or wiring site reads the new vocabulary or flag.
+default flip after preflight and clinician sign-off. The deterministic and LLM
+pilot legs now thread declared use behind `BBA_PILOT_DECLARED_USETYPE`, which is
+default-off; ticket #152 retains the go-live gate and default-flip decision.
 
 ## 5. Risks
 
