@@ -1296,6 +1296,21 @@ class TestValidateHeader:
         cols = list(reversed(list(get_schema("BDVST").columns)))
         validate_header("BDVST", cols)
 
+    def test_bdvstdt_schema_declares_usetype(self) -> None:
+        assert "USETYPE" in get_schema("BDVSTDT").columns
+
+    def test_bdvstdt_header_without_usetype_raises(self) -> None:
+        header = [
+            column for column in get_schema("BDVSTDT").columns if column != "USETYPE"
+        ]
+
+        with pytest.raises(SchemaDriftError) as exc_info:
+            validate_header("BDVSTDT", header)
+
+        msg = str(exc_info.value)
+        assert "USETYPE" in msg
+        assert "BDVSTDT" in msg
+
     def test_unknown_column_raises(self) -> None:
         with pytest.raises(SchemaDriftError) as exc_info:
             validate_header(

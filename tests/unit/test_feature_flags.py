@@ -27,3 +27,8 @@ def test_existing_flags_still_default_off() -> None:
     # The other flags remain default-off; guard against an accidental flip.
     assert feature_flags.PLATELET_LLM_ENABLED is False
     assert feature_flags.RESERVE_AHEAD_ROUTER_ENABLED is False
+    assert feature_flags.DECLARED_USETYPE_ENABLED is False
+
+
+def test_declared_usetype_flag_is_exported() -> None:
+    assert "DECLARED_USETYPE_ENABLED" in feature_flags.__all__

@@ -79,6 +79,9 @@ _REGISTRY_V1: Mapping[CSVTable, DataFrameSchema] = {
             "BDTYPE": _str(),
             "ITEMNO": _str(),
             "UNITAMT": _str(),
+            # Clinician-declared order-time use (1=ward/2=surgery/3=T/S/4=Day Care);
+            # ingested for declared surgical intent (spec #147); see bba.declared_use.
+            "USETYPE": _str(),
         }
     ),
     "BDVSTST": DataFrameSchema(
