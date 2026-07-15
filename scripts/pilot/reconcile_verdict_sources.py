@@ -62,7 +62,12 @@ def _buckets(verdicts: Mapping[str, Classification]) -> tuple[int, int, int, int
     NEEDS_REVIEW and INSUFFICIENT_EVIDENCE together, matching the report's
     3-bucket convention (see ``bba.attribution.pipeline._bucket_totals``)."""
     appropriate = sum(1 for c in verdicts.values() if c == "APPROPRIATE")
-    inappropriate = sum(1 for c in verdicts.values() if c == "INAPPROPRIATE")
+    # PREOP_OVER_RESERVATION folds into inappropriate, matching
+    # ``_bucket_totals`` and the scorecard counters (#162); no-op with the flag
+    # off since no producer emits it.
+    inappropriate = sum(
+        1 for c in verdicts.values() if c in ("INAPPROPRIATE", "PREOP_OVER_RESERVATION")
+    )
     total = len(verdicts)
     return appropriate, inappropriate, total - appropriate - inappropriate, total
 
