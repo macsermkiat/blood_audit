@@ -13,6 +13,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from bba.declared_use import DeclaredUse
 from bba.evidence_bundle_builder.canonical import bundle_hash, canonical_serialize
 from bba.evidence_bundle_builder.exceptions import EvidenceBundleTooLargeError
 from bba.evidence_bundle_builder.models import (
@@ -29,13 +30,13 @@ from bba.evidence_bundle_builder.models import (
     ProgressNote,
     VitalsRecord,
 )
-from bba.platelet_lookup.models import PLATELET_UNIT
 from bba.evidence_bundle_builder.ranking import (
     SECTION_PRIORITY,
     parse_soap_sections,
     split_focus_notes_5_5,
 )
 from bba.evidence_bundle_builder.salience import med_salience
+from bba.platelet_lookup.models import PLATELET_UNIT
 from bba.vitals_extractor.administration import scan_administration
 from bba.vitals_extractor.hemodynamic import scan_hemodynamics
 from bba.vitals_extractor.models import (
@@ -446,13 +447,17 @@ def _periop_payload(summary: PeriopSummary, anchor_dt: datetime) -> dict[str, An
 
     FACT-ONLY by contract: the surgical-context flag, the EBL in millilitres,
     the intra-op-transfusion flag, and the verbatim provenance snippets — nothing
-    else. There is deliberately no 'appropriate'/'indicated'/'justified' field;
-    peri-op context is a supporting factor the LLM weighs, never a standalone
-    verdict, and the deterministic classifier's procedure bypass keys on
-    structured timing, not on this scan. Each finding snippet is a substring of a
-    note already shipped in full elsewhere in the bundle, so the summary asserts
-    no fact the LLM cannot also read in context. Caller emits this only when
-    ``summary.is_empty`` is False."""
+    else from the note scan. The item may also carry exactly one order-level
+    structured fact: declared use, with explicit ``BDVSTDT.USETYPE`` provenance.
+    Declared use is an order attribute, not a note-derived surgery claim; it never
+    sets ``surgical_context`` or changes :class:`PeriopSummary`. There is
+    deliberately no 'appropriate'/'indicated'/'justified' field; peri-op context
+    is a supporting factor the LLM weighs, never a standalone verdict, and the
+    deterministic classifier's procedure bypass keys on structured timing, not
+    on this scan. Each finding snippet is a substring of a note already shipped
+    in full elsewhere in the bundle, so the summary asserts no note-derived fact
+    the LLM cannot also read in context. Caller emits this when the summary is
+    non-empty or an order-level declared use is present."""
     payload: dict[str, Any] = {}
     if summary.surgical_context:
         payload["surgical_context"] = True
@@ -780,6 +785,7 @@ def _assign_ids(
     *,
     hemo_summary: HemodynamicSummary,
     periop_summary: PeriopSummary,
+    declared_use: DeclaredUse | None,
     administration_summary: AdministrationSummary | None,
     diagnoses: Sequence[DiagnosisRecord],
     progress: Sequence[ProgressNote],
@@ -821,16 +827,24 @@ def _assign_ids(
         )
 
     # Peri-op summary SECOND (Case 107 / REQNO 68074627): the same pinned,
-    # fact-only shape as Hemodynamic. Emitted only when the scan found a
-    # surgery / EBL / intra-op transfusion — an empty summary adds no item and
-    # leaves all downstream IDs unchanged.
-    if not periop_summary.is_empty:
+    # fact-only shape as Hemodynamic. Emitted when the scan found a surgery /
+    # EBL / intra-op transfusion or an order-level declaration is present. An
+    # empty summary with no declaration adds no item and leaves all downstream
+    # IDs unchanged.
+    if not periop_summary.is_empty or declared_use is not None:
+        payload = _periop_payload(periop_summary, anchor_dt)
+        if declared_use is not None:
+            payload["declared_use"] = {
+                "code": declared_use.code,
+                "label": declared_use.label,
+                "source": "BDVSTDT.USETYPE",
+            }
         items.append(
             EvidenceItem(
                 id=_next_id(),
                 source="Periop",
                 timestamp_utc=None,
-                payload=_periop_payload(periop_summary, anchor_dt),
+                payload=payload,
             )
         )
 
@@ -1112,6 +1126,7 @@ def build_evidence_bundle(
     items = _assign_ids(
         hemo_summary=hemo_summary,
         periop_summary=periop_summary,
+        declared_use=inputs.declared_use,
         administration_summary=administration_summary,
         diagnoses=inputs.diagnoses,
         progress=progress,

@@ -35,6 +35,7 @@ from pydantic import (
     model_validator,
 )
 
+from bba.declared_use import DeclaredUse
 from bba.platelet_lookup.models import PlateletSource
 from bba.platelet_lookup.parse import MAX_PLATELET, MIN_PLATELET
 from bba.vitals_extractor.bounds import (
@@ -379,6 +380,10 @@ class EvidenceInputs(BaseModel):
     # never populate it — are byte-identical to before this field existed.
     platelet_history: tuple[PlateletRecord, ...] = ()
     vitals: tuple[VitalsRecord, ...] = ()
+    # Order-time declared use (spec #147). Defaults to None so every existing
+    # bundle — which never sets it — is canonical-JSON / hash / evidence-ID
+    # byte-identical to before this field existed.
+    declared_use: DeclaredUse | None = None
 
 
 # =============================================================================

@@ -49,6 +49,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from pydantic import ValidationError
 
+from bba.declared_use import DeclaredUse
 from bba.evidence_bundle_builder import (
     CAP_FOCUS_AFTER,
     CAP_FOCUS_BEFORE,
@@ -2753,6 +2754,53 @@ class TestPeriopSummaryItem:
         )
         assert bundle.periop_summary is not None
         assert bundle.periop_summary.is_empty is True
+
+    def test_declared_use_none_is_byte_identical(self) -> None:
+        # The load-bearing flag-off invariant: callers map unknown USETYPE
+        # codes (including "5") to None, which must be inert. Explicit None
+        # therefore produces the exact pre-feature bytes and hash.
+        without = _build_minimal()
+        with_none = _build_minimal(declared_use=None)
+        assert with_none.bundle_hash == without.bundle_hash
+        assert with_none.canonical_json == without.canonical_json
+
+    def test_declared_use_alone_emits_fact_only_periop_item(self) -> None:
+        declared_use = DeclaredUse.from_code("2")
+        bundle = _build_minimal(declared_use=declared_use)
+
+        periop = next(it for it in bundle.items if it.source == "Periop")
+        assert dict(periop.payload) == {
+            "declared_use": {
+                "code": "2",
+                "label": "surgery",
+                "source": "BDVSTDT.USETYPE",
+            }
+        }
+        assert "surgical_context" not in periop.payload
+        assert "blood_loss_ml" not in periop.payload
+
+    def test_declared_use_merges_with_note_derived_periop_payload(self) -> None:
+        focus = (_focus(offset_hours=3, text="Post-op s/p ORIF, EBL 800 ml"),)
+        without = _build_minimal(focus_notes=focus)
+        with_declared = _build_minimal(
+            focus_notes=focus,
+            declared_use=DeclaredUse.from_code("2"),
+        )
+
+        base_periop = next(it for it in without.items if it.source == "Periop")
+        merged_periop = next(
+            it for it in with_declared.items if it.source == "Periop"
+        )
+        assert {
+            key: value
+            for key, value in merged_periop.payload.items()
+            if key != "declared_use"
+        } == dict(base_periop.payload)
+        assert merged_periop.payload["declared_use"] == {
+            "code": "2",
+            "label": "surgery",
+            "source": "BDVSTDT.USETYPE",
+        }
 
 
 class TestAdministrationSummaryItem:

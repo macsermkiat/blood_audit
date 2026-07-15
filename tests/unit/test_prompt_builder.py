@@ -1406,6 +1406,17 @@ class TestRbcClearCutPromptSemantics:
                 "reliably; without a shared vocabulary model and guardrail diverge"
             )
 
+    def test_declared_use_does_not_satisfy_perioperative_indication(self) -> None:
+        carve_out = "BDVSTDT.USETYPE) alone does NOT satisfy PERIOPERATIVE"
+        for mode in self._RBC_MODES:
+            prompt = system_prompt_for(task_mode=mode, cohort_threshold=7.5)
+            assert carve_out in prompt
+
+        reserve_prompt = system_prompt_for(
+            task_mode="RESERVE_AHEAD_REVIEW", cohort_threshold=7.5
+        )
+        assert carve_out not in reserve_prompt
+
     @pytest.mark.parametrize("mode", _RBC_MODES)
     def test_active_bleeding_requires_volume_or_life_threatening(
         self, mode: str
@@ -1573,8 +1584,11 @@ class TestRbcPromptHashGolden:
     # melena / coffee-ground / tarry stool is digested (old) blood, not active
     # hemorrhage, qualifying only with shock or a sub-threshold Hb. Blessed by
     # test_active_bleeding_rule_excludes_melena.
+    # Re-pinned for #150: a declared order-time USETYPE alone cannot establish
+    # PERIOPERATIVE. Blessed by
+    # test_declared_use_does_not_satisfy_perioperative_indication.
     RBC_HB_7_10_75_EMPTY_EVIDENCE = (
-        "a4c361e5fbc02bdefffbf697408667c97a10a1ac3318dbb7ed97de6daca7f6f8"
+        "fd9c9ed8265a020d01be556f146ead93b0a0bde76639b5676a1b733f596e3da0"
     )
     # Re-pinned for #93 boundary alignment: dispatch routes Hb >= 10.0 to this
     # template (engine ``hb_ge_10``), so its prose states the inclusive
@@ -1584,8 +1598,9 @@ class TestRbcPromptHashGolden:
     # Re-pinned for case 68080335 (stale-dated volume) — same shared
     # ACTIVE_BLEEDING rule edit as the gray-zone golden above.
     # Re-pinned for the melena ruling — same shared ACTIVE_BLEEDING rule edit.
+    # Re-pinned for #150 — same shared declared-use carve-out as above.
     RBC_HB_GT_10_75_EMPTY_EVIDENCE = (
-        "4b81a7989fe4ffa1b2a896a07a46c169546c6bf259bad418270597598aeca1d5"
+        "609f6524ad6be4735a61424ed1ba74759fc4c14bce6e0c9224592d35965bf39e"
     )
 
     def test_hb_7_10_review_cohort_7_5_hash_is_pinned(self) -> None:
