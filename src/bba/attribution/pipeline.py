@@ -39,7 +39,13 @@ def _bucket_totals(verdicts: Mapping[str, str]) -> BucketTotals:
     """Collapse raw verdicts into the 3-bucket totals used for
     reconciliation (the 300 human labels must land on 162/32/106)."""
     appropriate = sum(1 for c in verdicts.values() if c == "APPROPRIATE")
-    inappropriate = sum(1 for c in verdicts.values() if c == "INAPPROPRIATE")
+    # PREOP_OVER_RESERVATION folds into inappropriate (scorable), mirroring the
+    # scorecard counters (#162); without it a passed-through over-reservation
+    # would fall into the `unresolved` remainder and the cohort total would
+    # disagree with the per-doctor scorecards (Codex PR #168 P2).
+    inappropriate = sum(
+        1 for c in verdicts.values() if c in ("INAPPROPRIATE", "PREOP_OVER_RESERVATION")
+    )
     returned = sum(1 for c in verdicts.values() if c == "RETURNED_NOT_TRANSFUSED")
     periop_exempt = sum(
         1 for c in verdicts.values() if c == "PERIOP_TRANSFUSION_EXEMPT"

@@ -507,6 +507,30 @@ class TestPipelineVerdictSource:
         assert result.totals.unresolved == 1
         assert result.totals.total == len(rows)
 
+    def test_preop_over_reservation_folds_into_ranking_totals(self) -> None:
+        # Regression (Codex PR #168 P2): with the projector passing
+        # PREOP_OVER_RESERVATION through, the RankingResult totals must fold it
+        # into inappropriate (not leave it in the unresolved remainder), so the
+        # cohort total agrees with the per-doctor scorecards.
+        rows = [
+            _audit_row("68000001", "APPROPRIATE"),
+            _audit_row("68000002", "PREOP_OVER_RESERVATION"),
+        ]
+        verdicts = pipeline_verdict_source(
+            rows, projector=needs_review_verdict_projector
+        )()
+
+        result = build_rankings(
+            verdicts=verdicts,
+            reqno_to_doctor={},
+            dct_registry={},
+        )
+
+        assert result.totals.appropriate == 1
+        assert result.totals.inappropriate == 1
+        assert result.totals.unresolved == 0
+        assert result.totals.total == len(rows)
+
     def test_unknown_classification_fails_loud_under_both_projectors(self) -> None:
         rows = [_audit_row("68000001", "MADE_UP_LABEL")]
         with pytest.raises(ValueError, match="MADE_UP_LABEL"):
