@@ -1,9 +1,9 @@
 """Runtime feature flags for bba.
 
-Most flags default to OFF (False), but ``RETURNS_LEDGER_ENABLED`` has been
-default-ON since the returns-ledger go-live (#138). Each flag's default is
-documented on the flag itself. Defining the contracts here keeps feature state
-in one place and preserves existing behavior while new flags remain OFF.
+Most flags default to OFF (False); ``RETURNS_LEDGER_ENABLED`` (returns-ledger
+go-live #138) and ``DECLARED_USETYPE_ENABLED`` (declared-usetype go-live
+2026-07-15) are default-ON. Each flag's default is documented on the flag
+itself. Defining the contracts here keeps feature state in one place.
 
 Flags
 -----
@@ -19,7 +19,7 @@ RETURNS_LEDGER_ENABLED
     pilot report reproduces the pre-feature behavior. Default: True.
 DECLARED_USETYPE_ENABLED
     Gates the declared surgical-intent signal from BDVSTDT.USETYPE. Default:
-    False.
+    True (go-live 2026-07-15).
 """
 
 from __future__ import annotations
@@ -54,11 +54,15 @@ now enabled by default. Tests that need the pre-feature behavior monkeypatch it
 back to False.
 """
 
-DECLARED_USETYPE_ENABLED: bool = False
-"""Enable the BDVSTDT.USETYPE declared surgical-intent signal (default: OFF).
+DECLARED_USETYPE_ENABLED: bool = True
+"""Enable the BDVSTDT.USETYPE declared surgical-intent signal (default: ON).
 
-Spec #147 gates this signal at wiring sites introduced only by later tickets;
-``classify()`` stays pure, and flag-off behavior is byte-identical.
+Spec #147. Default-ON since the declared-usetype go-live (representative
+preflight flip matrix + flag-on LLM-leg comparison + clinician sign-off on the
+hb_ge_10 bucket, 2026-07-15). ``classify()`` stays pure; the signal only fires
+where a caller populates ``declared_use`` (the pilot legs), so contexts that
+leave it ``None`` are unaffected. Set ``BBA_PILOT_DECLARED_USETYPE=0`` to force
+it off for a pilot run.
 """
 
 __all__: Sequence[str] = (

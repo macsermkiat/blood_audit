@@ -153,13 +153,17 @@ ONLY_REQNOS = frozenset(
 ENABLE_MISSING_HB_POSITIVE_EVIDENCE = os.environ.get(
     "BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE", ""
 ).strip().lower() in ("1", "true", "yes", "on")
-# Declared-use pilot seam (spec #147, ticket #151), read at import so it can fold
-# into CODE_VERSION below; main() sets feature_flags.DECLARED_USETYPE_ENABLED from
-# this same constant. "== '1'" idiom (default OFF) — NOT the reserve-router
-# "!= '0'" idiom. A plain module constant (no feature_flags mutation at import),
-# so importing this module in tests never pollutes the library flag.
+# Declared-use pilot seam (spec #147, ticket #151; go-live 2026-07-15), read at
+# import so it can fold into CODE_VERSION below; main() sets
+# feature_flags.DECLARED_USETYPE_ENABLED from this same constant. Defaults to the
+# library flag (now ON) when BBA_PILOT_DECLARED_USETYPE is unset; the env var
+# overrides ("1" forces on, anything else forces off). Read into a plain module
+# constant here (the main() assignment is the only feature_flags mutation).
+_declared_env = os.environ.get("BBA_PILOT_DECLARED_USETYPE")
 DECLARED_USETYPE_PILOT_ENABLED = (
-    os.environ.get("BBA_PILOT_DECLARED_USETYPE", "0") == "1"
+    _declared_env == "1"
+    if _declared_env is not None
+    else feature_flags.DECLARED_USETYPE_ENABLED
 )
 # Run/code identity (spec #119 §G, ticket #124). The audit_store is idempotent
 # on (run_id, audit_id, code_version), so enabling a seam that changes verdicts

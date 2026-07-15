@@ -253,7 +253,7 @@ def test_recommendation_names_remaining_requirements_and_flag_stays_off() -> Non
     assert "clinician sign-off" in text
     assert "hb_ge_10" in text
     assert "bypass_delta_hb" in text
-    assert feature_flags.DECLARED_USETYPE_ENABLED is before is False
+    assert feature_flags.DECLARED_USETYPE_ENABLED is before  # read-only: unchanged
 
 
 def test_run_preflight_uses_real_order_inputs_without_mutating_flag(
@@ -355,4 +355,4 @@ def test_run_preflight_uses_real_order_inputs_without_mutating_flag(
     assert result.flip_bucket_counts == {"bucket_highhb_to_defer": 1}
     assert result.incremental_signal_reqnos == ["REQ-1"]
     assert result.recommendation.startswith("GO")
-    assert feature_flags.DECLARED_USETYPE_ENABLED is before is False
+    assert feature_flags.DECLARED_USETYPE_ENABLED is before  # read-only: unchanged

@@ -1,8 +1,11 @@
 # Declared USETYPE surgical-intent plan
 
-**Status:** GO-LIVE PREFLIGHT AVAILABLE — pilot threading is complete and the
-read-only ticket #152 evidence gate is available; production enablement remains
-on hold pending the additional comparisons and clinical sign-off below.
+**Status:** LIVE (default-ON since 2026-07-15) — `DECLARED_USETYPE_ENABLED`
+defaults to `True` and both pilot legs default to it; set
+`BBA_PILOT_DECLARED_USETYPE=0` to force a run off. Go-live evidence: a
+representative 3,000-order preflight (12 flips, 0 unexpected, delta-Hb bucket
+empty), a flag-on LLM-leg comparison (1 intended verdict flip, 0 collateral),
+and clinician sign-off on the `hb_ge_10 → defer` bucket.
 **Scope:** Interpret the clinician's order-time declared use as a surgical-intent
 signal without changing routing until the later wiring tickets land.
 

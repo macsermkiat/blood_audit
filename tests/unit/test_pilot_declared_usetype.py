@@ -78,7 +78,7 @@ def test_hn_reqno_aggregation_prevents_cross_hn_leak() -> None:
 
 
 def test_run_pipeline_flag_off_report_schema_is_frozen(monkeypatch) -> None:
-    monkeypatch.delenv("BBA_PILOT_DECLARED_USETYPE", raising=False)
+    monkeypatch.setenv("BBA_PILOT_DECLARED_USETYPE", "0")
     mod = _load_run_pipeline("pilot_run_pipeline_declared_schema_off")
 
     assert mod.DECLARED_USETYPE_FIELDNAMES == [
@@ -96,7 +96,7 @@ def test_run_pipeline_declared_label_helper_gates_on_import_time_env(
 ) -> None:
     monkeypatch.setenv("BBA_PILOT_DECLARED_USETYPE", "1")
     enabled = _load_run_pipeline("pilot_run_pipeline_declared_helper_on")
-    monkeypatch.delenv("BBA_PILOT_DECLARED_USETYPE")
+    monkeypatch.setenv("BBA_PILOT_DECLARED_USETYPE", "0")
     disabled = _load_run_pipeline("pilot_run_pipeline_declared_helper_off")
 
     assert enabled._declared_use_label_for_classifier("2") == "surgery"
@@ -128,7 +128,7 @@ def test_declared_use_columns_are_descriptive_and_component_agnostic(
         "declared_use_label": "",
     }
 
-    monkeypatch.delenv("BBA_PILOT_DECLARED_USETYPE")
+    monkeypatch.setenv("BBA_PILOT_DECLARED_USETYPE", "0")
     off = _load_run_pipeline("pilot_run_pipeline_declared_cols_off")
     assert off._declared_use_columns("2") == {}
     assert off._declared_use_columns(None) == {}
@@ -139,7 +139,7 @@ def test_run_pipeline_collapse_is_skipped_and_silent_when_seam_off(
 ) -> None:
     # Flag-off byte identity includes log output: a flag-off run over a mixed
     # USETYPE order must NOT call collapse_usetype (which warns on mixed codes).
-    monkeypatch.delenv("BBA_PILOT_DECLARED_USETYPE", raising=False)
+    monkeypatch.setenv("BBA_PILOT_DECLARED_USETYPE", "0")
     off = _load_run_pipeline("pilot_run_pipeline_declared_collapse_off")
     with caplog.at_level(logging.WARNING):
         assert off._collapsed_usetype_for(["2", "3"]) is None
@@ -284,7 +284,7 @@ def test_code_version_folds_declared_use_seam(monkeypatch) -> None:
     assert on.DECLARED_USETYPE_PILOT_ENABLED is True
     assert "+declared" in on.CODE_VERSION
 
-    monkeypatch.delenv("BBA_PILOT_DECLARED_USETYPE")
+    monkeypatch.setenv("BBA_PILOT_DECLARED_USETYPE", "0")
     off = _load_run_llm_leg("pilot_run_llm_leg_declared_codever_off")
     assert off.DECLARED_USETYPE_PILOT_ENABLED is False
     assert "+declared" not in off.CODE_VERSION
