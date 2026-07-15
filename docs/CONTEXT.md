@@ -3422,3 +3422,107 @@ Unresolved, and excludes it from inappropriate-transfusion attribution.
 
 See `docs/administration-confirmation-plan.md` for the data request, gate
 contract, pilot enablement, and regeneration runbook.
+
+## Verification concepts
+
+Deterministic-core module `bba.verification` — honest before/after scoring for
+the peri-op fix. Pure and data-source-agnostic: callers assemble
+`reqno -> CaseVerdict` maps from whatever run artifacts they have (`report.csv`
+/ `llm_report.json`) and pass them in; the end-to-end scoring run over the pilot
+bundle lives in the pilot scripts, gated on the bundle being present.
+
+### CaseVerdict and the 3-bucket space
+
+`bba.verification.CaseVerdict` binds a REQNO to its verdict; `bucket_of` /
+`BUCKETS` collapse every classification into the same 3-bucket space the
+300-case human labels live in (`bba.attribution.human_label_verdict_source`), so
+a run is scored on the axis a reviewer actually used. `Bucket` and `Mechanism`
+(deterministic vs LLM) are the `StrEnum`s that name the axes.
+
+### compare_runs (before/after)
+
+`bba.verification.compare_runs(before, after) → RunComparison` judges the fix on
+its real costs, not one headline: `find_regressions` surfaces the cases the
+after-run made worse, and the comparison carries the LLM-volume delta alongside
+the accuracy move. `build_matrix` / `confusion_by_mechanism` produce the
+`ConfusionMatrix` / `ConfusionCell` grids, split by `MatrixScope` (overall,
+deterministic-only, LLM-only). Full surface: `bba.verification.__all__`.
+
+## Returns-ledger concepts (#120)
+
+Read-only plumbing module `bba.returns_ledger` — BDVSTTRANS returns-ledger
+disposition aggregation (spec #119). Public surface is the pure
+`summarize_returns` aggregator and the frozen `ReturnsSummary` it produces; the
+disposition ROUTER that consumes the summary (`RETURNED_NOT_TRANSFUSED` /
+`PERIOP_TRANSFUSION_EXEMPT`) lives in the pipeline, gated behind default-on
+`feature_flags.RETURNS_LEDGER_ENABLED`.
+
+### summarize_returns and ReturnsSummary
+
+`bba.returns_ledger.summarize_returns(rows) → ReturnsSummary` aggregates one
+REQNO's BDVSTTRANS ledger rows into a frozen summary. `units_total` counts
+DISTINCT physical units, not raw rows: the complete export records a unit's
+lifecycle as multiple rows (dispense + return, aliquots) keyed apart by `SEQNO`,
+so rows sharing `(DNRNO, SEQNO)` collapse to one unit at its terminal status
+before counting. `physical_units` / `rows_for_admission` are the row-scoping
+helpers; `terminal_status` reads a unit's terminal `Unitstat`.
+
+### Disposition (derived, fail-closed)
+
+`bba.returns_ledger.Disposition = Literal["not_transfused", "transfused",
+"inconclusive"]`. `ReturnsSummary.disposition` is DERIVED, never stored, so a
+summary cannot exist in an inconsistent state. It reads `not_transfused` only
+when the ledger COVERS the order (`ledger_complete`) AND every unit reached a
+non-transfusion terminal — returned (`Unitstat==3`) OR crossmatch-incompatible
+(`Unitstat==7`, never given); `transfused` when complete and at least one unit
+is neither; `inconclusive` otherwise (fail-closed on a partial export). Go-live
+evidence is produced read-only by
+`scripts/pilot/preflight_returns_validation.py` (#125).
+
+## Declared-use / USETYPE concepts (#147)
+
+Leaf module `bba.declared_use` — the single source of truth for interpreting the
+order-time declared use from `BDVSTDT.USETYPE`, so the ingest, classifier,
+bundle, and pilot layers cannot drift. Threaded through both pilot legs behind
+`feature_flags.DECLARED_USETYPE_ENABLED` and the `BBA_PILOT_DECLARED_USETYPE`
+seam.
+
+### USETYPE_LABELS and the declared surgical group
+
+`bba.declared_use.USETYPE_LABELS` maps raw codes to a `DeclaredUseLabel`
+(`1→ward`, `2→surgery`, `3→type_screen`, `4→day_care`); `label_for(code)`
+applies it, defaulting unknown codes — including `5` — to `unknown`, which drives
+no routing. `DECLARED_SURGICAL_LABELS = {surgery, type_screen}` is the declared
+surgical group that widens the step-6 preop deferral.
+
+### collapse_usetype and DeclaredUse
+
+`bba.declared_use.collapse_usetype(values)` reduces an order's detail lines to
+one code: one distinct non-blank value wins; blank-only inputs and mixed codes
+both return `None` (mixed logs a warning, never raises). `DeclaredUse` is the
+frozen `(code, label)` pair whose validator FAILS LOUD if the label does not
+equal `label_for(code)` — a surgical code can never be represented as
+non-surgical for the `.label`-keyed routing. Prefer `DeclaredUse.from_code`,
+which derives the label.
+
+## Platelet-guardrail concepts (Phase 2)
+
+Deterministic-core module `bba.platelet_guardrail` — the platelet LLM
+over-clear guardrail (docs plan §5.3 stage 5; user ruling 2026-07-08). The
+mechanism that makes the "ADD platelet hard signals" ruling safe: the LLM CAN
+clear any platelet count, but only with a grounded positive indication.
+
+### platelet_overclear_suspect
+
+`bba.platelet_guardrail.platelet_overclear_suspect(final, rule, hard_signals) →
+bool`. True iff the LLM returned `APPROPRIATE`, the deterministic gate had
+WITHHELD the clear (`NEEDS_REVIEW`, `INSUFFICIENT_EVIDENCE`, or
+`POTENTIALLY_INAPPROPRIATE` — the last included because transfusing at/above the
+100k ceiling is almost never appropriate and has no separate prompt backstop),
+and `hard_signals.any_signal()` is false. On a hit the pipeline FLOORS the row
+to human review (never to `INAPPROPRIATE`; an unauditable clear is reviewed, not
+condemned) and stamps `PLATELET_OVERCLEAR_REVIEW_REASON =
+"platelet_llm_overclear_suspect"` so the dashboard can triage suspects
+separately. Pure and side-effect-free — a replay-stable mirror of
+`bba.audit_pipeline.replay.llm_overclear_suspect`. `PlateletHardSignals` carries
+the structured grounded signals and their `any_signal()` test.

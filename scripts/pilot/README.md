@@ -189,3 +189,116 @@ validation step (M8 milestone).
   arm fires. A reusable `BloodOrderEvent` builder over the joined
   blood-order tables is a separate, sign-off-gated feature — no
   production code constructs `BloodOrderEvent` today.
+
+## Auxiliary & maintenance scripts
+
+Beyond the five-step walkthrough above, the pilot ships helper drivers for
+iteration, go-live evidence, and retroactive repair. All read the same
+`BBA_PILOT_WORK_DIR` and follow the same PHI handling rules.
+
+### `offline_reapply.py` — re-score cached LLM responses, zero API spend
+
+Rebuilds pilot contexts with the CURRENT cohorts, dispatch, and guardrails, then
+replays the cached Anthropic responses through the audit transform without
+calling the API. Use it to validate a cohort/guardrail change against an
+existing batch instead of paying for a fresh one. `BBA_PILOT_RUN_ID` is required
+and must differ from the source run id (a reused id makes every audit-store
+write an idempotent no-op).
+
+```bash
+BBA_PILOT_SOURCE_RUN_ID=pilot-mini \
+BBA_PILOT_RUN_ID=pilot-mini-reapply-v2 \
+uv run python scripts/pilot/offline_reapply.py
+```
+
+### `preflight_returns_validation.py` — returns-ledger go-live evidence (#125)
+
+READ-ONLY. Produces the evidence a clinician owner needs before flipping
+`RETURNS_LEDGER_ENABLED` for a real run — reissue/partial-coverage prevalence,
+administration-note recall, the no-non-returned-unit invariant, and a go/hold
+summary. It never enables the feature and never changes pipeline behaviour.
+`BBA_PREFLIGHT_BDVSTTRANS` defaults to the bundle's `BDVSTTRANS.csv` (else the
+raw Bloodbank export).
+
+```bash
+uv run python scripts/pilot/preflight_returns_validation.py
+# → $BBA_PILOT_WORK_DIR/preflight_returns_validation.json
+```
+
+### `reconcile_verdict_sources.py` — pre-swap cross-check for doctor ranking
+
+The gate before Feature 2 (doctor/department ranking) swaps its input from the
+human-review workbook to the pipeline's own verdicts. Reads BOTH sources and,
+over the REQNOs they share, prints agreement plus the peri-op OVER-CLEAR count
+(orders the pipeline cleared that the reviewer called inappropriate) — which
+must be ~0 to trust the swap. Read-only and fail-loud (non-zero exit) if either
+source is missing or the two share no REQNOs.
+
+```bash
+BBA_RUN_ID=pilot-mini \
+BBA_AUDIT_STORE_DIR="$BBA_PILOT_WORK_DIR/data/audit_store" \
+uv run python scripts/pilot/reconcile_verdict_sources.py
+```
+
+### `fix_reasoning_split.py` — repair tag-leaked reasoning in an old report
+
+Retroactive fix for the 2026-07-06 `claude-sonnet-5` run, where the model
+serialized both reasoning summaries into `reasoning_en` (separated by leaked
+tool-call tags) and left `reasoning_th` empty. Applies the same split the
+pipeline now does, plus the empty-reasoning guardrail (rows with no reasoning in
+either language floor to `NEEDS_REVIEW` / `needs_human_review=True`). Preserves
+`llm_report.json.bak`; re-running on a fixed report is a no-op. Run it before
+rebuilding the review.
+
+```bash
+uv run python scripts/pilot/fix_reasoning_split.py   # uses $BBA_PILOT_WORK_DIR
+uv run python scripts/pilot/build_review.py          # then regenerate review.html
+```
+
+### `notes_surgical_context.py` — surgical-context prototype (experimental)
+
+PROTOTYPE, regex only, NO LLM, not wired into the pipeline. When the operative
+tables (IPTSUMOPRT / INCPT) miss an order's index surgery, it recovers the
+surgical context from nursing focus notes (IPDNRFOCUSDT) and computes a
+notes-derived hours-to-surgery that could feed the same ≤72 h pre-op-crossmatch
+bypass. Reads `report.csv` + `bundle/IPDNRFOCUSDT.csv` under the work dir.
+
+```bash
+uv run python scripts/pilot/notes_surgical_context.py        # summary + 7 target cases
+uv run python scripts/pilot/notes_surgical_context.py --all  # every order
+```
+
+## Local-only PHI tools — do NOT publish or log
+
+> **These two scripts print REAL PHI (raw HN / AN).** Run them only in your own
+> terminal, never through an agent or CI step that logs output to a shared
+> transcript, and never commit their output. They are intentionally kept off the
+> public docs site. Both need `PHI_HMAC_KEY` — the same key `encrypt_phi.py`
+> used to pseudonymize HN/AN as `PHI_<first 16 hex of HMAC-SHA256(key, value)>`.
+> The truncated hash is one-way, so resolution is a forward scan: hash every raw
+> HN/AN and match the tokens you ask for. Replace the placeholder paths below
+> with your own local raw-export location.
+
+### `reverse_lookup_phi.py` — resolve specific `PHI_*` tokens → HN/AN
+
+Emits only the tokens you pass on the command line — no bulk dump.
+
+```bash
+export PHI_HMAC_KEY="$(cat <raw-parent-dir>/.phi_hmac_key)"
+python scripts/pilot/reverse_lookup_phi.py \
+    --raw-dir <path-to-raw-HOSxP-CSVs> \
+    PHI_xxxxxxxxxxxxxxxx PHI_yyyyyyyyyyyyyyyy
+```
+
+### `html_decode_hn_an.py` — build a `(REQNO, HN, AN)` table from a review HTML
+
+Extracts every case's `PHI_*` HN/AN tokens from a `review.html` and resolves
+them to a CSV keyed by CaseNumber (= REQNO).
+
+```bash
+export PHI_HMAC_KEY="$(cat <raw-parent-dir>/.phi_hmac_key)"
+python scripts/pilot/html_decode_hn_an.py \
+    --html "$BBA_PILOT_WORK_DIR/review.html" \
+    --raw-dir <path-to-raw-HOSxP-CSVs> \
+    --out "$BBA_PILOT_WORK_DIR/hn_an_table.csv"
+```
