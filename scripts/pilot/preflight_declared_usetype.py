@@ -51,12 +51,9 @@ from bba.returns_ledger import (
 from bba.vitals_extractor import scan_periop
 
 from _anchor_candidates import build_anchor_candidates
+from _bdvsttrans_source import load_bdvsttrans_rows
 from _hosxp_dt import _parse_hosxp_date, _parse_time
 from _periop_notes import vitals_notes_for
-from preflight_returns_validation import (
-    _load_bdvsttrans_by_reqno,
-    _resolve_bdvsttrans_path,
-)
 from run_pipeline import (
     CODE_VERSION,
     ENABLE_MISSING_HB_POSITIVE_EVIDENCE,
@@ -414,12 +411,16 @@ def run_preflight() -> PreflightResult:
         values_by_hn_reqno=usetype_values_by_hn_reqno,
     )
 
+    # Source the returns ledger exactly as the pilot legs do
+    # (run_pipeline.py / run_llm_leg.py): _bdvsttrans_source resolves
+    # BBA_BDVSTTRANS_CSV, then the bundle copy, then the canonical export, and
+    # falls through with NO rows when none is present (never aborts). Using the
+    # returns preflight's raw-export resolver would abort where no export exists
+    # AND could compute returns exits from a different ledger than production.
     trans_by_reqno: dict[str, list[dict[str, str]]] = {}
     if feature_flags.RETURNS_LEDGER_ENABLED:
-        ledger_path = _resolve_bdvsttrans_path()
-        if not ledger_path.exists():
-            sys.exit(f"BDVSTTRANS ledger not found: {ledger_path}")
-        trans_by_reqno = _load_bdvsttrans_by_reqno(ledger_path)
+        for row in load_bdvsttrans_rows(BUNDLE):
+            trans_by_reqno.setdefault(row.get("REQNO") or "", []).append(row)
 
     candidates_by_reqno = build_anchor_candidates(
         bdvstdt_rows=bdvstdt, bdvst_by_reqno=bdvst_by_reqno
