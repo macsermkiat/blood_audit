@@ -46,7 +46,7 @@ from bba.deterministic_classifier import (
 from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import ClassifierInputs
 from bba.declared_use import DeclaredUseLabel, collapse_usetype, label_for
-from bba.feature_flags import RETURNS_LEDGER_ENABLED
+from bba.feature_flags import DECLARED_USETYPE_ENABLED, RETURNS_LEDGER_ENABLED
 from bba.hb_lookup import (
     HbLookupResult,
     HbObservation,
@@ -87,13 +87,15 @@ BUNDLE = WORK / "bundle"
 ENABLE_MISSING_HB_POSITIVE_EVIDENCE = os.environ.get(
     "BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE", ""
 ).strip().lower() in ("1", "true", "yes", "on")
-# Declared-use pilot seam (spec #147, ticket #151). Default OFF; on-state
+# Declared-use pilot seam (spec #147, ticket #151; go-live 2026-07-15). Defaults
+# to the library flag DECLARED_USETYPE_ENABLED (now ON), so a plain pilot run
 # threads BDVSTDT.USETYPE into the classifier and appends the declared report
-# columns. Uses the "== '1'" idiom (default OFF) — NOT the reserve-router
-# "!= '0'" idiom (which defaults ON). Kept module-local (not a library-flag
-# mutation) so importing this module in tests never pollutes feature_flags.
+# columns. BBA_PILOT_DECLARED_USETYPE overrides: "1" forces on, anything else
+# (e.g. "0") forces off. Kept module-local (not a library-flag mutation) so
+# importing this module in tests never pollutes feature_flags.
+_declared_env = os.environ.get("BBA_PILOT_DECLARED_USETYPE")
 DECLARED_USETYPE_PILOT_ENABLED = (
-    os.environ.get("BBA_PILOT_DECLARED_USETYPE", "0") == "1"
+    _declared_env == "1" if _declared_env is not None else DECLARED_USETYPE_ENABLED
 )
 HB_HEM_CODE = "290095"
 HB_POCT_CODE = "500001"
