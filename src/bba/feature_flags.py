@@ -1,8 +1,9 @@
 """Runtime feature flags for bba.
 
-All flags default to OFF (False). Stage C2 wires the gate logic that reads
-these flags; defining them here keeps the flag contract in one place and
-ensures the RBC audit path is unaffected when a new flag is OFF.
+Most flags default to OFF (False), but ``RETURNS_LEDGER_ENABLED`` has been
+default-ON since the returns-ledger go-live (#138). Each flag's default is
+documented on the flag itself. Defining the contracts here keeps feature state
+in one place and preserves existing behavior while new flags remain OFF.
 
 Flags
 -----
@@ -15,7 +16,9 @@ RESERVE_AHEAD_ROUTER_ENABLED
     RBC dispatch and replay remain unchanged. Default: False.
 RETURNS_LEDGER_ENABLED
     Gates the BDVSTTRANS returns-ledger disposition read path. When False, the
-    pilot report is byte-identical to today; no verdict logic changes. Default:
+    pilot report reproduces the pre-feature behavior. Default: True.
+DECLARED_USETYPE_ENABLED
+    Gates the declared surgical-intent signal from BDVSTDT.USETYPE. Default:
     False.
 """
 
@@ -51,7 +54,15 @@ now enabled by default. Tests that need the pre-feature behavior monkeypatch it
 back to False.
 """
 
+DECLARED_USETYPE_ENABLED: bool = False
+"""Enable the BDVSTDT.USETYPE declared surgical-intent signal (default: OFF).
+
+Spec #147 gates this signal at wiring sites introduced only by later tickets;
+``classify()`` stays pure, and flag-off behavior is byte-identical.
+"""
+
 __all__: Sequence[str] = (
+    "DECLARED_USETYPE_ENABLED",
     "PLATELET_LLM_ENABLED",
     "RESERVE_AHEAD_ROUTER_ENABLED",
     "RETURNS_LEDGER_ENABLED",
