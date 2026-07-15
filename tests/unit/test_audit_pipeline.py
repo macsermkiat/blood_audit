@@ -103,6 +103,7 @@ from bba.audit_pipeline import (
     transition,
 )
 from bba.cohort_detector import CohortAssignment, CohortLabel
+from bba.declared_use import DeclaredUseLabel
 from bba.hb_lookup import DeltaHbWindow, HbLookupResult
 from bba.prompt_builder import EvidenceChunk
 from bba.returns_ledger import ReturnsSummary
@@ -358,6 +359,7 @@ def _row_context(
     sbp: float = 110.0,
     hr: float = 85.0,
     returns_summary: ReturnsSummary | None = None,
+    declared_use: DeclaredUseLabel | None = None,
 ) -> PipelineRowContext:
     """Build a PipelineRowContext whose upstream data drives the
     deterministic_classifier to produce the requested ``classification``.
@@ -466,7 +468,43 @@ def _row_context(
         periop_summary=periop_summary,
         administration_summary=administration_summary,
         returns_summary=returns_summary,
+        declared_use=declared_use,
     )
+
+
+@pytest.mark.parametrize(
+    ("flag_enabled", "expected_declared_use"),
+    [(True, "surgery"), (False, None)],
+)
+def test_pipeline_and_replay_classifier_input_twins_forward_declared_use_identically(
+    monkeypatch: pytest.MonkeyPatch,
+    flag_enabled: bool,
+    expected_declared_use: DeclaredUseLabel | None,
+) -> None:
+    import bba.deterministic_classifier as classifier_module
+    import bba.feature_flags as feature_flags
+    from bba.audit_pipeline.pipeline import _classifier_inputs_for
+    from bba.audit_pipeline.replay import _classify_from_context
+    from bba.deterministic_classifier import ClassifierInputs, ClassifierResult
+
+    ctx = _row_context(audit_id="declared-use-twin", declared_use="surgery")
+    monkeypatch.setattr(
+        feature_flags, "DECLARED_USETYPE_ENABLED", flag_enabled
+    )
+    pipeline_inputs = _classifier_inputs_for(ctx)
+    captured: list[ClassifierInputs] = []
+    real_classify = classifier_module.classify
+
+    def capture(inputs: ClassifierInputs) -> ClassifierResult:
+        captured.append(inputs)
+        return real_classify(inputs)
+
+    monkeypatch.setattr(classifier_module, "classify", capture)
+    _classify_from_context(ctx)
+
+    assert captured == [pipeline_inputs]
+    assert captured[0].model_dump() == pipeline_inputs.model_dump()
+    assert pipeline_inputs.declared_use == expected_declared_use
 
 
 class TestReturnedNotTransfusedTerminal:

@@ -12,13 +12,17 @@ specified in PRD §"Implementation Decisions §6":
 3. Cohort ``MTP``                   → ``APPROPRIATE`` (``bypass_reason=mtp``)
 4. Cohort ``UNKNOWN``               → ``NEEDS_REVIEW`` (no bypass)
 5. Bypass: peri-procedural ≤ 6 h    → ``APPROPRIATE`` (``bypass_reason=peri_procedural_6h``)
-6. Pre-op crossmatch ≤ 72 h upcoming, Hb ≥ cohort floor
-                                    → ``NEEDS_REVIEW`` (``rationale=preop_defer_llm``,
-                                       ``bypass_reason=none``); a reservation is not
-                                       an indication, so it DEFERS to the LLM instead
-                                       of auto-clearing (it does not skip the LLM). A
-                                       sub-threshold Hb is NOT deferred — it clears at
-                                       step 10 (its Hb is the indication).
+6. Structured pre-op crossmatch ≤ 72 h upcoming OR declared surgical intent,
+   with Hb ≥ cohort floor           → ``NEEDS_REVIEW``
+                                       (``rationale=preop_defer_llm`` for the
+                                       structured signal, otherwise
+                                       ``preop_defer_llm_declared``;
+                                       ``bypass_reason=none``); a reservation or
+                                       declaration is not an indication, so it
+                                       DEFERS to the LLM instead of auto-clearing
+                                       (it does not skip the LLM). A sub-threshold
+                                       Hb is NOT deferred — it clears at step 10
+                                       (its Hb is the indication).
 7. Bypass: delta-Hb trigger fired   → ``APPROPRIATE`` (``bypass_reason=delta_hb``)
 8. Hemodilution: Hb < threshold AND ≥ 2 L crystalloid in 4 h
                                     → ``NEEDS_REVIEW`` (``bypass_reason=hemodilution_flagged``)
@@ -67,6 +71,7 @@ Precedence notes:
 from __future__ import annotations
 
 from bba.cohort_detector import CohortLabel
+from bba.declared_use import DECLARED_SURGICAL_LABELS
 from bba.deterministic_classifier.models import (
     BypassReason,
     ClassifierInputs,
@@ -334,16 +339,18 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
             rationale="bypass_peri_procedural",
         )
 
-    # 6. Pre-op crossmatch — upcoming procedure within 72 h after the order
-    #    anchor. This is NOT a clearing bypass: a crossmatch *reservation* is
-    #    not a transfusion *indication*, and an upcoming surgery can hide an
-    #    active problem the reservation masks (case 68080335 documented
+    # 6. Pre-op crossmatch — an upcoming procedure within 72 h after the order
+    #    anchor, or declared surgical intent even without a structured op row.
+    #    This is NOT a clearing bypass: a crossmatch *reservation* or surgical
+    #    *declaration* is not a transfusion *indication*, and surgery can hide
+    #    an active problem the reservation masks (case 68080335 documented
     #    ongoing LGIB only in the nurse note, which neither the AI nor the
     #    human caught). So instead of auto-APPROPRIATE we DEFER to the LLM —
     #    NEEDS_REVIEW routes to the note-reading LLM leg (it is not in the
     #    DETERMINISTIC_FINAL set), which reads the ±72 h note window and
     #    decides on the actual clinical picture. bypass_reason stays NONE
-    #    because no clearing bypass fired.
+    #    because no clearing bypass fired. The structured signal keeps the
+    #    original rationale slug when both signals are present.
     #
     #    Only defer when the Hb tier would not already clear the order: a
     #    sub-threshold Hb (below the cohort floor) is itself the indication
@@ -356,9 +363,12 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
     #    already returned APPROPRIATE at step 2, so this only gates the
     #    [cohort_floor, ...) gray-zone / high-Hb pre-op cases.
     upcoming = inputs.upcoming_procedure_hours
+    structured_upcoming = (
+        upcoming is not None and upcoming <= PRE_OP_CROSSMATCH_WINDOW_HOURS
+    )
+    declared_surgical = inputs.declared_use in DECLARED_SURGICAL_LABELS
     if (
-        upcoming is not None
-        and upcoming <= PRE_OP_CROSSMATCH_WINDOW_HOURS
+        (structured_upcoming or declared_surgical)
         and threshold is not None
         and hb.value_g_dl >= threshold
     ):
@@ -366,7 +376,11 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
             classification="NEEDS_REVIEW",
             bypass_reason=BypassReason.NONE,
             cohort_threshold=threshold,
-            rationale="preop_defer_llm",
+            rationale=(
+                "preop_defer_llm"
+                if structured_upcoming
+                else "preop_defer_llm_declared"
+            ),
         )
 
     # 7. Delta-Hb bypass — at least one window in the HbLookupResult

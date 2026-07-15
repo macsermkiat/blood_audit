@@ -84,6 +84,10 @@ inject deterministic stubs (always-True for happy path, always-False
 for the adversarial-grounder case).
 """
 
+_RESERVE_AHEAD_RATIONALES = frozenset(
+    {"preop_defer_llm", "preop_defer_llm_declared"}
+)
+
 
 def default_verifier(
     result: BatchSubmissionResult, context: PipelineRowContext
@@ -1018,6 +1022,11 @@ def _classify_from_context(context: "PipelineRowContext") -> ClassifierResult:
                 and context.returns_summary is not None
                 else False
             ),
+            declared_use=(
+                context.declared_use
+                if feature_flags.DECLARED_USETYPE_ENABLED
+                else None
+            ),
         )
     )
 
@@ -1108,7 +1117,7 @@ def _build_audit_row(
     reserve_ahead = (
         context.component != "platelet"
         and feature_flags.RESERVE_AHEAD_ROUTER_ENABLED
-        and classifier_result.rationale == "preop_defer_llm"
+        and classifier_result.rationale in _RESERVE_AHEAD_RATIONALES
     )
     # For platelet rows, parse via parse_platelet_structured_response which
     # enforces the three hard-signal booleans.  A schema mismatch (missing or
