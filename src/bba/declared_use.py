@@ -14,7 +14,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from types import MappingProxyType
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 DeclaredUseLabel = Literal["ward", "surgery", "type_screen", "day_care", "unknown"]
 
@@ -57,12 +57,30 @@ def collapse_usetype(values: Iterable[str]) -> str | None:
 
 
 class DeclaredUse(BaseModel):
-    """A raw USETYPE code bound to its declared-use label."""
+    """A raw USETYPE code bound to its declared-use label.
+
+    The label is not free: it MUST equal ``label_for(code)``. Constructing an
+    inconsistent pair (e.g. ``DeclaredUse(code="2", label="ward")``) fails loud,
+    so a surgical code can never be represented as non-surgical for the
+    downstream ``.label``-keyed surgical routing. Prefer :meth:`from_code`, which
+    derives the label; the validator is the backstop for direct construction and
+    for deserialization.
+    """
 
     code: str
     label: DeclaredUseLabel
 
     model_config = ConfigDict(frozen=True)
+
+    @model_validator(mode="after")
+    def _label_matches_code(self) -> DeclaredUse:
+        expected = label_for(self.code)
+        if self.label != expected:
+            raise ValueError(
+                f"DeclaredUse label {self.label!r} does not match code "
+                f"{self.code!r} (expected {expected!r})"
+            )
+        return self
 
     @classmethod
     def from_code(cls, code: str) -> DeclaredUse:

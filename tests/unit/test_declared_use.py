@@ -107,3 +107,12 @@ def test_declared_use_from_code_binds_the_matching_label(
     # Assert
     assert declared_use.code == code
     assert declared_use.label == expected_label
+
+
+def test_declared_use_rejects_code_label_mismatch() -> None:
+    # A surgical code must never be representable as a non-surgical label:
+    # #149 routes on .label for the pre-op deferral, so an inconsistent pair
+    # like code="2" (surgery) with label="ward" would silently mis-route a
+    # surgical order. The model binds label to code and fails loud instead.
+    with pytest.raises(ValidationError):
+        DeclaredUse(code="2", label="ward")
