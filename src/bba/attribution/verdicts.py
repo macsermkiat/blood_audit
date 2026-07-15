@@ -181,16 +181,17 @@ members and must be projected explicitly."""
 
 
 def strict_verdict_projector(value: str) -> str:
-    """Project scorable values and pass through explicit excluded values.
+    """Identity on scorable report values and the explicit pass-through terminals.
 
-    ``PREOP_OVER_RESERVATION`` projects to ``INAPPROPRIATE`` as the scorable
-    report-level interpretation defined by ticket #162.
-
-    The excluded values (``RETURNED_NOT_TRANSFUSED``,
-    ``PERIOP_TRANSFUSION_EXEMPT``) pass through so the ranking layer can hold
-    them in their own non-scorable counters. Fail loud on other store-only
-    values, including ``POTENTIALLY_INAPPROPRIATE`` and
-    ``PREOP_RESERVATION_UNCONFIRMED``.
+    ``RETURNED_NOT_TRANSFUSED``, ``PERIOP_TRANSFUSION_EXEMPT`` and
+    ``PREOP_OVER_RESERVATION`` pass through UNCHANGED so the ranking layer can
+    hold them in their own counters: the scorecard folds
+    ``PREOP_OVER_RESERVATION`` into ``inappropriate_count`` while also counting
+    it as ``over_reservation_count`` (ticket #162). Collapsing it to
+    ``INAPPROPRIATE`` here would destroy the raw signal before the downstream
+    counter runs, so ``over_reservation_count`` could never populate on the
+    pipeline path. Fail loud on other store-only values, including
+    ``POTENTIALLY_INAPPROPRIATE`` and ``PREOP_RESERVATION_UNCONFIRMED``.
 
     The default so no build silently buckets a store-only value: mapping it is
     a clinical decision (mirrors
@@ -200,10 +201,12 @@ def strict_verdict_projector(value: str) -> str:
     """
     if value in _REPORT_CLASSIFICATIONS:
         return value
-    if value in ("RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"):
+    if value in (
+        "RETURNED_NOT_TRANSFUSED",
+        "PERIOP_TRANSFUSION_EXEMPT",
+        "PREOP_OVER_RESERVATION",
+    ):
         return value
-    if value == "PREOP_OVER_RESERVATION":
-        return "INAPPROPRIATE"
     raise ValueError(
         f"final_classification {value!r} is not one of the four report "
         f"classifications {sorted(_REPORT_CLASSIFICATIONS)}; if this is the "

@@ -461,12 +461,30 @@ class TestPipelineVerdictSource:
         )()
         assert verdicts == {"68000001": "NEEDS_REVIEW"}
 
-    def test_strict_projector_maps_preop_over_reservation_to_inappropriate(
+    def test_projector_passes_preop_over_reservation_through_for_counting(
         self,
     ) -> None:
+        # Regression (Codex PR #168 P2): the projector must PASS
+        # PREOP_OVER_RESERVATION through unchanged, like the returns terminals.
+        # Collapsing it to INAPPROPRIATE here would destroy the raw signal
+        # before build_doctor_scorecards (which keys over_reservation_count on
+        # the raw label) runs, so over_reservation_count could never populate on
+        # the real rank_doctors path (pipeline_verdict_source ->
+        # needs_review_verdict_projector -> build_doctor_scorecards).
         rows = [_audit_row("68000001", "PREOP_OVER_RESERVATION")]
 
-        assert pipeline_verdict_source(rows)() == {"68000001": "INAPPROPRIATE"}
+        assert strict_verdict_projector("PREOP_OVER_RESERVATION") == (
+            "PREOP_OVER_RESERVATION"
+        )
+        verdicts = pipeline_verdict_source(
+            rows, projector=needs_review_verdict_projector
+        )()
+        assert verdicts == {"68000001": "PREOP_OVER_RESERVATION"}
+
+        (card,) = build_doctor_scorecards(verdicts, {}, {})
+        assert card.total_orders == 1
+        assert card.inappropriate_count == 1
+        assert card.over_reservation_count == 1
 
     def test_pooled_preop_reservation_totals_reconcile_as_unresolved(self) -> None:
         rows = [
