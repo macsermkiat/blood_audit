@@ -23,8 +23,10 @@ operation-adjacent and only 0.2% had no operation row.
 
 Declared intent never auto-clears an order, and flag-off output must be
 byte-identical. Detail rows collapse per order using `(HN, REQNO)`, never bare
-`REQNO`. Unknown codes drive no routing, never render to the LLM, and the
-`DECLARED_USETYPE_ENABLED` flag remains default-off.
+`REQNO`. Unknown codes drive no routing and never render to the LLM. The
+`DECLARED_USETYPE_ENABLED` flag is default-ON since go-live (2026-07-15);
+forcing the feature off with `BBA_PILOT_DECLARED_USETYPE=0` reproduces the
+pre-feature output byte-for-byte.
 
 ## 3. Mapping and collapse semantics
 
@@ -37,10 +39,10 @@ warning and produce no signal without raising.
 
 The five-PR stack proceeds as: ingest, vocabulary, and flag; classifier and
 dispatch; bundle and prompts; pilot threading and preflight; then the go-live
-default flip after preflight and clinician sign-off. The deterministic and LLM
-pilot legs now thread declared use behind `BBA_PILOT_DECLARED_USETYPE`, which is
-default-off; ticket #152 supplies evidence for the later go-live enablement
-decision without changing the library default.
+default flip after the preflight and clinician sign-off (shipped 2026-07-15).
+The deterministic and LLM pilot legs default to the library flag
+`DECLARED_USETYPE_ENABLED` (now ON); `BBA_PILOT_DECLARED_USETYPE=1` forces on
+and anything else (e.g. `0`) forces off.
 
 ## 5. Go-live evidence gate
 
@@ -53,12 +55,14 @@ population, then writes
 declared-surgical population is also a HOLD. The artifact is read-only and does
 not enable either feature flag.
 
-This artifact is one gate, not complete go-live approval. The remaining
-requirements are a flag-on LLM-leg comparison, an attribution/dashboard delta
-summary, and clinician sign-off on the high-Hb (`hb_ge_10` to defer) and
-delta-Hb (`bypass_delta_hb` to defer) buckets. The library
-`DECLARED_USETYPE_ENABLED` default remains OFF regardless of the preflight
-recommendation.
+This artifact was one of four go-live gates, all met on 2026-07-15: a clean
+representative flip matrix (3,000-order sample: 12 flips, 0 unexpected), a
+flag-on LLM-leg comparison (1 intended verdict flip, 0 collateral), an
+attribution/dashboard delta summary, and clinician sign-off on the high-Hb
+(`hb_ge_10` to defer) bucket (the delta-Hb `bypass_delta_hb` bucket produced no
+cases). `DECLARED_USETYPE_ENABLED` is default-ON as a result; re-run the
+preflight when validating a new cohort or if a `bypass_delta_hb` flip ever
+appears.
 
 ## 6. Risks
 
