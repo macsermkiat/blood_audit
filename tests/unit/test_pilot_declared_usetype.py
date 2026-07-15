@@ -107,6 +107,33 @@ def test_run_pipeline_declared_label_helper_gates_on_import_time_env(
     assert disabled._declared_use_label_for_classifier(None) is None
 
 
+def test_declared_use_columns_are_descriptive_and_component_agnostic(
+    monkeypatch,
+) -> None:
+    # Populated for red-cell AND platelet report rows (a platelet order can be
+    # declared for surgery); unknown codes still render. Empty dict when off so
+    # platelet/red-cell rows stay byte-identical to a flag-off run.
+    monkeypatch.setenv("BBA_PILOT_DECLARED_USETYPE", "1")
+    on = _load_run_pipeline("pilot_run_pipeline_declared_cols_on")
+    assert on._declared_use_columns("2") == {
+        "declared_use_code": "2",
+        "declared_use_label": "surgery",
+    }
+    assert on._declared_use_columns("5") == {
+        "declared_use_code": "5",
+        "declared_use_label": "unknown",
+    }
+    assert on._declared_use_columns(None) == {
+        "declared_use_code": "",
+        "declared_use_label": "",
+    }
+
+    monkeypatch.delenv("BBA_PILOT_DECLARED_USETYPE")
+    off = _load_run_pipeline("pilot_run_pipeline_declared_cols_off")
+    assert off._declared_use_columns("2") == {}
+    assert off._declared_use_columns(None) == {}
+
+
 def test_run_llm_declared_record_is_gated_and_mapped_only(monkeypatch) -> None:
     mod = _load_run_llm_leg("pilot_run_llm_leg_declared_record")
     monkeypatch.setattr(mod.feature_flags, "DECLARED_USETYPE_ENABLED", True)

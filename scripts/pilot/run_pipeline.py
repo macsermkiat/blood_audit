@@ -201,6 +201,23 @@ def _declared_use_label_for_classifier(
     return None
 
 
+def _declared_use_columns(collapsed_code: str | None) -> dict[str, str]:
+    """Descriptive declared-use report columns for a row (empty dict when off).
+
+    USETYPE is a component-agnostic order attribute, so these columns are
+    populated for red-cell AND platelet rows — a blank on a platelet order that
+    was declared for surgery would read as "no declaration" in the opt-in
+    report. This is display only: platelet CLASSIFICATION is untouched (the
+    declared signal never feeds the platelet gate).
+    """
+    if not DECLARED_USETYPE_PILOT_ENABLED:
+        return {}
+    return {
+        "declared_use_code": collapsed_code or "",
+        "declared_use_label": label_for(collapsed_code) if collapsed_code else "",
+    }
+
+
 def _returns_periop_context_for_classifier(
     returns_summary: ReturnsSummary | None,
     *,
@@ -792,6 +809,13 @@ def main() -> None:
 
     rows: list[dict[str, Any]] = []
     for order in filter_result.included:
+        # Collapsed declared use for THIS order, keyed by (HN, REQNO). Computed
+        # before the component split so both the red-cell and platelet report
+        # rows carry the descriptive columns (the platelet classifier never
+        # reads it).
+        collapsed_usetype = collapse_usetype(
+            usetype_values_by_hn_reqno.get(((order.hn or "").strip(), order.reqno), [])
+        )
         # --- Platelet path (Phase 2, component="platelet") ---
         if order.component == "platelet":
             plt_obs = _build_platelet_observations(lab, order.an)
@@ -878,6 +902,7 @@ def main() -> None:
                         "returns_ledger_complete": plt_returns_summary.ledger_complete,
                     }
                 )
+            plt_row.update(_declared_use_columns(collapsed_usetype))
             rows.append(plt_row)
             continue
 
@@ -991,10 +1016,6 @@ def main() -> None:
             vitals_notes_for(progress, focus, order.an, evidence_anchor.anchor_utc)
         )
 
-        collapsed_usetype = collapse_usetype(
-            usetype_values_by_hn_reqno.get(((order.hn or "").strip(), order.reqno), [])
-        )
-
         clf = classify(
             ClassifierInputs(
                 audit_id=order.audit_id,
@@ -1083,11 +1104,7 @@ def main() -> None:
                     "returns_ledger_complete": returns_summary.ledger_complete,
                 }
             )
-        if DECLARED_USETYPE_PILOT_ENABLED:
-            row["declared_use_code"] = collapsed_usetype or ""
-            row["declared_use_label"] = (
-                label_for(collapsed_usetype) if collapsed_usetype else ""
-            )
+        row.update(_declared_use_columns(collapsed_usetype))
         rows.append(row)
 
     # Append excluded cases as sparse rows so build_review.py can surface
