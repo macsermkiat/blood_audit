@@ -26,7 +26,6 @@ dependencies = [
 ]
 
 [project.scripts]
-blood-audit = "blood_audit:main"
 bba = "bba.cli.main:cli"
 
 [build-system]
@@ -34,10 +33,11 @@ requires = ["uv_build>=0.9.24,<0.10.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-# uv_build's default infers the wheel module from the project name (blood_audit).
-# We ship two top-level packages under src/, so list both explicitly — otherwise
-# `pip install blood-audit` produces a wheel that lacks `bba.ingest`.
-module-name = ["bba", "blood_audit"]
+# uv_build's default infers the wheel module from the project name (blood_audit),
+# but we ship the package under src/ as `bba`, not `blood_audit`. Name it
+# explicitly so the wheel contains `bba.*` (e.g. `bba.ingest`); without this the
+# default inference would look for a `blood_audit` module that no longer exists.
+module-name = ["bba"]
 
 [dependency-groups]
 dev = [
