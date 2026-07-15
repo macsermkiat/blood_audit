@@ -239,6 +239,22 @@ def test_declared_deferral_is_in_reserve_ahead_dispatch_set() -> None:
     )
 
 
+def test_code_version_folds_declared_use_seam(monkeypatch) -> None:
+    # The audit_store is idempotent on (audit_id, run_id, code_version).
+    # Declared-use flips some orders to NEEDS_REVIEW, so enabling the seam must
+    # yield a DISTINCT code identity — otherwise a flag-on rerun with a reused
+    # run id keeps the stale flag-off verdicts (Codex P2, PR #156).
+    monkeypatch.setenv("BBA_PILOT_DECLARED_USETYPE", "1")
+    on = _load_run_llm_leg("pilot_run_llm_leg_declared_codever_on")
+    assert on.DECLARED_USETYPE_PILOT_ENABLED is True
+    assert "+declared" in on.CODE_VERSION
+
+    monkeypatch.delenv("BBA_PILOT_DECLARED_USETYPE")
+    off = _load_run_llm_leg("pilot_run_llm_leg_declared_codever_off")
+    assert off.DECLARED_USETYPE_PILOT_ENABLED is False
+    assert "+declared" not in off.CODE_VERSION
+
+
 def test_sample_bundle_carries_usetype() -> None:
     mod = _load_pilot_module("sample_bundle.py", "pilot_sample_bundle_declared_usetype")
 

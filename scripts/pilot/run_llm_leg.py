@@ -153,18 +153,32 @@ ONLY_REQNOS = frozenset(
 ENABLE_MISSING_HB_POSITIVE_EVIDENCE = os.environ.get(
     "BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE", ""
 ).strip().lower() in ("1", "true", "yes", "on")
+# Declared-use pilot seam (spec #147, ticket #151), read at import so it can fold
+# into CODE_VERSION below; main() sets feature_flags.DECLARED_USETYPE_ENABLED from
+# this same constant. "== '1'" idiom (default OFF) — NOT the reserve-router
+# "!= '0'" idiom. A plain module constant (no feature_flags mutation at import),
+# so importing this module in tests never pollutes the library flag.
+DECLARED_USETYPE_PILOT_ENABLED = (
+    os.environ.get("BBA_PILOT_DECLARED_USETYPE", "0") == "1"
+)
 # Run/code identity (spec #119 §G, ticket #124). The audit_store is idempotent
-# on (run_id, audit_id, code_version), so enabling the returns ledger must not
-# silently reuse a flag-off run's committed rows. Folding the flag into
+# on (run_id, audit_id, code_version), so enabling a seam that changes verdicts
+# must not silently reuse a flag-off run's committed rows. Folding each seam into
 # CODE_VERSION makes enabling it a DISTINCT code identity, so a re-run recomputes
 # every affected verdict instead of keeping stale pre-feature rows (AC "reusing a
-# stale identity does not leave pre-feature rows in place"). Flag-off keeps the
-# original "pilot-mini" identity, so a flag-off run is byte-identical to today.
-# The flag is captured once at import and never toggled mid-run, so it is
-# constant across this process's batch submit and result apply. A changed
-# BDVSTTRANS ledger still needs a fresh BBA_PILOT_RUN_ID (it does not alter the
-# code identity); production folds the ledger into run identity separately (#121).
-CODE_VERSION = "pilot-mini+returns" if RETURNS_LEDGER_ENABLED else "pilot-mini"
+# stale identity does not leave pre-feature rows in place"). Declared-use flips
+# some orders to NEEDS_REVIEW, changing the submission set and verdicts, so it is
+# folded in the same way (Codex P2, PR #156). Flag-off keeps the original
+# "pilot-mini" identity, so a flag-off run is byte-identical to today. The seams
+# are captured once at import and never toggled mid-run, so they are constant
+# across this process's batch submit and result apply. A changed BDVSTTRANS
+# ledger still needs a fresh BBA_PILOT_RUN_ID (it does not alter the code
+# identity); production folds the ledger into run identity separately (#121).
+CODE_VERSION = "pilot-mini"
+if RETURNS_LEDGER_ENABLED:
+    CODE_VERSION += "+returns"
+if DECLARED_USETYPE_PILOT_ENABLED:
+    CODE_VERSION += "+declared"
 TZ_LOCAL = "Asia/Bangkok"
 INCPT_OPERATION_GROUPS = {"110", "111"}
 
@@ -1152,13 +1166,11 @@ def main() -> None:
     feature_flags.RESERVE_AHEAD_ROUTER_ENABLED = (
         os.environ.get("BBA_PILOT_RESERVE_AHEAD_ROUTER", "1") != "0"
     )
-    # Declared-use pilot seam (spec #147, ticket #151). Default OFF. Sets the
-    # library flag so the classifier twins / _classify_from_context fallback agree
-    # with this leg's direct classify() call. "== '1'" idiom (default OFF) — do
-    # NOT copy the reserve-router "!= '0'" idiom above (it defaults ON).
-    feature_flags.DECLARED_USETYPE_ENABLED = (
-        os.environ.get("BBA_PILOT_DECLARED_USETYPE", "0") == "1"
-    )
+    # Declared-use pilot seam (spec #147, ticket #151). Set the library flag from
+    # the import-time constant (single source of truth; also folded into
+    # CODE_VERSION) so the classifier twins / _classify_from_context fallback
+    # agree with this leg's direct classify() call.
+    feature_flags.DECLARED_USETYPE_ENABLED = DECLARED_USETYPE_PILOT_ENABLED
 
     AUDIT_STORE_ROOT.mkdir(parents=True, exist_ok=True)
     (
