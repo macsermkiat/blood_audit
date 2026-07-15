@@ -18,6 +18,9 @@ Source quirks handled:
   * the extra Thai header row in the ``Sx`` sheet
   * ICD-9 codes spread across many trailing columns
   * ICD-9 codes stored as floats (OB-Gyn) with spurious trailing zeros
+  * sub-10 codes that lost their leading zero (a numeric 6.02, or the string
+    "4.73") are re-padded to a two-digit integer part before the dotless join
+    key is formed -- otherwise 6.02 -> "602" would collide with the code 60.2
   * two Ortho rows where Excel mis-parsed a typed "1-2" unit range into a date
 
 Operations with no ICD-9 code in the source are KEPT in the exploded file with
@@ -52,15 +55,14 @@ MEANING = {
 }
 HEADER_OPS = {"OPERATION", "หัตถการ"}  # English + the extra Sx Thai header row
 
-# Verified data-entry corrections, applied to the dotted ICD-9 code as written in
-# the workbook. Each target is a *structurally invalid* code (not merely absent
-# from the ICD-9-CM master), cross-checked against ICD9CM.csv:
+# Verified data-entry correction, applied to the canonical dotted code produced by
+# fmt_icd. The target is a *structurally invalid* code (not merely absent from the
+# ICD-9-CM master), cross-checked against ICD9CM.csv:
 #   06.40 -> 06.4   No 4-digit 06.40 exists; 06.4 = "Complete thyroidectomy", and
 #                   the ENT sheet already writes this same code correctly as 06.4.
-#   4.73  -> 04.73  ICD-9 procedure codes always carry two leading digits; the
-#                   leading zero was dropped. 04.73 = "Accessory-hypoglossal
-#                   anastomosis" -- exactly the ENT facial-reanimation procedure.
-ICD_CORRECTIONS = {"06.40": "06.4", "4.73": "04.73"}
+# (The former "4.73" -> "04.73" fix -- a dropped leading zero -- is now handled
+# generally by fmt_icd's leading-zero canonicalisation, so it is not special-cased.)
+ICD_CORRECTIONS = {"06.40": "06.4"}
 
 GROUPED_COLS = [
     "specialty", "sheet", "procedure_group", "operation",
@@ -73,19 +75,32 @@ EXPLODED_COLS = [
 
 
 def fmt_icd(v: object) -> str:
-    """Render a raw ICD-9 cell to a dotted code string.
+    """Render a raw ICD-9 cell to a canonical dotted code string.
 
     Floats (OB-Gyn stores codes numerically) are capped at two decimals -- the
     ICD-9 maximum -- then stripped of spurious trailing zeros so a genuine
     3-digit code like 74.1 does not masquerade as the 4-digit 74.10.
+
+    ICD-9 procedure codes always carry a two-digit integer part, so a 1-digit
+    integer part means a leading zero was lost -- a numeric 6.02 for 06.02, or the
+    string "4.73" for 04.73. It is zero-padded back to two digits so the downstream
+    dotless key is correct; otherwise 6.02 -> "602" would collide with the distinct
+    code 60.2. Idempotent on already-canonical values (06.02 stays 06.02).
     """
     if isinstance(v, bool):
         return ""
     if isinstance(v, float):
-        return ("%.2f" % v).rstrip("0").rstrip(".")
-    if isinstance(v, int):
-        return str(v)
-    return str(v).strip()
+        s = ("%.2f" % v).rstrip("0").rstrip(".")
+    elif isinstance(v, int):
+        s = str(v)
+    else:
+        s = str(v).strip()
+    if not s:
+        return ""
+    intpart, dot, frac = s.partition(".")
+    if intpart.isdigit() and len(intpart) < 2:
+        intpart = intpart.zfill(2)
+    return f"{intpart}{dot}{frac}"
 
 
 def fmt_units(v: object) -> str:
