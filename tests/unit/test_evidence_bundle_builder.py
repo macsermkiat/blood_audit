@@ -2788,9 +2788,7 @@ class TestPeriopSummaryItem:
         )
 
         base_periop = next(it for it in without.items if it.source == "Periop")
-        merged_periop = next(
-            it for it in with_declared.items if it.source == "Periop"
-        )
+        merged_periop = next(it for it in with_declared.items if it.source == "Periop")
         assert {
             key: value
             for key, value in merged_periop.payload.items()
@@ -2801,6 +2799,31 @@ class TestPeriopSummaryItem:
             "label": "surgery",
             "source": "BDVSTDT.USETYPE",
         }
+
+    def test_declared_use_unknown_code_alone_never_renders(self) -> None:
+        # Spec #147 locked constraint: an unknown / unmapped USETYPE code (label
+        # "unknown", e.g. "5") must never reach the LLM. Even if a caller passes a
+        # DeclaredUse for it, the builder treats it as inert — no pinned Periop
+        # item, and the bundle is byte-identical to no declaration.
+        unknown = DeclaredUse.from_code("5")
+        assert unknown.label == "unknown"
+        without = _build_minimal()
+        with_unknown = _build_minimal(declared_use=unknown)
+        assert with_unknown.bundle_hash == without.bundle_hash
+        assert with_unknown.canonical_json == without.canonical_json
+
+    def test_declared_use_unknown_code_omitted_from_note_periop(self) -> None:
+        # An unknown code alongside a real note-derived surgery must not inject a
+        # declared_use key: the pinned Periop item carries only the note facts, so
+        # the bundle matches the no-declaration case exactly.
+        focus = (_focus(offset_hours=3, text="Post-op s/p ORIF, EBL 800 ml"),)
+        without = _build_minimal(focus_notes=focus)
+        with_unknown = _build_minimal(
+            focus_notes=focus,
+            declared_use=DeclaredUse.from_code("5"),
+        )
+        assert with_unknown.bundle_hash == without.bundle_hash
+        assert with_unknown.canonical_json == without.canonical_json
 
 
 class TestAdministrationSummaryItem:

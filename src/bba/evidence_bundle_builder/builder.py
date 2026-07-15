@@ -826,17 +826,28 @@ def _assign_ids(
             )
         )
 
+    # An unknown / unmapped USETYPE code (label "unknown", e.g. code "5") must
+    # never reach the LLM (spec #147 locked constraint), so it is inert here: it
+    # neither forces the pinned item nor contributes a payload key. Callers are
+    # expected to pass None for unmapped codes; this guard enforces the constraint
+    # at the render site regardless of caller discipline.
+    renderable_declared = (
+        declared_use
+        if declared_use is not None and declared_use.label != "unknown"
+        else None
+    )
+
     # Peri-op summary SECOND (Case 107 / REQNO 68074627): the same pinned,
     # fact-only shape as Hemodynamic. Emitted when the scan found a surgery /
-    # EBL / intra-op transfusion or an order-level declaration is present. An
-    # empty summary with no declaration adds no item and leaves all downstream
-    # IDs unchanged.
-    if not periop_summary.is_empty or declared_use is not None:
+    # EBL / intra-op transfusion or a mapped order-level declaration is present.
+    # An empty summary with no renderable declaration adds no item and leaves all
+    # downstream IDs unchanged.
+    if not periop_summary.is_empty or renderable_declared is not None:
         payload = _periop_payload(periop_summary, anchor_dt)
-        if declared_use is not None:
+        if renderable_declared is not None:
             payload["declared_use"] = {
-                "code": declared_use.code,
-                "label": declared_use.label,
+                "code": renderable_declared.code,
+                "label": renderable_declared.label,
                 "source": "BDVSTDT.USETYPE",
             }
         items.append(
