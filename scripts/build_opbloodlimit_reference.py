@@ -65,12 +65,25 @@ HEADER_OPS = {"OPERATION", "หัตถการ"}  # English + the extra Sx Th
 ICD_CORRECTIONS = {"06.40": "06.4"}
 
 GROUPED_COLS = [
-    "specialty", "sheet", "procedure_group", "operation",
-    "msbos", "msbos_meaning", "recommended_units", "icd9_codes",
+    "specialty",
+    "sheet",
+    "procedure_group",
+    "operation",
+    "msbos",
+    "msbos_meaning",
+    "recommended_units",
+    "icd9_codes",
 ]
 EXPLODED_COLS = [
-    "icd9_code", "icd9_code_nodot", "specialty", "sheet",
-    "procedure_group", "operation", "msbos", "msbos_meaning", "recommended_units",
+    "icd9_code",
+    "icd9_code_nodot",
+    "specialty",
+    "sheet",
+    "procedure_group",
+    "operation",
+    "msbos",
+    "msbos_meaning",
+    "recommended_units",
 ]
 
 
@@ -79,7 +92,9 @@ def fmt_icd(v: object) -> str:
 
     Floats (OB-Gyn stores codes numerically) are capped at two decimals -- the
     ICD-9 maximum -- then stripped of spurious trailing zeros so a genuine
-    3-digit code like 74.1 does not masquerade as the 4-digit 74.10.
+    3-digit code like 74.1 does not masquerade as the 4-digit 74.10. A single
+    significant ``.0`` is kept, though: 74.0 (Classical cesarean) is a distinct
+    procedure code, not the category 74.
 
     ICD-9 procedure codes always carry a two-digit integer part, so a 1-digit
     integer part means a leading zero was lost -- a numeric 6.02 for 06.02, or the
@@ -90,7 +105,9 @@ def fmt_icd(v: object) -> str:
     if isinstance(v, bool):
         return ""
     if isinstance(v, float):
-        s = ("%.2f" % v).rstrip("0").rstrip(".")
+        s = ("%.2f" % v).rstrip("0")
+        if s.endswith("."):
+            s += "0"  # keep a significant .0 (74.0 is a code, distinct from 74)
     elif isinstance(v, int):
         s = str(v)
     else:
@@ -149,16 +166,18 @@ def parse(src: Path, applied: dict[str, int]) -> list[dict[str, object]]:
                     if dc and dc not in codes:
                         codes.append(dc)
             msbos = norm_msbos(r[2])
-            ops.append({
-                "specialty": SPECIALTY.get(sheet, sheet),
-                "sheet": sheet,
-                "procedure_group": group,
-                "operation": str(op).strip(),
-                "msbos": msbos,
-                "msbos_meaning": MEANING.get(msbos, ""),
-                "recommended_units": fmt_units(r[3]),
-                "codes": codes,
-            })
+            ops.append(
+                {
+                    "specialty": SPECIALTY.get(sheet, sheet),
+                    "sheet": sheet,
+                    "procedure_group": group,
+                    "operation": str(op).strip(),
+                    "msbos": msbos,
+                    "msbos_meaning": MEANING.get(msbos, ""),
+                    "recommended_units": fmt_units(r[3]),
+                    "codes": codes,
+                }
+            )
     return ops
 
 
@@ -177,19 +196,26 @@ def build_exploded(ops: list[dict[str, object]]) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for o in ops:
         base: dict[str, str] = {
-            "specialty": str(o["specialty"]), "sheet": str(o["sheet"]),
-            "procedure_group": str(o["procedure_group"]), "operation": str(o["operation"]),
-            "msbos": str(o["msbos"]), "msbos_meaning": str(o["msbos_meaning"]),
+            "specialty": str(o["specialty"]),
+            "sheet": str(o["sheet"]),
+            "procedure_group": str(o["procedure_group"]),
+            "operation": str(o["operation"]),
+            "msbos": str(o["msbos"]),
+            "msbos_meaning": str(o["msbos_meaning"]),
             "recommended_units": str(o["recommended_units"]),
         }
         codes: list[str] = o["codes"]  # type: ignore[assignment]
         if codes:
             for dc in codes:
-                rows.append({"icd9_code": dc, "icd9_code_nodot": dc.replace(".", ""), **base})
+                rows.append(
+                    {"icd9_code": dc, "icd9_code_nodot": dc.replace(".", ""), **base}
+                )
         else:
             rows.append({"icd9_code": "", "icd9_code_nodot": "", **base})
     # Coded rows first (sorted by dotless key), blank-code rows last.
-    rows.sort(key=lambda x: (x["icd9_code_nodot"] == "", x["icd9_code_nodot"], x["operation"]))
+    rows.sort(
+        key=lambda x: (x["icd9_code_nodot"] == "", x["icd9_code_nodot"], x["operation"])
+    )
     return rows
 
 
@@ -224,13 +250,22 @@ def report(
     for key in ICD_CORRECTIONS:
         n = applied.get(key, 0)
         tag = "applied" if n else "STALE (no longer in source -- consider removing)"
-        print(f"[correction] {key} -> {ICD_CORRECTIONS[key]}: {n}x {tag}", file=sys.stderr)
+        print(
+            f"[correction] {key} -> {ICD_CORRECTIONS[key]}: {n}x {tag}", file=sys.stderr
+        )
 
     # coverage: informational only -- never drops a row
-    unmatched = sorted({(x["icd9_code"], x["icd9_code_nodot"]) for x in coded
-                        if x["icd9_code_nodot"] not in ref_codes})
-    print(f"[coverage] codes absent from ICD9CM.csv (kept anyway): {len(unmatched)}",
-          file=sys.stderr)
+    unmatched = sorted(
+        {
+            (x["icd9_code"], x["icd9_code_nodot"])
+            for x in coded
+            if x["icd9_code_nodot"] not in ref_codes
+        }
+    )
+    print(
+        f"[coverage] codes absent from ICD9CM.csv (kept anyway): {len(unmatched)}",
+        file=sys.stderr,
+    )
     for dotted, nodot in unmatched:
         print(f"    KEEP {nodot} ({dotted})", file=sys.stderr)
 
@@ -240,29 +275,41 @@ def report(
         bycode[x["icd9_code_nodot"]].add((x["msbos"], x["recommended_units"]))
     conflicts = {k: v for k, v in bycode.items() if len(v) > 1}
 
-    print(f"[blank]    operations with no ICD-9 code (kept, match by name): {len(blank)}",
-          file=sys.stderr)
+    print(
+        f"[blank]    operations with no ICD-9 code (kept, match by name): {len(blank)}",
+        file=sys.stderr,
+    )
     for x in blank:
         print(f"    {x['sheet']}: {x['operation']}", file=sys.stderr)
-    print(f"[conflicts] codes with >1 (msbos,units): {len(conflicts)} of {len(distinct)} distinct",
-          file=sys.stderr)
+    print(
+        f"[conflicts] codes with >1 (msbos,units): {len(conflicts)} of {len(distinct)} distinct",
+        file=sys.stderr,
+    )
     print(f"grouped rows : {len(ops)}", file=sys.stderr)
-    print(f"exploded rows: {len(exploded)} ({len(coded)} coded + {len(blank)} blank)",
-          file=sys.stderr)
+    print(
+        f"exploded rows: {len(exploded)} ({len(coded)} coded + {len(blank)} blank)",
+        file=sys.stderr,
+    )
 
 
 def main() -> None:
-    default_raw = Path(__file__).resolve().parents[1].parent / "Bloodbank" / "data" / "raw"
+    default_raw = (
+        Path(__file__).resolve().parents[1].parent / "Bloodbank" / "data" / "raw"
+    )
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument(
-        "--raw-dir", type=Path, default=default_raw,
+        "--raw-dir",
+        type=Path,
+        default=default_raw,
         help="Folder holding OPBloodLimit.xlsx + ICD9CM.csv, and where the CSVs "
-             "are written (default: Bloodbank/data/raw).",
+        "are written (default: Bloodbank/data/raw).",
     )
     ap.add_argument(
-        "--out-dir", type=Path, default=None,
+        "--out-dir",
+        type=Path,
+        default=None,
         help="Where to write the CSVs (default: same as --raw-dir).",
     )
     args = ap.parse_args()
@@ -283,9 +330,13 @@ def main() -> None:
 
     ref_codes = load_ref_codes(ref) if ref.is_file() else set()
     if not ref_codes:
-        sys.stderr.write(f"WARN: ICD9CM.csv not found at {ref}; coverage check skipped\n")
+        sys.stderr.write(
+            f"WARN: ICD9CM.csv not found at {ref}; coverage check skipped\n"
+        )
     report(ops, exploded, ref_codes, applied)
-    print(f"wrote {out_dir / 'OPBloodLimit.csv'} and {out_dir / 'OPBloodLimit_by_icd9.csv'}")
+    print(
+        f"wrote {out_dir / 'OPBloodLimit.csv'} and {out_dir / 'OPBloodLimit_by_icd9.csv'}"
+    )
 
 
 if __name__ == "__main__":
