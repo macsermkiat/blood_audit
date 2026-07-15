@@ -59,10 +59,40 @@ def test_bundle_used_when_no_override(tmp_path: Path, monkeypatch) -> None:
     assert SRC.load_bdvsttrans_rows(bundle) == [{"REQNO": "B1", "UNITSTAT": "3"}]
 
 
-def test_absent_ledger_returns_empty(tmp_path: Path, monkeypatch) -> None:
-    # No override and no bundle copy -> empty, never a crash (the driver then
-    # falls through to the legacy pipeline for every order).
+def test_canonical_default_when_no_override_or_bundle(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Zero-config default: no override and no bundle copy -> the canonical
+    # data/encrypted export, so a production run needs no env var.
     monkeypatch.delenv("BBA_BDVSTTRANS_CSV", raising=False)
+    canonical = tmp_path / "canonical.csv"
+    _write_csv(canonical, "REQNO,UNITSTAT", "K1,3")
+    monkeypatch.setattr(SRC, "_CANONICAL_DEFAULT", canonical)
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()  # no BDVSTTRANS.csv in the bundle
+
+    assert SRC.resolve_bdvsttrans_path(bundle) == canonical
+    assert SRC.load_bdvsttrans_rows(bundle) == [{"REQNO": "K1", "UNITSTAT": "3"}]
+
+
+def test_bundle_wins_over_canonical_default(tmp_path: Path, monkeypatch) -> None:
+    # A bundle-staged slice takes precedence over the full canonical export.
+    monkeypatch.delenv("BBA_BDVSTTRANS_CSV", raising=False)
+    canonical = tmp_path / "canonical.csv"
+    _write_csv(canonical, "REQNO,UNITSTAT", "K1,3")
+    monkeypatch.setattr(SRC, "_CANONICAL_DEFAULT", canonical)
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    _write_csv(bundle / "BDVSTTRANS.csv", "REQNO,UNITSTAT", "B1,5")
+
+    assert SRC.resolve_bdvsttrans_path(bundle) == bundle / "BDVSTTRANS.csv"
+
+
+def test_absent_ledger_returns_empty(tmp_path: Path, monkeypatch) -> None:
+    # No override, no bundle copy, AND no canonical export -> empty, never a
+    # crash (the driver then falls through to the legacy pipeline).
+    monkeypatch.delenv("BBA_BDVSTTRANS_CSV", raising=False)
+    monkeypatch.setattr(SRC, "_CANONICAL_DEFAULT", tmp_path / "no_canonical.csv")
     bundle = tmp_path / "bundle"
     bundle.mkdir()
     assert SRC.resolve_bdvsttrans_path(bundle) is None
