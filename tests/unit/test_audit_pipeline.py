@@ -488,9 +488,7 @@ def test_pipeline_and_replay_classifier_input_twins_forward_declared_use_identic
     from bba.deterministic_classifier import ClassifierInputs, ClassifierResult
 
     ctx = _row_context(audit_id="declared-use-twin", declared_use="surgery")
-    monkeypatch.setattr(
-        feature_flags, "DECLARED_USETYPE_ENABLED", flag_enabled
-    )
+    monkeypatch.setattr(feature_flags, "DECLARED_USETYPE_ENABLED", flag_enabled)
     pipeline_inputs = _classifier_inputs_for(ctx)
     captured: list[ClassifierInputs] = []
     real_classify = classifier_module.classify

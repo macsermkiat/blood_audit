@@ -377,9 +377,7 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
             bypass_reason=BypassReason.NONE,
             cohort_threshold=threshold,
             rationale=(
-                "preop_defer_llm"
-                if structured_upcoming
-                else "preop_defer_llm_declared"
+                "preop_defer_llm" if structured_upcoming else "preop_defer_llm_declared"
             ),
         )
 

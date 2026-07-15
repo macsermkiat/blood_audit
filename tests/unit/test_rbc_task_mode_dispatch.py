@@ -230,9 +230,7 @@ def test_pipeline_dispatches_declared_preop_by_router_flag(
         declared_use="surgery",
     )
     monkeypatch.setattr(feature_flags, "DECLARED_USETYPE_ENABLED", True)
-    monkeypatch.setattr(
-        feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", router_enabled
-    )
+    monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", router_enabled)
     classifier_result = classify(_classifier_inputs_for(ctx))
     assert classifier_result.rationale == "preop_defer_llm_declared"
 
@@ -326,9 +324,7 @@ def test_resume_dispatches_declared_preop_by_router_flag(
         declared_use="type_screen",
     )
     monkeypatch.setattr(feature_flags, "DECLARED_USETYPE_ENABLED", True)
-    monkeypatch.setattr(
-        feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", router_enabled
-    )
+    monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", router_enabled)
 
     request = _rebuild_submission_requests(
         run=_batch_run(ctx.order.audit_id),
@@ -366,9 +362,7 @@ def test_replay_dispatches_declared_preop_by_router_flag(
         declared_use="surgery",
     )
     monkeypatch.setattr(feature_flags, "DECLARED_USETYPE_ENABLED", True)
-    monkeypatch.setattr(
-        feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", router_enabled
-    )
+    monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", router_enabled)
     classifier_result = classify(_classifier_inputs_for(ctx))
     assert classifier_result.rationale == "preop_defer_llm_declared"
     response = RawBatchResponse(

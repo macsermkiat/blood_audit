@@ -59,9 +59,7 @@ from bba.llm_client.models import (
 )
 
 
-_RESERVE_AHEAD_RATIONALES = frozenset(
-    {"preop_defer_llm", "preop_defer_llm_declared"}
-)
+_RESERVE_AHEAD_RATIONALES = frozenset({"preop_defer_llm", "preop_defer_llm_declared"})
 
 
 def resume_on_startup(

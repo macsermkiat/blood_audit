@@ -84,9 +84,7 @@ inject deterministic stubs (always-True for happy path, always-False
 for the adversarial-grounder case).
 """
 
-_RESERVE_AHEAD_RATIONALES = frozenset(
-    {"preop_defer_llm", "preop_defer_llm_declared"}
-)
+_RESERVE_AHEAD_RATIONALES = frozenset({"preop_defer_llm", "preop_defer_llm_declared"})
 
 
 def default_verifier(
@@ -1023,9 +1021,7 @@ def _classify_from_context(context: "PipelineRowContext") -> ClassifierResult:
                 else False
             ),
             declared_use=(
-                context.declared_use
-                if feature_flags.DECLARED_USETYPE_ENABLED
-                else None
+                context.declared_use if feature_flags.DECLARED_USETYPE_ENABLED else None
             ),
         )
     )
