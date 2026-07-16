@@ -69,12 +69,16 @@ from bba.audit_pipeline.pipeline import (
     _persist_injection_flagged_row,
     _persist_operation_unresolved_row,
     _persist_over_reservation_row,
+    _persist_platelet_over_reservation_row,
+    _persist_platelet_reservation_review_row,
     rbc_task_mode,
 )
 from bba.audit_pipeline.replay import (
     apply_batch_results,
     is_operation_unresolved,
     is_over_reservation,
+    is_platelet_over_reservation,
+    is_platelet_reservation_review,
 )
 from bba.audit_store import AuditStore, AuditStoreConfig
 from bba.cohort_detector import (
@@ -131,7 +135,9 @@ from bba.platelet_lookup import (
     parse_platelet_count,
 )
 from bba.preop_reservation import (
+    REVIEW_REASONS as PLATELET_REVIEW_REASONS,
     ReservationDecision,
+    evaluate_platelet_reservation,
     evaluate_reservation_with_notes,
     load_msbos_reference,
     reserved_units_by_component,
@@ -207,7 +213,7 @@ if RETURNS_LEDGER_ENABLED:
 if DECLARED_USETYPE_PILOT_ENABLED:
     CODE_VERSION += "+declared"
 if MSBOS_RESERVATION_PILOT_ENABLED:
-    CODE_VERSION += "+msbos2"
+    CODE_VERSION += "+msbos3"
 TZ_LOCAL = "Asia/Bangkok"
 INCPT_OPERATION_GROUPS = {"110", "111"}
 
@@ -1443,7 +1449,53 @@ def main() -> None:
                     platelet_count=plt_result.value_k_ul,
                 )
             )
-            if plt_clf.classification == "INSUFFICIENT_EVIDENCE":
+            # Compute the platelet reservation snapshot BEFORE the floor so a
+            # reserved-but-uncounted order is not swallowed by it (see the
+            # floor-defer note below). \x00AMBIG and a missing count are handled
+            # inside evaluate_platelet_reservation, so no special-casing here.
+            platelet_reservation_decision = None
+            if MSBOS_RESERVATION_PILOT_ENABLED and msbos_reference:
+                plt_op_events = _op_events(
+                    iptsumoprt,
+                    ipddchsumoprt,
+                    incpt,
+                    optract_dict,
+                    icd9_dict,
+                    order.an,
+                )
+                planned = _planned_op_icd9(plt_op_events, order.order_datetime)
+                reserved_plt = reserved_units_map.get(
+                    (
+                        order.hn.strip(),
+                        order.reqno.strip(),
+                        ComponentFamily.PLATELET,
+                    ),
+                    0,
+                )
+                platelet_reservation_decision = evaluate_platelet_reservation(
+                    reserved_units=reserved_plt,
+                    pre_op_count_k_ul=plt_result.value_k_ul,
+                    planned_icd9_nodot=planned,
+                    procedure_groups=msbos_reference.groups_for(planned),
+                    reference_hash=msbos_reference.content_hash,
+                )
+            # The platelet floor (INSUFFICIENT_EVIDENCE on a missing/unusable
+            # count) is terminal EXCEPT when the reservation overlay must fire: a
+            # reserved-but-uncounted order routes to `missing_pre_op_count`
+            # NEEDS_REVIEW (never-guess) and must reach the dispatch overlay
+            # rather than be dropped by this `continue`. Flag-off (decision is
+            # None) keeps the original floor precedence byte-for-byte.
+            _reservation_routes_to_terminal = (
+                platelet_reservation_decision is not None
+                and (
+                    platelet_reservation_decision.is_over
+                    or platelet_reservation_decision.reason in PLATELET_REVIEW_REASONS
+                )
+            )
+            if (
+                plt_clf.classification == "INSUFFICIENT_EVIDENCE"
+                and not _reservation_routes_to_terminal
+            ):
                 # Terminal: no LLM submission; deterministic-final row would be
                 # persisted by the pipeline library but is out-of-scope here.
                 continue
@@ -1476,6 +1528,7 @@ def main() -> None:
                     prompt_hash="0" * 64,
                     evidence_bundle_hash=bundle.bundle_hash,
                     evidence_chunks=tuple(plt_chunks),
+                    platelet_reservation_decision=platelet_reservation_decision,
                 )
             )
             continue
@@ -1978,6 +2031,7 @@ def main() -> None:
     llm_contexts: list[PipelineRowContext] = []
     over_reserved_ctxs: list[PipelineRowContext] = []
     operation_unresolved_ctxs: list[PipelineRowContext] = []
+    platelet_review_ctxs: list[PipelineRowContext] = []
     audit_store = AuditStore(
         AuditStoreConfig(
             root_dir=AUDIT_STORE_ROOT,
@@ -2008,6 +2062,24 @@ def main() -> None:
                     platelet_count=plt_count,
                 )
             )
+            if MSBOS_RESERVATION_PILOT_ENABLED:
+                plt_report = report_classifier_results[ctx.order.audit_id]
+                if is_platelet_over_reservation(
+                    classifier_result=plt_report, context=ctx
+                ):
+                    _persist_platelet_over_reservation_row(
+                        ctx, audit_store=audit_store, run_id=RUN_ID
+                    )
+                    over_reserved_ctxs.append(ctx)
+                    continue
+                if is_platelet_reservation_review(
+                    classifier_result=plt_report, context=ctx
+                ):
+                    _persist_platelet_reservation_review_row(
+                        ctx, audit_store=audit_store, run_id=RUN_ID
+                    )
+                    platelet_review_ctxs.append(ctx)
+                    continue
             llm_contexts.append(ctx)
             continue
         periop = ctx.periop_summary
@@ -2078,10 +2150,19 @@ def main() -> None:
             "  operation-unresolved (not submitted, NEEDS_REVIEW): "
             f"{len(operation_unresolved_ctxs)}"
         )
+        print(
+            "  platelet-reservation-review (not submitted, NEEDS_REVIEW): "
+            f"{len(platelet_review_ctxs)}"
+        )
     print(f"\nLLM-bound: {len(llm_contexts)} / {len(contexts)}")
     # Over-reserved rows are persisted but not submitted; a run filtered to only
     # such REQNOs still has verdicts to report, so it must not exit here (#163).
-    if not llm_contexts and not over_reserved_ctxs and not operation_unresolved_ctxs:
+    if (
+        not llm_contexts
+        and not over_reserved_ctxs
+        and not operation_unresolved_ctxs
+        and not platelet_review_ctxs
+    ):
         sys.exit("nothing to submit")
 
     submissions: list[BatchSubmissionRequest] = []
@@ -2243,6 +2324,7 @@ def main() -> None:
         *llm_contexts,
         *over_reserved_ctxs,
         *operation_unresolved_ctxs,
+        *platelet_review_ctxs,
     ]
     for ctx in reported_ctxs:
         det = report_classifier_results[ctx.order.audit_id]

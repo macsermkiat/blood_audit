@@ -63,6 +63,7 @@ from bba.platelet_guardrail import (
     platelet_overclear_suspect,
 )
 from bba.platelet_guardrail.models import PlateletHardSignals
+from bba.preop_reservation.platelet_evaluate import REVIEW_REASONS
 from bba.quote_grounder.layers import (
     contiguous_match,
     find_cited_source,
@@ -151,6 +152,7 @@ so a reviewer dashboard can triage the two failure modes separately."""
 PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON = "preop_reservation_unconfirmed"
 PREOP_OVER_RESERVATION_REVIEW_REASON = "preop_over_reservation"
 OPERATION_UNRESOLVED_REVIEW_REASON = "operation_unresolved"
+PLATELET_RESERVATION_REVIEW_REASON = "platelet_reservation_review"
 ADMINISTRATION_CONTRADICTION_REVIEW_REASON = "administration_signal_contradiction"
 
 _RETURNS_TERMINALS = frozenset({"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"})
@@ -176,6 +178,34 @@ def is_operation_unresolved(
         return False
     decision = context.reservation_decision
     if decision is None or decision.reason != "operation_unresolved":
+        return False
+    return classifier_result.classification not in _RETURNS_TERMINALS
+
+
+def is_platelet_over_reservation(
+    *,
+    classifier_result: ClassifierResult | PlateletClassifierResult,
+    context: PipelineRowContext,
+) -> bool:
+    """Read the platelet over-reservation snapshot unless returns outranks it."""
+    if not feature_flags.MSBOS_RESERVATION_ENABLED:
+        return False
+    decision = context.platelet_reservation_decision
+    if decision is None or not decision.is_over:
+        return False
+    return classifier_result.classification not in _RETURNS_TERMINALS
+
+
+def is_platelet_reservation_review(
+    *,
+    classifier_result: ClassifierResult | PlateletClassifierResult,
+    context: PipelineRowContext,
+) -> bool:
+    """True iff the platelet reservation snapshot carries a review reason."""
+    if not feature_flags.MSBOS_RESERVATION_ENABLED:
+        return False
+    decision = context.platelet_reservation_decision
+    if decision is None or decision.reason not in REVIEW_REASONS:
         return False
     return classifier_result.classification not in _RETURNS_TERMINALS
 
@@ -1595,6 +1625,40 @@ def _audit_row_for_operation_unresolved(
     )
 
 
+def _audit_row_for_platelet_reservation_review(
+    *,
+    run_id: str,
+    context: PipelineRowContext,
+    classifier_result: ClassifierResult,
+    review_reason: str,
+    verifier_pass: bool,
+    verifier_retries: int,
+    model_id: str,
+    reasoning_en: str,
+    reasoning_th: str,
+    indications: tuple[dict[str, object], ...],
+    negative_evidence: tuple[str, ...],
+    confidence: float,
+    escalated: bool,
+) -> AuditRow:
+    """Construct NEEDS_REVIEW for an unsigned platelet reservation route."""
+    return _audit_row_for_needs_review(
+        run_id=run_id,
+        context=context,
+        classifier_result=classifier_result,
+        review_reason=PLATELET_RESERVATION_REVIEW_REASON,
+        verifier_pass=verifier_pass,
+        verifier_retries=verifier_retries,
+        model_id=model_id,
+        reasoning_en=reasoning_en,
+        reasoning_th=reasoning_th,
+        indications=indications,
+        negative_evidence=negative_evidence,
+        confidence=confidence,
+        escalated=escalated,
+    )
+
+
 def _build_llm_call(
     result: BatchSubmissionResult, *, attempt_index: int, run_id: str
 ) -> LlmCall:
@@ -1908,10 +1972,13 @@ __all__ = [
     "PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON",
     "PERIOP_GUARDRAIL_MIN_EBL_ML",
     "PERIOP_OVERCLEAR_WINDOW_HOURS",
+    "PLATELET_RESERVATION_REVIEW_REASON",
     "Verifier",
     "apply_batch_results",
     "default_verifier",
     "is_over_reservation",
+    "is_platelet_over_reservation",
+    "is_platelet_reservation_review",
     "llm_overclear_suspect",
     "periop_contradiction",
     "select_winning_attempt",

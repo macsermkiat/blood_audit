@@ -1,4 +1,4 @@
-"""MSBOS pre-op RBC reservation evaluation."""
+"""Pre-op blood-component reservation evaluation."""
 
 from __future__ import annotations
 
@@ -13,6 +13,22 @@ from bba.preop_reservation.models import (
     MsbosRow,
     ReservationDecision,
 )
+from bba.preop_reservation.platelet_evaluate import (
+    REVIEW_REASONS,
+    PlateletReservationDecision,
+    PlateletReservationReason,
+    evaluate_platelet_reservation,
+    platelet_reservation_verdict_for_category,
+)
+from bba.preop_reservation.platelet_thresholds import (
+    CATEGORY_SEED_STATUS,
+    MNS_HIGH_RISK_CEILING_PER_UL,
+    MNS_THRESHOLD_PER_UL,
+    PROCEDURE_GROUP_TO_CATEGORY,
+    PlateletCategory,
+    SeedStatus,
+    category_for_groups,
+)
 from bba.preop_reservation.reference import (
     MsbosReference,
     MsbosReferenceError,
@@ -25,9 +41,21 @@ __all__: Sequence[str] = (
     "MsbosReference",
     "MsbosReferenceError",
     "MsbosRow",
+    "CATEGORY_SEED_STATUS",
+    "MNS_HIGH_RISK_CEILING_PER_UL",
+    "MNS_THRESHOLD_PER_UL",
+    "PROCEDURE_GROUP_TO_CATEGORY",
+    "PlateletCategory",
+    "PlateletReservationDecision",
+    "PlateletReservationReason",
+    "REVIEW_REASONS",
     "ReservationDecision",
+    "SeedStatus",
+    "category_for_groups",
+    "evaluate_platelet_reservation",
     "evaluate_reservation",
     "evaluate_reservation_with_notes",
     "load_msbos_reference",
+    "platelet_reservation_verdict_for_category",
     "reserved_units_by_component",
 )
