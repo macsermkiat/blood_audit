@@ -649,10 +649,58 @@ def test_cli_writes_deterministic_json_without_mutating_feature_flag(
     assert artifact["provenance"]["total_reservation_markers"] == 1
     assert "timestamp" not in artifact["provenance"]
     assert stdout.count("not population coverage") == 2
-    assert "RECOMMENDATION: HOLD" in stdout
+    # Post-go-live (#167): the blanket HOLD is gone; a clean reconciliation drives
+    # a PASS recommendation with precision framed as a tracked follow-up.
+    assert "RECOMMENDATION: Returns reconciliation PASS" in stdout
+    assert "tracked post-go-live follow-up" in stdout
+    assert "HOLD" not in stdout
     assert output.read_text(encoding="utf-8") == json.dumps(
         artifact, indent=2, sort_keys=True, ensure_ascii=False
     )
+
+
+def test_cli_recommends_investigate_on_returns_double_fire(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Arrange — an over-marker whose committed row is a returns terminal is a
+    # double-fire; the report must recommend INVESTIGATE, not PASS.
+    module = _load_cli()
+    row = _row("double-fire", "RETURNED_NOT_TRANSFUSED")
+    call = _call("double-fire", "over_reservation")
+
+    class FakeStore:
+        def __init__(self, _config: object) -> None:
+            pass
+
+        def read_audit_results(
+            self, run_id: str | None, code_version: str | None
+        ) -> tuple[AuditRow, ...]:
+            return (row,)
+
+        def read_llm_calls(
+            self, run_id: str | None, code_version: str | None
+        ) -> tuple[LlmCall, ...]:
+            return (call,)
+
+    store_dir = tmp_path / "store"
+    store_dir.mkdir()
+    monkeypatch.setattr(module, "AuditStore", FakeStore)
+    monkeypatch.setenv("BBA_AUDIT_STORE_DIR", str(store_dir))
+    monkeypatch.setenv("BBA_RUN_ID", _RUN_ID)
+    monkeypatch.setenv("BBA_CODE_VERSION", _CODE_VERSION)
+    monkeypatch.setenv("BBA_MSBOS_REPORT_OUT", str(tmp_path / "report.json"))
+
+    # Act
+    exit_code = module.main()
+    stdout = capsys.readouterr().out
+
+    # Assert
+    assert exit_code == 0
+    assert "RECOMMENDATION: INVESTIGATE — returns double-fire detected" in stdout
+    assert "double-fire" in stdout
+    assert "PASS" not in stdout
 
 
 def test_cli_refuses_output_inside_audit_store(

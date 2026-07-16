@@ -1,8 +1,9 @@
 """Runtime feature flags for bba.
 
 Most flags default to OFF (False); ``RETURNS_LEDGER_ENABLED`` (returns-ledger
-go-live #138) and ``DECLARED_USETYPE_ENABLED`` (declared-usetype go-live
-2026-07-15) are default-ON. Each flag's default is documented on the flag
+go-live #138), ``DECLARED_USETYPE_ENABLED`` (declared-usetype go-live
+2026-07-15), and ``MSBOS_RESERVATION_ENABLED`` (MSBOS reservation go-live
+2026-07-16, #167) are default-ON. Each flag's default is documented on the flag
 itself. Defining the contracts here keeps feature state in one place.
 
 Flags
@@ -21,7 +22,8 @@ DECLARED_USETYPE_ENABLED
     Gates the declared surgical-intent signal from BDVSTDT.USETYPE. Default:
     True (go-live 2026-07-15).
 MSBOS_RESERVATION_ENABLED
-    Gates the MSBOS pre-op reservation-appropriateness arm. Default: False.
+    Gates the MSBOS pre-op reservation-appropriateness arm. Default: True
+    (go-live 2026-07-16, #167).
 """
 
 from __future__ import annotations
@@ -67,18 +69,21 @@ leave it ``None`` are unaffected. Set ``BBA_PILOT_DECLARED_USETYPE=0`` to force
 it off for a pilot run.
 """
 
-MSBOS_RESERVATION_ENABLED: bool = False
-"""Enable the MSBOS pre-op reservation-appropriateness arm (default: OFF).
+MSBOS_RESERVATION_ENABLED: bool = True
+"""Enable the MSBOS pre-op reservation-appropriateness arm (default: ON).
 
-Spec MSBOS, tickets #162-#166. When enabled (via the pilot boundary override
-``BBA_PILOT_MSBOS_RESERVATION``), the pilot leg emits clinical terminal rows:
-the RBC over-reservation verdict ``PREOP_OVER_RESERVATION`` (T1-T3, #163-#165)
-and the platelet reservation verdict/review (T4, #166). This is NOT inert
-scaffolding. The platelet thresholds are now CLINICIAN-SIGNED (KCMH Transfusion
-Committee worksheet, T4/#166); the flag nonetheless stays default-OFF because
-enabling it is a separate deliberate go-live step (Section E: "remains behind
-the default-OFF flag") and this single flag also gates the RBC path, which has
-its own open committee item (the T2 crossmatch wrinkle).
+Spec MSBOS, tickets #162-#167. When enabled, the pilot leg emits clinical
+terminal rows: the RBC over-reservation verdict ``PREOP_OVER_RESERVATION``
+(T1-T3, #163-#165) and the platelet reservation verdict/review (T4, #166).
+
+Default-ON since the MSBOS reservation go-live (2026-07-16): the KCMH Transfusion
+Committee signed off on the T5 committee pilot report (T5/#167, the go-live gate),
+the platelet thresholds are CLINICIAN-SIGNED (T4/#166), and the RBC-path T2
+crossmatch wrinkle is resolved (committee ruling: keep the strict >0 crossmatch
+proxy, ignore any recommended_units the reference lists for a T/S item). The
+library batch pipeline stays inert regardless (it never populates a reservation
+snapshot, so the overlays no-op there). Set ``BBA_PILOT_MSBOS_RESERVATION=0`` to
+force it off for a pilot run.
 """
 
 __all__: Sequence[str] = (

@@ -42,6 +42,12 @@ def _decide_from_row(
         # units is a compliant screen-only reservation. This makes the
         # crossmatch-vs-screen status always establishable, so it never asserts
         # over on absent unit data.
+        #
+        # Committee ruling (T2 wrinkle resolved, #167): keep the strict >0 rule
+        # and ignore any recommended_units the reference lists for a T/S item.
+        # ``row.recommended_units`` is already normalised to 0 at reference
+        # construction (reference.py), so the snapshot records 0, never the
+        # reference figure, and unit-only-differing T/S rows resolve unambiguously.
         if reserved_units > 0:
             return decision(reason="over_type_and_screen_crossmatched", is_over=True)
         return decision(reason="type_and_screen_screen_only")

@@ -97,6 +97,14 @@ def _reference_from_rows(
             raise MsbosReferenceError(
                 f"malformed schedule rejected at row {row_number}: {exc}"
             ) from exc
+        if token == "T/S":
+            # Committee ruling (T2 wrinkle, #167): recommended_units is meaningless
+            # for a Type & Screen (screen only, zero units crossmatched), so it is
+            # ignored. Normalising to 0 at construction collapses T/S rows that
+            # differ ONLY in units (e.g. codes 2261 / 8180) to one recommendation,
+            # so resolve() yields the unambiguous over-if-reserved verdict instead
+            # of a spurious ambiguity that would route to NEEDS_REVIEW.
+            units = 0
         code = row["icd9_code_nodot"].strip()
         if not code:
             continue

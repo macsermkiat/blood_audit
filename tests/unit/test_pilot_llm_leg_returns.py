@@ -181,9 +181,10 @@ def test_llm_leg_code_version_is_flag_sensitive(monkeypatch) -> None:
     identity). The flag is captured at import, so each fresh load reflects it."""
     import bba.feature_flags as feature_flags
 
-    # Isolate the returns flag: force the declared-usetype seam off (it defaults
-    # to the now-ON library flag and would otherwise add "+declared").
+    # Isolate the returns flag: force the other now-ON default seams off so they
+    # do not add their own CODE_VERSION tokens ("+declared", "+msbos5").
     monkeypatch.setenv("BBA_PILOT_DECLARED_USETYPE", "0")
+    monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", "0")
 
     monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", True)
     assert _load_llm_leg().CODE_VERSION == "pilot-mini+returns"

@@ -21,12 +21,28 @@ from bba.audit_store import AuditStore, AuditStoreConfig
 from bba.preop_reservation.pilot_report import (
     MsbosReservationPilotReport,
     PilotReportError,
+    ReconciliationSection,
     build_pilot_report,
 )
 
-_HOLD_RECOMMENDATION = (
-    "HOLD — over-reservation precision pending a clinician-validated sample"
-)
+
+def _recommendation(reconciliation: ReconciliationSection) -> str:
+    """Derive the committee recommendation from the returns reconciliation.
+
+    Post-go-live (#167, committee sign-off 2026-07-16) this report is a
+    monitoring artifact, not a pre-go-live gate: a returns double-fire is the one
+    actionable defect it can detect, so it drives the recommendation. Over-
+    reservation precision remains data-blocked and is surfaced as a tracked
+    follow-up rather than a blanket HOLD that would contradict the live flag.
+    """
+    if reconciliation.status == "FAIL":
+        ids = ", ".join(reconciliation.double_fire_ids)
+        return f"INVESTIGATE — returns double-fire detected: {ids}"
+    return (
+        "Returns reconciliation PASS — no double-fires. Over-reservation precision "
+        "remains PENDING a clinician-validated sample (tracked post-go-live "
+        "follow-up, not a go-live blocker)."
+    )
 
 
 def _audit_store_path() -> Path | None:
@@ -95,7 +111,7 @@ def _print_summary(report: MsbosReservationPilotReport, artifact: Path) -> None:
     )
     if reconciliation.double_fire_ids:
         print(f"  Double-fire audit_ids: {', '.join(reconciliation.double_fire_ids)}")
-    print(f"RECOMMENDATION: {_HOLD_RECOMMENDATION}")
+    print(f"RECOMMENDATION: {_recommendation(reconciliation)}")
     print(f"JSON artifact: {artifact}")
 
 
