@@ -182,7 +182,7 @@ def test_llm_leg_code_version_is_flag_sensitive(monkeypatch) -> None:
     import bba.feature_flags as feature_flags
 
     # Isolate the returns flag: force the other now-ON default seams off so they
-    # do not add their own CODE_VERSION tokens ("+declared", "+msbos4").
+    # do not add their own CODE_VERSION tokens ("+declared", "+msbos5").
     monkeypatch.setenv("BBA_PILOT_DECLARED_USETYPE", "0")
     monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", "0")
 

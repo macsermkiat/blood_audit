@@ -57,8 +57,8 @@ def test_run_llm_leg_msbos_env_override(
 
     assert module.MSBOS_RESERVATION_PILOT_ENABLED is expected
     tokens = module.CODE_VERSION.split("+")
-    assert ("msbos4" in tokens) is expected, (
-        "flag-on runs need a fresh T4 cache identity"
+    assert ("msbos5" in tokens) is expected, (
+        "flag-on runs need a fresh reservation cache identity"
     )
     assert "msbos" not in tokens, (
         "the retired T2 token must not survive as a standalone cache identity"
@@ -69,14 +69,14 @@ def test_run_llm_leg_msbos_unset_uses_library_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # With no env override the pilot leg follows the library default, which is
-    # ON since the MSBOS go-live (#167): a fresh T4 cache identity, no standalone
-    # retired-T2 token.
+    # ON since the MSBOS go-live (#167): a fresh reservation cache identity, no
+    # standalone retired-T2 token.
     monkeypatch.delenv("BBA_PILOT_MSBOS_RESERVATION", raising=False)
 
     module = _load_run_llm_leg("pilot_run_llm_leg_msbos_default")
 
     assert module.MSBOS_RESERVATION_PILOT_ENABLED is True
-    assert "msbos4" in module.CODE_VERSION.split("+")
+    assert "msbos5" in module.CODE_VERSION.split("+")
     assert "msbos" not in module.CODE_VERSION.split("+")
     assert (
         module.MSBOS_RESERVATION_PILOT_ENABLED
@@ -102,7 +102,7 @@ def test_msbos_flag_off_serialized_schemas_are_frozen(
         + RANKING_CSV_COLUMNS
     )
     assert llm_module.MSBOS_RESERVATION_PILOT_ENABLED is False
-    assert "msbos4" not in llm_module.CODE_VERSION.split("+")
+    assert "msbos5" not in llm_module.CODE_VERSION.split("+")
     assert not any(
         marker in name
         for name in serialized_columns

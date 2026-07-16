@@ -213,7 +213,12 @@ if RETURNS_LEDGER_ENABLED:
 if DECLARED_USETYPE_PILOT_ENABLED:
     CODE_VERSION += "+declared"
 if MSBOS_RESERVATION_PILOT_ENABLED:
-    CODE_VERSION += "+msbos4"
+    # +msbos5 (#167): the T/S unit-normalization correction changes the verdict
+    # for unit-only-conflicting T/S codes (e.g. 2261 / 8180) from NEEDS_REVIEW to
+    # PREOP_OVER_RESERVATION, so it needs a fresh code identity — the audit store
+    # is idempotent on (run_id, audit_id, code_version), and a re-run under the
+    # old +msbos4 token would silently retain the pre-correction verdict.
+    CODE_VERSION += "+msbos5"
 TZ_LOCAL = "Asia/Bangkok"
 INCPT_OPERATION_GROUPS = {"110", "111"}
 
