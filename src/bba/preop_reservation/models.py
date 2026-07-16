@@ -15,6 +15,7 @@ ReservationReason = Literal[
     "type_and_screen_screen_only",
     "unresolved_code",
     "ambiguous_code",
+    "operation_unresolved",
     "no_planned_op",
     "ambiguous_planned_op",
 ]
@@ -29,8 +30,18 @@ class MsbosRow(BaseModel):
     recommended_units: int = Field(ge=0)
 
 
+class CandidateOperation(BaseModel):
+    """One raw MSBOS row for a code, carrying its operation name for note disambiguation."""
+
+    model_config = ConfigDict(frozen=True)
+
+    operation: str
+    msbos: MsbosToken
+    recommended_units: int = Field(ge=0)
+
+
 class ReservationDecision(BaseModel):
-    """Durable per-order snapshot of the MSBOS reservation judgment."""
+    """Frozen per-order, in-run snapshot of the MSBOS reservation judgment."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -41,9 +52,11 @@ class ReservationDecision(BaseModel):
     is_over: bool = False
     reason: ReservationReason
     reference_hash: str
+    note_resolved: bool = False
 
 
 __all__ = [
+    "CandidateOperation",
     "MsbosRow",
     "MsbosToken",
     "ReservationDecision",

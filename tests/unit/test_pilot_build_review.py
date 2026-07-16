@@ -24,6 +24,7 @@ def _render_empty_review(
     monkeypatch: pytest.MonkeyPatch,
     *,
     returns_enabled: bool,
+    msbos_enabled: bool = False,
 ) -> bytes:
     bundle = root / "bundle"
     bundle.mkdir(parents=True)
@@ -54,6 +55,7 @@ def _render_empty_review(
     monkeypatch.setattr(module, "ICD10_DICT_CSV", root / "missing-icd10.csv")
     monkeypatch.setattr(module, "OUT", output)
     monkeypatch.setattr(module, "RETURNS_LEDGER_ENABLED", returns_enabled)
+    monkeypatch.setattr(module, "MSBOS_RESERVATION_PILOT_ENABLED", msbos_enabled)
     module.main()
     return output.read_bytes()
 
@@ -86,3 +88,25 @@ def test_flag_on_review_includes_returns_presentation(
     assert "cls-periop_transfusion_exempt" in rendered
     assert "<dt>PERIOP_TRANSFUSION_EXEMPT</dt>" in rendered
     assert "Peri-op transfusion \u2014 exempt (excluded)" in rendered
+
+
+def test_flag_off_review_omits_operation_unresolved_glossary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Flag-off byte parity: the T3 glossary entry must not leak into review.html
+    # when the MSBOS reservation pilot is disabled.
+    module = _load_build_review()
+    rendered = _render_empty_review(
+        module, tmp_path, monkeypatch, returns_enabled=True, msbos_enabled=False
+    ).decode()
+    assert "<dt>operation_unresolved</dt>" not in rendered
+
+
+def test_flag_on_review_includes_operation_unresolved_glossary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_build_review()
+    rendered = _render_empty_review(
+        module, tmp_path, monkeypatch, returns_enabled=True, msbos_enabled=True
+    ).decode()
+    assert "<dt>operation_unresolved</dt>" in rendered

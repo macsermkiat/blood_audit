@@ -2,32 +2,54 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from bba.preop_reservation.models import (
     MsbosRow,
     ReservationDecision,
     ReservationReason,
 )
+from bba.preop_reservation.note_operation import resolve_operation_from_notes
 from bba.preop_reservation.reference import MsbosReference
 
 
-def _resolved_decision(
+def _decide_from_row(
     *,
-    code: str,
+    row: MsbosRow,
     reserved_units: int,
-    recommendation: MsbosRow,
-    reference: MsbosReference,
-    reason: ReservationReason,
-    is_over: bool = False,
+    resolved_icd9: str,
+    reference_hash: str,
+    note_resolved: bool,
 ) -> ReservationDecision:
-    return ReservationDecision(
-        resolved_icd9=code,
-        msbos=recommendation.msbos,
-        recommended_units=recommendation.recommended_units,
-        reserved_units=reserved_units,
-        is_over=is_over,
-        reason=reason,
-        reference_hash=reference.content_hash,
-    )
+    def decision(
+        *, reason: ReservationReason, is_over: bool = False
+    ) -> ReservationDecision:
+        return ReservationDecision(
+            resolved_icd9=resolved_icd9,
+            msbos=row.msbos,
+            recommended_units=row.recommended_units,
+            reserved_units=reserved_units,
+            is_over=is_over,
+            reason=reason,
+            reference_hash=reference_hash,
+            note_resolved=note_resolved,
+        )
+
+    if row.msbos == "T/S":
+        # T2 (#164): a Type & Screen recommends screening only, no crossmatch.
+        # The chosen crossmatch signal is the reserved-unit count (reserved_units
+        # proxy): reserving any physical RBC unit is over-preparation, while zero
+        # units is a compliant screen-only reservation. This makes the
+        # crossmatch-vs-screen status always establishable, so it never asserts
+        # over on absent unit data.
+        if reserved_units > 0:
+            return decision(reason="over_type_and_screen_crossmatched", is_over=True)
+        return decision(reason="type_and_screen_screen_only")
+    if row.msbos == "none" and reserved_units > 0:
+        return decision(reason="over_none", is_over=True)
+    if row.msbos == "G/M" and reserved_units > row.recommended_units:
+        return decision(reason="over_gm_excess", is_over=True)
+    return decision(reason="within_recommendation")
 
 
 def evaluate_reservation(
@@ -61,57 +83,50 @@ def evaluate_reservation(
             reference_hash=reference.content_hash,
         )
 
-    if recommendation.msbos == "T/S":
-        # T2 (#164): a Type & Screen recommends screening only, no crossmatch.
-        # The chosen crossmatch signal is the reserved-unit count (reserved_units
-        # proxy): reserving any physical RBC unit is over-preparation, while zero
-        # units is a compliant screen-only reservation. This makes the
-        # crossmatch-vs-screen status always establishable, so it never asserts
-        # over on absent unit data.
-        if reserved_units > 0:
-            return _resolved_decision(
-                code=code,
-                reserved_units=reserved_units,
-                recommendation=recommendation,
-                reference=reference,
-                is_over=True,
-                reason="over_type_and_screen_crossmatched",
-            )
-        return _resolved_decision(
-            code=code,
-            reserved_units=reserved_units,
-            recommendation=recommendation,
-            reference=reference,
-            reason="type_and_screen_screen_only",
-        )
-    if recommendation.msbos == "none" and reserved_units > 0:
-        return _resolved_decision(
-            code=code,
-            reserved_units=reserved_units,
-            recommendation=recommendation,
-            reference=reference,
-            is_over=True,
-            reason="over_none",
-        )
-    if (
-        recommendation.msbos == "G/M"
-        and reserved_units > recommendation.recommended_units
-    ):
-        return _resolved_decision(
-            code=code,
-            reserved_units=reserved_units,
-            recommendation=recommendation,
-            reference=reference,
-            is_over=True,
-            reason="over_gm_excess",
-        )
-    return _resolved_decision(
-        code=code,
+    return _decide_from_row(
+        row=recommendation,
         reserved_units=reserved_units,
-        recommendation=recommendation,
-        reference=reference,
-        reason="within_recommendation",
+        resolved_icd9=code,
+        reference_hash=reference.content_hash,
+        note_resolved=False,
     )
 
 
-__all__ = ["evaluate_reservation"]
+def evaluate_reservation_with_notes(
+    *,
+    reserved_units: int,
+    planned_icd9_nodot: str,
+    reference: MsbosReference,
+    note_texts: Sequence[str],
+) -> ReservationDecision:
+    """As evaluate_reservation, but disambiguate an ambiguous code via notes."""
+    decision = evaluate_reservation(
+        reserved_units=reserved_units,
+        planned_icd9_nodot=planned_icd9_nodot,
+        reference=reference,
+    )
+    if decision.reason != "ambiguous_code":
+        return decision
+
+    code = planned_icd9_nodot.strip()
+    row = resolve_operation_from_notes(
+        candidates=reference.candidates_for(code), note_texts=note_texts
+    )
+    if row is None:
+        return ReservationDecision(
+            resolved_icd9=code,
+            reserved_units=reserved_units,
+            is_over=False,
+            reason="operation_unresolved",
+            reference_hash=reference.content_hash,
+        )
+    return _decide_from_row(
+        row=row,
+        reserved_units=reserved_units,
+        resolved_icd9=code,
+        reference_hash=reference.content_hash,
+        note_resolved=True,
+    )
+
+
+__all__ = ["evaluate_reservation", "evaluate_reservation_with_notes"]

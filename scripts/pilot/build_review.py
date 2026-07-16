@@ -34,9 +34,13 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from bba.feature_flags import RETURNS_LEDGER_ENABLED
+from bba.feature_flags import MSBOS_RESERVATION_ENABLED, RETURNS_LEDGER_ENABLED
 
 WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
+_msbos_env = os.environ.get("BBA_PILOT_MSBOS_RESERVATION")
+MSBOS_RESERVATION_PILOT_ENABLED = (
+    _msbos_env == "1" if _msbos_env is not None else MSBOS_RESERVATION_ENABLED
+)
 BUNDLE = WORK / "bundle"
 LLM_REPORT = WORK / "llm_report.json"
 DET_REPORT = WORK / "report.csv"
@@ -191,6 +195,10 @@ _REVIEW_REASON_LABELS: dict[str, str] = {
         "Reserve-ahead pre-op crossmatch with no affirmative administration "
         "evidence — terminal, excluded from transfusion attribution; not queued "
         "for human review"
+    ),
+    "operation_unresolved": (
+        "Conflicting MSBOS operation code could not be uniquely resolved from "
+        "the windowed clinical notes — escalated to human review"
     ),
     "administration_signal_contradiction": (
         "Structured intra-op/EBL evidence indicates administration but the model "
@@ -1831,6 +1839,13 @@ def main() -> None:
         if RETURNS_LEDGER_ENABLED
         else ""
     )
+    msbos_glossary_html = (
+        "<dt>operation_unresolved</dt><dd>Conflicting MSBOS operation code "
+        "could not be uniquely resolved from the windowed clinical notes — "
+        "escalated to human review.</dd>\n"
+        if MSBOS_RESERVATION_PILOT_ENABLED
+        else ""
+    )
     head = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1903,7 +1918,7 @@ LLM: Anthropic Batch classification on structured evidence only.
 <dt>llm_native_review_asserted_inappropriate</dt><dd>Guardrail-converted INAPPROPRIATE: the model itself returned NEEDS_REVIEW with reasoning but no hard signal and no qualified bleed, so the verdict was converted to INAPPROPRIATE; the human-review flag is cleared.</dd>
 <dt>llm_overclear_suspect</dt><dd>Over-clear floored to NEEDS_REVIEW: historical rows from before the assert guardrail, plus the live paths where asserting is unsafe — a shape-drifted tool payload (missing or garbled indications/negative_evidence), or a grounded high-confidence citation of a hard indication the structured system cannot dismiss (ACS; documented shock/pressors the vitals snapshot cannot see; a structurally-true sub-floor Hb withheld as unreliable).</dd>
 <dt>periop_signal_contradiction</dt><dd>Peri-operative hard signal contradicts the LLM verdict — kept NEEDS_REVIEW for a human (the intended residual).</dd>
-<dt>hallucination_suspect</dt><dd>Quote verifier rejected every attempt — the cited quotes did not ground in the evidence bundle.</dd>
+{msbos_glossary_html}<dt>hallucination_suspect</dt><dd>Quote verifier rejected every attempt — the cited quotes did not ground in the evidence bundle.</dd>
 <dt>empty_reasoning</dt><dd>Final verdict carried empty reasoning — floored to NEEDS_REVIEW (a verdict with no rationale is never asserted).</dd>
 <dt>platelet_llm_overclear_suspect</dt><dd>Platelet-leg over-clear floored to NEEDS_REVIEW (platelet guardrail; the RBC assert path does not apply to platelets).</dd>
 <dt>malformed_json</dt><dd>Parse failure — the response was not valid JSON.</dd>

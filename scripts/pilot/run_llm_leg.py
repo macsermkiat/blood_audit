@@ -67,10 +67,15 @@ from bba.audit_orders import (
 from bba.audit_pipeline import PipelineRowContext
 from bba.audit_pipeline.pipeline import (
     _persist_injection_flagged_row,
+    _persist_operation_unresolved_row,
     _persist_over_reservation_row,
     rbc_task_mode,
 )
-from bba.audit_pipeline.replay import apply_batch_results, is_over_reservation
+from bba.audit_pipeline.replay import (
+    apply_batch_results,
+    is_operation_unresolved,
+    is_over_reservation,
+)
 from bba.audit_store import AuditStore, AuditStoreConfig
 from bba.cohort_detector import (
     CohortAssignment,
@@ -127,7 +132,7 @@ from bba.platelet_lookup import (
 )
 from bba.preop_reservation import (
     ReservationDecision,
-    evaluate_reservation,
+    evaluate_reservation_with_notes,
     load_msbos_reference,
     reserved_units_by_component,
 )
@@ -202,7 +207,7 @@ if RETURNS_LEDGER_ENABLED:
 if DECLARED_USETYPE_PILOT_ENABLED:
     CODE_VERSION += "+declared"
 if MSBOS_RESERVATION_PILOT_ENABLED:
-    CODE_VERSION += "+msbos"
+    CODE_VERSION += "+msbos2"
 TZ_LOCAL = "Asia/Bangkok"
 INCPT_OPERATION_GROUPS = {"110", "111"}
 
@@ -1776,6 +1781,12 @@ def main() -> None:
                 )
             )
 
+        note_texts = tuple(
+            chunk.text
+            for chunk in chunks
+            if chunk.source in ("IPDADMPROGRESS", "IPDNRFOCUSDT")
+        )
+
         next_eid = 801
         incpt_chunks, next_eid = _incpt_evidence_chunks(
             incpt,
@@ -1915,10 +1926,11 @@ def main() -> None:
                     reference_hash=msbos_reference.content_hash,
                 )
             else:
-                reservation_decision = evaluate_reservation(
+                reservation_decision = evaluate_reservation_with_notes(
                     reserved_units=reserved,
                     planned_icd9_nodot=planned,
                     reference=msbos_reference,
+                    note_texts=note_texts,
                 )
 
         contexts.append(
@@ -1965,6 +1977,7 @@ def main() -> None:
     report_classifier_results: dict[str, Any] = {}
     llm_contexts: list[PipelineRowContext] = []
     over_reserved_ctxs: list[PipelineRowContext] = []
+    operation_unresolved_ctxs: list[PipelineRowContext] = []
     audit_store = AuditStore(
         AuditStoreConfig(
             root_dir=AUDIT_STORE_ROOT,
@@ -2034,19 +2047,25 @@ def main() -> None:
             feature_flags.RESERVE_AHEAD_ROUTER_ENABLED
             and cres.rationale in _RESERVE_AHEAD_RATIONALES
         )
-        if (
-            MSBOS_RESERVATION_PILOT_ENABLED
-            and reserve_ahead
-            and is_over_reservation(classifier_result=cres, context=ctx)
-        ):
-            _persist_over_reservation_row(
-                ctx,
-                classifier_result=cres,
-                audit_store=audit_store,
-                run_id=RUN_ID,
-            )
-            over_reserved_ctxs.append(ctx)
-            continue
+        if MSBOS_RESERVATION_PILOT_ENABLED and reserve_ahead:
+            if is_over_reservation(classifier_result=cres, context=ctx):
+                _persist_over_reservation_row(
+                    ctx,
+                    classifier_result=cres,
+                    audit_store=audit_store,
+                    run_id=RUN_ID,
+                )
+                over_reserved_ctxs.append(ctx)
+                continue
+            if is_operation_unresolved(classifier_result=cres, context=ctx):
+                _persist_operation_unresolved_row(
+                    ctx,
+                    classifier_result=cres,
+                    audit_store=audit_store,
+                    run_id=RUN_ID,
+                )
+                operation_unresolved_ctxs.append(ctx)
+                continue
         if cres.classification not in DETERMINISTIC_FINAL:
             llm_contexts.append(ctx)
 
@@ -2054,10 +2073,15 @@ def main() -> None:
         "  over-reserved (not submitted, PREOP_OVER_RESERVATION): "
         f"{len(over_reserved_ctxs)}"
     )
+    if MSBOS_RESERVATION_PILOT_ENABLED:
+        print(
+            "  operation-unresolved (not submitted, NEEDS_REVIEW): "
+            f"{len(operation_unresolved_ctxs)}"
+        )
     print(f"\nLLM-bound: {len(llm_contexts)} / {len(contexts)}")
     # Over-reserved rows are persisted but not submitted; a run filtered to only
     # such REQNOs still has verdicts to report, so it must not exit here (#163).
-    if not llm_contexts and not over_reserved_ctxs:
+    if not llm_contexts and not over_reserved_ctxs and not operation_unresolved_ctxs:
         sys.exit("nothing to submit")
 
     submissions: list[BatchSubmissionRequest] = []
@@ -2215,7 +2239,11 @@ def main() -> None:
     # LLM submission; surface them in the console table and JSON report so the
     # deterministic verdict is not invisible to the review page (#163). Empty
     # when the flag is off, so a flag-off run is byte-identical.
-    reported_ctxs = [*llm_contexts, *over_reserved_ctxs]
+    reported_ctxs = [
+        *llm_contexts,
+        *over_reserved_ctxs,
+        *operation_unresolved_ctxs,
+    ]
     for ctx in reported_ctxs:
         det = report_classifier_results[ctx.order.audit_id]
         r = rows_by_id.get(ctx.order.audit_id)
