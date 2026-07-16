@@ -62,12 +62,27 @@ def evaluate_reservation(
         )
 
     if recommendation.msbos == "T/S":
+        # T2 (#164): a Type & Screen recommends screening only, no crossmatch.
+        # The chosen crossmatch signal is the reserved-unit count (reserved_units
+        # proxy): reserving any physical RBC unit is over-preparation, while zero
+        # units is a compliant screen-only reservation. This makes the
+        # crossmatch-vs-screen status always establishable, so it never asserts
+        # over on absent unit data.
+        if reserved_units > 0:
+            return _resolved_decision(
+                code=code,
+                reserved_units=reserved_units,
+                recommendation=recommendation,
+                reference=reference,
+                is_over=True,
+                reason="over_type_and_screen_crossmatched",
+            )
         return _resolved_decision(
             code=code,
             reserved_units=reserved_units,
             recommendation=recommendation,
             reference=reference,
-            reason="type_and_screen_deferred",
+            reason="type_and_screen_screen_only",
         )
     if recommendation.msbos == "none" and reserved_units > 0:
         return _resolved_decision(
