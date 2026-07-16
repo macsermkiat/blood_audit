@@ -68,12 +68,15 @@ def test_run_llm_leg_msbos_env_override(
 def test_run_llm_leg_msbos_unset_uses_library_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # With no env override the pilot leg follows the library default, which is
+    # ON since the MSBOS go-live (#167): a fresh T4 cache identity, no standalone
+    # retired-T2 token.
     monkeypatch.delenv("BBA_PILOT_MSBOS_RESERVATION", raising=False)
 
     module = _load_run_llm_leg("pilot_run_llm_leg_msbos_default")
 
-    assert module.MSBOS_RESERVATION_PILOT_ENABLED is False
-    assert "msbos4" not in module.CODE_VERSION.split("+")
+    assert module.MSBOS_RESERVATION_PILOT_ENABLED is True
+    assert "msbos4" in module.CODE_VERSION.split("+")
     assert "msbos" not in module.CODE_VERSION.split("+")
     assert (
         module.MSBOS_RESERVATION_PILOT_ENABLED
@@ -81,21 +84,16 @@ def test_run_llm_leg_msbos_unset_uses_library_default(
     )
 
 
-@pytest.mark.parametrize("env_value", [None, "0"])
+# Flag-off is now an explicit opt-out (BBA_PILOT_MSBOS_RESERVATION=0); the unset
+# default is ON post-go-live (#167), so it is no longer a flag-off case.
+@pytest.mark.parametrize("env_value", ["0"])
 def test_msbos_flag_off_serialized_schemas_are_frozen(
     monkeypatch: pytest.MonkeyPatch,
-    env_value: str | None,
+    env_value: str,
 ) -> None:
-    if env_value is None:
-        monkeypatch.delenv("BBA_PILOT_MSBOS_RESERVATION", raising=False)
-    else:
-        monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", env_value)
-    llm_module = _load_run_llm_leg(
-        f"pilot_run_llm_leg_msbos_schema_{env_value or 'default'}"
-    )
-    pipeline_module = _load_run_pipeline(
-        f"pilot_run_pipeline_msbos_schema_{env_value or 'default'}"
-    )
+    monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", env_value)
+    llm_module = _load_run_llm_leg(f"pilot_run_llm_leg_msbos_schema_{env_value}")
+    pipeline_module = _load_run_pipeline(f"pilot_run_pipeline_msbos_schema_{env_value}")
 
     serialized_columns = (
         tuple(pipeline_module.REPORT_FIELDNAMES)
@@ -121,18 +119,13 @@ def test_msbos_deterministic_final_vocabulary_is_inert_when_flag_off(
     assert "PREOP_OVER_RESERVATION" in module.DETERMINISTIC_FINAL
 
 
-@pytest.mark.parametrize("env_value", [None, "0"])
+@pytest.mark.parametrize("env_value", ["0"])
 def test_msbos_flag_off_never_loads_reference_or_reservations(
     monkeypatch: pytest.MonkeyPatch,
-    env_value: str | None,
+    env_value: str,
 ) -> None:
-    if env_value is None:
-        monkeypatch.delenv("BBA_PILOT_MSBOS_RESERVATION", raising=False)
-    else:
-        monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", env_value)
-    module = _load_run_llm_leg(
-        f"pilot_run_llm_leg_msbos_no_load_{env_value or 'default'}"
-    )
+    monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", env_value)
+    module = _load_run_llm_leg(f"pilot_run_llm_leg_msbos_no_load_{env_value}")
 
     def forbidden(*args: object, **kwargs: object) -> None:
         raise AssertionError("flag-off MSBOS loader/accessor was invoked")
