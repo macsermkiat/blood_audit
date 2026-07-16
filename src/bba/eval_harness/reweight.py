@@ -20,11 +20,13 @@ from bba.eval_harness.models import (
     StratifiedSample,
 )
 
+_INAPPROPRIATE_LIKE = ("INAPPROPRIATE", "PREOP_OVER_RESERVATION")
+
 
 def _case_inclusion_probability(
     case: AuditCase, *, base_pi: float, positive_pi: float
 ) -> float:
-    return positive_pi if case.pred_classification == "INAPPROPRIATE" else base_pi
+    return positive_pi if case.pred_classification in _INAPPROPRIATE_LIKE else base_pi
 
 
 def horvitz_thompson_prevalence(

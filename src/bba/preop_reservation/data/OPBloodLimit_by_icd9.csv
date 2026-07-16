@@ -1,0 +1,611 @@
+﻿icd9_code,icd9_code_nodot,specialty,sheet,procedure_group,operation,msbos,msbos_meaning,recommended_units
+00.80,0080,Orthopedics,Ortho,Arthroplasty,"TKA, revision TKA",T/S,Type and Screen,1
+00.81,0081,Orthopedics,Ortho,Arthroplasty,"TKA, revision TKA",T/S,Type and Screen,1
+00.82,0082,Orthopedics,Ortho,Arthroplasty,"TKA, revision TKA",T/S,Type and Screen,1
+00.83,0083,Orthopedics,Ortho,Arthroplasty,"TKA, revision TKA",T/S,Type and Screen,1
+00.84,0084,Orthopedics,Ortho,Arthroplasty,"TKA, revision TKA",T/S,Type and Screen,1
+01.24,0124,ENT (Otolaryngology),ENT,Head-Neck,Craniofacial resection,T/S,Type and Screen,2
+01.24,0124,ENT (Otolaryngology),ENT,Rhino,Craniofacial resection,T/S,Type and Screen,2
+01.24,0124,General Surgery,Sx,ศัลยกรรมระบบประสาท,Craniotomy (aneurysm),G/M,Group and Match (crossmatch),2
+01.24,0124,General Surgery,Sx,ศัลยกรรมระบบประสาท,Craniotomy (hematoma),none,No blood preparation,
+01.24,0124,General Surgery,Sx,ศัลยกรรมระบบประสาท,Craniotomy (tumor),G/M,Group and Match (crossmatch),4
+01.24,0124,ENT (Otolaryngology),ENT,Oto,Infratemporal fossa app,none,No blood preparation,
+01.25,0125,General Surgery,Sx,ศัลยกรรมระบบประสาท,Craniotomy (aneurysm),G/M,Group and Match (crossmatch),2
+01.25,0125,General Surgery,Sx,ศัลยกรรมระบบประสาท,Craniotomy (hematoma),none,No blood preparation,
+01.25,0125,General Surgery,Sx,ศัลยกรรมระบบประสาท,Craniotomy (tumor),G/M,Group and Match (crossmatch),4
+01.39,0139,General Surgery,Sx,ศัลยกรรมระบบประสาท,Craniotomy (tumor),G/M,Group and Match (crossmatch),4
+01.51,0151,General Surgery,Sx,ศัลยกรรมระบบประสาท,Craniotomy (tumor),G/M,Group and Match (crossmatch),4
+01.52,0152,General Surgery,Sx,ศัลยกรรมระบบประสาท,Craniotomy (tumor),G/M,Group and Match (crossmatch),4
+01.53,0153,General Surgery,Sx,ศัลยกรรมระบบประสาท,Craniotomy (tumor),G/M,Group and Match (crossmatch),4
+01.59,0159,ENT (Otolaryngology),ENT,Oto,CPA tumor surgery,none,No blood preparation,
+01.59,0159,General Surgery,Sx,ศัลยกรรมระบบประสาท,Craniotomy (tumor),G/M,Group and Match (crossmatch),4
+03.01,0301,General Surgery,Sx,ศัลยกรรมระบบประสาท,Minimally invasive (MIS) spine surgery 1-2 level,G/M,Group and Match (crossmatch),1
+03.01,0301,General Surgery,Sx,ศัลยกรรมระบบประสาท,Open spine surgery 1-2 level,G/M,Group and Match (crossmatch),2
+03.02,0302,General Surgery,Sx,ศัลยกรรมระบบประสาท,Minimally invasive (MIS) spine surgery 1-2 level,G/M,Group and Match (crossmatch),1
+03.02,0302,General Surgery,Sx,ศัลยกรรมระบบประสาท,Open spine surgery 1-2 level,G/M,Group and Match (crossmatch),2
+03.09,0309,General Surgery,Sx,ศัลยกรรมระบบประสาท,Minimally invasive (MIS) spine surgery 1-2 level,G/M,Group and Match (crossmatch),1
+03.09,0309,General Surgery,Sx,ศัลยกรรมระบบประสาท,Open spine surgery 1-2 level,G/M,Group and Match (crossmatch),2
+03.4,034,General Surgery,Sx,ศัลยกรรมระบบประสาท,Minimally invasive (MIS) spine surgery 1-2 level,G/M,Group and Match (crossmatch),1
+03.4,034,General Surgery,Sx,ศัลยกรรมระบบประสาท,Open spine surgery 1-2 level,G/M,Group and Match (crossmatch),2
+03.53,0353,General Surgery,Sx,ศัลยกรรมระบบประสาท,Minimally invasive (MIS) spine surgery 1-2 level,G/M,Group and Match (crossmatch),1
+03.53,0353,General Surgery,Sx,ศัลยกรรมระบบประสาท,Open spine surgery 1-2 level,G/M,Group and Match (crossmatch),2
+04.01,0401,ENT (Otolaryngology),ENT,Oto,CPA tumor surgery,none,No blood preparation,
+04.72,0472,ENT (Otolaryngology),ENT,Facial plastic,Facial reanimation surgery,none,No blood preparation,
+04.73,0473,ENT (Otolaryngology),ENT,Facial plastic,Facial reanimation surgery,none,No blood preparation,
+06.02,0602,ENT (Otolaryngology),ENT,Head-Neck,Thyroid/Parathyroid surgery,none,No blood preparation,
+06.02,0602,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : High risk bleeding,T/S,Type and Screen,
+06.02,0602,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : normal case,none,No blood preparation,
+06.09,0609,ENT (Otolaryngology),ENT,Head-Neck,Thyroid/Parathyroid surgery,none,No blood preparation,
+06.09,0609,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : High risk bleeding,T/S,Type and Screen,
+06.09,0609,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : normal case,none,No blood preparation,
+06.12,0612,ENT (Otolaryngology),ENT,Head-Neck,Thyroid/Parathyroid surgery,none,No blood preparation,
+06.12,0612,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : High risk bleeding,T/S,Type and Screen,
+06.12,0612,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : normal case,none,No blood preparation,
+06.13,0613,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : High risk bleeding,T/S,Type and Screen,
+06.13,0613,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : normal case,none,No blood preparation,
+06.19,0619,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : High risk bleeding,T/S,Type and Screen,
+06.19,0619,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : normal case,none,No blood preparation,
+06.2,062,ENT (Otolaryngology),ENT,Head-Neck,Thyroid/Parathyroid surgery,none,No blood preparation,
+06.2,062,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : High risk bleeding,T/S,Type and Screen,
+06.2,062,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : normal case,none,No blood preparation,
+06.31,0631,ENT (Otolaryngology),ENT,Head-Neck,Thyroid/Parathyroid surgery,none,No blood preparation,
+06.31,0631,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : High risk bleeding,T/S,Type and Screen,
+06.31,0631,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : normal case,none,No blood preparation,
+06.39,0639,ENT (Otolaryngology),ENT,Head-Neck,Thyroid/Parathyroid surgery,none,No blood preparation,
+06.39,0639,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : High risk bleeding,T/S,Type and Screen,
+06.39,0639,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : normal case,none,No blood preparation,
+06.4,064,ENT (Otolaryngology),ENT,Head-Neck,Thyroid/Parathyroid surgery,none,No blood preparation,
+06.4,064,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : High risk bleeding,T/S,Type and Screen,
+06.4,064,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : normal case,none,No blood preparation,
+06.50,0650,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : Combine median sternotomy,G/M,Group and Match (crossmatch),1
+06.51,0651,ENT (Otolaryngology),ENT,Head-Neck,Thyroid/Parathyroid surgery,none,No blood preparation,
+06.51,0651,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : Combine median sternotomy,G/M,Group and Match (crossmatch),1
+06.52,0652,ENT (Otolaryngology),ENT,Head-Neck,Thyroid/Parathyroid surgery,none,No blood preparation,
+06.52,0652,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : Combine median sternotomy,G/M,Group and Match (crossmatch),1
+06.7,067,ENT (Otolaryngology),ENT,Head-Neck,Thyroid/Parathyroid surgery,none,No blood preparation,
+06.81,0681,ENT (Otolaryngology),ENT,Head-Neck,Thyroid/Parathyroid surgery,none,No blood preparation,
+06.81,0681,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : High risk bleeding,T/S,Type and Screen,
+06.81,0681,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : normal case,none,No blood preparation,
+06.89,0689,ENT (Otolaryngology),ENT,Head-Neck,Thyroid/Parathyroid surgery,none,No blood preparation,
+06.89,0689,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : High risk bleeding,T/S,Type and Screen,
+06.89,0689,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : normal case,none,No blood preparation,
+06.91,0691,ENT (Otolaryngology),ENT,Head-Neck,Thyroid/Parathyroid surgery,none,No blood preparation,
+06.91,0691,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : High risk bleeding,T/S,Type and Screen,
+06.91,0691,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : normal case,none,No blood preparation,
+06.95,0695,ENT (Otolaryngology),ENT,Head-Neck,Thyroid/Parathyroid surgery,none,No blood preparation,
+06.95,0695,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : High risk bleeding,T/S,Type and Screen,
+06.95,0695,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : normal case,none,No blood preparation,
+06.98,0698,ENT (Otolaryngology),ENT,Head-Neck,Thyroid/Parathyroid surgery,none,No blood preparation,
+06.98,0698,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : High risk bleeding,T/S,Type and Screen,
+06.98,0698,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : normal case,none,No blood preparation,
+06.99,0699,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : High risk bleeding,T/S,Type and Screen,
+06.99,0699,General Surgery,Sx,ศัลยกรรมทั่วไป,Thyroid/parathyroid surgery : normal case,none,No blood preparation,
+07.14,0714,General Surgery,Sx,ศัลยกรรมระบบประสาท,Transsphenoidal surgery,G/M,Group and Match (crossmatch),1
+07.62,0762,General Surgery,Sx,ศัลยกรรมระบบประสาท,Transsphenoidal surgery,G/M,Group and Match (crossmatch),1
+07.63,0763,General Surgery,Sx,ศัลยกรรมระบบประสาท,Transsphenoidal surgery,G/M,Group and Match (crossmatch),1
+07.65,0765,General Surgery,Sx,ศัลยกรรมระบบประสาท,Transsphenoidal surgery,G/M,Group and Match (crossmatch),1
+07.68,0768,General Surgery,Sx,ศัลยกรรมระบบประสาท,Transsphenoidal surgery,G/M,Group and Match (crossmatch),1
+07.69,0769,General Surgery,Sx,ศัลยกรรมระบบประสาท,Transsphenoidal surgery,G/M,Group and Match (crossmatch),1
+07.71,0771,General Surgery,Sx,ศัลยกรรมระบบประสาท,Transsphenoidal surgery,G/M,Group and Match (crossmatch),1
+07.72,0772,General Surgery,Sx,ศัลยกรรมระบบประสาท,Transsphenoidal surgery,G/M,Group and Match (crossmatch),1
+07.79,0779,General Surgery,Sx,ศัลยกรรมระบบประสาท,Transsphenoidal surgery,G/M,Group and Match (crossmatch),1
+08.36,0836,ENT (Otolaryngology),ENT,Facial plastic,Blepharoplasty,none,No blood preparation,
+08.52,0852,ENT (Otolaryngology),ENT,Facial plastic,Blepharoplasty,none,No blood preparation,
+09.81,0981,ENT (Otolaryngology),ENT,Rhino,Endoscopic DCR,none,No blood preparation,
+17.43,1743,General Surgery,Sx,ศัลยกรรมทางเดินปัสสาวะ,Robotic-assisted laparoscopic prostatectomy (RALP),G/M,Group and Match (crossmatch),2
+18.31,1831,ENT (Otolaryngology),ENT,Oto,EAC surgery,none,No blood preparation,
+18.6,186,ENT (Otolaryngology),ENT,Oto,EAC surgery,none,No blood preparation,
+18.79,1879,ENT (Otolaryngology),ENT,Oto,EAC surgery,none,No blood preparation,
+18.9,189,ENT (Otolaryngology),ENT,Oto,EAC surgery,none,No blood preparation,
+19.11,1911,ENT (Otolaryngology),ENT,Oto,ME tumor surgery,none,No blood preparation,
+19.19,1919,ENT (Otolaryngology),ENT,Oto,ME tumor surgery,none,No blood preparation,
+19.21,1921,ENT (Otolaryngology),ENT,Oto,ME tumor surgery,none,No blood preparation,
+19.4,194,ENT (Otolaryngology),ENT,Oto,EAC surgery,none,No blood preparation,
+19.4,194,ENT (Otolaryngology),ENT,Oto,Myringotomy + PE tube,none,No blood preparation,
+19.52,1952,ENT (Otolaryngology),ENT,Oto,Tympanoplasty,none,No blood preparation,
+19.53,1953,ENT (Otolaryngology),ENT,Oto,Tympanoplasty,none,No blood preparation,
+19.54,1954,ENT (Otolaryngology),ENT,Oto,Tympanoplasty,none,No blood preparation,
+19.6,196,ENT (Otolaryngology),ENT,Oto,Tympanoplasty,none,No blood preparation,
+20.23,2023,ENT (Otolaryngology),ENT,Oto,ME tumor surgery,none,No blood preparation,
+20.39,2039,ENT (Otolaryngology),ENT,Oto,ME tumor surgery,none,No blood preparation,
+20.41,2041,ENT (Otolaryngology),ENT,Oto,Mastoidectomy,none,No blood preparation,
+20.42,2042,ENT (Otolaryngology),ENT,Oto,Mastoidectomy,none,No blood preparation,
+20.49,2049,ENT (Otolaryngology),ENT,Oto,Mastoidectomy,none,No blood preparation,
+20.51,2051,ENT (Otolaryngology),ENT,Oto,ME tumor surgery,none,No blood preparation,
+20.96,2096,ENT (Otolaryngology),ENT,Oto,Cochlear implant,none,No blood preparation,
+20.97,2097,ENT (Otolaryngology),ENT,Oto,Cochlear implant,none,No blood preparation,
+20.98,2098,ENT (Otolaryngology),ENT,Oto,Cochlear implant,none,No blood preparation,
+21.04,2104,ENT (Otolaryngology),ENT,Rhino,SPA ligation,T/S,Type and Screen,1
+21.05,2105,ENT (Otolaryngology),ENT,Rhino,SPA ligation,T/S,Type and Screen,1
+21.84,2184,ENT (Otolaryngology),ENT,Facial plastic,Opened rhinoplasty,none,No blood preparation,
+21.85,2185,ENT (Otolaryngology),ENT,Facial plastic,Opened rhinoplasty,none,No blood preparation,
+21.86,2186,ENT (Otolaryngology),ENT,Facial plastic,Closed rhinoplasty,none,No blood preparation,
+21.88,2188,ENT (Otolaryngology),ENT,Rhino,Septoplasty,none,No blood preparation,
+21.88,2188,ENT (Otolaryngology),ENT,Sleep,Septoplasty,none,No blood preparation,
+22.31,2231,ENT (Otolaryngology),ENT,Rhino,Fullhouse FESS,none,No blood preparation,
+22.31,2231,ENT (Otolaryngology),ENT,Rhino,Limited FESS,none,No blood preparation,
+22.41,2241,ENT (Otolaryngology),ENT,Rhino,Fullhouse FESS,none,No blood preparation,
+22.41,2241,ENT (Otolaryngology),ENT,Rhino,Limited FESS,none,No blood preparation,
+22.42,2242,ENT (Otolaryngology),ENT,Rhino,PNS tumor surgery,T/S,Type and Screen,1
+22.52,2252,ENT (Otolaryngology),ENT,Rhino,Fullhouse FESS,none,No blood preparation,
+22.52,2252,ENT (Otolaryngology),ENT,Rhino,Limited FESS,none,No blood preparation,
+22.60,2260,ENT (Otolaryngology),ENT,Rhino,PNS tumor surgery,T/S,Type and Screen,1
+22.61,2261,ENT (Otolaryngology),ENT,Head-Neck,Maxillectomy,T/S,Type and Screen,2
+22.61,2261,ENT (Otolaryngology),ENT,Rhino,PNS tumor surgery,T/S,Type and Screen,1
+22.62,2262,ENT (Otolaryngology),ENT,Rhino,Fullhouse FESS,none,No blood preparation,
+22.62,2262,ENT (Otolaryngology),ENT,Rhino,Limited FESS,none,No blood preparation,
+22.62,2262,ENT (Otolaryngology),ENT,Head-Neck,Maxillectomy,T/S,Type and Screen,2
+22.62,2262,ENT (Otolaryngology),ENT,Rhino,PNS tumor surgery,T/S,Type and Screen,1
+22.63,2263,ENT (Otolaryngology),ENT,Rhino,Fullhouse FESS,none,No blood preparation,
+22.63,2263,ENT (Otolaryngology),ENT,Rhino,Limited FESS,none,No blood preparation,
+22.64,2264,ENT (Otolaryngology),ENT,Rhino,Fullhouse FESS,none,No blood preparation,
+22.64,2264,ENT (Otolaryngology),ENT,Rhino,Limited FESS,none,No blood preparation,
+25.59,2559,ENT (Otolaryngology),ENT,Sleep,Genioglossal advancement,none,No blood preparation,
+26.30,2630,ENT (Otolaryngology),ENT,Head-Neck,Parotidectomy,none,No blood preparation,
+27.43,2743,ENT (Otolaryngology),ENT,Facial plastic,Scar revision surgery,none,No blood preparation,
+27.59,2759,ENT (Otolaryngology),ENT,Sleep,Genioglossal advancement,none,No blood preparation,
+27.61,2761,General Surgery,Sx,ศัลยกรรมตกแต่ง,Cleft palate,T/S,Type and Screen,
+27.62,2762,General Surgery,Sx,ศัลยกรรมตกแต่ง,Cleft palate,T/S,Type and Screen,
+27.63,2763,General Surgery,Sx,ศัลยกรรมตกแต่ง,Cleft palate,T/S,Type and Screen,
+27.69,2769,General Surgery,Sx,ศัลยกรรมตกแต่ง,Cleft palate,T/S,Type and Screen,
+27.72,2772,ENT (Otolaryngology),ENT,Sleep,UPPP,none,No blood preparation,
+27.73,2773,ENT (Otolaryngology),ENT,Sleep,UPPP,none,No blood preparation,
+27.79,2779,ENT (Otolaryngology),ENT,Sleep,UPPP,none,No blood preparation,
+27.99,2799,ENT (Otolaryngology),ENT,Head-Neck,Other operations on oral cavity,none,No blood preparation,
+28.2,282,ENT (Otolaryngology),ENT,Sleep,Tonsillectomy,none,No blood preparation,
+28.3,283,ENT (Otolaryngology),ENT,Sleep,Adenotonsillectomy,none,No blood preparation,
+29.39,2939,ENT (Otolaryngology),ENT,Head-Neck,Pharyngeal surgery,none,No blood preparation,
+29.4,294,ENT (Otolaryngology),ENT,Head-Neck,Pharyngeal surgery,none,No blood preparation,
+30.09,3009,ENT (Otolaryngology),ENT,Larynx,Laryngeal surgery,none,No blood preparation,
+30.09,3009,ENT (Otolaryngology),ENT,Head-Neck,Laryngectomy,none,No blood preparation,
+30.09,3009,ENT (Otolaryngology),ENT,Larynx,MicroDL + laser,none,No blood preparation,
+30.1,301,ENT (Otolaryngology),ENT,Larynx,Laryngeal surgery,none,No blood preparation,
+30.22,3022,ENT (Otolaryngology),ENT,Larynx,Laryngeal surgery,none,No blood preparation,
+30.29,3029,ENT (Otolaryngology),ENT,Larynx,Laryngeal surgery,none,No blood preparation,
+30.29,3029,ENT (Otolaryngology),ENT,Head-Neck,Laryngectomy,none,No blood preparation,
+30.3,303,ENT (Otolaryngology),ENT,Larynx,Laryngeal surgery,none,No blood preparation,
+30.3,303,ENT (Otolaryngology),ENT,Head-Neck,Laryngectomy,none,No blood preparation,
+30.4,304,ENT (Otolaryngology),ENT,Larynx,Laryngeal surgery,none,No blood preparation,
+30.4,304,ENT (Otolaryngology),ENT,Head-Neck,Laryngectomy,none,No blood preparation,
+31.29,3129,ENT (Otolaryngology),ENT,Larynx,Tracheal surgery,none,No blood preparation,
+31.3,313,ENT (Otolaryngology),ENT,Larynx,Laryngeal surgery,none,No blood preparation,
+31.3,313,ENT (Otolaryngology),ENT,Larynx,Tracheal surgery,none,No blood preparation,
+31.41,3141,ENT (Otolaryngology),ENT,Larynx,Tracheal surgery,none,No blood preparation,
+31.42,3142,ENT (Otolaryngology),ENT,Larynx,Direct laryngoscopy,none,No blood preparation,
+31.42,3142,ENT (Otolaryngology),ENT,Larynx,Laryngeal surgery,none,No blood preparation,
+31.42,3142,ENT (Otolaryngology),ENT,Larynx,Tracheal surgery,none,No blood preparation,
+31.45,3145,ENT (Otolaryngology),ENT,Larynx,Laryngeal surgery,none,No blood preparation,
+31.45,3145,ENT (Otolaryngology),ENT,Larynx,Tracheal surgery,none,No blood preparation,
+31.5,315,ENT (Otolaryngology),ENT,Larynx,Tracheal surgery,none,No blood preparation,
+31.61,3161,ENT (Otolaryngology),ENT,Larynx,Laryngeal surgery,none,No blood preparation,
+31.64,3164,ENT (Otolaryngology),ENT,Larynx,Laryngeal surgery,none,No blood preparation,
+31.69,3169,ENT (Otolaryngology),ENT,Larynx,Laryngeal surgery,none,No blood preparation,
+31.71,3171,ENT (Otolaryngology),ENT,Larynx,Tracheal surgery,none,No blood preparation,
+31.72,3172,ENT (Otolaryngology),ENT,Larynx,Tracheal surgery,none,No blood preparation,
+31.73,3173,ENT (Otolaryngology),ENT,Larynx,Tracheal surgery,none,No blood preparation,
+31.74,3174,ENT (Otolaryngology),ENT,Larynx,Tracheal surgery,none,No blood preparation,
+31.75,3175,ENT (Otolaryngology),ENT,Larynx,Laryngeal surgery,none,No blood preparation,
+31.75,3175,ENT (Otolaryngology),ENT,Larynx,Tracheal surgery,none,No blood preparation,
+31.79,3179,ENT (Otolaryngology),ENT,Larynx,Tracheal surgery,none,No blood preparation,
+31.92,3192,ENT (Otolaryngology),ENT,Larynx,Laryngeal surgery,none,No blood preparation,
+31.92,3192,ENT (Otolaryngology),ENT,Larynx,Tracheal surgery,none,No blood preparation,
+31.98,3198,ENT (Otolaryngology),ENT,Larynx,Laryngeal surgery,none,No blood preparation,
+31.99,3199,ENT (Otolaryngology),ENT,Larynx,Tracheal surgery,none,No blood preparation,
+32.01,3201,ENT (Otolaryngology),ENT,Larynx,Broncho + laser,none,No blood preparation,
+32.20,3220,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+32.21,3221,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+32.22,3222,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+32.23,3223,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+32.25,3225,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+32.28,3228,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+32.29,3229,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+32.30,3230,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+32.39,3239,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+32.41,3241,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+32.49,3249,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+32.50,3250,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+32.59,3259,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+32.6,326,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+32.9,329,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+33.1,331,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+33.20,3320,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+33.28,3328,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+33.39,3339,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+33.43,3343,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+33.49,3349,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+33.50,3350,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+33.51,3351,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+33.52,3352,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+33.99,3399,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+34.51,3451,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+34.59,3459,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+34.93,3493,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Lung,G/M,Group and Match (crossmatch),1
+35.10,3510,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.10,3510,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.11,3511,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.11,3511,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.12,3512,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.12,3512,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.13,3513,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.13,3513,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.14,3514,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.14,3514,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.20,3520,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.20,3520,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.21,3521,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.21,3521,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.22,3522,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.22,3522,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.23,3523,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.23,3523,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.24,3524,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.24,3524,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.25,3525,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.25,3525,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.26,3526,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.26,3526,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.27,3527,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.27,3527,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.28,3528,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.28,3528,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.31,3531,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.31,3531,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.32,3532,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.32,3532,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.33,3533,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.33,3533,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.34,3534,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.34,3534,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.35,3535,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.35,3535,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.39,3539,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.39,3539,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.42,3542,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.42,3542,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.50,3550,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.50,3550,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.51,3551,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.51,3551,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.52,3552,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.52,3552,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.53,3553,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.53,3553,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.54,3554,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.54,3554,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.60,3560,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.60,3560,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.61,3561,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.61,3561,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.62,3562,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.62,3562,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.63,3563,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.63,3563,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.70,3570,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.70,3570,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.71,3571,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.71,3571,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.72,3572,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.72,3572,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.73,3573,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.73,3573,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.81,3581,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.81,3581,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.82,3582,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.82,3582,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.83,3583,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.83,3583,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.84,3584,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.84,3584,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.91,3591,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.91,3591,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.92,3592,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.92,3592,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.93,3593,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.93,3593,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.94,3594,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.94,3594,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.95,3595,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.95,3595,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.98,3598,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.98,3598,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+35.99,3599,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery,G/M,Group and Match (crossmatch),4
+35.99,3599,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Open heart surgery (redo),G/M,Group and Match (crossmatch),6
+36.10,3610,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Coronary artery bypass grafting (CABG),none,No blood preparation,
+36.11,3611,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Coronary artery bypass grafting (CABG),none,No blood preparation,
+36.12,3612,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Coronary artery bypass grafting (CABG),none,No blood preparation,
+36.13,3613,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Coronary artery bypass grafting (CABG),none,No blood preparation,
+36.14,3614,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Coronary artery bypass grafting (CABG),none,No blood preparation,
+36.15,3615,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Coronary artery bypass grafting (CABG),none,No blood preparation,
+36.16,3616,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Coronary artery bypass grafting (CABG),none,No blood preparation,
+36.17,3617,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Coronary artery bypass grafting (CABG),none,No blood preparation,
+36.19,3619,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Coronary artery bypass grafting (CABG),none,No blood preparation,
+38.07,3807,General Surgery,Sx,ศัลยกรรมทั่วไป,Venous surgery,none,No blood preparation,
+38.09,3809,General Surgery,Sx,ศัลยกรรมทั่วไป,Venous surgery,none,No blood preparation,
+38.12,3812,General Surgery,Sx,ศัลยกรรมทั่วไป,Carotid surgery,T/S,Type and Screen,
+38.18,3818,General Surgery,Sx,ศัลยกรรมทั่วไป,Common femoral endarterectomy,none,No blood preparation,
+38.34,3834,General Surgery,Sx,ศัลยกรรมทั่วไป,Open aneurysm repair,G/M,Group and Match (crossmatch),4
+38.34,3834,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Thoracoabdominal,G/M,Group and Match (crossmatch),10
+38.35,3835,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Thoracoabdominal,G/M,Group and Match (crossmatch),10
+38.36,3836,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Thoracoabdominal,G/M,Group and Match (crossmatch),10
+38.37,3837,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Thoracoabdominal,G/M,Group and Match (crossmatch),10
+38.37,3837,General Surgery,Sx,ศัลยกรรมทั่วไป,Venous surgery,none,No blood preparation,
+38.39,3839,General Surgery,Sx,ศัลยกรรมทั่วไป,Venous surgery,none,No blood preparation,
+38.44,3844,General Surgery,Sx,ศัลยกรรมทั่วไป,Open aneurysm repair,G/M,Group and Match (crossmatch),4
+38.44,3844,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Thoracoabdominal,G/M,Group and Match (crossmatch),10
+38.45,3845,General Surgery,Sx,ศัลยกรรมทั่วไป,Open aneurysm repair,G/M,Group and Match (crossmatch),4
+38.45,3845,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Thoracoabdominal,G/M,Group and Match (crossmatch),10
+38.46,3846,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Thoracoabdominal,G/M,Group and Match (crossmatch),10
+38.47,3847,General Surgery,Sx,ศัลยกรรมหัวใจและทรวงอก,Thoracoabdominal,G/M,Group and Match (crossmatch),10
+38.47,3847,General Surgery,Sx,ศัลยกรรมทั่วไป,Venous surgery,none,No blood preparation,
+38.49,3849,General Surgery,Sx,ศัลยกรรมทั่วไป,Venous surgery,none,No blood preparation,
+38.50,3850,General Surgery,Sx,ศัลยกรรมทั่วไป,Venous surgery,none,No blood preparation,
+38.51,3851,General Surgery,Sx,ศัลยกรรมทั่วไป,Venous surgery,none,No blood preparation,
+38.52,3852,General Surgery,Sx,ศัลยกรรมทั่วไป,Venous surgery,none,No blood preparation,
+38.53,3853,General Surgery,Sx,ศัลยกรรมทั่วไป,Venous surgery,none,No blood preparation,
+38.55,3855,General Surgery,Sx,ศัลยกรรมทั่วไป,Venous surgery,none,No blood preparation,
+38.57,3857,General Surgery,Sx,ศัลยกรรมทั่วไป,Venous surgery,none,No blood preparation,
+38.59,3859,General Surgery,Sx,ศัลยกรรมทั่วไป,Venous surgery,none,No blood preparation,
+38.67,3867,General Surgery,Sx,ศัลยกรรมทั่วไป,Venous surgery,none,No blood preparation,
+38.69,3869,General Surgery,Sx,ศัลยกรรมทั่วไป,Venous surgery,none,No blood preparation,
+39.25,3925,General Surgery,Sx,ศัลยกรรมทั่วไป,Aorto-bifemoral bypass,G/M,Group and Match (crossmatch),2
+39.27,3927,General Surgery,Sx,ศัลยกรรมทั่วไป,Arteriovenous fistula (AVF)/arteriovenous graft (AVG),none,No blood preparation,
+39.29,3929,General Surgery,Sx,ศัลยกรรมทั่วไป,Axillo-bifemoral bypass,T/S,Type and Screen,
+39.29,3929,General Surgery,Sx,ศัลยกรรมทั่วไป,Femero-libial bypass,T/S,Type and Screen,
+39.29,3929,General Surgery,Sx,ศัลยกรรมทั่วไป,Femeropopliteal bypass (above knee),T/S,Type and Screen,
+39.29,3929,General Surgery,Sx,ศัลยกรรมทั่วไป,Femeropopliteal bypass (below knee),T/S,Type and Screen,
+39.32,3932,General Surgery,Sx,ศัลยกรรมทั่วไป,Venous surgery,none,No blood preparation,
+39.42,3942,General Surgery,Sx,ศัลยกรรมทั่วไป,Arteriovenous fistula (AVF)/arteriovenous graft (AVG),none,No blood preparation,
+39.51,3951,General Surgery,Sx,ศัลยกรรมระบบประสาท,Craniotomy (aneurysm),G/M,Group and Match (crossmatch),2
+39.52,3952,General Surgery,Sx,ศัลยกรรมระบบประสาท,Craniotomy (aneurysm),G/M,Group and Match (crossmatch),2
+39.59,3959,General Surgery,Sx,ศัลยกรรมระบบประสาท,Craniotomy (aneurysm),G/M,Group and Match (crossmatch),2
+39.8,398,ENT (Otolaryngology),ENT,Head-Neck,Carotid body tumor,T/S,Type and Screen,2
+39.98,3998,Orthopedics,Ortho,Tumor,Pathologies fx fixation from Bleeding CA,G/M,Group and Match (crossmatch),2
+40.41,4041,ENT (Otolaryngology),ENT,Head-Neck,"Neck dissection, unilateral",none,No blood preparation,
+40.42,4042,ENT (Otolaryngology),ENT,Head-Neck,"Neck dissection, bilateral",none,No blood preparation,
+42.40,4240,General Surgery,Sx,ศัลยกรรมทั่วไป,Esophagectomy/bypass,G/M,Group and Match (crossmatch),2
+42.40,4240,General Surgery,Sx,ศัลยกรรมทั่วไป,Esophagectomy/bypass (redo),G/M,Group and Match (crossmatch),4
+42.41,4241,General Surgery,Sx,ศัลยกรรมทั่วไป,Esophagectomy/bypass,G/M,Group and Match (crossmatch),2
+42.41,4241,General Surgery,Sx,ศัลยกรรมทั่วไป,Esophagectomy/bypass (redo),G/M,Group and Match (crossmatch),4
+42.42,4242,General Surgery,Sx,ศัลยกรรมทั่วไป,Esophagectomy/bypass,G/M,Group and Match (crossmatch),2
+42.42,4242,General Surgery,Sx,ศัลยกรรมทั่วไป,Esophagectomy/bypass (redo),G/M,Group and Match (crossmatch),4
+42.51,4251,General Surgery,Sx,ศัลยกรรมทั่วไป,Esophagectomy/bypass,G/M,Group and Match (crossmatch),2
+42.51,4251,General Surgery,Sx,ศัลยกรรมทั่วไป,Esophagectomy/bypass (redo),G/M,Group and Match (crossmatch),4
+42.52,4252,General Surgery,Sx,ศัลยกรรมทั่วไป,Esophagectomy/bypass,G/M,Group and Match (crossmatch),2
+42.52,4252,General Surgery,Sx,ศัลยกรรมทั่วไป,Esophagectomy/bypass (redo),G/M,Group and Match (crossmatch),4
+42.53,4253,General Surgery,Sx,ศัลยกรรมทั่วไป,Esophagectomy/bypass,G/M,Group and Match (crossmatch),2
+42.53,4253,General Surgery,Sx,ศัลยกรรมทั่วไป,Esophagectomy/bypass (redo),G/M,Group and Match (crossmatch),4
+42.54,4254,General Surgery,Sx,ศัลยกรรมทั่วไป,Esophagectomy/bypass,G/M,Group and Match (crossmatch),2
+42.54,4254,General Surgery,Sx,ศัลยกรรมทั่วไป,Esophagectomy/bypass (redo),G/M,Group and Match (crossmatch),4
+42.55,4255,General Surgery,Sx,ศัลยกรรมทั่วไป,Esophagectomy/bypass,G/M,Group and Match (crossmatch),2
+42.55,4255,General Surgery,Sx,ศัลยกรรมทั่วไป,Esophagectomy/bypass (redo),G/M,Group and Match (crossmatch),4
+42.56,4256,General Surgery,Sx,ศัลยกรรมทั่วไป,Esophagectomy/bypass,G/M,Group and Match (crossmatch),2
+42.56,4256,General Surgery,Sx,ศัลยกรรมทั่วไป,Esophagectomy/bypass (redo),G/M,Group and Match (crossmatch),4
+42.58,4258,General Surgery,Sx,ศัลยกรรมทั่วไป,Esophagectomy/bypass,G/M,Group and Match (crossmatch),2
+42.58,4258,General Surgery,Sx,ศัลยกรรมทั่วไป,Esophagectomy/bypass (redo),G/M,Group and Match (crossmatch),4
+43.5,435,General Surgery,Sx,ศัลยกรรมทั่วไป,Gastrectomy,G/M,Group and Match (crossmatch),2
+43.5,435,General Surgery,Sx,ศัลยกรรมทั่วไป,Gastrectomy (redo),G/M,Group and Match (crossmatch),4
+43.6,436,General Surgery,Sx,ศัลยกรรมทั่วไป,Gastrectomy,G/M,Group and Match (crossmatch),2
+43.6,436,General Surgery,Sx,ศัลยกรรมทั่วไป,Gastrectomy (redo),G/M,Group and Match (crossmatch),4
+43.7,437,General Surgery,Sx,ศัลยกรรมทั่วไป,Gastrectomy,G/M,Group and Match (crossmatch),2
+43.7,437,General Surgery,Sx,ศัลยกรรมทั่วไป,Gastrectomy (redo),G/M,Group and Match (crossmatch),4
+43.81,4381,General Surgery,Sx,ศัลยกรรมทั่วไป,Gastrectomy,G/M,Group and Match (crossmatch),2
+43.81,4381,General Surgery,Sx,ศัลยกรรมทั่วไป,Gastrectomy (redo),G/M,Group and Match (crossmatch),4
+43.89,4389,General Surgery,Sx,ศัลยกรรมทั่วไป,Gastrectomy,G/M,Group and Match (crossmatch),2
+43.89,4389,General Surgery,Sx,ศัลยกรรมทั่วไป,Gastrectomy (redo),G/M,Group and Match (crossmatch),4
+43.91,4391,General Surgery,Sx,ศัลยกรรมทั่วไป,Gastrectomy,G/M,Group and Match (crossmatch),2
+43.91,4391,General Surgery,Sx,ศัลยกรรมทั่วไป,Gastrectomy (redo),G/M,Group and Match (crossmatch),4
+43.99,4399,General Surgery,Sx,ศัลยกรรมทั่วไป,Gastrectomy,G/M,Group and Match (crossmatch),2
+43.99,4399,General Surgery,Sx,ศัลยกรรมทั่วไป,Gastrectomy (redo),G/M,Group and Match (crossmatch),4
+44.31,4431,General Surgery,Sx,ศัลยกรรมทั่วไป,Morbidity obesity surgery,none,No blood preparation,
+44.38,4438,General Surgery,Sx,ศัลยกรรมทั่วไป,Morbidity obesity surgery,none,No blood preparation,
+44.39,4439,General Surgery,Sx,ศัลยกรรมทั่วไป,Morbidity obesity surgery,none,No blood preparation,
+44.93,4493,General Surgery,Sx,ศัลยกรรมทั่วไป,Morbidity obesity surgery,none,No blood preparation,
+44.95,4495,General Surgery,Sx,ศัลยกรรมทั่วไป,Morbidity obesity surgery,none,No blood preparation,
+45.71,4571,General Surgery,Sx,ศัลยกรรมลำไส้ใหญ่และทวารหนัก,Colectomy/ anterior resection (AR)/ low anterior resection (LAR)/abdominoperineal resection (APR),T/S,Type and Screen,
+45.72,4572,General Surgery,Sx,ศัลยกรรมลำไส้ใหญ่และทวารหนัก,Colectomy/ anterior resection (AR)/ low anterior resection (LAR)/abdominoperineal resection (APR),T/S,Type and Screen,
+45.73,4573,General Surgery,Sx,ศัลยกรรมลำไส้ใหญ่และทวารหนัก,Colectomy/ anterior resection (AR)/ low anterior resection (LAR)/abdominoperineal resection (APR),T/S,Type and Screen,
+45.74,4574,General Surgery,Sx,ศัลยกรรมลำไส้ใหญ่และทวารหนัก,Colectomy/ anterior resection (AR)/ low anterior resection (LAR)/abdominoperineal resection (APR),T/S,Type and Screen,
+45.75,4575,General Surgery,Sx,ศัลยกรรมลำไส้ใหญ่และทวารหนัก,Colectomy/ anterior resection (AR)/ low anterior resection (LAR)/abdominoperineal resection (APR),T/S,Type and Screen,
+45.76,4576,General Surgery,Sx,ศัลยกรรมลำไส้ใหญ่และทวารหนัก,Colectomy/ anterior resection (AR)/ low anterior resection (LAR)/abdominoperineal resection (APR),T/S,Type and Screen,
+45.79,4579,General Surgery,Sx,ศัลยกรรมลำไส้ใหญ่และทวารหนัก,Colectomy/ anterior resection (AR)/ low anterior resection (LAR)/abdominoperineal resection (APR),T/S,Type and Screen,
+45.81,4581,General Surgery,Sx,ศัลยกรรมลำไส้ใหญ่และทวารหนัก,Colectomy/ anterior resection (AR)/ low anterior resection (LAR)/abdominoperineal resection (APR),T/S,Type and Screen,
+45.82,4582,General Surgery,Sx,ศัลยกรรมลำไส้ใหญ่และทวารหนัก,Colectomy/ anterior resection (AR)/ low anterior resection (LAR)/abdominoperineal resection (APR),T/S,Type and Screen,
+45.83,4583,General Surgery,Sx,ศัลยกรรมลำไส้ใหญ่และทวารหนัก,Colectomy/ anterior resection (AR)/ low anterior resection (LAR)/abdominoperineal resection (APR),T/S,Type and Screen,
+50.22,5022,General Surgery,Sx,ศัลยกรรมทั่วไป,Hepatectomy (minor),T/S,Type and Screen,
+50.3,503,General Surgery,Sx,ศัลยกรรมทั่วไป,Hepatectomy (major),G/M,Group and Match (crossmatch),2
+50.4,504,General Surgery,Sx,ศัลยกรรมทั่วไป,Hepatectomy (major),G/M,Group and Match (crossmatch),2
+50.51,5051,General Surgery,Sx,ศัลยกรรมทั่วไป,Liver transplant,G/M,Group and Match (crossmatch),10
+50.59,5059,General Surgery,Sx,ศัลยกรรมทั่วไป,Liver transplant,G/M,Group and Match (crossmatch),10
+52.7,527,General Surgery,Sx,ศัลยกรรมทั่วไป,Whipple’s operation,G/M,Group and Match (crossmatch),2
+54.3,543,General Surgery,Sx,ศัลยกรรมทั่วไป,Peritonectomy + hyperthermic intraperitoneal chemotherapy,G/M,Group and Match (crossmatch),6
+54.4,544,General Surgery,Sx,ศัลยกรรมทั่วไป,Peritonectomy + hyperthermic intraperitoneal chemotherapy,G/M,Group and Match (crossmatch),6
+55.01,5501,General Surgery,Sx,ศัลยกรรมทางเดินปัสสาวะ,Percutaneous nephrolithotomy (PCNL),G/M,Group and Match (crossmatch),2
+55.02,5502,General Surgery,Sx,ศัลยกรรมทางเดินปัสสาวะ,Percutaneous nephrolithotomy (PCNL),G/M,Group and Match (crossmatch),2
+55.03,5503,General Surgery,Sx,ศัลยกรรมทางเดินปัสสาวะ,Percutaneous nephrolithotomy (PCNL),G/M,Group and Match (crossmatch),2
+55.04,5504,General Surgery,Sx,ศัลยกรรมทางเดินปัสสาวะ,Percutaneous nephrolithotomy (PCNL),G/M,Group and Match (crossmatch),2
+55.51,5551,General Surgery,Sx,ศัลยกรรมทางเดินปัสสาวะ,Radical nephrectomy,G/M,Group and Match (crossmatch),2
+55.51,5551,General Surgery,Sx,ศัลยกรรมทางเดินปัสสาวะ,Radical nephrectomy with thrombectomy,G/M,Group and Match (crossmatch),4
+55.52,5552,General Surgery,Sx,ศัลยกรรมทางเดินปัสสาวะ,Radical nephrectomy,G/M,Group and Match (crossmatch),2
+55.52,5552,General Surgery,Sx,ศัลยกรรมทางเดินปัสสาวะ,Radical nephrectomy with thrombectomy,G/M,Group and Match (crossmatch),4
+55.53,5553,General Surgery,Sx,ศัลยกรรมทางเดินปัสสาวะ,Radical nephrectomy,G/M,Group and Match (crossmatch),2
+55.53,5553,General Surgery,Sx,ศัลยกรรมทางเดินปัสสาวะ,Radical nephrectomy with thrombectomy,G/M,Group and Match (crossmatch),4
+55.54,5554,General Surgery,Sx,ศัลยกรรมทางเดินปัสสาวะ,Radical nephrectomy,G/M,Group and Match (crossmatch),2
+55.54,5554,General Surgery,Sx,ศัลยกรรมทางเดินปัสสาวะ,Radical nephrectomy with thrombectomy,G/M,Group and Match (crossmatch),4
+55.61,5561,General Surgery,Sx,ศัลยกรรมทั่วไป,Kidney transplant,G/M,Group and Match (crossmatch),2
+55.69,5569,General Surgery,Sx,ศัลยกรรมทั่วไป,Kidney transplant,G/M,Group and Match (crossmatch),2
+57.49,5749,General Surgery,Sx,ศัลยกรรมทางเดินปัสสาวะ,Transurethral resection of bladder tumor (TURB),G/M,Group and Match (crossmatch),1
+57.71,5771,General Surgery,Sx,ศัลยกรรมทางเดินปัสสาวะ,Radical cystectomy,G/M,Group and Match (crossmatch),4
+57.79,5779,General Surgery,Sx,ศัลยกรรมทางเดินปัสสาวะ,Radical cystectomy,G/M,Group and Match (crossmatch),4
+60.11,6011,General Surgery,Sx,ศัลยกรรมทางเดินปัสสาวะ,Transrectal ultrasound guide-prostate biopsy (TRUS),none,No blood preparation,
+60.21,6021,General Surgery,Sx,ศัลยกรรมทางเดินปัสสาวะ,Transurethral resection of the prostate (TURP),none,No blood preparation,
+60.29,6029,General Surgery,Sx,ศัลยกรรมทางเดินปัสสาวะ,Transurethral resection of the prostate (TURP),none,No blood preparation,
+60.5,605,General Surgery,Sx,ศัลยกรรมทางเดินปัสสาวะ,Robotic-assisted laparoscopic prostatectomy (RALP),G/M,Group and Match (crossmatch),2
+65.25,6525,Obstetrics & Gynecology,OB-Gyn,Enucleation,Other laparoscopic local excision or destruction of ovary,T/S,Type and Screen,1
+65.29,6529,Obstetrics & Gynecology,OB-Gyn,Enucleation,Other local excision or destruction of ovary,T/S,Type and Screen,1
+65.41,6541,Obstetrics & Gynecology,OB-Gyn,Hysterectomy,Laparoscopic unilateral salpingo-oophorectomy,T/S,Type and Screen,1
+65.49,6549,Obstetrics & Gynecology,OB-Gyn,Hysterectomy,Other unilateral salpingo-oophorectomy,T/S,Type and Screen,1
+65.49,6549,Obstetrics & Gynecology,OB-Gyn,Hysterectomy,Other unilateral salpingo-oophorectomy,T/S,Type and Screen,1
+65.61,6561,Obstetrics & Gynecology,OB-Gyn,Hysterectomy,Other removal of both ovaries and tubes at same operative episode,T/S,Type and Screen,1
+65.62,6562,Obstetrics & Gynecology,OB-Gyn,Hysterectomy,Other removal of remaining ovary and tube,T/S,Type and Screen,1
+65.63,6563,Obstetrics & Gynecology,OB-Gyn,Hysterectomy,Laparoscopic removal of both ovaries and tubes at same operative episode,T/S,Type and Screen,1
+66.31,6631,Obstetrics & Gynecology,OB-Gyn,TR,Other bilateral ligation and crushing of fallopian tubes,T/S,Type and Screen,1
+66.32,6632,Obstetrics & Gynecology,OB-Gyn,TR,Other bilateral ligation and division of fallopian tubes,T/S,Type and Screen,1
+66.32,6632,Obstetrics & Gynecology,OB-Gyn,TR,TR,T/S,Type and Screen,1
+66.4,664,Obstetrics & Gynecology,OB-Gyn,Salpingectomy,Total unilateral salpingectomy,T/S,Type and Screen,1
+66.51,6651,Obstetrics & Gynecology,OB-Gyn,Salpingectomy,Total bilateral salpingectomy,T/S,Type and Screen,1
+66.62,6662,Obstetrics & Gynecology,OB-Gyn,Salpingectomy,Salpingectomy with removal of tubal pregnancy,T/S,Type and Screen,1
+66.63,6663,Obstetrics & Gynecology,OB-Gyn,Salpingectomy,"Bilateral partial salpingectomy, not otherwise specified",T/S,Type and Screen,1
+66.69,6669,Obstetrics & Gynecology,OB-Gyn,Salpingectomy,Other partial salpingectomy,T/S,Type and Screen,1
+68.15,6815,Obstetrics & Gynecology,OB-Gyn,Hysteroscopy,Closed biopsy of uterus,T/S,Type and Screen,1
+68.29,6829,Obstetrics & Gynecology,OB-Gyn,Hysteroscopy,Other excision or destruction of lesion of uterus,T/S,Type and Screen,1
+68.29,6829,Obstetrics & Gynecology,OB-Gyn,Myomectomy,Other excision or destruction of lesion of uterus,T/S,Type and Screen,1
+68.31,6831,Obstetrics & Gynecology,OB-Gyn,Hysterectomy,Laparoscopic supracervical hysterectomy (LSH),T/S,Type and Screen,1
+68.41,6841,Obstetrics & Gynecology,OB-Gyn,Hysterectomy,Laparoscopic total abdominal hysterectomy,T/S,Type and Screen,1
+68.49,6849,Obstetrics & Gynecology,OB-Gyn,Hysterectomy,Other and unspecified total abdominal hysterectomy,T/S,Type and Screen,1
+68.51,6851,Obstetrics & Gynecology,OB-Gyn,Hysterectomy,Laparoscopically assisted vaginal hysterectomy (LAVH),T/S,Type and Screen,1
+68.61,6861,Obstetrics & Gynecology,OB-Gyn,Hysterectomy,Laparoscopic radical abdominal hysterectomy,T/S,Type and Screen,1
+68.8,688,Orthopedics,Ortho,Tumor,Pelvectomy with sacrectomy,G/M,Group and Match (crossmatch),4
+68.8,688,General Surgery,Sx,ศัลยกรรมลำไส้ใหญ่และทวารหนัก,Pelvic exenteration,G/M,Group and Match (crossmatch),4
+74,74,Obstetrics & Gynecology,OB-Gyn,C/S,Cesarean section and removal of fetus,T/S,Type and Screen,1
+74.1,741,Obstetrics & Gynecology,OB-Gyn,C/S,Cesarean section and removal of fetus (Elective),T/S,Type and Screen,1
+74.1,741,Obstetrics & Gynecology,OB-Gyn,C/S,Cesarean section and removal of fetus (Emergency),T/S,Type and Screen,1
+74.1,741,Obstetrics & Gynecology,OB-Gyn,C/S,Low cervical cesarean section,T/S,Type and Screen,1
+74.4,744,Obstetrics & Gynecology,OB-Gyn,C/S,Cesarean section of other specified type,T/S,Type and Screen,1
+76.2,762,ENT (Otolaryngology),ENT,Oto,Temporal bone resection,T/S,Type and Screen,2
+76.31,7631,ENT (Otolaryngology),ENT,Head-Neck,Mandibular surgery,T/S,Type and Screen,1
+76.39,7639,ENT (Otolaryngology),ENT,Oto,Temporal bone resection,T/S,Type and Screen,2
+76.41,7641,ENT (Otolaryngology),ENT,Head-Neck,Mandibular surgery,T/S,Type and Screen,1
+76.42,7642,ENT (Otolaryngology),ENT,Sleep,Genioglossal advancement,none,No blood preparation,
+76.42,7642,ENT (Otolaryngology),ENT,Head-Neck,Mandibular surgery,T/S,Type and Screen,1
+76.43,7643,ENT (Otolaryngology),ENT,Head-Neck,Mandibular surgery,T/S,Type and Screen,1
+76.63,7663,ENT (Otolaryngology),ENT,Head-Neck,Mandibular surgery,T/S,Type and Screen,1
+76.64,7664,ENT (Otolaryngology),ENT,Head-Neck,Mandibular surgery,T/S,Type and Screen,1
+76.68,7668,ENT (Otolaryngology),ENT,Sleep,Genioglossal advancement,none,No blood preparation,
+77.00,7700,Orthopedics,Ortho,Foot,Sequestrectomy with Ilizarov fixation (ถ้า sequestrectomy หรือ Ilizarov อย่างใดอย่างหนึ่ง No M/G),T/S,Type and Screen,1
+77.07,7707,Orthopedics,Ortho,Foot,Sequestrectomy with Ilizarov fixation (ถ้า sequestrectomy หรือ Ilizarov อย่างใดอย่างหนึ่ง No M/G),T/S,Type and Screen,1
+77.60,7760,Orthopedics,Ortho,Tumor,Excision benign bone tumor without tourniquet,T/S,Type and Screen,1-2
+77.60,7760,Orthopedics,Ortho,Tumor,Wide excision malignant bone tumor in extremity,G/M,Group and Match (crossmatch),2
+77.60,7760,Orthopedics,Ortho,Tumor,Wide excision malignant soft-tissue tumor,T/S,Type and Screen,2
+77.69,7769,Orthopedics,Ortho,Tumor,Excision benign bone tumor without tourniquet,T/S,Type and Screen,1-2
+77.89,7789,Orthopedics,Ortho,Tumor,Pelvectomy with sacrectomy,G/M,Group and Match (crossmatch),4
+77.99,7799,Orthopedics,Ortho,Tumor,Pelvectomy with sacrectomy,G/M,Group and Match (crossmatch),4
+78.51,7851,Orthopedics,Ortho,Trauma,"ORIF shaft, distal clavicle, AC injury",none,No blood preparation,
+79.25,7925,Orthopedics,Ortho,Trauma,"PFNA, DHS",none,No blood preparation,
+79.30,7930,Orthopedics,Ortho,Trauma,ORIF acetabulum,G/M,Group and Match (crossmatch),2
+79.30,7930,Orthopedics,Ortho,Tumor,Pathologies fx fixation from Bleeding CA,G/M,Group and Match (crossmatch),2
+79.30,7930,Orthopedics,Ortho,Tumor,Pathologies fx fixation from other CA,T/S,Type and Screen,2
+79.31,7931,Orthopedics,Ortho,Trauma,ORIF distal humerus (ขึ้น tourniquet ได้),none,No blood preparation,
+79.31,7931,Orthopedics,Ortho,Trauma,ORIF distal humerus (ขึ้น tourniquet ไม่ได้),T/S,Type and Screen,1
+79.31,7931,Orthopedics,Ortho,Trauma,ORIF proximal humerus,T/S,Type and Screen,1
+79.31,7931,Orthopedics,Ortho,Trauma,ORIF shaft humerus,T/S,Type and Screen,1
+79.32,7932,Orthopedics,Ortho,Trauma,"ORIF olecranon, around elbow. forearm, wrist",none,No blood preparation,
+79.35,7935,Orthopedics,Ortho,Trauma,ORIF pelvis,G/M,Group and Match (crossmatch),2
+79.35,7935,Orthopedics,Ortho,Trauma,ORIF shaft femur distal femur,G/M,Group and Match (crossmatch),1
+79.35,7935,Orthopedics,Ortho,Trauma,ORIF subtrochanter femur,G/M,Group and Match (crossmatch),1
+79.36,7936,Orthopedics,Ortho,Trauma,"ORIF patela tibia plateau, shaft tibia, paleo, ankle fracture (หัตถการที่ขึ้น tourniquet ได้)",none,No blood preparation,
+80.50,8050,General Surgery,Sx,ศัลยกรรมระบบประสาท,Minimally invasive (MIS) spine surgery 1-2 level,G/M,Group and Match (crossmatch),1
+80.50,8050,General Surgery,Sx,ศัลยกรรมระบบประสาท,Open spine surgery 1-2 level,G/M,Group and Match (crossmatch),2
+80.51,8051,General Surgery,Sx,ศัลยกรรมระบบประสาท,Minimally invasive (MIS) spine surgery 1-2 level,G/M,Group and Match (crossmatch),1
+80.51,8051,General Surgery,Sx,ศัลยกรรมระบบประสาท,Open spine surgery 1-2 level,G/M,Group and Match (crossmatch),2
+80.59,8059,General Surgery,Sx,ศัลยกรรมระบบประสาท,Minimally invasive (MIS) spine surgery 1-2 level,G/M,Group and Match (crossmatch),1
+80.59,8059,General Surgery,Sx,ศัลยกรรมระบบประสาท,Open spine surgery 1-2 level,G/M,Group and Match (crossmatch),2
+81.00,8100,General Surgery,Sx,ศัลยกรรมระบบประสาท,Minimally invasive (MIS) spine surgery 1-2 level,G/M,Group and Match (crossmatch),1
+81.00,8100,General Surgery,Sx,ศัลยกรรมระบบประสาท,Open spine surgery 1-2 level,G/M,Group and Match (crossmatch),2
+81.01,8101,General Surgery,Sx,ศัลยกรรมระบบประสาท,Minimally invasive (MIS) spine surgery 1-2 level,G/M,Group and Match (crossmatch),1
+81.01,8101,General Surgery,Sx,ศัลยกรรมระบบประสาท,Open spine surgery 1-2 level,G/M,Group and Match (crossmatch),2
+81.02,8102,Orthopedics,Ortho,C Spine,ACDF,none,No blood preparation,
+81.02,8102,General Surgery,Sx,ศัลยกรรมระบบประสาท,Minimally invasive (MIS) spine surgery 1-2 level,G/M,Group and Match (crossmatch),1
+81.02,8102,General Surgery,Sx,ศัลยกรรมระบบประสาท,Open spine surgery 1-2 level,G/M,Group and Match (crossmatch),2
+81.03,8103,General Surgery,Sx,ศัลยกรรมระบบประสาท,Minimally invasive (MIS) spine surgery 1-2 level,G/M,Group and Match (crossmatch),1
+81.03,8103,General Surgery,Sx,ศัลยกรรมระบบประสาท,Open spine surgery 1-2 level,G/M,Group and Match (crossmatch),2
+81.03,8103,Orthopedics,Ortho,C Spine,Posterior surgery,T/S,Type and Screen,1
+81.04,8104,Orthopedics,Ortho,TL spine,1-2 open fusion,T/S,Type and Screen,1
+81.04,8104,Orthopedics,Ortho,Metastasis spine,1-2 open fusion,T/S,Type and Screen,1
+81.04,8104,Orthopedics,Ortho,TL spine,3 level ขึ้นไป,G/M,Group and Match (crossmatch),1
+81.04,8104,Orthopedics,Ortho,Metastasis spine,3 level ขึ้นไป,G/M,Group and Match (crossmatch),1
+81.04,8104,Orthopedics,Ortho,TL spine,MIS surgery,none,No blood preparation,
+81.04,8104,General Surgery,Sx,ศัลยกรรมระบบประสาท,Minimally invasive (MIS) spine surgery 1-2 level,G/M,Group and Match (crossmatch),1
+81.04,8104,General Surgery,Sx,ศัลยกรรมระบบประสาท,Open spine surgery 1-2 level,G/M,Group and Match (crossmatch),2
+81.05,8105,Orthopedics,Ortho,TL spine,1-2 open fusion,T/S,Type and Screen,1
+81.05,8105,Orthopedics,Ortho,Metastasis spine,1-2 open fusion,T/S,Type and Screen,1
+81.05,8105,Orthopedics,Ortho,TL spine,3 level ขึ้นไป,G/M,Group and Match (crossmatch),1
+81.05,8105,Orthopedics,Ortho,Metastasis spine,3 level ขึ้นไป,G/M,Group and Match (crossmatch),1
+81.05,8105,General Surgery,Sx,ศัลยกรรมระบบประสาท,Minimally invasive (MIS) spine surgery 1-2 level,G/M,Group and Match (crossmatch),1
+81.05,8105,General Surgery,Sx,ศัลยกรรมระบบประสาท,Open spine surgery 1-2 level,G/M,Group and Match (crossmatch),2
+81.06,8106,Orthopedics,Ortho,TL spine,1-2 open fusion,T/S,Type and Screen,1
+81.06,8106,Orthopedics,Ortho,Metastasis spine,1-2 open fusion,T/S,Type and Screen,1
+81.06,8106,Orthopedics,Ortho,TL spine,3 level ขึ้นไป,G/M,Group and Match (crossmatch),1
+81.06,8106,Orthopedics,Ortho,Metastasis spine,3 level ขึ้นไป,G/M,Group and Match (crossmatch),1
+81.06,8106,General Surgery,Sx,ศัลยกรรมระบบประสาท,Minimally invasive (MIS) spine surgery 1-2 level,G/M,Group and Match (crossmatch),1
+81.06,8106,General Surgery,Sx,ศัลยกรรมระบบประสาท,Open spine surgery 1-2 level,G/M,Group and Match (crossmatch),2
+81.07,8107,Orthopedics,Ortho,TL spine,1-2 open fusion,T/S,Type and Screen,1
+81.07,8107,Orthopedics,Ortho,Metastasis spine,1-2 open fusion,T/S,Type and Screen,1
+81.07,8107,Orthopedics,Ortho,TL spine,3 level ขึ้นไป,G/M,Group and Match (crossmatch),1
+81.07,8107,Orthopedics,Ortho,Metastasis spine,3 level ขึ้นไป,G/M,Group and Match (crossmatch),1
+81.07,8107,General Surgery,Sx,ศัลยกรรมระบบประสาท,Minimally invasive (MIS) spine surgery 1-2 level,G/M,Group and Match (crossmatch),1
+81.07,8107,General Surgery,Sx,ศัลยกรรมระบบประสาท,Open spine surgery 1-2 level,G/M,Group and Match (crossmatch),2
+81.08,8108,Orthopedics,Ortho,TL spine,1-2 open fusion,T/S,Type and Screen,1
+81.08,8108,Orthopedics,Ortho,Metastasis spine,1-2 open fusion,T/S,Type and Screen,1
+81.08,8108,Orthopedics,Ortho,TL spine,3 level ขึ้นไป,G/M,Group and Match (crossmatch),1
+81.08,8108,Orthopedics,Ortho,Metastasis spine,3 level ขึ้นไป,G/M,Group and Match (crossmatch),1
+81.08,8108,General Surgery,Sx,ศัลยกรรมระบบประสาท,Minimally invasive (MIS) spine surgery 1-2 level,G/M,Group and Match (crossmatch),1
+81.08,8108,General Surgery,Sx,ศัลยกรรมระบบประสาท,Open spine surgery 1-2 level,G/M,Group and Match (crossmatch),2
+81.11,8111,Orthopedics,Ortho,Foot,Fusion with iliac bone grafting,T/S,Type and Screen,1
+81.11,8111,Orthopedics,Ortho,Foot,Pantalar fusion,T/S,Type and Screen,1
+81.12,8112,Orthopedics,Ortho,Foot,Fusion with iliac bone grafting,T/S,Type and Screen,1
+81.12,8112,Orthopedics,Ortho,Foot,Pantalar fusion,T/S,Type and Screen,1
+81.13,8113,Orthopedics,Ortho,Foot,Fusion with iliac bone grafting,T/S,Type and Screen,1
+81.13,8113,Orthopedics,Ortho,Foot,Pantalar fusion,T/S,Type and Screen,1
+81.14,8114,Orthopedics,Ortho,Foot,Fusion with iliac bone grafting,T/S,Type and Screen,1
+81.14,8114,Orthopedics,Ortho,Foot,Pantalar fusion,T/S,Type and Screen,1
+81.15,8115,Orthopedics,Ortho,Foot,Fusion with iliac bone grafting,T/S,Type and Screen,1
+81.15,8115,Orthopedics,Ortho,Foot,Pantalar fusion,T/S,Type and Screen,1
+81.16,8116,Orthopedics,Ortho,Foot,Fusion with iliac bone grafting,T/S,Type and Screen,1
+81.16,8116,Orthopedics,Ortho,Foot,Pantalar fusion,T/S,Type and Screen,1
+81.17,8117,Orthopedics,Ortho,Foot,Fusion with iliac bone grafting,T/S,Type and Screen,1
+81.17,8117,Orthopedics,Ortho,Foot,Pantalar fusion,T/S,Type and Screen,1
+81.18,8118,Orthopedics,Ortho,Foot,Fusion with iliac bone grafting,T/S,Type and Screen,1
+81.18,8118,Orthopedics,Ortho,Foot,Pantalar fusion,T/S,Type and Screen,1
+81.51,8151,Orthopedics,Ortho,Arthroplasty,THA,G/M,Group and Match (crossmatch),1
+81.51,8151,Orthopedics,Ortho,Arthroplasty,"THA, revision THA",G/M,Group and Match (crossmatch),2
+81.52,8152,Orthopedics,Ortho,Arthroplasty,Bipolar,T/S,Type and Screen,1
+81.52,8152,Orthopedics,Ortho,Trauma,Bipolar hemiarthroplasty,T/S,Type and Screen,1
+81.53,8153,Orthopedics,Ortho,Arthroplasty,"THA, revision THA",G/M,Group and Match (crossmatch),2
+81.54,8154,Orthopedics,Ortho,Arthroplasty,"TKA, revision TKA",T/S,Type and Screen,1
+81.54,8154,Orthopedics,Ortho,Arthroplasty,UKA,none,No blood preparation,
+81.55,8155,Orthopedics,Ortho,Arthroplasty,"TKA, revision TKA",T/S,Type and Screen,1
+81.59,8159,Orthopedics,Ortho,Arthroplasty,"TKA, revision TKA",T/S,Type and Screen,1
+81.80,8180,Orthopedics,Ortho,Sport,Reverse shoulder arthroplasty,T/S,Type and Screen,2
+81.80,8180,Orthopedics,Ortho,Sport,Total shoulder arthroplasty,T/S,Type and Screen,1
+81.99,8199,Orthopedics,Ortho,Sport,Reverse shoulder arthroplasty,T/S,Type and Screen,2
+83.39,8339,Orthopedics,Ortho,Tumor,Excision benign bone tumor with tourniquet,none,No blood preparation,
+83.39,8339,Orthopedics,Ortho,Tumor,Excision benign soft-tissue tumor,T/S,Type and Screen,1
+83.49,8349,Orthopedics,Ortho,Tumor,Excision benign bone tumor with tourniquet,none,No blood preparation,
+83.49,8349,Orthopedics,Ortho,Tumor,Excision benign soft-tissue tumor,T/S,Type and Screen,1
+83.82,8382,ENT (Otolaryngology),ENT,Facial plastic,Facial reanimation surgery,none,No blood preparation,
+84.00,8400,Orthopedics,Ortho,Tumor,Amputation,T/S,Type and Screen,1-2
+84.09,8409,Orthopedics,Ortho,Tumor,Forequarter amputation,G/M,Group and Match (crossmatch),2
+84.10,8410,Orthopedics,Ortho,Tumor,Amputation,T/S,Type and Screen,1-2
+84.19,8419,Orthopedics,Ortho,Tumor,Hindquarter amputation,G/M,Group and Match (crossmatch),3
+84.59,8459,Orthopedics,Ortho,Trauma,SI screw,none,No blood preparation,
+85.12,8512,Orthopedics,Ortho,Tumor,Incisional biopsy,none,No blood preparation,
+86.22,8622,General Surgery,Sx,ศัลยกรรมตกแต่ง,Debride 20% burn,G/M,Group and Match (crossmatch),2
+86.3,863,ENT (Otolaryngology),ENT,Facial plastic,Facial fat injection,none,No blood preparation,
+86.60,8660,ENT (Otolaryngology),ENT,Facial plastic,Free flap reconstruction,T/S,Type and Screen,2
+86.63,8663,ENT (Otolaryngology),ENT,Facial plastic,Free flap reconstruction,T/S,Type and Screen,2
+86.69,8669,ENT (Otolaryngology),ENT,Facial plastic,Free flap reconstruction,T/S,Type and Screen,2
+86.70,8670,ENT (Otolaryngology),ENT,Facial plastic,Local flap reconstruction,none,No blood preparation,
+86.71,8671,ENT (Otolaryngology),ENT,Facial plastic,Regional flap reconstruction,none,No blood preparation,
+86.72,8672,ENT (Otolaryngology),ENT,Facial plastic,Regional flap reconstruction,none,No blood preparation,
+86.74,8674,ENT (Otolaryngology),ENT,Facial plastic,Regional flap reconstruction,none,No blood preparation,
+86.75,8675,ENT (Otolaryngology),ENT,Facial plastic,Regional flap reconstruction,none,No blood preparation,
+86.82,8682,ENT (Otolaryngology),ENT,Facial plastic,Facelift surgery,none,No blood preparation,
+86.83,8683,ENT (Otolaryngology),ENT,Facial plastic,Facial liposuction,none,No blood preparation,
+86.84,8684,ENT (Otolaryngology),ENT,Facial plastic,Scar revision surgery,none,No blood preparation,
+,,General Surgery,Sx,ศัลยกรรมทั่วไป,Complex EVAR,G/M,Group and Match (crossmatch),2
+,,General Surgery,Sx,ศัลยกรรมทั่วไป,Endovascular aortic aneurysm repair (EVAR),T/S,Type and Screen,
+,,General Surgery,Sx,ศัลยกรรมทั่วไป,Endovascular intervention : normal case,none,No blood preparation,
+,,General Surgery,Sx,ศัลยกรรมทั่วไป,Endovascular intervention : risk for rupture,T/S,Type and Screen,
+,,Orthopedics,Ortho,Pediatric,"Ext, no tourniquet",G/M,Group and Match (crossmatch),1
+,,Orthopedics,Ortho,Pediatric,Extremity with tourniquet,T/S,Type and Screen,1
+,,Orthopedics,Ortho,Pediatric,Hip and spine,G/M,Group and Match (crossmatch),2

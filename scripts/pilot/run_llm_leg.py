@@ -52,6 +52,7 @@ import json
 import os
 import sys
 import time
+from collections.abc import Sequence
 from datetime import date, datetime, time as _time, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -64,8 +65,12 @@ from bba.audit_orders import (
     build_audit_orders,
 )
 from bba.audit_pipeline import PipelineRowContext
-from bba.audit_pipeline.pipeline import _persist_injection_flagged_row, rbc_task_mode
-from bba.audit_pipeline.replay import apply_batch_results
+from bba.audit_pipeline.pipeline import (
+    _persist_injection_flagged_row,
+    _persist_over_reservation_row,
+    rbc_task_mode,
+)
+from bba.audit_pipeline.replay import apply_batch_results, is_over_reservation
 from bba.audit_store import AuditStore, AuditStoreConfig
 from bba.cohort_detector import (
     CohortAssignment,
@@ -75,6 +80,7 @@ from bba.cohort_detector import (
     OperativeEvent,
     assign_cohort,
 )
+from bba.component_map import ComponentFamily
 from bba.deterministic_classifier import (
     ClassifierResult,
     classify,
@@ -118,6 +124,12 @@ from bba.platelet_lookup import (
     PlateletObservation,
     lookup_platelet,
     parse_platelet_count,
+)
+from bba.preop_reservation import (
+    ReservationDecision,
+    evaluate_reservation,
+    load_msbos_reference,
+    reserved_units_by_component,
 )
 from bba.ingest.date_parser import parse_kcmh_english_date
 from bba.ingest.models import ParsedTimeOfDay
@@ -171,7 +183,6 @@ MSBOS_RESERVATION_PILOT_ENABLED = (
     if _msbos_env is not None
     else feature_flags.MSBOS_RESERVATION_ENABLED
 )
-# Folding MSBOS into CODE_VERSION is deferred to T1 when a producer emits.
 # Run/code identity (spec #119 §G, ticket #124). The audit_store is idempotent
 # on (run_id, audit_id, code_version), so enabling a seam that changes verdicts
 # must not silently reuse a flag-off run's committed rows. Folding each seam into
@@ -190,6 +201,8 @@ if RETURNS_LEDGER_ENABLED:
     CODE_VERSION += "+returns"
 if DECLARED_USETYPE_PILOT_ENABLED:
     CODE_VERSION += "+declared"
+if MSBOS_RESERVATION_PILOT_ENABLED:
+    CODE_VERSION += "+msbos"
 TZ_LOCAL = "Asia/Bangkok"
 INCPT_OPERATION_GROUPS = {"110", "111"}
 
@@ -252,6 +265,7 @@ DETERMINISTIC_FINAL = frozenset(
         "INAPPROPRIATE",
         "RETURNED_NOT_TRANSFUSED",
         "PERIOP_TRANSFUSION_EXEMPT",
+        "PREOP_OVER_RESERVATION",
     }
 )
 
@@ -260,6 +274,21 @@ DETERMINISTIC_FINAL = frozenset(
 # RESERVE_AHEAD_REVIEW here too. Kept a local mirror for the same reason the
 # leg mirrors the classifier-input helpers.
 _RESERVE_AHEAD_RATIONALES = frozenset({"preop_defer_llm", "preop_defer_llm_declared"})
+
+
+def _planned_op_icd9(
+    op_events: Sequence[OperativeEvent], order_datetime: datetime
+) -> str:
+    """Select the nearest upcoming planned ICD-9, failing closed on a tie."""
+    upcoming = sorted(
+        (o for o in op_events if o.operative_datetime >= order_datetime),
+        key=lambda o: (o.operative_datetime, o.icd9),
+    )
+    if not upcoming:
+        return ""
+    nearest_dt = upcoming[0].operative_datetime
+    nearest = {o.icd9.strip() for o in upcoming if o.operative_datetime == nearest_dt}
+    return upcoming[0].icd9.strip() if len(nearest) == 1 else "\x00AMBIG"
 
 
 def _returns_disposition_for_classifier(returns_summary: ReturnsSummary | None) -> str:
@@ -1059,6 +1088,12 @@ def _build_inputs():
     """Return all the CSV slices the per-case loop needs."""
     bdvst = _read_csv("BDVST.csv")
     bdvstdt = _read_csv("BDVSTDT.csv")
+    msbos_reference = (
+        load_msbos_reference() if MSBOS_RESERVATION_PILOT_ENABLED else None
+    )
+    reserved_units_map = (
+        reserved_units_by_component(bdvstdt) if MSBOS_RESERVATION_PILOT_ENABLED else {}
+    )
     diag = _read_csv("Diagnosis.csv")
     lab = _read_csv("Lab.csv")
     med = _read_csv("Med.csv")
@@ -1167,6 +1202,8 @@ def _build_inputs():
         bdvsttrans_by_reqno,
         unitamt_lines_by_reqno,
         usetype_values_by_hn_reqno,
+        msbos_reference,
+        reserved_units_map,
     )
 
 
@@ -1213,6 +1250,8 @@ def main() -> None:
         bdvsttrans_by_reqno,
         unitamt_lines_by_reqno,
         usetype_values_by_hn_reqno,
+        msbos_reference,
+        reserved_units_map,
     ) = _build_inputs()
 
     fr = build_audit_orders(inputs, AuditOrdersConfig(code_version=CODE_VERSION))
@@ -1858,6 +1897,30 @@ def main() -> None:
                 unitamt_lines_by_reqno.get(order.reqno, []),
             )
 
+        reservation_decision = None
+        if (
+            MSBOS_RESERVATION_PILOT_ENABLED
+            and order.component == "red_cell"
+            and msbos_reference
+        ):
+            planned = _planned_op_icd9(op_events, order.order_datetime)
+            reserved = reserved_units_map.get(
+                (order.hn.strip(), order.reqno.strip(), ComponentFamily.RED_CELL), 0
+            )
+            if planned == "\x00AMBIG":
+                reservation_decision = ReservationDecision(
+                    reserved_units=reserved,
+                    is_over=False,
+                    reason="ambiguous_planned_op",
+                    reference_hash=msbos_reference.content_hash,
+                )
+            else:
+                reservation_decision = evaluate_reservation(
+                    reserved_units=reserved,
+                    planned_icd9_nodot=planned,
+                    reference=msbos_reference,
+                )
+
         contexts.append(
             PipelineRowContext(
                 order=order,
@@ -1881,6 +1944,7 @@ def main() -> None:
                 administration_summary=bundle.administration_summary,
                 enable_missing_hb_positive_evidence=ENABLE_MISSING_HB_POSITIVE_EVIDENCE,
                 returns_summary=returns_summary,
+                reservation_decision=reservation_decision,
                 declared_use=_declared_use_label_for_classifier(collapsed_usetype),
             )
         )
@@ -1900,6 +1964,13 @@ def main() -> None:
     classifier_results: dict[str, Any] = {}
     report_classifier_results: dict[str, Any] = {}
     llm_contexts: list[PipelineRowContext] = []
+    over_reserved_ctxs: list[PipelineRowContext] = []
+    audit_store = AuditStore(
+        AuditStoreConfig(
+            root_dir=AUDIT_STORE_ROOT,
+            code_version=CODE_VERSION,
+        )
+    )
     for ctx in contexts:
         if ctx.component == "platelet":
             # Platelet contexts were already classified in the order loop above
@@ -1959,9 +2030,30 @@ def main() -> None:
         )
         classifier_results[ctx.order.audit_id] = cres
         report_classifier_results[ctx.order.audit_id] = cres
+        reserve_ahead = (
+            feature_flags.RESERVE_AHEAD_ROUTER_ENABLED
+            and cres.rationale in _RESERVE_AHEAD_RATIONALES
+        )
+        if (
+            MSBOS_RESERVATION_PILOT_ENABLED
+            and reserve_ahead
+            and is_over_reservation(classifier_result=cres, context=ctx)
+        ):
+            _persist_over_reservation_row(
+                ctx,
+                classifier_result=cres,
+                audit_store=audit_store,
+                run_id=RUN_ID,
+            )
+            over_reserved_ctxs.append(ctx)
+            continue
         if cres.classification not in DETERMINISTIC_FINAL:
             llm_contexts.append(ctx)
 
+    print(
+        "  over-reserved (not submitted, PREOP_OVER_RESERVATION): "
+        f"{len(over_reserved_ctxs)}"
+    )
     print(f"\nLLM-bound: {len(llm_contexts)} / {len(contexts)}")
     if not llm_contexts:
         sys.exit("nothing to submit")
@@ -2026,13 +2118,6 @@ def main() -> None:
                 prompt=prompt,
             )
         )
-
-    audit_store = AuditStore(
-        AuditStoreConfig(
-            root_dir=AUDIT_STORE_ROOT,
-            code_version=CODE_VERSION,
-        )
-    )
 
     # Codex round-5 P2 (security): persist injection-flagged rows locally as
     # NEEDS_REVIEW — they were never sent to Anthropic. Mirrors the batch

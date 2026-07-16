@@ -36,6 +36,9 @@ data/encrypted/
 data/raw/
 *.csv
 !tests/fixtures/**/*.csv
+# Vendored public MSBOS reference schedule (ICD-9 -> blood-order recommendation,
+# NOT patient data) — required in-repo by the pre-op reservation arm (#163).
+!src/bba/preop_reservation/data/OPBloodLimit_by_icd9.csv
 
 # Secrets — never commit
 .env

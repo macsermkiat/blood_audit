@@ -242,6 +242,7 @@ _CLS_DISPLAY: dict[str, str] = {
     "PREOP_RESERVATION_UNCONFIRMED": (
         "Administration unconfirmed (pre-op reservation)"
     ),
+    "PREOP_OVER_RESERVATION": "Pre-op over-reservation",
     "INAPPROPRIATE": "Inappropriate",
     "INSUFFICIENT_EVIDENCE": "Insufficient evidence",
     "EXCLUDED": "Excluded",
