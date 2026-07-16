@@ -1,4 +1,4 @@
-"""Vendored platelet procedure-category SEED tests for ticket #166."""
+"""Vendored platelet procedure-category tests for ticket #166 (clinician-signed)."""
 
 from __future__ import annotations
 
@@ -6,10 +6,9 @@ import csv
 from importlib import resources
 
 from bba.preop_reservation import (
-    CATEGORY_SEED_STATUS,
+    CATEGORY_OVER_ABOVE_PER_UL,
     PROCEDURE_GROUP_TO_CATEGORY,
     PlateletCategory,
-    SeedStatus,
     category_for_groups,
 )
 from bba.preop_reservation.reference import MSBOS_REFERENCE_FILENAME
@@ -30,12 +29,23 @@ def test_mapping_exactly_covers_all_vendored_procedure_groups() -> None:
     assert len(csv_groups) == 28
 
 
-def test_category_seed_statuses_keep_unsigned_routes_in_review() -> None:
-    assert CATEGORY_SEED_STATUS == {
-        PlateletCategory.MAJOR_NON_NEURAXIAL: SeedStatus.RESOLVED,
-        PlateletCategory.CARDIAC_CPB: SeedStatus.UNRESOLVED_ROUTE_REVIEW,
-        PlateletCategory.NEURAXIAL: SeedStatus.UNRESOLVED_ROUTE_REVIEW,
-        PlateletCategory.UNCATEGORISED: SeedStatus.UNRESOLVED_ROUTE_REVIEW,
+def test_tumor_tr_pediatric_are_signed_to_major_non_neuraxial() -> None:
+    # Signed Section C: the three previously-uncategorised groups are MNS.
+    for group in ("Tumor", "TR", "Pediatric"):
+        assert (
+            PROCEDURE_GROUP_TO_CATEGORY[group] is PlateletCategory.MAJOR_NON_NEURAXIAL
+        )
+
+
+def test_every_category_has_a_signed_cutoff() -> None:
+    # Every category the mapping can produce must have a numeric cutoff so the
+    # evaluator never reaches an unresolved category.
+    for category in set(PROCEDURE_GROUP_TO_CATEGORY.values()):
+        assert category in CATEGORY_OVER_ABOVE_PER_UL
+    assert CATEGORY_OVER_ABOVE_PER_UL == {
+        PlateletCategory.MAJOR_NON_NEURAXIAL: 80_000,
+        PlateletCategory.CARDIAC_CPB: 100_000,
+        PlateletCategory.NEURAXIAL: 100_000,
     }
 
 

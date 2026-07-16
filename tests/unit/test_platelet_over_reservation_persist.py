@@ -41,24 +41,36 @@ def _platelet_result(classification: str) -> PlateletClassifierResult:
 
 
 def _decision(*, review: bool = False) -> PlateletReservationDecision:
+    # Over: a real count above the signed cutoff. Review: a genuinely-missing
+    # count (missing_pre_op_count) — the count MUST be None so the snapshot is
+    # not self-contradictory.
     return PlateletReservationDecision(
         resolved_icd9="1234",
         category="major_non_neuraxial",
-        pre_op_count_k_ul=120.0,
-        threshold_per_ul=80_000,
-        high_risk_ceiling_per_ul=100_000,
+        pre_op_count_k_ul=None if review else 120.0,
+        over_above_per_ul=80_000,
         reserved_units=2,
         is_over=not review,
-        reason=(
-            "gray_band_major_non_neuraxial" if review else "over_major_non_neuraxial"
-        ),
+        reason=("missing_pre_op_count" if review else "over_major_non_neuraxial"),
         reference_hash="a" * 64,
-        seed_pending_signoff=True,
+        clinician_signed=True,
     )
 
 
 def _context(*, review: bool = False) -> PipelineRowContext:
     decision = _decision(review=review)
+    platelet_result = (
+        PlateletLookupResult(
+            value_k_ul=None, datetime_utc=None, source=None, freshness="missing"
+        )
+        if decision.pre_op_count_k_ul is None
+        else PlateletLookupResult(
+            value_k_ul=decision.pre_op_count_k_ul,
+            datetime_utc=_NOW,
+            source="HEMATOLOGY",
+            freshness="fresh",
+        )
+    )
     return PipelineRowContext.for_platelet(
         order=AuditOrder(
             audit_id=f"audit-platelet-msbos-{'review' if review else 'over'}",
@@ -71,12 +83,7 @@ def _context(*, review: bool = False) -> PipelineRowContext:
             diagnosis_codes=(),
             component="platelet",
         ),
-        platelet_result=PlateletLookupResult(
-            value_k_ul=decision.pre_op_count_k_ul,
-            datetime_utc=_NOW,
-            source="HEMATOLOGY",
-            freshness="fresh",
-        ),
+        platelet_result=platelet_result,
         hn_hash="hn_hash",
         an_hash="an_hash",
         redactor_version="test",
@@ -135,7 +142,7 @@ def test_platelet_persist_helpers_write_paired_marker_idempotently(
     expected_reason: str,
 ) -> None:
     store = AuditStore(
-        AuditStoreConfig(root_dir=tmp_path / "store", code_version="test+msbos3")
+        AuditStoreConfig(root_dir=tmp_path / "store", code_version="test+msbos4")
     )
     context = _context(review=review)
     persist = (
@@ -162,7 +169,7 @@ def test_platelet_persist_helpers_write_paired_marker_idempotently(
         "category": decision.category,
         "pre_op_count_k_ul": decision.pre_op_count_k_ul,
         "reserved_units": decision.reserved_units,
-        "seed_pending_signoff": decision.seed_pending_signoff,
+        "clinician_signed": decision.clinician_signed,
     }
     expected_request[
         "platelet_reservation_review" if review else "platelet_over_reservation"
@@ -184,7 +191,7 @@ def test_platelet_over_row_uses_existing_component_blind_inappropriate_fold(
     tmp_path: Path,
 ) -> None:
     store = AuditStore(
-        AuditStoreConfig(root_dir=tmp_path / "store", code_version="test+msbos3")
+        AuditStoreConfig(root_dir=tmp_path / "store", code_version="test+msbos4")
     )
     _persist_platelet_over_reservation_row(
         _context(review=False), audit_store=store, run_id=_RUN_ID

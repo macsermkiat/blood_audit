@@ -207,10 +207,13 @@ def test_flag_off_matches_pre_feature_behavior_and_never_reserves(
 @pytest.mark.parametrize(
     ("planned_code", "expected_final", "expected_reason"),
     [
+        # count 120k (from _configure_platelet_pilot): over the MNS 80k cutoff and
+        # over the signed cardiothoracic 100k cutoff (Section B-i), so both are
+        # PREOP_OVER_RESERVATION.
         ("0613", "PREOP_OVER_RESERVATION", "preop_over_reservation"),
-        ("3220", "NEEDS_REVIEW", "platelet_reservation_review"),
+        ("3220", "PREOP_OVER_RESERVATION", "preop_over_reservation"),
     ],
-    ids=["major-non-neuraxial-over", "cardiothoracic-review"],
+    ids=["major-non-neuraxial-over", "cardiothoracic-over"],
 )
 def test_flag_on_pilot_persists_platelet_reservation_terminal_and_reports_it(
     monkeypatch: pytest.MonkeyPatch,
