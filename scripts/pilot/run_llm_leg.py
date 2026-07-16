@@ -2055,7 +2055,9 @@ def main() -> None:
         f"{len(over_reserved_ctxs)}"
     )
     print(f"\nLLM-bound: {len(llm_contexts)} / {len(contexts)}")
-    if not llm_contexts:
+    # Over-reserved rows are persisted but not submitted; a run filtered to only
+    # such REQNOs still has verdicts to report, so it must not exit here (#163).
+    if not llm_contexts and not over_reserved_ctxs:
         sys.exit("nothing to submit")
 
     submissions: list[BatchSubmissionRequest] = []
@@ -2209,7 +2211,12 @@ def main() -> None:
         f"{'conf':<6} {'review_reason':<22} {'reasoning_en (head)'}"
     )
     print("=" * 120)
-    for ctx in llm_contexts:
+    # Over-reserved rows were persisted (PREOP_OVER_RESERVATION) but skipped
+    # LLM submission; surface them in the console table and JSON report so the
+    # deterministic verdict is not invisible to the review page (#163). Empty
+    # when the flag is off, so a flag-off run is byte-identical.
+    reported_ctxs = [*llm_contexts, *over_reserved_ctxs]
+    for ctx in reported_ctxs:
         det = report_classifier_results[ctx.order.audit_id]
         r = rows_by_id.get(ctx.order.audit_id)
         reasoning = r.reasoning_summary_en[:60] if r and r.reasoning_summary_en else ""
@@ -2222,7 +2229,7 @@ def main() -> None:
         )
 
     report = []
-    for ctx in llm_contexts:
+    for ctx in reported_ctxs:
         det = report_classifier_results[ctx.order.audit_id]
         r = rows_by_id.get(ctx.order.audit_id)
         ev = anchor_by_id.get(ctx.order.audit_id)

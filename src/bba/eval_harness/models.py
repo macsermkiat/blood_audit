@@ -71,8 +71,13 @@ Classification = Literal[
     "INAPPROPRIATE",
     "NEEDS_REVIEW",
     "INSUFFICIENT_EVIDENCE",
+    "PREOP_OVER_RESERVATION",
 ]
-"""The four pipeline output classes (PRD §"Solution")."""
+"""The four pipeline output classes (PRD §"Solution") plus the MSBOS
+``PREOP_OVER_RESERVATION`` terminal (#163), which the sampler/reweighter treat
+as inappropriate-like. Admitting it here lets an MSBOS-run population validate;
+without it the raw over-reservation label would fail :class:`AuditCase`
+validation before the inappropriate-like fold could run."""
 
 
 SplitStrategy = Literal["lomo", "blocked"]

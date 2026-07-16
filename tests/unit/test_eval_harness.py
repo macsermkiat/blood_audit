@@ -1629,3 +1629,31 @@ class TestPublicSurface:
             inappropriate_enrichment_per_stratum=138,
         )
         assert targets.per_stratum[Stratum.HB_LT_7] == 140
+
+
+class TestPreopOverReservationIsInappropriateLike:
+    """#163: the MSBOS over-reservation terminal is admitted and scored positive.
+
+    The raw ``PREOP_OVER_RESERVATION`` label must both validate as an
+    ``AuditCase`` prediction and be folded into the inappropriate-like positive
+    class by the outcome-anchored falsification / sampling / reweight paths;
+    otherwise an MSBOS-run population fails validation before the fold can run.
+    """
+
+    def test_audit_case_admits_over_reservation_label(self) -> None:
+        case = _case(audit_id="msbos-1", pred="PREOP_OVER_RESERVATION")
+
+        assert case.pred_classification == "PREOP_OVER_RESERVATION"
+
+    def test_falsification_counts_over_reservation_as_inappropriate(self) -> None:
+        result = outcome_anchored_falsification(
+            predictions=["PREOP_OVER_RESERVATION", "APPROPRIATE"],
+            outcomes=[
+                FalsificationOutcome.FURTHER_TRANSFUSION_24H,
+                FalsificationOutcome.NO_FURTHER_TRANSFUSION,
+            ],
+        )
+
+        # Only the over-reservation row is a positive; the APPROPRIATE row is not.
+        assert result.n_inappropriate_pred == 1
+        assert result.n_contradicted == 1
