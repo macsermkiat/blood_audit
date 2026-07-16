@@ -58,6 +58,43 @@ def test_candidate_phrase_split_across_two_notes_does_not_match() -> None:
     )
 
 
+def test_generic_alias_subsumed_by_specific_name_does_not_false_resolve() -> None:
+    # Real reference shape (ICD-9 8151): "THA" (G/M 1) is a sub-phrase of
+    # "THA, revision THA" (G/M 2). A note about the revision case must NOT
+    # resolve to the primary-THA (lower-unit) row via the generic name — 81/120
+    # conflicting codes carry such a subsumption pair.
+    candidates = [
+        _candidate("THA", recommended_units=1),
+        _candidate("THA, revision THA", recommended_units=2),
+    ]
+    assert (
+        resolve_operation_from_notes(
+            candidates=candidates,
+            note_texts=["Plan: revision THA next week."],
+        )
+        is None
+    ), "a substring-generic candidate must not resolve a more-specific note"
+    assert (
+        resolve_operation_from_notes(
+            candidates=candidates, note_texts=["THA scheduled."]
+        )
+        is None
+    ), "a bare generic mention is ambiguous with the specific variant"
+
+
+def test_specific_operation_phrase_still_resolves_over_its_generic_alias() -> None:
+    # The longer, specific name still resolves when its FULL phrase is present.
+    candidates = [
+        _candidate("THA", recommended_units=1),
+        _candidate("THA, revision THA", recommended_units=2),
+    ]
+    assert resolve_operation_from_notes(
+        candidates=candidates, note_texts=["Booked for THA, revision THA."]
+    ) == MsbosRow(msbos="G/M", recommended_units=2), (
+        "the specific operation phrase must still resolve its own recommendation"
+    )
+
+
 def test_two_distinct_recommendations_refuse_to_guess() -> None:
     resolved = resolve_operation_from_notes(
         candidates=[

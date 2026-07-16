@@ -24,10 +24,20 @@ def resolve_operation_from_notes(
     multiple distinct recommendations match. Input ordering does not matter.
     """
     norm_notes = [_normalize(text) for text in note_texts]
+    norm_candidates = [
+        (candidate, _normalize(candidate.operation)) for candidate in candidates
+    ]
     matched: set[MsbosRow] = set()
-    for candidate in candidates:
-        needle = _normalize(candidate.operation)
+    for candidate, needle in norm_candidates:
         if needle.strip() == "":
+            continue
+        # A candidate whose full name is a proper sub-phrase of another
+        # candidate's name for the same code cannot be confidently matched: a
+        # note carrying the shorter, generic phrase (e.g. "THA") does not
+        # distinguish it from the longer operation (e.g. "THA, revision THA"),
+        # so matching it would silently resolve to the wrong recommendation.
+        # Disqualify it — resolution requires the specific operation phrase.
+        if any(needle != other and needle in other for _, other in norm_candidates):
             continue
         if any(needle in note for note in norm_notes):
             matched.add(
