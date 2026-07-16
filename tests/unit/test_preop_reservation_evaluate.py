@@ -26,7 +26,11 @@ _ROWS = [
         ("2000", 3, "over_gm_excess", True, 2),
         ("2000", 2, "within_recommendation", False, 2),
         ("2000", 1, "within_recommendation", False, 2),
-        ("3000", 8, "type_and_screen_deferred", False, 1),
+        # T2 (#164): T/S recommended but units crossmatched -> over; zero units
+        # is a compliant screen-only reservation.
+        ("3000", 8, "over_type_and_screen_crossmatched", True, 1),
+        ("3000", 1, "over_type_and_screen_crossmatched", True, 1),
+        ("3000", 0, "type_and_screen_screen_only", False, 1),
         ("9999", 2, "unresolved_code", False, 0),
         ("4000", 2, "ambiguous_code", False, 0),
         ("", 2, "no_planned_op", False, 0),

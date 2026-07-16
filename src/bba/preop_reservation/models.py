@@ -10,8 +10,9 @@ MsbosToken = Literal["none", "G/M", "T/S"]
 ReservationReason = Literal[
     "over_none",
     "over_gm_excess",
+    "over_type_and_screen_crossmatched",
     "within_recommendation",
-    "type_and_screen_deferred",
+    "type_and_screen_screen_only",
     "unresolved_code",
     "ambiguous_code",
     "no_planned_op",
