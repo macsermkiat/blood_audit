@@ -150,6 +150,7 @@ so a reviewer dashboard can triage the two failure modes separately."""
 
 PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON = "preop_reservation_unconfirmed"
 PREOP_OVER_RESERVATION_REVIEW_REASON = "preop_over_reservation"
+OPERATION_UNRESOLVED_REVIEW_REASON = "operation_unresolved"
 ADMINISTRATION_CONTRADICTION_REVIEW_REASON = "administration_signal_contradiction"
 
 _RETURNS_TERMINALS = frozenset({"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"})
@@ -163,6 +164,18 @@ def is_over_reservation(
         return False
     decision = context.reservation_decision
     if decision is None or not decision.is_over:
+        return False
+    return classifier_result.classification not in _RETURNS_TERMINALS
+
+
+def is_operation_unresolved(
+    *, classifier_result: ClassifierResult, context: PipelineRowContext
+) -> bool:
+    """True iff the in-run snapshot is operation_unresolved (flag-gated, returns-safe)."""
+    if not feature_flags.MSBOS_RESERVATION_ENABLED:
+        return False
+    decision = context.reservation_decision
+    if decision is None or decision.reason != "operation_unresolved":
         return False
     return classifier_result.classification not in _RETURNS_TERMINALS
 
@@ -1545,6 +1558,40 @@ def _audit_row_for_over_reservation(
             "final_classification": "PREOP_OVER_RESERVATION",
             "review_reason": PREOP_OVER_RESERVATION_REVIEW_REASON,
         }
+    )
+
+
+def _audit_row_for_operation_unresolved(
+    *,
+    run_id: str,
+    context: PipelineRowContext,
+    classifier_result: ClassifierResult,
+    review_reason: str,
+    verifier_pass: bool,
+    verifier_retries: int,
+    model_id: str,
+    reasoning_en: str,
+    reasoning_th: str,
+    indications: tuple[dict[str, object], ...],
+    negative_evidence: tuple[str, ...],
+    confidence: float,
+    escalated: bool,
+) -> AuditRow:
+    """Construct a deterministic NEEDS_REVIEW row for unresolved operation identity."""
+    return _audit_row_for_needs_review(
+        run_id=run_id,
+        context=context,
+        classifier_result=classifier_result,
+        review_reason=OPERATION_UNRESOLVED_REVIEW_REASON,
+        verifier_pass=verifier_pass,
+        verifier_retries=verifier_retries,
+        model_id=model_id,
+        reasoning_en=reasoning_en,
+        reasoning_th=reasoning_th,
+        indications=indications,
+        negative_evidence=negative_evidence,
+        confidence=confidence,
+        escalated=escalated,
     )
 
 

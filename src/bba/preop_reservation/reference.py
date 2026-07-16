@@ -7,13 +7,13 @@ import hashlib
 import io
 import re
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from importlib import resources
 from types import MappingProxyType
 from typing import Literal, cast
 
-from bba.preop_reservation.models import MsbosRow, MsbosToken
+from bba.preop_reservation.models import CandidateOperation, MsbosRow, MsbosToken
 
 MSBOS_REFERENCE_FILENAME = "OPBloodLimit_by_icd9.csv"
 _REQUIRED_COLUMNS = frozenset({"icd9_code_nodot", "msbos", "recommended_units"})
@@ -34,6 +34,9 @@ class MsbosReference:
 
     content_hash: str
     _rows_by_code: Mapping[str, frozenset[MsbosRow]]
+    _candidates_by_code: Mapping[str, tuple[CandidateOperation, ...]] = field(
+        repr=False, compare=False
+    )
 
     def resolve(self, icd9_nodot: str) -> Resolution:
         """Resolve a code to one recommendation, ambiguity, or no match."""
@@ -43,6 +46,10 @@ class MsbosReference:
         if len(matches) > 1:
             return "ambiguous"
         return next(iter(matches))
+
+    def candidates_for(self, icd9_nodot: str) -> tuple[CandidateOperation, ...]:
+        """Raw candidate operations sharing this code (deterministically sorted); () if absent."""
+        return self._candidates_by_code.get(icd9_nodot.strip(), ())
 
 
 def parse_recommended_units(raw: str) -> int:
@@ -63,6 +70,7 @@ def _reference_from_rows(
 ) -> MsbosReference:
     """Build a validated reference from parsed rows (test seam)."""
     by_code: dict[str, set[MsbosRow]] = {}
+    candidates_by_code: dict[str, list[CandidateOperation]] = {}
     for row_number, row in enumerate(rows, start=2):
         missing = _REQUIRED_COLUMNS.difference(row)
         if missing:
@@ -91,11 +99,37 @@ def _reference_from_rows(
             recommended_units=units,
         )
         by_code.setdefault(code, set()).add(recommendation)
+        candidates_by_code.setdefault(code, []).append(
+            CandidateOperation(
+                operation=row.get("operation", "").strip(),
+                msbos=cast(MsbosToken, token),
+                recommended_units=units,
+            )
+        )
 
     frozen_rows = MappingProxyType(
         {code: frozenset(values) for code, values in sorted(by_code.items())}
     )
-    return MsbosReference(content_hash=content_hash, _rows_by_code=frozen_rows)
+    frozen_candidates = MappingProxyType(
+        {
+            code: tuple(
+                sorted(
+                    values,
+                    key=lambda candidate: (
+                        candidate.operation,
+                        candidate.msbos,
+                        candidate.recommended_units,
+                    ),
+                )
+            )
+            for code, values in sorted(candidates_by_code.items())
+        }
+    )
+    return MsbosReference(
+        content_hash=content_hash,
+        _rows_by_code=frozen_rows,
+        _candidates_by_code=frozen_candidates,
+    )
 
 
 @lru_cache(maxsize=1)

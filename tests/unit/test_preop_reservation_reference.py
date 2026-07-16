@@ -89,3 +89,66 @@ def test_resolve_unique_ambiguous_and_absent_codes_data_driven() -> None:
     assert isinstance(reference.resolve(unique_code), MsbosRow)
     assert reference.resolve(ambiguous_code) == "ambiguous"
     assert reference.resolve("not-in-reference") is None
+
+
+def test_candidates_for_conflicting_code_are_named_sorted_and_absent_is_empty() -> None:
+    reference = load_msbos_reference()
+
+    candidates = reference.candidates_for("0124")
+
+    assert candidates, "a real conflicting code must expose its raw named rows"
+    assert {candidate.operation for candidate in candidates} >= {
+        "Craniofacial resection",
+        "Craniotomy (aneurysm)",
+    }, "candidate names are the note-disambiguation vocabulary"
+    assert candidates == tuple(
+        sorted(
+            candidates,
+            key=lambda candidate: (
+                candidate.operation,
+                candidate.msbos,
+                candidate.recommended_units,
+            ),
+        )
+    ), "candidate order must be deterministic regardless of CSV row order"
+    assert reference.candidates_for("not-in-reference") == (), (
+        "an absent code has no candidate operation names"
+    )
+
+
+def test_multiple_operation_names_with_one_recommendation_still_resolve() -> None:
+    reference = load_msbos_reference()
+
+    candidates = reference.candidates_for("194")
+
+    assert {candidate.operation for candidate in candidates} == {
+        "EAC surgery",
+        "Myringotomy + PE tube",
+    }, "the regression code must genuinely carry multiple raw operation names"
+    assert reference.resolve("194") == MsbosRow(msbos="none", recommended_units=0), (
+        "MsbosRow identity must remain recommendation-only, never operation-name based"
+    )
+
+
+def test_candidate_index_does_not_change_reference_identity_or_hash() -> None:
+    shared = {
+        "icd9_code_nodot": "1234",
+        "msbos": "G/M",
+        "recommended_units": "2",
+    }
+    first = _reference_from_rows(
+        [{**shared, "operation": "Operation A"}], content_hash="c" * 64
+    )
+    second = _reference_from_rows(
+        [{**shared, "operation": "Operation B"}], content_hash="c" * 64
+    )
+
+    assert first == second, (
+        "the auxiliary candidate-name index must not alter reference equality"
+    )
+    assert first.content_hash == second.content_hash == "c" * 64, (
+        "the supplied raw-byte hash remains the reference content identity"
+    )
+    assert "Operation A" not in repr(first), (
+        "the auxiliary candidate-name index must not alter reference repr"
+    )

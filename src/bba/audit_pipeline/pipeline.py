@@ -897,6 +897,7 @@ def _persist_over_reservation_row(
     fingerprint = hashlib.sha256(
         f"{run_id}|{context.order.audit_id}|over-reservation".encode("utf-8")
     ).hexdigest()[:16]
+    decision = context.reservation_decision
     marker_call = LlmCall(
         call_id=f"call-{context.order.audit_id}-msbos-{fingerprint}",
         audit_id=context.order.audit_id,
@@ -907,10 +908,78 @@ def _persist_over_reservation_row(
         request_json={
             "over_reservation": True,
             "audit_id": context.order.audit_id,
+            "reason": decision.reason if decision is not None else None,
+            "resolved_icd9": (decision.resolved_icd9 if decision is not None else None),
+            "note_resolved": (
+                decision.note_resolved if decision is not None else False
+            ),
         },
         response_json={
             "classification": "PREOP_OVER_RESERVATION",
             "review_reason": PREOP_OVER_RESERVATION_REVIEW_REASON,
+        },
+        request_timestamp=context.order.order_datetime,
+        latency_ms=0,
+        extended_thinking_blocks=None,
+        cold_storage_uri=None,
+    )
+    audit_store.write(row, [marker_call])
+
+
+def _persist_operation_unresolved_row(
+    context: PipelineRowContext,
+    *,
+    classifier_result: ClassifierResult,
+    audit_store: AuditStore,
+    run_id: str,
+) -> None:
+    """Persist unresolved operation identity as NEEDS_REVIEW with a marker call."""
+    from bba.audit_pipeline.replay import (
+        OPERATION_UNRESOLVED_REVIEW_REASON,
+        _audit_row_for_operation_unresolved,
+    )
+
+    row = _audit_row_for_operation_unresolved(
+        run_id=run_id,
+        context=context,
+        classifier_result=classifier_result,
+        review_reason=OPERATION_UNRESOLVED_REVIEW_REASON,
+        verifier_pass=True,
+        verifier_retries=0,
+        model_id="msbos-reservation",
+        reasoning_en=(
+            "The conflicting operation code could not be uniquely resolved from "
+            "the windowed clinical notes; clinician review is required."
+        ),
+        reasoning_th="",
+        indications=(),
+        negative_evidence=(),
+        confidence=1.0,
+        escalated=False,
+    )
+    fingerprint = hashlib.sha256(
+        f"{run_id}|{context.order.audit_id}|operation-unresolved".encode("utf-8")
+    ).hexdigest()[:16]
+    decision = context.reservation_decision
+    marker_call = LlmCall(
+        call_id=f"call-{context.order.audit_id}-msbos-{fingerprint}",
+        audit_id=context.order.audit_id,
+        run_id=run_id,
+        model_id="msbos-reservation",
+        anthropic_version="n/a",
+        prompt_cache_id=None,
+        request_json={
+            "operation_unresolved": True,
+            "audit_id": context.order.audit_id,
+            "reason": decision.reason if decision is not None else None,
+            "resolved_icd9": (decision.resolved_icd9 if decision is not None else None),
+            "note_resolved": (
+                decision.note_resolved if decision is not None else False
+            ),
+        },
+        response_json={
+            "classification": "NEEDS_REVIEW",
+            "review_reason": OPERATION_UNRESOLVED_REVIEW_REASON,
         },
         request_timestamp=context.order.order_datetime,
         latency_ms=0,
@@ -1132,4 +1201,9 @@ def _now_utc() -> datetime:
     return datetime.now(UTC)
 
 
-__all__ = ["_persist_over_reservation_row", "process_audit_order", "run_pipeline"]
+__all__ = [
+    "_persist_operation_unresolved_row",
+    "_persist_over_reservation_row",
+    "process_audit_order",
+    "run_pipeline",
+]
