@@ -70,9 +70,13 @@ it off for a pilot run.
 MSBOS_RESERVATION_ENABLED: bool = False
 """Enable the MSBOS pre-op reservation-appropriateness arm (default: OFF).
 
-Ticket #162 (spec MSBOS) adds inert T0 scaffolding only. The pilot boundary
-may override this default with ``BBA_PILOT_MSBOS_RESERVATION``; no producer
-emits the MSBOS verdict until a later ticket.
+Spec MSBOS, tickets #162-#166. When enabled (via the pilot boundary override
+``BBA_PILOT_MSBOS_RESERVATION``), the pilot leg emits clinical terminal rows:
+the RBC over-reservation verdict ``PREOP_OVER_RESERVATION`` (T1-T3, #163-#165)
+and the platelet reservation verdict/review (T4, #166). This is NOT inert
+scaffolding. It stays default-OFF because the platelet thresholds are SEED
+values transcribed from the DRAFT surgical guideline and go-live is gated on the
+clinician-signed sign-off worksheet (#166); RBC MSBOS is likewise pilot-gated.
 """
 
 __all__: Sequence[str] = (

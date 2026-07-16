@@ -1,11 +1,13 @@
-"""Reserved-unit quantity keying for the future MSBOS evaluator (#162).
+"""Reserved-unit quantity keying for the MSBOS evaluator (#162).
 
 Keying BDVSTDT lines on ``(HN, REQNO)`` prevents a REQNO reused across
 admissions or patients from importing foreign reservation lines. This mirrors
 the ``usetype_values_by_hn_reqno`` rationale in ``scripts/pilot/run_pipeline.py``.
 Restricting each total to its evaluated :class:`ComponentFamily` also keeps an
-RBC reservation from counting platelet units. The accessor is inert in T0;
-ticket #162 deliberately wires no consumer or verdict producer yet.
+RBC reservation from counting platelet units. Introduced inert in T0 (#162);
+the pilot leg now consumes it for both the RBC (RED_CELL, T1-T3) and platelet
+(PLATELET, T4) reservation verdicts, behind the default-OFF
+``MSBOS_RESERVATION_ENABLED`` flag.
 """
 
 from __future__ import annotations

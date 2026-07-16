@@ -43,7 +43,7 @@ from bba.cohort_detector import CohortAssignment
 from bba.declared_use import DeclaredUseLabel
 from bba.hb_lookup import HbLookupResult
 from bba.platelet_lookup.models import PlateletLookupResult
-from bba.preop_reservation import ReservationDecision
+from bba.preop_reservation import PlateletReservationDecision, ReservationDecision
 from bba.prompt_builder import EvidenceChunk
 from bba.returns_ledger import ReturnsSummary
 from bba.vitals_extractor import AdministrationSummary, PeriopSummary, VitalsResult
@@ -204,6 +204,7 @@ class PipelineRowContext(BaseModel):
     returns_summary: ReturnsSummary | None = None
 
     reservation_decision: ReservationDecision | None = None
+    platelet_reservation_decision: PlateletReservationDecision | None = None
 
     declared_use: DeclaredUseLabel | None = None
 
@@ -248,6 +249,7 @@ class PipelineRowContext(BaseModel):
         periop_summary: "PeriopSummary | None" = None,
         returns_summary: "ReturnsSummary | None" = None,
         platelet_mtp_suppressed: bool = False,
+        platelet_reservation_decision: "PlateletReservationDecision | None" = None,
         enable_missing_hb_positive_evidence: bool = False,
     ) -> "PipelineRowContext":
         """Build a PipelineRowContext for a platelet order.
@@ -309,6 +311,7 @@ class PipelineRowContext(BaseModel):
             component="platelet",
             platelet_result=platelet_result,
             platelet_mtp_suppressed=platelet_mtp_suppressed,
+            platelet_reservation_decision=platelet_reservation_decision,
             enable_missing_hb_positive_evidence=enable_missing_hb_positive_evidence,
         )
 

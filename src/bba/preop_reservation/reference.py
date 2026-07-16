@@ -37,6 +37,7 @@ class MsbosReference:
     _candidates_by_code: Mapping[str, tuple[CandidateOperation, ...]] = field(
         repr=False, compare=False
     )
+    _groups_by_code: Mapping[str, tuple[str, ...]] = field(repr=False, compare=False)
 
     def resolve(self, icd9_nodot: str) -> Resolution:
         """Resolve a code to one recommendation, ambiguity, or no match."""
@@ -50,6 +51,10 @@ class MsbosReference:
     def candidates_for(self, icd9_nodot: str) -> tuple[CandidateOperation, ...]:
         """Raw candidate operations sharing this code (deterministically sorted); () if absent."""
         return self._candidates_by_code.get(icd9_nodot.strip(), ())
+
+    def groups_for(self, icd9_nodot: str) -> tuple[str, ...]:
+        """Sorted unique procedure groups sharing this code; () if absent."""
+        return self._groups_by_code.get(icd9_nodot.strip(), ())
 
 
 def parse_recommended_units(raw: str) -> int:
@@ -71,6 +76,7 @@ def _reference_from_rows(
     """Build a validated reference from parsed rows (test seam)."""
     by_code: dict[str, set[MsbosRow]] = {}
     candidates_by_code: dict[str, list[CandidateOperation]] = {}
+    groups_by_code: dict[str, list[str]] = {}
     for row_number, row in enumerate(rows, start=2):
         missing = _REQUIRED_COLUMNS.difference(row)
         if missing:
@@ -106,6 +112,9 @@ def _reference_from_rows(
                 recommended_units=units,
             )
         )
+        group = row.get("procedure_group", "").strip()
+        if group:
+            groups_by_code.setdefault(code, []).append(group)
 
     frozen_rows = MappingProxyType(
         {code: frozenset(values) for code, values in sorted(by_code.items())}
@@ -125,10 +134,17 @@ def _reference_from_rows(
             for code, values in sorted(candidates_by_code.items())
         }
     )
+    frozen_groups = MappingProxyType(
+        {
+            code: tuple(sorted(set(values)))
+            for code, values in sorted(groups_by_code.items())
+        }
+    )
     return MsbosReference(
         content_hash=content_hash,
         _rows_by_code=frozen_rows,
         _candidates_by_code=frozen_candidates,
+        _groups_by_code=frozen_groups,
     )
 
 

@@ -116,6 +116,34 @@ def test_candidates_for_conflicting_code_are_named_sorted_and_absent_is_empty() 
     )
 
 
+def test_groups_for_returns_sorted_unique_groups_and_absent_is_empty() -> None:
+    reference = load_msbos_reference()
+
+    groups = reference.groups_for("0124")
+
+    assert groups == tuple(sorted(set(groups)))
+    assert groups == ("Head-Neck", "Oto", "Rhino", "ศัลยกรรมระบบประสาท")
+    assert reference.groups_for("not-in-reference") == ()
+
+
+def test_groups_for_optional_column_absence_is_empty() -> None:
+    reference = _reference_from_rows(
+        [
+            {
+                "icd9_code_nodot": "1234",
+                "msbos": "G/M",
+                "recommended_units": "2",
+                "operation": "Operation A",
+            }
+        ],
+        content_hash="d" * 64,
+    )
+
+    assert reference.groups_for("1234") == (), (
+        "procedure_group remains optional so RBC-only test seams stay unchanged"
+    )
+
+
 def test_multiple_operation_names_with_one_recommendation_still_resolve() -> None:
     reference = load_msbos_reference()
 
@@ -151,4 +179,30 @@ def test_candidate_index_does_not_change_reference_identity_or_hash() -> None:
     )
     assert "Operation A" not in repr(first), (
         "the auxiliary candidate-name index must not alter reference repr"
+    )
+
+
+def test_group_index_does_not_change_rbc_reference_identity_repr_or_resolution() -> (
+    None
+):
+    shared = {
+        "icd9_code_nodot": "1234",
+        "msbos": "G/M",
+        "recommended_units": "2",
+        "operation": "Operation A",
+    }
+    first = _reference_from_rows(
+        [{**shared, "procedure_group": "Head-Neck"}], content_hash="e" * 64
+    )
+    second = _reference_from_rows(
+        [{**shared, "procedure_group": "C Spine"}], content_hash="e" * 64
+    )
+
+    assert first == second
+    assert repr(first) == repr(second)
+    assert first.content_hash == second.content_hash == "e" * 64
+    assert (
+        first.resolve("1234")
+        == second.resolve("1234")
+        == MsbosRow(msbos="G/M", recommended_units=2)
     )

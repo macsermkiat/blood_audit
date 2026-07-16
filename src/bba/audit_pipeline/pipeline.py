@@ -989,6 +989,152 @@ def _persist_operation_unresolved_row(
     audit_store.write(row, [marker_call])
 
 
+def _persist_platelet_over_reservation_row(
+    context: PipelineRowContext,
+    *,
+    audit_store: AuditStore,
+    run_id: str,
+) -> None:
+    """Persist the platelet over-reservation verdict with a paired marker call."""
+    from bba.audit_pipeline.replay import (
+        PREOP_OVER_RESERVATION_REVIEW_REASON,
+        _audit_row_for_over_reservation,
+    )
+
+    classifier_result = ClassifierResult(
+        classification="NEEDS_REVIEW",
+        rationale="msbos_platelet_reservation",
+        cohort_threshold=None,
+        bypass_reason=BypassReason.NONE,
+    )
+    row = _audit_row_for_over_reservation(
+        run_id=run_id,
+        context=context,
+        classifier_result=classifier_result,
+        review_reason=PREOP_OVER_RESERVATION_REVIEW_REASON,
+        verifier_pass=True,
+        verifier_retries=0,
+        model_id="msbos-platelet-reservation",
+        reasoning_en=(
+            "Pre-op platelet reservation exceeds the DRAFT recommendation for "
+            "the planned operation; not submitted to LLM."
+        ),
+        reasoning_th="",
+        indications=(),
+        negative_evidence=(),
+        confidence=1.0,
+        escalated=False,
+    )
+    fingerprint = hashlib.sha256(
+        f"{run_id}|{context.order.audit_id}|platelet-over-reservation".encode("utf-8")
+    ).hexdigest()[:16]
+    decision = context.platelet_reservation_decision
+    marker_call = LlmCall(
+        call_id=f"call-{context.order.audit_id}-msbos-plt-{fingerprint}",
+        audit_id=context.order.audit_id,
+        run_id=run_id,
+        model_id="msbos-platelet-reservation",
+        anthropic_version="n/a",
+        prompt_cache_id=None,
+        request_json={
+            "platelet_over_reservation": True,
+            "audit_id": context.order.audit_id,
+            "reason": decision.reason if decision is not None else None,
+            "resolved_icd9": (decision.resolved_icd9 if decision is not None else None),
+            "category": decision.category if decision is not None else None,
+            "pre_op_count_k_ul": (
+                decision.pre_op_count_k_ul if decision is not None else None
+            ),
+            "reserved_units": decision.reserved_units if decision is not None else 0,
+            "seed_pending_signoff": (
+                decision.seed_pending_signoff if decision is not None else True
+            ),
+        },
+        response_json={
+            "classification": "PREOP_OVER_RESERVATION",
+            "review_reason": PREOP_OVER_RESERVATION_REVIEW_REASON,
+        },
+        request_timestamp=context.order.order_datetime,
+        latency_ms=0,
+        extended_thinking_blocks=None,
+        cold_storage_uri=None,
+    )
+    audit_store.write(row, [marker_call])
+
+
+def _persist_platelet_reservation_review_row(
+    context: PipelineRowContext,
+    *,
+    audit_store: AuditStore,
+    run_id: str,
+) -> None:
+    """Persist a platelet reservation NEEDS_REVIEW row with a marker call."""
+    from bba.audit_pipeline.replay import (
+        PLATELET_RESERVATION_REVIEW_REASON,
+        _audit_row_for_platelet_reservation_review,
+    )
+
+    classifier_result = ClassifierResult(
+        classification="NEEDS_REVIEW",
+        rationale="msbos_platelet_reservation",
+        cohort_threshold=None,
+        bypass_reason=BypassReason.NONE,
+    )
+    row = _audit_row_for_platelet_reservation_review(
+        run_id=run_id,
+        context=context,
+        classifier_result=classifier_result,
+        review_reason=PLATELET_RESERVATION_REVIEW_REASON,
+        verifier_pass=True,
+        verifier_retries=0,
+        model_id="msbos-platelet-reservation",
+        reasoning_en=(
+            "Pre-op platelet reservation appropriateness is unresolved under "
+            "the pending-sign-off DRAFT rule; clinician review is required."
+        ),
+        reasoning_th="",
+        indications=(),
+        negative_evidence=(),
+        confidence=1.0,
+        escalated=False,
+    )
+    fingerprint = hashlib.sha256(
+        f"{run_id}|{context.order.audit_id}|platelet-reservation-review".encode("utf-8")
+    ).hexdigest()[:16]
+    decision = context.platelet_reservation_decision
+    marker_call = LlmCall(
+        call_id=f"call-{context.order.audit_id}-msbos-plt-{fingerprint}",
+        audit_id=context.order.audit_id,
+        run_id=run_id,
+        model_id="msbos-platelet-reservation",
+        anthropic_version="n/a",
+        prompt_cache_id=None,
+        request_json={
+            "platelet_reservation_review": True,
+            "audit_id": context.order.audit_id,
+            "reason": decision.reason if decision is not None else None,
+            "resolved_icd9": (decision.resolved_icd9 if decision is not None else None),
+            "category": decision.category if decision is not None else None,
+            "pre_op_count_k_ul": (
+                decision.pre_op_count_k_ul if decision is not None else None
+            ),
+            "reserved_units": decision.reserved_units if decision is not None else 0,
+            "seed_pending_signoff": (
+                decision.seed_pending_signoff if decision is not None else True
+            ),
+        },
+        response_json={
+            "classification": "NEEDS_REVIEW",
+            "review_reason": PLATELET_RESERVATION_REVIEW_REASON,
+        },
+        request_timestamp=context.order.order_datetime,
+        latency_ms=0,
+        extended_thinking_blocks=None,
+        cold_storage_uri=None,
+    )
+    audit_store.write(row, [marker_call])
+
+
 def _chunked(
     contexts: Sequence[PipelineRowContext], size: int
 ) -> list[tuple[PipelineRowContext, ...]]:
@@ -1204,6 +1350,8 @@ def _now_utc() -> datetime:
 __all__ = [
     "_persist_operation_unresolved_row",
     "_persist_over_reservation_row",
+    "_persist_platelet_over_reservation_row",
+    "_persist_platelet_reservation_review_row",
     "process_audit_order",
     "run_pipeline",
 ]
