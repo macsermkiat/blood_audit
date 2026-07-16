@@ -236,3 +236,32 @@ def test_flag_on_pilot_persists_platelet_reservation_terminal_and_reports_it(
     report = json.loads((module.WORK / "llm_report.json").read_text())
     assert report[0]["llm_final"]["final_classification"] == expected_final
     assert report[0]["llm_final"]["review_reason"] == expected_reason
+
+
+def test_flag_on_reserved_but_uncounted_order_reaches_reservation_review(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Never-guess: a platelet order with reserved units (2) but NO usable pre-op
+    # count would be dropped to INSUFFICIENT_EVIDENCE by the platelet floor before
+    # the reservation runs. The producer computes the snapshot before the floor
+    # and the floor defers, so the missing-count case reaches the reservation
+    # NEEDS_REVIEW row instead of being silently skipped.
+    monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", "1")
+    module = _load_run_llm_leg("pilot_platelet_msbos_missing_count")
+    order = _configure_platelet_pilot(
+        module, monkeypatch, tmp_path / "missing", planned_code="0613"
+    )
+    missing_count = PlateletLookupResult(
+        value_k_ul=None, datetime_utc=None, source=None, freshness="missing"
+    )
+    monkeypatch.setattr(module, "lookup_platelet", lambda **_kwargs: missing_count)
+
+    module.main()
+
+    rows, calls = _artifacts(module)
+    assert len(rows) == len(calls) == 1
+    assert rows[0]["audit_id"] == order.audit_id
+    assert rows[0]["component"] == "platelet"
+    assert rows[0]["final_classification"] == "NEEDS_REVIEW"
+    assert rows[0]["review_reason"] == "platelet_reservation_review"
+    assert calls[0]["request_json"]["reason"] == "missing_pre_op_count"

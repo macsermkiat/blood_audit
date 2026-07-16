@@ -135,7 +135,7 @@ from bba.platelet_lookup import (
     parse_platelet_count,
 )
 from bba.preop_reservation import (
-    PlateletReservationDecision,
+    REVIEW_REASONS as PLATELET_REVIEW_REASONS,
     ReservationDecision,
     evaluate_platelet_reservation,
     evaluate_reservation_with_notes,
@@ -1449,10 +1449,10 @@ def main() -> None:
                     platelet_count=plt_result.value_k_ul,
                 )
             )
-            if plt_clf.classification == "INSUFFICIENT_EVIDENCE":
-                # Terminal: no LLM submission; deterministic-final row would be
-                # persisted by the pipeline library but is out-of-scope here.
-                continue
+            # Compute the platelet reservation snapshot BEFORE the floor so a
+            # reserved-but-uncounted order is not swallowed by it (see the
+            # floor-defer note below). \x00AMBIG and a missing count are handled
+            # inside evaluate_platelet_reservation, so no special-casing here.
             platelet_reservation_decision = None
             if MSBOS_RESERVATION_PILOT_ENABLED and msbos_reference:
                 plt_op_events = _op_events(
@@ -1472,21 +1472,33 @@ def main() -> None:
                     ),
                     0,
                 )
-                if planned == "\x00AMBIG":
-                    platelet_reservation_decision = PlateletReservationDecision(
-                        reserved_units=reserved_plt,
-                        is_over=False,
-                        reason="ambiguous_planned_op",
-                        reference_hash=msbos_reference.content_hash,
-                    )
-                else:
-                    platelet_reservation_decision = evaluate_platelet_reservation(
-                        reserved_units=reserved_plt,
-                        pre_op_count_k_ul=plt_result.value_k_ul,
-                        planned_icd9_nodot=planned,
-                        procedure_groups=msbos_reference.groups_for(planned),
-                        reference_hash=msbos_reference.content_hash,
-                    )
+                platelet_reservation_decision = evaluate_platelet_reservation(
+                    reserved_units=reserved_plt,
+                    pre_op_count_k_ul=plt_result.value_k_ul,
+                    planned_icd9_nodot=planned,
+                    procedure_groups=msbos_reference.groups_for(planned),
+                    reference_hash=msbos_reference.content_hash,
+                )
+            # The platelet floor (INSUFFICIENT_EVIDENCE on a missing/unusable
+            # count) is terminal EXCEPT when the reservation overlay must fire: a
+            # reserved-but-uncounted order routes to `missing_pre_op_count`
+            # NEEDS_REVIEW (never-guess) and must reach the dispatch overlay
+            # rather than be dropped by this `continue`. Flag-off (decision is
+            # None) keeps the original floor precedence byte-for-byte.
+            _reservation_routes_to_terminal = (
+                platelet_reservation_decision is not None
+                and (
+                    platelet_reservation_decision.is_over
+                    or platelet_reservation_decision.reason in PLATELET_REVIEW_REASONS
+                )
+            )
+            if (
+                plt_clf.classification == "INSUFFICIENT_EVIDENCE"
+                and not _reservation_routes_to_terminal
+            ):
+                # Terminal: no LLM submission; deterministic-final row would be
+                # persisted by the pipeline library but is out-of-scope here.
+                continue
             plt_chunks: list[EvidenceChunk] = []
             for item in bundle.items:
                 text = _render_payload(item.source, dict(item.payload))

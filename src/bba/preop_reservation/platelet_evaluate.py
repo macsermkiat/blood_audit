@@ -118,6 +118,13 @@ def evaluate_platelet_reservation(
             seed_pending_signoff=True,
         )
 
+    if reserved_units <= 0:
+        # No reserved platelet units means there is no reservation to judge — it
+        # can be neither over nor a review case, whatever the count, plan, or
+        # category. Short-circuits before every terminal branch below so a
+        # zero-unit order (incl. a missing count) proceeds to the normal floor /
+        # LLM path instead of a spurious NEEDS_REVIEW.
+        return decision(reason="no_reserved_units")
     if code == "":
         # TODO(worksheet T4/#166): a reservation without one planned operation requires review.
         return decision(reason="no_planned_op")

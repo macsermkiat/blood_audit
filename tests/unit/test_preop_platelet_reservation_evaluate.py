@@ -117,6 +117,55 @@ def test_evaluator_routes_clinical_ambiguity_to_typed_review(
 
 
 @pytest.mark.parametrize(
+    ("groups", "count", "planned"),
+    [
+        # Every terminal-bearing shape, but with zero reserved units: an MNS
+        # over-count, a category that would otherwise route to review, a missing
+        # count (would-be missing_pre_op_count), and a blank plan.
+        (("ศัลยกรรมทั่วไป",), 150.0, "0613"),
+        (("ศัลยกรรมหัวใจและทรวงอก",), 70.0, "3220"),
+        (("ศัลยกรรมทั่วไป",), None, "0613"),
+        (("ศัลยกรรมทั่วไป",), 70.0, "   "),
+    ],
+)
+def test_zero_reserved_units_evaluate_is_never_terminal(
+    groups: tuple[str, ...], count: float | None, planned: str
+) -> None:
+    # WHY: with no platelet units reserved there is no reservation to judge, so
+    # the order must proceed to the normal floor/LLM path (never over, never
+    # review) — otherwise a bare platelet order with no BDVSTDT detail line would
+    # be spuriously flagged. This guards the reserved-units<=0 short-circuit.
+    decision = evaluate_platelet_reservation(
+        reserved_units=0,
+        pre_op_count_k_ul=count,
+        planned_icd9_nodot=planned,
+        procedure_groups=groups,
+        reference_hash="a" * 64,
+    )
+
+    assert decision.reason == "no_reserved_units"
+    assert decision.is_over is False
+    assert decision.reason not in REVIEW_REASONS
+
+
+def test_reserved_but_uncounted_major_non_neuraxial_routes_to_review() -> None:
+    # The never-guess missing-count case: platelets ARE reserved (2 units) but no
+    # pre-op count exists, so the reservation cannot be judged numerically and
+    # must reach clinician review rather than be silently absorbed.
+    decision = evaluate_platelet_reservation(
+        reserved_units=2,
+        pre_op_count_k_ul=None,
+        planned_icd9_nodot="0613",
+        procedure_groups=("ศัลยกรรมทั่วไป",),
+        reference_hash="a" * 64,
+    )
+
+    assert decision.reason == "missing_pre_op_count"
+    assert decision.reason in REVIEW_REASONS
+    assert decision.is_over is False
+
+
+@pytest.mark.parametrize(
     ("planned", "expected_reason"),
     [("   ", "no_planned_op"), ("\x00AMBIG", "ambiguous_planned_op")],
 )
