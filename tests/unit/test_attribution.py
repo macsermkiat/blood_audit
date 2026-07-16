@@ -461,6 +461,31 @@ class TestPipelineVerdictSource:
         )()
         assert verdicts == {"68000001": "NEEDS_REVIEW"}
 
+    def test_projector_passes_preop_over_reservation_through_for_counting(
+        self,
+    ) -> None:
+        # Regression (Codex PR #168 P2): the projector must PASS
+        # PREOP_OVER_RESERVATION through unchanged, like the returns terminals.
+        # Collapsing it to INAPPROPRIATE here would destroy the raw signal
+        # before build_doctor_scorecards (which keys over_reservation_count on
+        # the raw label) runs, so over_reservation_count could never populate on
+        # the real rank_doctors path (pipeline_verdict_source ->
+        # needs_review_verdict_projector -> build_doctor_scorecards).
+        rows = [_audit_row("68000001", "PREOP_OVER_RESERVATION")]
+
+        assert strict_verdict_projector("PREOP_OVER_RESERVATION") == (
+            "PREOP_OVER_RESERVATION"
+        )
+        verdicts = pipeline_verdict_source(
+            rows, projector=needs_review_verdict_projector
+        )()
+        assert verdicts == {"68000001": "PREOP_OVER_RESERVATION"}
+
+        (card,) = build_doctor_scorecards(verdicts, {}, {})
+        assert card.total_orders == 1
+        assert card.inappropriate_count == 1
+        assert card.over_reservation_count == 1
+
     def test_pooled_preop_reservation_totals_reconcile_as_unresolved(self) -> None:
         rows = [
             _audit_row("68000001", "APPROPRIATE"),
@@ -480,6 +505,30 @@ class TestPipelineVerdictSource:
         assert result.totals.appropriate == 1
         assert result.totals.inappropriate == 1
         assert result.totals.unresolved == 1
+        assert result.totals.total == len(rows)
+
+    def test_preop_over_reservation_folds_into_ranking_totals(self) -> None:
+        # Regression (Codex PR #168 P2): with the projector passing
+        # PREOP_OVER_RESERVATION through, the RankingResult totals must fold it
+        # into inappropriate (not leave it in the unresolved remainder), so the
+        # cohort total agrees with the per-doctor scorecards.
+        rows = [
+            _audit_row("68000001", "APPROPRIATE"),
+            _audit_row("68000002", "PREOP_OVER_RESERVATION"),
+        ]
+        verdicts = pipeline_verdict_source(
+            rows, projector=needs_review_verdict_projector
+        )()
+
+        result = build_rankings(
+            verdicts=verdicts,
+            reqno_to_doctor={},
+            dct_registry={},
+        )
+
+        assert result.totals.appropriate == 1
+        assert result.totals.inappropriate == 1
+        assert result.totals.unresolved == 0
         assert result.totals.total == len(rows)
 
     def test_unknown_classification_fails_loud_under_both_projectors(self) -> None:
@@ -676,6 +725,32 @@ class TestBuildScorecards:
         )
         assert ranked.bucket_rate == pytest.approx(0.5)
         assert ranked.periop_transfusion_exempt_count == 1
+
+    def test_preop_over_reservation_conserves_doctor_department_and_ranking(
+        self,
+    ) -> None:
+        verdicts = {"r1": "PREOP_OVER_RESERVATION"}
+        reqno_to_doctor = {"r1": "302389"}
+
+        (doctor,) = build_doctor_scorecards(verdicts, reqno_to_doctor, self._REGISTRY)
+        (department,) = build_department_scorecards(
+            verdicts, reqno_to_doctor, self._REGISTRY
+        )
+        (ranked,) = rank_top_n(
+            (doctor,),
+            "inappropriate",
+            group_id=lambda card: card.physician_id,
+            group_name=lambda card: card.physician_name,
+            min_orders=1,
+        )
+
+        for card in (doctor, department):
+            assert card.total_orders == 1
+            assert card.inappropriate_count == 1
+            assert card.over_reservation_count == 1
+        assert ranked.total_orders == 1
+        assert ranked.inappropriate_count == 1
+        assert ranked.over_reservation_count == 1
 
 
 # ---------------------------------------------------------------------------

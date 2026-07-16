@@ -37,6 +37,7 @@ def _count_classifications(
         "INAPPROPRIATE": 0,
         "NEEDS_REVIEW": 0,
         "INSUFFICIENT_EVIDENCE": 0,
+        "PREOP_OVER_RESERVATION": 0,
         "RETURNED_NOT_TRANSFUSED": 0,
         "PERIOP_TRANSFUSION_EXEMPT": 0,
     }
@@ -84,11 +85,14 @@ def build_doctor_scorecards(
                 - counts["RETURNED_NOT_TRANSFUSED"]
                 - counts["PERIOP_TRANSFUSION_EXEMPT"],
                 appropriate_count=counts["APPROPRIATE"],
-                inappropriate_count=counts["INAPPROPRIATE"],
+                inappropriate_count=(
+                    counts["INAPPROPRIATE"] + counts["PREOP_OVER_RESERVATION"]
+                ),
                 needs_review_count=counts["NEEDS_REVIEW"],
                 insufficient_evidence_count=counts["INSUFFICIENT_EVIDENCE"],
                 returned_not_transfused_count=counts["RETURNED_NOT_TRANSFUSED"],
                 periop_transfusion_exempt_count=counts["PERIOP_TRANSFUSION_EXEMPT"],
+                over_reservation_count=counts["PREOP_OVER_RESERVATION"],
                 average_confidence=0.0,
             )
         )
@@ -131,11 +135,14 @@ def build_department_scorecards(
                 - counts["RETURNED_NOT_TRANSFUSED"]
                 - counts["PERIOP_TRANSFUSION_EXEMPT"],
                 appropriate_count=counts["APPROPRIATE"],
-                inappropriate_count=counts["INAPPROPRIATE"],
+                inappropriate_count=(
+                    counts["INAPPROPRIATE"] + counts["PREOP_OVER_RESERVATION"]
+                ),
                 needs_review_count=counts["NEEDS_REVIEW"],
                 insufficient_evidence_count=counts["INSUFFICIENT_EVIDENCE"],
                 returned_not_transfused_count=counts["RETURNED_NOT_TRANSFUSED"],
                 periop_transfusion_exempt_count=counts["PERIOP_TRANSFUSION_EXEMPT"],
+                over_reservation_count=counts["PREOP_OVER_RESERVATION"],
                 average_confidence=0.0,
             )
         )

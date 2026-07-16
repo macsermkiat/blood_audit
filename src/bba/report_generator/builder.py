@@ -111,13 +111,15 @@ rates; the default projector fails loud on them so they must be dropped upstream
 def default_classification_projector(
     value: AuditClassification,
 ) -> ReportClassification:
-    """Identity on the four shared classifications; raise on the audit-
-    store-only classifications.
+    """Project shared and MSBOS classifications; raise on other store values.
 
     Failing loud is the right default because mapping
     ``POTENTIALLY_INAPPROPRIATE`` is a clinical decision (the PRD does
     not promise a 1:1 onto the four reportable labels); the caller must
-    inject a remap if the run produces this label."""
+    inject a remap if the run produces this label. Ticket #162 defines
+    ``PREOP_OVER_RESERVATION`` as scorable ``INAPPROPRIATE``."""
+    if value == "PREOP_OVER_RESERVATION":
+        return "INAPPROPRIATE"
     if value == "POTENTIALLY_INAPPROPRIATE":
         raise MissingResolverError(
             "audit_store row carries final_classification="
@@ -400,6 +402,7 @@ def _project_row(
         cohort_applied=row.cohort_applied,
         indication_codes=indication_codes_extractor(row),
         needs_human_review=row.needs_human_review,
+        over_reservation=(row.final_classification == "PREOP_OVER_RESERVATION"),
     )
 
 

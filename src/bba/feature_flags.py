@@ -20,6 +20,8 @@ RETURNS_LEDGER_ENABLED
 DECLARED_USETYPE_ENABLED
     Gates the declared surgical-intent signal from BDVSTDT.USETYPE. Default:
     True (go-live 2026-07-15).
+MSBOS_RESERVATION_ENABLED
+    Gates the MSBOS pre-op reservation-appropriateness arm. Default: False.
 """
 
 from __future__ import annotations
@@ -65,8 +67,17 @@ leave it ``None`` are unaffected. Set ``BBA_PILOT_DECLARED_USETYPE=0`` to force
 it off for a pilot run.
 """
 
+MSBOS_RESERVATION_ENABLED: bool = False
+"""Enable the MSBOS pre-op reservation-appropriateness arm (default: OFF).
+
+Ticket #162 (spec MSBOS) adds inert T0 scaffolding only. The pilot boundary
+may override this default with ``BBA_PILOT_MSBOS_RESERVATION``; no producer
+emits the MSBOS verdict until a later ticket.
+"""
+
 __all__: Sequence[str] = (
     "DECLARED_USETYPE_ENABLED",
+    "MSBOS_RESERVATION_ENABLED",
     "PLATELET_LLM_ENABLED",
     "RESERVE_AHEAD_ROUTER_ENABLED",
     "RETURNS_LEDGER_ENABLED",

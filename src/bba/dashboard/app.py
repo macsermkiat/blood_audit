@@ -234,7 +234,9 @@ def _aggregate_classifications(
     return {
         "total_orders": total,
         "appropriate_count": _count_classification(rows, "APPROPRIATE"),
-        "inappropriate_count": _count_classification(rows, "INAPPROPRIATE"),
+        "inappropriate_count": _count_classification(rows, "INAPPROPRIATE")
+        + _count_classification(rows, "PREOP_OVER_RESERVATION"),
+        "over_reservation_count": _count_classification(rows, "PREOP_OVER_RESERVATION"),
         "needs_review_count": _count_classification(rows, "NEEDS_REVIEW"),
         "insufficient_evidence_count": _count_classification(
             rows, "INSUFFICIENT_EVIDENCE"
@@ -392,6 +394,7 @@ def get_ward_scorecard(
         insufficient_evidence_count=int(aggs["insufficient_evidence_count"]),
         returned_not_transfused_count=int(aggs["returned_not_transfused_count"]),
         periop_transfusion_exempt_count=int(aggs["periop_transfusion_exempt_count"]),
+        over_reservation_count=int(aggs["over_reservation_count"]),
         average_confidence=float(aggs["average_confidence"]),
     )
 
@@ -442,6 +445,7 @@ def get_physician_scorecard(
         insufficient_evidence_count=int(aggs["insufficient_evidence_count"]),
         returned_not_transfused_count=int(aggs["returned_not_transfused_count"]),
         periop_transfusion_exempt_count=int(aggs["periop_transfusion_exempt_count"]),
+        over_reservation_count=int(aggs["over_reservation_count"]),
         average_confidence=float(aggs["average_confidence"]),
     )
 
