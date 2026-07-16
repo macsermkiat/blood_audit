@@ -255,7 +255,14 @@ def _validate_scope(
 def _validate_join(marker: _Marker, row: AuditRow) -> None:
     is_over = marker.key in _OVER_MARKER_KEYS
     expected_final = "PREOP_OVER_RESERVATION" if is_over else "NEEDS_REVIEW"
-    if row.final_classification != expected_final:
+    # An over-marker whose committed row is a returns terminal is the exact
+    # double-fire the returns reconciliation exists to REPORT (a returned /
+    # peri-op-exempt order also billed as over-reservation). Let it through so
+    # reconcile_returns surfaces it as FAIL + double_fire_ids instead of
+    # aborting the whole gating report on a generic integrity error. Any OTHER
+    # final-classification mismatch is still corruption and fails loud.
+    returns_double_fire = is_over and row.final_classification in _RETURNS_TERMINALS
+    if row.final_classification != expected_final and not returns_double_fire:
         raise PilotReportError(
             f"marker {marker.audit_id!r} requires final_classification "
             f"{expected_final!r}, got {row.final_classification!r}"

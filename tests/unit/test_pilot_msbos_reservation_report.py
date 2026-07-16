@@ -310,6 +310,44 @@ def test_reconcile_returns_overlap_fails_and_lists_ids() -> None:
     assert result.double_fire_ids == ("shared",)
 
 
+@pytest.mark.parametrize(
+    "returns_terminal",
+    ["RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"],
+)
+def test_over_marker_on_returns_terminal_row_is_reported_not_aborted(
+    returns_terminal: str,
+) -> None:
+    # Arrange — the exact double-fire the reconciliation guards: an over-marker
+    # whose committed row is a returns terminal. It must reach reconcile_returns
+    # and be REPORTED as FAIL, not abort the whole gating report (Codex #174 P2).
+    rows = [
+        _row("double-fire", returns_terminal),
+        _row("clean-over", "PREOP_OVER_RESERVATION"),
+    ]
+    calls = [
+        _call("double-fire", "over_reservation"),
+        _call("clean-over", "over_reservation"),
+    ]
+
+    # Act
+    reconciliation = _build(rows, calls).reconciliation
+
+    # Assert
+    assert reconciliation.status == "FAIL"
+    assert reconciliation.double_fire_ids == ("double-fire",)
+    assert reconciliation.returns_terminal_count == 1
+
+
+def test_over_marker_on_non_returns_final_still_fails_loud() -> None:
+    # Arrange — a non-returns final-classification mismatch is still corruption.
+    row = _row("wrong-final", "APPROPRIATE")
+    call = _call("wrong-final", "over_reservation")
+
+    # Act / Assert
+    with pytest.raises(PilotReportError, match="final_classification"):
+        _build([row], [call])
+
+
 def test_orphan_marker_fails_loud_and_lists_all_ids() -> None:
     # Arrange
     calls = [
