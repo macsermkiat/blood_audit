@@ -863,6 +863,63 @@ def _persist_injection_flagged_row(
     audit_store.write(row, [marker_call])
 
 
+def _persist_over_reservation_row(
+    context: PipelineRowContext,
+    *,
+    classifier_result: ClassifierResult,
+    audit_store: AuditStore,
+    run_id: str,
+) -> None:
+    """Persist the deterministic MSBOS verdict with a paired marker call."""
+    from bba.audit_pipeline.replay import (
+        PREOP_OVER_RESERVATION_REVIEW_REASON,
+        _audit_row_for_over_reservation,
+    )
+
+    row = _audit_row_for_over_reservation(
+        run_id=run_id,
+        context=context,
+        classifier_result=classifier_result,
+        review_reason=PREOP_OVER_RESERVATION_REVIEW_REASON,
+        verifier_pass=True,
+        verifier_retries=0,
+        model_id="msbos-reservation",
+        reasoning_en=(
+            "Pre-op RBC reservation exceeds the MSBOS recommendation for the "
+            "planned operation; not submitted to LLM."
+        ),
+        reasoning_th="",
+        indications=(),
+        negative_evidence=(),
+        confidence=1.0,
+        escalated=False,
+    )
+    fingerprint = hashlib.sha256(
+        f"{run_id}|{context.order.audit_id}|over-reservation".encode("utf-8")
+    ).hexdigest()[:16]
+    marker_call = LlmCall(
+        call_id=f"call-{context.order.audit_id}-msbos-{fingerprint}",
+        audit_id=context.order.audit_id,
+        run_id=run_id,
+        model_id="msbos-reservation",
+        anthropic_version="n/a",
+        prompt_cache_id=None,
+        request_json={
+            "over_reservation": True,
+            "audit_id": context.order.audit_id,
+        },
+        response_json={
+            "classification": "PREOP_OVER_RESERVATION",
+            "review_reason": PREOP_OVER_RESERVATION_REVIEW_REASON,
+        },
+        request_timestamp=context.order.order_datetime,
+        latency_ms=0,
+        extended_thinking_blocks=None,
+        cold_storage_uri=None,
+    )
+    audit_store.write(row, [marker_call])
+
+
 def _chunked(
     contexts: Sequence[PipelineRowContext], size: int
 ) -> list[tuple[PipelineRowContext, ...]]:
@@ -1075,4 +1132,4 @@ def _now_utc() -> datetime:
     return datetime.now(UTC)
 
 
-__all__ = ["process_audit_order", "run_pipeline"]
+__all__ = ["_persist_over_reservation_row", "process_audit_order", "run_pipeline"]

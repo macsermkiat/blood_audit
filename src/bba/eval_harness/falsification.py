@@ -30,6 +30,7 @@ _CONTRADICTION = {
     FalsificationOutcome.FURTHER_TRANSFUSION_24H,
     FalsificationOutcome.DEATH_FROM_ANEMIA_30D,
 }
+_INAPPROPRIATE_LIKE = ("INAPPROPRIATE", "PREOP_OVER_RESERVATION")
 
 
 def outcome_anchored_falsification(
@@ -50,7 +51,7 @@ def outcome_anchored_falsification(
     inappropriate_outcomes = [
         out
         for pred, out in zip(predictions, outcomes, strict=True)
-        if pred == "INAPPROPRIATE"
+        if pred in _INAPPROPRIATE_LIKE
     ]
     n_inappropriate = len(inappropriate_outcomes)
     n_contradicted = sum(1 for o in inappropriate_outcomes if o in _CONTRADICTION)

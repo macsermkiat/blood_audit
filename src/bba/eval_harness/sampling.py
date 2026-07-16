@@ -24,6 +24,8 @@ from bba.eval_harness.models import (
     StratumDraw,
 )
 
+_INAPPROPRIATE_LIKE = ("INAPPROPRIATE", "PREOP_OVER_RESERVATION")
+
 
 def _partition_by_stratum(
     population: Sequence[AuditCase],
@@ -35,7 +37,7 @@ def _partition_by_stratum(
 
 
 def _is_inappropriate(case: AuditCase) -> bool:
-    return case.pred_classification == "INAPPROPRIATE"
+    return case.pred_classification in _INAPPROPRIATE_LIKE
 
 
 def _draw_stratum(

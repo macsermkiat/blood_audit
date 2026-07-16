@@ -149,7 +149,23 @@ Distinct from ``hallucination_suspect`` (verifier rejected every attempt)
 so a reviewer dashboard can triage the two failure modes separately."""
 
 PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON = "preop_reservation_unconfirmed"
+PREOP_OVER_RESERVATION_REVIEW_REASON = "preop_over_reservation"
 ADMINISTRATION_CONTRADICTION_REVIEW_REASON = "administration_signal_contradiction"
+
+_RETURNS_TERMINALS = frozenset({"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"})
+
+
+def is_over_reservation(
+    *, classifier_result: ClassifierResult, context: PipelineRowContext
+) -> bool:
+    """Read the persisted over-reservation snapshot unless returns outranks it."""
+    if not feature_flags.MSBOS_RESERVATION_ENABLED:
+        return False
+    decision = context.reservation_decision
+    if decision is None or not decision.is_over:
+        return False
+    return classifier_result.classification not in _RETURNS_TERMINALS
+
 
 _PERIOP_CONTRADICTION_CLASSES: frozenset[Classification] = frozenset(
     {"INSUFFICIENT_EVIDENCE", "POTENTIALLY_INAPPROPRIATE"}
@@ -1492,6 +1508,46 @@ def _audit_row_for_needs_review(
     )
 
 
+def _audit_row_for_over_reservation(
+    *,
+    run_id: str,
+    context: PipelineRowContext,
+    classifier_result: ClassifierResult,
+    review_reason: str,
+    verifier_pass: bool,
+    verifier_retries: int,
+    model_id: str,
+    reasoning_en: str,
+    reasoning_th: str,
+    indications: tuple[dict[str, object], ...],
+    negative_evidence: tuple[str, ...],
+    confidence: float,
+    escalated: bool,
+) -> AuditRow:
+    """Construct a deterministic PREOP_OVER_RESERVATION audit row."""
+    row = _audit_row_for_needs_review(
+        run_id=run_id,
+        context=context,
+        classifier_result=classifier_result,
+        review_reason=review_reason,
+        verifier_pass=verifier_pass,
+        verifier_retries=verifier_retries,
+        model_id=model_id,
+        reasoning_en=reasoning_en,
+        reasoning_th=reasoning_th,
+        indications=indications,
+        negative_evidence=negative_evidence,
+        confidence=confidence,
+        escalated=escalated,
+    )
+    return row.model_copy(
+        update={
+            "final_classification": "PREOP_OVER_RESERVATION",
+            "review_reason": PREOP_OVER_RESERVATION_REVIEW_REASON,
+        }
+    )
+
+
 def _build_llm_call(
     result: BatchSubmissionResult, *, attempt_index: int, run_id: str
 ) -> LlmCall:
@@ -1801,12 +1857,14 @@ __all__ = [
     "LLM_OVERCLEAR_UNSTABLE_HR",
     "LLM_OVERCLEAR_UNSTABLE_SBP",
     "PERIOP_CONTRADICTION_REVIEW_REASON",
+    "PREOP_OVER_RESERVATION_REVIEW_REASON",
     "PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON",
     "PERIOP_GUARDRAIL_MIN_EBL_ML",
     "PERIOP_OVERCLEAR_WINDOW_HOURS",
     "Verifier",
     "apply_batch_results",
     "default_verifier",
+    "is_over_reservation",
     "llm_overclear_suspect",
     "periop_contradiction",
     "select_winning_attempt",

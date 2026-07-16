@@ -43,6 +43,7 @@ from bba.cohort_detector import CohortAssignment
 from bba.declared_use import DeclaredUseLabel
 from bba.hb_lookup import HbLookupResult
 from bba.platelet_lookup.models import PlateletLookupResult
+from bba.preop_reservation import ReservationDecision
 from bba.prompt_builder import EvidenceChunk
 from bba.returns_ledger import ReturnsSummary
 from bba.vitals_extractor import AdministrationSummary, PeriopSummary, VitalsResult
@@ -201,6 +202,8 @@ class PipelineRowContext(BaseModel):
     # Structured blood-bank unit disposition. None preserves every legacy
     # caller and stays inert unless the returns-ledger feature flag is enabled.
     returns_summary: ReturnsSummary | None = None
+
+    reservation_decision: ReservationDecision | None = None
 
     declared_use: DeclaredUseLabel | None = None
 
