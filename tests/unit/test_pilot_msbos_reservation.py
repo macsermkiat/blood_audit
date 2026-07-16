@@ -57,7 +57,7 @@ def test_run_llm_leg_msbos_env_override(
 
     assert module.MSBOS_RESERVATION_PILOT_ENABLED is expected
     tokens = module.CODE_VERSION.split("+")
-    assert ("msbos3" in tokens) is expected, (
+    assert ("msbos4" in tokens) is expected, (
         "flag-on runs need a fresh T4 cache identity"
     )
     assert "msbos" not in tokens, (
@@ -73,7 +73,7 @@ def test_run_llm_leg_msbos_unset_uses_library_default(
     module = _load_run_llm_leg("pilot_run_llm_leg_msbos_default")
 
     assert module.MSBOS_RESERVATION_PILOT_ENABLED is False
-    assert "msbos3" not in module.CODE_VERSION.split("+")
+    assert "msbos4" not in module.CODE_VERSION.split("+")
     assert "msbos" not in module.CODE_VERSION.split("+")
     assert (
         module.MSBOS_RESERVATION_PILOT_ENABLED
@@ -104,7 +104,7 @@ def test_msbos_flag_off_serialized_schemas_are_frozen(
         + RANKING_CSV_COLUMNS
     )
     assert llm_module.MSBOS_RESERVATION_PILOT_ENABLED is False
-    assert "msbos3" not in llm_module.CODE_VERSION.split("+")
+    assert "msbos4" not in llm_module.CODE_VERSION.split("+")
     assert not any(
         marker in name
         for name in serialized_columns

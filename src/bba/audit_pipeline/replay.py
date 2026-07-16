@@ -1641,7 +1641,7 @@ def _audit_row_for_platelet_reservation_review(
     confidence: float,
     escalated: bool,
 ) -> AuditRow:
-    """Construct NEEDS_REVIEW for an unsigned platelet reservation route."""
+    """Construct NEEDS_REVIEW for a platelet reservation that cannot be judged."""
     return _audit_row_for_needs_review(
         run_id=run_id,
         context=context,

@@ -74,9 +74,11 @@ Spec MSBOS, tickets #162-#166. When enabled (via the pilot boundary override
 ``BBA_PILOT_MSBOS_RESERVATION``), the pilot leg emits clinical terminal rows:
 the RBC over-reservation verdict ``PREOP_OVER_RESERVATION`` (T1-T3, #163-#165)
 and the platelet reservation verdict/review (T4, #166). This is NOT inert
-scaffolding. It stays default-OFF because the platelet thresholds are SEED
-values transcribed from the DRAFT surgical guideline and go-live is gated on the
-clinician-signed sign-off worksheet (#166); RBC MSBOS is likewise pilot-gated.
+scaffolding. The platelet thresholds are now CLINICIAN-SIGNED (KCMH Transfusion
+Committee worksheet, T4/#166); the flag nonetheless stays default-OFF because
+enabling it is a separate deliberate go-live step (Section E: "remains behind
+the default-OFF flag") and this single flag also gates the RBC path, which has
+its own open committee item (the T2 crossmatch wrinkle).
 """
 
 __all__: Sequence[str] = (

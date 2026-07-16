@@ -1,4 +1,15 @@
-"""Vendored SEED thresholds and procedure categories for platelet reservation."""
+"""Clinician-signed platelet reservation thresholds and procedure categories.
+
+The KCMH Transfusion Committee signed off the pre-op platelet reservation
+thresholds, the transfusion->reservation reinterpretation, and the
+procedure->category mapping (worksheet T4 / issue #166). The values below are
+the SIGNED decisions — no longer SEED. Each category applies a single count
+cutoff (no gray band, per signed Open question A-i): a reservation is
+APPROPRIATE when the pre-op count is at/below the cutoff and OVER when it is
+strictly above. The feature stays behind the default-OFF
+``MSBOS_RESERVATION_ENABLED`` flag; enabling it is a separate deliberate
+go-live step.
+"""
 
 from __future__ import annotations
 
@@ -7,102 +18,74 @@ from enum import StrEnum
 
 
 class PlateletCategory(StrEnum):
-    """Reservation categories represented by the surgical reference."""
+    """Signed reservation categories, each with a single count cutoff."""
 
     MAJOR_NON_NEURAXIAL = "major_non_neuraxial"
     CARDIAC_CPB = "cardiac_cpb"
     NEURAXIAL = "neuraxial"
-    UNCATEGORISED = "uncategorised"
 
 
-class SeedStatus(StrEnum):
-    """Whether a category can produce a numeric reservation judgment."""
+# Clinician-signed (KCMH Transfusion Committee worksheet, T4/#166), Section A1
+# "Major non-neuraxial surgery": reserving is over when count > 80,000/uL.
+MAJOR_NON_NEURAXIAL_OVER_ABOVE_PER_UL = 80_000
+# Clinician-signed (worksheet T4/#166), Section B-i: the merged cardiothoracic
+# group is APPROPRIATE at count <= 100,000/uL and over above it (the committee
+# declined to apply "any reserved unit = over" to the un-splittable group).
+CARDIAC_CPB_OVER_ABOVE_PER_UL = 100_000
+# Clinician-signed (worksheet T4/#166), Section D: neuraxial reservation is
+# APPROPRIATE at count <= 100,000/uL and over above it.
+NEURAXIAL_OVER_ABOVE_PER_UL = 100_000
 
-    RESOLVED = "resolved"
-    UNRESOLVED_ROUTE_REVIEW = "unresolved_route_review"
+# Signed thresholds transcribed for citation/reference only — these categories
+# are transfusion-threshold buckets, not surgical procedure_groups, so they are
+# NOT reachable through the procedure->category mapping (Section A-ii marked
+# "in scope", but the vendored reference exposes no LP/CVC/consumptive group to
+# key them to). Kept as documented constants so a later data update can wire them.
+MAJOR_NON_NEURAXIAL_HIGH_RISK_OVER_ABOVE_PER_UL = 100_000  # A2 high-bleeding-risk
+LP_OVER_ABOVE_PER_UL = 80_000  # A3 lumbar puncture (surgical)
+CVC_OVER_ABOVE_PER_UL = 50_000  # A4 central venous catheter
+CONSUMPTIVE_OVER_ABOVE_PER_UL = 10_000  # A5 consumptive thrombocytopenia / DIC
 
 
-# SEED — pending clinician sign-off (worksheet T4/#166), DRAFT §4 major non-neuraxial transfuse-if-count-below clause.
-MNS_THRESHOLD_PER_UL = 80_000
-# SEED — pending clinician sign-off (worksheet T4/#166), DRAFT §4 high-bleeding-risk ceiling clause.
-MNS_HIGH_RISK_CEILING_PER_UL = 100_000
-# SEED — pending clinician sign-off (worksheet T4/#166), DRAFT §4 LP surgical transfuse-if-count-below clause; citation only.
-LP_THRESHOLD_PER_UL = 80_000
-# SEED — pending clinician sign-off (worksheet T4/#166), DRAFT §4 CVC transfuse-if-count-below clause; citation only.
-CVC_THRESHOLD_PER_UL = 50_000
-# SEED — pending clinician sign-off (worksheet T4/#166), DRAFT §4 consumptive/DIC no-bleed transfuse-if-count-below clause; citation only.
-CONSUMPTIVE_THRESHOLD_PER_UL = 10_000
-
-
-PROCEDURE_GROUP_TO_CATEGORY: Mapping[str, PlateletCategory] = {
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row Arthroplasty.
-    "Arthroplasty": PlateletCategory.MAJOR_NON_NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row C Spine.
-    "C Spine": PlateletCategory.NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row C/S.
-    "C/S": PlateletCategory.MAJOR_NON_NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row Enucleation.
-    "Enucleation": PlateletCategory.MAJOR_NON_NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row Facial plastic.
-    "Facial plastic": PlateletCategory.MAJOR_NON_NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row Foot.
-    "Foot": PlateletCategory.MAJOR_NON_NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row Head-Neck.
-    "Head-Neck": PlateletCategory.MAJOR_NON_NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row Hysterectomy.
-    "Hysterectomy": PlateletCategory.MAJOR_NON_NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row Hysteroscopy.
-    "Hysteroscopy": PlateletCategory.MAJOR_NON_NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row Larynx.
-    "Larynx": PlateletCategory.MAJOR_NON_NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row Metastasis spine.
-    "Metastasis spine": PlateletCategory.NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row Myomectomy.
-    "Myomectomy": PlateletCategory.MAJOR_NON_NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row Oto.
-    "Oto": PlateletCategory.MAJOR_NON_NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row Pediatric.
-    "Pediatric": PlateletCategory.UNCATEGORISED,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row Rhino.
-    "Rhino": PlateletCategory.MAJOR_NON_NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row Salpingectomy.
-    "Salpingectomy": PlateletCategory.MAJOR_NON_NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row Sleep.
-    "Sleep": PlateletCategory.MAJOR_NON_NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row Sport.
-    "Sport": PlateletCategory.MAJOR_NON_NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row TL spine.
-    "TL spine": PlateletCategory.NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row TR.
-    "TR": PlateletCategory.UNCATEGORISED,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row Trauma.
-    "Trauma": PlateletCategory.MAJOR_NON_NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row Tumor.
-    "Tumor": PlateletCategory.UNCATEGORISED,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row ศัลยกรรมตกแต่ง.
-    "ศัลยกรรมตกแต่ง": PlateletCategory.MAJOR_NON_NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row ศัลยกรรมทั่วไป.
-    "ศัลยกรรมทั่วไป": PlateletCategory.MAJOR_NON_NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row ศัลยกรรมทางเดินปัสสาวะ.
-    "ศัลยกรรมทางเดินปัสสาวะ": PlateletCategory.MAJOR_NON_NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row ศัลยกรรมระบบประสาท.
-    "ศัลยกรรมระบบประสาท": PlateletCategory.NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row ศัลยกรรมลำไส้ใหญ่และทวารหนัก.
-    "ศัลยกรรมลำไส้ใหญ่และทวารหนัก": PlateletCategory.MAJOR_NON_NEURAXIAL,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C row ศัลยกรรมหัวใจและทรวงอก.
-    "ศัลยกรรมหัวใจและทรวงอก": PlateletCategory.CARDIAC_CPB,
+#: Signed count cutoff per category: reserving is over when count > cutoff.
+CATEGORY_OVER_ABOVE_PER_UL: Mapping[PlateletCategory, int] = {
+    PlateletCategory.MAJOR_NON_NEURAXIAL: MAJOR_NON_NEURAXIAL_OVER_ABOVE_PER_UL,
+    PlateletCategory.CARDIAC_CPB: CARDIAC_CPB_OVER_ABOVE_PER_UL,
+    PlateletCategory.NEURAXIAL: NEURAXIAL_OVER_ABOVE_PER_UL,
 }
 
 
-CATEGORY_SEED_STATUS: Mapping[PlateletCategory, SeedStatus] = {
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT §4 major non-neuraxial route is numerically resolved.
-    PlateletCategory.MAJOR_NON_NEURAXIAL: SeedStatus.RESOLVED,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT Open B-i merged cardiac/thoracic route remains unresolved.
-    PlateletCategory.CARDIAC_CPB: SeedStatus.UNRESOLVED_ROUTE_REVIEW,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT Open D supplies no neuraxial reservation rule.
-    PlateletCategory.NEURAXIAL: SeedStatus.UNRESOLVED_ROUTE_REVIEW,
-    # SEED — pending clinician sign-off (worksheet T4/#166), DRAFT worksheet Section C leaves uncategorised groups unresolved.
-    PlateletCategory.UNCATEGORISED: SeedStatus.UNRESOLVED_ROUTE_REVIEW,
+# Clinician-signed procedure_group -> platelet-category mapping (worksheet
+# Section C, all 28 groups confirmed; Tumor/TR/Pediatric signed to MNS).
+PROCEDURE_GROUP_TO_CATEGORY: Mapping[str, PlateletCategory] = {
+    "Arthroplasty": PlateletCategory.MAJOR_NON_NEURAXIAL,
+    "C Spine": PlateletCategory.NEURAXIAL,
+    "C/S": PlateletCategory.MAJOR_NON_NEURAXIAL,
+    "Enucleation": PlateletCategory.MAJOR_NON_NEURAXIAL,
+    "Facial plastic": PlateletCategory.MAJOR_NON_NEURAXIAL,
+    "Foot": PlateletCategory.MAJOR_NON_NEURAXIAL,
+    "Head-Neck": PlateletCategory.MAJOR_NON_NEURAXIAL,
+    "Hysterectomy": PlateletCategory.MAJOR_NON_NEURAXIAL,
+    "Hysteroscopy": PlateletCategory.MAJOR_NON_NEURAXIAL,
+    "Larynx": PlateletCategory.MAJOR_NON_NEURAXIAL,
+    "Metastasis spine": PlateletCategory.NEURAXIAL,
+    "Myomectomy": PlateletCategory.MAJOR_NON_NEURAXIAL,
+    "Oto": PlateletCategory.MAJOR_NON_NEURAXIAL,
+    "Pediatric": PlateletCategory.MAJOR_NON_NEURAXIAL,
+    "Rhino": PlateletCategory.MAJOR_NON_NEURAXIAL,
+    "Salpingectomy": PlateletCategory.MAJOR_NON_NEURAXIAL,
+    "Sleep": PlateletCategory.MAJOR_NON_NEURAXIAL,
+    "Sport": PlateletCategory.MAJOR_NON_NEURAXIAL,
+    "TL spine": PlateletCategory.NEURAXIAL,
+    "TR": PlateletCategory.MAJOR_NON_NEURAXIAL,
+    "Trauma": PlateletCategory.MAJOR_NON_NEURAXIAL,
+    "Tumor": PlateletCategory.MAJOR_NON_NEURAXIAL,
+    "ศัลยกรรมตกแต่ง": PlateletCategory.MAJOR_NON_NEURAXIAL,
+    "ศัลยกรรมทั่วไป": PlateletCategory.MAJOR_NON_NEURAXIAL,
+    "ศัลยกรรมทางเดินปัสสาวะ": PlateletCategory.MAJOR_NON_NEURAXIAL,
+    "ศัลยกรรมระบบประสาท": PlateletCategory.NEURAXIAL,
+    "ศัลยกรรมลำไส้ใหญ่และทวารหนัก": PlateletCategory.MAJOR_NON_NEURAXIAL,
+    "ศัลยกรรมหัวใจและทรวงอก": PlateletCategory.CARDIAC_CPB,
 }
 
 
@@ -116,14 +99,15 @@ def category_for_groups(groups: Sequence[str]) -> frozenset[PlateletCategory]:
 
 
 __all__ = [
-    "CATEGORY_SEED_STATUS",
-    "CONSUMPTIVE_THRESHOLD_PER_UL",
-    "CVC_THRESHOLD_PER_UL",
-    "LP_THRESHOLD_PER_UL",
-    "MNS_HIGH_RISK_CEILING_PER_UL",
-    "MNS_THRESHOLD_PER_UL",
+    "CARDIAC_CPB_OVER_ABOVE_PER_UL",
+    "CATEGORY_OVER_ABOVE_PER_UL",
+    "CONSUMPTIVE_OVER_ABOVE_PER_UL",
+    "CVC_OVER_ABOVE_PER_UL",
+    "LP_OVER_ABOVE_PER_UL",
+    "MAJOR_NON_NEURAXIAL_HIGH_RISK_OVER_ABOVE_PER_UL",
+    "MAJOR_NON_NEURAXIAL_OVER_ABOVE_PER_UL",
+    "NEURAXIAL_OVER_ABOVE_PER_UL",
     "PROCEDURE_GROUP_TO_CATEGORY",
     "PlateletCategory",
-    "SeedStatus",
     "category_for_groups",
 ]

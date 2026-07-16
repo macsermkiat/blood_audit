@@ -1016,8 +1016,8 @@ def _persist_platelet_over_reservation_row(
         verifier_retries=0,
         model_id="msbos-platelet-reservation",
         reasoning_en=(
-            "Pre-op platelet reservation exceeds the DRAFT recommendation for "
-            "the planned operation; not submitted to LLM."
+            "Pre-op platelet count is above the clinician-signed reservation "
+            "cutoff for the planned operation; not submitted to LLM."
         ),
         reasoning_th="",
         indications=(),
@@ -1046,8 +1046,8 @@ def _persist_platelet_over_reservation_row(
                 decision.pre_op_count_k_ul if decision is not None else None
             ),
             "reserved_units": decision.reserved_units if decision is not None else 0,
-            "seed_pending_signoff": (
-                decision.seed_pending_signoff if decision is not None else True
+            "clinician_signed": (
+                decision.clinician_signed if decision is not None else True
             ),
         },
         response_json={
@@ -1089,8 +1089,10 @@ def _persist_platelet_reservation_review_row(
         verifier_retries=0,
         model_id="msbos-platelet-reservation",
         reasoning_en=(
-            "Pre-op platelet reservation appropriateness is unresolved under "
-            "the pending-sign-off DRAFT rule; clinician review is required."
+            "Pre-op platelet reservation could not be judged under the "
+            "clinician-signed rule (missing pre-op count, uncategorisable or "
+            "category-ambiguous procedure, or unresolved planned operation); "
+            "clinician review is required."
         ),
         reasoning_th="",
         indications=(),
@@ -1119,8 +1121,8 @@ def _persist_platelet_reservation_review_row(
                 decision.pre_op_count_k_ul if decision is not None else None
             ),
             "reserved_units": decision.reserved_units if decision is not None else 0,
-            "seed_pending_signoff": (
-                decision.seed_pending_signoff if decision is not None else True
+            "clinician_signed": (
+                decision.clinician_signed if decision is not None else True
             ),
         },
         response_json={

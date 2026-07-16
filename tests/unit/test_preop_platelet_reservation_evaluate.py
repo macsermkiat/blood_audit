@@ -1,12 +1,13 @@
-"""Pure platelet reservation judgment tests for ticket #166."""
+"""Pure platelet reservation judgment tests for ticket #166 (clinician-signed)."""
 
 from __future__ import annotations
 
 import pytest
 
 from bba.preop_reservation import (
-    MNS_HIGH_RISK_CEILING_PER_UL,
-    MNS_THRESHOLD_PER_UL,
+    CARDIAC_CPB_OVER_ABOVE_PER_UL,
+    MAJOR_NON_NEURAXIAL_OVER_ABOVE_PER_UL,
+    NEURAXIAL_OVER_ABOVE_PER_UL,
     REVIEW_REASONS,
     PlateletCategory,
     evaluate_platelet_reservation,
@@ -14,17 +15,13 @@ from bba.preop_reservation import (
 )
 
 
-def test_review_reasons_is_exactly_the_eight_needs_review_reasons() -> None:
+def test_review_reasons_is_exactly_the_five_needs_review_reasons() -> None:
     # WHY: the review overlay fires iff decision.reason in REVIEW_REASONS.
-    # Membership is load-bearing — accidentally adding a benign reason
-    # (within_*, no_reserved_units) or an over_* reason here would route a
-    # non-review verdict to NEEDS_REVIEW (or silently swallow an over row).
-    # Pin the frozen set exactly so such a drift fails loudly.
+    # Membership is load-bearing — accidentally adding a benign (within_*,
+    # no_reserved_units) or an over_* reason here would route a non-review verdict
+    # to NEEDS_REVIEW (or silently swallow an over row). Pin the set exactly.
     assert REVIEW_REASONS == frozenset(
         {
-            "gray_band_major_non_neuraxial",
-            "cardiothoracic_split_unresolved",
-            "neuraxial_rule_unresolved",
             "uncategorised_procedure",
             "ambiguous_category",
             "missing_pre_op_count",
@@ -32,32 +29,50 @@ def test_review_reasons_is_exactly_the_eight_needs_review_reasons() -> None:
             "ambiguous_planned_op",
         }
     )
-    # The benign non-over and over reasons must NEVER be review reasons.
     for reason in (
         "within_major_non_neuraxial",
+        "within_neuraxial",
+        "within_cardiac_cpb",
         "no_reserved_units",
         "over_major_non_neuraxial",
-        "over_cardiac_cpb_any_units",
+        "over_neuraxial",
+        "over_cardiac_cpb",
     ):
         assert reason not in REVIEW_REASONS
 
 
 @pytest.mark.parametrize(
-    ("count_k_ul", "expected"),
+    ("category", "count_k_ul", "expected"),
     [
-        (79.999, (False, "within_major_non_neuraxial")),
-        (80.0, (False, "gray_band_major_non_neuraxial")),
-        (99.999, (False, "gray_band_major_non_neuraxial")),
-        (100.0, (True, "over_major_non_neuraxial")),
-        (150.0, (True, "over_major_non_neuraxial")),
+        # Signed binary rule (no gray band): count <= cutoff -> within;
+        # count > cutoff -> over. MNS cutoff 80,000; NEURAX/CARD cutoff 100,000.
+        (
+            PlateletCategory.MAJOR_NON_NEURAXIAL,
+            80.0,
+            (False, "within_major_non_neuraxial"),
+        ),
+        (
+            PlateletCategory.MAJOR_NON_NEURAXIAL,
+            80.001,
+            (True, "over_major_non_neuraxial"),
+        ),
+        (
+            PlateletCategory.MAJOR_NON_NEURAXIAL,
+            150.0,
+            (True, "over_major_non_neuraxial"),
+        ),
+        (PlateletCategory.NEURAXIAL, 100.0, (False, "within_neuraxial")),
+        (PlateletCategory.NEURAXIAL, 100.001, (True, "over_neuraxial")),
+        (PlateletCategory.CARDIAC_CPB, 100.0, (False, "within_cardiac_cpb")),
+        (PlateletCategory.CARDIAC_CPB, 120.0, (True, "over_cardiac_cpb")),
     ],
 )
-def test_major_non_neuraxial_seam_uses_draft_boundaries(
-    count_k_ul: float, expected: tuple[bool, str]
+def test_seam_applies_signed_cutoff_per_category(
+    category: PlateletCategory, count_k_ul: float, expected: tuple[bool, str]
 ) -> None:
     assert (
         platelet_reservation_verdict_for_category(
-            category=PlateletCategory.MAJOR_NON_NEURAXIAL,
+            category=category,
             pre_op_count_k_ul=count_k_ul,
             reserved_units=1,
         )
@@ -67,7 +82,11 @@ def test_major_non_neuraxial_seam_uses_draft_boundaries(
 
 @pytest.mark.parametrize(
     "category",
-    [PlateletCategory.MAJOR_NON_NEURAXIAL, PlateletCategory.CARDIAC_CPB],
+    [
+        PlateletCategory.MAJOR_NON_NEURAXIAL,
+        PlateletCategory.NEURAXIAL,
+        PlateletCategory.CARDIAC_CPB,
+    ],
 )
 def test_zero_reserved_units_can_never_be_over(category: PlateletCategory) -> None:
     assert platelet_reservation_verdict_for_category(
@@ -77,26 +96,41 @@ def test_zero_reserved_units_can_never_be_over(category: PlateletCategory) -> No
     ) == (False, "no_reserved_units")
 
 
-def test_resolved_card_rule_seam_treats_any_reserved_unit_as_over() -> None:
-    # The CARDIAC_CPB category is still UNRESOLVED_ROUTE_REVIEW pending clinician
-    # sign-off (worksheet Open B-i), so evaluate_platelet_reservation routes
-    # cardiothoracic to NEEDS_REVIEW. This asserts only the pure count-independent
-    # SEAM that becomes reachable once the cardiac/thoracic split is signed off;
-    # it does NOT imply any clinician approval has occurred.
-    assert platelet_reservation_verdict_for_category(
-        category=PlateletCategory.CARDIAC_CPB,
-        pre_op_count_k_ul=None,
-        reserved_units=1,
-    ) == (True, "over_cardiac_cpb_any_units")
+@pytest.mark.parametrize(
+    ("groups", "count", "expected_reason"),
+    [
+        # Signed resolutions: cardiothoracic and neuraxial now carry a count
+        # cutoff (100k), so they produce within/over rather than a review reason.
+        (("ศัลยกรรมหัวใจและทรวงอก",), 120.0, "over_cardiac_cpb"),
+        (("ศัลยกรรมหัวใจและทรวงอก",), 90.0, "within_cardiac_cpb"),
+        (("ศัลยกรรมระบบประสาท",), 120.0, "over_neuraxial"),
+        (("ศัลยกรรมระบบประสาท",), 90.0, "within_neuraxial"),
+        # Tumor is now signed to MNS (cutoff 80k).
+        (("Tumor",), 90.0, "over_major_non_neuraxial"),
+        (("ศัลยกรรมทั่วไป",), 70.0, "within_major_non_neuraxial"),
+    ],
+)
+def test_evaluator_applies_signed_category_verdicts(
+    groups: tuple[str, ...], count: float, expected_reason: str
+) -> None:
+    decision = evaluate_platelet_reservation(
+        reserved_units=2,
+        pre_op_count_k_ul=count,
+        planned_icd9_nodot="0124",
+        procedure_groups=groups,
+        reference_hash="a" * 64,
+    )
+
+    assert decision.reason == expected_reason
+    assert decision.clinician_signed is True
 
 
 @pytest.mark.parametrize(
     ("groups", "count", "expected_reason"),
     [
-        (("ศัลยกรรมหัวใจและทรวงอก",), None, "cardiothoracic_split_unresolved"),
-        (("ศัลยกรรมระบบประสาท",), 70.0, "neuraxial_rule_unresolved"),
-        (("Tumor",), 70.0, "uncategorised_procedure"),
+        # A code whose groups span DISTINCT categories -> never guess.
         (("ศัลยกรรมทั่วไป", "C Spine"), 70.0, "ambiguous_category"),
+        # A resolved category with no usable pre-op count -> review.
         (("ศัลยกรรมทั่วไป",), None, "missing_pre_op_count"),
     ],
 )
@@ -112,18 +146,27 @@ def test_evaluator_routes_clinical_ambiguity_to_typed_review(
     )
 
     assert decision.reason == expected_reason
+    assert decision.reason in REVIEW_REASONS
     assert decision.is_over is False
-    assert decision.seed_pending_signoff is True
+
+
+def test_absent_code_with_no_known_group_routes_to_uncategorised() -> None:
+    decision = evaluate_platelet_reservation(
+        reserved_units=2,
+        pre_op_count_k_ul=70.0,
+        planned_icd9_nodot="9999",
+        procedure_groups=(),
+        reference_hash="a" * 64,
+    )
+    assert decision.reason == "uncategorised_procedure"
+    assert decision.reason in REVIEW_REASONS
 
 
 @pytest.mark.parametrize(
     ("groups", "count", "planned"),
     [
-        # Every terminal-bearing shape, but with zero reserved units: an MNS
-        # over-count, a category that would otherwise route to review, a missing
-        # count (would-be missing_pre_op_count), and a blank plan.
         (("ศัลยกรรมทั่วไป",), 150.0, "0613"),
-        (("ศัลยกรรมหัวใจและทรวงอก",), 70.0, "3220"),
+        (("ศัลยกรรมหัวใจและทรวงอก",), 120.0, "3220"),
         (("ศัลยกรรมทั่วไป",), None, "0613"),
         (("ศัลยกรรมทั่วไป",), 70.0, "   "),
     ],
@@ -134,7 +177,7 @@ def test_zero_reserved_units_evaluate_is_never_terminal(
     # WHY: with no platelet units reserved there is no reservation to judge, so
     # the order must proceed to the normal floor/LLM path (never over, never
     # review) — otherwise a bare platelet order with no BDVSTDT detail line would
-    # be spuriously flagged. This guards the reserved-units<=0 short-circuit.
+    # be spuriously flagged. Guards the reserved-units<=0 short-circuit.
     decision = evaluate_platelet_reservation(
         reserved_units=0,
         pre_op_count_k_ul=count,
@@ -148,10 +191,9 @@ def test_zero_reserved_units_evaluate_is_never_terminal(
     assert decision.reason not in REVIEW_REASONS
 
 
-def test_reserved_but_uncounted_major_non_neuraxial_routes_to_review() -> None:
-    # The never-guess missing-count case: platelets ARE reserved (2 units) but no
-    # pre-op count exists, so the reservation cannot be judged numerically and
-    # must reach clinician review rather than be silently absorbed.
+def test_reserved_but_uncounted_routes_to_review() -> None:
+    # The never-guess missing-count case: platelets ARE reserved but no pre-op
+    # count exists, so the reservation cannot be judged and must reach review.
     decision = evaluate_platelet_reservation(
         reserved_units=2,
         pre_op_count_k_ul=None,
@@ -216,16 +258,16 @@ def test_evaluator_stamps_resolved_major_non_neuraxial_snapshot() -> None:
         "resolved_icd9": "0613",
         "category": "major_non_neuraxial",
         "pre_op_count_k_ul": 120.0,
-        "threshold_per_ul": 80_000,
-        "high_risk_ceiling_per_ul": 100_000,
+        "over_above_per_ul": 80_000,
         "reserved_units": 2,
         "is_over": True,
         "reason": "over_major_non_neuraxial",
         "reference_hash": "d" * 64,
-        "seed_pending_signoff": True,
+        "clinician_signed": True,
     }
 
 
-def test_seed_thresholds_match_the_draft_values() -> None:
-    assert MNS_THRESHOLD_PER_UL == 80_000
-    assert MNS_HIGH_RISK_CEILING_PER_UL == 100_000
+def test_signed_cutoffs_match_the_worksheet_values() -> None:
+    assert MAJOR_NON_NEURAXIAL_OVER_ABOVE_PER_UL == 80_000
+    assert NEURAXIAL_OVER_ABOVE_PER_UL == 100_000
+    assert CARDIAC_CPB_OVER_ABOVE_PER_UL == 100_000
