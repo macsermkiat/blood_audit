@@ -22,15 +22,12 @@ def _decide_from_row(
     note_resolved: bool,
 ) -> ReservationDecision:
     def decision(
-        *,
-        reason: ReservationReason,
-        is_over: bool = False,
-        recommended_units: int = row.recommended_units,
+        *, reason: ReservationReason, is_over: bool = False
     ) -> ReservationDecision:
         return ReservationDecision(
             resolved_icd9=resolved_icd9,
             msbos=row.msbos,
-            recommended_units=recommended_units,
+            recommended_units=row.recommended_units,
             reserved_units=reserved_units,
             is_over=is_over,
             reason=reason,
@@ -46,18 +43,14 @@ def _decide_from_row(
         # crossmatch-vs-screen status always establishable, so it never asserts
         # over on absent unit data.
         #
-        # Committee ruling (T2 wrinkle resolved): keep the strict >0 rule and
-        # IGNORE any recommended_units the reference carries for a T/S item (some
-        # rows list "1"/"2"/"1-2"). It is never a crossmatch ceiling — T/S means
-        # zero units should be crossmatched — so the snapshot records
-        # recommended_units=0, never the reference figure.
+        # Committee ruling (T2 wrinkle resolved, #167): keep the strict >0 rule
+        # and ignore any recommended_units the reference lists for a T/S item.
+        # ``row.recommended_units`` is already normalised to 0 at reference
+        # construction (reference.py), so the snapshot records 0, never the
+        # reference figure, and unit-only-differing T/S rows resolve unambiguously.
         if reserved_units > 0:
-            return decision(
-                reason="over_type_and_screen_crossmatched",
-                is_over=True,
-                recommended_units=0,
-            )
-        return decision(reason="type_and_screen_screen_only", recommended_units=0)
+            return decision(reason="over_type_and_screen_crossmatched", is_over=True)
+        return decision(reason="type_and_screen_screen_only")
     if row.msbos == "none" and reserved_units > 0:
         return decision(reason="over_none", is_over=True)
     if row.msbos == "G/M" and reserved_units > row.recommended_units:

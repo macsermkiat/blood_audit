@@ -71,12 +71,16 @@ def test_resolve_unique_ambiguous_and_absent_codes_data_driven() -> None:
     for row in rows:
         code = row["icd9_code_nodot"].strip()
         if code:
-            recommendations[code].add(
-                (
-                    row["msbos"].strip(),
-                    parse_recommended_units(row["recommended_units"]),
-                )
+            token = row["msbos"].strip()
+            # Mirror the reference's T/S unit normalisation (#167) so this test's
+            # notion of unique/ambiguous matches resolve(): a code that is
+            # "ambiguous" only because two T/S rows differ in units is unique.
+            units = (
+                0
+                if token == "T/S"
+                else parse_recommended_units(row["recommended_units"])
             )
+            recommendations[code].add((token, units))
     unique_code = next(
         code for code, values in recommendations.items() if len(values) == 1
     )
@@ -89,6 +93,20 @@ def test_resolve_unique_ambiguous_and_absent_codes_data_driven() -> None:
     assert isinstance(reference.resolve(unique_code), MsbosRow)
     assert reference.resolve(ambiguous_code) == "ambiguous"
     assert reference.resolve("not-in-reference") is None
+
+
+@pytest.mark.parametrize("code", ["2261", "8180"])
+def test_type_and_screen_units_ignored_so_unit_only_conflict_resolves(
+    code: str,
+) -> None:
+    # Regression for #167: these real codes carry two T/S rows differing only in
+    # recommended_units (1 vs 2). Before the committee ruling, MsbosRow identity
+    # included units, so resolve() returned "ambiguous" and a reserved T/S order
+    # wrongly routed to NEEDS_REVIEW instead of the mandated over-reservation.
+    # Normalising T/S units to 0 collapses them to one recommendation.
+    reference = load_msbos_reference()
+
+    assert reference.resolve(code) == MsbosRow(msbos="T/S", recommended_units=0)
 
 
 def test_candidates_for_conflicting_code_are_named_sorted_and_absent_is_empty() -> None:
