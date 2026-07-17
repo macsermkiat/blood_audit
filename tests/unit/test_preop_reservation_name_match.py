@@ -138,6 +138,29 @@ def test_exact_redo_event_matches_only_the_redo_row() -> None:
     assert result.recommendation == MsbosRow(msbos="G/M", recommended_units=2)
 
 
+def test_paren_stripped_variant_preserves_semantic_modifier() -> None:
+    # Regression (Codex P2): an operation with BOTH an acronym paren and a
+    # semantic-modifier paren must strip ONLY the acronym paren for its
+    # paren-stripped needle. The modifier stays, so a generic one-word event
+    # cannot smuggle into the modified operation via the stripped variant.
+    index = _index(
+        [_row("Hepatectomy (major) (ABC)", msbos="G/M", recommended_units="4")]
+    )
+
+    # The acronym itself still matches.
+    assert match_operation_names(index, ["Booked for ABC"]).status == "matched"
+    # A bare one-word "Hepatectomy" must NOT resolve via a stripped needle that
+    # dropped the "(major)" modifier.
+    assert match_operation_names(index, ["Hepatectomy"]).status == "no_match", (
+        "the paren-stripped variant must keep the semantic modifier so a generic "
+        "one-word event cannot match the modified operation"
+    )
+    # An event that includes the modifier does resolve.
+    assert (
+        match_operation_names(index, ["Hepatectomy major planned"]).status == "matched"
+    )
+
+
 # --- needle-collision determinism -------------------------------------------
 
 

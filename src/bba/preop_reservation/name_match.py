@@ -144,7 +144,16 @@ def _acronym_variants(operation: str) -> tuple[frozenset[str], str | None]:
                 acronyms.add(needle)
     stripped: str | None = None
     if acronyms:
-        stripped_raw = _PAREN_RE.sub(" ", operation)
+        # Strip ONLY the acronym parens for the paren-stripped variant; keep any
+        # semantic-modifier parens ("(major)", "(tumor)") in place. Removing every
+        # paren would let a generic event (a bare "Hepatectomy") match a modified
+        # operation ("Hepatectomy (major) (ABC)") via the stripped needle,
+        # smuggling in a modifier the needle policy documents as mandatory.
+        def _drop_acronym_parens(match: re.Match[str]) -> str:
+            inner = match.group(1).strip()
+            return " " if _ACRONYM_RE.fullmatch(inner) else match.group(0)
+
+        stripped_raw = _PAREN_RE.sub(_drop_acronym_parens, operation)
         candidate = _normalize(stripped_raw)
         if candidate.strip():
             stripped = candidate
