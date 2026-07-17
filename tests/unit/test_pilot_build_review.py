@@ -257,7 +257,7 @@ def test_msbos_flag_off_report_columns_do_not_change_review_bytes(
         tmp_path / "without",
         monkeypatch,
         manifest_csv=manifest_csv,
-        report_csv="reqno,classification,component\nR1,RETURNED_NOT_TRANSFUSED,red_cell\n",
+        report_csv="reqno,classification,component\nR1,RETURNED_NOT_TRANSFUSED,platelet\n",
         llm_json="[]",
     )
     with_columns = _render_review_with_rows(
@@ -268,9 +268,11 @@ def test_msbos_flag_off_report_columns_do_not_change_review_bytes(
         report_csv=(
             "reqno,classification,component,msbos_reserved_units,msbos_token,"
             "msbos_recommended_units,msbos_reason,msbos_is_over,"
-            "msbos_resolved_icd9,msbos_reference_hash\n"
-            "R1,RETURNED_NOT_TRANSFUSED,red_cell,3,G/M,2,over_gm_excess,True,"
-            "0139,hash\n"
+            "msbos_resolved_icd9,msbos_reference_hash,msbos_plt_category,"
+            "msbos_plt_count_k_ul,msbos_plt_over_above_per_ul,"
+            "msbos_plt_clinician_signed\n"
+            "R1,RETURNED_NOT_TRANSFUSED,platelet,2,,,over_neuraxial,True,"
+            "0199,hash,neuraxial,120.0,100000,True\n"
         ),
         llm_json="[]",
     )
@@ -280,6 +282,8 @@ def test_msbos_flag_off_report_columns_do_not_change_review_bytes(
     assert "MSBOS" not in rendered
     assert "cls-msbos-" not in rendered
     assert "above tariff" not in rendered
+    assert "<dt>above</dt>" not in rendered
+    assert "PLT 120 > 100" not in rendered
     assert "msbos-counts" not in rendered
 
 
@@ -303,18 +307,21 @@ def test_msbos_flag_on_renders_summary_cases_counts_glossary_and_css(
         report_csv=(
             "reqno,classification,component,msbos_reserved_units,msbos_token,"
             "msbos_recommended_units,msbos_reason,msbos_is_over,"
-            "msbos_resolved_icd9,msbos_reference_hash,returns_units_transfused,"
+            "msbos_resolved_icd9,msbos_reference_hash,msbos_plt_category,"
+            "msbos_plt_count_k_ul,msbos_plt_over_above_per_ul,"
+            "msbos_plt_clinician_signed,returns_units_transfused,"
             "returns_units_returned\n"
             "R1,RETURNED_NOT_TRANSFUSED,red_cell,3,G/M,2,over_gm_excess,True,"
-            "0139,hash,,\n"
+            "0139,hash,,,,,,\n"
             "R2,RETURNED_NOT_TRANSFUSED,red_cell,1,G/M,2,within_recommendation,"
-            "False,0139,hash,,\n"
-            "R3,APPROPRIATE,red_cell,3,G/M,2,over_gm_excess,True,0139,hash,,\n"
-            "R4,RETURNED_NOT_TRANSFUSED,platelet,,,,,,,,,\n"
+            "False,0139,hash,,,,,,\n"
+            "R3,APPROPRIATE,red_cell,3,G/M,2,over_gm_excess,True,0139,hash,,,,,,\n"
+            "R4,RETURNED_NOT_TRANSFUSED,platelet,2,,,over_neuraxial,True,0199,"
+            "hash,neuraxial,120.0,100000,True,,\n"
             "R5,RETURNED_NOT_TRANSFUSED,red_cell,0,,0,reservation_lookup_miss,"
-            "False,,hash,,\n"
+            "False,,hash,,,,,,\n"
             "R6,PERIOP_TRANSFUSION_EXEMPT,red_cell,2,G/M,2,"
-            "within_recommendation,False,0139,hash,1,1\n"
+            "within_recommendation,False,0139,hash,,,,,1,1\n"
         ),
         llm_json="[]",
         msbos_enabled=True,
@@ -327,22 +334,20 @@ def test_msbos_flag_on_renders_summary_cases_counts_glossary_and_css(
         "<td><span class='cls cls-appropriate'>Appropriate</span></td>"
         "<td>(LLM not run)</td><td>—</td>" in rendered
     )
-    assert (
-        "<td><span class='cls cls-returned_not_transfused'>"
-        "Returned — not transfused (excluded)</span></td>"
-        "<td>(LLM not run)</td><td>—</td>" in rendered
-    )
     assert "MSBOS reservation: Reserved 3; MSBOS tariff G/M 2" in rendered
     assert "<span class='cls cls-msbos-warn'>unlinked</span>" in rendered
     assert "Reservation detail lines not linked (unlinked)" in rendered
     assert "Reserved 2; MSBOS tariff G/M 2; 1 transfused, 1 returned" in rendered
-    # R4 is a platelet returns row (blank MSBOS fields, T1 = RBC only): it is NOT
-    # counted, so the denominator (3) equals above+within+unresolved and no empty
-    # "MSBOS reservation:" line is emitted for it.
-    assert "Returned (3): 1 above tariff / 1 within / 1 unresolved" in rendered
-    assert "Peri-op exempt (1): 0 above tariff / 1 within / 0 unresolved" in rendered
+    assert "<span class='cls cls-msbos-warn'>PLT 120 > 100</span>" in rendered
+    assert (
+        "Reserved 2u platelets; pre-op count 120k/uL > neuraxial cutoff 100k/uL"
+        in rendered
+    )
+    # R4 is an annotated platelet over row and is counted alongside RBC returns.
+    assert "Returned (4): 2 above / 1 within / 1 unresolved" in rendered
+    assert "Peri-op exempt (1): 0 above / 1 within / 0 unresolved" in rendered
     assert "MSBOS reservation: </div>" not in rendered
-    assert "<dt>above tariff</dt>" in rendered
+    assert "<dt>above</dt>" in rendered
     assert "INFORMATIONAL" in rendered
     assert "not a billed verdict" in rendered
     assert "anticipated hemorrhage, case cancellation, or emergency status" in rendered
@@ -445,3 +450,149 @@ def test_msbos_case_line_maps_every_reachable_reason() -> None:
         "PERIOP_TRANSFUSION_EXEMPT",
     )
     assert exempt == "Reserved 3; MSBOS tariff G/M 2; 1 transfused, 2 returned"
+
+
+def _platelet_returns_det(reason: str, **extra: str) -> dict[str, str]:
+    return {
+        "classification": "RETURNED_NOT_TRANSFUSED",
+        "component": "platelet",
+        "msbos_reason": reason,
+        "msbos_reserved_units": "2",
+        "msbos_plt_category": "neuraxial",
+        "msbos_plt_count_k_ul": "120.0",
+        "msbos_plt_over_above_per_ul": "100000",
+        **extra,
+    }
+
+
+def test_fmt_plt_k_preserves_non_integral_values() -> None:
+    module = _load_build_review()
+
+    assert module._fmt_plt_k(120.0) == "120"
+    assert module._fmt_plt_k(120.5) == "120.5"
+    assert module._fmt_plt_k("") == ""
+    assert module._fmt_plt_k(None) == ""
+    assert module._fmt_plt_k("x") == ""
+
+
+def test_fmt_plt_cutoff_k_is_crash_safe() -> None:
+    module = _load_build_review()
+
+    assert module._fmt_plt_cutoff_k(100000) == "100"
+    assert module._fmt_plt_cutoff_k(80000) == "80"
+    assert module._fmt_plt_cutoff_k("") == ""
+    assert module._fmt_plt_cutoff_k(None) == ""
+    assert module._fmt_plt_cutoff_k("x") == ""
+
+
+def test_msbos_platelet_summary_pill_maps_every_reason_without_rbc_fallthrough() -> (
+    None
+):
+    module = _load_build_review()
+    cases = {
+        "over_major_non_neuraxial": ("PLT 120 > 100", "cls-msbos-warn"),
+        "over_neuraxial": ("PLT 120 > 100", "cls-msbos-warn"),
+        "over_cardiac_cpb": ("PLT 120 > 100", "cls-msbos-warn"),
+        "within_major_non_neuraxial": ("within", "cls-msbos-ok"),
+        "within_neuraxial": ("within", "cls-msbos-ok"),
+        "within_cardiac_cpb": ("within", "cls-msbos-ok"),
+        "no_reserved_units": ("within", "cls-msbos-ok"),
+        "missing_pre_op_count": ("count missing", "cls-msbos-warn"),
+        "uncategorised_procedure": ("op uncategorised", "cls-msbos-warn"),
+        "ambiguous_category": ("category ambiguous", "cls-msbos-warn"),
+        "no_planned_op": ("op unresolved", "cls-msbos-warn"),
+        "ambiguous_planned_op": ("op unresolved", "cls-msbos-warn"),
+        "reservation_lookup_miss": ("unlinked", "cls-msbos-warn"),
+    }
+    for reason, (text, pill_class) in cases.items():
+        pill = module._msbos_summary_pill(_platelet_returns_det(reason))
+        assert pill == f"<span class='cls {pill_class}'>{text}</span>", reason
+        expected_bucket = (
+            "above"
+            if reason.startswith("over_")
+            else "within"
+            if reason.startswith("within_") or reason == "no_reserved_units"
+            else "unresolved"
+        )
+        assert module._msbos_reason_bucket(reason) == expected_bucket
+
+    assert (
+        module._msbos_summary_pill(_platelet_returns_det("within_recommendation"))
+        == "—"
+    )
+
+    category_cases = {
+        "over_major_non_neuraxial": (
+            "major_non_neuraxial",
+            "80000",
+            "PLT 120 > 80",
+        ),
+        "over_cardiac_cpb": ("cardiac_cpb", "100000", "PLT 120 > 100"),
+    }
+    for reason, (category, cutoff, text) in category_cases.items():
+        pill = module._msbos_summary_pill(
+            _platelet_returns_det(
+                reason,
+                msbos_plt_category=category,
+                msbos_plt_over_above_per_ul=cutoff,
+            )
+        )
+        assert pill == f"<span class='cls cls-msbos-warn'>{text}</span>", reason
+
+
+def test_msbos_platelet_case_line_maps_every_reason() -> None:
+    module = _load_build_review()
+    expected = {
+        "over_neuraxial": (
+            "Reserved 2u platelets; pre-op count 120k/uL > neuraxial cutoff 100k/uL"
+        ),
+        "within_neuraxial": (
+            "Reserved 2u platelets; pre-op count 120k/uL within neuraxial cutoff 100k/uL"
+        ),
+        "no_reserved_units": "No platelet units reserved",
+        "missing_pre_op_count": "Platelet pre-op count missing",
+        "uncategorised_procedure": "MSBOS platelet category could not be resolved",
+        "ambiguous_category": "MSBOS platelet category ambiguous",
+        "no_planned_op": "MSBOS planned operation unresolved",
+        "ambiguous_planned_op": "MSBOS planned operation unresolved",
+        "reservation_lookup_miss": "Reservation detail lines not linked (unlinked)",
+    }
+    for reason, text in expected.items():
+        line = module._msbos_case_line(
+            _platelet_returns_det(reason), "RETURNED_NOT_TRANSFUSED"
+        )
+        assert line == text, reason
+
+    category_cases = {
+        "over_major_non_neuraxial": (
+            "major_non_neuraxial",
+            "80000",
+            "Reserved 2u platelets; pre-op count 120k/uL > "
+            "major-non-neuraxial cutoff 80k/uL",
+        ),
+        "over_cardiac_cpb": (
+            "cardiac_cpb",
+            "100000",
+            "Reserved 2u platelets; pre-op count 120k/uL > cardiac-CPB cutoff 100k/uL",
+        ),
+    }
+    for reason, (category, cutoff, text) in category_cases.items():
+        line = module._msbos_case_line(
+            _platelet_returns_det(
+                reason,
+                msbos_plt_category=category,
+                msbos_plt_over_above_per_ul=cutoff,
+            ),
+            "RETURNED_NOT_TRANSFUSED",
+        )
+        assert line == text, reason
+
+    exempt = module._msbos_case_line(
+        _platelet_returns_det(
+            "within_neuraxial",
+            returns_units_transfused="1",
+            returns_units_returned="1",
+        ),
+        "PERIOP_TRANSFUSION_EXEMPT",
+    )
+    assert exempt.endswith("; 1 transfused, 1 returned")
