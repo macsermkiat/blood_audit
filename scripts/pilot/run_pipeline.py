@@ -20,6 +20,7 @@ from __future__ import annotations
 import csv
 import os
 import sys
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,7 @@ from bba.cohort_detector import (
     OperativeEvent,
     assign_cohort,
 )
+from bba.component_map import ComponentFamily
 from bba.deterministic_classifier import (
     ClassifierResult,
     classify,
@@ -46,7 +48,11 @@ from bba.deterministic_classifier import (
 from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import ClassifierInputs
 from bba.declared_use import DeclaredUseLabel, collapse_usetype, label_for
-from bba.feature_flags import DECLARED_USETYPE_ENABLED, RETURNS_LEDGER_ENABLED
+from bba.feature_flags import (
+    DECLARED_USETYPE_ENABLED,
+    MSBOS_RESERVATION_ENABLED,
+    RETURNS_LEDGER_ENABLED,
+)
 from bba.hb_lookup import (
     HbLookupResult,
     HbObservation,
@@ -63,6 +69,13 @@ from bba.platelet_lookup import (
     PlateletObservation,
     lookup_platelet,
     parse_platelet_count,
+)
+from bba.preop_reservation import (
+    MsbosReference,
+    ReservationDecision,
+    evaluate_reservation,
+    load_msbos_reference,
+    reserved_units_by_component,
 )
 from bba.returns_ledger import ReturnsSummary, rows_for_admission, summarize_returns
 from bba.vitals_extractor import PeriopSummary, scan_periop
@@ -97,9 +110,14 @@ _declared_env = os.environ.get("BBA_PILOT_DECLARED_USETYPE")
 DECLARED_USETYPE_PILOT_ENABLED = (
     _declared_env == "1" if _declared_env is not None else DECLARED_USETYPE_ENABLED
 )
+_msbos_env = os.environ.get("BBA_PILOT_MSBOS_RESERVATION")
+MSBOS_RESERVATION_PILOT_ENABLED = (
+    _msbos_env == "1" if _msbos_env is not None else MSBOS_RESERVATION_ENABLED
+)
 HB_HEM_CODE = "290095"
 HB_POCT_CODE = "500001"
 ANC_CODE = "290093"
+# Unlike run_llm_leg.py, this leg has no store writer: AuditOrdersConfig.code_version is inert and report.csv is fully regenerated, so seam suffixes do not apply.
 CODE_VERSION = "pilot-mini"
 INCPT_OPERATION_GROUPS = {"110", "111"}
 
@@ -178,6 +196,35 @@ RETURNS_LEDGER_FIELDNAMES = [
 # Declared-use columns (spec #147, ticket #151). Appended ONLY when the pilot
 # seam is on, so a flag-off run reproduces the base schema byte-for-byte.
 DECLARED_USETYPE_FIELDNAMES = ["declared_use_code", "declared_use_label"]
+
+# MSBOS reservation annotation columns (spec #176, ticket #179). Appended ONLY when the
+# MSBOS pilot seam is on; populated ONLY on returns-terminal RBC rows, so a flag-off run
+# reproduces the post-T0 schema byte-for-byte. NO msbos_note_resolved column (Q1: plain
+# evaluator, no note disambiguation — the field would be constant-false).
+MSBOS_RESERVATION_FIELDNAMES = [
+    "msbos_reserved_units",
+    "msbos_token",
+    "msbos_recommended_units",
+    "msbos_reason",
+    "msbos_is_over",
+    "msbos_resolved_icd9",
+    "msbos_reference_hash",
+]
+
+
+def _report_fieldnames() -> list[str]:
+    """Assemble report.csv fieldnames = base + gated seam columns.
+
+    Module-level and pure so a test can assert the msbos_* keys are present when the seam is on
+    (DictWriter uses extrasaction="ignore", so a column missing from fieldnames is silently
+    dropped and flag-on output masquerades as flag-off).
+    """
+    return (
+        REPORT_FIELDNAMES
+        + (RETURNS_LEDGER_FIELDNAMES if RETURNS_LEDGER_ENABLED else [])
+        + (DECLARED_USETYPE_FIELDNAMES if DECLARED_USETYPE_PILOT_ENABLED else [])
+        + (MSBOS_RESERVATION_FIELDNAMES if MSBOS_RESERVATION_PILOT_ENABLED else [])
+    )
 
 
 def _returns_disposition_for_classifier(
@@ -264,6 +311,84 @@ def _returns_periop_context_for_classifier(
 _RETURNS_TERMINAL_CLASSIFICATIONS = frozenset(
     {"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"}
 )
+
+
+def _planned_op_icd9(
+    op_events: Sequence[OperativeEvent], order_datetime: datetime
+) -> str:
+    """Select the nearest upcoming planned ICD-9, failing closed on a tie."""
+    upcoming = sorted(
+        (o for o in op_events if o.operative_datetime >= order_datetime),
+        key=lambda o: (o.operative_datetime, o.icd9),
+    )
+    if not upcoming:
+        return ""
+    nearest_dt = upcoming[0].operative_datetime
+    nearest = {o.icd9.strip() for o in upcoming if o.operative_datetime == nearest_dt}
+    return upcoming[0].icd9.strip() if len(nearest) == 1 else "\x00AMBIG"
+
+
+def _msbos_reservation_columns(
+    *,
+    classification: str,
+    hn: str,
+    reqno: str,
+    op_events: Sequence[OperativeEvent],
+    order_datetime: datetime,
+    reserved_units_map: Mapping[tuple[str, str, ComponentFamily], int],
+    msbos_reference: MsbosReference,
+) -> dict[str, Any]:
+    """MSBOS annotation columns for one RBC report row (spec #176, ticket #179).
+
+    Returns {} for non-returns-terminal rows (so the caller can update() unconditionally and a
+    non-returns row keeps blank msbos_* columns). Q1: plain evaluate_reservation, no notes.
+    Never-guess join-miss guard: blank stripped HN/REQNO, or a component key absent from
+    reserved_units_map, annotates reservation_lookup_miss — never within/clean. A GENUINE
+    zero-unit reservation is PRESENT in the map with value 0 (reserved_units_by_component sets
+    every key it sees before parsing quantities, reserved_units.py:36), so a present key with
+    value 0 is a real screen-only, distinct from an absent key. Keys stripped, mirroring
+    reserved_units.py:31 and run_llm_leg.py:1976.
+    """
+    if classification not in _RETURNS_TERMINAL_CLASSIFICATIONS:
+        return {}
+    hn_s = hn.strip()
+    reqno_s = reqno.strip()
+    key = (hn_s, reqno_s, ComponentFamily.RED_CELL)
+    if not hn_s or not reqno_s or key not in reserved_units_map:
+        return {
+            "msbos_reserved_units": 0,
+            "msbos_token": "",
+            "msbos_recommended_units": 0,
+            "msbos_reason": "reservation_lookup_miss",
+            "msbos_is_over": False,
+            "msbos_resolved_icd9": "",
+            "msbos_reference_hash": msbos_reference.content_hash,
+        }
+    reserved = reserved_units_map[key]
+    planned = _planned_op_icd9(op_events, order_datetime)
+    if planned == "\x00AMBIG":
+        decision = ReservationDecision(
+            reserved_units=reserved,
+            is_over=False,
+            reason="ambiguous_planned_op",
+            reference_hash=msbos_reference.content_hash,
+        )
+    else:
+        decision = evaluate_reservation(
+            reserved_units=reserved,
+            planned_icd9_nodot=planned,
+            reference=msbos_reference,
+        )
+    return {
+        "msbos_reserved_units": decision.reserved_units,
+        "msbos_token": decision.msbos,
+        "msbos_recommended_units": decision.recommended_units,
+        "msbos_reason": decision.reason,
+        "msbos_is_over": decision.is_over,
+        "msbos_resolved_icd9": decision.resolved_icd9,
+        "msbos_reference_hash": decision.reference_hash,
+    }
+
 
 # Inert Hb / cohort sentinels for the platelet returns-terminal check. A
 # platelet order has no Hb or cohort, but ``classify`` requires both on
@@ -674,6 +799,12 @@ def main() -> None:
 
     bdvst = _read_csv("BDVST.csv")
     bdvstdt = _read_csv("BDVSTDT.csv")
+    msbos_reference = (
+        load_msbos_reference() if MSBOS_RESERVATION_PILOT_ENABLED else None
+    )
+    reserved_units_map = (
+        reserved_units_by_component(bdvstdt) if MSBOS_RESERVATION_PILOT_ENABLED else {}
+    )
     diag = _read_csv("Diagnosis.csv")
     lab = _read_csv("Lab.csv")
     med = _read_csv("Med.csv")
@@ -1119,6 +1250,18 @@ def main() -> None:
                 }
             )
         row.update(_declared_use_columns(collapsed_usetype))
+        if MSBOS_RESERVATION_PILOT_ENABLED and msbos_reference is not None:
+            row.update(
+                _msbos_reservation_columns(
+                    classification=clf.classification,
+                    hn=order.hn,
+                    reqno=order.reqno,
+                    op_events=op_events,
+                    order_datetime=order.order_datetime,
+                    reserved_units_map=reserved_units_map,
+                    msbos_reference=msbos_reference,
+                )
+            )
         rows.append(row)
 
     # Append excluded cases as sparse rows so build_review.py can surface
@@ -1133,11 +1276,7 @@ def main() -> None:
     # only) report.csv so build_review.py can open it. Stable fieldnames
     # also keep the schema consistent across runs (one column won't
     # disappear if every case happens to have e.g. anc_value=None).
-    fieldnames = (
-        REPORT_FIELDNAMES
-        + (RETURNS_LEDGER_FIELDNAMES if RETURNS_LEDGER_ENABLED else [])
-        + (DECLARED_USETYPE_FIELDNAMES if DECLARED_USETYPE_PILOT_ENABLED else [])
-    )
+    fieldnames = _report_fieldnames()
     with out_csv.open("w", encoding="utf-8", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=fieldnames, extrasaction="ignore")
         w.writeheader()

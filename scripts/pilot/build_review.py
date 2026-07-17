@@ -29,6 +29,7 @@ import json
 import os
 import re
 import sys
+from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -256,6 +257,16 @@ _CLS_DISPLAY: dict[str, str] = {
     "EXCLUDED": "Excluded",
 }
 
+_RETURNS_TERMINALS = frozenset({"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"})
+_MSBOS_ABOVE_REASONS = frozenset(
+    {"over_gm_excess", "over_none", "over_type_and_screen_crossmatched"}
+)
+_MSBOS_WITHIN_REASONS = frozenset(
+    {"within_recommendation", "type_and_screen_screen_only"}
+)
+# unresolved = everything else with a nonblank reason: ambiguous_code, unresolved_code,
+# ambiguous_planned_op, no_planned_op, operation_unresolved, reservation_lookup_miss.
+
 
 def _display_cls(cls: str | None) -> str:
     normalized = (cls or "").upper()
@@ -264,6 +275,91 @@ def _display_cls(cls: str | None) -> str:
     if RETURNS_LEDGER_ENABLED and normalized == "PERIOP_TRANSFUSION_EXEMPT":
         return "Peri-op transfusion — exempt (excluded)"
     return _CLS_DISPLAY.get(normalized, cls or "Excluded")
+
+
+def _msbos_reason_bucket(reason: str) -> str | None:
+    normalized = reason.strip()
+    if not normalized:
+        return None
+    if normalized in _MSBOS_ABOVE_REASONS:
+        return "above"
+    if normalized in _MSBOS_WITHIN_REASONS:
+        return "within"
+    return "unresolved"
+
+
+def _msbos_summary_pill(det: dict[str, str]) -> str:
+    det_class = (det.get("classification") or "").upper()
+    reason = (det.get("msbos_reason") or "").strip()
+    if det_class not in _RETURNS_TERMINALS or not reason:
+        return "—"
+
+    reserved = esc(det.get("msbos_reserved_units", ""))
+    recommended = esc(det.get("msbos_recommended_units", ""))
+    if reason == "over_gm_excess":
+        text = f"{reserved} vs G/M {recommended}"
+        pill_class = "cls-msbos-warn"
+    elif reason == "over_none":
+        text = f"{reserved} vs none 0"
+        pill_class = "cls-msbos-warn"
+    elif reason == "over_type_and_screen_crossmatched":
+        text = f"T/S; {reserved}u reserved"
+        pill_class = "cls-msbos-warn"
+    elif reason in _MSBOS_WITHIN_REASONS:
+        text = "within"
+        pill_class = "cls-msbos-ok"
+    elif reason in {"ambiguous_code", "unresolved_code"}:
+        text = "code unresolved"
+        pill_class = "cls-msbos-warn"
+    elif reason in {
+        "ambiguous_planned_op",
+        "no_planned_op",
+        "operation_unresolved",
+    }:
+        text = "op unresolved"
+        pill_class = "cls-msbos-warn"
+    elif reason == "reservation_lookup_miss":
+        text = "unlinked"
+        pill_class = "cls-msbos-warn"
+    else:
+        return "—"
+    return f"<span class='cls {pill_class}'>{text}</span>"
+
+
+def _msbos_case_line(det: dict[str, str], det_class: str) -> str:
+    reason = (det.get("msbos_reason") or "").strip()
+    reserved = esc(det.get("msbos_reserved_units", ""))
+    recommended = esc(det.get("msbos_recommended_units", ""))
+    token = esc(det.get("msbos_token", ""))
+    if reason == "over_gm_excess":
+        text = f"Reserved {reserved}; MSBOS tariff G/M {recommended}"
+    elif reason == "over_none":
+        text = f"Reserved {reserved}; MSBOS tariff none 0"
+    elif reason == "over_type_and_screen_crossmatched":
+        text = f"Reserved {reserved}; MSBOS tariff T/S"
+    elif reason == "within_recommendation":
+        text = f"Reserved {reserved}; MSBOS tariff {token} {recommended}"
+    elif reason == "type_and_screen_screen_only":
+        text = f"Reserved {reserved}; MSBOS tariff T/S"
+    elif reason in {"ambiguous_code", "unresolved_code"}:
+        text = "MSBOS operation code unresolved"
+    elif reason in {
+        "ambiguous_planned_op",
+        "no_planned_op",
+        "operation_unresolved",
+    }:
+        text = "MSBOS planned operation unresolved"
+    elif reason == "reservation_lookup_miss":
+        text = "Reservation detail lines not linked (unlinked)"
+    else:
+        text = ""
+
+    if det_class == "PERIOP_TRANSFUSION_EXEMPT":
+        text += (
+            f"; {esc(det.get('returns_units_transfused', ''))} transfused, "
+            f"{esc(det.get('returns_units_returned', ''))} returned"
+        )
+    return text
 
 
 def fmt_time(raw: Any) -> str:
@@ -547,7 +643,9 @@ def render_table(rows: list[dict[str, Any]], cols: list[str]) -> str:
 _SUMMARY_DATA_COLS = ["#", "REQNO", "HN", "AN", "Hb", "Cohort", "Threshold", "Returned"]
 
 
-def render_summary_table(rows: list[dict[str, Any]]) -> str:
+def render_summary_table(
+    rows: list[dict[str, Any]], *, show_msbos: bool = False
+) -> str:
     """Render the case-summary table.
 
     Unlike ``render_table``, the Deterministic and LLM cells carry pre-built
@@ -559,6 +657,8 @@ def render_summary_table(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return "<p class='empty'>(no rows)</p>"
     headers = _SUMMARY_DATA_COLS + ["Deterministic", "LLM"]
+    if show_msbos:
+        headers.append("MSBOS")
     head = "".join(f"<th>{esc(c)}</th>" for c in headers)
     body_parts: list[str] = []
     for r in rows:
@@ -566,6 +666,8 @@ def render_summary_table(rows: list[dict[str, Any]]) -> str:
             f"<td>{esc(r.get(c, ''))}</td>" for c in _SUMMARY_DATA_COLS
         )
         verdict_cells = f"<td>{r['_det_html']}</td><td>{r['_llm_html']}</td>"
+        if show_msbos:
+            verdict_cells += f"<td>{r['_msbos_html']}</td>"
         tr_open = "<tr class='verdict-mismatch'>" if r.get("_mismatch") else "<tr>"
         body_parts.append(tr_open + data_cells + verdict_cells + "</tr>")
     body = "".join(body_parts)
@@ -763,6 +865,18 @@ def main() -> None:
 
     det_rows = list(csv.DictReader(DET_REPORT.open(encoding="utf-8")))
     det_by_reqno = {r["reqno"]: r for r in det_rows}
+    if MSBOS_RESERVATION_PILOT_ENABLED:
+        # det_by_reqno joins on the bare REQNO, so ANY duplicate REQNO in the report
+        # scope (a REQNO reused across admissions, or an RBC+platelet split) would let
+        # one row silently overwrite another and mis-render its verdict/annotation. Fail
+        # loud instead (plan #176: "fail loud on duplicate REQNOs in the report scope").
+        reqno_counts = Counter((r.get("reqno") or "").strip() for r in det_rows)
+        dups = sorted(reqno for reqno, count in reqno_counts.items() if count > 1)
+        if dups:
+            raise ValueError(
+                "duplicate REQNO in report scope, cannot safely join "
+                f"MSBOS annotations: {dups}"
+            )
 
     llm_report = (
         json.loads(LLM_REPORT.read_text(encoding="utf-8"))
@@ -782,6 +896,10 @@ def main() -> None:
     case_html_parts: list[str] = []
     summary_rows: list[dict[str, str]] = []
     case_mismatch_tags: list[str] = []
+    msbos_counts: dict[str, dict[str, int]] = {
+        terminal: {"denominator": 0, "above": 0, "within": 0, "unresolved": 0}
+        for terminal in _RETURNS_TERMINALS
+    }
 
     for i, m in enumerate(manifest_rows, start=1):
         hn = m["HN"]
@@ -1185,6 +1303,18 @@ def main() -> None:
 
         llm = llm_by_reqno.get(reqno)
         det_class = det.get("classification") or "excluded"
+        det_class_upper = det_class.upper()
+        # Only RBC returns rows carry an MSBOS annotation (T1). A platelet returns row
+        # has a blank msbos_reason -> _msbos_reason_bucket is None; skip it so the bucket
+        # tallies always sum to the denominator (no "silent" uncounted rows).
+        msbos_bucket = (
+            _msbos_reason_bucket(det.get("msbos_reason", ""))
+            if MSBOS_RESERVATION_PILOT_ENABLED and det_class_upper in _RETURNS_TERMINALS
+            else None
+        )
+        if msbos_bucket is not None:
+            msbos_counts[det_class_upper]["denominator"] += 1
+            msbos_counts[det_class_upper][msbos_bucket] += 1
         # ``llm_final`` may be explicitly null when run_llm_leg.py persisted
         # a partial result (missing batch row); chaining ``.get`` on None
         # would crash, so coalesce twice.
@@ -1240,6 +1370,7 @@ def main() -> None:
                 or "—",
                 "_det_html": det_pill,
                 "_llm_html": llm_cell,
+                "_msbos_html": _msbos_summary_pill(det),
                 "_mismatch": bool(_nav_tag),
             }
         )
@@ -1321,6 +1452,15 @@ def main() -> None:
             f"<div class='rationale'>bypass: "
             f"{_code_abbr(det.get('bypass_reason') or 'none', _BYPASS_LABELS)}</div>"
         )
+        if (
+            MSBOS_RESERVATION_PILOT_ENABLED
+            and det_class_upper in _RETURNS_TERMINALS
+            and (det.get("msbos_reason") or "").strip()
+        ):
+            parts.append(
+                "<div class='rationale'>MSBOS reservation: "
+                f"{_msbos_case_line(det, det_class_upper)}</div>"
+            )
         parts.append("</div>")
 
         parts.append("<div class='vbox llm'>")
@@ -1690,7 +1830,26 @@ def main() -> None:
         parts.append("</section>")
         case_html_parts.append("\n".join(parts))
 
-    summary_html = render_summary_table(summary_rows)
+    summary_html = render_summary_table(
+        summary_rows, show_msbos=MSBOS_RESERVATION_PILOT_ENABLED
+    )
+    if MSBOS_RESERVATION_PILOT_ENABLED:
+        returned_counts = msbos_counts["RETURNED_NOT_TRANSFUSED"]
+        exempt_counts = msbos_counts["PERIOP_TRANSFUSION_EXEMPT"]
+        msbos_counts_html = (
+            "<div class='msbos-counts'>"
+            f"Returned ({returned_counts['denominator']}): "
+            f"{returned_counts['above']} above tariff / "
+            f"{returned_counts['within']} within / "
+            f"{returned_counts['unresolved']} unresolved<br>"
+            f"Peri-op exempt ({exempt_counts['denominator']}): "
+            f"{exempt_counts['above']} above tariff / "
+            f"{exempt_counts['within']} within / "
+            f"{exempt_counts['unresolved']} unresolved"
+            "</div>"
+        )
+    else:
+        msbos_counts_html = ""
 
     css = """
     :root {
@@ -1871,6 +2030,14 @@ def main() -> None:
         if RETURNS_LEDGER_ENABLED
         else ""
     )
+    msbos_annotation_css = (
+        "\n    .cls-msbos-warn { background: var(--warn-bg); color: var(--warn-fg); }\n"
+        "    .cls-msbos-ok   { background: var(--ok-bg);   color: var(--ok-fg); }\n"
+        "    .msbos-counts { font-size: 0.8125rem; color: var(--s-muted); "
+        "margin: 8px 0 0; }\n"
+        if MSBOS_RESERVATION_PILOT_ENABLED
+        else ""
+    )
     returns_glossary_html = (
         "<dt>RETURNED_NOT_TRANSFUSED</dt><dd>All dispensed units were returned; "
         "excluded from scoring and review.</dd>\n"
@@ -1884,6 +2051,14 @@ def main() -> None:
         "<dt>operation_unresolved</dt><dd>Conflicting MSBOS operation code "
         "could not be uniquely resolved from the windowed clinical notes — "
         "escalated to human review.</dd>\n"
+        "<dt>above tariff</dt><dd>reserved units exceeded the elective MSBOS "
+        "tariff for the resolved planned procedure code. This annotation is "
+        "INFORMATIONAL — it is not a billed verdict, does not change the order's "
+        "classification or scoring, and does not account for anticipated "
+        "hemorrhage, case cancellation, or emergency status (the schedule data "
+        "cannot see these). On peri-op-exempt rows it judges ordering QUANTITY "
+        "only, never the transfusion decision (that is the anaesthesiologist's "
+        "call — the reason the bucket is exempt).</dd>\n"
         if MSBOS_RESERVATION_PILOT_ENABLED
         else ""
     )
@@ -1891,7 +2066,7 @@ def main() -> None:
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KCMH RBC order appropriateness audit — human review</title>
-<style>{css}{returns_pill_css}</style></head><body>
+<style>{css}{returns_pill_css}{msbos_annotation_css}</style></head><body>
 <h1>KCMH RBC Order Appropriateness Audit — Human Review</h1>
 <p>{n_cases} RBC orders. Deterministic: local rule-based verdict.
 LLM: Anthropic Batch classification on structured evidence only.
@@ -1921,7 +2096,7 @@ LLM: Anthropic Batch classification on structured evidence only.
 {returns_legend_html}  <span class="cls cls-insufficient_evidence">Insufficient evidence</span>
   <span class="cls cls-excluded">Excluded</span>
 </div>
-<div class='table-scroll'>{summary_html}</div>
+<div class='table-scroll'>{summary_html}</div>{msbos_counts_html}
 <details style='margin:16px 0;'><summary><b>Glossary — verdict classes and classifier codes</b></summary>
 <div class='glossary-body'>
 <dl>
