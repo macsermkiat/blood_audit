@@ -73,6 +73,7 @@ from bba.platelet_lookup import (
 from bba.preop_reservation import (
     MsbosReference,
     ReservationDecision,
+    evaluate_platelet_reservation,
     evaluate_reservation,
     load_msbos_reference,
     reserved_units_by_component,
@@ -198,9 +199,10 @@ RETURNS_LEDGER_FIELDNAMES = [
 DECLARED_USETYPE_FIELDNAMES = ["declared_use_code", "declared_use_label"]
 
 # MSBOS reservation annotation columns (spec #176, ticket #179). Appended ONLY when the
-# MSBOS pilot seam is on; populated ONLY on returns-terminal RBC rows, so a flag-off run
-# reproduces the post-T0 schema byte-for-byte. NO msbos_note_resolved column (Q1: plain
-# evaluator, no note disambiguation — the field would be constant-false).
+# MSBOS pilot seam is on. The reserved-units, reason, is-over, resolved-ICD9, and reference-hash
+# columns are shared across RBC and platelet returns rows; token and recommended-units remain
+# RBC-only. A flag-off run reproduces the post-T0 schema byte-for-byte. NO msbos_note_resolved
+# column (Q1: plain evaluator, no note disambiguation — the field would be constant-false).
 MSBOS_RESERVATION_FIELDNAMES = [
     "msbos_reserved_units",
     "msbos_token",
@@ -209,6 +211,17 @@ MSBOS_RESERVATION_FIELDNAMES = [
     "msbos_is_over",
     "msbos_resolved_icd9",
     "msbos_reference_hash",
+]
+
+# Platelet-specific MSBOS columns (spec #176, ticket #180). Appended ONLY when the MSBOS pilot seam
+# is on; populated ONLY on returns-terminal PLATELET rows. On RBC rows these stay blank; on platelet
+# rows the RBC-only msbos_token/msbos_recommended_units stay blank. The shared msbos_reserved_units/
+# msbos_is_over/msbos_reason/msbos_reference_hash/msbos_resolved_icd9 are populated for BOTH components.
+MSBOS_PLATELET_FIELDNAMES = [
+    "msbos_plt_category",
+    "msbos_plt_count_k_ul",
+    "msbos_plt_over_above_per_ul",
+    "msbos_plt_clinician_signed",
 ]
 
 
@@ -224,6 +237,7 @@ def _report_fieldnames() -> list[str]:
         + (RETURNS_LEDGER_FIELDNAMES if RETURNS_LEDGER_ENABLED else [])
         + (DECLARED_USETYPE_FIELDNAMES if DECLARED_USETYPE_PILOT_ENABLED else [])
         + (MSBOS_RESERVATION_FIELDNAMES if MSBOS_RESERVATION_PILOT_ENABLED else [])
+        + (MSBOS_PLATELET_FIELDNAMES if MSBOS_RESERVATION_PILOT_ENABLED else [])
     )
 
 
@@ -387,6 +401,70 @@ def _msbos_reservation_columns(
         "msbos_is_over": decision.is_over,
         "msbos_resolved_icd9": decision.resolved_icd9,
         "msbos_reference_hash": decision.reference_hash,
+    }
+
+
+def _msbos_platelet_columns(
+    *,
+    classification: str,
+    hn: str,
+    reqno: str,
+    op_events: Sequence[OperativeEvent],
+    order_datetime: datetime,
+    pre_op_count_k_ul: float | None,
+    reserved_units_map: Mapping[tuple[str, str, ComponentFamily], int],
+    msbos_reference: MsbosReference,
+) -> dict[str, Any]:
+    """Platelet MSBOS annotation columns for one report row (spec #176, ticket #180).
+
+    Mirror of _msbos_reservation_columns for the PLATELET component. Returns {} for non-returns rows.
+    Same never-guess join-miss guard with the PLATELET key: blank stripped HN/REQNO, or a
+    (hn, reqno, PLATELET) key ABSENT from reserved_units_map -> reservation_lookup_miss (warn-style),
+    never a within/clean reason. A key PRESENT with value 0 is a genuine no_reserved_units (never over)
+    — reserved_units_by_component setdefaults every key it sees (reserved_units.py:29-42), so a present
+    0 is distinct from an absent key. Unlike the RBC helper, no explicit \x00AMBIG branch is needed:
+    evaluate_platelet_reservation maps "" -> no_planned_op and "\x00AMBIG" -> ambiguous_planned_op.
+    """
+    if classification not in _RETURNS_TERMINAL_CLASSIFICATIONS:
+        return {}
+    hn_s = hn.strip()
+    reqno_s = reqno.strip()
+    key = (hn_s, reqno_s, ComponentFamily.PLATELET)
+    if not hn_s or not reqno_s or key not in reserved_units_map:
+        return {
+            "msbos_reserved_units": 0,
+            "msbos_reason": "reservation_lookup_miss",
+            "msbos_is_over": False,
+            "msbos_resolved_icd9": "",
+            "msbos_reference_hash": msbos_reference.content_hash,
+            "msbos_plt_category": "",
+            "msbos_plt_count_k_ul": "",
+            "msbos_plt_over_above_per_ul": "",
+            "msbos_plt_clinician_signed": "",
+        }
+    reserved = reserved_units_map[key]
+    planned = _planned_op_icd9(op_events, order_datetime)
+    decision = evaluate_platelet_reservation(
+        reserved_units=reserved,
+        pre_op_count_k_ul=pre_op_count_k_ul,
+        planned_icd9_nodot=planned,
+        procedure_groups=msbos_reference.groups_for(planned),
+        reference_hash=msbos_reference.content_hash,
+    )
+    return {
+        "msbos_reserved_units": decision.reserved_units,
+        "msbos_is_over": decision.is_over,
+        "msbos_reason": decision.reason,
+        "msbos_reference_hash": decision.reference_hash,
+        "msbos_resolved_icd9": decision.resolved_icd9,
+        "msbos_plt_category": decision.category,
+        "msbos_plt_count_k_ul": (
+            decision.pre_op_count_k_ul if decision.pre_op_count_k_ul is not None else ""
+        ),
+        "msbos_plt_over_above_per_ul": (
+            decision.over_above_per_ul if decision.over_above_per_ul is not None else ""
+        ),
+        "msbos_plt_clinician_signed": decision.clinician_signed,
     }
 
 
@@ -1048,6 +1126,22 @@ def main() -> None:
                     }
                 )
             plt_row.update(_declared_use_columns(collapsed_usetype))
+            if MSBOS_RESERVATION_PILOT_ENABLED and msbos_reference is not None:
+                plt_op_events = _build_op_events(
+                    iptsumoprt, ipddchsumoprt, incpt, optract_dict, icd9_dict, order.an
+                )
+                plt_row.update(
+                    _msbos_platelet_columns(
+                        classification=plt_classification,
+                        hn=order.hn,
+                        reqno=order.reqno,
+                        op_events=plt_op_events,
+                        order_datetime=order.order_datetime,
+                        pre_op_count_k_ul=plt_result.value_k_ul,
+                        reserved_units_map=reserved_units_map,
+                        msbos_reference=msbos_reference,
+                    )
+                )
             rows.append(plt_row)
             continue
 

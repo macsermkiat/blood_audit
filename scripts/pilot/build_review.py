@@ -26,6 +26,7 @@ from __future__ import annotations
 import csv
 import html
 import json
+import math
 import os
 import re
 import sys
@@ -259,13 +260,28 @@ _CLS_DISPLAY: dict[str, str] = {
 
 _RETURNS_TERMINALS = frozenset({"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"})
 _MSBOS_ABOVE_REASONS = frozenset(
-    {"over_gm_excess", "over_none", "over_type_and_screen_crossmatched"}
+    {
+        "over_gm_excess",
+        "over_none",
+        "over_type_and_screen_crossmatched",
+        "over_major_non_neuraxial",
+        "over_neuraxial",
+        "over_cardiac_cpb",
+    }
 )
 _MSBOS_WITHIN_REASONS = frozenset(
-    {"within_recommendation", "type_and_screen_screen_only"}
+    {
+        "within_recommendation",
+        "type_and_screen_screen_only",
+        "within_major_non_neuraxial",
+        "within_neuraxial",
+        "within_cardiac_cpb",
+        "no_reserved_units",
+    }
 )
 # unresolved = everything else with a nonblank reason: ambiguous_code, unresolved_code,
-# ambiguous_planned_op, no_planned_op, operation_unresolved, reservation_lookup_miss.
+# ambiguous_planned_op, no_planned_op, operation_unresolved, reservation_lookup_miss,
+# uncategorised_procedure, ambiguous_category, missing_pre_op_count.
 
 
 def _display_cls(cls: str | None) -> str:
@@ -288,11 +304,80 @@ def _msbos_reason_bucket(reason: str) -> str | None:
     return "unresolved"
 
 
+def _fmt_plt_k(value: object) -> str:
+    """Render a k/µL count/cutoff: integral -> no decimals, non-integral preserved, blank/bad -> ''.
+
+    120.0 -> "120", 120.5 -> "120.5", "" / None / non-numeric -> "". Never truncates.
+    """
+    try:
+        f = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return ""
+    if not math.isfinite(f):
+        return ""
+    return str(int(f)) if f == int(f) else str(f)
+
+
+def _fmt_plt_cutoff_k(raw: object) -> str:
+    """Category cutoff stored per-µL -> displayed in k/µL; blank/missing/malformed -> ''.
+
+    Defensive mirror of the RBC path's .get()-based rendering: never raises on a malformed row.
+    """
+    try:
+        f = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return ""
+    if not math.isfinite(f):
+        return ""
+    return _fmt_plt_k(f / 1000)
+
+
+def _msbos_platelet_summary_pill(det: dict[str, str]) -> str:
+    reason = (det.get("msbos_reason") or "").strip()
+    if reason in {
+        "over_major_non_neuraxial",
+        "over_neuraxial",
+        "over_cardiac_cpb",
+    }:
+        count = esc(_fmt_plt_k(det.get("msbos_plt_count_k_ul", "")))
+        cutoff = esc(_fmt_plt_cutoff_k(det.get("msbos_plt_over_above_per_ul", "")))
+        text = f"PLT {count} > {cutoff}"
+        pill_class = "cls-msbos-warn"
+    elif reason in {
+        "within_major_non_neuraxial",
+        "within_neuraxial",
+        "within_cardiac_cpb",
+        "no_reserved_units",
+    }:
+        text = "within"
+        pill_class = "cls-msbos-ok"
+    elif reason == "missing_pre_op_count":
+        text = "count missing"
+        pill_class = "cls-msbos-warn"
+    elif reason == "uncategorised_procedure":
+        text = "op uncategorised"
+        pill_class = "cls-msbos-warn"
+    elif reason == "ambiguous_category":
+        text = "category ambiguous"
+        pill_class = "cls-msbos-warn"
+    elif reason in {"no_planned_op", "ambiguous_planned_op"}:
+        text = "op unresolved"
+        pill_class = "cls-msbos-warn"
+    elif reason == "reservation_lookup_miss":
+        text = "unlinked"
+        pill_class = "cls-msbos-warn"
+    else:
+        return "—"
+    return f"<span class='cls {pill_class}'>{text}</span>"
+
+
 def _msbos_summary_pill(det: dict[str, str]) -> str:
     det_class = (det.get("classification") or "").upper()
     reason = (det.get("msbos_reason") or "").strip()
     if det_class not in _RETURNS_TERMINALS or not reason:
         return "—"
+    if (det.get("component") or "") == "platelet":
+        return _msbos_platelet_summary_pill(det)
 
     reserved = esc(det.get("msbos_reserved_units", ""))
     recommended = esc(det.get("msbos_recommended_units", ""))
@@ -326,7 +411,66 @@ def _msbos_summary_pill(det: dict[str, str]) -> str:
     return f"<span class='cls {pill_class}'>{text}</span>"
 
 
+def _msbos_platelet_case_line(det: dict[str, str], det_class: str) -> str:
+    reason = (det.get("msbos_reason") or "").strip()
+    category_labels = {
+        "major_non_neuraxial": "major-non-neuraxial",
+        "neuraxial": "neuraxial",
+        "cardiac_cpb": "cardiac-CPB",
+    }
+    if reason in {
+        "over_major_non_neuraxial",
+        "over_neuraxial",
+        "over_cardiac_cpb",
+    }:
+        reserved = esc(det.get("msbos_reserved_units", ""))
+        count = esc(_fmt_plt_k(det.get("msbos_plt_count_k_ul", "")))
+        cutoff = esc(_fmt_plt_cutoff_k(det.get("msbos_plt_over_above_per_ul", "")))
+        label = esc(category_labels.get(det.get("msbos_plt_category", ""), ""))
+        text = (
+            f"Reserved {reserved}u platelets; pre-op count {count}k/uL > "
+            f"{label} cutoff {cutoff}k/uL"
+        )
+    elif reason in {
+        "within_major_non_neuraxial",
+        "within_neuraxial",
+        "within_cardiac_cpb",
+    }:
+        reserved = esc(det.get("msbos_reserved_units", ""))
+        count = esc(_fmt_plt_k(det.get("msbos_plt_count_k_ul", "")))
+        cutoff = esc(_fmt_plt_cutoff_k(det.get("msbos_plt_over_above_per_ul", "")))
+        label = esc(category_labels.get(det.get("msbos_plt_category", ""), ""))
+        text = (
+            f"Reserved {reserved}u platelets; pre-op count {count}k/uL within "
+            f"{label} cutoff {cutoff}k/uL"
+        )
+    elif reason == "no_reserved_units":
+        text = "No platelet units reserved"
+    elif reason == "missing_pre_op_count":
+        text = "Platelet pre-op count missing"
+    elif reason == "uncategorised_procedure":
+        text = "MSBOS platelet category could not be resolved"
+    elif reason == "ambiguous_category":
+        text = "MSBOS platelet category ambiguous"
+    elif reason in {"no_planned_op", "ambiguous_planned_op"}:
+        text = "MSBOS planned operation unresolved"
+    elif reason == "reservation_lookup_miss":
+        text = "Reservation detail lines not linked (unlinked)"
+    else:
+        text = ""
+
+    if det_class == "PERIOP_TRANSFUSION_EXEMPT":
+        text += (
+            f"; {esc(det.get('returns_units_transfused', ''))} transfused, "
+            f"{esc(det.get('returns_units_returned', ''))} returned"
+        )
+    return text
+
+
 def _msbos_case_line(det: dict[str, str], det_class: str) -> str:
+    if (det.get("component") or "") == "platelet":
+        return _msbos_platelet_case_line(det, det_class)
+
     reason = (det.get("msbos_reason") or "").strip()
     reserved = esc(det.get("msbos_reserved_units", ""))
     recommended = esc(det.get("msbos_recommended_units", ""))
@@ -1304,9 +1448,9 @@ def main() -> None:
         llm = llm_by_reqno.get(reqno)
         det_class = det.get("classification") or "excluded"
         det_class_upper = det_class.upper()
-        # Only RBC returns rows carry an MSBOS annotation (T1). A platelet returns row
-        # has a blank msbos_reason -> _msbos_reason_bucket is None; skip it so the bucket
-        # tallies always sum to the denominator (no "silent" uncounted rows).
+        # Annotated RBC and platelet returns rows are counted together. A blank
+        # msbos_reason -> _msbos_reason_bucket is None; skip it so the bucket tallies
+        # always sum to the denominator (no "silent" uncounted rows).
         msbos_bucket = (
             _msbos_reason_bucket(det.get("msbos_reason", ""))
             if MSBOS_RESERVATION_PILOT_ENABLED and det_class_upper in _RETURNS_TERMINALS
@@ -1839,11 +1983,11 @@ def main() -> None:
         msbos_counts_html = (
             "<div class='msbos-counts'>"
             f"Returned ({returned_counts['denominator']}): "
-            f"{returned_counts['above']} above tariff / "
+            f"{returned_counts['above']} above / "
             f"{returned_counts['within']} within / "
             f"{returned_counts['unresolved']} unresolved<br>"
             f"Peri-op exempt ({exempt_counts['denominator']}): "
-            f"{exempt_counts['above']} above tariff / "
+            f"{exempt_counts['above']} above / "
             f"{exempt_counts['within']} within / "
             f"{exempt_counts['unresolved']} unresolved"
             "</div>"
@@ -2051,14 +2195,16 @@ def main() -> None:
         "<dt>operation_unresolved</dt><dd>Conflicting MSBOS operation code "
         "could not be uniquely resolved from the windowed clinical notes — "
         "escalated to human review.</dd>\n"
-        "<dt>above tariff</dt><dd>reserved units exceeded the elective MSBOS "
-        "tariff for the resolved planned procedure code. This annotation is "
-        "INFORMATIONAL — it is not a billed verdict, does not change the order's "
-        "classification or scoring, and does not account for anticipated "
+        "<dt>above</dt><dd>reserved units exceeded the elective MSBOS tariff for "
+        "the resolved planned procedure code (RBC), OR the pre-op platelet count "
+        "exceeded the clinician-signed cutoff for the resolved procedure category "
+        "(platelet: major-non-neuraxial 80k/µL; neuraxial and cardiac-CPB 100k/µL). "
+        "This annotation is INFORMATIONAL — not a billed verdict, does not change "
+        "the order's classification or scoring, and does not account for anticipated "
         "hemorrhage, case cancellation, or emergency status (the schedule data "
-        "cannot see these). On peri-op-exempt rows it judges ordering QUANTITY "
-        "only, never the transfusion decision (that is the anaesthesiologist's "
-        "call — the reason the bucket is exempt).</dd>\n"
+        "cannot see these). On peri-op-exempt rows it judges ordering QUANTITY only, "
+        "never the transfusion decision (the anaesthesiologist's call — the reason "
+        "the bucket is exempt).</dd>\n"
         if MSBOS_RESERVATION_PILOT_ENABLED
         else ""
     )
