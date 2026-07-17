@@ -639,6 +639,33 @@ def _deterministic_marker_call(
     fingerprint = hashlib.sha256(
         f"{run_id}|{context.order.audit_id}|deterministic".encode("utf-8")
     ).hexdigest()[:16]
+    response_json: dict[str, object] = {
+        "classification": classifier.classification,
+        "rationale": classifier.rationale,
+    }
+    reservation = context.reservation_decision
+    # Inert today: no library producer supplies reservation_decision for
+    # returns-terminal contexts (deferred batch wiring). The store is idempotent
+    # on (run_id, audit_id, code_version) via AuditStoreConfig.code_version
+    # (audit_store/store.py:397,447) -- NOT AuditPipelineConfig.code_version,
+    # which only stamps BatchRun (nothing enforces the two are equal). When that
+    # deferred producer ships it MUST bump the AuditStoreConfig.code_version it
+    # passes, or pre-T3 committed marker rows never pick up this field on re-runs.
+    if (
+        feature_flags.MSBOS_RESERVATION_ENABLED
+        and classifier.classification in _RETURNS_TERMINAL_CLASSIFICATIONS
+        and reservation is not None
+    ):
+        response_json["reservation_annotation"] = {
+            "reserved_units": reservation.reserved_units,
+            "msbos": reservation.msbos,
+            "recommended_units": reservation.recommended_units,
+            "is_over": reservation.is_over,
+            "reason": reservation.reason,
+            "resolved_icd9": reservation.resolved_icd9,
+            "note_resolved": reservation.note_resolved,
+            "reference_hash": reservation.reference_hash,
+        }
     return LlmCall(
         call_id=f"call-{context.order.audit_id}-det-{fingerprint}",
         audit_id=context.order.audit_id,
@@ -652,10 +679,7 @@ def _deterministic_marker_call(
             if classifier.bypass_reason
             else "none",
         },
-        response_json={
-            "classification": classifier.classification,
-            "rationale": classifier.rationale,
-        },
+        response_json=response_json,
         request_timestamp=context.order.order_datetime,
         latency_ms=0,
         extended_thinking_blocks=None,
@@ -734,6 +758,26 @@ def _platelet_marker_call(
     fingerprint = hashlib.sha256(
         f"{run_id}|{context.order.audit_id}|deterministic-plt".encode("utf-8")
     ).hexdigest()[:16]
+    response_json: dict[str, object] = {
+        "classification": classifier_result.classification,
+        "rationale": classifier_result.rationale,
+    }
+    reservation = context.platelet_reservation_decision
+    if (
+        feature_flags.MSBOS_RESERVATION_ENABLED
+        and classifier_result.classification in _RETURNS_TERMINAL_CLASSIFICATIONS
+        and reservation is not None
+    ):
+        response_json["reservation_annotation"] = {
+            "reserved_units": reservation.reserved_units,
+            "category": reservation.category,
+            "pre_op_count_k_ul": reservation.pre_op_count_k_ul,
+            "over_above_per_ul": reservation.over_above_per_ul,
+            "is_over": reservation.is_over,
+            "reason": reservation.reason,
+            "clinician_signed": reservation.clinician_signed,
+            "reference_hash": reservation.reference_hash,
+        }
     return LlmCall(
         call_id=f"call-{context.order.audit_id}-det-plt-{fingerprint}",
         audit_id=context.order.audit_id,
@@ -748,10 +792,7 @@ def _platelet_marker_call(
             ),
             "component": "platelet",
         },
-        response_json={
-            "classification": classifier_result.classification,
-            "rationale": classifier_result.rationale,
-        },
+        response_json=response_json,
         request_timestamp=context.order.order_datetime,
         latency_ms=0,
         extended_thinking_blocks=None,

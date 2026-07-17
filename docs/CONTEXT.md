@@ -2886,6 +2886,21 @@ transactional-ordering invariant rejects rows without a paired
 the LLM stage where the cassette / production transport supplies the
 response.
 
+**Returns-terminal reservation annotation (forward-looking, #178).** When the
+MSBOS flag (`feature_flags.MSBOS_RESERVATION_ENABLED`) is on, the classification
+is a returns terminal (`RETURNED_NOT_TRANSFUSED` / `PERIOP_TRANSFUSION_EXEMPT`),
+and the context carries the matching decision snapshot, both deterministic marker
+builders (`_deterministic_marker_call` for RBC, `_platelet_marker_call` for
+platelet) embed a `reservation_annotation` object inside the marker's
+`response_json`. It is a snapshot of the already-computed MSBOS reservation
+judgment (`ReservationDecision` / `PlateletReservationDecision`), never a verdict,
+scoring, bucket, or `model_id` change; the reservation pilot report's marker scan
+(`model_id.startswith("msbos-")`) does not match `model_id="deterministic"`, so
+`reconcile_returns` is unaffected. Inert today — no library producer persists
+returns-terminal rows with a decision (deferred batch wiring); it exists so any
+future producer carries the annotation for free. Flag-off / decision-None /
+non-returns rows omit the key entirely (byte-identical to pre-#178).
+
 ### Qualified-bleeding exemption & stale-volume gate
 
 `bba.audit_pipeline.bleeding` is the ONLY place the RBC over-clear
