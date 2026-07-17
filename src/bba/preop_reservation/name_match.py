@@ -57,8 +57,11 @@ class OperationNameIndex(BaseModel):
     operation names it points at (collisions are represented, never
     overwritten). ``_full_needles`` is the subset of needles that are full
     operation names (eligible for reverse matching; acronym-only variants are
-    not). ``_recommendation_by_operation`` carries each canonical operation's
-    resolved recommendation (T/S units already normalized to 0).
+    not). ``_recommendations_by_operation`` carries the SET of recommendations
+    each canonical operation name resolves to (T/S units already normalized to
+    0). It is a set, not a single value, because the same operation string could
+    in principle appear with conflicting recommendations; keeping every one lets
+    the uniqueness rule fail closed instead of silently keeping the first.
     """
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
@@ -66,7 +69,7 @@ class OperationNameIndex(BaseModel):
     content_hash: str
     _needles: Mapping[str, frozenset[str]]
     _full_needles: frozenset[str]
-    _recommendation_by_operation: Mapping[str, MsbosRow]
+    _recommendations_by_operation: Mapping[str, frozenset[MsbosRow]]
     _operations_by_full_name: Mapping[str, frozenset[str]]
 
     def __init__(
@@ -75,26 +78,31 @@ class OperationNameIndex(BaseModel):
         content_hash: str,
         needles: Mapping[str, frozenset[str]],
         full_needles: frozenset[str],
-        recommendation_by_operation: Mapping[str, MsbosRow],
+        recommendations_by_operation: Mapping[str, frozenset[MsbosRow]],
         operations_by_full_name: Mapping[str, frozenset[str]],
     ) -> None:
         super().__init__(content_hash=content_hash)
         object.__setattr__(self, "_needles", needles)
         object.__setattr__(self, "_full_needles", full_needles)
         object.__setattr__(
-            self, "_recommendation_by_operation", recommendation_by_operation
+            self, "_recommendations_by_operation", recommendations_by_operation
         )
-        object.__setattr__(
-            self, "_operations_by_full_name", operations_by_full_name
-        )
+        object.__setattr__(self, "_operations_by_full_name", operations_by_full_name)
+
+    def recommendations_for(self, operation: str) -> frozenset[MsbosRow]:
+        """The set of recommendations a canonical operation name resolves to; empty if absent."""
+        return self._recommendations_by_operation.get(operation, frozenset())
 
     def recommendation_for(self, operation: str) -> MsbosRow | None:
-        """The resolved recommendation for a canonical operation name; None if absent."""
-        return self._recommendation_by_operation.get(operation)
+        """The single recommendation for a canonical operation name, or None if absent or ambiguous."""
+        recommendations = self._recommendations_by_operation.get(operation)
+        if recommendations is None or len(recommendations) != 1:
+            return None
+        return next(iter(recommendations))
 
     def operations(self) -> frozenset[str]:
         """All canonical operation names in the index."""
-        return frozenset(self._recommendation_by_operation)
+        return frozenset(self._recommendations_by_operation)
 
 
 class NameMatchResult(BaseModel):
@@ -154,7 +162,7 @@ def _index_from_rows(
     """
     needles: dict[str, set[str]] = {}
     full_needles: set[str] = set()
-    recommendation_by_operation: dict[str, MsbosRow] = {}
+    recommendations_by_operation: dict[str, set[MsbosRow]] = {}
     operations_by_full_name: dict[str, set[str]] = {}
 
     for row_number, row in enumerate(rows, start=2):
@@ -190,10 +198,12 @@ def _index_from_rows(
             msbos=cast(MsbosToken, token), recommended_units=units
         )
         # The same operation name can legitimately recur; identity is the
-        # (msbos, units) recommendation, so re-adding the same name is a no-op.
-        # A name recurring with a DIFFERENT recommendation is not overwritten:
-        # the fail-closed uniqueness rule at match time surfaces it as conflict.
-        recommendation_by_operation.setdefault(operation, recommendation)
+        # (msbos, units) recommendation, so re-adding the same recommendation is
+        # a no-op. A name recurring with a DIFFERENT recommendation keeps BOTH:
+        # accumulating into a set (never overwriting the first) lets the
+        # uniqueness rule at match/verify time surface the collision as a
+        # conflict, and makes construction row-order-independent.
+        recommendations_by_operation.setdefault(operation, set()).add(recommendation)
 
         full_needle = _normalize(operation)
         if not full_needle.strip():
@@ -213,7 +223,14 @@ def _index_from_rows(
     frozen_needles = MappingProxyType(
         {needle: frozenset(names) for needle, names in sorted(needles.items())}
     )
-    frozen_recs = MappingProxyType(dict(sorted(recommendation_by_operation.items())))
+    frozen_recs = MappingProxyType(
+        {
+            operation: frozenset(recommendations)
+            for operation, recommendations in sorted(
+                recommendations_by_operation.items()
+            )
+        }
+    )
     frozen_full_names = MappingProxyType(
         {
             full_name: frozenset(names)
@@ -224,7 +241,7 @@ def _index_from_rows(
         content_hash=content_hash,
         needles=frozen_needles,
         full_needles=frozenset(full_needles),
-        recommendation_by_operation=frozen_recs,
+        recommendations_by_operation=frozen_recs,
         operations_by_full_name=frozen_full_names,
     )
 
@@ -262,37 +279,49 @@ def _word_bounded_in(needle: str, haystack: str) -> bool:
 def _matches_for_event(index: OperationNameIndex, event_name: str) -> frozenset[str]:
     """Canonical operation names matched by a single event name.
 
-    Forward: a needle is word-bounded inside the normalized event name.
+    Forward: a needle is word-bounded inside the normalized event name (the
+    operation name is actually PRESENT in the event).
     Reverse: the event name is contained in a FULL operation name only (never an
-    acronym-only variant), AND only when the event name has >=2 words.
-    Then longest-match-wins subphrase disqualification WITHIN this event: a
-    matched needle that is a proper sub-phrase of another matched needle for
-    this event is disqualified (mirrors note_operation.py:34-41).
+    acronym-only variant), AND only when the event name has >=2 words (the event
+    is a fragment of a longer operation name).
+
+    Longest-match-wins subphrase disqualification then drops a needle that is a
+    proper sub-phrase of another FORWARD-matched needle for this event (mirrors
+    note_operation.py:34-41). The disqualifier must be forward-matched — a longer
+    needle that only reverse-matched is NOT present in the event, so it must not
+    cannibalize a shorter needle that is; otherwise an event that exactly names a
+    shorter operation (e.g. "Radical nephrectomy") would be silently reassigned
+    to a longer operation it never mentions ("Radical nephrectomy with
+    thrombectomy"), a fail-open the fail-closed rule forbids. Retaining both
+    instead lets the uniqueness rule surface the ambiguity as a conflict.
     """
     norm_event = _normalize(event_name)
     if not norm_event.strip():
         return frozenset()
     event_word_count = len(norm_event.split())
 
-    hit_needles: set[str] = set()
+    forward_needles: set[str] = set()
     # Forward: index needle word-bounded inside the event name.
     for needle in index._needles:
         if _word_bounded_in(needle, norm_event):
-            hit_needles.add(needle)
+            forward_needles.add(needle)
     # Reverse: event name contained in a FULL operation name, event has >=2 words.
+    reverse_needles: set[str] = set()
     if event_word_count >= 2:
         for full_needle in index._full_needles:
             if _word_bounded_in(norm_event, full_needle):
-                hit_needles.add(full_needle)
+                reverse_needles.add(full_needle)
+    hit_needles = forward_needles | reverse_needles
 
     # Longest-match-wins: drop a needle that is a proper sub-phrase of another
-    # matched needle for THIS event (word-bounded containment).
+    # needle actually PRESENT in the event (a forward match). Reverse-only
+    # needles never disqualify, so exact forward matches are preserved.
     surviving = {
         needle
         for needle in hit_needles
         if not any(
             other != needle and _word_bounded_in(needle, other)
-            for other in hit_needles
+            for other in forward_needles
         )
     }
 
@@ -325,8 +354,9 @@ def match_operation_names(
         return NameMatchResult(status="no_match")
 
     distinct_recommendations = {
-        index._recommendation_by_operation[operation]
+        recommendation
         for operation in matched_operations
+        for recommendation in index.recommendations_for(operation)
     }
     ordered_operations = tuple(sorted(matched_operations))
     distinct_count = len(distinct_recommendations)
@@ -391,7 +421,9 @@ def verify_proposed_operation(
     if not operations:
         return VerificationResult(accepted=False)
     distinct_recommendations = {
-        index._recommendation_by_operation[operation] for operation in operations
+        recommendation
+        for operation in operations
+        for recommendation in index.recommendations_for(operation)
     }
     if len(distinct_recommendations) != 1:
         return VerificationResult(accepted=False)

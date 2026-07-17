@@ -68,7 +68,9 @@ def test_forward_needle_inside_larger_word_does_not_match() -> None:
 
 
 def test_multiword_event_reverse_matches_a_longer_full_operation_name() -> None:
-    index = _index([_row("Radical nephrectomy with thrombectomy", recommended_units="4")])
+    index = _index(
+        [_row("Radical nephrectomy with thrombectomy", recommended_units="4")]
+    )
 
     result = match_operation_names(index, ["radical nephrectomy"])
 
@@ -80,7 +82,9 @@ def test_multiword_event_reverse_matches_a_longer_full_operation_name() -> None:
 def test_single_word_event_does_not_reverse_match_longer_operation() -> None:
     # Acceptance: single-word "Thrombectomy" must NOT reverse-match
     # "Radical nephrectomy with thrombectomy".
-    index = _index([_row("Radical nephrectomy with thrombectomy", recommended_units="4")])
+    index = _index(
+        [_row("Radical nephrectomy with thrombectomy", recommended_units="4")]
+    )
 
     result = match_operation_names(index, ["Thrombectomy"])
 
@@ -93,7 +97,9 @@ def test_single_word_event_does_not_reverse_match_longer_operation() -> None:
 
 
 def test_real_acronym_paren_is_a_standalone_needle() -> None:
-    index = _index([_row("Coronary artery bypass grafting (CABG)", recommended_units="2")])
+    index = _index(
+        [_row("Coronary artery bypass grafting (CABG)", recommended_units="2")]
+    )
 
     result = match_operation_names(index, ["Patient booked for CABG"])
 
@@ -371,6 +377,82 @@ def test_longest_match_wins_disqualifies_subphrase_within_one_event() -> None:
     assert result.recommendation == MsbosRow(msbos="G/M", recommended_units=2)
 
 
+# --- exact forward match preserved vs reverse-only longer op (P1 fix, #191) --
+
+
+def test_exact_event_not_reassigned_to_longer_reverse_only_operation() -> None:
+    # Regression (Codex P1): an event that exactly names a shorter operation is
+    # a forward (present-in-event) match; a longer operation that only reverse-
+    # matches (the event is a fragment of it) must NOT cannibalize it. With a
+    # different recommendation the two must fail closed as a conflict, never
+    # silently resolve to the longer op. Mirrors the packaged
+    # "Radical nephrectomy" (G/M 2) / "... with thrombectomy" (G/M 4) pair.
+    index = _index(
+        [
+            _row("Excise organ", msbos="G/M", recommended_units="2"),
+            _row("Excise organ with graft", msbos="G/M", recommended_units="4"),
+        ]
+    )
+
+    result = match_operation_names(index, ["Excise organ"])
+
+    assert result.status == "conflicting_recommendations", (
+        "an exact forward match must not be cannibalized by a reverse-only "
+        "longer operation carrying a different recommendation"
+    )
+    assert set(result.matched_operations) == {
+        "Excise organ",
+        "Excise organ with graft",
+    }
+    assert result.distinct_recommendation_count == 2
+
+
+def test_exact_event_reverse_longer_same_recommendation_collapses() -> None:
+    # When the exact shorter op and the reverse-matched longer op share ONE
+    # recommendation, retaining both is a benign collapse: still matched, all
+    # names reported.
+    index = _index(
+        [
+            _row("Excise organ", msbos="G/M", recommended_units="2"),
+            _row("Excise organ with graft", msbos="G/M", recommended_units="2"),
+        ]
+    )
+
+    result = match_operation_names(index, ["Excise organ"])
+
+    assert result.status == "matched"
+    assert result.distinct_recommendation_count == 1
+    assert set(result.matched_operations) == {
+        "Excise organ",
+        "Excise organ with graft",
+    }
+
+
+# --- duplicate identical operation names fail closed (P1 fix, #191) ----------
+
+
+def test_identical_operation_name_with_conflicting_recs_fails_closed() -> None:
+    # Regression (Codex P1): two rows with the EXACT same operation string but
+    # different recommendations must keep BOTH (not silently keep the first), so
+    # the name is ambiguous, matching fails closed, and the outcome is
+    # independent of row order.
+    rows = [
+        _row("Duplicate operation", msbos="G/M", recommended_units="2"),
+        _row("Duplicate operation", msbos="G/M", recommended_units="4"),
+    ]
+    forward = match_operation_names(_index(rows), ["Duplicate operation"])
+    reverse = match_operation_names(
+        _index(list(reversed(rows))), ["Duplicate operation"]
+    )
+
+    assert forward.status == "conflicting_recommendations"
+    assert forward.distinct_recommendation_count == 2
+    assert forward == reverse, "duplicate-name resolution must be row-order-independent"
+    assert (
+        verify_proposed_operation(_index(rows), "Duplicate operation").accepted is False
+    ), "an ambiguous duplicate name must also be rejected by the verification helper"
+
+
 # --- no-match on empty / whitespace events ----------------------------------
 
 
@@ -410,6 +492,20 @@ def test_packaged_index_indexes_blank_code_operations_and_matches_reference_hash
     result = match_operation_names(index, ["Complex EVAR"])
     assert result.status == "matched"
     assert "Complex EVAR" in result.matched_operations
+
+    # Regression (Codex P1) against the REAL schedule: an event that exactly
+    # names "Radical nephrectomy" (G/M 2) must NOT be silently reassigned to
+    # "Radical nephrectomy with thrombectomy" (G/M 4); the differing
+    # recommendations must fail closed as a conflict.
+    nephrectomy = match_operation_names(index, ["Radical nephrectomy"])
+    assert nephrectomy.status == "conflicting_recommendations", (
+        "an exact 'Radical nephrectomy' event must not resolve to the longer "
+        "thrombectomy recommendation"
+    )
+    assert {
+        "Radical nephrectomy",
+        "Radical nephrectomy with thrombectomy",
+    } <= set(nephrectomy.matched_operations)
 
     assert index.content_hash == load_msbos_reference().content_hash, (
         "the name index reads the same bytes as the reference loader, so their "
