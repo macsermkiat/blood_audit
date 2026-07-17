@@ -69,6 +69,7 @@ def _render_review_with_rows(
     manifest_csv: str,
     report_csv: str,
     llm_json: str,
+    msbos_enabled: bool = False,
 ) -> bytes:
     bundle = root / "bundle"
     bundle.mkdir(parents=True)
@@ -101,7 +102,7 @@ def _render_review_with_rows(
     monkeypatch.setattr(module, "ICD10_DICT_CSV", root / "missing-icd10.csv")
     monkeypatch.setattr(module, "OUT", output)
     monkeypatch.setattr(module, "RETURNS_LEDGER_ENABLED", True)
-    monkeypatch.setattr(module, "MSBOS_RESERVATION_PILOT_ENABLED", False)
+    monkeypatch.setattr(module, "MSBOS_RESERVATION_PILOT_ENABLED", msbos_enabled)
     module.main()
     return output.read_bytes()
 
@@ -244,3 +245,203 @@ def test_summary_pills_and_mismatch_rendered_server_side(
     assert rendered.count("<tr class='verdict-mismatch'>") == 1
     assert "A&lt;B" in rendered
     assert "(LLM not run)" in rendered
+
+
+def test_msbos_flag_off_report_columns_do_not_change_review_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_build_review()
+    manifest_csv = "HN,REQNO,AN\nA<B,R1,AN1\n"
+    without_columns = _render_review_with_rows(
+        module,
+        tmp_path / "without",
+        monkeypatch,
+        manifest_csv=manifest_csv,
+        report_csv="reqno,classification,component\nR1,RETURNED_NOT_TRANSFUSED,red_cell\n",
+        llm_json="[]",
+    )
+    with_columns = _render_review_with_rows(
+        module,
+        tmp_path / "with",
+        monkeypatch,
+        manifest_csv=manifest_csv,
+        report_csv=(
+            "reqno,classification,component,msbos_reserved_units,msbos_token,"
+            "msbos_recommended_units,msbos_reason,msbos_is_over,"
+            "msbos_resolved_icd9,msbos_reference_hash\n"
+            "R1,RETURNED_NOT_TRANSFUSED,red_cell,3,G/M,2,over_gm_excess,True,"
+            "0139,hash\n"
+        ),
+        llm_json="[]",
+    )
+
+    assert with_columns == without_columns
+    rendered = with_columns.decode()
+    assert "MSBOS" not in rendered
+    assert "cls-msbos-" not in rendered
+    assert "above tariff" not in rendered
+    assert "msbos-counts" not in rendered
+
+
+def test_msbos_flag_on_renders_summary_cases_counts_glossary_and_css(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv=(
+            "HN,REQNO,AN\n"
+            "A<B,R1,AN1\n"
+            "HN2,R2,AN2\n"
+            "HN3,R3,AN3\n"
+            "HN4,R4,AN4\n"
+            "HN5,R5,AN5\n"
+            "HN6,R6,AN6\n"
+        ),
+        report_csv=(
+            "reqno,classification,component,msbos_reserved_units,msbos_token,"
+            "msbos_recommended_units,msbos_reason,msbos_is_over,"
+            "msbos_resolved_icd9,msbos_reference_hash,returns_units_transfused,"
+            "returns_units_returned\n"
+            "R1,RETURNED_NOT_TRANSFUSED,red_cell,3,G/M,2,over_gm_excess,True,"
+            "0139,hash,,\n"
+            "R2,RETURNED_NOT_TRANSFUSED,red_cell,1,G/M,2,within_recommendation,"
+            "False,0139,hash,,\n"
+            "R3,APPROPRIATE,red_cell,3,G/M,2,over_gm_excess,True,0139,hash,,\n"
+            "R4,RETURNED_NOT_TRANSFUSED,platelet,,,,,,,,,\n"
+            "R5,RETURNED_NOT_TRANSFUSED,red_cell,0,,0,reservation_lookup_miss,"
+            "False,,hash,,\n"
+            "R6,PERIOP_TRANSFUSION_EXEMPT,red_cell,2,G/M,2,"
+            "within_recommendation,False,0139,hash,1,1\n"
+        ),
+        llm_json="[]",
+        msbos_enabled=True,
+    ).decode()
+
+    assert "<th>MSBOS</th>" in rendered
+    assert "<span class='cls cls-msbos-warn'>3 vs G/M 2</span>" in rendered
+    assert "<span class='cls cls-msbos-ok'>within</span>" in rendered
+    assert (
+        "<td><span class='cls cls-appropriate'>Appropriate</span></td>"
+        "<td>(LLM not run)</td><td>—</td>" in rendered
+    )
+    assert (
+        "<td><span class='cls cls-returned_not_transfused'>"
+        "Returned — not transfused (excluded)</span></td>"
+        "<td>(LLM not run)</td><td>—</td>" in rendered
+    )
+    assert "MSBOS reservation: Reserved 3; MSBOS tariff G/M 2" in rendered
+    assert "<span class='cls cls-msbos-warn'>unlinked</span>" in rendered
+    assert "Reservation detail lines not linked (unlinked)" in rendered
+    assert "Reserved 2; MSBOS tariff G/M 2; 1 transfused, 1 returned" in rendered
+    # R4 is a platelet returns row (blank MSBOS fields, T1 = RBC only): it is NOT
+    # counted, so the denominator (3) equals above+within+unresolved and no empty
+    # "MSBOS reservation:" line is emitted for it.
+    assert "Returned (3): 1 above tariff / 1 within / 1 unresolved" in rendered
+    assert "Peri-op exempt (1): 0 above tariff / 1 within / 0 unresolved" in rendered
+    assert "MSBOS reservation: </div>" not in rendered
+    assert "<dt>above tariff</dt>" in rendered
+    assert "INFORMATIONAL" in rendered
+    assert "not a billed verdict" in rendered
+    assert "anticipated hemorrhage, case cancellation, or emergency status" in rendered
+    assert ".cls-msbos-warn" in rendered
+    assert ".cls-msbos-ok" in rendered
+    assert "A&lt;B" in rendered
+
+
+def test_msbos_flag_on_rejects_duplicate_reqno_component_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_build_review()
+    with pytest.raises(
+        ValueError,
+        match=r"duplicate REQNO in report scope.*'R1'",
+    ):
+        _render_review_with_rows(
+            module,
+            tmp_path,
+            monkeypatch,
+            manifest_csv="HN,REQNO,AN\n",
+            report_csv=(
+                "reqno,classification,component\n"
+                "R1,RETURNED_NOT_TRANSFUSED,red_cell\n"
+                "R1,RETURNED_NOT_TRANSFUSED,platelet\n"
+            ),
+            llm_json="[]",
+            msbos_enabled=True,
+        )
+
+
+def _returns_det(reason: str, **extra: str) -> dict[str, str]:
+    return {
+        "classification": "RETURNED_NOT_TRANSFUSED",
+        "msbos_reason": reason,
+        "msbos_reserved_units": "3",
+        "msbos_recommended_units": "2",
+        "msbos_token": "G/M",
+        **extra,
+    }
+
+
+def test_msbos_summary_pill_maps_every_reachable_reason() -> None:
+    # Pin the full reason -> (text, color) mapping so no reachable plain-evaluator
+    # reason silently falls through to em-dash / the wrong colour role.
+    module = _load_build_review()
+    cases = {
+        "over_gm_excess": ("3 vs G/M 2", "cls-msbos-warn"),
+        "over_none": ("3 vs none 0", "cls-msbos-warn"),
+        "over_type_and_screen_crossmatched": ("T/S; 3u reserved", "cls-msbos-warn"),
+        "within_recommendation": ("within", "cls-msbos-ok"),
+        "type_and_screen_screen_only": ("within", "cls-msbos-ok"),
+        "ambiguous_code": ("code unresolved", "cls-msbos-warn"),
+        "unresolved_code": ("code unresolved", "cls-msbos-warn"),
+        "ambiguous_planned_op": ("op unresolved", "cls-msbos-warn"),
+        "no_planned_op": ("op unresolved", "cls-msbos-warn"),
+        "operation_unresolved": ("op unresolved", "cls-msbos-warn"),
+        "reservation_lookup_miss": ("unlinked", "cls-msbos-warn"),
+    }
+    for reason, (text, pill_class) in cases.items():
+        pill = module._msbos_summary_pill(_returns_det(reason))
+        assert pill == f"<span class='cls {pill_class}'>{text}</span>", reason
+
+    # Blank reason and non-returns rows collapse to a plain em-dash (no pill).
+    assert module._msbos_summary_pill(_returns_det("")) == "—"
+    assert (
+        module._msbos_summary_pill(
+            {"classification": "APPROPRIATE", "msbos_reason": "over_gm_excess"}
+        )
+        == "—"
+    )
+
+
+def test_msbos_case_line_maps_every_reachable_reason() -> None:
+    module = _load_build_review()
+    expected = {
+        "over_gm_excess": "Reserved 3; MSBOS tariff G/M 2",
+        "over_none": "Reserved 3; MSBOS tariff none 0",
+        "over_type_and_screen_crossmatched": "Reserved 3; MSBOS tariff T/S",
+        "within_recommendation": "Reserved 3; MSBOS tariff G/M 2",
+        "type_and_screen_screen_only": "Reserved 3; MSBOS tariff T/S",
+        "ambiguous_code": "MSBOS operation code unresolved",
+        "unresolved_code": "MSBOS operation code unresolved",
+        "ambiguous_planned_op": "MSBOS planned operation unresolved",
+        "no_planned_op": "MSBOS planned operation unresolved",
+        "operation_unresolved": "MSBOS planned operation unresolved",
+        "reservation_lookup_miss": "Reservation detail lines not linked (unlinked)",
+    }
+    for reason, text in expected.items():
+        line = module._msbos_case_line(_returns_det(reason), "RETURNED_NOT_TRANSFUSED")
+        assert line == text, reason
+
+    # Exempt rows append transfused/returned counts from the returns columns.
+    exempt = module._msbos_case_line(
+        _returns_det(
+            "over_gm_excess",
+            returns_units_transfused="1",
+            returns_units_returned="2",
+        ),
+        "PERIOP_TRANSFUSION_EXEMPT",
+    )
+    assert exempt == "Reserved 3; MSBOS tariff G/M 2; 1 transfused, 2 returned"

@@ -46,6 +46,200 @@ def _load_run_pipeline(module_name: str) -> ModuleType:
     ("env_value", "expected"),
     [("1", True), ("0", False), ("anything-else", False)],
 )
+def test_run_pipeline_msbos_env_override(
+    monkeypatch: pytest.MonkeyPatch,
+    env_value: str,
+    expected: bool,
+) -> None:
+    monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", env_value)
+
+    module = _load_run_pipeline(f"pilot_run_pipeline_msbos_{env_value}")
+
+    assert module.MSBOS_RESERVATION_PILOT_ENABLED is expected
+    assert module.CODE_VERSION == "pilot-mini"
+
+
+def test_run_pipeline_msbos_unset_uses_library_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BBA_PILOT_MSBOS_RESERVATION", raising=False)
+
+    module = _load_run_pipeline("pilot_run_pipeline_msbos_default")
+
+    assert module.MSBOS_RESERVATION_PILOT_ENABLED is True
+    assert (
+        module.MSBOS_RESERVATION_PILOT_ENABLED
+        is feature_flags.MSBOS_RESERVATION_ENABLED
+    )
+    assert module.CODE_VERSION == "pilot-mini"
+
+
+@pytest.mark.parametrize("env_value", ["1", "0"])
+def test_run_pipeline_msbos_report_fieldnames_are_exact(
+    monkeypatch: pytest.MonkeyPatch,
+    env_value: str,
+) -> None:
+    monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", env_value)
+    module = _load_run_pipeline(f"pilot_run_pipeline_msbos_fields_{env_value}")
+    flag_off = (
+        module.REPORT_FIELDNAMES
+        + module.RETURNS_LEDGER_FIELDNAMES
+        + module.DECLARED_USETYPE_FIELDNAMES
+    )
+    expected = (
+        flag_off + module.MSBOS_RESERVATION_FIELDNAMES if env_value == "1" else flag_off
+    )
+
+    assert module._report_fieldnames() == expected
+    if env_value == "1":
+        assert all(
+            name in module._report_fieldnames()
+            for name in module.MSBOS_RESERVATION_FIELDNAMES
+        )
+    else:
+        assert not any(
+            name in module._report_fieldnames()
+            for name in module.MSBOS_RESERVATION_FIELDNAMES
+        )
+
+
+def test_run_pipeline_msbos_fieldnames_are_disjoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", "1")
+    module = _load_run_pipeline("pilot_run_pipeline_msbos_disjoint")
+    base_names = (
+        module.REPORT_FIELDNAMES
+        + module.RETURNS_LEDGER_FIELDNAMES
+        + module.DECLARED_USETYPE_FIELDNAMES
+    )
+
+    assert set(module.MSBOS_RESERVATION_FIELDNAMES).isdisjoint(base_names)
+    assert not any(name.startswith("msbos_") for name in base_names)
+    # Freeze the LITERAL schema (order + names). Q1: NO msbos_note_resolved column.
+    assert module.MSBOS_RESERVATION_FIELDNAMES == [
+        "msbos_reserved_units",
+        "msbos_token",
+        "msbos_recommended_units",
+        "msbos_reason",
+        "msbos_is_over",
+        "msbos_resolved_icd9",
+        "msbos_reference_hash",
+    ]
+
+
+def test_run_pipeline_planned_op_icd9_nearest_ambiguous_and_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", "1")
+    module = _load_run_pipeline("pilot_run_pipeline_msbos_planned_op")
+    order_datetime = datetime(2026, 7, 16, 4, 0, tzinfo=UTC)
+
+    def event(code: str, offset_hours: int) -> OperativeEvent:
+        return OperativeEvent(
+            icd9=code,
+            or_flag=True,
+            operative_datetime=order_datetime + timedelta(hours=offset_hours),
+        )
+
+    assert (
+        module._planned_op_icd9(
+            [event("past", -1), event("later", 12), event("nearest", 4)],
+            order_datetime,
+        )
+        == "nearest"
+    )
+    assert (
+        module._planned_op_icd9(
+            [event("1000", 4), event("2000", 4), event("later", 12)],
+            order_datetime,
+        )
+        == "\x00AMBIG"
+    )
+    assert module._planned_op_icd9([event("past", -1)], order_datetime) == ""
+
+
+def test_run_pipeline_msbos_reservation_columns_cover_locked_verdicts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", "1")
+    module = _load_run_pipeline("pilot_run_pipeline_msbos_columns")
+    reference = module.load_msbos_reference()
+    order_datetime = datetime(2026, 7, 16, 4, 0, tzinfo=UTC)
+    gm_code = "0139"
+    ts_code = "0080"
+    gm_row = reference.resolve(gm_code)
+    ts_row = reference.resolve(ts_code)
+    assert gm_row not in (None, "ambiguous") and gm_row.msbos == "G/M"
+    assert ts_row not in (None, "ambiguous") and ts_row.msbos == "T/S"
+
+    def event(code: str, offset_hours: int = 4) -> OperativeEvent:
+        return OperativeEvent(
+            icd9=code,
+            or_flag=True,
+            operative_datetime=order_datetime + timedelta(hours=offset_hours),
+        )
+
+    def columns(
+        *,
+        classification: str = "RETURNED_NOT_TRANSFUSED",
+        hn: str = "HN1",
+        reqno: str = "REQ1",
+        events: list[OperativeEvent] | None = None,
+        reserved: int = 0,
+        include_key: bool = True,
+    ) -> dict[str, object]:
+        reservations = (
+            {(hn.strip(), reqno.strip(), module.ComponentFamily.RED_CELL): reserved}
+            if include_key
+            else {}
+        )
+        return module._msbos_reservation_columns(
+            classification=classification,
+            hn=hn,
+            reqno=reqno,
+            op_events=events if events is not None else [event(gm_code)],
+            order_datetime=order_datetime,
+            reserved_units_map=reservations,
+            msbos_reference=reference,
+        )
+
+    assert columns(classification="APPROPRIATE", reserved=5) == {}
+
+    gm_over = columns(reserved=gm_row.recommended_units + 1)
+    assert gm_over["msbos_reason"] == "over_gm_excess"
+    assert gm_over["msbos_is_over"] is True
+    assert gm_over["msbos_token"] == "G/M"
+
+    gm_within = columns(reserved=gm_row.recommended_units)
+    assert gm_within["msbos_reason"] == "within_recommendation"
+    assert gm_within["msbos_is_over"] is False
+
+    ts_screen = columns(events=[event(ts_code)], reserved=0)
+    assert ts_screen["msbos_reason"] == "type_and_screen_screen_only"
+    ts_over = columns(events=[event(ts_code)], reserved=1)
+    assert ts_over["msbos_reason"] == "over_type_and_screen_crossmatched"
+    assert ts_over["msbos_is_over"] is True
+
+    ambiguous = columns(events=[event(gm_code), event(ts_code)], reserved=1)
+    assert ambiguous["msbos_reason"] == "ambiguous_planned_op"
+    no_upcoming = columns(events=[event(gm_code, -1)], reserved=1)
+    assert no_upcoming["msbos_reason"] == "no_planned_op"
+
+    absent = columns(include_key=False)
+    blank_hn = columns(hn=" ", include_key=False)
+    genuine_zero = columns(events=[event(ts_code)], reserved=0)
+    assert absent["msbos_reason"] == "reservation_lookup_miss"
+    assert blank_hn["msbos_reason"] == "reservation_lookup_miss"
+    assert genuine_zero["msbos_reason"] == "type_and_screen_screen_only"
+    assert absent["msbos_reason"] == blank_hn["msbos_reason"]
+    assert genuine_zero["msbos_reason"] != absent["msbos_reason"]
+
+
+@pytest.mark.parametrize(
+    ("env_value", "expected"),
+    [("1", True), ("0", False), ("anything-else", False)],
+)
 def test_run_llm_leg_msbos_env_override(
     monkeypatch: pytest.MonkeyPatch,
     env_value: str,
