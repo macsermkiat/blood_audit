@@ -544,6 +544,34 @@ def render_table(rows: list[dict[str, Any]], cols: list[str]) -> str:
     return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
 
 
+_SUMMARY_DATA_COLS = ["#", "REQNO", "HN", "AN", "Hb", "Cohort", "Threshold", "Returned"]
+
+
+def render_summary_table(rows: list[dict[str, Any]]) -> str:
+    """Render the case-summary table.
+
+    Unlike ``render_table``, the Deterministic and LLM cells carry pre-built
+    trusted pill markup (``_det_html`` / ``_llm_html``) and a row may carry a
+    ``verdict-mismatch`` class (``_mismatch``). Only that generated pill span
+    and the row class bypass escaping; every data cell value is HTML-escaped
+    exactly as ``render_table`` would.
+    """
+    if not rows:
+        return "<p class='empty'>(no rows)</p>"
+    headers = _SUMMARY_DATA_COLS + ["Deterministic", "LLM"]
+    head = "".join(f"<th>{esc(c)}</th>" for c in headers)
+    body_parts: list[str] = []
+    for r in rows:
+        data_cells = "".join(
+            f"<td>{esc(r.get(c, ''))}</td>" for c in _SUMMARY_DATA_COLS
+        )
+        verdict_cells = f"<td>{r['_det_html']}</td><td>{r['_llm_html']}</td>"
+        tr_open = "<tr class='verdict-mismatch'>" if r.get("_mismatch") else "<tr>"
+        body_parts.append(tr_open + data_cells + verdict_cells + "</tr>")
+    body = "".join(body_parts)
+    return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+
+
 def render_indications(items: list[dict[str, Any]]) -> str:
     if not items:
         return "<p class='empty'>(none)</p>"
@@ -1186,6 +1214,18 @@ def main() -> None:
             _nav_tag = " <b class='nav-flag'>[!]</b>"
         case_mismatch_tags.append(_nav_tag)
 
+        det_pill = (
+            f"<span class='cls cls-{esc(det_class).lower()}'>"
+            f"{esc(_display_cls(det_class))}</span>"
+        )
+        if _has_llm:
+            llm_cell = (
+                f"<span class='cls cls-{esc(llm_final).lower()}'>"
+                f"{esc(_display_cls(llm_final))}</span>"
+            )
+        else:
+            llm_cell = esc(_display_cls(llm_final))
+
         summary_rows.append(
             {
                 "#": str(i),
@@ -1198,8 +1238,9 @@ def main() -> None:
                 "Returned": det.get("returned_blood_datetime_local")
                 or _returned_blood_datetime(trans_rows)
                 or "—",
-                "Deterministic": _display_cls(det_class),
-                "LLM": _display_cls(llm_final) if llm_final else "—",
+                "_det_html": det_pill,
+                "_llm_html": llm_cell,
+                "_mismatch": bool(_nav_tag),
             }
         )
 
@@ -1649,21 +1690,7 @@ def main() -> None:
         parts.append("</section>")
         case_html_parts.append("\n".join(parts))
 
-    summary_html = render_table(
-        summary_rows,
-        [
-            "#",
-            "REQNO",
-            "HN",
-            "AN",
-            "Hb",
-            "Cohort",
-            "Threshold",
-            "Returned",
-            "Deterministic",
-            "LLM",
-        ],
-    )
+    summary_html = render_summary_table(summary_rows)
 
     css = """
     :root {
@@ -1692,6 +1719,7 @@ def main() -> None:
     h2 { font-size: 1.563rem; font-weight: 700;
          border-bottom: 2px solid var(--s-border-strong);
          padding-bottom: 6px; margin-top: 40px; }
+    h2#summary { margin-top: 0; }
     h3 { font-size: 1.25rem; font-weight: 600; color: var(--s-ink); margin-top: 18px; }
     h4 { font-size: 1rem; font-weight: 600; margin-top: 12px; }
     h5 { font-size: 0.875rem; font-weight: 600; margin-top: 10px; color: var(--s-muted); }
@@ -1713,9 +1741,11 @@ def main() -> None:
     .cls-insufficient_evidence { background: var(--neu-bg);  color: var(--neu-fg); }
     .cls-preop_reservation_unconfirmed { background: var(--info-bg); color: var(--info-fg); }
     .cls-excluded { background: var(--info-bg); color: var(--info-fg); }
+    .cls-preop_over_reservation { background: var(--err-bg); color: var(--err-fg); }
     .conf { font-size: 0.75rem; font-weight: 400; color: var(--s-muted); }
     .rationale { font-size: 0.8125rem; color: var(--s-muted); margin-top: 4px; }
     table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 0.8125rem; }
+    .table-scroll { overflow-x: auto; }
     th, td { border: 1px solid var(--s-border); padding: 4px 8px; text-align: left;
              vertical-align: top; }
     th { background: var(--s-bg-muted); color: var(--s-ink); font-weight: 600; }
@@ -1750,6 +1780,7 @@ def main() -> None:
     .legend { display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
               margin: 10px 0 18px; font-size: 0.8125rem; }
     .legend .cls { margin-bottom: 0; font-size: 0.8125rem; padding: 3px 10px; }
+    table .cls { margin-bottom: 0; }
     @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
     .nav-flag { font-size: 0.75rem; color: var(--warn-fg); }
     .nav-flag--major { color: var(--err-fg); }
@@ -1768,6 +1799,8 @@ def main() -> None:
              border-radius: 4px; padding: 3px 10px; background: var(--s-bg-raised);
              color: var(--s-ink); font-size: 0.8125rem; transition: background 0.12s; }
     button:hover { background: var(--s-bg-muted); }
+    button:focus-visible, a:focus-visible, input:focus-visible {
+        outline: 2px solid var(--accent); outline-offset: 2px; }
     .mark-reviewed { font-size: 0.75rem; padding: 2px 8px; }
     .case.is-reviewed .mark-reviewed { background: var(--ok-bg); color: var(--ok-fg);
                                         border-color: oklch(70% 0.08 150); }
@@ -1806,6 +1839,7 @@ def main() -> None:
     @media (max-width: 800px) { .glossary-body { column-count: 1; } }
     /* Keyboard shortcut hint */
     .kbd-hint { font-size: 0.75rem; color: var(--s-muted); margin-bottom: 8px; }
+    .kbd-dismiss { font-size: 0.75rem; padding: 1px 6px; margin-left: 8px; }
     kbd { font-size: 0.75rem; background: var(--s-bg-muted); border: 1px solid var(--s-border-strong);
           border-radius: 3px; padding: 1px 5px; font-family: inherit; }
     @media print { nav { display: none; } details { display: block; }
@@ -1830,6 +1864,13 @@ def main() -> None:
         if RETURNS_LEDGER_ENABLED
         else ""
     )
+    returns_pill_css = (
+        "\n    .cls-returned_not_transfused,\n"
+        "    .cls-periop_transfusion_exempt "
+        "{ background: var(--neu-bg); color: var(--neu-fg); }\n"
+        if RETURNS_LEDGER_ENABLED
+        else ""
+    )
     returns_glossary_html = (
         "<dt>RETURNED_NOT_TRANSFUSED</dt><dd>All dispensed units were returned; "
         "excluded from scoring and review.</dd>\n"
@@ -1850,12 +1891,12 @@ def main() -> None:
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KCMH RBC order appropriateness audit — human review</title>
-<style>{css}</style></head><body>
+<style>{css}{returns_pill_css}</style></head><body>
 <h1>KCMH RBC Order Appropriateness Audit — Human Review</h1>
 <p>{n_cases} RBC orders. Deterministic: local rule-based verdict.
 LLM: Anthropic Batch classification on structured evidence only.
 {n_mismatches} verdict mismatches flagged.</p>
-<p class='kbd-hint' id='kbd-hint'>Keyboard: <kbd>j</kbd> next · <kbd>k</kbd> prev · <kbd>e</kbd> mark reviewed · <kbd>f</kbd> filter · <kbd>E</kbd> expand all · <kbd>x</kbd> expand case <button onclick='dismissKbdHint()' style='font-size:0.7rem;padding:1px 6px;margin-left:8px'>Dismiss</button></p>
+<p class='kbd-hint' id='kbd-hint'>Keyboard: <kbd>j</kbd> next · <kbd>k</kbd> prev · <kbd>e</kbd> mark reviewed · <kbd>f</kbd> filter · <kbd>E</kbd> expand all · <kbd>x</kbd> expand case <button class='kbd-dismiss' onclick='dismissKbdHint()'>Dismiss</button></p>
 <nav>
   <div class='nav-controls'>
     <a href='#summary' class='nav-home'>Summary</a>
@@ -1870,7 +1911,7 @@ LLM: Anthropic Batch classification on structured evidence only.
   <div class='nav-links' id='nav-links'>{nav_links_items}</div>
   </details>
 </nav>
-<h2 id='summary' style='margin-top:0;'>Summary</h2>
+<h2 id='summary'>Summary</h2>
 <div class="legend">
   <b>Key:</b>
   <span class="cls cls-appropriate">Appropriate</span>
@@ -1880,7 +1921,7 @@ LLM: Anthropic Batch classification on structured evidence only.
 {returns_legend_html}  <span class="cls cls-insufficient_evidence">Insufficient evidence</span>
   <span class="cls cls-excluded">Excluded</span>
 </div>
-{summary_html}
+<div class='table-scroll'>{summary_html}</div>
 <details style='margin:16px 0;'><summary><b>Glossary — verdict classes and classifier codes</b></summary>
 <div class='glossary-body'>
 <dl>
@@ -1934,28 +1975,6 @@ LLM: Anthropic Batch classification on structured evidence only.
     foot = "</body></html>"
     script = """<script>
 (function(){
-  /* ── Summary table: pill spans + mismatch row highlights ── */
-  var norm = function(s){ return s.trim().replace(/\\s+/g,'_').toLowerCase(); };
-  var sentinels = /^\\(|^—/;
-  var tbl = document.querySelector('table');
-  if (tbl) {
-    tbl.querySelectorAll('tr').forEach(function(tr){
-      var cells = tr.querySelectorAll('td');
-      if(cells.length < 10) return;
-      var detCell = cells[8];
-      var llmCell = cells[9];
-      var llmTxt = (llmCell.textContent || '').trim();
-      if(sentinels.test(llmTxt)) return;
-      var detN = norm(detCell.textContent || '');
-      var llmN = norm(llmTxt);
-      detCell.innerHTML = "<span class='cls cls-" + detN + "' style='margin-bottom:0'>"
-        + detCell.textContent + "</span>";
-      llmCell.innerHTML = "<span class='cls cls-" + llmN + "' style='margin-bottom:0'>"
-        + llmCell.textContent + "</span>";
-      if (detN !== llmN) { tr.classList.add('verdict-mismatch'); }
-    });
-  }
-
   /* ── Mark-reviewed with localStorage persistence ── */
   var STORE_KEY = 'bba_reviewed';
   function loadReviewed() {

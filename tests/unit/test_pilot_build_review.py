@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 from types import ModuleType
 
@@ -60,6 +61,51 @@ def _render_empty_review(
     return output.read_bytes()
 
 
+def _render_review_with_rows(
+    module: ModuleType,
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    manifest_csv: str,
+    report_csv: str,
+    llm_json: str,
+) -> bytes:
+    bundle = root / "bundle"
+    bundle.mkdir(parents=True)
+    for name in (
+        "BDVST.csv",
+        "BDVSTDT.csv",
+        "Diagnosis.csv",
+        "Lab.csv",
+        "Med.csv",
+        "IPTSUMOPRT.csv",
+        "ICD9CM.csv",
+        "BDVSTST.csv",
+        "IPDADMPROGRESS.csv",
+        "IPDNRFOCUSDT.csv",
+    ):
+        (bundle / name).write_text("", encoding="utf-8")
+    manifest = root / "sample_manifest.csv"
+    report = root / "report.csv"
+    llm_report = root / "llm_report.json"
+    output = root / "review.html"
+    manifest.write_text(manifest_csv, encoding="utf-8")
+    report.write_text(report_csv, encoding="utf-8")
+    llm_report.write_text(llm_json, encoding="utf-8")
+
+    monkeypatch.setattr(module, "WORK", root)
+    monkeypatch.setattr(module, "BUNDLE", bundle)
+    monkeypatch.setattr(module, "MANIFEST", manifest)
+    monkeypatch.setattr(module, "DET_REPORT", report)
+    monkeypatch.setattr(module, "LLM_REPORT", llm_report)
+    monkeypatch.setattr(module, "ICD10_DICT_CSV", root / "missing-icd10.csv")
+    monkeypatch.setattr(module, "OUT", output)
+    monkeypatch.setattr(module, "RETURNS_LEDGER_ENABLED", True)
+    monkeypatch.setattr(module, "MSBOS_RESERVATION_PILOT_ENABLED", False)
+    module.main()
+    return output.read_bytes()
+
+
 def test_flag_off_review_omits_returns_presentation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -110,3 +156,91 @@ def test_flag_on_review_includes_operation_unresolved_glossary(
         module, tmp_path, monkeypatch, returns_enabled=True, msbos_enabled=True
     ).decode()
     assert "<dt>operation_unresolved</dt>" in rendered
+
+
+def test_preop_over_reservation_pill_defined_unconditional(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_build_review()
+    rendered = _render_empty_review(
+        module, tmp_path, monkeypatch, returns_enabled=False
+    ).decode()
+    assert ".cls-preop_over_reservation" in rendered
+    assert "var(--err-bg)" in rendered
+
+
+def test_returns_pill_classes_defined_when_returns_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_build_review()
+    rendered = _render_empty_review(
+        module, tmp_path, monkeypatch, returns_enabled=True
+    ).decode()
+    assert ".cls-returned_not_transfused" in rendered
+    assert ".cls-periop_transfusion_exempt" in rendered
+    assert "var(--neu-bg)" in rendered
+
+
+def test_summary_pill_wrapping_js_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_build_review()
+    rendered = _render_empty_review(
+        module, tmp_path, monkeypatch, returns_enabled=True
+    ).decode()
+    assert "document.querySelector('table')" not in rendered
+    assert "var sentinels" not in rendered
+
+
+def test_summary_table_focus_overflow_and_kbd_styles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_build_review()
+    rendered = _render_empty_review(
+        module, tmp_path, monkeypatch, returns_enabled=True
+    ).decode()
+    assert ":focus-visible" in rendered
+    assert "outline-offset: 2px" in rendered
+    assert ".table-scroll" in rendered
+    assert "overflow-x: auto" in rendered
+    assert "kbd-dismiss" in rendered
+    assert "0.7rem" not in rendered
+
+
+def test_summary_pills_and_mismatch_rendered_server_side(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN\nA<B,R1,AN1\nHN2,R2,AN2\n",
+        report_csv=(
+            "reqno,classification\nR1,POTENTIALLY_INAPPROPRIATE\nR2,APPROPRIATE\n"
+        ),
+        llm_json=json.dumps(
+            [
+                {
+                    "reqno": "R1",
+                    "llm_final": {
+                        "final_classification": "APPROPRIATE",
+                        "confidence": 0.91,
+                        "model": "test",
+                        "review_reason": "model_verdict",
+                        "indications": [],
+                        "negative_evidence": [],
+                        "reasoning_en": "x",
+                        "reasoning_th": "x",
+                    },
+                }
+            ]
+        ),
+    ).decode()
+    # R1 is a major mismatch and is shaded server-side; R2 has no LLM row,
+    # so it is not shaded and its LLM cell remains plain sentinel text.
+    assert "<span class='cls cls-potentially_inappropriate'>" in rendered
+    assert "<span class='cls cls-appropriate'>" in rendered
+    assert rendered.count("<tr class='verdict-mismatch'>") == 1
+    assert "A&lt;B" in rendered
+    assert "(LLM not run)" in rendered
