@@ -871,6 +871,17 @@ def _earliest_return_datetime_local(rows: list[dict[str, str]]) -> str:
     return min(candidates) if candidates else ""
 
 
+def _icd9_dict_from_rows(rows: list[dict[str, str]]) -> dict[str, dict[str, str]]:
+    """Build the dotless-code -> {NAME, ORFLAG} ICD-9 dictionary from CSV rows."""
+    return {
+        (r.get("Icd9cm") or "").strip().replace(".", ""): {
+            "NAME": (r.get("Name") or "").strip(),
+            "ORFLAG": (r.get("Orflag") or "").strip(),
+        }
+        for r in rows
+    }
+
+
 def main() -> None:
     if not BUNDLE.exists():
         sys.exit(f"bundle not found: {BUNDLE} (run sample_bundle.py first)")
@@ -901,13 +912,7 @@ def main() -> None:
     # flag-off run never opens the possibly-large canonical file).
     bdvsttrans = load_bdvsttrans_rows(BUNDLE) if RETURNS_LEDGER_ENABLED else []
     icd9 = _read_csv("ICD9CM.csv")
-    icd9_dict = {
-        (r.get("Icd9cm") or "").strip().replace(".", ""): {
-            "NAME": (r.get("Name") or "").strip(),
-            "ORFLAG": (r.get("Orflag") or "").strip(),
-        }
-        for r in icd9
-    }
+    icd9_dict = _icd9_dict_from_rows(icd9)
 
     bdvst_by_reqno = {r["REQNO"]: r for r in bdvst}
 
