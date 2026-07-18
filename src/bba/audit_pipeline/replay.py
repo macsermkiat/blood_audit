@@ -158,6 +158,22 @@ ADMINISTRATION_CONTRADICTION_REVIEW_REASON = "administration_signal_contradictio
 _RETURNS_TERMINALS = frozenset({"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"})
 
 
+def is_msbos_eligible(
+    classifier_result: ClassifierResult | PlateletClassifierResult,
+) -> bool:
+    """Whether a reserve-ahead or declared-pre-op result may enter MSBOS.
+
+    Declared pre-op exemption waives only the transfusion judgment, so its rows
+    remain reservation-screen eligible. Factual returns and the legacy peri-op
+    exemption remain terminal ahead of MSBOS.
+    """
+    if classifier_result.classification == "PERIOP_TRANSFUSION_EXEMPT":
+        return classifier_result.rationale == "preop_declared_exempt"
+    if classifier_result.classification in _RETURNS_TERMINALS:
+        return False
+    return classifier_result.rationale in _RESERVE_AHEAD_RATIONALES
+
+
 def is_over_reservation(
     *, classifier_result: ClassifierResult, context: PipelineRowContext
 ) -> bool:
@@ -167,7 +183,10 @@ def is_over_reservation(
     decision = context.reservation_decision
     if decision is None or not decision.is_over:
         return False
-    return classifier_result.classification not in _RETURNS_TERMINALS
+    return (
+        classifier_result.classification not in _RETURNS_TERMINALS
+        or is_msbos_eligible(classifier_result)
+    )
 
 
 def is_operation_unresolved(
@@ -179,7 +198,10 @@ def is_operation_unresolved(
     decision = context.reservation_decision
     if decision is None or decision.reason != "operation_unresolved":
         return False
-    return classifier_result.classification not in _RETURNS_TERMINALS
+    return (
+        classifier_result.classification not in _RETURNS_TERMINALS
+        or is_msbos_eligible(classifier_result)
+    )
 
 
 def is_platelet_over_reservation(
@@ -193,7 +215,10 @@ def is_platelet_over_reservation(
     decision = context.platelet_reservation_decision
     if decision is None or not decision.is_over:
         return False
-    return classifier_result.classification not in _RETURNS_TERMINALS
+    return (
+        classifier_result.classification not in _RETURNS_TERMINALS
+        or is_msbos_eligible(classifier_result)
+    )
 
 
 def is_platelet_reservation_review(
@@ -207,7 +232,10 @@ def is_platelet_reservation_review(
     decision = context.platelet_reservation_decision
     if decision is None or decision.reason not in REVIEW_REASONS:
         return False
-    return classifier_result.classification not in _RETURNS_TERMINALS
+    return (
+        classifier_result.classification not in _RETURNS_TERMINALS
+        or is_msbos_eligible(classifier_result)
+    )
 
 
 _PERIOP_CONTRADICTION_CLASSES: frozenset[Classification] = frozenset(
@@ -1075,15 +1103,16 @@ def _classify_from_context(context: "PipelineRowContext") -> ClassifierResult:
                     procedure_proximity_hours=context.procedure_proximity_hours,
                     upcoming_procedure_hours=context.upcoming_procedure_hours,
                 )
-                if feature_flags.RETURNS_LEDGER_ENABLED
+                if not feature_flags.DECLARED_USE_PREOP_EXEMPT_ENABLED
+                and feature_flags.RETURNS_LEDGER_ENABLED
                 and context.returns_summary is not None
                 else False
             ),
             declared_use=(
                 context.declared_use if feature_flags.DECLARED_USETYPE_ENABLED else None
             ),
-            require_surgical_use_for_periop_exempt=(
-                feature_flags.PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE
+            enable_declared_use_preop_exemption=(
+                feature_flags.DECLARED_USE_PREOP_EXEMPT_ENABLED
             ),
         )
     )
@@ -1979,6 +2008,7 @@ __all__ = [
     "Verifier",
     "apply_batch_results",
     "default_verifier",
+    "is_msbos_eligible",
     "is_over_reservation",
     "is_platelet_over_reservation",
     "is_platelet_reservation_review",

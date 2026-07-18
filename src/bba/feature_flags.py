@@ -3,7 +3,7 @@
 Most flags default to OFF (False); ``RETURNS_LEDGER_ENABLED`` (returns-ledger
 go-live #138), ``DECLARED_USETYPE_ENABLED`` (declared-usetype go-live
 2026-07-15), and ``MSBOS_RESERVATION_ENABLED`` (MSBOS reservation go-live
-2026-07-16, #167), and ``PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE`` are
+2026-07-16, #167), and ``DECLARED_USE_PREOP_EXEMPT_ENABLED`` are
 default-ON. Each flag's default is documented on the flag itself. Defining the
 contracts here keeps feature state in one place.
 
@@ -25,9 +25,9 @@ DECLARED_USETYPE_ENABLED
 MSBOS_RESERVATION_ENABLED
     Gates the MSBOS pre-op reservation-appropriateness arm. Default: True
     (go-live 2026-07-16, #167).
-PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE
-    Requires a surgical or type-screen declared use for the returns peri-op
-    exemption. Default: True.
+DECLARED_USE_PREOP_EXEMPT_ENABLED
+    Exempts orders whose declared use is surgery or type-screen from the
+    Hb-appropriateness judgment. Default: True.
 """
 
 from __future__ import annotations
@@ -73,15 +73,17 @@ leave it ``None`` are unaffected. Set ``BBA_PILOT_DECLARED_USETYPE=0`` to force
 it off for a pilot run.
 """
 
-PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE: bool = True
-"""Require surgical declared use for the returns peri-op exemption (default: ON).
+DECLARED_USE_PREOP_EXEMPT_ENABLED: bool = True
+"""Enable the order-level declared-use pre-op exemption (default: ON).
 
-When enabled, a known ward or day-care declared use no longer automatically
-receives ``PERIOP_TRANSFUSION_EXEMPT``; surgical and type-screen use remain
-eligible. Read at the ``ClassifierInputs`` composition seams (the audit
-pipeline / replay composers and both pilot legs) — ``classify()`` stays pure.
-Contexts that leave ``declared_use`` ``None`` are unaffected. Set
-``BBA_PILOT_PERIOP_EXEMPT_SURGICAL=0`` to force this gate off for a pilot run.
+When enabled, a collapsed BDVSTDT.USETYPE of ``surgery`` or ``type_screen``
+receives ``PERIOP_TRANSFUSION_EXEMPT`` regardless of returns-ledger coverage or
+the peri-op note/proximity envelope. A factual all-returned/incompatible ledger
+still wins unless contradicted by hard peri-op evidence. Other declared uses
+follow the normal Hb/cohort path. Read at the ``ClassifierInputs`` composition
+seams so ``classify()`` remains pure. Set
+``BBA_PILOT_DECLARED_USE_PREOP_EXEMPT=0`` to restore the legacy transfused plus
+peri-op-envelope exemption in pilot runs.
 """
 
 MSBOS_RESERVATION_ENABLED: bool = True
@@ -103,8 +105,8 @@ force it off for a pilot run.
 
 __all__: Sequence[str] = (
     "DECLARED_USETYPE_ENABLED",
+    "DECLARED_USE_PREOP_EXEMPT_ENABLED",
     "MSBOS_RESERVATION_ENABLED",
-    "PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE",
     "PLATELET_LLM_ENABLED",
     "RESERVE_AHEAD_ROUTER_ENABLED",
     "RETURNS_LEDGER_ENABLED",

@@ -106,12 +106,16 @@ def _unresolved_decision() -> ReservationDecision:
     )
 
 
-def _classifier(classification: str = "POTENTIALLY_INAPPROPRIATE") -> ClassifierResult:
+def _classifier(
+    classification: str = "POTENTIALLY_INAPPROPRIATE",
+    *,
+    rationale: str = "preop_defer_llm",
+) -> ClassifierResult:
     return ClassifierResult(
         classification=classification,
         bypass_reason=BypassReason.NONE,
         cohort_threshold=7.0,
-        rationale="preop_defer_llm",
+        rationale=rationale,
     )
 
 
@@ -256,6 +260,25 @@ def test_returns_terminal_fires_neither_reservation_overlay(
     assert not is_operation_unresolved(
         classifier_result=classifier, context=_context(decision=_unresolved_decision())
     ), "returns disposition also outranks the unresolved-review terminal"
+
+
+def test_declared_preop_exempt_remains_msbos_eligible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(feature_flags, "MSBOS_RESERVATION_ENABLED", True)
+    declared = _classifier(
+        "PERIOP_TRANSFUSION_EXEMPT", rationale="preop_declared_exempt"
+    )
+    legacy = _classifier(
+        "PERIOP_TRANSFUSION_EXEMPT", rationale="periop_transfusion_exempt"
+    )
+
+    assert is_over_reservation(
+        classifier_result=declared, context=_context(decision=_decision())
+    )
+    assert not is_over_reservation(
+        classifier_result=legacy, context=_context(decision=_decision())
+    )
 
 
 def test_operation_unresolved_builder_is_needs_review_not_llm_assertion() -> None:

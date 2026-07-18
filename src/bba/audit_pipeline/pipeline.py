@@ -1376,15 +1376,16 @@ def _classifier_inputs_for(context: PipelineRowContext) -> ClassifierInputs:
                 procedure_proximity_hours=context.procedure_proximity_hours,
                 upcoming_procedure_hours=context.upcoming_procedure_hours,
             )
-            if feature_flags.RETURNS_LEDGER_ENABLED
+            if not feature_flags.DECLARED_USE_PREOP_EXEMPT_ENABLED
+            and feature_flags.RETURNS_LEDGER_ENABLED
             and context.returns_summary is not None
             else False
         ),
         declared_use=(
             context.declared_use if feature_flags.DECLARED_USETYPE_ENABLED else None
         ),
-        require_surgical_use_for_periop_exempt=(
-            feature_flags.PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE
+        enable_declared_use_preop_exemption=(
+            feature_flags.DECLARED_USE_PREOP_EXEMPT_ENABLED
         ),
     )
 

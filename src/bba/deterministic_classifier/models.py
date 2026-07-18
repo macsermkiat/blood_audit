@@ -141,12 +141,13 @@ class ClassifierInputs(BaseModel):
           the pre-pass inert, so a caller that never ran ``scan_periop``
           gets the unchanged Hb-present behaviour.
 
-    * ``require_surgical_use_for_periop_exempt`` gates the returns peri-op
-      exemption on declared use. When ``True``, known non-operative ``ward``
-      and ``day_care`` uses fall through to the normal Hb/cohort rules;
-      ``surgery``, ``type_screen``, ``unknown``, and ``None`` remain eligible.
-      It defaults to ``False`` so callers that do not opt in preserve the
-      original classifier behavior.
+    * ``enable_declared_use_preop_exemption`` selects the order-level pre-op
+      rule. When ``True``, declared ``surgery`` and ``type_screen`` orders are
+      exempt from the Hb-appropriateness judgment regardless of ledger state;
+      factual all-returned/incompatible disposition still has precedence.
+      The peri-op note/proximity envelope is ignored. It defaults to ``False``
+      so direct callers that do not opt in preserve the legacy transfused plus
+      peri-op-envelope behavior byte-for-byte.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -167,7 +168,7 @@ class ClassifierInputs(BaseModel):
     )
     returns_periop_context: bool = False
     declared_use: DeclaredUseLabel | None = None
-    require_surgical_use_for_periop_exempt: bool = False
+    enable_declared_use_preop_exemption: bool = False
 
 
 class ClassifierResult(BaseModel):

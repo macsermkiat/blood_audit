@@ -76,6 +76,7 @@ def test_pilot_flag_off_forces_inconclusive(monkeypatch) -> None:
 def test_pilot_classifier_path_emits_periop_exempt_terminal(monkeypatch) -> None:
     pilot = _load_pilot()
     monkeypatch.setattr(pilot, "RETURNS_LEDGER_ENABLED", True)
+    monkeypatch.setattr(pilot, "DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED", False)
     summary = ReturnsSummary(
         units_total=2,
         units_returned=0,
@@ -141,13 +142,13 @@ def test_pilot_periop_context_flag_off_forces_false(monkeypatch) -> None:
 
 
 def test_pilot_periop_surgical_gate_override_matrix(monkeypatch) -> None:
-    monkeypatch.setenv("BBA_PILOT_PERIOP_EXEMPT_SURGICAL", "0")
+    monkeypatch.setenv("BBA_PILOT_DECLARED_USE_PREOP_EXEMPT", "0")
     off = _load_pilot("pilot_run_pipeline_periop_surgical_off")
-    monkeypatch.setenv("BBA_PILOT_PERIOP_EXEMPT_SURGICAL", "1")
+    monkeypatch.setenv("BBA_PILOT_DECLARED_USE_PREOP_EXEMPT", "1")
     on = _load_pilot("pilot_run_pipeline_periop_surgical_on")
 
-    assert off.PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE_PILOT is False
-    assert on.PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE_PILOT is True
+    assert off.DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED is False
+    assert on.DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED is True
 
     base = {
         "audit_id": "pilot-periop-surgical-gate",
@@ -177,16 +178,16 @@ def test_pilot_periop_surgical_gate_override_matrix(monkeypatch) -> None:
     off_result = classify(
         ClassifierInputs(
             **base,
-            require_surgical_use_for_periop_exempt=(
-                off.PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE_PILOT
+            enable_declared_use_preop_exemption=(
+                off.DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED
             ),
         )
     )
     on_result = classify(
         ClassifierInputs(
             **base,
-            require_surgical_use_for_periop_exempt=(
-                on.PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE_PILOT
+            enable_declared_use_preop_exemption=(
+                on.DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED
             ),
         )
     )

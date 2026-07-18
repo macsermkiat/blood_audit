@@ -287,7 +287,7 @@ def test_code_version_folds_declared_use_seam(monkeypatch) -> None:
     monkeypatch.setenv("BBA_PILOT_DECLARED_USETYPE", "0")
     off = _load_run_llm_leg("pilot_run_llm_leg_declared_codever_off")
     assert off.DECLARED_USETYPE_PILOT_ENABLED is False
-    assert "+declared" not in off.CODE_VERSION
+    assert "declared" not in off.CODE_VERSION.split("+")
 
 
 def test_sample_bundle_carries_usetype() -> None:
