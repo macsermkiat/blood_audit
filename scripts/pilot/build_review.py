@@ -126,17 +126,17 @@ _RATIONALE_LABELS: dict[str, str] = {
     "cohort_non_threshold": "Cohort has no fixed Hb threshold (e.g., active haematological malignancy)",
     "bypass_mtp": "Massive Transfusion Protocol cohort — auto-classified APPROPRIATE",
     "bypass_mtp_hb_missing": "MTP cohort with no Hb available — auto-classified APPROPRIATE",
-    "bypass_peri_procedural": "Procedure within 6 h before order — peri-procedural bypass",
+    "bypass_peri_procedural": "[legacy/flag-off] Procedure within 6 h before order — peri-procedural bypass",
     "bypass_peri_procedural_hb_missing": "Peri-procedural bypass (Hb missing) — auto-classified APPROPRIATE",
     "preop_defer_llm": (
-        "Upcoming procedure within 72 h — routed to LLM review, not auto-cleared "
+        "[legacy/flag-off] Upcoming procedure within 72 h — routed to LLM review, not auto-cleared "
         "(a crossmatch reservation is not a transfusion indication). Minor "
         "procedures (perm cath, tracheostomy, lumbar puncture, thoracocentesis, "
         "paracentesis, arthrocentesis, arterial/central line) are excluded from "
         "this signal."
     ),
     "preop_defer_llm_declared": (
-        "Declared surgical intent (BDVSTDT.USETYPE = surgery/type-screen) "
+        "[legacy/flag-off] Declared surgical intent (BDVSTDT.USETYPE = surgery/type-screen) "
         "routed the order to LLM review with no structured op row; a "
         "declaration is not a transfusion indication."
     ),
@@ -2282,9 +2282,9 @@ LLM: Anthropic Batch classification on structured evidence only.
 <dt>cohort_unknown</dt><dd>Patient cohort could not be determined.</dd>
 <dt>cohort_non_threshold</dt><dd>Cohort has no fixed Hb threshold (e.g. active haematological malignancy).</dd>
 <dt>bypass_mtp</dt><dd>Massive Transfusion Protocol cohort — auto-classified APPROPRIATE.</dd>
-<dt>bypass_peri_procedural</dt><dd>Procedure within 6 h before order — peri-procedural bypass.</dd>
-<dt>preop_defer_llm</dt><dd>Upcoming procedure within 72 h — routed to LLM review, not auto-cleared (a reservation is not an indication). Minor procedures (perm cath, tracheostomy, lumbar puncture, thoracocentesis, paracentesis, arthrocentesis, arterial/central line) are excluded from the peri-op signal.</dd>
-<dt>preop_defer_llm_declared</dt><dd>Declared surgical intent (BDVSTDT.USETYPE = surgery/type-screen) routed the order to LLM review with no structured op row; a declaration is not a transfusion indication.</dd>
+<dt>bypass_peri_procedural</dt><dd>[legacy/flag-off] Procedure within 6 h before order — peri-procedural bypass.</dd>
+<dt>preop_defer_llm</dt><dd>[legacy/flag-off] Upcoming procedure within 72 h — routed to LLM review, not auto-cleared (a reservation is not an indication). Minor procedures (perm cath, tracheostomy, lumbar puncture, thoracocentesis, paracentesis, arthrocentesis, arterial/central line) are excluded from the peri-op signal.</dd>
+<dt>preop_defer_llm_declared</dt><dd>[legacy/flag-off] Declared surgical intent (BDVSTDT.USETYPE = surgery/type-screen) routed the order to LLM review with no structured op row; a declaration is not a transfusion indication.</dd>
 <dt>bypass_pre_op_crossmatch</dt><dd>[legacy] Upcoming procedure within 72 h — auto-classified APPROPRIATE. Superseded by preop_defer_llm; retained for historical reports.</dd>
 <dt>bypass_delta_hb</dt><dd>Rapid Hb drop (delta-Hb trigger) fired — auto-classified APPROPRIATE.</dd>
 <dt>bypass_hemodilution</dt><dd>Haemodilution pattern flagged — Hb unreliable; sent to NEEDS_REVIEW.</dd>

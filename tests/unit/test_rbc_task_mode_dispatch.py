@@ -200,6 +200,7 @@ def test_flag_off_preop_dispatch_is_byte_identical_with_classifier_threaded() ->
 def test_pipeline_routes_real_preop_classifier_result_when_flag_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(feature_flags, "DECLARED_USE_PREOP_EXEMPT_ENABLED", False)
     ctx = _rbc_ctx("audit-rbc-case-68026306", 12.9, upcoming_procedure_hours=24.0)
     classifier_result = classify(_classifier_inputs_for(ctx))
     assert classifier_result.rationale == "preop_defer_llm"
@@ -230,6 +231,7 @@ def test_pipeline_dispatches_declared_preop_by_router_flag(
         declared_use="surgery",
     )
     monkeypatch.setattr(feature_flags, "DECLARED_USETYPE_ENABLED", True)
+    monkeypatch.setattr(feature_flags, "DECLARED_USE_PREOP_EXEMPT_ENABLED", False)
     monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", router_enabled)
     classifier_result = classify(_classifier_inputs_for(ctx))
     assert classifier_result.rationale == "preop_defer_llm_declared"
@@ -294,6 +296,7 @@ def test_resume_flag_off_does_not_reclassify(
 def test_resume_routes_real_preop_classifier_result_when_flag_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(feature_flags, "DECLARED_USE_PREOP_EXEMPT_ENABLED", False)
     ctx = _rbc_ctx(
         "audit-rbc-resume-case-68026306", 12.9, upcoming_procedure_hours=24.0
     )
@@ -324,6 +327,7 @@ def test_resume_dispatches_declared_preop_by_router_flag(
         declared_use="type_screen",
     )
     monkeypatch.setattr(feature_flags, "DECLARED_USETYPE_ENABLED", True)
+    monkeypatch.setattr(feature_flags, "DECLARED_USE_PREOP_EXEMPT_ENABLED", False)
     monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", router_enabled)
 
     request = _rebuild_submission_requests(
@@ -362,6 +366,7 @@ def test_replay_dispatches_declared_preop_by_router_flag(
         declared_use="surgery",
     )
     monkeypatch.setattr(feature_flags, "DECLARED_USETYPE_ENABLED", True)
+    monkeypatch.setattr(feature_flags, "DECLARED_USE_PREOP_EXEMPT_ENABLED", False)
     monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", router_enabled)
     classifier_result = classify(_classifier_inputs_for(ctx))
     assert classifier_result.rationale == "preop_defer_llm_declared"
@@ -472,6 +477,7 @@ def test_resume_flag_off_ignores_returns_summary(
     """
     monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", False)
     monkeypatch.setattr(feature_flags, "RESERVE_AHEAD_ROUTER_ENABLED", True)
+    monkeypatch.setattr(feature_flags, "DECLARED_USE_PREOP_EXEMPT_ENABLED", False)
     ctx = _rbc_ctx(
         "audit-rbc-resume-returned-flagoff", 12.9, upcoming_procedure_hours=24.0
     ).model_copy(update={"returns_summary": _ALL_RETURNED})

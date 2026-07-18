@@ -245,8 +245,8 @@ if MSBOS_RESERVATION_PILOT_ENABLED:
     # old +msbos4 token would silently retain the pre-correction verdict.
     CODE_VERSION += "+msbos5"
 if DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED:
-    # +declaredpreopexempt: order-level USETYPE changes deterministic terminals.
-    CODE_VERSION += "+declaredpreopexempt"
+    # +usetypeonly: USETYPE is the sole pre-op router; procedure facts are evidence.
+    CODE_VERSION += "+usetypeonly"
 TZ_LOCAL = "Asia/Bangkok"
 INCPT_OPERATION_GROUPS = {"110", "111"}
 

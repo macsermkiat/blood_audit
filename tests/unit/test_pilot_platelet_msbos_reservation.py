@@ -17,6 +17,20 @@ from bba.platelet_lookup import PlateletLookupResult
 
 
 PILOT_DIR = Path(__file__).resolve().parents[2] / "scripts" / "pilot"
+
+
+@pytest.fixture(autouse=True)
+def _restore_library_feature_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep run_llm_leg.main's process-global pilot seams test-local."""
+    for name in (
+        "RESERVE_AHEAD_ROUTER_ENABLED",
+        "DECLARED_USETYPE_ENABLED",
+        "MSBOS_RESERVATION_ENABLED",
+        "DECLARED_USE_PREOP_EXEMPT_ENABLED",
+    ):
+        monkeypatch.setattr(feature_flags, name, getattr(feature_flags, name))
+
+
 _NOW = datetime(2026, 7, 16, 4, 0, tzinfo=UTC)
 
 

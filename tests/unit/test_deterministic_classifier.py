@@ -703,6 +703,120 @@ class TestBypassPathways:
         assert result.classification == "APPROPRIATE"
         assert result.bypass_reason == BypassReason.PERI_PROCEDURAL_6H
 
+
+class TestUsetypeOnlyPreopRouting:
+    """Flag ON makes declared USETYPE the sole pre-op routing signal."""
+
+    @pytest.mark.parametrize(
+        (
+            "hb",
+            "proximity",
+            "upcoming",
+            "expected_classification",
+            "expected_rationale",
+        ),
+        [
+            (7.5, None, 60.8, "NEEDS_REVIEW", "hb_7_to_10"),
+            (8.0, 2.0, None, "NEEDS_REVIEW", "hb_7_to_10"),
+            # The unchanged universal-low rule precedes the cohort threshold.
+            (6.5, 2.0, None, "APPROPRIATE", "hb_lt_7_universal"),
+        ],
+    )
+    def test_ward_procedure_signals_are_evidence_only(
+        self,
+        hb: float,
+        proximity: float | None,
+        upcoming: float | None,
+        expected_classification: str,
+        expected_rationale: str,
+    ) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(hb),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                procedure_proximity_hours=proximity,
+                upcoming_procedure_hours=upcoming,
+                declared_use="ward",
+                enable_declared_use_preop_exemption=True,
+            )
+        )
+
+        assert result.classification == expected_classification
+        assert result.bypass_reason == BypassReason.NONE
+        assert result.rationale == expected_rationale
+
+    @pytest.mark.parametrize("proximity", [None, 2.0, 200.0])
+    def test_declared_surgery_is_exempt_regardless_of_proximity(
+        self, proximity: float | None
+    ) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(8.0),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                procedure_proximity_hours=proximity,
+                declared_use="surgery",
+                enable_declared_use_preop_exemption=True,
+            )
+        )
+
+        assert result.classification == "PERIOP_TRANSFUSION_EXEMPT"
+        assert result.rationale == "preop_declared_exempt"
+
+    def test_upcoming_procedure_no_longer_blocks_delta_hb(self) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(7.5, delta_bypass=True),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                upcoming_procedure_hours=60.8,
+                declared_use="ward",
+                enable_declared_use_preop_exemption=True,
+            )
+        )
+
+        assert result.classification == "APPROPRIATE"
+        assert result.bypass_reason == BypassReason.DELTA_HB
+        assert result.rationale == "bypass_delta_hb"
+
+    def test_missing_hb_proximity_defers_but_hard_signals_still_fire(self) -> None:
+        common = {
+            "hb": _hb(None),
+            "enable_missing_hb_positive_evidence": True,
+            "enable_declared_use_preop_exemption": True,
+            "declared_use": "ward",
+        }
+        proximity = classify(
+            _inputs(
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                procedure_proximity_hours=2.0,
+                **common,
+            )
+        )
+        mtp = classify(_inputs(cohort=_cohort(CohortLabel.MTP, None), **common))
+        intraop = classify(
+            _inputs(
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                periop_intraop_transfusion=True,
+                **common,
+            )
+        )
+
+        assert (proximity.classification, proximity.rationale) == (
+            "NEEDS_REVIEW",
+            "hb_missing_defer_llm",
+        )
+        assert (mtp.classification, mtp.rationale) == (
+            "APPROPRIATE",
+            "bypass_mtp_hb_missing",
+        )
+        assert (intraop.classification, intraop.rationale) == (
+            "APPROPRIATE",
+            "bypass_periop_evidence_hb_missing",
+        )
+
+
+class TestPreopAndDeltaBypassPathways:
+    """Legacy pre-op routing plus the retained delta-Hb bypass matrix."""
+
     def test_pre_op_crossmatch_within_72h_defers_to_llm(self) -> None:
         """Procedure ≤ 72 h after order → NEEDS_REVIEW (defer to LLM), NOT
         deterministic APPROPRIATE. A crossmatch reservation is not a

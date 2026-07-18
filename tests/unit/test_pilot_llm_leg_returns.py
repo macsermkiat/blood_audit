@@ -84,7 +84,7 @@ def test_llm_leg_deterministic_final_includes_returns_terminals() -> None:
 def test_llm_leg_periop_surgical_gate_env_matrix(monkeypatch) -> None:
     """The LLM leg resolves the periop use-type gate from
     BBA_PILOT_DECLARED_USE_PREOP_EXEMPT (default: the library flag) and folds a
-    distinct ``+declaredpreopexempt`` code identity when ON — the audit store is
+    distinct ``+usetypeonly`` code identity when ON — the audit store is
     idempotent on (run_id, audit_id, code_version), so the verdict-affecting
     gate must not silently reuse a flag-off run's committed rows (PR #194
     Codex P1: the gate was previously inert outside the det pilot leg)."""
@@ -95,8 +95,8 @@ def test_llm_leg_periop_surgical_gate_env_matrix(monkeypatch) -> None:
 
     assert off.DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED is False
     assert on.DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED is True
-    assert "+declaredpreopexempt" not in off.CODE_VERSION
-    assert "+declaredpreopexempt" in on.CODE_VERSION
+    assert "+usetypeonly" not in off.CODE_VERSION
+    assert "+usetypeonly" in on.CODE_VERSION
 
 
 def test_llm_leg_returned_summary_is_terminal_and_skips_model(monkeypatch) -> None:
@@ -234,7 +234,7 @@ def test_llm_leg_code_version_is_flag_sensitive(monkeypatch) -> None:
 
     # Isolate the returns flag: force the other now-ON default seams off so they
     # do not add their own CODE_VERSION tokens ("+declared", "+msbos5",
-    # "+declaredpreopexempt").
+    # "+usetypeonly").
     monkeypatch.setenv("BBA_PILOT_DECLARED_USETYPE", "0")
     monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", "0")
     monkeypatch.setenv("BBA_PILOT_DECLARED_USE_PREOP_EXEMPT", "0")
