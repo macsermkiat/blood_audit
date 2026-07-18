@@ -39,6 +39,9 @@ data/raw/
 # Vendored public MSBOS reference schedule (ICD-9 -> blood-order recommendation,
 # NOT patient data) — required in-repo by the pre-op reservation arm (#163).
 !src/bba/preop_reservation/data/OPBloodLimit_by_icd9.csv
+# Vendored OPRTACT->ICD9 bridge (billing-code -> procedure-code mapping,
+# NOT patient data) — required in-repo by the planned-op picker v2 (#197).
+!src/bba/preop_reservation/data/oprtact_icd9_bridge.csv
 
 # Secrets — never commit
 .env
