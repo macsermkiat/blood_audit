@@ -1555,7 +1555,15 @@ def main() -> None:
                     or platelet_reservation_decision.reason in PLATELET_REVIEW_REASONS
                 )
             )
-            if plt_returns_result is not None and not _reservation_routes_to_terminal:
+            # Only the DECLARED pre-op exemption is held for the MSBOS screens
+            # (is_msbos_eligible); a legacy flag-off PERIOP_TRANSFUSION_EXEMPT
+            # stays terminal here regardless of the reservation decision, so
+            # the flag-off submission set is byte-identical to before (Codex
+            # P2 on 5d31f8b).
+            if plt_returns_result is not None and not (
+                is_msbos_eligible(plt_returns_result)
+                and _reservation_routes_to_terminal
+            ):
                 continue
             if (
                 plt_clf.classification == "INSUFFICIENT_EVIDENCE"
