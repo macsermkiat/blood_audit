@@ -48,6 +48,10 @@ class MsbosReference:
             return "ambiguous"
         return next(iter(matches))
 
+    def codes(self) -> frozenset[str]:
+        """All dotless ICD-9 codes present in the schedule."""
+        return frozenset(self._rows_by_code)
+
     def candidates_for(self, icd9_nodot: str) -> tuple[CandidateOperation, ...]:
         """Raw candidate operations sharing this code (deterministically sorted); () if absent."""
         return self._candidates_by_code.get(icd9_nodot.strip(), ())

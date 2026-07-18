@@ -154,6 +154,15 @@ PREOP_OVER_RESERVATION_REVIEW_REASON = "preop_over_reservation"
 OPERATION_UNRESOLVED_REVIEW_REASON = "operation_unresolved"
 PLATELET_RESERVATION_REVIEW_REASON = "platelet_reservation_review"
 ADMINISTRATION_CONTRADICTION_REVIEW_REASON = "administration_signal_contradiction"
+# Picker-v2 verdict gate review reasons (spec #196 §2d; leg-local strings,
+# NOT part of the frozen ReservationReason vocabulary — #179 precedent).
+PREOP_RESERVATION_BRIDGE_DISAGREEMENT_REVIEW_REASON = (
+    "preop_reservation_bridge_disagreement"
+)
+PREOP_OVER_RESERVATION_BRIDGE_UNCONFIRMED_REVIEW_REASON = (
+    "preop_over_reservation_bridge_unconfirmed"
+)
+PLANNED_OP_AMBIGUOUS_REVIEW_REASON = "ambiguous_planned_op"
 
 _RETURNS_TERMINALS = frozenset({"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"})
 
@@ -174,14 +183,36 @@ def is_msbos_eligible(
     return classifier_result.rationale in _RESERVE_AHEAD_RATIONALES
 
 
+def _planned_op_gate(decision: object) -> str:
+    """The picker-v2 verdict-gate ruling on a decision snapshot; "" if none."""
+    provenance = getattr(decision, "planned_op", None)
+    if provenance is None:
+        return ""
+    return str(provenance.gate)
+
+
+def _planned_op_status(decision: object) -> str:
+    """The picker-v2 pick_status on a decision snapshot; "" if none."""
+    provenance = getattr(decision, "planned_op", None)
+    if provenance is None:
+        return ""
+    return str(provenance.pick_status)
+
+
 def is_over_reservation(
     *, classifier_result: ClassifierResult, context: PipelineRowContext
 ) -> bool:
-    """Read the persisted over-reservation snapshot unless returns outranks it."""
+    """Read the persisted over-reservation snapshot unless returns outranks it.
+
+    A picker-v2 gated over (``planned_op.gate`` non-empty) never asserts the
+    hard verdict here; the bridge review predicates route it instead.
+    """
     if not feature_flags.MSBOS_RESERVATION_ENABLED:
         return False
     decision = context.reservation_decision
     if decision is None or not decision.is_over:
+        return False
+    if _planned_op_gate(decision):
         return False
     return (
         classifier_result.classification not in _RETURNS_TERMINALS
@@ -209,11 +240,107 @@ def is_platelet_over_reservation(
     classifier_result: ClassifierResult | PlateletClassifierResult,
     context: PipelineRowContext,
 ) -> bool:
-    """Read the platelet over-reservation snapshot unless returns outranks it."""
+    """Read the platelet over-reservation snapshot unless returns outranks it.
+
+    A picker-v2 gated over (``planned_op.gate`` non-empty) never asserts the
+    hard verdict here; the bridge review predicates route it instead.
+    """
     if not feature_flags.MSBOS_RESERVATION_ENABLED:
         return False
     decision = context.platelet_reservation_decision
     if decision is None or not decision.is_over:
+        return False
+    if _planned_op_gate(decision):
+        return False
+    return (
+        classifier_result.classification not in _RETURNS_TERMINALS
+        or is_msbos_eligible(classifier_result)
+    )
+
+
+def _bridge_gate_review(
+    *,
+    classifier_result: ClassifierResult | PlateletClassifierResult,
+    decision: object,
+    gate: str,
+) -> bool:
+    if not feature_flags.MSBOS_RESERVATION_ENABLED:
+        return False
+    if decision is None or _planned_op_gate(decision) != gate:
+        return False
+    return (
+        classifier_result.classification not in _RETURNS_TERMINALS
+        or is_msbos_eligible(classifier_result)
+    )
+
+
+def is_bridge_disagreement_review(
+    *,
+    classifier_result: ClassifierResult | PlateletClassifierResult,
+    context: PipelineRowContext,
+) -> bool:
+    """True iff the RBC snapshot carries the First/Human disagreement gate."""
+    return _bridge_gate_review(
+        classifier_result=classifier_result,
+        decision=context.reservation_decision,
+        gate="bridge_disagreement",
+    )
+
+
+def is_bridge_over_unconfirmed_review(
+    *,
+    classifier_result: ClassifierResult | PlateletClassifierResult,
+    context: PipelineRowContext,
+) -> bool:
+    """True iff the RBC snapshot is an over gated out of the hard verdict."""
+    return _bridge_gate_review(
+        classifier_result=classifier_result,
+        decision=context.reservation_decision,
+        gate="bridge_over_unconfirmed",
+    )
+
+
+def is_platelet_bridge_disagreement_review(
+    *,
+    classifier_result: ClassifierResult | PlateletClassifierResult,
+    context: PipelineRowContext,
+) -> bool:
+    """Platelet twin of :func:`is_bridge_disagreement_review`."""
+    return _bridge_gate_review(
+        classifier_result=classifier_result,
+        decision=context.platelet_reservation_decision,
+        gate="bridge_disagreement",
+    )
+
+
+def is_platelet_bridge_over_unconfirmed_review(
+    *,
+    classifier_result: ClassifierResult | PlateletClassifierResult,
+    context: PipelineRowContext,
+) -> bool:
+    """Platelet twin of :func:`is_bridge_over_unconfirmed_review`."""
+    return _bridge_gate_review(
+        classifier_result=classifier_result,
+        decision=context.platelet_reservation_decision,
+        gate="bridge_over_unconfirmed",
+    )
+
+
+def is_planned_op_ambiguous_review(
+    *,
+    classifier_result: ClassifierResult | PlateletClassifierResult,
+    context: PipelineRowContext,
+) -> bool:
+    """True iff the RBC picker-v2 pick was ambiguous (review, never verdict).
+
+    Platelet ambiguity needs no twin: ``ambiguous_planned_op`` is already in
+    the platelet REVIEW_REASONS set, so :func:`is_platelet_reservation_review`
+    routes it.
+    """
+    if not feature_flags.MSBOS_RESERVATION_ENABLED:
+        return False
+    decision = context.reservation_decision
+    if decision is None or _planned_op_status(decision) != "ambiguous_top_rank":
         return False
     return (
         classifier_result.classification not in _RETURNS_TERMINALS
@@ -2004,7 +2131,10 @@ __all__ = [
     "LLM_OVERCLEAR_UNSTABLE_HR",
     "LLM_OVERCLEAR_UNSTABLE_SBP",
     "PERIOP_CONTRADICTION_REVIEW_REASON",
+    "PLANNED_OP_AMBIGUOUS_REVIEW_REASON",
+    "PREOP_OVER_RESERVATION_BRIDGE_UNCONFIRMED_REVIEW_REASON",
     "PREOP_OVER_RESERVATION_REVIEW_REASON",
+    "PREOP_RESERVATION_BRIDGE_DISAGREEMENT_REVIEW_REASON",
     "PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON",
     "PERIOP_GUARDRAIL_MIN_EBL_ML",
     "PERIOP_OVERCLEAR_WINDOW_HOURS",
@@ -2012,8 +2142,13 @@ __all__ = [
     "Verifier",
     "apply_batch_results",
     "default_verifier",
+    "is_bridge_disagreement_review",
+    "is_bridge_over_unconfirmed_review",
     "is_msbos_eligible",
     "is_over_reservation",
+    "is_planned_op_ambiguous_review",
+    "is_platelet_bridge_disagreement_review",
+    "is_platelet_bridge_over_unconfirmed_review",
     "is_platelet_over_reservation",
     "is_platelet_reservation_review",
     "llm_overclear_suspect",

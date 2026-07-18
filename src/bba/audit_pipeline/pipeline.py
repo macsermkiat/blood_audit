@@ -1178,6 +1178,134 @@ def _persist_platelet_reservation_review_row(
     audit_store.write(row, [marker_call])
 
 
+def _persist_bridge_gate_review_row(
+    context: PipelineRowContext,
+    *,
+    classifier_result: ClassifierResult,
+    audit_store: AuditStore,
+    run_id: str,
+    review_reason: str,
+    marker_tag: str,
+    reasoning_en: str,
+) -> None:
+    """Persist a picker-v2 gate/ambiguity ruling as NEEDS_REVIEW (spec #196 T2).
+
+    Serves the RBC bridge-disagreement, bridge-over-unconfirmed, and
+    ambiguous-planned-op review terminals; ``review_reason`` distinguishes
+    them for triage.
+    """
+    from bba.audit_pipeline.replay import _audit_row_for_needs_review
+
+    row = _audit_row_for_needs_review(
+        run_id=run_id,
+        context=context,
+        classifier_result=classifier_result,
+        review_reason=review_reason,
+        verifier_pass=True,
+        verifier_retries=0,
+        model_id="msbos-reservation",
+        reasoning_en=reasoning_en,
+        reasoning_th="",
+        indications=(),
+        negative_evidence=(),
+        confidence=1.0,
+        escalated=False,
+    )
+    fingerprint = hashlib.sha256(
+        f"{run_id}|{context.order.audit_id}|{marker_tag}".encode("utf-8")
+    ).hexdigest()[:16]
+    decision = context.reservation_decision
+    marker_call = LlmCall(
+        call_id=f"call-{context.order.audit_id}-msbos-{fingerprint}",
+        audit_id=context.order.audit_id,
+        run_id=run_id,
+        model_id="msbos-reservation",
+        anthropic_version="n/a",
+        prompt_cache_id=None,
+        request_json={
+            marker_tag.replace("-", "_"): True,
+            "audit_id": context.order.audit_id,
+            "reason": decision.reason if decision is not None else None,
+            "resolved_icd9": (decision.resolved_icd9 if decision is not None else None),
+            "note_resolved": (
+                decision.note_resolved if decision is not None else False
+            ),
+        },
+        response_json={
+            "classification": "NEEDS_REVIEW",
+            "review_reason": review_reason,
+        },
+        request_timestamp=context.order.order_datetime,
+        latency_ms=0,
+        extended_thinking_blocks=None,
+        cold_storage_uri=None,
+    )
+    audit_store.write(row, [marker_call])
+
+
+def _persist_platelet_bridge_gate_review_row(
+    context: PipelineRowContext,
+    *,
+    audit_store: AuditStore,
+    run_id: str,
+    review_reason: str,
+    marker_tag: str,
+    reasoning_en: str,
+) -> None:
+    """Platelet twin of :func:`_persist_bridge_gate_review_row`."""
+    from bba.audit_pipeline.replay import _audit_row_for_needs_review
+
+    classifier_result = ClassifierResult(
+        classification="NEEDS_REVIEW",
+        rationale="msbos_platelet_reservation",
+        cohort_threshold=None,
+        bypass_reason=BypassReason.NONE,
+    )
+    row = _audit_row_for_needs_review(
+        run_id=run_id,
+        context=context,
+        classifier_result=classifier_result,
+        review_reason=review_reason,
+        verifier_pass=True,
+        verifier_retries=0,
+        model_id="msbos-platelet-reservation",
+        reasoning_en=reasoning_en,
+        reasoning_th="",
+        indications=(),
+        negative_evidence=(),
+        confidence=1.0,
+        escalated=False,
+    )
+    fingerprint = hashlib.sha256(
+        f"{run_id}|{context.order.audit_id}|{marker_tag}".encode("utf-8")
+    ).hexdigest()[:16]
+    decision = context.platelet_reservation_decision
+    marker_call = LlmCall(
+        call_id=f"call-{context.order.audit_id}-msbos-plt-{fingerprint}",
+        audit_id=context.order.audit_id,
+        run_id=run_id,
+        model_id="msbos-platelet-reservation",
+        anthropic_version="n/a",
+        prompt_cache_id=None,
+        request_json={
+            marker_tag.replace("-", "_"): True,
+            "audit_id": context.order.audit_id,
+            "reason": decision.reason if decision is not None else None,
+            "resolved_icd9": (decision.resolved_icd9 if decision is not None else None),
+            "category": decision.category if decision is not None else None,
+        },
+        response_json={
+            "classification": "NEEDS_REVIEW",
+            "review_reason": review_reason,
+        },
+        request_timestamp=context.order.order_datetime,
+        latency_ms=0,
+        extended_thinking_blocks=None,
+        cold_storage_uri=None,
+    )
+    audit_store.write(row, [marker_call])
+
+
 def _chunked(
     contexts: Sequence[PipelineRowContext], size: int
 ) -> list[tuple[PipelineRowContext, ...]]:

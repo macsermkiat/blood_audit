@@ -27,10 +27,14 @@ from __future__ import annotations
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Literal
+from typing import Literal, TypeVar
+
+from pydantic import BaseModel
 
 from bba.cohort_detector.models import OperativeEvent
 from bba.preop_reservation.bridge import OprtactBridge
+from bba.preop_reservation.models import PlannedOpProvenance
+from bba.preop_reservation.reference import MsbosReference
 
 PLANNED_OP_WINDOW_HOURS = 72
 """Inclusive pre-op horizon, hours (parity with PRE_OP_CROSSMATCH_WINDOW_HOURS)."""
@@ -61,6 +65,16 @@ Exact codes only — never prefixes. Additions require clinician review."""
 
 _SENTINEL_PREFIX = "INCPT:"
 
+AMBIGUOUS_PLANNED_OP_SENTINEL = "\x00AMBIG"
+"""Legacy ambiguity sentinel: both reservation evaluators map it to
+``ambiguous_planned_op`` (the platelet evaluator directly; the RBC callers via
+their existing sentinel branch)."""
+
+BRIDGE_HARD_VERDICT_MIN_SCORE = 0.95
+"""Minimum First-Choice score for a bridge-sourced over to keep a hard
+verdict (clinician-tunable, spec #196 §2d). Below it — or without human
+agreement — the over routes to NEEDS_REVIEW instead."""
+
 PickStatus = Literal[
     "selected",
     "selected_blank_code",
@@ -83,6 +97,7 @@ class PlannedOpPick:
     bridge_score: float | None
     human_index: str | None
     human_agreed: bool | None
+    human_icd9: str | None
     or_flag: bool | None
     matched_datetime: datetime | None
     pick_status: PickStatus
@@ -98,6 +113,7 @@ class _Candidate:
     bridge_score: float | None
     human_index: str | None
     human_agreed: bool | None
+    human_icd9: str | None
     event: OperativeEvent
 
 
@@ -109,6 +125,7 @@ def _failure(status: PickStatus) -> PlannedOpPick:
         bridge_score=None,
         human_index=None,
         human_agreed=None,
+        human_icd9=None,
         or_flag=None,
         matched_datetime=None,
         pick_status=status,
@@ -135,6 +152,7 @@ def _derive(event: OperativeEvent, bridge: OprtactBridge) -> _Candidate:
                 bridge_score=None,
                 human_index=None,
                 human_agreed=None,
+                human_icd9=None,
                 event=event,
             )
         return _Candidate(
@@ -144,6 +162,7 @@ def _derive(event: OperativeEvent, bridge: OprtactBridge) -> _Candidate:
             bridge_score=entry.score,
             human_index=entry.human_index,
             human_agreed=entry.human_agreed,
+            human_icd9=entry.human_icd9,
             event=event,
         )
     return _Candidate(
@@ -153,6 +172,7 @@ def _derive(event: OperativeEvent, bridge: OprtactBridge) -> _Candidate:
         bridge_score=None,
         human_index=None,
         human_agreed=None,
+        human_icd9=None,
         event=event,
     )
 
@@ -183,6 +203,7 @@ def _result(
         bridge_score=candidate.bridge_score,
         human_index=candidate.human_index,
         human_agreed=candidate.human_agreed,
+        human_icd9=candidate.human_icd9,
         or_flag=candidate.event.or_flag,
         matched_datetime=candidate.event.operative_datetime,
         pick_status=status,
@@ -261,12 +282,105 @@ def select_planned_op_v2(
     )
 
 
+def planned_op_v2_for_events(
+    events: Sequence[OperativeEvent],
+    order_datetime: datetime,
+    *,
+    bridge: OprtactBridge,
+    msbos_codes: Collection[str],
+    approved_non_blood_codes: Collection[str],
+) -> tuple[str, PlannedOpPick]:
+    """Shared leg seam: pick, plus the evaluator-facing planned-code string.
+
+    Maps the pick onto the exact string contract both reservation evaluators
+    already speak, so a flag-ON leg swaps only the picker, never the
+    evaluation flow: ambiguity -> the legacy ambiguity sentinel; failure
+    statuses -> ``""`` (no plan); otherwise the resolved code (which may be an
+    unresolvable ``INCPT:`` sentinel, yielding ``unresolved_code`` exactly as
+    the legacy picker's sentinel did).
+    """
+    pick = select_planned_op_v2(
+        events,
+        order_datetime,
+        bridge,
+        msbos_codes=msbos_codes,
+        approved_non_blood_codes=approved_non_blood_codes,
+    )
+    if pick.pick_status == "ambiguous_top_rank":
+        return AMBIGUOUS_PLANNED_OP_SENTINEL, pick
+    return pick.resolved_icd9, pick
+
+
+_DecisionT = TypeVar("_DecisionT", bound=BaseModel)
+
+
+def _bridge_gate(
+    pick: PlannedOpPick, *, is_over: bool, reference: MsbosReference
+) -> Literal["", "bridge_disagreement", "bridge_over_unconfirmed"]:
+    """Verdict-gate ruling for one pick (spec #196 §2d).
+
+    Only bridge-sourced, non-ambiguous picks are ever gated (an ambiguous
+    pick already routes to review on its status, so its provenance must not
+    also assert a gate). The disagreement guard fires BEFORE the score gate.
+    """
+    if pick.source != "incpt_bridge" or pick.pick_status == "ambiguous_top_rank":
+        return ""
+    human_icd9 = pick.human_icd9 or ""
+    if human_icd9 and human_icd9 != pick.resolved_icd9:
+        first_hits = reference.resolve(_nodot(pick.resolved_icd9)) is not None
+        human_hits = reference.resolve(_nodot(human_icd9)) is not None
+        if first_hits or human_hits:
+            return "bridge_disagreement"
+    if is_over:
+        score = pick.bridge_score if pick.bridge_score is not None else 0.0
+        confirmed = score >= BRIDGE_HARD_VERDICT_MIN_SCORE and bool(pick.human_agreed)
+        if not confirmed:
+            return "bridge_over_unconfirmed"
+    return ""
+
+
+def attach_planned_op(
+    decision: _DecisionT,
+    pick: PlannedOpPick,
+    *,
+    reference: MsbosReference,
+    bridge_hash: str,
+) -> _DecisionT:
+    """Attach picker-v2 provenance (including the gate ruling) to a decision.
+
+    Works for both the RBC ``ReservationDecision`` and the platelet
+    ``PlateletReservationDecision`` — both carry the optional ``planned_op``
+    field and expose ``is_over``. The raw ``is_over`` judgment is preserved
+    for audit; the verdict overlay consults ``planned_op.gate`` instead.
+    """
+    is_over = bool(getattr(decision, "is_over", False))
+    provenance = PlannedOpProvenance(
+        source_code=pick.source_code,
+        source=pick.source or "",
+        bridge_icd9=pick.resolved_icd9 if pick.source == "incpt_bridge" else "",
+        bridge_score=pick.bridge_score,
+        human_index=pick.human_index or "",
+        human_agreed=pick.human_agreed,
+        human_icd9=pick.human_icd9 or "",
+        pick_status=pick.pick_status,
+        candidate_count=pick.candidate_count,
+        tie_count=pick.tie_count,
+        bridge_hash=bridge_hash,
+        gate=_bridge_gate(pick, is_over=is_over, reference=reference),
+    )
+    return decision.model_copy(update={"planned_op": provenance})
+
+
 __all__ = [
+    "AMBIGUOUS_PLANNED_OP_SENTINEL",
+    "BRIDGE_HARD_VERDICT_MIN_SCORE",
     "PLANNED_OP_CLUSTER_WINDOW_SECONDS",
     "PLANNED_OP_SOURCE_CODE_DENYLIST",
     "PLANNED_OP_WINDOW_HOURS",
     "PickSource",
     "PickStatus",
     "PlannedOpPick",
+    "attach_planned_op",
+    "planned_op_v2_for_events",
     "select_planned_op_v2",
 ]

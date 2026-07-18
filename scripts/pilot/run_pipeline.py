@@ -40,6 +40,7 @@ from bba.cohort_detector import (
 )
 from bba.component_map import ComponentFamily
 from bba.deterministic_classifier import (
+    NON_BLOOD_PROCEDURE_ICD9,
     ClassifierResult,
     classify,
     is_blood_requiring_procedure,
@@ -50,6 +51,7 @@ from bba.deterministic_classifier.models import ClassifierInputs
 from bba.declared_use import DeclaredUseLabel, collapse_usetype, label_for
 from bba.feature_flags import (
     DECLARED_USETYPE_ENABLED,
+    MSBOS_PLANNED_OP_PICKER_V2_ENABLED,
     MSBOS_RESERVATION_ENABLED,
     DECLARED_USE_PREOP_EXEMPT_ENABLED,
     RETURNS_LEDGER_ENABLED,
@@ -79,6 +81,12 @@ from bba.preop_reservation import (
     evaluate_reservation,
     load_msbos_reference,
     reserved_units_by_component,
+)
+from bba.preop_reservation.bridge import OprtactBridge, load_oprtact_bridge
+from bba.preop_reservation.models import PlannedOpProvenance
+from bba.preop_reservation.planned_op import (
+    attach_planned_op,
+    planned_op_v2_for_events,
 )
 from bba.returns_ledger import ReturnsSummary, rows_for_admission, summarize_returns
 from bba.vitals_extractor import PeriopSummary, scan_periop
@@ -122,6 +130,14 @@ DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED = (
 _msbos_env = os.environ.get("BBA_PILOT_MSBOS_RESERVATION")
 MSBOS_RESERVATION_PILOT_ENABLED = (
     _msbos_env == "1" if _msbos_env is not None else MSBOS_RESERVATION_ENABLED
+)
+# Planned-op picker v2 seam (spec #196, ticket #199). Effective ONLY when the
+# MSBOS seam is also on; flag-off keeps every output byte-identical.
+_picker_v2_env = os.environ.get("BBA_PILOT_MSBOS_PLANNED_OP_PICKER_V2")
+MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED = (
+    _picker_v2_env == "1"
+    if _picker_v2_env is not None
+    else MSBOS_PLANNED_OP_PICKER_V2_ENABLED
 )
 HB_HEM_CODE = "290095"
 HB_POCT_CODE = "500001"
@@ -232,6 +248,23 @@ MSBOS_PLATELET_FIELDNAMES = [
     "msbos_plt_clinician_signed",
 ]
 
+# Planned-op picker v2 provenance columns (spec #196, ticket #199). Appended
+# ONLY when BOTH the MSBOS seam and the picker-v2 seam are on, so either seam
+# off reproduces the prior schema byte-for-byte. The internal "_bridge_gate"
+# key the helpers also emit is deliberately NOT listed: it drives the verdict
+# overlay and is dropped by DictWriter (extrasaction="ignore").
+MSBOS_PICKER_V2_FIELDNAMES = [
+    "msbos_source_code",
+    "msbos_bridge_icd9",
+    "msbos_bridge_score",
+    "msbos_bridge_human_index",
+    "msbos_bridge_human_agreed",
+    "msbos_op_pick_status",
+    "msbos_candidate_count",
+    "msbos_tie_count",
+    "msbos_bridge_hash",
+]
+
 
 def _report_fieldnames() -> list[str]:
     """Assemble report.csv fieldnames = base + gated seam columns.
@@ -246,6 +279,12 @@ def _report_fieldnames() -> list[str]:
         + (DECLARED_USETYPE_FIELDNAMES if DECLARED_USETYPE_PILOT_ENABLED else [])
         + (MSBOS_RESERVATION_FIELDNAMES if MSBOS_RESERVATION_PILOT_ENABLED else [])
         + (MSBOS_PLATELET_FIELDNAMES if MSBOS_RESERVATION_PILOT_ENABLED else [])
+        + (
+            MSBOS_PICKER_V2_FIELDNAMES
+            if MSBOS_RESERVATION_PILOT_ENABLED
+            and MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED
+            else []
+        )
     )
 
 
@@ -340,6 +379,75 @@ _RETURNS_TERMINAL_CLASSIFICATIONS = frozenset(
 )
 
 
+def _picker_v2_columns(provenance: PlannedOpProvenance) -> dict[str, Any]:
+    """Picker-v2 provenance report columns + the internal gate key (#199).
+
+    ``_bridge_gate`` is read by the classification overlay and silently
+    dropped from report.csv (not in the gated fieldnames).
+    """
+    return {
+        "msbos_source_code": provenance.source_code,
+        "msbos_bridge_icd9": provenance.bridge_icd9,
+        "msbos_bridge_score": (
+            provenance.bridge_score if provenance.bridge_score is not None else ""
+        ),
+        "msbos_bridge_human_index": provenance.human_index,
+        "msbos_bridge_human_agreed": (
+            provenance.human_agreed if provenance.human_agreed is not None else ""
+        ),
+        "msbos_op_pick_status": provenance.pick_status,
+        "msbos_candidate_count": provenance.candidate_count,
+        "msbos_tie_count": provenance.tie_count,
+        "msbos_bridge_hash": provenance.bridge_hash,
+        "_bridge_gate": provenance.gate,
+    }
+
+
+def _declared_msbos_overlay(
+    msbos_columns: Mapping[str, Any],
+) -> tuple[str, str] | None:
+    """Classification/rationale override for a declared-exempt RBC row.
+
+    Picker-v2 verdict gate (#199): ambiguity first (the pick itself is
+    unreliable), then the disagreement guard, then the score gate on an over.
+    Flag-off rows never carry "_bridge_gate"/"msbos_op_pick_status", so only
+    the legacy over/operation-unresolved branches can fire there.
+    """
+    gate = msbos_columns.get("_bridge_gate", "")
+    if msbos_columns.get("msbos_op_pick_status") == "ambiguous_top_rank":
+        return ("NEEDS_REVIEW", "ambiguous_planned_op")
+    if gate == "bridge_disagreement":
+        return ("NEEDS_REVIEW", "preop_reservation_bridge_disagreement")
+    if msbos_columns.get("msbos_is_over") is True:
+        if gate == "bridge_over_unconfirmed":
+            return ("NEEDS_REVIEW", "preop_over_reservation_bridge_unconfirmed")
+        return ("PREOP_OVER_RESERVATION", "preop_over_reservation")
+    if msbos_columns.get("msbos_reason") == "operation_unresolved":
+        return ("NEEDS_REVIEW", "operation_unresolved")
+    return None
+
+
+def _declared_platelet_overlay(
+    msbos_columns: Mapping[str, Any],
+) -> tuple[str, str] | None:
+    """Platelet twin of :func:`_declared_msbos_overlay`.
+
+    Platelet pick ambiguity needs no explicit branch: it lands in
+    PLATELET_REVIEW_REASONS (ambiguous_planned_op) and the gate is suppressed
+    on ambiguous picks.
+    """
+    gate = msbos_columns.get("_bridge_gate", "")
+    if gate == "bridge_disagreement":
+        return ("NEEDS_REVIEW", "preop_reservation_bridge_disagreement")
+    if msbos_columns.get("msbos_is_over") is True:
+        if gate == "bridge_over_unconfirmed":
+            return ("NEEDS_REVIEW", "preop_over_reservation_bridge_unconfirmed")
+        return ("PREOP_OVER_RESERVATION", "preop_over_reservation")
+    if msbos_columns.get("msbos_reason") in PLATELET_REVIEW_REASONS:
+        return ("NEEDS_REVIEW", "platelet_reservation_review")
+    return None
+
+
 def _planned_op_icd9(
     op_events: Sequence[OperativeEvent], order_datetime: datetime
 ) -> str:
@@ -364,6 +472,7 @@ def _msbos_reservation_columns(
     order_datetime: datetime,
     reserved_units_map: Mapping[tuple[str, str, ComponentFamily], int],
     msbos_reference: MsbosReference,
+    oprtact_bridge: OprtactBridge | None = None,
 ) -> dict[str, Any]:
     """MSBOS annotation columns for one RBC report row (spec #176, ticket #179).
 
@@ -392,7 +501,17 @@ def _msbos_reservation_columns(
             "msbos_reference_hash": msbos_reference.content_hash,
         }
     reserved = reserved_units_map[key]
-    planned = _planned_op_icd9(op_events, order_datetime)
+    pick = None
+    if oprtact_bridge is not None:
+        planned, pick = planned_op_v2_for_events(
+            op_events,
+            order_datetime,
+            bridge=oprtact_bridge,
+            msbos_codes=msbos_reference.codes(),
+            approved_non_blood_codes=NON_BLOOD_PROCEDURE_ICD9,
+        )
+    else:
+        planned = _planned_op_icd9(op_events, order_datetime)
     if planned == "\x00AMBIG":
         decision = ReservationDecision(
             reserved_units=reserved,
@@ -406,7 +525,7 @@ def _msbos_reservation_columns(
             planned_icd9_nodot=planned,
             reference=msbos_reference,
         )
-    return {
+    columns = {
         "msbos_reserved_units": decision.reserved_units,
         "msbos_token": decision.msbos,
         "msbos_recommended_units": decision.recommended_units,
@@ -415,6 +534,16 @@ def _msbos_reservation_columns(
         "msbos_resolved_icd9": decision.resolved_icd9,
         "msbos_reference_hash": decision.reference_hash,
     }
+    if pick is not None and oprtact_bridge is not None:
+        decision = attach_planned_op(
+            decision,
+            pick,
+            reference=msbos_reference,
+            bridge_hash=oprtact_bridge.content_hash,
+        )
+    if decision.planned_op is not None:
+        columns.update(_picker_v2_columns(decision.planned_op))
+    return columns
 
 
 def _msbos_platelet_columns(
@@ -427,6 +556,7 @@ def _msbos_platelet_columns(
     pre_op_count_k_ul: float | None,
     reserved_units_map: Mapping[tuple[str, str, ComponentFamily], int],
     msbos_reference: MsbosReference,
+    oprtact_bridge: OprtactBridge | None = None,
 ) -> dict[str, Any]:
     """Platelet MSBOS annotation columns for one report row (spec #176, ticket #180).
 
@@ -456,7 +586,17 @@ def _msbos_platelet_columns(
             "msbos_plt_clinician_signed": "",
         }
     reserved = reserved_units_map[key]
-    planned = _planned_op_icd9(op_events, order_datetime)
+    pick = None
+    if oprtact_bridge is not None:
+        planned, pick = planned_op_v2_for_events(
+            op_events,
+            order_datetime,
+            bridge=oprtact_bridge,
+            msbos_codes=msbos_reference.codes(),
+            approved_non_blood_codes=NON_BLOOD_PROCEDURE_ICD9,
+        )
+    else:
+        planned = _planned_op_icd9(op_events, order_datetime)
     decision = evaluate_platelet_reservation(
         reserved_units=reserved,
         pre_op_count_k_ul=pre_op_count_k_ul,
@@ -464,7 +604,14 @@ def _msbos_platelet_columns(
         procedure_groups=msbos_reference.groups_for(planned),
         reference_hash=msbos_reference.content_hash,
     )
-    return {
+    if pick is not None and oprtact_bridge is not None:
+        decision = attach_planned_op(
+            decision,
+            pick,
+            reference=msbos_reference,
+            bridge_hash=oprtact_bridge.content_hash,
+        )
+    columns = {
         "msbos_reserved_units": decision.reserved_units,
         "msbos_is_over": decision.is_over,
         "msbos_reason": decision.reason,
@@ -479,6 +626,9 @@ def _msbos_platelet_columns(
         ),
         "msbos_plt_clinician_signed": decision.clinician_signed,
     }
+    if decision.planned_op is not None:
+        columns.update(_picker_v2_columns(decision.planned_op))
+    return columns
 
 
 # Inert Hb / cohort sentinels for the platelet returns-terminal check. A
@@ -919,6 +1069,13 @@ def main() -> None:
     msbos_reference = (
         load_msbos_reference() if MSBOS_RESERVATION_PILOT_ENABLED else None
     )
+    # Bridge loader invoked ONLY when BOTH the MSBOS and picker-v2 seams are
+    # on (spec #196 §3).
+    oprtact_bridge = (
+        load_oprtact_bridge()
+        if MSBOS_RESERVATION_PILOT_ENABLED and MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED
+        else None
+    )
     reserved_units_map = (
         reserved_units_by_component(bdvstdt) if MSBOS_RESERVATION_PILOT_ENABLED else {}
     )
@@ -1168,15 +1325,13 @@ def main() -> None:
                     pre_op_count_k_ul=plt_result.value_k_ul,
                     reserved_units_map=reserved_units_map,
                     msbos_reference=msbos_reference,
+                    oprtact_bridge=oprtact_bridge,
                 )
                 plt_row.update(msbos_columns)
                 if plt_rationale == "preop_declared_exempt":
-                    if msbos_columns.get("msbos_is_over") is True:
-                        plt_classification = "PREOP_OVER_RESERVATION"
-                        plt_rationale = "preop_over_reservation"
-                    elif msbos_columns.get("msbos_reason") in PLATELET_REVIEW_REASONS:
-                        plt_classification = "NEEDS_REVIEW"
-                        plt_rationale = "platelet_reservation_review"
+                    plt_overlay = _declared_platelet_overlay(msbos_columns)
+                    if plt_overlay is not None:
+                        plt_classification, plt_rationale = plt_overlay
                     plt_row.update(
                         classification=plt_classification,
                         rationale=plt_rationale,
@@ -1401,18 +1556,15 @@ def main() -> None:
                 order_datetime=order.order_datetime,
                 reserved_units_map=reserved_units_map,
                 msbos_reference=msbos_reference,
+                oprtact_bridge=oprtact_bridge,
             )
             row.update(msbos_columns)
             if clf.rationale == "preop_declared_exempt":
-                if msbos_columns.get("msbos_is_over") is True:
+                overlay = _declared_msbos_overlay(msbos_columns)
+                if overlay is not None:
                     row.update(
-                        classification="PREOP_OVER_RESERVATION",
-                        rationale="preop_over_reservation",
-                    )
-                elif msbos_columns.get("msbos_reason") == "operation_unresolved":
-                    row.update(
-                        classification="NEEDS_REVIEW",
-                        rationale="operation_unresolved",
+                        classification=overlay[0],
+                        rationale=overlay[1],
                     )
         rows.append(row)
 

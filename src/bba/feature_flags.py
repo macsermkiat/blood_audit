@@ -105,9 +105,24 @@ snapshot, so the overlays no-op there). Set ``BBA_PILOT_MSBOS_RESERVATION=0`` to
 force it off for a pilot run.
 """
 
+MSBOS_PLANNED_OP_PICKER_V2_ENABLED: bool = False
+"""Gate the MSBOS planned-op picker v2 (spec #196; default: OFF, dark).
+
+When True — and only in combination with ``MSBOS_RESERVATION_ENABLED`` — the
+MSBOS reservation arm selects the planned operation with the bounded,
+denylist-hygienic, bridge-resolving picker (``preop_reservation.planned_op``)
+instead of the legacy nearest-future-event pick, applies the bridge verdict
+gate (First/Human disagreement guard + score gate; gated overs route to
+NEEDS_REVIEW instead of a hard PREOP_OVER_RESERVATION), and emits the picker
+provenance columns. When False, every output is byte-identical to the
+pre-picker pipeline. Pilot override: ``BBA_PILOT_MSBOS_PLANNED_OP_PICKER_V2``
+("1" forces on, anything else forces off).
+"""
+
 __all__: Sequence[str] = (
     "DECLARED_USETYPE_ENABLED",
     "DECLARED_USE_PREOP_EXEMPT_ENABLED",
+    "MSBOS_PLANNED_OP_PICKER_V2_ENABLED",
     "MSBOS_RESERVATION_ENABLED",
     "PLATELET_LLM_ENABLED",
     "RESERVE_AHEAD_ROUTER_ENABLED",

@@ -66,18 +66,28 @@ from bba.audit_orders import (
 )
 from bba.audit_pipeline import PipelineRowContext
 from bba.audit_pipeline.pipeline import (
+    _persist_bridge_gate_review_row,
     _persist_injection_flagged_row,
     _persist_operation_unresolved_row,
     _persist_over_reservation_row,
+    _persist_platelet_bridge_gate_review_row,
     _persist_platelet_over_reservation_row,
     _persist_platelet_reservation_review_row,
     rbc_task_mode,
 )
 from bba.audit_pipeline.replay import (
+    PLANNED_OP_AMBIGUOUS_REVIEW_REASON,
+    PREOP_OVER_RESERVATION_BRIDGE_UNCONFIRMED_REVIEW_REASON,
+    PREOP_RESERVATION_BRIDGE_DISAGREEMENT_REVIEW_REASON,
     apply_batch_results,
+    is_bridge_disagreement_review,
+    is_bridge_over_unconfirmed_review,
     is_msbos_eligible,
     is_operation_unresolved,
     is_over_reservation,
+    is_planned_op_ambiguous_review,
+    is_platelet_bridge_disagreement_review,
+    is_platelet_bridge_over_unconfirmed_review,
     is_platelet_over_reservation,
     is_platelet_reservation_review,
 )
@@ -92,6 +102,7 @@ from bba.cohort_detector import (
 )
 from bba.component_map import ComponentFamily
 from bba.deterministic_classifier import (
+    NON_BLOOD_PROCEDURE_ICD9,
     ClassifierResult,
     classify,
     is_blood_requiring_procedure,
@@ -142,6 +153,11 @@ from bba.preop_reservation import (
     evaluate_reservation_with_notes,
     load_msbos_reference,
     reserved_units_by_component,
+)
+from bba.preop_reservation.bridge import load_oprtact_bridge
+from bba.preop_reservation.planned_op import (
+    attach_planned_op,
+    planned_op_v2_for_events,
 )
 from bba.ingest.date_parser import parse_kcmh_english_date
 from bba.ingest.models import ParsedTimeOfDay
@@ -208,6 +224,15 @@ MSBOS_RESERVATION_PILOT_ENABLED = (
     if _msbos_env is not None
     else feature_flags.MSBOS_RESERVATION_ENABLED
 )
+# Planned-op picker v2 seam (spec #196, ticket #199), same seam shape: env
+# override, else the library flag (default OFF). Effective ONLY when the MSBOS
+# seam is also on; main() mirrors it into feature_flags.
+_picker_v2_env = os.environ.get("BBA_PILOT_MSBOS_PLANNED_OP_PICKER_V2")
+MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED = (
+    _picker_v2_env == "1"
+    if _picker_v2_env is not None
+    else feature_flags.MSBOS_PLANNED_OP_PICKER_V2_ENABLED
+)
 # Declared-use pre-op exemption, same seam shape as declared-use above:
 # BBA_PILOT_DECLARED_USE_PREOP_EXEMPT overrides ("1" forces on, anything else
 # forces off), defaulting to the library flag (ON). main() mirrors it into
@@ -244,6 +269,11 @@ if MSBOS_RESERVATION_PILOT_ENABLED:
     # is idempotent on (run_id, audit_id, code_version), and a re-run under the
     # old +msbos4 token would silently retain the pre-correction verdict.
     CODE_VERSION += "+msbos5"
+if MSBOS_RESERVATION_PILOT_ENABLED and MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED:
+    # +opbound (#196/#199): picker-v2 changes which operation MSBOS judges and
+    # gates bridge-sourced overs, so it needs a fresh code identity. Appended
+    # ONLY when BOTH seams are on; picker-v2 OFF keeps ...+msbos5 exactly.
+    CODE_VERSION += "+opbound"
 if DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED:
     # +usetypeonly: USETYPE is the sole pre-op router; procedure facts are evidence.
     CODE_VERSION += "+usetypeonly"
@@ -1151,6 +1181,13 @@ def _build_inputs():
     msbos_reference = (
         load_msbos_reference() if MSBOS_RESERVATION_PILOT_ENABLED else None
     )
+    # Bridge loader invoked ONLY when BOTH the MSBOS and picker-v2 seams are
+    # on (spec #196 §3).
+    oprtact_bridge = (
+        load_oprtact_bridge()
+        if MSBOS_RESERVATION_PILOT_ENABLED and MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED
+        else None
+    )
     reserved_units_map = (
         reserved_units_by_component(bdvstdt) if MSBOS_RESERVATION_PILOT_ENABLED else {}
     )
@@ -1262,6 +1299,7 @@ def _build_inputs():
         bdvsttrans_by_reqno,
         unitamt_lines_by_reqno,
         usetype_values_by_hn_reqno,
+        oprtact_bridge,
         msbos_reference,
         reserved_units_map,
     )
@@ -1292,6 +1330,9 @@ def main() -> None:
     # agree with this leg's direct classify() call.
     feature_flags.DECLARED_USETYPE_ENABLED = DECLARED_USETYPE_PILOT_ENABLED
     feature_flags.MSBOS_RESERVATION_ENABLED = MSBOS_RESERVATION_PILOT_ENABLED
+    feature_flags.MSBOS_PLANNED_OP_PICKER_V2_ENABLED = (
+        MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED
+    )
     feature_flags.DECLARED_USE_PREOP_EXEMPT_ENABLED = (
         DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED
     )
@@ -1318,6 +1359,7 @@ def main() -> None:
         bdvsttrans_by_reqno,
         unitamt_lines_by_reqno,
         usetype_values_by_hn_reqno,
+        oprtact_bridge,
         msbos_reference,
         reserved_units_map,
     ) = _build_inputs()
@@ -1526,7 +1568,17 @@ def main() -> None:
                     icd9_dict,
                     order.an,
                 )
-                planned = _planned_op_icd9(plt_op_events, order.order_datetime)
+                plt_pick = None
+                if oprtact_bridge is not None:
+                    planned, plt_pick = planned_op_v2_for_events(
+                        plt_op_events,
+                        order.order_datetime,
+                        bridge=oprtact_bridge,
+                        msbos_codes=msbos_reference.codes(),
+                        approved_non_blood_codes=NON_BLOOD_PROCEDURE_ICD9,
+                    )
+                else:
+                    planned = _planned_op_icd9(plt_op_events, order.order_datetime)
                 reserved_plt = reserved_units_map.get(
                     (
                         order.hn.strip(),
@@ -1542,6 +1594,13 @@ def main() -> None:
                     procedure_groups=msbos_reference.groups_for(planned),
                     reference_hash=msbos_reference.content_hash,
                 )
+                if plt_pick is not None and oprtact_bridge is not None:
+                    platelet_reservation_decision = attach_planned_op(
+                        platelet_reservation_decision,
+                        plt_pick,
+                        reference=msbos_reference,
+                        bridge_hash=oprtact_bridge.content_hash,
+                    )
             # The platelet floor (INSUFFICIENT_EVIDENCE on a missing/unusable
             # count) is terminal EXCEPT when the reservation overlay must fire: a
             # reserved-but-uncounted order routes to `missing_pre_op_count`
@@ -1553,6 +1612,10 @@ def main() -> None:
                 and (
                     platelet_reservation_decision.is_over
                     or platelet_reservation_decision.reason in PLATELET_REVIEW_REASONS
+                    or (
+                        platelet_reservation_decision.planned_op is not None
+                        and platelet_reservation_decision.planned_op.gate != ""
+                    )
                 )
             )
             # Only the DECLARED pre-op exemption is held for the MSBOS screens
@@ -2037,7 +2100,17 @@ def main() -> None:
             and order.component == "red_cell"
             and msbos_reference
         ):
-            planned = _planned_op_icd9(op_events, order.order_datetime)
+            rbc_pick = None
+            if oprtact_bridge is not None:
+                planned, rbc_pick = planned_op_v2_for_events(
+                    op_events,
+                    order.order_datetime,
+                    bridge=oprtact_bridge,
+                    msbos_codes=msbos_reference.codes(),
+                    approved_non_blood_codes=NON_BLOOD_PROCEDURE_ICD9,
+                )
+            else:
+                planned = _planned_op_icd9(op_events, order.order_datetime)
             reserved = reserved_units_map.get(
                 (order.hn.strip(), order.reqno.strip(), ComponentFamily.RED_CELL), 0
             )
@@ -2054,6 +2127,13 @@ def main() -> None:
                     planned_icd9_nodot=planned,
                     reference=msbos_reference,
                     note_texts=note_texts,
+                )
+            if rbc_pick is not None and oprtact_bridge is not None:
+                reservation_decision = attach_planned_op(
+                    reservation_decision,
+                    rbc_pick,
+                    reference=msbos_reference,
+                    bridge_hash=oprtact_bridge.content_hash,
                 )
 
         contexts.append(
@@ -2102,6 +2182,7 @@ def main() -> None:
     over_reserved_ctxs: list[PipelineRowContext] = []
     operation_unresolved_ctxs: list[PipelineRowContext] = []
     platelet_review_ctxs: list[PipelineRowContext] = []
+    bridge_review_ctxs: list[PipelineRowContext] = []
     audit_store = AuditStore(
         AuditStoreConfig(
             root_dir=AUDIT_STORE_ROOT,
@@ -2134,6 +2215,25 @@ def main() -> None:
             )
             if MSBOS_RESERVATION_PILOT_ENABLED:
                 plt_report = report_classifier_results[ctx.order.audit_id]
+                if is_platelet_bridge_disagreement_review(
+                    classifier_result=plt_report, context=ctx
+                ):
+                    _persist_platelet_bridge_gate_review_row(
+                        ctx,
+                        audit_store=audit_store,
+                        run_id=RUN_ID,
+                        review_reason=(
+                            PREOP_RESERVATION_BRIDGE_DISAGREEMENT_REVIEW_REASON
+                        ),
+                        marker_tag="platelet-bridge-disagreement",
+                        reasoning_en=(
+                            "The bridge First-Choice and human-selected codes "
+                            "disagree and at least one resolves in MSBOS; "
+                            "clinician review is required."
+                        ),
+                    )
+                    platelet_review_ctxs.append(ctx)
+                    continue
                 if is_platelet_over_reservation(
                     classifier_result=plt_report, context=ctx
                 ):
@@ -2141,6 +2241,26 @@ def main() -> None:
                         ctx, audit_store=audit_store, run_id=RUN_ID
                     )
                     over_reserved_ctxs.append(ctx)
+                    continue
+                if is_platelet_bridge_over_unconfirmed_review(
+                    classifier_result=plt_report, context=ctx
+                ):
+                    _persist_platelet_bridge_gate_review_row(
+                        ctx,
+                        audit_store=audit_store,
+                        run_id=RUN_ID,
+                        review_reason=(
+                            PREOP_OVER_RESERVATION_BRIDGE_UNCONFIRMED_REVIEW_REASON
+                        ),
+                        marker_tag="platelet-bridge-over-unconfirmed",
+                        reasoning_en=(
+                            "The reservation exceeds the MSBOS recommendation, "
+                            "but the bridge-resolved procedure identity lacks "
+                            "the score and human-agreement confirmation for a "
+                            "hard verdict; clinician review is required."
+                        ),
+                    )
+                    platelet_review_ctxs.append(ctx)
                     continue
                 if is_platelet_reservation_review(
                     classifier_result=plt_report, context=ctx
@@ -2189,6 +2309,39 @@ def main() -> None:
         classifier_results[ctx.order.audit_id] = cres
         report_classifier_results[ctx.order.audit_id] = cres
         if MSBOS_RESERVATION_PILOT_ENABLED and is_msbos_eligible(cres):
+            if is_planned_op_ambiguous_review(classifier_result=cres, context=ctx):
+                _persist_bridge_gate_review_row(
+                    ctx,
+                    classifier_result=cres,
+                    audit_store=audit_store,
+                    run_id=RUN_ID,
+                    review_reason=PLANNED_OP_AMBIGUOUS_REVIEW_REASON,
+                    marker_tag="planned-op-ambiguous",
+                    reasoning_en=(
+                        "Near-simultaneous candidate operations resolve to "
+                        "multiple distinct MSBOS-eligible codes; the planned "
+                        "operation cannot be selected automatically and "
+                        "clinician review is required."
+                    ),
+                )
+                bridge_review_ctxs.append(ctx)
+                continue
+            if is_bridge_disagreement_review(classifier_result=cres, context=ctx):
+                _persist_bridge_gate_review_row(
+                    ctx,
+                    classifier_result=cres,
+                    audit_store=audit_store,
+                    run_id=RUN_ID,
+                    review_reason=(PREOP_RESERVATION_BRIDGE_DISAGREEMENT_REVIEW_REASON),
+                    marker_tag="bridge-disagreement",
+                    reasoning_en=(
+                        "The bridge First-Choice and human-selected codes "
+                        "disagree and at least one resolves in MSBOS; "
+                        "clinician review is required."
+                    ),
+                )
+                bridge_review_ctxs.append(ctx)
+                continue
             if is_over_reservation(classifier_result=cres, context=ctx):
                 _persist_over_reservation_row(
                     ctx,
@@ -2197,6 +2350,25 @@ def main() -> None:
                     run_id=RUN_ID,
                 )
                 over_reserved_ctxs.append(ctx)
+                continue
+            if is_bridge_over_unconfirmed_review(classifier_result=cres, context=ctx):
+                _persist_bridge_gate_review_row(
+                    ctx,
+                    classifier_result=cres,
+                    audit_store=audit_store,
+                    run_id=RUN_ID,
+                    review_reason=(
+                        PREOP_OVER_RESERVATION_BRIDGE_UNCONFIRMED_REVIEW_REASON
+                    ),
+                    marker_tag="bridge-over-unconfirmed",
+                    reasoning_en=(
+                        "The reservation exceeds the MSBOS recommendation, but "
+                        "the bridge-resolved procedure identity lacks the "
+                        "score and human-agreement confirmation for a hard "
+                        "verdict; clinician review is required."
+                    ),
+                )
+                bridge_review_ctxs.append(ctx)
                 continue
             if is_operation_unresolved(classifier_result=cres, context=ctx):
                 _persist_operation_unresolved_row(
@@ -2223,6 +2395,11 @@ def main() -> None:
             "  platelet-reservation-review (not submitted, NEEDS_REVIEW): "
             f"{len(platelet_review_ctxs)}"
         )
+    if MSBOS_RESERVATION_PILOT_ENABLED and MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED:
+        print(
+            "  bridge-gate-review (not submitted, NEEDS_REVIEW): "
+            f"{len(bridge_review_ctxs)}"
+        )
     print(f"\nLLM-bound: {len(llm_contexts)} / {len(contexts)}")
     # Over-reserved rows are persisted but not submitted; a run filtered to only
     # such REQNOs still has verdicts to report, so it must not exit here (#163).
@@ -2231,6 +2408,7 @@ def main() -> None:
         and not over_reserved_ctxs
         and not operation_unresolved_ctxs
         and not platelet_review_ctxs
+        and not bridge_review_ctxs
     ):
         stale_out = WORK / "llm_report.json"
         if ONLY_REQNOS and stale_out.exists():
@@ -2408,6 +2586,7 @@ def main() -> None:
         *over_reserved_ctxs,
         *operation_unresolved_ctxs,
         *platelet_review_ctxs,
+        *bridge_review_ctxs,
     ]
     for ctx in reported_ctxs:
         det = report_classifier_results[ctx.order.audit_id]

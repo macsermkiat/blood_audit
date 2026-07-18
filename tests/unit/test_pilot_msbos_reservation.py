@@ -762,6 +762,7 @@ def _configure_minimal_msbos_pilot(
         {},
         {},
         {},
+        None,
         reference,
         {("HN1", "REQ1", module.ComponentFamily.RED_CELL): 5},
     )
