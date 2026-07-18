@@ -2232,6 +2232,20 @@ def main() -> None:
         and not operation_unresolved_ctxs
         and not platelet_review_ctxs
     ):
+        stale_out = WORK / "llm_report.json"
+        if ONLY_REQNOS and stale_out.exists():
+            # A filtered run whose every target became deterministic-final
+            # still must purge the targets' stale LLM records before exiting
+            # (Codex P2 on 727239a) — otherwise the review page keeps an
+            # obsolete model verdict for a now-deterministic row.
+            existing = json.loads(stale_out.read_text())
+            purged = _merge_filtered_report(existing, [], ONLY_REQNOS)
+            if len(purged) != len(existing):
+                stale_out.write_text(json.dumps(purged, indent=2, ensure_ascii=False))
+                print(
+                    f"  purged {len(existing) - len(purged)} targeted stale "
+                    "record(s) before no-submit exit"
+                )
         sys.exit("nothing to submit")
 
     submissions: list[BatchSubmissionRequest] = []
