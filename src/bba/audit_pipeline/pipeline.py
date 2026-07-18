@@ -110,6 +110,33 @@ _RETURNS_TERMINAL_BYPASS: dict[str, str] = {
     "PERIOP_TRANSFUSION_EXEMPT": BypassReason.PERIOP_TRANSFUSION_EXEMPT.value,
 }
 
+
+def _planned_op_annotation(decision: object) -> dict[str, object] | None:
+    """Full picker-v2 provenance payload for a decision snapshot (spec #196 T3).
+
+    ``None`` when the legacy picker ran (``planned_op`` absent), so every
+    pre-picker marker payload stays byte-identical. The key set is frozen:
+    auditors reconstruct each verdict/review from exactly these fields.
+    """
+    provenance = getattr(decision, "planned_op", None)
+    if provenance is None:
+        return None
+    return {
+        "source_code": provenance.source_code,
+        "source": provenance.source,
+        "bridge_icd9": provenance.bridge_icd9,
+        "bridge_score": provenance.bridge_score,
+        "human_index": provenance.human_index,
+        "human_agreed": provenance.human_agreed,
+        "human_icd9": provenance.human_icd9,
+        "pick_status": provenance.pick_status,
+        "candidate_count": provenance.candidate_count,
+        "tie_count": provenance.tie_count,
+        "bridge_hash": provenance.bridge_hash,
+        "gate": provenance.gate,
+    }
+
+
 # Platelet gate verdicts that route onward to the platelet LLM leg (Stage C2).
 # INSUFFICIENT_EVIDENCE is deterministic-final (persisted above); everything
 # with a count (POTENTIALLY_INAPPROPRIATE / NEEDS_REVIEW) defers to the LLM.
@@ -656,7 +683,7 @@ def _deterministic_marker_call(
         and classifier.classification in _RETURNS_TERMINAL_CLASSIFICATIONS
         and reservation is not None
     ):
-        response_json["reservation_annotation"] = {
+        annotation: dict[str, object] = {
             "reserved_units": reservation.reserved_units,
             "msbos": reservation.msbos,
             "recommended_units": reservation.recommended_units,
@@ -666,6 +693,10 @@ def _deterministic_marker_call(
             "note_resolved": reservation.note_resolved,
             "reference_hash": reservation.reference_hash,
         }
+        planned_op = _planned_op_annotation(reservation)
+        if planned_op is not None:
+            annotation["planned_op"] = planned_op
+        response_json["reservation_annotation"] = annotation
     return LlmCall(
         call_id=f"call-{context.order.audit_id}-det-{fingerprint}",
         audit_id=context.order.audit_id,
@@ -768,7 +799,7 @@ def _platelet_marker_call(
         and classifier_result.classification in _RETURNS_TERMINAL_CLASSIFICATIONS
         and reservation is not None
     ):
-        response_json["reservation_annotation"] = {
+        plt_annotation: dict[str, object] = {
             "reserved_units": reservation.reserved_units,
             "category": reservation.category,
             "pre_op_count_k_ul": reservation.pre_op_count_k_ul,
@@ -778,6 +809,10 @@ def _platelet_marker_call(
             "clinician_signed": reservation.clinician_signed,
             "reference_hash": reservation.reference_hash,
         }
+        plt_planned_op = _planned_op_annotation(reservation)
+        if plt_planned_op is not None:
+            plt_annotation["planned_op"] = plt_planned_op
+        response_json["reservation_annotation"] = plt_annotation
     return LlmCall(
         call_id=f"call-{context.order.audit_id}-det-plt-{fingerprint}",
         audit_id=context.order.audit_id,
@@ -939,6 +974,7 @@ def _persist_over_reservation_row(
         f"{run_id}|{context.order.audit_id}|over-reservation".encode("utf-8")
     ).hexdigest()[:16]
     decision = context.reservation_decision
+    planned_op = _planned_op_annotation(decision)
     marker_call = LlmCall(
         call_id=f"call-{context.order.audit_id}-msbos-{fingerprint}",
         audit_id=context.order.audit_id,
@@ -954,6 +990,7 @@ def _persist_over_reservation_row(
             "note_resolved": (
                 decision.note_resolved if decision is not None else False
             ),
+            **({"planned_op": planned_op} if planned_op is not None else {}),
         },
         response_json={
             "classification": "PREOP_OVER_RESERVATION",
@@ -1002,6 +1039,7 @@ def _persist_operation_unresolved_row(
         f"{run_id}|{context.order.audit_id}|operation-unresolved".encode("utf-8")
     ).hexdigest()[:16]
     decision = context.reservation_decision
+    planned_op = _planned_op_annotation(decision)
     marker_call = LlmCall(
         call_id=f"call-{context.order.audit_id}-msbos-{fingerprint}",
         audit_id=context.order.audit_id,
@@ -1017,6 +1055,7 @@ def _persist_operation_unresolved_row(
             "note_resolved": (
                 decision.note_resolved if decision is not None else False
             ),
+            **({"planned_op": planned_op} if planned_op is not None else {}),
         },
         response_json={
             "classification": "NEEDS_REVIEW",
@@ -1070,6 +1109,7 @@ def _persist_platelet_over_reservation_row(
         f"{run_id}|{context.order.audit_id}|platelet-over-reservation".encode("utf-8")
     ).hexdigest()[:16]
     decision = context.platelet_reservation_decision
+    planned_op = _planned_op_annotation(decision)
     marker_call = LlmCall(
         call_id=f"call-{context.order.audit_id}-msbos-plt-{fingerprint}",
         audit_id=context.order.audit_id,
@@ -1090,6 +1130,7 @@ def _persist_platelet_over_reservation_row(
             "clinician_signed": (
                 decision.clinician_signed if decision is not None else True
             ),
+            **({"planned_op": planned_op} if planned_op is not None else {}),
         },
         response_json={
             "classification": "PREOP_OVER_RESERVATION",
@@ -1145,6 +1186,7 @@ def _persist_platelet_reservation_review_row(
         f"{run_id}|{context.order.audit_id}|platelet-reservation-review".encode("utf-8")
     ).hexdigest()[:16]
     decision = context.platelet_reservation_decision
+    planned_op = _planned_op_annotation(decision)
     marker_call = LlmCall(
         call_id=f"call-{context.order.audit_id}-msbos-plt-{fingerprint}",
         audit_id=context.order.audit_id,
@@ -1165,6 +1207,7 @@ def _persist_platelet_reservation_review_row(
             "clinician_signed": (
                 decision.clinician_signed if decision is not None else True
             ),
+            **({"planned_op": planned_op} if planned_op is not None else {}),
         },
         response_json={
             "classification": "NEEDS_REVIEW",
@@ -1215,6 +1258,7 @@ def _persist_bridge_gate_review_row(
         f"{run_id}|{context.order.audit_id}|{marker_tag}".encode("utf-8")
     ).hexdigest()[:16]
     decision = context.reservation_decision
+    planned_op = _planned_op_annotation(decision)
     marker_call = LlmCall(
         call_id=f"call-{context.order.audit_id}-msbos-{fingerprint}",
         audit_id=context.order.audit_id,
@@ -1230,6 +1274,7 @@ def _persist_bridge_gate_review_row(
             "note_resolved": (
                 decision.note_resolved if decision is not None else False
             ),
+            **({"planned_op": planned_op} if planned_op is not None else {}),
         },
         response_json={
             "classification": "NEEDS_REVIEW",
@@ -1280,6 +1325,7 @@ def _persist_platelet_bridge_gate_review_row(
         f"{run_id}|{context.order.audit_id}|{marker_tag}".encode("utf-8")
     ).hexdigest()[:16]
     decision = context.platelet_reservation_decision
+    planned_op = _planned_op_annotation(decision)
     marker_call = LlmCall(
         call_id=f"call-{context.order.audit_id}-msbos-plt-{fingerprint}",
         audit_id=context.order.audit_id,
@@ -1293,6 +1339,7 @@ def _persist_platelet_bridge_gate_review_row(
             "reason": decision.reason if decision is not None else None,
             "resolved_icd9": (decision.resolved_icd9 if decision is not None else None),
             "category": decision.category if decision is not None else None,
+            **({"planned_op": planned_op} if planned_op is not None else {}),
         },
         response_json={
             "classification": "NEEDS_REVIEW",
