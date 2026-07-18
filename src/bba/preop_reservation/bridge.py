@@ -22,7 +22,16 @@ from types import MappingProxyType
 
 BRIDGE_REFERENCE_FILENAME = "oprtact_icd9_bridge.csv"
 _REQUIRED_COLUMNS = frozenset(
-    {"oprtact", "icd9", "icd9_nodot", "score", "human_index", "human_agreed", "name"}
+    {
+        "oprtact",
+        "icd9",
+        "icd9_nodot",
+        "score",
+        "human_index",
+        "human_agreed",
+        "human_icd9",
+        "name",
+    }
 )
 
 
@@ -32,13 +41,21 @@ class BridgeReferenceError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class BridgeEntry:
-    """One OPRTACT key's First-Choice ICD-9 mapping with human provenance."""
+    """One OPRTACT key's First-Choice ICD-9 mapping with human provenance.
+
+    ``human_icd9`` is the ICD-9 the human selector picked when it DIFFERS from
+    the First Choice (index "1"/"2"); blank on agreement, no selection, or an
+    out-of-range index. The verdict-gate disagreement guard needs the code
+    itself (not just the index) to test whether the human pick resolves in the
+    MSBOS reference.
+    """
 
     icd9: str
     icd9_nodot: str
     score: float
     human_index: str
     human_agreed: bool
+    human_icd9: str
     name: str
 
 
@@ -120,6 +137,7 @@ def _bridge_from_rows(
             score=score,
             human_index=(row["human_index"] or "").strip(),
             human_agreed=human_agreed_raw == "true",
+            human_icd9=(row["human_icd9"] or "").strip(),
             name=(row["name"] or "").strip(),
         )
     frozen = MappingProxyType(dict(sorted(entries.items())))

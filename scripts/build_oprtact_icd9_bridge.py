@@ -37,7 +37,17 @@ from pathlib import Path
 
 RAW_FILENAME = "Mapping INCPT ICD9.csv"
 OUT_FILENAME = "oprtact_icd9_bridge.csv"
-REQUIRED_COLUMNS = ("OPRTACT", "First Choice", "Human suggestion")
+REQUIRED_COLUMNS = (
+    "OPRTACT",
+    "First Choice",
+    "Second choice",
+    "Third choice",
+    "Human suggestion",
+)
+# Which raw choice column a disagreeing Human suggestion index selects. Index
+# "0" is agreement (the First Choice itself); indexes beyond Top-3 ("3"/"4")
+# point at nothing and are treated as no-selection.
+SELECTED_CHOICE_COLUMNS = {"1": "Second choice", "2": "Third choice"}
 OUTPUT_COLUMNS = (
     "oprtact",
     "icd9",
@@ -45,6 +55,7 @@ OUTPUT_COLUMNS = (
     "score",
     "human_index",
     "human_agreed",
+    "human_icd9",
     "name",
 )
 
@@ -110,6 +121,15 @@ def build_rows(
         counts.eligible += 1
         icd9, name, score = parse_first_choice(first_choice)
         human_index = (record.get("Human suggestion") or "").strip()
+        human_icd9 = ""
+        selected_column = SELECTED_CHOICE_COLUMNS.get(human_index)
+        if selected_column is not None:
+            selected_cell = (record.get(selected_column) or "").strip()
+            if selected_cell:
+                # Malformed non-blank cells fail loud via the shared grammar;
+                # a blank cell means the index points at nothing (no-selection,
+                # same handling as out-of-range indexes).
+                human_icd9, _, _ = parse_first_choice(selected_cell)
         row = {
             "oprtact": oprtact,
             "icd9": icd9,
@@ -117,6 +137,7 @@ def build_rows(
             "score": score,
             "human_index": human_index,
             "human_agreed": "true" if human_index == "0" else "false",
+            "human_icd9": human_icd9,
             "name": name,
         }
         existing = by_key.get(oprtact)

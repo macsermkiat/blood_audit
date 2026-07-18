@@ -46,10 +46,14 @@ def _raw_row(
     oprtact: str = "P0001",
     first_choice: str = "3725::Biopsy of heart (score=1.000)",
     human: str = "0",
+    second: str = "",
+    third: str = "",
 ) -> dict[str, str]:
     return {
         "OPRTACT": oprtact,
         "First Choice": first_choice,
+        "Second choice": second,
+        "Third choice": third,
         "Human suggestion": human,
     }
 
@@ -62,6 +66,7 @@ def _row(
     score: str = "1.000",
     human_index: str = "0",
     human_agreed: str = "true",
+    human_icd9: str = "",
     name: str = "Biopsy of heart",
 ) -> dict[str, str]:
     return {
@@ -71,6 +76,7 @@ def _row(
         "score": score,
         "human_index": human_index,
         "human_agreed": human_agreed,
+        "human_icd9": human_icd9,
         "name": name,
     }
 
@@ -191,6 +197,41 @@ def test_build_rows_human_agreed_derivation(human: str, agreed: str) -> None:
 
     assert rows[0]["human_index"] == human
     assert rows[0]["human_agreed"] == agreed
+
+
+@pytest.mark.parametrize(
+    ("human", "expected_human_icd9"),
+    [
+        ("0", ""),  # agreement: no separate human code
+        ("1", "4573"),  # selects the Second choice
+        ("2", "7935"),  # selects the Third choice
+        ("3", ""),  # out-of-range index points at nothing
+        ("", ""),  # no selection
+    ],
+)
+def test_build_rows_human_icd9_selection(human: str, expected_human_icd9: str) -> None:
+    rows, _ = _BUILD.build_rows(
+        [
+            _raw_row(
+                human=human,
+                second="4573::Open synthetic repair (score=0.80)",
+                third="7935::Other synthetic repair (score=0.60)",
+            )
+        ]
+    )
+
+    assert rows[0]["human_icd9"] == expected_human_icd9
+
+
+def test_build_rows_blank_selected_cell_is_no_selection() -> None:
+    rows, _ = _BUILD.build_rows([_raw_row(human="1", second="")])
+
+    assert rows[0]["human_icd9"] == ""
+
+
+def test_build_rows_malformed_selected_cell_fails_loud() -> None:
+    with pytest.raises(_BUILD.BridgeBuildError):
+        _BUILD.build_rows([_raw_row(human="1", second="4573 no separator")])
 
 
 def test_build_rows_output_sorted_by_oprtact() -> None:
@@ -357,13 +398,21 @@ def test_packaged_bridge_first_choice_spot_checks() -> None:
 
     p0937 = bridge.get("P0937")
     assert p0937 is not None and p0937.icd9 == "554" and p0937.human_agreed is True
+    assert p0937.human_icd9 == ""
     p1247 = bridge.get("P1247")
     assert p1247 is not None and p1247.icd9 == "8151" and p1247.human_agreed is True
-    # First Choice, NOT the Human-selected codes (315 / 3809).
+    # First Choice, NOT the Human-selected codes (315 / 3809) — which are
+    # carried separately for the disagreement guard.
     p0580 = bridge.get("P0580")
     assert p0580 is not None and p0580.icd9 == "343"
+    assert p0580.human_icd9 == "315"
     p0624 = bridge.get("P0624")
     assert p0624 is not None and p0624.icd9 == "3800"
+    assert p0624.human_icd9 == "3809"
+    # The P0752 class (First misses MSBOS, Human hits): the guard's data.
+    p0752 = bridge.get("P0752")
+    assert p0752 is not None and p0752.icd9 == "1733"
+    assert p0752.human_icd9 == "4573"
 
 
 def test_load_oprtact_bridge_is_cached() -> None:
