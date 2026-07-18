@@ -45,6 +45,7 @@ def _bridge_row(
     icd9: str = "3725",
     score: str = "0.90",
     human_index: str = "1",
+    human_icd9: str = "",
 ) -> dict[str, str]:
     return {
         "oprtact": oprtact,
@@ -53,6 +54,7 @@ def _bridge_row(
         "score": score,
         "human_index": human_index,
         "human_agreed": "true" if human_index == "0" else "false",
+        "human_icd9": human_icd9,
         "name": f"Synthetic op {oprtact}",
     }
 
