@@ -93,12 +93,13 @@ def _incomplete() -> ReturnsSummary:
     )
 
 
-def _call(leg: ModuleType, summary, periop):
+def _call(leg: ModuleType, summary, periop, declared_use=None):
     return leg._platelet_returns_result(
         audit_id="plt",
         order_datetime=_ORDER_DT,
         returns_summary=summary,
         periop=periop,
+        declared_use=declared_use,
     )
 
 
@@ -110,6 +111,53 @@ def test_both_legs_expose_returns_terminal_set(leg_key: str) -> None:
     assert leg._RETURNS_TERMINAL_CLASSIFICATIONS == frozenset(
         {"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"}
     )
+
+
+@pytest.mark.parametrize("leg_key", ["det", "model"])
+@pytest.mark.parametrize(
+    ("gate_enabled", "declared_use", "expect_exempt"),
+    [
+        # Gate ON + known non-operative declared use -> exemption blocked, the
+        # short-circuit yields no returns terminal and the order falls through
+        # to the platelet gate / LLM (PR #194 Codex P1 round 2: declared_use
+        # was never threaded into the platelet short-circuit, so ward platelet
+        # orders kept the exemption).
+        (True, "ward", False),
+        (True, "day_care", False),
+        # Gate ON + surgical / absent declared use -> exemption preserved.
+        (True, "surgery", True),
+        (True, None, True),
+        # Gate OFF -> declared use never blocks (pre-#194 behavior).
+        (False, "ward", True),
+    ],
+)
+def test_platelet_short_circuit_gates_exempt_on_declared_use(
+    leg_key: str,
+    gate_enabled: bool,
+    declared_use,
+    expect_exempt: bool,
+    monkeypatch,
+) -> None:
+    """A transfused platelet order inside the peri-op envelope is exempt only
+    when the declared use does not contradict an operative context — a
+    ward/day-care declared platelet must be judged by the platelet gate, not
+    rubber-stamped exempt off stale peri-op notes."""
+    leg = _LEG_LOADERS[leg_key]()
+    monkeypatch.setattr(leg, "RETURNS_LEDGER_ENABLED", True)
+    monkeypatch.setattr(
+        leg, "PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE_PILOT", gate_enabled
+    )
+    result = _call(
+        leg,
+        _transfused(),
+        PeriopSummary(surgical_context=True),
+        declared_use=declared_use,
+    )
+    if expect_exempt:
+        assert result is not None
+        assert result.classification == "PERIOP_TRANSFUSION_EXEMPT"
+    else:
+        assert result is None
 
 
 @pytest.mark.parametrize("leg_key", ["det", "model"])

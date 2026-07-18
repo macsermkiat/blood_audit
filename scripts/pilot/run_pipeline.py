@@ -289,8 +289,9 @@ def _declared_use_columns(collapsed_code: str | None) -> dict[str, str]:
     USETYPE is a component-agnostic order attribute, so these columns are
     populated for red-cell AND platelet rows — a blank on a platelet order that
     was declared for surgery would read as "no declaration" in the opt-in
-    report. This is display only: platelet CLASSIFICATION is untouched (the
-    declared signal never feeds the platelet gate).
+    report. The platelet GATE (classify_platelet) never reads the declared
+    signal; the platelet returns short-circuit does receive the label to gate
+    the peri-op exemption (PR #194).
     """
     if not DECLARED_USETYPE_PILOT_ENABLED:
         return {}
@@ -504,12 +505,16 @@ def _platelet_returns_result(
     order_datetime: datetime,
     returns_summary: ReturnsSummary | None,
     periop: PeriopSummary | None,
+    declared_use: DeclaredUseLabel | None,
 ) -> ClassifierResult | None:
     """Returns-ledger short-circuit for a platelet order (spec #119).
 
     Mirrors ``pipeline.run_pipeline``'s platelet branch: run the RBC classifier
     on the order's returns disposition + peri-op envelope and, if it yields a
-    returns terminal, use that instead of the platelet gate. Peri-op IS fed —
+    returns terminal, use that instead of the platelet gate. ``declared_use``
+    is REQUIRED (not defaulted) so a caller cannot silently skip the use-type
+    gate: a ward/day-care declared platelet order must fall through to the
+    platelet gate instead of being exempted off peri-op context (PR #194). Peri-op IS fed —
     matching production's tested contract (``test_platelet_dispatch`` feeds a
     ``periop_summary`` and expects ``PERIOP_TRANSFUSION_EXEMPT``) — so BOTH
     terminals are reachable and, crucially, the hard intra-op/EBL contradiction
@@ -547,6 +552,7 @@ def _platelet_returns_result(
                 procedure_proximity_hours=None,
                 upcoming_procedure_hours=None,
             ),
+            declared_use=declared_use,
             require_surgical_use_for_periop_exempt=(
                 PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE_PILOT
             ),
@@ -1049,8 +1055,9 @@ def main() -> None:
     for order in filter_result.included:
         # Collapsed declared use for THIS order, keyed by (HN, REQNO). Computed
         # before the component split so both the red-cell and platelet report
-        # rows carry the descriptive columns (the platelet classifier never
-        # reads it). Guarded so a flag-off run never calls collapse_usetype.
+        # rows carry the descriptive columns and the platelet returns
+        # short-circuit can gate the peri-op exemption (PR #194). Guarded so a
+        # flag-off run never calls collapse_usetype.
         collapsed_usetype = _collapsed_usetype_for(
             usetype_values_by_hn_reqno.get(((order.hn or "").strip(), order.reqno), [])
         )
@@ -1086,6 +1093,7 @@ def main() -> None:
                 order_datetime=order.order_datetime,
                 returns_summary=plt_returns_summary,
                 periop=plt_periop,
+                declared_use=_declared_use_label_for_classifier(collapsed_usetype),
             )
             if plt_returns_result is not None:
                 plt_classification = plt_returns_result.classification

@@ -437,12 +437,17 @@ def _platelet_returns_result(
     order_datetime: datetime,
     returns_summary: ReturnsSummary | None,
     periop: PeriopSummary | None,
+    declared_use: DeclaredUseLabel | None,
 ) -> ClassifierResult | None:
     """Returns-ledger short-circuit for a platelet order (spec #119).
 
     Mirrors ``pipeline.run_pipeline``'s platelet branch AND
     ``run_pipeline._platelet_returns_result`` (the deterministic leg): the same
     pure ``classify()`` decision, so both legs agree given the same peri-op.
+    ``declared_use`` is REQUIRED (not defaulted) so a caller cannot silently
+    skip the use-type gate: a ward/day-care declared platelet order must fall
+    through to the platelet gate / LLM instead of being exempted off peri-op
+    context (PR #194).
     Peri-op IS fed — matching production's tested contract
     (``test_platelet_dispatch`` feeds a ``periop_summary`` and expects
     ``PERIOP_TRANSFUSION_EXEMPT``) — so BOTH terminals are reachable and the hard
@@ -486,6 +491,7 @@ def _platelet_returns_result(
                 procedure_proximity_hours=None,
                 upcoming_procedure_hours=None,
             ),
+            declared_use=declared_use,
             require_surgical_use_for_periop_exempt=(
                 PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE_PILOT
             ),
@@ -1304,6 +1310,14 @@ def main() -> None:
     for order in fr.included:
         if ONLY_REQNOS and order.reqno not in ONLY_REQNOS:
             continue
+        # Collapsed declared use for THIS order, keyed by (HN, REQNO). Computed
+        # before the component split (mirroring the deterministic leg) so the
+        # platelet returns short-circuit can gate the peri-op exemption
+        # (PR #194). Guarded so a flag-off run never calls collapse_usetype
+        # (which warns on mixed codes) — keeps flag-off byte-identical.
+        collapsed_usetype = _collapsed_usetype_for(
+            usetype_values_by_hn_reqno.get(((order.hn or "").strip(), order.reqno), [])
+        )
         # --- Platelet path (Phase 2, component="platelet") ---
         # Only active when feature_flags.PLATELET_LLM_ENABLED is True.
         # With the flag off, non-terminal platelet verdicts orphan intentionally
@@ -1462,6 +1476,7 @@ def main() -> None:
                         unitamt_lines_by_reqno.get(order.reqno, []),
                     ),
                     periop=bundle.periop_summary,
+                    declared_use=_declared_use_label_for_classifier(collapsed_usetype),
                 )
                 is not None
             ):
@@ -1561,11 +1576,7 @@ def main() -> None:
             continue
 
         # --- Red-cell path (Phase 1, component="red_cell") ---
-        # Guarded so a flag-off run never calls collapse_usetype (which warns on
-        # mixed codes) — keeps flag-off byte-identical, no new log output.
-        collapsed_usetype = _collapsed_usetype_for(
-            usetype_values_by_hn_reqno.get(((order.hn or "").strip(), order.reqno), [])
-        )
+        # (collapsed_usetype is computed above the component split.)
         # Reserve-ahead elective orders are crossmatched days before they are
         # transfused; re-anchor the evidence windows (Hb lookback, notes, CBC,
         # meds, vitals, INCPT) onto the issue datetime so the model adjudicates
