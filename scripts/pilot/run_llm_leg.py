@@ -75,6 +75,7 @@ from bba.audit_pipeline.pipeline import (
 )
 from bba.audit_pipeline.replay import (
     apply_batch_results,
+    is_msbos_eligible,
     is_operation_unresolved,
     is_over_reservation,
     is_platelet_over_reservation,
@@ -169,6 +170,19 @@ ONLY_REQNOS = frozenset(
     for v in os.environ.get("BBA_PILOT_ONLY_REQNO", "").split(",")
     if v.strip()
 )
+
+
+def _merge_filtered_report(
+    existing: list[dict[str, Any]],
+    fresh: list[dict[str, Any]],
+    only_reqnos: frozenset[str],
+) -> list[dict[str, Any]]:
+    """Replace a filtered run's targets, purging targets with no fresh row."""
+    retained = [rec for rec in existing if rec["reqno"] not in only_reqnos]
+    retained_reqnos = {rec["reqno"] for rec in retained}
+    return retained + [rec for rec in fresh if rec["reqno"] not in retained_reqnos]
+
+
 # Operator opt-in for the missing-Hb positive-evidence pre-check (MTP /
 # peri-procedural auto-APPROPRIATE on no documented Hb). Defaults off because
 # the policy is SEED pending clinical sign-off — see ClassifierInputs and
@@ -193,6 +207,17 @@ MSBOS_RESERVATION_PILOT_ENABLED = (
     _msbos_env == "1"
     if _msbos_env is not None
     else feature_flags.MSBOS_RESERVATION_ENABLED
+)
+# Declared-use pre-op exemption, same seam shape as declared-use above:
+# BBA_PILOT_DECLARED_USE_PREOP_EXEMPT overrides ("1" forces on, anything else
+# forces off), defaulting to the library flag (ON). main() mirrors it into
+# feature_flags so the library composer twins agree with this leg's inline
+# ClassifierInputs.
+_declared_preop_exempt_env = os.environ.get("BBA_PILOT_DECLARED_USE_PREOP_EXEMPT")
+DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED = (
+    _declared_preop_exempt_env == "1"
+    if _declared_preop_exempt_env is not None
+    else feature_flags.DECLARED_USE_PREOP_EXEMPT_ENABLED
 )
 # Run/code identity (spec #119 §G, ticket #124). The audit_store is idempotent
 # on (run_id, audit_id, code_version), so enabling a seam that changes verdicts
@@ -219,6 +244,9 @@ if MSBOS_RESERVATION_PILOT_ENABLED:
     # is idempotent on (run_id, audit_id, code_version), and a re-run under the
     # old +msbos4 token would silently retain the pre-correction verdict.
     CODE_VERSION += "+msbos5"
+if DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED:
+    # +declaredpreopexempt: order-level USETYPE changes deterministic terminals.
+    CODE_VERSION += "+declaredpreopexempt"
 TZ_LOCAL = "Asia/Bangkok"
 INCPT_OPERATION_GROUPS = {"110", "111"}
 
@@ -373,7 +401,11 @@ def _returns_periop_context_for_classifier(
     transfusion. Off, or with no ledger coverage, returns ``False`` so the
     exemption cannot fire and today's output is unchanged.
     """
-    if RETURNS_LEDGER_ENABLED and returns_summary is not None:
+    if (
+        not DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED
+        and RETURNS_LEDGER_ENABLED
+        and returns_summary is not None
+    ):
         return periop_envelope(
             surgical_context=surgical_context,
             intraop_transfusion=intraop_transfusion,
@@ -421,12 +453,18 @@ def _platelet_returns_result(
     order_datetime: datetime,
     returns_summary: ReturnsSummary | None,
     periop: PeriopSummary | None,
+    declared_use: DeclaredUseLabel | None,
 ) -> ClassifierResult | None:
     """Returns-ledger short-circuit for a platelet order (spec #119).
 
     Mirrors ``pipeline.run_pipeline``'s platelet branch AND
     ``run_pipeline._platelet_returns_result`` (the deterministic leg): the same
     pure ``classify()`` decision, so both legs agree given the same peri-op.
+    With the declared-use rule enabled, surgery/type-screen orders reach the
+    terminal even without a returns ledger; a factual all-returned ledger still
+    wins. With the rule disabled, the precheck retains the legacy returns-ledger
+    requirement and peri-op-envelope behavior. ``declared_use`` is required so
+    both pilot legs make the same order-level decision.
     Peri-op IS fed — matching production's tested contract
     (``test_platelet_dispatch`` feeds a ``periop_summary`` and expects
     ``PERIOP_TRANSFUSION_EXEMPT``) — so BOTH terminals are reachable and the hard
@@ -443,10 +481,12 @@ def _platelet_returns_result(
     only on that same documented det/model split.
 
     Returns the :class:`ClassifierResult` iff it is a returns terminal, else
-    ``None``. Off, or with no ledger coverage, returns ``None`` so the leg
-    submits the identical set to today.
+    ``None``. When the declared-use rule is off, missing ledger coverage returns
+    ``None`` exactly as before.
     """
-    if not (RETURNS_LEDGER_ENABLED and returns_summary is not None):
+    if not DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED and not (
+        RETURNS_LEDGER_ENABLED and returns_summary is not None
+    ):
         return None
     surgical_context = periop.surgical_context if periop else False
     intraop_transfusion = periop.intraop_transfusion if periop else False
@@ -469,6 +509,10 @@ def _platelet_returns_result(
                 intraop_transfusion=intraop_transfusion,
                 procedure_proximity_hours=None,
                 upcoming_procedure_hours=None,
+            ),
+            declared_use=declared_use,
+            enable_declared_use_preop_exemption=(
+                DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED
             ),
         )
     )
@@ -1248,6 +1292,14 @@ def main() -> None:
     # agree with this leg's direct classify() call.
     feature_flags.DECLARED_USETYPE_ENABLED = DECLARED_USETYPE_PILOT_ENABLED
     feature_flags.MSBOS_RESERVATION_ENABLED = MSBOS_RESERVATION_PILOT_ENABLED
+    feature_flags.DECLARED_USE_PREOP_EXEMPT_ENABLED = (
+        DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED
+    )
+    if DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED and not DECLARED_USETYPE_PILOT_ENABLED:
+        print(
+            "WARNING: declared-use pre-op exemption is ON while the declared-use "
+            "seam is OFF; zero pre-op exemptions can be produced."
+        )
 
     AUDIT_STORE_ROOT.mkdir(parents=True, exist_ok=True)
     (
@@ -1282,6 +1334,14 @@ def main() -> None:
     for order in fr.included:
         if ONLY_REQNOS and order.reqno not in ONLY_REQNOS:
             continue
+        # Collapsed declared use for THIS order, keyed by (HN, REQNO). Computed
+        # before the component split (mirroring the deterministic leg) so the
+        # platelet returns short-circuit can gate the peri-op exemption
+        # (PR #194). Guarded so a flag-off run never calls collapse_usetype
+        # (which warns on mixed codes) — keeps flag-off byte-identical.
+        collapsed_usetype = _collapsed_usetype_for(
+            usetype_values_by_hn_reqno.get(((order.hn or "").strip(), order.reqno), [])
+        )
         # --- Platelet path (Phase 2, component="platelet") ---
         # Only active when feature_flags.PLATELET_LLM_ENABLED is True.
         # With the flag off, non-terminal platelet verdicts orphan intentionally
@@ -1415,33 +1475,31 @@ def main() -> None:
                     vitals=plt_vital_records,
                 )
             )
-            # Returns-ledger short-circuit FIRST — BEFORE the platelet gate below
-            # (mirror pipeline.run_pipeline's platelet branch: the returns terminal
-            # precedes classify_platelet). An all-returned (or peri-op-exempt)
-            # platelet order is deterministic-final and must NOT be LLM-submitted;
-            # the deterministic leg (run_pipeline.py) persists its terminal row,
-            # here we skip submission. Because this runs before the gate, an
-            # all-returned platelet with NO usable count is still screened by the
-            # ledger (the Codex P2 fix). Uses the bundle's WINDOWED periop_summary
-            # (not admission-wide), so a remote same-admission surgery cannot
-            # exempt an unrelated transfusion — mirroring production and the RBC
-            # LLM path. The deterministic leg scans peri-op admission-wide (the
-            # accepted #123 Risk #3), so the two legs can differ only on that same
-            # documented split. Gated on RETURNS_LEDGER_ENABLED so a flag-off run
-            # submits the identical set.
-            if RETURNS_LEDGER_ENABLED and (
-                _platelet_returns_result(
+            # Factual all-returned remains the first terminal. Declared pre-op
+            # exemption is held until after T4 MSBOS screening because it waives
+            # the transfusion judgment, not reservation appropriateness.
+            plt_returns_summary = (
+                summarize_returns(
+                    rows_for_admission(
+                        bdvsttrans_by_reqno.get(order.reqno, []), order.an
+                    ),
+                    unitamt_lines_by_reqno.get(order.reqno, []),
+                )
+                if RETURNS_LEDGER_ENABLED
+                else None
+            )
+            plt_returns_result = None
+            if RETURNS_LEDGER_ENABLED or DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED:
+                plt_returns_result = _platelet_returns_result(
                     audit_id=order.audit_id,
                     order_datetime=order.order_datetime,
-                    returns_summary=summarize_returns(
-                        rows_for_admission(
-                            bdvsttrans_by_reqno.get(order.reqno, []), order.an
-                        ),
-                        unitamt_lines_by_reqno.get(order.reqno, []),
-                    ),
+                    returns_summary=plt_returns_summary,
                     periop=bundle.periop_summary,
+                    declared_use=_declared_use_label_for_classifier(collapsed_usetype),
                 )
-                is not None
+            if (
+                plt_returns_result is not None
+                and plt_returns_result.classification == "RETURNED_NOT_TRANSFUSED"
             ):
                 continue
             # Deterministic platelet gate: INSUFFICIENT_EVIDENCE is terminal (same
@@ -1497,6 +1555,16 @@ def main() -> None:
                     or platelet_reservation_decision.reason in PLATELET_REVIEW_REASONS
                 )
             )
+            # Only the DECLARED pre-op exemption is held for the MSBOS screens
+            # (is_msbos_eligible); a legacy flag-off PERIOP_TRANSFUSION_EXEMPT
+            # stays terminal here regardless of the reservation decision, so
+            # the flag-off submission set is byte-identical to before (Codex
+            # P2 on 5d31f8b).
+            if plt_returns_result is not None and not (
+                is_msbos_eligible(plt_returns_result)
+                and _reservation_routes_to_terminal
+            ):
+                continue
             if (
                 plt_clf.classification == "INSUFFICIENT_EVIDENCE"
                 and not _reservation_routes_to_terminal
@@ -1534,16 +1602,13 @@ def main() -> None:
                     evidence_bundle_hash=bundle.bundle_hash,
                     evidence_chunks=tuple(plt_chunks),
                     platelet_reservation_decision=platelet_reservation_decision,
+                    declared_use=_declared_use_label_for_classifier(collapsed_usetype),
                 )
             )
             continue
 
         # --- Red-cell path (Phase 1, component="red_cell") ---
-        # Guarded so a flag-off run never calls collapse_usetype (which warns on
-        # mixed codes) — keeps flag-off byte-identical, no new log output.
-        collapsed_usetype = _collapsed_usetype_for(
-            usetype_values_by_hn_reqno.get(((order.hn or "").strip(), order.reqno), [])
-        )
+        # (collapsed_usetype is computed above the component split.)
         # Reserve-ahead elective orders are crossmatched days before they are
         # transfused; re-anchor the evidence windows (Hb lookback, notes, CBC,
         # meds, vitals, INCPT) onto the issue datetime so the model adjudicates
@@ -2116,15 +2181,14 @@ def main() -> None:
                 declared_use=(
                     ctx.declared_use if feature_flags.DECLARED_USETYPE_ENABLED else None
                 ),
+                enable_declared_use_preop_exemption=(
+                    DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED
+                ),
             )
         )
         classifier_results[ctx.order.audit_id] = cres
         report_classifier_results[ctx.order.audit_id] = cres
-        reserve_ahead = (
-            feature_flags.RESERVE_AHEAD_ROUTER_ENABLED
-            and cres.rationale in _RESERVE_AHEAD_RATIONALES
-        )
-        if MSBOS_RESERVATION_PILOT_ENABLED and reserve_ahead:
+        if MSBOS_RESERVATION_PILOT_ENABLED and is_msbos_eligible(cres):
             if is_over_reservation(classifier_result=cres, context=ctx):
                 _persist_over_reservation_row(
                     ctx,
@@ -2168,6 +2232,20 @@ def main() -> None:
         and not operation_unresolved_ctxs
         and not platelet_review_ctxs
     ):
+        stale_out = WORK / "llm_report.json"
+        if ONLY_REQNOS and stale_out.exists():
+            # A filtered run whose every target became deterministic-final
+            # still must purge the targets' stale LLM records before exiting
+            # (Codex P2 on 727239a) — otherwise the review page keeps an
+            # obsolete model verdict for a now-deterministic row.
+            existing = json.loads(stale_out.read_text())
+            purged = _merge_filtered_report(existing, [], ONLY_REQNOS)
+            if len(purged) != len(existing):
+                stale_out.write_text(json.dumps(purged, indent=2, ensure_ascii=False))
+                print(
+                    f"  purged {len(existing) - len(purged)} targeted stale "
+                    "record(s) before no-submit exit"
+                )
         sys.exit("nothing to submit")
 
     submissions: list[BatchSubmissionRequest] = []
@@ -2392,15 +2470,17 @@ def main() -> None:
         )
     out = WORK / "llm_report.json"
     if ONLY_REQNOS and out.exists():
-        # Filtered run: splice the fresh records into the existing report so
-        # the other cases (and the review page built from it) are preserved.
+        # Filtered run: purge every targeted REQNO first, including targets that
+        # became deterministic-final and therefore produced no fresh LLM record.
+        # Then append this run's fresh records while preserving all untargeted
+        # cases. This prevents a stale model verdict surviving a no-submit run.
         existing = json.loads(out.read_text())
-        fresh_by_reqno = {rec["reqno"]: rec for rec in report}
-        existing_reqnos = {rec["reqno"] for rec in existing}
-        report = [fresh_by_reqno.get(rec["reqno"], rec) for rec in existing] + [
-            rec for rec in report if rec["reqno"] not in existing_reqnos
-        ]
-        print(f"  merged {len(fresh_by_reqno)} fresh record(s) into existing report")
+        retained_count = sum(rec["reqno"] not in ONLY_REQNOS for rec in existing)
+        report = _merge_filtered_report(existing, report, ONLY_REQNOS)
+        print(
+            f"  purged {len(existing) - retained_count} targeted stale record(s); "
+            f"merged {len(report) - retained_count} fresh record(s)"
+        )
     out.write_text(json.dumps(report, indent=2, ensure_ascii=False))
     print(f"\nFull JSON report: {out}")
 

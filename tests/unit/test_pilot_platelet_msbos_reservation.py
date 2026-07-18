@@ -107,7 +107,7 @@ def _configure_platelet_pilot(
         {},
         {},
         {},
-        {},
+        {("HN1", "REQ1"): ["2"]},
         reference,
         reserved,
     )
@@ -176,6 +176,7 @@ def test_flag_off_matches_pre_feature_behavior_and_never_reserves(
     # an unconditional flag-off regression is caught) AND that the reservation
     # producer is never invoked and no reservation marker is ever written.
     monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", "0")
+    monkeypatch.setenv("BBA_PILOT_DECLARED_USE_PREOP_EXEMPT", "0")
     module = _load_run_llm_leg("pilot_platelet_msbos_off")
     order = _configure_platelet_pilot(
         module, monkeypatch, tmp_path / "off", planned_code="0613"

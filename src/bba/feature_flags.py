@@ -3,8 +3,9 @@
 Most flags default to OFF (False); ``RETURNS_LEDGER_ENABLED`` (returns-ledger
 go-live #138), ``DECLARED_USETYPE_ENABLED`` (declared-usetype go-live
 2026-07-15), and ``MSBOS_RESERVATION_ENABLED`` (MSBOS reservation go-live
-2026-07-16, #167) are default-ON. Each flag's default is documented on the flag
-itself. Defining the contracts here keeps feature state in one place.
+2026-07-16, #167), and ``DECLARED_USE_PREOP_EXEMPT_ENABLED`` are
+default-ON. Each flag's default is documented on the flag itself. Defining the
+contracts here keeps feature state in one place.
 
 Flags
 -----
@@ -24,6 +25,9 @@ DECLARED_USETYPE_ENABLED
 MSBOS_RESERVATION_ENABLED
     Gates the MSBOS pre-op reservation-appropriateness arm. Default: True
     (go-live 2026-07-16, #167).
+DECLARED_USE_PREOP_EXEMPT_ENABLED
+    Exempts orders whose declared use is surgery or type-screen from the
+    Hb-appropriateness judgment. Default: True.
 """
 
 from __future__ import annotations
@@ -69,6 +73,19 @@ leave it ``None`` are unaffected. Set ``BBA_PILOT_DECLARED_USETYPE=0`` to force
 it off for a pilot run.
 """
 
+DECLARED_USE_PREOP_EXEMPT_ENABLED: bool = True
+"""Enable the order-level declared-use pre-op exemption (default: ON).
+
+When enabled, a collapsed BDVSTDT.USETYPE of ``surgery`` or ``type_screen``
+receives ``PERIOP_TRANSFUSION_EXEMPT`` regardless of returns-ledger coverage or
+the peri-op note/proximity envelope. A factual all-returned/incompatible ledger
+still wins unless contradicted by hard peri-op evidence. Other declared uses
+follow the normal Hb/cohort path. Read at the ``ClassifierInputs`` composition
+seams so ``classify()`` remains pure. Set
+``BBA_PILOT_DECLARED_USE_PREOP_EXEMPT=0`` to restore the legacy transfused plus
+peri-op-envelope exemption in pilot runs.
+"""
+
 MSBOS_RESERVATION_ENABLED: bool = True
 """Enable the MSBOS pre-op reservation-appropriateness arm (default: ON).
 
@@ -88,6 +105,7 @@ force it off for a pilot run.
 
 __all__: Sequence[str] = (
     "DECLARED_USETYPE_ENABLED",
+    "DECLARED_USE_PREOP_EXEMPT_ENABLED",
     "MSBOS_RESERVATION_ENABLED",
     "PLATELET_LLM_ENABLED",
     "RESERVE_AHEAD_ROUTER_ENABLED",

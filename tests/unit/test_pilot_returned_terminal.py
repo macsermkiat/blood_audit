@@ -12,12 +12,12 @@ from bba.hb_lookup import HbLookupResult
 from bba.returns_ledger import ReturnsSummary
 
 
-def _load_pilot() -> ModuleType:
+def _load_pilot(module_name: str = "pilot_run_pipeline_returned_test") -> ModuleType:
     pilot_dir = Path(__file__).resolve().parents[2] / "scripts" / "pilot"
     if str(pilot_dir) not in sys.path:
         sys.path.insert(0, str(pilot_dir))
     spec = importlib.util.spec_from_file_location(
-        "pilot_run_pipeline_returned_test", pilot_dir / "run_pipeline.py"
+        module_name, pilot_dir / "run_pipeline.py"
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -76,6 +76,7 @@ def test_pilot_flag_off_forces_inconclusive(monkeypatch) -> None:
 def test_pilot_classifier_path_emits_periop_exempt_terminal(monkeypatch) -> None:
     pilot = _load_pilot()
     monkeypatch.setattr(pilot, "RETURNS_LEDGER_ENABLED", True)
+    monkeypatch.setattr(pilot, "DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED", False)
     summary = ReturnsSummary(
         units_total=2,
         units_returned=0,
@@ -138,3 +139,58 @@ def test_pilot_periop_context_flag_off_forces_false(monkeypatch) -> None:
         )
         is False
     )
+
+
+def test_pilot_periop_surgical_gate_override_matrix(monkeypatch) -> None:
+    monkeypatch.setenv("BBA_PILOT_DECLARED_USE_PREOP_EXEMPT", "0")
+    off = _load_pilot("pilot_run_pipeline_periop_surgical_off")
+    monkeypatch.setenv("BBA_PILOT_DECLARED_USE_PREOP_EXEMPT", "1")
+    on = _load_pilot("pilot_run_pipeline_periop_surgical_on")
+
+    assert off.DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED is False
+    assert on.DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED is True
+
+    base = {
+        "audit_id": "pilot-periop-surgical-gate",
+        "hb_result": HbLookupResult(
+            value_g_dl=6.5,
+            datetime_utc=datetime(2026, 7, 13, tzinfo=UTC),
+            source="HEMATOLOGY",
+            freshness="fresh",
+            delta_hb_bypass=False,
+            delta_hb_windows=(),
+            needs_review_single_low_hb=False,
+        ),
+        "cohort_assignment": CohortAssignment(
+            label=CohortLabel.DEFAULT,
+            threshold=7.0,
+            evidence_code=None,
+            evidence_name=None,
+        ),
+        "order_datetime": datetime(2026, 7, 13, tzinfo=UTC),
+        "procedure_proximity_hours": None,
+        "crystalloid_liters_prior_4h": 0.0,
+        "returns_disposition": "transfused",
+        "returns_periop_context": True,
+        "declared_use": "ward",
+    }
+
+    off_result = classify(
+        ClassifierInputs(
+            **base,
+            enable_declared_use_preop_exemption=(
+                off.DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED
+            ),
+        )
+    )
+    on_result = classify(
+        ClassifierInputs(
+            **base,
+            enable_declared_use_preop_exemption=(
+                on.DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED
+            ),
+        )
+    )
+
+    assert off_result.classification == "PERIOP_TRANSFUSION_EXEMPT"
+    assert on_result.classification == "APPROPRIATE"

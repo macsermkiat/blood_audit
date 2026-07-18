@@ -93,12 +93,13 @@ def _incomplete() -> ReturnsSummary:
     )
 
 
-def _call(leg: ModuleType, summary, periop):
+def _call(leg: ModuleType, summary, periop, declared_use=None):
     return leg._platelet_returns_result(
         audit_id="plt",
         order_datetime=_ORDER_DT,
         returns_summary=summary,
         periop=periop,
+        declared_use=declared_use,
     )
 
 
@@ -109,6 +110,69 @@ def test_both_legs_expose_returns_terminal_set(leg_key: str) -> None:
     leg = _LEG_LOADERS[leg_key]()
     assert leg._RETURNS_TERMINAL_CLASSIFICATIONS == frozenset(
         {"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"}
+    )
+
+
+@pytest.mark.parametrize("leg_key", ["det", "model"])
+@pytest.mark.parametrize(
+    ("gate_enabled", "declared_use", "expect_exempt"),
+    [
+        # Flag ON: only the two canonical declared surgical labels exempt.
+        (True, "surgery", True),
+        (True, "type_screen", True),
+        (True, "ward", False),
+        (True, None, False),
+        # Flag OFF: legacy transfused + peri-op envelope behavior.
+        (False, "ward", True),
+    ],
+)
+def test_platelet_short_circuit_gates_exempt_on_declared_use(
+    leg_key: str,
+    gate_enabled: bool,
+    declared_use,
+    expect_exempt: bool,
+    monkeypatch,
+) -> None:
+    """The five-way pilot matrix selects declared-use semantics when on and
+    exact legacy envelope semantics when off."""
+    leg = _LEG_LOADERS[leg_key]()
+    monkeypatch.setattr(leg, "RETURNS_LEDGER_ENABLED", True)
+    monkeypatch.setattr(leg, "DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED", gate_enabled)
+    result = _call(
+        leg,
+        _transfused(),
+        PeriopSummary(surgical_context=True),
+        declared_use=declared_use,
+    )
+    if expect_exempt:
+        assert result is not None
+        assert result.classification == "PERIOP_TRANSFUSION_EXEMPT"
+    else:
+        assert result is None
+
+
+@pytest.mark.parametrize("leg_key", ["det", "model"])
+def test_platelet_short_circuit_threads_declared_preop_flag(
+    leg_key: str, monkeypatch
+) -> None:
+    """Both legs thread their declared pre-op constant into the
+    short-circuit's ClassifierInputs — the det/model legs run the same pure
+    ``classify()`` decision and must stay in lockstep on its inputs (spec #119;
+    PR #194 Codex P1 found the model leg missing the field)."""
+    leg = _LEG_LOADERS[leg_key]()
+    monkeypatch.setattr(leg, "RETURNS_LEDGER_ENABLED", True)
+    captured = []
+    real_classify = leg.classify
+
+    def capture(inputs):  # noqa: ANN001, ANN202 - mirrors leg.classify
+        captured.append(inputs)
+        return real_classify(inputs)
+
+    monkeypatch.setattr(leg, "classify", capture)
+    _call(leg, _transfused(), PeriopSummary())
+    (inputs,) = captured
+    assert inputs.enable_declared_use_preop_exemption is (
+        leg.DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED
     )
 
 
@@ -138,6 +202,26 @@ def test_all_returned_with_intraop_transfusion_falls_through(
 
 
 @pytest.mark.parametrize("leg_key", ["det", "model"])
+def test_all_returned_intraop_contradiction_declared_surgery_is_exempt(
+    leg_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    leg = _LEG_LOADERS[leg_key]()
+    monkeypatch.setattr(leg, "RETURNS_LEDGER_ENABLED", True)
+    monkeypatch.setattr(leg, "DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED", True)
+
+    result = _call(
+        leg,
+        _all_returned(),
+        PeriopSummary(intraop_transfusion=True),
+        declared_use="surgery",
+    )
+
+    assert result is not None
+    assert result.classification == "PERIOP_TRANSFUSION_EXEMPT"
+    assert result.rationale == "preop_declared_exempt"
+
+
+@pytest.mark.parametrize("leg_key", ["det", "model"])
 def test_all_returned_with_major_blood_loss_falls_through(
     leg_key: str, monkeypatch
 ) -> None:
@@ -151,15 +235,15 @@ def test_all_returned_with_major_blood_loss_falls_through(
 
 @pytest.mark.parametrize("leg_key", ["det", "model"])
 def test_transfused_platelet_in_periop_is_exempt(leg_key: str, monkeypatch) -> None:
-    """Finding 3: a confirmed-transfused platelet order inside the peri-op
-    envelope (surgical context) short-circuits to PERIOP_TRANSFUSION_EXEMPT —
-    matching production's tested contract."""
+    """A surgery-declared platelet order is exempt independent of the envelope."""
     leg = _LEG_LOADERS[leg_key]()
     monkeypatch.setattr(leg, "RETURNS_LEDGER_ENABLED", True)
+    monkeypatch.setattr(leg, "DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED", True)
     periop = PeriopSummary(surgical_context=True)
-    result = _call(leg, _transfused(), periop)
+    result = _call(leg, _transfused(), periop, declared_use="surgery")
     assert result is not None
     assert result.classification == "PERIOP_TRANSFUSION_EXEMPT"
+    assert result.rationale == "preop_declared_exempt"
 
 
 @pytest.mark.parametrize("leg_key", ["det", "model"])
@@ -188,6 +272,7 @@ def test_flag_off_never_short_circuits(leg_key: str, monkeypatch) -> None:
     context yields None, so the platelet path is unchanged from today."""
     leg = _LEG_LOADERS[leg_key]()
     monkeypatch.setattr(leg, "RETURNS_LEDGER_ENABLED", False)
+    monkeypatch.setattr(leg, "DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED", False)
     assert _call(leg, _all_returned(), PeriopSummary(surgical_context=True)) is None
 
 
@@ -197,3 +282,18 @@ def test_none_summary_falls_through(leg_key: str, monkeypatch) -> None:
     leg = _LEG_LOADERS[leg_key]()
     monkeypatch.setattr(leg, "RETURNS_LEDGER_ENABLED", True)
     assert _call(leg, None, None) is None
+
+
+@pytest.mark.parametrize("leg_key", ["det", "model"])
+def test_declared_preop_without_ledger_is_exempt(
+    leg_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    leg = _LEG_LOADERS[leg_key]()
+    monkeypatch.setattr(leg, "RETURNS_LEDGER_ENABLED", False)
+    monkeypatch.setattr(leg, "DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED", True)
+
+    result = _call(leg, None, None, declared_use="surgery")
+
+    assert result is not None
+    assert result.classification == "PERIOP_TRANSFUSION_EXEMPT"
+    assert result.rationale == "preop_declared_exempt"

@@ -176,6 +176,10 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
     :class:`ClassifierInputs` with invalid types fails at the Pydantic
     boundary, not here.
 
+    The order-level declared-use pre-op exemption is selected through
+    ``inputs.enable_declared_use_preop_exemption``; the gate is an explicit
+    input so this function remains pure.
+
     See module docstring for precedence ordering.
     """
     hb = inputs.hb_result
@@ -206,21 +210,33 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
             rationale="returned_not_transfused",
         )
 
-    # A confirmed transfusion (a unit not returned, or an explicit
-    # transfused-status unit) inside a peri-operative envelope is exempt from
-    # appropriateness judgment — anaesthesia frequently does not chart the
-    # indication, so scoring it would be unfair. Hb-independent and dominates
-    # every clinical tier, exactly like the returned exit above. A confirmed
-    # transfusion with NO peri-op context falls through and is judged normally
-    # (it can still be POTENTIALLY_INAPPROPRIATE). The envelope is computed at
-    # the flag-gated wiring sites (see :func:`periop_envelope`).
-    if inputs.returns_disposition == "transfused" and inputs.returns_periop_context:
-        return ClassifierResult(
-            classification="PERIOP_TRANSFUSION_EXEMPT",
-            bypass_reason=BypassReason.PERIOP_TRANSFUSION_EXEMPT,
-            cohort_threshold=threshold,
-            rationale="periop_transfusion_exempt",
-        )
+    if inputs.enable_declared_use_preop_exemption:
+        # Clinician-declared use is authoritative for the order-level pre-op
+        # rule. Ledger absence/inconclusiveness does not defeat it; only the
+        # factual returned exit above has higher precedence.
+        if inputs.declared_use in DECLARED_SURGICAL_LABELS:
+            return ClassifierResult(
+                classification="PERIOP_TRANSFUSION_EXEMPT",
+                bypass_reason=BypassReason.PERIOP_TRANSFUSION_EXEMPT,
+                cohort_threshold=threshold,
+                rationale="preop_declared_exempt",
+            )
+    else:
+        # A confirmed transfusion (a unit not returned, or an explicit
+        # transfused-status unit) inside a peri-operative envelope is exempt from
+        # appropriateness judgment — anaesthesia frequently does not chart the
+        # indication, so scoring it would be unfair. Hb-independent and dominates
+        # every clinical tier, exactly like the returned exit above. A confirmed
+        # transfusion with NO peri-op context falls through and is judged normally
+        # (it can still be POTENTIALLY_INAPPROPRIATE). The envelope is computed at
+        # the flag-gated wiring sites (see :func:`periop_envelope`).
+        if inputs.returns_disposition == "transfused" and inputs.returns_periop_context:
+            return ClassifierResult(
+                classification="PERIOP_TRANSFUSION_EXEMPT",
+                bypass_reason=BypassReason.PERIOP_TRANSFUSION_EXEMPT,
+                cohort_threshold=threshold,
+                rationale="periop_transfusion_exempt",
+            )
 
     # 1. Hb missing — positive-evidence pre-pass (SEED pending clinical
     #    sign-off). Gated behind ``inputs.enable_missing_hb_positive_evidence``,

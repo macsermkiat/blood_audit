@@ -23,12 +23,12 @@ from bba.hb_lookup import HbLookupResult
 from bba.returns_ledger import ReturnsSummary
 
 
-def _load_llm_leg() -> ModuleType:
+def _load_llm_leg(module_name: str = "pilot_run_llm_leg_returns_test") -> ModuleType:
     pilot_dir = Path(__file__).resolve().parents[2] / "scripts" / "pilot"
     if str(pilot_dir) not in sys.path:
         sys.path.insert(0, str(pilot_dir))
     spec = importlib.util.spec_from_file_location(
-        "pilot_run_llm_leg_returns_test", pilot_dir / "run_llm_leg.py"
+        module_name, pilot_dir / "run_llm_leg.py"
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -81,12 +81,31 @@ def test_llm_leg_deterministic_final_includes_returns_terminals() -> None:
     }
 
 
+def test_llm_leg_periop_surgical_gate_env_matrix(monkeypatch) -> None:
+    """The LLM leg resolves the periop use-type gate from
+    BBA_PILOT_DECLARED_USE_PREOP_EXEMPT (default: the library flag) and folds a
+    distinct ``+declaredpreopexempt`` code identity when ON — the audit store is
+    idempotent on (run_id, audit_id, code_version), so the verdict-affecting
+    gate must not silently reuse a flag-off run's committed rows (PR #194
+    Codex P1: the gate was previously inert outside the det pilot leg)."""
+    monkeypatch.setenv("BBA_PILOT_DECLARED_USE_PREOP_EXEMPT", "0")
+    off = _load_llm_leg("pilot_run_llm_leg_periop_gate_off")
+    monkeypatch.setenv("BBA_PILOT_DECLARED_USE_PREOP_EXEMPT", "1")
+    on = _load_llm_leg("pilot_run_llm_leg_periop_gate_on")
+
+    assert off.DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED is False
+    assert on.DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED is True
+    assert "+declaredpreopexempt" not in off.CODE_VERSION
+    assert "+declaredpreopexempt" in on.CODE_VERSION
+
+
 def test_llm_leg_returned_summary_is_terminal_and_skips_model(monkeypatch) -> None:
     """An all-returned order routes to RETURNED_NOT_TRANSFUSED, which is in the
     leg's DETERMINISTIC_FINAL set, so the submission guard drops it — the exact
     bug this ticket closes (returned row was previously LLM-submitted)."""
     leg = _load_llm_leg()
     monkeypatch.setattr(leg, "RETURNS_LEDGER_ENABLED", True)
+    monkeypatch.setattr(leg, "DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED", False)
     summary = ReturnsSummary(
         units_total=2, units_returned=2, ordered_unit_amount=2, ledger_complete=True
     )
@@ -117,6 +136,7 @@ def test_llm_leg_periop_transfused_is_terminal_and_skips_model(monkeypatch) -> N
     PERIOP_TRANSFUSION_EXEMPT, also terminal in the leg — never LLM-submitted."""
     leg = _load_llm_leg()
     monkeypatch.setattr(leg, "RETURNS_LEDGER_ENABLED", True)
+    monkeypatch.setattr(leg, "DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED", False)
     summary = ReturnsSummary(
         units_total=2,
         units_returned=0,
@@ -145,6 +165,37 @@ def test_llm_leg_periop_transfused_is_terminal_and_skips_model(monkeypatch) -> N
     )
     assert result.classification == "PERIOP_TRANSFUSION_EXEMPT"
     assert result.classification in leg.DETERMINISTIC_FINAL
+
+
+def test_declared_preop_rbc_without_ledger_skips_model() -> None:
+    leg = _load_llm_leg()
+    result = classify(
+        ClassifierInputs(
+            audit_id="llm-declared-preop",
+            hb_result=_hb_present(),
+            cohort_assignment=_COHORT,
+            order_datetime=datetime(2026, 7, 13, tzinfo=UTC),
+            procedure_proximity_hours=None,
+            crystalloid_liters_prior_4h=0.0,
+            declared_use="surgery",
+            enable_declared_use_preop_exemption=True,
+        )
+    )
+
+    assert result.rationale == "preop_declared_exempt"
+    assert result.classification in leg.DETERMINISTIC_FINAL
+
+
+def test_only_reqnos_purges_target_with_no_fresh_llm_record() -> None:
+    leg = _load_llm_leg()
+    existing = [
+        {"reqno": "KEEP", "llm_final": {"classification": "APPROPRIATE"}},
+        {"reqno": "TARGET", "llm_final": {"classification": "STALE"}},
+    ]
+
+    merged = leg._merge_filtered_report(existing, [], frozenset({"TARGET"}))
+
+    assert merged == [existing[0]]
 
 
 def test_llm_leg_flag_off_disposition_inconclusive_not_screened(monkeypatch) -> None:
@@ -182,9 +233,11 @@ def test_llm_leg_code_version_is_flag_sensitive(monkeypatch) -> None:
     import bba.feature_flags as feature_flags
 
     # Isolate the returns flag: force the other now-ON default seams off so they
-    # do not add their own CODE_VERSION tokens ("+declared", "+msbos5").
+    # do not add their own CODE_VERSION tokens ("+declared", "+msbos5",
+    # "+declaredpreopexempt").
     monkeypatch.setenv("BBA_PILOT_DECLARED_USETYPE", "0")
     monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", "0")
+    monkeypatch.setenv("BBA_PILOT_DECLARED_USE_PREOP_EXEMPT", "0")
 
     monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", True)
     assert _load_llm_leg().CODE_VERSION == "pilot-mini+returns"
@@ -199,6 +252,7 @@ def test_llm_leg_periop_envelope_is_windowed(monkeypatch) -> None:
     exempt an unrelated transfusion."""
     leg = _load_llm_leg()
     monkeypatch.setattr(leg, "RETURNS_LEDGER_ENABLED", True)
+    monkeypatch.setattr(leg, "DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED", False)
     summary = ReturnsSummary(
         units_total=1,
         units_returned=0,

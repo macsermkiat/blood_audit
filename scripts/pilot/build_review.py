@@ -284,11 +284,13 @@ _MSBOS_WITHIN_REASONS = frozenset(
 # uncategorised_procedure, ambiguous_category, missing_pre_op_count.
 
 
-def _display_cls(cls: str | None) -> str:
+def _display_cls(cls: str | None, rationale: str | None = None) -> str:
     normalized = (cls or "").upper()
     if RETURNS_LEDGER_ENABLED and normalized == "RETURNED_NOT_TRANSFUSED":
         return "Returned — not transfused (excluded)"
     if RETURNS_LEDGER_ENABLED and normalized == "PERIOP_TRANSFUSION_EXEMPT":
+        if rationale == "preop_declared_exempt":
+            return "Declared pre-op order — exempt (excluded)"
         return "Peri-op transfusion — exempt (excluded)"
     return _CLS_DISPLAY.get(normalized, cls or "Excluded")
 
@@ -459,7 +461,16 @@ def _msbos_platelet_case_line(det: dict[str, str], det_class: str) -> str:
     else:
         text = ""
 
-    if det_class == "PERIOP_TRANSFUSION_EXEMPT":
+    has_returns_summary = any(
+        (det.get(key) or "").strip()
+        for key in (
+            "returns_disposition",
+            "returns_units_total",
+            "returns_units_transfused",
+            "returns_units_returned",
+        )
+    )
+    if det_class == "PERIOP_TRANSFUSION_EXEMPT" and has_returns_summary:
         text += (
             f"; {esc(det.get('returns_units_transfused', ''))} transfused, "
             f"{esc(det.get('returns_units_returned', ''))} returned"
@@ -498,7 +509,16 @@ def _msbos_case_line(det: dict[str, str], det_class: str) -> str:
     else:
         text = ""
 
-    if det_class == "PERIOP_TRANSFUSION_EXEMPT":
+    has_returns_summary = any(
+        (det.get(key) or "").strip()
+        for key in (
+            "returns_disposition",
+            "returns_units_total",
+            "returns_units_transfused",
+            "returns_units_returned",
+        )
+    )
+    if det_class == "PERIOP_TRANSFUSION_EXEMPT" and has_returns_summary:
         text += (
             f"; {esc(det.get('returns_units_transfused', ''))} transfused, "
             f"{esc(det.get('returns_units_returned', ''))} returned"
@@ -1490,7 +1510,7 @@ def main() -> None:
 
         det_pill = (
             f"<span class='cls cls-{esc(det_class).lower()}'>"
-            f"{esc(_display_cls(det_class))}</span>"
+            f"{esc(_display_cls(det_class, det.get('rationale')))}</span>"
         )
         if _has_llm:
             llm_cell = (
@@ -1586,7 +1606,7 @@ def main() -> None:
         parts.append("<h4>Deterministic verdict</h4>")
         parts.append(
             f"<div class='cls cls-{esc(det_class).lower()}'>"
-            f"{esc(_display_cls(det_class))}</div>"
+            f"{esc(_display_cls(det_class, det.get('rationale')))}</div>"
         )
         parts.append(
             f"<div class='rationale'>rationale: "
@@ -2185,9 +2205,11 @@ def main() -> None:
     returns_glossary_html = (
         "<dt>RETURNED_NOT_TRANSFUSED</dt><dd>All dispensed units were returned; "
         "excluded from scoring and review.</dd>\n"
-        "<dt>PERIOP_TRANSFUSION_EXEMPT</dt><dd>Confirmed transfusion in a "
-        "surgical/procedural context; exempt from judgment and excluded from "
-        "scoring and review.</dd>\n"
+        "<dt>PERIOP_TRANSFUSION_EXEMPT</dt><dd>Declared pre-op order (USETYPE "
+        "M/G or T/S); exempt from transfusion judgment but still screened for "
+        "reservation appropriateness. Legacy periop_transfusion_exempt "
+        "rows mean confirmed transfusion in a surgical/procedural context and "
+        "retain that legacy interpretation.</dd>\n"
         if RETURNS_LEDGER_ENABLED
         else ""
     )

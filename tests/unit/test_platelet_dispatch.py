@@ -25,6 +25,7 @@ from bba.audit_pipeline.pipeline import (
 from bba.audit_store import AuditRow, AuditStore
 from bba.audit_store.models import AuditStoreConfig
 from bba.deterministic_classifier import BypassReason, ClassifierResult
+from bba.declared_use import DeclaredUseLabel
 from bba.llm_client import CassetteTransport, LlmClientConfig, RawBatchResponse
 from bba.llm_client.models import (
     SONNET_MODEL_ID,
@@ -67,6 +68,7 @@ def _platelet_ctx(
     evidence_chunks: tuple[EvidenceChunk, ...] = (),
     periop_summary: PeriopSummary | None = None,
     returns_summary: ReturnsSummary | None = None,
+    declared_use: DeclaredUseLabel | None = None,
 ) -> PipelineRowContext:
     plt_result = (
         PlateletLookupResult(
@@ -96,6 +98,7 @@ def _platelet_ctx(
         evidence_chunks=evidence_chunks,
         periop_summary=periop_summary,
         returns_summary=returns_summary,
+        declared_use=declared_use,
         platelet_mtp_suppressed=platelet_mtp_suppressed,
     )
 
@@ -225,6 +228,7 @@ def test_platelet_periop_transfusion_is_terminal(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", True)
+    monkeypatch.setattr(feature_flags, "DECLARED_USE_PREOP_EXEMPT_ENABLED", False)
     ctx = _platelet_ctx(
         "audit-plt-periop",
         platelet_count=150.0,
@@ -251,6 +255,34 @@ def test_platelet_periop_transfusion_is_terminal(
     (row,) = store.read_audit_results(run_id="run-plt-periop")
     assert row.final_classification == "PERIOP_TRANSFUSION_EXEMPT"
     assert row.needs_human_review is False
+
+
+def test_platelet_declared_preop_without_ledger_is_terminal(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", False)
+    monkeypatch.setattr(feature_flags, "DECLARED_USE_PREOP_EXEMPT_ENABLED", True)
+    ctx = _platelet_ctx(
+        "audit-plt-declared-preop",
+        platelet_count=150.0,
+        declared_use="surgery",
+    )
+    store = _audit_store(tmp_path)
+
+    result = run_pipeline(
+        [ctx],
+        transport=CassetteTransport(interactions=()),
+        audit_store=store,
+        batch_run_store=InMemoryBatchRunStore(),
+        llm_config=_LLM_CONFIG,
+        pipeline_config=_PIPELINE_CONFIG,
+        run_id="run-plt-declared-preop",
+    )
+
+    assert result.audit_ids_persisted == (ctx.order.audit_id,)
+    (row,) = store.read_audit_results(run_id="run-plt-declared-preop")
+    assert row.final_classification == "PERIOP_TRANSFUSION_EXEMPT"
+    assert row.reasoning_summary_en == "deterministic: preop_declared_exempt"
 
 
 # ───────────────────────── Test 3 ─────────────────────────

@@ -217,6 +217,7 @@ def _inputs(
     returns_disposition: str = "inconclusive",
     returns_periop_context: bool = False,
     declared_use: DeclaredUseLabel | None = None,
+    enable_declared_use_preop_exemption: bool = False,
 ) -> ClassifierInputs:
     return ClassifierInputs(
         audit_id="audit-test-0001",
@@ -233,6 +234,7 @@ def _inputs(
         returns_disposition=returns_disposition,  # type: ignore[arg-type]
         returns_periop_context=returns_periop_context,
         declared_use=declared_use,
+        enable_declared_use_preop_exemption=enable_declared_use_preop_exemption,
     )
 
 
@@ -377,6 +379,124 @@ class TestPeriopTransfusionExempt:
         )
         assert result.classification == "POTENTIALLY_INAPPROPRIATE"
         assert result.bypass_reason == BypassReason.NONE
+
+    @pytest.mark.parametrize(
+        ("declared_use", "is_preop"),
+        [
+            ("surgery", True),
+            ("type_screen", True),
+            ("ward", False),
+            ("day_care", False),
+            ("unknown", False),
+            (None, False),
+        ],
+    )
+    @pytest.mark.parametrize(
+        ("ledger_case", "returns_disposition"),
+        [
+            ("absent", "inconclusive"),
+            ("inconclusive", "inconclusive"),
+            ("transfused", "transfused"),
+            ("all_returned", "not_transfused"),
+            ("all_incompatible", "not_transfused"),
+        ],
+    )
+    def test_declared_use_preop_edge_matrix(
+        self,
+        declared_use: DeclaredUseLabel | None,
+        is_preop: bool,
+        ledger_case: str,
+        returns_disposition: str,
+    ) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(11.0),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                returns_disposition=returns_disposition,
+                returns_periop_context=True,
+                declared_use=declared_use,
+                enable_declared_use_preop_exemption=True,
+            )
+        )
+
+        if returns_disposition == "not_transfused":
+            assert result.classification == "RETURNED_NOT_TRANSFUSED", ledger_case
+            assert result.rationale == "returned_not_transfused"
+        elif is_preop:
+            assert result.classification == "PERIOP_TRANSFUSION_EXEMPT", ledger_case
+            assert result.rationale == "preop_declared_exempt"
+        else:
+            assert result.classification == "POTENTIALLY_INAPPROPRIATE", ledger_case
+            assert result.rationale == "hb_ge_10"
+
+    def test_declared_preop_ignores_periop_envelope(self) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(11.0),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                returns_disposition="inconclusive",
+                returns_periop_context=False,
+                declared_use="surgery",
+                enable_declared_use_preop_exemption=True,
+            )
+        )
+        assert result.classification == "PERIOP_TRANSFUSION_EXEMPT"
+        assert result.rationale == "preop_declared_exempt"
+
+    def test_all_returned_intraop_contradiction_becomes_declared_exempt(self) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(11.0),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                returns_disposition="not_transfused",
+                periop_intraop_transfusion=True,
+                declared_use="surgery",
+                enable_declared_use_preop_exemption=True,
+            )
+        )
+        assert result.classification == "PERIOP_TRANSFUSION_EXEMPT"
+        assert result.rationale == "preop_declared_exempt"
+
+    def test_mtp_declared_surgery_is_exempt(self) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(6.5),
+                cohort=_cohort(CohortLabel.MTP, None),
+                declared_use="surgery",
+                enable_declared_use_preop_exemption=True,
+            )
+        )
+        assert result.classification == "PERIOP_TRANSFUSION_EXEMPT"
+        assert result.rationale == "preop_declared_exempt"
+
+    def test_flag_off_preserves_legacy_envelope_exemption(self) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(6.5),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                returns_disposition="transfused",
+                returns_periop_context=True,
+                declared_use="ward",
+                enable_declared_use_preop_exemption=False,
+            )
+        )
+
+        assert result.classification == "PERIOP_TRANSFUSION_EXEMPT"
+        assert result.rationale == "periop_transfusion_exempt"
+
+    def test_flag_off_declared_surgery_without_envelope_is_normal(self) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(11.0),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                returns_disposition="inconclusive",
+                returns_periop_context=False,
+                declared_use="surgery",
+                enable_declared_use_preop_exemption=False,
+            )
+        )
+        assert result.classification == "NEEDS_REVIEW"
+        assert result.rationale == "preop_defer_llm_declared"
 
     @pytest.mark.parametrize("disposition", ["not_transfused", "inconclusive"])
     def test_periop_context_without_transfused_disposition_does_not_exempt(

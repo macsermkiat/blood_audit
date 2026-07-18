@@ -51,6 +51,7 @@ from bba.declared_use import DeclaredUseLabel, collapse_usetype, label_for
 from bba.feature_flags import (
     DECLARED_USETYPE_ENABLED,
     MSBOS_RESERVATION_ENABLED,
+    DECLARED_USE_PREOP_EXEMPT_ENABLED,
     RETURNS_LEDGER_ENABLED,
 )
 from bba.hb_lookup import (
@@ -71,6 +72,7 @@ from bba.platelet_lookup import (
     parse_platelet_count,
 )
 from bba.preop_reservation import (
+    REVIEW_REASONS as PLATELET_REVIEW_REASONS,
     MsbosReference,
     ReservationDecision,
     evaluate_platelet_reservation,
@@ -110,6 +112,12 @@ ENABLE_MISSING_HB_POSITIVE_EVIDENCE = os.environ.get(
 _declared_env = os.environ.get("BBA_PILOT_DECLARED_USETYPE")
 DECLARED_USETYPE_PILOT_ENABLED = (
     _declared_env == "1" if _declared_env is not None else DECLARED_USETYPE_ENABLED
+)
+_declared_preop_exempt_env = os.environ.get("BBA_PILOT_DECLARED_USE_PREOP_EXEMPT")
+DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED = (
+    _declared_preop_exempt_env == "1"
+    if _declared_preop_exempt_env is not None
+    else DECLARED_USE_PREOP_EXEMPT_ENABLED
 )
 _msbos_env = os.environ.get("BBA_PILOT_MSBOS_RESERVATION")
 MSBOS_RESERVATION_PILOT_ENABLED = (
@@ -282,8 +290,9 @@ def _declared_use_columns(collapsed_code: str | None) -> dict[str, str]:
     USETYPE is a component-agnostic order attribute, so these columns are
     populated for red-cell AND platelet rows — a blank on a platelet order that
     was declared for surgery would read as "no declaration" in the opt-in
-    report. This is display only: platelet CLASSIFICATION is untouched (the
-    declared signal never feeds the platelet gate).
+    report. The platelet GATE (classify_platelet) never reads the declared
+    signal; the platelet returns short-circuit does receive the label to gate
+    the peri-op exemption (PR #194).
     """
     if not DECLARED_USETYPE_PILOT_ENABLED:
         return {}
@@ -307,7 +316,11 @@ def _returns_periop_context_for_classifier(
     ledger coverage, the classifier sees ``False`` so the exemption cannot
     fire and today's output is unchanged.
     """
-    if RETURNS_LEDGER_ENABLED and returns_summary is not None:
+    if (
+        not DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED
+        and RETURNS_LEDGER_ENABLED
+        and returns_summary is not None
+    ):
         return periop_envelope(
             surgical_context=surgical_context,
             intraop_transfusion=intraop_transfusion,
@@ -497,12 +510,16 @@ def _platelet_returns_result(
     order_datetime: datetime,
     returns_summary: ReturnsSummary | None,
     periop: PeriopSummary | None,
+    declared_use: DeclaredUseLabel | None,
 ) -> ClassifierResult | None:
     """Returns-ledger short-circuit for a platelet order (spec #119).
 
-    Mirrors ``pipeline.run_pipeline``'s platelet branch: run the RBC classifier
-    on the order's returns disposition + peri-op envelope and, if it yields a
-    returns terminal, use that instead of the platelet gate. Peri-op IS fed —
+    Mirrors ``pipeline.run_pipeline``'s platelet branch. With the declared-use
+    rule enabled, surgery/type-screen orders reach the terminal even without a
+    returns ledger; a factual all-returned ledger still wins. With the rule
+    disabled, the precheck retains the legacy returns-ledger requirement and
+    peri-op envelope behavior. ``declared_use`` is required so both pilot legs
+    make the same order-level decision. Peri-op IS fed —
     matching production's tested contract (``test_platelet_dispatch`` feeds a
     ``periop_summary`` and expects ``PERIOP_TRANSFUSION_EXEMPT``) — so BOTH
     terminals are reachable and, crucially, the hard intra-op/EBL contradiction
@@ -513,10 +530,12 @@ def _platelet_returns_result(
     envelope rests only on surgical_context / intra-op transfusion.
 
     Returns the :class:`ClassifierResult` iff it is a returns terminal, else
-    ``None``. Off, or with no ledger coverage, returns ``None`` so the platelet
-    path is byte-identical to today.
+    ``None``. When the declared-use rule is off, missing ledger coverage returns
+    ``None`` exactly as before.
     """
-    if not (RETURNS_LEDGER_ENABLED and returns_summary is not None):
+    if not DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED and not (
+        RETURNS_LEDGER_ENABLED and returns_summary is not None
+    ):
         return None
     surgical_context = periop.surgical_context if periop else False
     intraop_transfusion = periop.intraop_transfusion if periop else False
@@ -539,6 +558,10 @@ def _platelet_returns_result(
                 intraop_transfusion=intraop_transfusion,
                 procedure_proximity_hours=None,
                 upcoming_procedure_hours=None,
+            ),
+            declared_use=declared_use,
+            enable_declared_use_preop_exemption=(
+                DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED
             ),
         )
     )
@@ -883,6 +906,11 @@ def _icd9_dict_from_rows(rows: list[dict[str, str]]) -> dict[str, dict[str, str]
 
 
 def main() -> None:
+    if DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED and not DECLARED_USETYPE_PILOT_ENABLED:
+        print(
+            "WARNING: declared-use pre-op exemption is ON while the declared-use "
+            "seam is OFF; zero pre-op exemptions can be produced."
+        )
     if not BUNDLE.exists():
         sys.exit(f"bundle not found: {BUNDLE} (run sample_bundle.py first)")
 
@@ -1039,8 +1067,9 @@ def main() -> None:
     for order in filter_result.included:
         # Collapsed declared use for THIS order, keyed by (HN, REQNO). Computed
         # before the component split so both the red-cell and platelet report
-        # rows carry the descriptive columns (the platelet classifier never
-        # reads it). Guarded so a flag-off run never calls collapse_usetype.
+        # rows carry the descriptive columns and the platelet returns
+        # short-circuit can gate the peri-op exemption (PR #194). Guarded so a
+        # flag-off run never calls collapse_usetype.
         collapsed_usetype = _collapsed_usetype_for(
             usetype_values_by_hn_reqno.get(((order.hn or "").strip(), order.reqno), [])
         )
@@ -1076,6 +1105,7 @@ def main() -> None:
                 order_datetime=order.order_datetime,
                 returns_summary=plt_returns_summary,
                 periop=plt_periop,
+                declared_use=_declared_use_label_for_classifier(collapsed_usetype),
             )
             if plt_returns_result is not None:
                 plt_classification = plt_returns_result.classification
@@ -1093,12 +1123,6 @@ def main() -> None:
                 f"{plt_result.value_k_ul:.0f}"
                 if plt_result.value_k_ul is not None
                 else "----"
-            )
-            print(
-                f"{order.reqno:<10} {order.an[:20]:<22} "
-                f"{'platelet':<24} "
-                f"PLT={plt_disp:<5} {plt_result.freshness:<14} "
-                f"{'n/a':<5} {plt_classification:<26} {plt_rationale}"
             )
             plt_row: dict[str, Any] = {
                 "reqno": order.reqno,
@@ -1135,18 +1159,34 @@ def main() -> None:
                 plt_op_events = _build_op_events(
                     iptsumoprt, ipddchsumoprt, incpt, optract_dict, icd9_dict, order.an
                 )
-                plt_row.update(
-                    _msbos_platelet_columns(
-                        classification=plt_classification,
-                        hn=order.hn,
-                        reqno=order.reqno,
-                        op_events=plt_op_events,
-                        order_datetime=order.order_datetime,
-                        pre_op_count_k_ul=plt_result.value_k_ul,
-                        reserved_units_map=reserved_units_map,
-                        msbos_reference=msbos_reference,
-                    )
+                msbos_columns = _msbos_platelet_columns(
+                    classification=plt_classification,
+                    hn=order.hn,
+                    reqno=order.reqno,
+                    op_events=plt_op_events,
+                    order_datetime=order.order_datetime,
+                    pre_op_count_k_ul=plt_result.value_k_ul,
+                    reserved_units_map=reserved_units_map,
+                    msbos_reference=msbos_reference,
                 )
+                plt_row.update(msbos_columns)
+                if plt_rationale == "preop_declared_exempt":
+                    if msbos_columns.get("msbos_is_over") is True:
+                        plt_classification = "PREOP_OVER_RESERVATION"
+                        plt_rationale = "preop_over_reservation"
+                    elif msbos_columns.get("msbos_reason") in PLATELET_REVIEW_REASONS:
+                        plt_classification = "NEEDS_REVIEW"
+                        plt_rationale = "platelet_reservation_review"
+                    plt_row.update(
+                        classification=plt_classification,
+                        rationale=plt_rationale,
+                    )
+            print(
+                f"{order.reqno:<10} {order.an[:20]:<22} "
+                f"{'platelet':<24} "
+                f"PLT={plt_disp:<5} {plt_result.freshness:<14} "
+                f"{'n/a':<5} {plt_classification:<26} {plt_rationale}"
+            )
             rows.append(plt_row)
             continue
 
@@ -1284,6 +1324,9 @@ def main() -> None:
                     upcoming_procedure_hours=upcoming_h,
                 ),
                 declared_use=_declared_use_label_for_classifier(collapsed_usetype),
+                enable_declared_use_preop_exemption=(
+                    DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED
+                ),
             )
         )
 
@@ -1350,17 +1393,27 @@ def main() -> None:
             )
         row.update(_declared_use_columns(collapsed_usetype))
         if MSBOS_RESERVATION_PILOT_ENABLED and msbos_reference is not None:
-            row.update(
-                _msbos_reservation_columns(
-                    classification=clf.classification,
-                    hn=order.hn,
-                    reqno=order.reqno,
-                    op_events=op_events,
-                    order_datetime=order.order_datetime,
-                    reserved_units_map=reserved_units_map,
-                    msbos_reference=msbos_reference,
-                )
+            msbos_columns = _msbos_reservation_columns(
+                classification=clf.classification,
+                hn=order.hn,
+                reqno=order.reqno,
+                op_events=op_events,
+                order_datetime=order.order_datetime,
+                reserved_units_map=reserved_units_map,
+                msbos_reference=msbos_reference,
             )
+            row.update(msbos_columns)
+            if clf.rationale == "preop_declared_exempt":
+                if msbos_columns.get("msbos_is_over") is True:
+                    row.update(
+                        classification="PREOP_OVER_RESERVATION",
+                        rationale="preop_over_reservation",
+                    )
+                elif msbos_columns.get("msbos_reason") == "operation_unresolved":
+                    row.update(
+                        classification="NEEDS_REVIEW",
+                        rationale="operation_unresolved",
+                    )
         rows.append(row)
 
     # Append excluded cases as sparse rows so build_review.py can surface
