@@ -687,23 +687,31 @@ dashboards can group by reason without re-deriving from `rationale`.
 
 ### Classification precedence
 
-Eleven-step composition in `bba.deterministic_classifier.classify`
-(top wins): (1) Hb missing → MTP / peri-procedural / hard-peri-op-evidence
-positive-evidence pre-pass (`APPROPRIATE` on an Hb-independent signal);
+Eleven-step composition in `bba.deterministic_classifier.classify`. With the
+default-ON `DECLARED_USE_PREOP_EXEMPT_ENABLED`, USETYPE is the only pre-op
+router: declared surgery/type-screen exits as `PERIOP_TRANSFUSION_EXEMPT`,
+while scheduled/recent procedures remain LLM evidence and never route or
+auto-decide. The remaining precedence (top wins) is: (1) Hb missing → MTP /
+hard-peri-op-evidence positive-evidence pre-pass (`APPROPRIATE` on an
+Hb-independent signal);
 with the pre-pass flag on but no hard evidence → `NEEDS_REVIEW` (defer to
 LLM), with the flag off → `INSUFFICIENT_EVIDENCE` (see "Missing-Hb
 positive-evidence pre-check"); (2) Hb < 7.0 →
 `APPROPRIATE`/`NONE`; (3) cohort `MTP` → `APPROPRIATE`/`MTP`;
-(4) cohort `UNKNOWN` → `NEEDS_REVIEW`; (5) procedure ≤ 6 h →
-`APPROPRIATE`/`PERI_PROCEDURAL_6H`; (6) upcoming procedure ≤ 72 h →
-`APPROPRIATE`/`PRE_OP_CROSSMATCH`; (7) delta-Hb fired →
-`APPROPRIATE`/`DELTA_HB`; (8) non-threshold cohort →
-`NEEDS_REVIEW`; (9) hemodilution (Hb < threshold ∧ ≥ 2 L crystalloid)
-→ `NEEDS_REVIEW`/`HEMODILUTION_FLAGGED`; (10)
+(4) cohort `UNKNOWN` → `NEEDS_REVIEW`; (5) delta-Hb fired →
+`APPROPRIATE`/`DELTA_HB`; (6) non-threshold cohort →
+`NEEDS_REVIEW`; (7) hemodilution (Hb < threshold ∧ ≥ 2 L crystalloid)
+→ `NEEDS_REVIEW`/`HEMODILUTION_FLAGGED`; (8)
 single-low-Hb-no-trend (Hb < threshold ∧ `needs_review_single_low_hb`)
-→ `NEEDS_REVIEW`/`NONE`; (11) plain Hb-tier: `< threshold` →
+→ `NEEDS_REVIEW`/`NONE`; (9) plain Hb-tier: `< threshold` →
 `APPROPRIATE`, `[threshold, 10)` → `NEEDS_REVIEW`, `≥ 10` →
 `POTENTIALLY_INAPPROPRIATE`.
+
+With `DECLARED_USE_PREOP_EXEMPT_ENABLED=False`, the legacy procedure routing is
+restored byte-for-byte: missing-Hb and Hb-present proximity ≤6 h can produce
+`bypass_peri_procedural_hb_missing` / `bypass_peri_procedural`, and upcoming
+≤72 h or declared surgical intent can produce `preop_defer_llm` /
+`preop_defer_llm_declared`.
 
 ### INAPPROPRIATE never deterministic
 
@@ -810,15 +818,18 @@ the original PRD spec line in `scripts/create_issues.sh` ("Hb missing →
 INSUFFICIENT_EVIDENCE"). The orchestrator that builds `PipelineRowContext`
 is the sign-off binding point.
 
-When the flag is `True`, the pre-pass applies and order is preserved
-(MTP → UNKNOWN → peri-procedural → hard peri-op evidence):
+When the flag is `True`, the pre-pass applies and order is preserved. In
+default USETYPE-only mode the effective order is MTP → UNKNOWN → hard peri-op
+evidence; legacy flag-OFF mode retains the peri-procedural arm:
 
 - cohort `MTP` → `APPROPRIATE`/`MTP`, `rationale="bypass_mtp_hb_missing"`;
 - cohort `UNKNOWN` → no deterministic auto-approve (peri-procedural / peri-op
   evidence must not override UNKNOWN, mirroring the Hb-present order); defers
   to the LLM below;
-- `procedure_proximity_hours ≤ 6.0` → `APPROPRIATE`/`PERI_PROCEDURAL_6H`,
-  `rationale="bypass_peri_procedural_hb_missing"`;
+- with `DECLARED_USE_PREOP_EXEMPT_ENABLED=False` only,
+  `procedure_proximity_hours ≤ 6.0` → `APPROPRIATE`/`PERI_PROCEDURAL_6H`,
+  `rationale="bypass_peri_procedural_hb_missing"`; in default USETYPE-only mode
+  proximity is evidence and the missing-Hb order defers to the LLM;
 - hard peri-op note evidence — a charted intra-op transfusion, or estimated
   blood loss ≥ `PERIOP_MIN_EBL_ML` (500 mL) — → `APPROPRIATE`/`PERIOP_EVIDENCE`,
   `rationale="bypass_periop_evidence_hb_missing"`. Soft cues (a surgery is
@@ -3428,8 +3439,11 @@ never records status 5 (transfused); `USETIME` is populated for only 128/300
 orders. Administration therefore cannot be confirmed from structured status
 data, and reserve-ahead orders must not be treated as completed transfusions.
 
-Default-off `feature_flags.RESERVE_AHEAD_ROUTER_ENABLED` routes
-`preop_defer_llm` cases to `RESERVE_AHEAD_REVIEW`. Its asymmetric result gate
+Default-off `feature_flags.RESERVE_AHEAD_ROUTER_ENABLED` routes legacy flag-OFF
+`preop_defer_llm` cases to `RESERVE_AHEAD_REVIEW`. Default USETYPE-only mode
+does not produce either pre-op deferral rationale; the dispatch and
+`PREOP_RESERVATION_UNCONFIRMED` handling remain for flag-OFF and historical
+rows. Its asymmetric result gate
 accepts grounded affirmative administration evidence, including the fact-only
 `scan_administration` extractor; without confirmation it stores
 `PREOP_RESERVATION_UNCONFIRMED` (`needs_human_review=False`), projects it to
@@ -3516,7 +3530,10 @@ seam.
 (`1→ward`, `2→surgery`, `3→type_screen`, `4→day_care`); `label_for(code)`
 applies it, defaulting unknown codes — including `5` — to `unknown`, which drives
 no routing. `DECLARED_SURGICAL_LABELS = {surgery, type_screen}` is the declared
-surgical group that widens the step-6 preop deferral.
+surgical group. With default-ON `DECLARED_USE_PREOP_EXEMPT_ENABLED`, it is
+authoritative: those labels receive `preop_declared_exempt` and every other
+USETYPE follows plain Hb/cohort routing. With the flag OFF, the group retains
+its legacy role in the step-6 `preop_defer_llm_declared` path.
 
 ### collapse_usetype and DeclaredUse
 

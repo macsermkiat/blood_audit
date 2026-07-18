@@ -74,6 +74,7 @@ from bba.audit_pipeline.replay import (
     _administration_claimed_from_result,
     _administration_evidence_from_result,
     _classification_from_result,
+    _has_windowed_periop_exemption,
     _reservation_assessment_from_result,
     llm_overclear_suspect,
     periop_contradiction,
@@ -768,6 +769,43 @@ class TestPeriopTransfusionExemptTerminal:
             ),
         )
         assert _classify_from_context(ctx).classification == expected_classification
+
+    @pytest.mark.parametrize(
+        ("hb_value", "proximity", "upcoming", "expected_rationale"),
+        [
+            (7.5, None, 60.8, "hb_7_to_10"),
+            (8.0, 2.0, None, "hb_7_to_10"),
+        ],
+    )
+    def test_pipeline_and_replay_twins_treat_procedures_as_evidence_only(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        hb_value: float,
+        proximity: float | None,
+        upcoming: float | None,
+        expected_rationale: str,
+    ) -> None:
+        import bba.feature_flags as feature_flags
+        from bba.audit_pipeline.pipeline import _classifier_inputs_for
+        from bba.audit_pipeline.replay import _classify_from_context
+        from bba.deterministic_classifier import classify
+
+        monkeypatch.setattr(feature_flags, "DECLARED_USETYPE_ENABLED", True)
+        monkeypatch.setattr(feature_flags, "DECLARED_USE_PREOP_EXEMPT_ENABLED", True)
+        ctx = _row_context(
+            audit_id=f"usetype-only-{hb_value}-{proximity}-{upcoming}",
+            hb_value=hb_value,
+            procedure_proximity_hours=proximity,
+            upcoming_procedure_hours=upcoming,
+            declared_use="ward",
+        )
+
+        pipeline_result = classify(_classifier_inputs_for(ctx))
+        replay_result = _classify_from_context(ctx)
+
+        assert pipeline_result == replay_result
+        assert pipeline_result.classification == "NEEDS_REVIEW"
+        assert pipeline_result.rationale == expected_rationale
 
 
 # =============================================================================
@@ -2029,6 +2067,13 @@ def _apply_single_row(
 
 
 class TestReserveAheadGate:
+    @pytest.fixture(autouse=True)
+    def _legacy_preop_routing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Reserve-ahead rationales exist only in the legacy flag-OFF path."""
+        from bba import feature_flags
+
+        monkeypatch.setattr(feature_flags, "DECLARED_USE_PREOP_EXEMPT_ENABLED", False)
+
     def test_flag_off_case_68026306_replays_with_existing_b1_bytes(
         self, tmp_path: object
     ) -> None:
@@ -2586,20 +2631,47 @@ class TestReserveAheadGate:
 class TestPeriopContradictionPredicate:
     """Unit-level pin on the pure predicate + its constants."""
 
-    def test_surgery_alone_contradicts_insufficient_evidence(self) -> None:
+    @pytest.mark.parametrize("flag_enabled", [False, True])
+    def test_surgery_alone_is_legacy_flag_off_floor(
+        self, monkeypatch: pytest.MonkeyPatch, flag_enabled: bool
+    ) -> None:
+        from bba import feature_flags
+
+        monkeypatch.setattr(
+            feature_flags, "DECLARED_USE_PREOP_EXEMPT_ENABLED", flag_enabled
+        )
         ctx = _row_context(
             audit_id="p-1", periop_summary=PeriopSummary(surgical_context=True)
         )
-        assert periop_contradiction("INSUFFICIENT_EVIDENCE", ctx) is True
+        assert periop_contradiction("INSUFFICIENT_EVIDENCE", ctx) is (not flag_enabled)
+        assert periop_contradiction("POTENTIALLY_INAPPROPRIATE", ctx) is (
+            not flag_enabled
+        )
 
-    def test_large_ebl_alone_contradicts(self) -> None:
+    @pytest.mark.parametrize("flag_enabled", [False, True])
+    def test_large_ebl_alone_contradicts_in_both_modes(
+        self, monkeypatch: pytest.MonkeyPatch, flag_enabled: bool
+    ) -> None:
+        from bba import feature_flags
+
+        monkeypatch.setattr(
+            feature_flags, "DECLARED_USE_PREOP_EXEMPT_ENABLED", flag_enabled
+        )
         ctx = _row_context(
             audit_id="p-2",
             periop_summary=PeriopSummary(blood_loss_ml=PERIOP_GUARDRAIL_MIN_EBL_ML),
         )
         assert periop_contradiction("POTENTIALLY_INAPPROPRIATE", ctx) is True
 
-    def test_intraop_transfusion_alone_contradicts(self) -> None:
+    @pytest.mark.parametrize("flag_enabled", [False, True])
+    def test_intraop_transfusion_alone_contradicts_in_both_modes(
+        self, monkeypatch: pytest.MonkeyPatch, flag_enabled: bool
+    ) -> None:
+        from bba import feature_flags
+
+        monkeypatch.setattr(
+            feature_flags, "DECLARED_USE_PREOP_EXEMPT_ENABLED", flag_enabled
+        )
         ctx = _row_context(
             audit_id="p-3", periop_summary=PeriopSummary(intraop_transfusion=True)
         )
@@ -2691,15 +2763,47 @@ class TestLlmOverclearPredicate:
         )
         assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is True
 
-    def test_surgical_context_with_recent_op_exempts(self) -> None:
+    @pytest.mark.parametrize("flag_enabled", [False, True])
+    def test_surgical_context_with_recent_op_is_legacy_flag_off_exemption(
+        self, monkeypatch: pytest.MonkeyPatch, flag_enabled: bool
+    ) -> None:
         # A charted surgery WITH a completed op inside the 3-day window is a
-        # genuine peri-op transfusion context and exempts.
+        # legacy peri-op exemption; USETYPE-only mode treats it as evidence.
+        from bba import feature_flags
+
+        monkeypatch.setattr(
+            feature_flags, "DECLARED_USE_PREOP_EXEMPT_ENABLED", flag_enabled
+        )
         ctx = _row_context(
             audit_id="oc-4c",
             hb_value=9.4,
             periop_summary=PeriopSummary(surgical_context=True),
             procedure_proximity_hours=20.0,
         )
+        assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is flag_enabled
+
+    @pytest.mark.parametrize("flag_enabled", [False, True])
+    @pytest.mark.parametrize(
+        "summary",
+        [
+            PeriopSummary(intraop_transfusion=True),
+            PeriopSummary(blood_loss_ml=PERIOP_GUARDRAIL_MIN_EBL_ML),
+        ],
+    )
+    def test_hard_periop_facts_preserve_overclear_in_both_modes(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        flag_enabled: bool,
+        summary: PeriopSummary,
+    ) -> None:
+        from bba import feature_flags
+
+        monkeypatch.setattr(
+            feature_flags, "DECLARED_USE_PREOP_EXEMPT_ENABLED", flag_enabled
+        )
+        ctx = _row_context(audit_id="oc-hard-ab", hb_value=9.4, periop_summary=summary)
+
+        assert _has_windowed_periop_exemption(ctx) is True
         assert llm_overclear_suspect("APPROPRIATE", "NEEDS_REVIEW", ctx) is False
 
     def test_surgical_context_with_stale_op_does_not_exempt(self) -> None:
@@ -2899,10 +3003,13 @@ class TestLlmOverclearGuardrail:
         assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
 
     def test_surgical_context_with_recent_op_exempts_overclear(
-        self, tmp_path: object
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # A charted surgery WITH a completed op inside the 3-day window is a
         # genuine peri-op transfusion context — the LLM APPROPRIATE survives.
+        from bba import feature_flags
+
+        monkeypatch.setattr(feature_flags, "DECLARED_USE_PREOP_EXEMPT_ENABLED", False)
         ctx = _row_context(
             audit_id="audit-oc-surg-recent",
             classification="NEEDS_REVIEW",
@@ -5216,7 +5323,7 @@ class TestMissingHbBypassPersistence:
         assert row.hb_freshness == "missing"
 
     def test_peri_procedural_bypass_missing_hb_persists_when_flag_enabled(
-        self, tmp_path: object
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Peri-procedural bypass (≤ 6 h) with no Hb produces a persisted
         APPROPRIATE row when the SEED policy flag is on.
@@ -5227,9 +5334,11 @@ class TestMissingHbBypassPersistence:
         """
         from pathlib import Path
 
+        from bba import feature_flags
         from bba.audit_store import AuditStore, AuditStoreConfig
 
         assert isinstance(tmp_path, Path)
+        monkeypatch.setattr(feature_flags, "DECLARED_USE_PREOP_EXEMPT_ENABLED", False)
         audit_store = AuditStore(
             AuditStoreConfig(root_dir=tmp_path / "store", code_version="v0.1.0+test")
         )

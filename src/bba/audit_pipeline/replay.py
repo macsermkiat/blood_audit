@@ -254,15 +254,16 @@ def _has_hard_periop_signal(summary: PeriopSummary | None) -> bool:
     """True iff ``summary`` carries a deterministically-extracted peri-op
     signal strong enough to contradict an "insufficient evidence" verdict.
 
-    Any one of documented surgery (op-time), estimated blood loss at or
-    above :data:`PERIOP_GUARDRAIL_MIN_EBL_ML`, or an intra-op transfusion
-    qualifies — these are the three signals scan_periop recovers from the
-    shipped notes, and each alone is enough to warrant a human look when the
-    model said the evidence was insufficient.
+    Estimated blood loss at or above :data:`PERIOP_GUARDRAIL_MIN_EBL_ML` or an
+    intra-op transfusion qualifies in both modes. A bare documented-surgery
+    signal qualifies only in legacy flag-OFF mode; USETYPE-only mode keeps it
+    as LLM evidence rather than a deterministic floor.
     """
     if summary is None:
         return False
-    if summary.surgical_context or summary.intraop_transfusion:
+    if summary.intraop_transfusion or (
+        summary.surgical_context and not feature_flags.DECLARED_USE_PREOP_EXEMPT_ENABLED
+    ):
         return True
     return (
         summary.blood_loss_ml is not None
@@ -292,7 +293,7 @@ def _has_windowed_periop_exemption(context: PipelineRowContext) -> bool:
       — a real surgical event that self-evidently happened, ungated (a bundle
       may recover these from prose with no structured op time, e.g. the
       1300 mL intra-op bleed of REQNO 68044754); OR
-    * ``surgical_context`` WITH a completed operation within
+    * in legacy flag-OFF mode, ``surgical_context`` WITH a completed operation within
       :data:`PERIOP_OVERCLEAR_WINDOW_HOURS` before the transfusion
       (``procedure_proximity_hours``). ``upcoming_procedure_hours`` is
       deliberately NOT accepted — reserve-ahead ("M/G for surgery") blood may
@@ -308,6 +309,8 @@ def _has_windowed_periop_exemption(context: PipelineRowContext) -> bool:
         and summary.blood_loss_ml >= PERIOP_GUARDRAIL_MIN_EBL_ML
     ):
         return True
+    if feature_flags.DECLARED_USE_PREOP_EXEMPT_ENABLED:
+        return False
     proximity = context.procedure_proximity_hours
     return (
         summary.surgical_context
@@ -449,9 +452,10 @@ def _has_structured_hard_signal(context: PipelineRowContext) -> bool:
 
     Any one of: a genuinely low Hb (< 7.0 g/dL), an MTP cohort, or a
     windowed peri-op signal (:func:`_has_windowed_periop_exemption` — an
-    intra-op transfusion / major EBL, or a ``surgical_context`` with a
-    completed op within :data:`PERIOP_OVERCLEAR_WINDOW_HOURS`; NOT a bare
-    surgical mention or a reserve-ahead upcoming procedure; case 68009853).
+    intra-op transfusion / major EBL in both modes, or, only in legacy flag-OFF
+    mode, a ``surgical_context`` with a completed op within
+    :data:`PERIOP_OVERCLEAR_WINDOW_HOURS`; NOT a bare surgical mention or a
+    reserve-ahead upcoming procedure; case 68009853).
     Deliberately structured-only — soft prose indications are not trusted
     here (they are what over-cleared the motivating cases).
 

@@ -81,9 +81,11 @@ receives ``PERIOP_TRANSFUSION_EXEMPT`` regardless of returns-ledger coverage or
 the peri-op note/proximity envelope. A factual all-returned/incompatible ledger
 still wins unless contradicted by hard peri-op evidence. Other declared uses
 follow the normal Hb/cohort path. Read at the ``ClassifierInputs`` composition
-seams so ``classify()`` remains pure. Set
-``BBA_PILOT_DECLARED_USE_PREOP_EXEMPT=0`` to restore the legacy transfused plus
-peri-op-envelope exemption in pilot runs.
+seams so ``classify()`` remains pure. This is also the USETYPE-only pre-op
+routing switch: scheduled or
+recent procedures remain LLM evidence but cannot route or auto-decide an order.
+Set ``BBA_PILOT_DECLARED_USE_PREOP_EXEMPT=0`` to restore the legacy transfused
+plus peri-op-envelope exemption and procedure-based routing in pilot runs.
 """
 
 MSBOS_RESERVATION_ENABLED: bool = True

@@ -5,14 +5,17 @@ over the Hb-tier rules + five bypass pathways. Precedence (top wins) is
 specified in PRD §"Implementation Decisions §6":
 
 1. Hb missing                       → positive-evidence pre-pass
-   (``APPROPRIATE`` on MTP / peri-procedural / hard peri-op evidence).
+   (``APPROPRIATE`` on MTP / hard peri-op evidence; legacy flag-OFF also
+   accepts peri-procedural proximity).
    With the pre-pass flag ON but no hard evidence → ``NEEDS_REVIEW``
    (defer to LLM); with the flag OFF → ``INSUFFICIENT_EVIDENCE``.
 2. Hb < 7.0 g/dL                    → ``APPROPRIATE`` (global low-Hb rule)
 3. Cohort ``MTP``                   → ``APPROPRIATE`` (``bypass_reason=mtp``)
 4. Cohort ``UNKNOWN``               → ``NEEDS_REVIEW`` (no bypass)
-5. Bypass: peri-procedural ≤ 6 h    → ``APPROPRIATE`` (``bypass_reason=peri_procedural_6h``)
-6. Structured pre-op crossmatch ≤ 72 h upcoming OR declared surgical intent,
+5. Legacy flag-OFF bypass: peri-procedural ≤ 6 h
+                                    → ``APPROPRIATE`` (``bypass_reason=peri_procedural_6h``)
+6. Legacy flag-OFF structured pre-op crossmatch ≤ 72 h upcoming OR declared
+   surgical intent,
    with Hb ≥ cohort floor           → ``NEEDS_REVIEW``
                                        (``rationale=preop_defer_llm`` for the
                                        structured signal, otherwise
@@ -43,7 +46,8 @@ Precedence notes:
   Hb-independent signals auto-classify ``APPROPRIATE`` just as the
   Hb-present path would (SEED pending clinical sign-off) —
     - active MTP                       → ``bypass_mtp_hb_missing``
-    - peri-procedural ≤ 6 h            → ``bypass_peri_procedural_hb_missing``
+    - peri-procedural ≤ 6 h (legacy flag-OFF only)
+                                       → ``bypass_peri_procedural_hb_missing``
     - hard peri-op note evidence       → ``bypass_periop_evidence_hb_missing``
       (a charted intra-op transfusion, or EBL ≥ ``PERIOP_MIN_EBL_ML``)
   — and the distinct rationale slugs keep these auditable. Interpreted
@@ -242,10 +246,10 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
     #    sign-off). Gated behind ``inputs.enable_missing_hb_positive_evidence``,
     #    which defaults to False. When OFF the original PRD spec applies
     #    (missing Hb → INSUFFICIENT_EVIDENCE) and no bypass fires; when ON,
-    #    hard Hb-independent signals (active MTP, peri-procedural ≤ 6 h, or a
-    #    documented intra-op transfusion / EBL ≥ PERIOP_MIN_EBL_ML)
-    #    auto-classify APPROPRIATE exactly as the Hb-present path would,
-    #    preserving the canonical MTP → UNKNOWN → peri-procedural ordering.
+    #    hard Hb-independent signals (active MTP or documented intra-op
+    #    transfusion / EBL ≥ PERIOP_MIN_EBL_ML) auto-classify APPROPRIATE.
+    #    Legacy flag-OFF pre-op routing also accepts proximity ≤ 6 h, preserving
+    #    the original MTP → UNKNOWN → peri-procedural ordering.
     #    Everything else with the flag ON defers to the LLM (NEEDS_REVIEW)
     #    rather than dead-ending. Interpreted signals (delta-Hb, which needs
     #    a current Hb), the weaker pre-op crossmatch, and the soft "surgery
@@ -267,7 +271,11 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
             # rather than auto-approving.
             if cohort.label != CohortLabel.UNKNOWN:
                 proximity = inputs.procedure_proximity_hours
-                if proximity is not None and proximity <= PERI_PROCEDURAL_WINDOW_HOURS:
+                if (
+                    not inputs.enable_declared_use_preop_exemption
+                    and proximity is not None
+                    and proximity <= PERI_PROCEDURAL_WINDOW_HOURS
+                ):
                     return ClassifierResult(
                         classification="APPROPRIATE",
                         bypass_reason=BypassReason.PERI_PROCEDURAL_6H,
@@ -344,10 +352,15 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
             rationale="cohort_unknown",
         )
 
-    # 5. Peri-procedural bypass — procedure within the 6 h window before
-    #    the order anchor. ``<=`` per PRD §6 ("within 6 h" inclusive).
+    # 5. Legacy flag-OFF peri-procedural bypass — procedure within the 6 h
+    #    window before the order anchor. In USETYPE-only mode the procedure is
+    #    LLM evidence and the order continues through the plain Hb tiers.
     proximity = inputs.procedure_proximity_hours
-    if proximity is not None and proximity <= PERI_PROCEDURAL_WINDOW_HOURS:
+    if (
+        not inputs.enable_declared_use_preop_exemption
+        and proximity is not None
+        and proximity <= PERI_PROCEDURAL_WINDOW_HOURS
+    ):
         return ClassifierResult(
             classification="APPROPRIATE",
             bypass_reason=BypassReason.PERI_PROCEDURAL_6H,
@@ -355,8 +368,11 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
             rationale="bypass_peri_procedural",
         )
 
-    # 6. Pre-op crossmatch — an upcoming procedure within 72 h after the order
-    #    anchor, or declared surgical intent even without a structured op row.
+    # 6. Legacy flag-OFF pre-op deferral — an upcoming procedure within 72 h
+    #    after the order anchor, or declared surgical intent even without a
+    #    structured op row. USETYPE-only mode exits declared surgical orders at
+    #    the exemption above and lets every other order reach the ordinary
+    #    non-pre-op rules; procedure facts remain available to the LLM evidence.
     #    This is NOT a clearing bypass: a crossmatch *reservation* or surgical
     #    *declaration* is not a transfusion *indication*, and surgery can hide
     #    an active problem the reservation masks (case 68080335 documented
@@ -384,7 +400,8 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
     )
     declared_surgical = inputs.declared_use in DECLARED_SURGICAL_LABELS
     if (
-        (structured_upcoming or declared_surgical)
+        not inputs.enable_declared_use_preop_exemption
+        and (structured_upcoming or declared_surgical)
         and threshold is not None
         and hb.value_g_dl >= threshold
     ):
