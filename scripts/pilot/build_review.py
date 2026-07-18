@@ -1101,8 +1101,8 @@ def main() -> None:
     summary_rows: list[dict[str, str]] = []
     case_mismatch_tags: list[str] = []
     msbos_counts: dict[str, dict[str, int]] = {
-        terminal: {"denominator": 0, "above": 0, "within": 0, "unresolved": 0}
-        for terminal in _RETURNS_TERMINALS
+        render_class: {"denominator": 0, "above": 0, "within": 0, "unresolved": 0}
+        for render_class in _MSBOS_RENDER_CLASSES
     }
 
     for i, m in enumerate(manifest_rows, start=1):
@@ -2053,6 +2053,27 @@ def main() -> None:
             f"{exempt_counts['unresolved']} unresolved"
             "</div>"
         )
+        # Post-flip verdict classes (#201): a declared row MSBOS reclassified
+        # keeps its annotation, so its bucket tallies surface here too. Only
+        # rendered when non-empty (a picker-off run leaves both at zero and
+        # the block absent, keeping the legacy layout).
+        over_counts = msbos_counts["PREOP_OVER_RESERVATION"]
+        review_counts = msbos_counts["NEEDS_REVIEW"]
+        if over_counts["denominator"] or review_counts["denominator"]:
+            msbos_counts_html = msbos_counts_html.replace(
+                "</div>",
+                "<br>"
+                f"Over-reserved ({over_counts['denominator']}): "
+                f"{over_counts['above']} above / "
+                f"{over_counts['within']} within / "
+                f"{over_counts['unresolved']} unresolved<br>"
+                f"MSBOS review ({review_counts['denominator']}): "
+                f"{review_counts['above']} above / "
+                f"{review_counts['within']} within / "
+                f"{review_counts['unresolved']} unresolved"
+                "</div>",
+                1,
+            )
     else:
         msbos_counts_html = ""
 

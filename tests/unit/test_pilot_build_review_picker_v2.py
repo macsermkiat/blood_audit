@@ -134,6 +134,41 @@ def test_case_line_non_bridge_pick_shows_status_only(review: ModuleType) -> None
     assert "human-" not in line
 
 
+# --- counts across post-flip classes ------------------------------------------
+
+
+def test_counts_do_not_crash_on_post_flip_classes(
+    review: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression (first live flag-ON render): msbos_counts was initialized
+    # for the returns terminals only, so a NEEDS_REVIEW row carrying msbos
+    # data raised KeyError in the count pass.
+    from test_pilot_build_review import _render_review_with_rows
+
+    rendered = _render_review_with_rows(
+        review,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN\nHN1,R1,AN1\nHN2,R2,AN2\n",
+        report_csv=(
+            "reqno,classification,rationale,component,msbos_reason,"
+            "msbos_reserved_units,msbos_recommended_units,msbos_token,"
+            "msbos_is_over,msbos_resolved_icd9,msbos_reference_hash\n"
+            "R1,NEEDS_REVIEW,preop_reservation_bridge_disagreement,red_cell,"
+            "unresolved_code,1,0,,False,INCPT:PX001,hash\n"
+            "R2,PREOP_OVER_RESERVATION,preop_over_reservation,red_cell,"
+            "over_gm_excess,5,2,G/M,True,8151,hash\n"
+        ),
+        llm_json="[]",
+        msbos_enabled=True,
+    ).decode()
+
+    assert "Over-reserved (1): 1 above / 0 within / 0 unresolved" in rendered
+    assert "MSBOS review (1): 0 above / 0 within / 1 unresolved" in rendered
+
+
 # --- glossary ----------------------------------------------------------------
 
 
