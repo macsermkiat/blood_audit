@@ -194,6 +194,17 @@ MSBOS_RESERVATION_PILOT_ENABLED = (
     if _msbos_env is not None
     else feature_flags.MSBOS_RESERVATION_ENABLED
 )
+# Peri-op exempt use-type gate (PR #194), same seam shape as declared-use above:
+# BBA_PILOT_PERIOP_EXEMPT_SURGICAL overrides ("1" forces on, anything else
+# forces off), defaulting to the library flag (ON). main() mirrors it into
+# feature_flags so the library composer twins agree with this leg's inline
+# ClassifierInputs.
+_periop_surg_env = os.environ.get("BBA_PILOT_PERIOP_EXEMPT_SURGICAL")
+PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE_PILOT = (
+    _periop_surg_env == "1"
+    if _periop_surg_env is not None
+    else feature_flags.PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE
+)
 # Run/code identity (spec #119 §G, ticket #124). The audit_store is idempotent
 # on (run_id, audit_id, code_version), so enabling a seam that changes verdicts
 # must not silently reuse a flag-off run's committed rows. Folding each seam into
@@ -219,6 +230,11 @@ if MSBOS_RESERVATION_PILOT_ENABLED:
     # is idempotent on (run_id, audit_id, code_version), and a re-run under the
     # old +msbos4 token would silently retain the pre-correction verdict.
     CODE_VERSION += "+msbos5"
+if PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE_PILOT:
+    # +periopgate (PR #194): the use-type gate flips ward/day-care peri-op
+    # exemptions back into the judged tiers, changing verdicts and the
+    # submission set, so it needs its own code identity like +declared.
+    CODE_VERSION += "+periopgate"
 TZ_LOCAL = "Asia/Bangkok"
 INCPT_OPERATION_GROUPS = {"110", "111"}
 
@@ -469,6 +485,9 @@ def _platelet_returns_result(
                 intraop_transfusion=intraop_transfusion,
                 procedure_proximity_hours=None,
                 upcoming_procedure_hours=None,
+            ),
+            require_surgical_use_for_periop_exempt=(
+                PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE_PILOT
             ),
         )
     )
@@ -1248,6 +1267,9 @@ def main() -> None:
     # agree with this leg's direct classify() call.
     feature_flags.DECLARED_USETYPE_ENABLED = DECLARED_USETYPE_PILOT_ENABLED
     feature_flags.MSBOS_RESERVATION_ENABLED = MSBOS_RESERVATION_PILOT_ENABLED
+    feature_flags.PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE = (
+        PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE_PILOT
+    )
 
     AUDIT_STORE_ROOT.mkdir(parents=True, exist_ok=True)
     (
@@ -2115,6 +2137,9 @@ def main() -> None:
                 ),
                 declared_use=(
                     ctx.declared_use if feature_flags.DECLARED_USETYPE_ENABLED else None
+                ),
+                require_surgical_use_for_periop_exempt=(
+                    PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE_PILOT
                 ),
             )
         )

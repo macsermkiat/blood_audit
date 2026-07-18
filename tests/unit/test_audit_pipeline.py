@@ -676,6 +676,85 @@ class TestPeriopTransfusionExemptTerminal:
         assert inputs.returns_periop_context is False
         assert classify(inputs).classification == "POTENTIALLY_INAPPROPRIATE"
 
+    @pytest.mark.parametrize(
+        ("gate_enabled", "expected_classification"),
+        [(True, "APPROPRIATE"), (False, "PERIOP_TRANSFUSION_EXEMPT")],
+    )
+    def test_ward_declared_use_gates_exempt_at_pipeline_wiring(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        gate_enabled: bool,
+        expected_classification: str,
+    ) -> None:
+        # WHY (PR #194 Codex P1): PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE is
+        # default-ON, so the MAIN audit composer must thread it — otherwise a
+        # ward-declared transfused order inside the peri-op envelope silently
+        # keeps the exemption on the production path while the pilot det leg
+        # judges it normally.
+        import bba.feature_flags as feature_flags
+        from bba.audit_pipeline.pipeline import _classifier_inputs_for
+        from bba.deterministic_classifier import classify
+
+        monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", True)
+        monkeypatch.setattr(feature_flags, "DECLARED_USETYPE_ENABLED", True)
+        monkeypatch.setattr(
+            feature_flags, "PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE", gate_enabled
+        )
+        ctx = _row_context(
+            audit_id=f"transfused-ward-gate-{gate_enabled}",
+            classification="APPROPRIATE",
+            hb_value=6.5,
+            upcoming_procedure_hours=48.0,
+            declared_use="ward",
+            returns_summary=ReturnsSummary(
+                units_total=1,
+                units_returned=0,
+                units_transfused=1,
+                ordered_unit_amount=1,
+                ledger_complete=True,
+            ),
+        )
+        inputs = _classifier_inputs_for(ctx)
+        assert inputs.require_surgical_use_for_periop_exempt is gate_enabled
+        assert classify(inputs).classification == expected_classification
+
+    @pytest.mark.parametrize(
+        ("gate_enabled", "expected_classification"),
+        [(True, "APPROPRIATE"), (False, "PERIOP_TRANSFUSION_EXEMPT")],
+    )
+    def test_ward_declared_use_gates_exempt_in_replay_fallback(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        gate_enabled: bool,
+        expected_classification: str,
+    ) -> None:
+        # WHY: replay's _classify_from_context is the resume-path twin of the
+        # pipeline composer; if only one threads the gate, a resumed run flips
+        # a ward order's verdict relative to the original run.
+        import bba.feature_flags as feature_flags
+        from bba.audit_pipeline.replay import _classify_from_context
+
+        monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", True)
+        monkeypatch.setattr(feature_flags, "DECLARED_USETYPE_ENABLED", True)
+        monkeypatch.setattr(
+            feature_flags, "PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE", gate_enabled
+        )
+        ctx = _row_context(
+            audit_id=f"transfused-ward-gate-replay-{gate_enabled}",
+            classification="APPROPRIATE",
+            hb_value=6.5,
+            upcoming_procedure_hours=48.0,
+            declared_use="ward",
+            returns_summary=ReturnsSummary(
+                units_total=1,
+                units_returned=0,
+                units_transfused=1,
+                ordered_unit_amount=1,
+                ledger_complete=True,
+            ),
+        )
+        assert _classify_from_context(ctx).classification == expected_classification
+
 
 # =============================================================================
 # AC ② — State-machine transitions

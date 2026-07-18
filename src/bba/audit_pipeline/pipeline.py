@@ -1383,6 +1383,9 @@ def _classifier_inputs_for(context: PipelineRowContext) -> ClassifierInputs:
         declared_use=(
             context.declared_use if feature_flags.DECLARED_USETYPE_ENABLED else None
         ),
+        require_surgical_use_for_periop_exempt=(
+            feature_flags.PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE
+        ),
     )
 
 

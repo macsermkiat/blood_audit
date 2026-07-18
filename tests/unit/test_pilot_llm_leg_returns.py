@@ -23,12 +23,12 @@ from bba.hb_lookup import HbLookupResult
 from bba.returns_ledger import ReturnsSummary
 
 
-def _load_llm_leg() -> ModuleType:
+def _load_llm_leg(module_name: str = "pilot_run_llm_leg_returns_test") -> ModuleType:
     pilot_dir = Path(__file__).resolve().parents[2] / "scripts" / "pilot"
     if str(pilot_dir) not in sys.path:
         sys.path.insert(0, str(pilot_dir))
     spec = importlib.util.spec_from_file_location(
-        "pilot_run_llm_leg_returns_test", pilot_dir / "run_llm_leg.py"
+        module_name, pilot_dir / "run_llm_leg.py"
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -79,6 +79,24 @@ def test_llm_leg_deterministic_final_includes_returns_terminals() -> None:
         "RETURNED_NOT_TRANSFUSED",
         "PERIOP_TRANSFUSION_EXEMPT",
     }
+
+
+def test_llm_leg_periop_surgical_gate_env_matrix(monkeypatch) -> None:
+    """The LLM leg resolves the periop use-type gate from
+    BBA_PILOT_PERIOP_EXEMPT_SURGICAL (default: the library flag) and folds a
+    distinct ``+periopgate`` code identity when ON — the audit store is
+    idempotent on (run_id, audit_id, code_version), so the verdict-affecting
+    gate must not silently reuse a flag-off run's committed rows (PR #194
+    Codex P1: the gate was previously inert outside the det pilot leg)."""
+    monkeypatch.setenv("BBA_PILOT_PERIOP_EXEMPT_SURGICAL", "0")
+    off = _load_llm_leg("pilot_run_llm_leg_periop_gate_off")
+    monkeypatch.setenv("BBA_PILOT_PERIOP_EXEMPT_SURGICAL", "1")
+    on = _load_llm_leg("pilot_run_llm_leg_periop_gate_on")
+
+    assert off.PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE_PILOT is False
+    assert on.PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE_PILOT is True
+    assert "+periopgate" not in off.CODE_VERSION
+    assert "+periopgate" in on.CODE_VERSION
 
 
 def test_llm_leg_returned_summary_is_terminal_and_skips_model(monkeypatch) -> None:
@@ -182,9 +200,11 @@ def test_llm_leg_code_version_is_flag_sensitive(monkeypatch) -> None:
     import bba.feature_flags as feature_flags
 
     # Isolate the returns flag: force the other now-ON default seams off so they
-    # do not add their own CODE_VERSION tokens ("+declared", "+msbos5").
+    # do not add their own CODE_VERSION tokens ("+declared", "+msbos5",
+    # "+periopgate").
     monkeypatch.setenv("BBA_PILOT_DECLARED_USETYPE", "0")
     monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", "0")
+    monkeypatch.setenv("BBA_PILOT_PERIOP_EXEMPT_SURGICAL", "0")
 
     monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", True)
     assert _load_llm_leg().CODE_VERSION == "pilot-mini+returns"

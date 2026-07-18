@@ -113,6 +113,31 @@ def test_both_legs_expose_returns_terminal_set(leg_key: str) -> None:
 
 
 @pytest.mark.parametrize("leg_key", ["det", "model"])
+def test_platelet_short_circuit_threads_periop_surgical_gate(
+    leg_key: str, monkeypatch
+) -> None:
+    """Both legs thread their pilot periop use-type gate constant into the
+    short-circuit's ClassifierInputs — the det/model legs run the same pure
+    ``classify()`` decision and must stay in lockstep on its inputs (spec #119;
+    PR #194 Codex P1 found the model leg missing the field)."""
+    leg = _LEG_LOADERS[leg_key]()
+    monkeypatch.setattr(leg, "RETURNS_LEDGER_ENABLED", True)
+    captured = []
+    real_classify = leg.classify
+
+    def capture(inputs):  # noqa: ANN001, ANN202 - mirrors leg.classify
+        captured.append(inputs)
+        return real_classify(inputs)
+
+    monkeypatch.setattr(leg, "classify", capture)
+    _call(leg, _transfused(), PeriopSummary())
+    (inputs,) = captured
+    assert inputs.require_surgical_use_for_periop_exempt is (
+        leg.PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE_PILOT
+    )
+
+
+@pytest.mark.parametrize("leg_key", ["det", "model"])
 def test_all_returned_platelet_short_circuits(leg_key: str, monkeypatch) -> None:
     """An all-returned platelet order (no contradicting peri-op) returns the
     RETURNED_NOT_TRANSFUSED terminal (component-agnostic) so the platelet gate /

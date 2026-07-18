@@ -78,8 +78,10 @@ PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE: bool = True
 
 When enabled, a known ward or day-care declared use no longer automatically
 receives ``PERIOP_TRANSFUSION_EXEMPT``; surgical and type-screen use remain
-eligible. Set ``BBA_PILOT_PERIOP_EXEMPT_SURGICAL=0`` to force this gate off for
-a pilot run.
+eligible. Read at the ``ClassifierInputs`` composition seams (the audit
+pipeline / replay composers and both pilot legs) — ``classify()`` stays pure.
+Contexts that leave ``declared_use`` ``None`` are unaffected. Set
+``BBA_PILOT_PERIOP_EXEMPT_SURGICAL=0`` to force this gate off for a pilot run.
 """
 
 MSBOS_RESERVATION_ENABLED: bool = True
