@@ -2,8 +2,9 @@
 
 Most flags default to OFF (False); ``RETURNS_LEDGER_ENABLED`` (returns-ledger
 go-live #138), ``DECLARED_USETYPE_ENABLED`` (declared-usetype go-live
-2026-07-15), and ``MSBOS_RESERVATION_ENABLED`` (MSBOS reservation go-live
-2026-07-16, #167), and ``DECLARED_USE_PREOP_EXEMPT_ENABLED`` are
+2026-07-15), ``MSBOS_RESERVATION_ENABLED`` (MSBOS reservation go-live
+2026-07-16, #167), ``DECLARED_USE_PREOP_EXEMPT_ENABLED``, and
+``MSBOS_PLANNED_OP_PICKER_V2_ENABLED`` (picker-v2 go-live 2026-07-19) are
 default-ON. Each flag's default is documented on the flag itself. Defining the
 contracts here keeps feature state in one place.
 
@@ -25,6 +26,10 @@ DECLARED_USETYPE_ENABLED
 MSBOS_RESERVATION_ENABLED
     Gates the MSBOS pre-op reservation-appropriateness arm. Default: True
     (go-live 2026-07-16, #167).
+MSBOS_PLANNED_OP_PICKER_V2_ENABLED
+    Gates the MSBOS planned-op picker v2 (bounded, denylist-hygienic,
+    bridge-resolving) plus the bridge verdict gate. Default: True (go-live
+    2026-07-19).
 DECLARED_USE_PREOP_EXEMPT_ENABLED
     Exempts orders whose declared use is surgery or type-screen from the
     Hb-appropriateness judgment. Default: True.
@@ -105,8 +110,8 @@ snapshot, so the overlays no-op there). Set ``BBA_PILOT_MSBOS_RESERVATION=0`` to
 force it off for a pilot run.
 """
 
-MSBOS_PLANNED_OP_PICKER_V2_ENABLED: bool = False
-"""Gate the MSBOS planned-op picker v2 (spec #196; default: OFF, dark).
+MSBOS_PLANNED_OP_PICKER_V2_ENABLED: bool = True
+"""Gate the MSBOS planned-op picker v2 (spec #196; default: ON).
 
 When True — and only in combination with ``MSBOS_RESERVATION_ENABLED`` — the
 MSBOS reservation arm selects the planned operation with the bounded,
@@ -115,7 +120,14 @@ instead of the legacy nearest-future-event pick, applies the bridge verdict
 gate (First/Human disagreement guard + score gate; gated overs route to
 NEEDS_REVIEW instead of a hard PREOP_OVER_RESERVATION), and emits the picker
 provenance columns. When False, every output is byte-identical to the
-pre-picker pipeline. Pilot override: ``BBA_PILOT_MSBOS_PLANNED_OP_PICKER_V2``
+pre-picker pipeline.
+
+Default-ON since the picker-v2 go-live (2026-07-19, user-authorized): the
+flag-ON transition matrix was verified on the 300-row pilot — exactly 28
+classification changes, all from declared-exempt rows (18 bridge-disagreement
+reviews, 8 cluster-ambiguity reviews, 2 exact-ICD9 hard overs), ZERO
+bridge-sourced hard over-flips. Set
+``BBA_PILOT_MSBOS_PLANNED_OP_PICKER_V2=0`` to force it off for a pilot run
 ("1" forces on, anything else forces off).
 """
 

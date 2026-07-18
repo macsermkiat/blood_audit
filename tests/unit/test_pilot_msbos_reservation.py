@@ -88,10 +88,13 @@ def test_run_pipeline_msbos_report_fieldnames_are_exact(
         + module.RETURNS_LEDGER_FIELDNAMES
         + module.DECLARED_USETYPE_FIELDNAMES
     )
+    # Picker-v2 defaults ON since the 2026-07-19 go-live, so the MSBOS-on
+    # schema also carries the picker provenance columns.
     expected = (
         flag_off
         + module.MSBOS_RESERVATION_FIELDNAMES
         + module.MSBOS_PLATELET_FIELDNAMES
+        + module.MSBOS_PICKER_V2_FIELDNAMES
         if env_value == "1"
         else flag_off
     )
@@ -276,6 +279,8 @@ def test_run_pipeline_msbos_platelet_columns_cover_locked_verdicts(
     reference = SimpleNamespace(
         content_hash="platelet-reference-hash",
         groups_for=lambda code: group_by_code.get(code, ()),
+        codes=lambda: frozenset(),
+        resolve=lambda code: None,
     )
 
     def event(code: str, offset_hours: int = 4) -> OperativeEvent:
@@ -422,6 +427,8 @@ def _configure_minimal_run_pipeline_platelet(
     reference = SimpleNamespace(
         content_hash="platelet-reference-hash",
         groups_for=lambda code: ("Arthroplasty",) if code == "major" else (),
+        codes=lambda: frozenset(),
+        resolve=lambda code: None,
     )
     reserved_units_map = {
         ("HN1", "REQ1", module.ComponentFamily.PLATELET): 2,

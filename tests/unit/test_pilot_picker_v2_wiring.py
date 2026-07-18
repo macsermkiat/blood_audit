@@ -150,14 +150,28 @@ def test_llm_leg_opbound_token_gated_on_both_seams(
         assert "+msbos5+opbound" in module.CODE_VERSION
 
 
-def test_picker_default_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_picker_default_is_on_with_env_escape_hatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Go-live 2026-07-19: the picker seam defaults ON; the env override
+    # remains the operator escape hatch back to the legacy picker.
     monkeypatch.delenv("BBA_PILOT_MSBOS_PLANNED_OP_PICKER_V2", raising=False)
     monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", "1")
     module = _load_pilot_module("run_pipeline.py", "pilot_run_pipeline_p2_default")
 
-    assert module.MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED is False
-    assert not any(
+    assert module.MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED is True
+    assert all(
         c in module._report_fieldnames() for c in module.MSBOS_PICKER_V2_FIELDNAMES
+    )
+
+    monkeypatch.setenv("BBA_PILOT_MSBOS_PLANNED_OP_PICKER_V2", "0")
+    forced_off = _load_pilot_module(
+        "run_pipeline.py", "pilot_run_pipeline_p2_forced_off"
+    )
+    assert forced_off.MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED is False
+    assert not any(
+        c in forced_off._report_fieldnames()
+        for c in forced_off.MSBOS_PICKER_V2_FIELDNAMES
     )
 
 
