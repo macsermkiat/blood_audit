@@ -40,6 +40,36 @@ class CandidateOperation(BaseModel):
     recommended_units: int = Field(ge=0)
 
 
+class PlannedOpProvenance(BaseModel):
+    """Picker-v2 provenance for one planned-op selection (spec #196, T2/T3).
+
+    Attached to a reservation decision ONLY when the picker-v2 seam produced
+    the pick; ``None`` (the default) means the legacy picker ran and every
+    pre-picker-v2 code path is byte-identical. ``gate`` records the verdict
+    gate's ruling for a bridge-sourced pick: ``bridge_disagreement`` (the
+    First-Choice and human-selected codes differ and either resolves in
+    MSBOS) or ``bridge_over_unconfirmed`` (an over that lacks the
+    score>=threshold + human-agreement confirmation required for a hard
+    verdict); ``""`` means no gate applies (exact-ICD9 pick, confirmed
+    bridge pick, or an ambiguous pick whose gate is suppressed).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    source_code: str = ""
+    source: str = ""
+    bridge_icd9: str = ""
+    bridge_score: float | None = None
+    human_index: str = ""
+    human_agreed: bool | None = None
+    human_icd9: str = ""
+    pick_status: str = ""
+    candidate_count: int = 0
+    tie_count: int = 0
+    bridge_hash: str = ""
+    gate: Literal["", "bridge_disagreement", "bridge_over_unconfirmed"] = ""
+
+
 class ReservationDecision(BaseModel):
     """Frozen per-order, in-run snapshot of the MSBOS reservation judgment."""
 
@@ -53,12 +83,14 @@ class ReservationDecision(BaseModel):
     reason: ReservationReason
     reference_hash: str
     note_resolved: bool = False
+    planned_op: PlannedOpProvenance | None = None
 
 
 __all__ = [
     "CandidateOperation",
     "MsbosRow",
     "MsbosToken",
+    "PlannedOpProvenance",
     "ReservationDecision",
     "ReservationReason",
 ]

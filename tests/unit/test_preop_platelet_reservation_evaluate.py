@@ -264,6 +264,7 @@ def test_evaluator_stamps_resolved_major_non_neuraxial_snapshot() -> None:
         "reason": "over_major_non_neuraxial",
         "reference_hash": "d" * 64,
         "clinician_signed": True,
+        "planned_op": None,
     }
 
 

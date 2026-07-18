@@ -122,6 +122,7 @@ def _configure_platelet_pilot(
         {},
         {},
         {("HN1", "REQ1"): ["2"]},
+        None,
         reference,
         reserved,
     )

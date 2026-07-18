@@ -15,6 +15,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from bba.preop_reservation.models import PlannedOpProvenance
 from bba.preop_reservation.platelet_thresholds import (
     CATEGORY_OVER_ABOVE_PER_UL,
     PlateletCategory,
@@ -72,6 +73,7 @@ class PlateletReservationDecision(BaseModel):
     reason: PlateletReservationReason
     reference_hash: str
     clinician_signed: bool = True
+    planned_op: PlannedOpProvenance | None = None
 
 
 def platelet_reservation_verdict_for_category(
