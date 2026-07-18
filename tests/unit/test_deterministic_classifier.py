@@ -217,6 +217,7 @@ def _inputs(
     returns_disposition: str = "inconclusive",
     returns_periop_context: bool = False,
     declared_use: DeclaredUseLabel | None = None,
+    require_surgical_use_for_periop_exempt: bool = False,
 ) -> ClassifierInputs:
     return ClassifierInputs(
         audit_id="audit-test-0001",
@@ -233,6 +234,7 @@ def _inputs(
         returns_disposition=returns_disposition,  # type: ignore[arg-type]
         returns_periop_context=returns_periop_context,
         declared_use=declared_use,
+        require_surgical_use_for_periop_exempt=(require_surgical_use_for_periop_exempt),
     )
 
 
@@ -377,6 +379,72 @@ class TestPeriopTransfusionExempt:
         )
         assert result.classification == "POTENTIALLY_INAPPROPRIATE"
         assert result.bypass_reason == BypassReason.NONE
+
+    @pytest.mark.parametrize("declared_use", ["ward", "day_care"])
+    def test_gate_blocks_known_non_surgical_declared_use(
+        self, declared_use: DeclaredUseLabel
+    ) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(6.5),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                returns_disposition="transfused",
+                returns_periop_context=True,
+                declared_use=declared_use,
+                require_surgical_use_for_periop_exempt=True,
+            )
+        )
+
+        assert result.classification == "APPROPRIATE"
+        assert result.rationale == "hb_lt_7_universal"
+
+    @pytest.mark.parametrize("declared_use", ["surgery", "type_screen"])
+    def test_gate_allows_surgical_declared_use(
+        self, declared_use: DeclaredUseLabel
+    ) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(6.5),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                returns_disposition="transfused",
+                returns_periop_context=True,
+                declared_use=declared_use,
+                require_surgical_use_for_periop_exempt=True,
+            )
+        )
+
+        assert result.classification == "PERIOP_TRANSFUSION_EXEMPT"
+
+    @pytest.mark.parametrize("declared_use", ["unknown", None])
+    def test_gate_leaves_unknown_or_missing_declared_use_inert(
+        self, declared_use: DeclaredUseLabel | None
+    ) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(6.5),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                returns_disposition="transfused",
+                returns_periop_context=True,
+                declared_use=declared_use,
+                require_surgical_use_for_periop_exempt=True,
+            )
+        )
+
+        assert result.classification == "PERIOP_TRANSFUSION_EXEMPT"
+
+    def test_gate_off_preserves_ward_exemption(self) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(6.5),
+                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                returns_disposition="transfused",
+                returns_periop_context=True,
+                declared_use="ward",
+                require_surgical_use_for_periop_exempt=False,
+            )
+        )
+
+        assert result.classification == "PERIOP_TRANSFUSION_EXEMPT"
 
     @pytest.mark.parametrize("disposition", ["not_transfused", "inconclusive"])
     def test_periop_context_without_transfused_disposition_does_not_exempt(

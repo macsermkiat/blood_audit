@@ -3,8 +3,9 @@
 Most flags default to OFF (False); ``RETURNS_LEDGER_ENABLED`` (returns-ledger
 go-live #138), ``DECLARED_USETYPE_ENABLED`` (declared-usetype go-live
 2026-07-15), and ``MSBOS_RESERVATION_ENABLED`` (MSBOS reservation go-live
-2026-07-16, #167) are default-ON. Each flag's default is documented on the flag
-itself. Defining the contracts here keeps feature state in one place.
+2026-07-16, #167), and ``PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE`` are
+default-ON. Each flag's default is documented on the flag itself. Defining the
+contracts here keeps feature state in one place.
 
 Flags
 -----
@@ -24,6 +25,9 @@ DECLARED_USETYPE_ENABLED
 MSBOS_RESERVATION_ENABLED
     Gates the MSBOS pre-op reservation-appropriateness arm. Default: True
     (go-live 2026-07-16, #167).
+PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE
+    Requires a surgical or type-screen declared use for the returns peri-op
+    exemption. Default: True.
 """
 
 from __future__ import annotations
@@ -69,6 +73,15 @@ leave it ``None`` are unaffected. Set ``BBA_PILOT_DECLARED_USETYPE=0`` to force
 it off for a pilot run.
 """
 
+PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE: bool = True
+"""Require surgical declared use for the returns peri-op exemption (default: ON).
+
+When enabled, a known ward or day-care declared use no longer automatically
+receives ``PERIOP_TRANSFUSION_EXEMPT``; surgical and type-screen use remain
+eligible. Set ``BBA_PILOT_PERIOP_EXEMPT_SURGICAL=0`` to force this gate off for
+a pilot run.
+"""
+
 MSBOS_RESERVATION_ENABLED: bool = True
 """Enable the MSBOS pre-op reservation-appropriateness arm (default: ON).
 
@@ -89,6 +102,7 @@ force it off for a pilot run.
 __all__: Sequence[str] = (
     "DECLARED_USETYPE_ENABLED",
     "MSBOS_RESERVATION_ENABLED",
+    "PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE",
     "PLATELET_LLM_ENABLED",
     "RESERVE_AHEAD_ROUTER_ENABLED",
     "RETURNS_LEDGER_ENABLED",

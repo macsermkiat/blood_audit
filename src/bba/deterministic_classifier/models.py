@@ -140,6 +140,13 @@ class ClassifierInputs(BaseModel):
           (those cases defer to the LLM). ``None``/``False`` defaults leave
           the pre-pass inert, so a caller that never ran ``scan_periop``
           gets the unchanged Hb-present behaviour.
+
+    * ``require_surgical_use_for_periop_exempt`` gates the returns peri-op
+      exemption on declared use. When ``True``, known non-operative ``ward``
+      and ``day_care`` uses fall through to the normal Hb/cohort rules;
+      ``surgery``, ``type_screen``, ``unknown``, and ``None`` remain eligible.
+      It defaults to ``False`` so callers that do not opt in preserve the
+      original classifier behavior.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -160,6 +167,7 @@ class ClassifierInputs(BaseModel):
     )
     returns_periop_context: bool = False
     declared_use: DeclaredUseLabel | None = None
+    require_surgical_use_for_periop_exempt: bool = False
 
 
 class ClassifierResult(BaseModel):

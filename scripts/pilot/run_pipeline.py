@@ -51,6 +51,7 @@ from bba.declared_use import DeclaredUseLabel, collapse_usetype, label_for
 from bba.feature_flags import (
     DECLARED_USETYPE_ENABLED,
     MSBOS_RESERVATION_ENABLED,
+    PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE,
     RETURNS_LEDGER_ENABLED,
 )
 from bba.hb_lookup import (
@@ -110,6 +111,12 @@ ENABLE_MISSING_HB_POSITIVE_EVIDENCE = os.environ.get(
 _declared_env = os.environ.get("BBA_PILOT_DECLARED_USETYPE")
 DECLARED_USETYPE_PILOT_ENABLED = (
     _declared_env == "1" if _declared_env is not None else DECLARED_USETYPE_ENABLED
+)
+_periop_surg_env = os.environ.get("BBA_PILOT_PERIOP_EXEMPT_SURGICAL")
+PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE_PILOT = (
+    _periop_surg_env == "1"
+    if _periop_surg_env is not None
+    else PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE
 )
 _msbos_env = os.environ.get("BBA_PILOT_MSBOS_RESERVATION")
 MSBOS_RESERVATION_PILOT_ENABLED = (
@@ -539,6 +546,9 @@ def _platelet_returns_result(
                 intraop_transfusion=intraop_transfusion,
                 procedure_proximity_hours=None,
                 upcoming_procedure_hours=None,
+            ),
+            require_surgical_use_for_periop_exempt=(
+                PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE_PILOT
             ),
         )
     )
@@ -1284,6 +1294,9 @@ def main() -> None:
                     upcoming_procedure_hours=upcoming_h,
                 ),
                 declared_use=_declared_use_label_for_classifier(collapsed_usetype),
+                require_surgical_use_for_periop_exempt=(
+                    PERIOP_EXEMPT_REQUIRE_SURGICAL_USETYPE_PILOT
+                ),
             )
         )
 

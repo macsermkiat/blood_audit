@@ -104,6 +104,10 @@ Hb as hemodilution-suspect. Triggers ``NEEDS_REVIEW`` rather than
 auto-APPROPRIATE in the cohort-threshold branch, but never overrides the
 global Hb < 7.0 rule."""
 
+# Known non-operative declared uses that block the returns peri-op exemption
+# when the gate is enabled.
+_PERIOP_EXEMPT_BLOCKING_DECLARED_USE = frozenset({"ward", "day_care"})
+
 PERIOP_MIN_EBL_ML: int = 500
 """Estimated-blood-loss floor (mL) that counts as a HARD peri-op signal.
 
@@ -176,6 +180,10 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
     :class:`ClassifierInputs` with invalid types fails at the Pydantic
     boundary, not here.
 
+    The returns peri-op exemption optionally rejects known non-operative
+    declared uses through ``inputs.require_surgical_use_for_periop_exempt``;
+    the gate is an explicit input so this function remains pure.
+
     See module docstring for precedence ordering.
     """
     hb = inputs.hb_result
@@ -211,10 +219,19 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
     # appropriateness judgment — anaesthesia frequently does not chart the
     # indication, so scoring it would be unfair. Hb-independent and dominates
     # every clinical tier, exactly like the returned exit above. A confirmed
-    # transfusion with NO peri-op context falls through and is judged normally
+    # transfusion with NO peri-op context, or a known non-operative declared use
+    # when the use-type gate is enabled, falls through and is judged normally
     # (it can still be POTENTIALLY_INAPPROPRIATE). The envelope is computed at
     # the flag-gated wiring sites (see :func:`periop_envelope`).
-    if inputs.returns_disposition == "transfused" and inputs.returns_periop_context:
+    declared_use_blocks_exempt = (
+        inputs.require_surgical_use_for_periop_exempt
+        and inputs.declared_use in _PERIOP_EXEMPT_BLOCKING_DECLARED_USE
+    )
+    if (
+        inputs.returns_disposition == "transfused"
+        and inputs.returns_periop_context
+        and not declared_use_blocks_exempt
+    ):
         return ClassifierResult(
             classification="PERIOP_TRANSFUSION_EXEMPT",
             bypass_reason=BypassReason.PERIOP_TRANSFUSION_EXEMPT,
