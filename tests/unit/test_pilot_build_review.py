@@ -349,7 +349,10 @@ def test_msbos_flag_on_renders_summary_cases_counts_glossary_and_css(
     assert "MSBOS reservation: </div>" not in rendered
     assert "<dt>above</dt>" in rendered
     assert "INFORMATIONAL" in rendered
-    assert "not a billed verdict" in rendered
+    # Corrected glossary (#201): on declared pre-op rows MSBOS screening CAN
+    # reclassify (spec #194/#196); the old "never changes classification"
+    # claim is gone.
+    assert "MSBOS screening CAN change the classification" in rendered
     assert "anticipated hemorrhage, case cancellation, or emergency status" in rendered
     assert ".cls-msbos-warn" in rendered
     assert ".cls-msbos-ok" in rendered

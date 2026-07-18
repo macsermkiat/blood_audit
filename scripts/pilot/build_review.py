@@ -36,12 +36,22 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from bba.feature_flags import MSBOS_RESERVATION_ENABLED, RETURNS_LEDGER_ENABLED
+from bba.feature_flags import (
+    MSBOS_PLANNED_OP_PICKER_V2_ENABLED,
+    MSBOS_RESERVATION_ENABLED,
+    RETURNS_LEDGER_ENABLED,
+)
 
 WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
 _msbos_env = os.environ.get("BBA_PILOT_MSBOS_RESERVATION")
 MSBOS_RESERVATION_PILOT_ENABLED = (
     _msbos_env == "1" if _msbos_env is not None else MSBOS_RESERVATION_ENABLED
+)
+_picker_v2_env = os.environ.get("BBA_PILOT_MSBOS_PLANNED_OP_PICKER_V2")
+MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED = (
+    _picker_v2_env == "1"
+    if _picker_v2_env is not None
+    else MSBOS_PLANNED_OP_PICKER_V2_ENABLED
 )
 BUNDLE = WORK / "bundle"
 LLM_REPORT = WORK / "llm_report.json"
@@ -259,6 +269,15 @@ _CLS_DISPLAY: dict[str, str] = {
 }
 
 _RETURNS_TERMINALS = frozenset({"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"})
+# Classes whose rows may carry MSBOS reservation detail (#201): the returns
+# terminals where the annotation is informational, PLUS the post-flip verdict
+# classes a declared row can reach once MSBOS screening reclassifies it
+# (over -> PREOP_OVER_RESERVATION; unresolved/gated/ambiguous -> NEEDS_REVIEW,
+# spec #194/#196). Rows without msbos_* data still render nothing: every
+# consumer also requires a non-blank msbos_reason.
+_MSBOS_RENDER_CLASSES = _RETURNS_TERMINALS | frozenset(
+    {"PREOP_OVER_RESERVATION", "NEEDS_REVIEW"}
+)
 _MSBOS_ABOVE_REASONS = frozenset(
     {
         "over_gm_excess",
@@ -376,7 +395,7 @@ def _msbos_platelet_summary_pill(det: dict[str, str]) -> str:
 def _msbos_summary_pill(det: dict[str, str]) -> str:
     det_class = (det.get("classification") or "").upper()
     reason = (det.get("msbos_reason") or "").strip()
-    if det_class not in _RETURNS_TERMINALS or not reason:
+    if det_class not in _MSBOS_RENDER_CLASSES or not reason:
         return "—"
     if (det.get("component") or "") == "platelet":
         return _msbos_platelet_summary_pill(det)
@@ -475,7 +494,28 @@ def _msbos_platelet_case_line(det: dict[str, str], det_class: str) -> str:
             f"; {esc(det.get('returns_units_transfused', ''))} transfused, "
             f"{esc(det.get('returns_units_returned', ''))} returned"
         )
-    return text
+    return text + _msbos_pick_detail(det)
+
+
+def _msbos_pick_detail(det: dict[str, str]) -> str:
+    """Picker-v2 provenance fragment for a case line; "" when the picker
+    seam did not run (no msbos_op_pick_status column value)."""
+    pick_status = (det.get("msbos_op_pick_status") or "").strip()
+    if not pick_status:
+        return ""
+    detail = f"; pick {esc(pick_status)}"
+    source_code = (det.get("msbos_source_code") or "").strip()
+    if source_code:
+        detail += f" via {esc(source_code)}"
+    bridge_icd9 = (det.get("msbos_bridge_icd9") or "").strip()
+    if bridge_icd9:
+        agreed = (det.get("msbos_bridge_human_agreed") or "").strip()
+        agreement = "human-agreed" if agreed == "True" else "human-disagreed"
+        detail += (
+            f" -> {esc(bridge_icd9)} "
+            f"(score {esc(det.get('msbos_bridge_score', ''))}, {agreement})"
+        )
+    return detail
 
 
 def _msbos_case_line(det: dict[str, str], det_class: str) -> str:
@@ -523,7 +563,7 @@ def _msbos_case_line(det: dict[str, str], det_class: str) -> str:
             f"; {esc(det.get('returns_units_transfused', ''))} transfused, "
             f"{esc(det.get('returns_units_returned', ''))} returned"
         )
-    return text
+    return text + _msbos_pick_detail(det)
 
 
 def fmt_time(raw: Any) -> str:
@@ -1473,7 +1513,8 @@ def main() -> None:
         # always sum to the denominator (no "silent" uncounted rows).
         msbos_bucket = (
             _msbos_reason_bucket(det.get("msbos_reason", ""))
-            if MSBOS_RESERVATION_PILOT_ENABLED and det_class_upper in _RETURNS_TERMINALS
+            if MSBOS_RESERVATION_PILOT_ENABLED
+            and det_class_upper in _MSBOS_RENDER_CLASSES
             else None
         )
         if msbos_bucket is not None:
@@ -1618,7 +1659,7 @@ def main() -> None:
         )
         if (
             MSBOS_RESERVATION_PILOT_ENABLED
-            and det_class_upper in _RETURNS_TERMINALS
+            and det_class_upper in _MSBOS_RENDER_CLASSES
             and (det.get("msbos_reason") or "").strip()
         ):
             parts.append(
@@ -2221,13 +2262,30 @@ def main() -> None:
         "the resolved planned procedure code (RBC), OR the pre-op platelet count "
         "exceeded the clinician-signed cutoff for the resolved procedure category "
         "(platelet: major-non-neuraxial 80k/µL; neuraxial and cardiac-CPB 100k/µL). "
-        "This annotation is INFORMATIONAL — not a billed verdict, does not change "
-        "the order's classification or scoring, and does not account for anticipated "
+        "On factual returns rows this annotation is INFORMATIONAL. On DECLARED "
+        "pre-op rows (USETYPE surgery/type-screen) MSBOS screening CAN change the "
+        "classification: an over-reservation reclassifies the row to "
+        "PREOP_OVER_RESERVATION and an unresolved, ambiguous, or bridge-gated "
+        "pick to NEEDS_REVIEW. It still does not account for anticipated "
         "hemorrhage, case cancellation, or emergency status (the schedule data "
-        "cannot see these). On peri-op-exempt rows it judges ordering QUANTITY only, "
+        "cannot see these), and it judges ordering QUANTITY only, "
         "never the transfusion decision (the anaesthesiologist's call — the reason "
         "the bucket is exempt).</dd>\n"
         if MSBOS_RESERVATION_PILOT_ENABLED
+        else ""
+    )
+    picker_glossary_html = (
+        "<dt>preop_reservation_bridge_disagreement</dt><dd>The billing-code "
+        "bridge's First-Choice ICD-9 and the human reviewer's selected code "
+        "disagree and at least one of them carries an MSBOS recommendation — "
+        "the procedure identity is contested, so the row routes to human "
+        "review instead of any automatic verdict.</dd>\n"
+        "<dt>preop_over_reservation_bridge_unconfirmed</dt><dd>The reservation "
+        "exceeds the MSBOS recommendation for the bridge-resolved procedure, "
+        "but the mapping lacks the confidence (score >= 0.95) plus human "
+        "agreement required for a hard PREOP_OVER_RESERVATION — routed to "
+        "review, never asserted.</dd>\n"
+        if MSBOS_RESERVATION_PILOT_ENABLED and MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED
         else ""
     )
     head = f"""<!doctype html>
@@ -2302,7 +2360,7 @@ LLM: Anthropic Batch classification on structured evidence only.
 <dt>llm_native_review_asserted_inappropriate</dt><dd>Guardrail-converted INAPPROPRIATE: the model itself returned NEEDS_REVIEW with reasoning but no hard signal and no qualified bleed, so the verdict was converted to INAPPROPRIATE; the human-review flag is cleared.</dd>
 <dt>llm_overclear_suspect</dt><dd>Over-clear floored to NEEDS_REVIEW: historical rows from before the assert guardrail, plus the live paths where asserting is unsafe — a shape-drifted tool payload (missing or garbled indications/negative_evidence), or a grounded high-confidence citation of a hard indication the structured system cannot dismiss (ACS; documented shock/pressors the vitals snapshot cannot see; a structurally-true sub-floor Hb withheld as unreliable).</dd>
 <dt>periop_signal_contradiction</dt><dd>Peri-operative hard signal contradicts the LLM verdict — kept NEEDS_REVIEW for a human (the intended residual).</dd>
-{msbos_glossary_html}<dt>hallucination_suspect</dt><dd>Quote verifier rejected every attempt — the cited quotes did not ground in the evidence bundle.</dd>
+{msbos_glossary_html}{picker_glossary_html}<dt>hallucination_suspect</dt><dd>Quote verifier rejected every attempt — the cited quotes did not ground in the evidence bundle.</dd>
 <dt>empty_reasoning</dt><dd>Final verdict carried empty reasoning — floored to NEEDS_REVIEW (a verdict with no rationale is never asserted).</dd>
 <dt>platelet_llm_overclear_suspect</dt><dd>Platelet-leg over-clear floored to NEEDS_REVIEW (platelet guardrail; the RBC assert path does not apply to platelets).</dd>
 <dt>malformed_json</dt><dd>Parse failure — the response was not valid JSON.</dd>
