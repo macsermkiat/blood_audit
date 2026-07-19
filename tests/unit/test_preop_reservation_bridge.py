@@ -204,6 +204,21 @@ def test_canonical_nodot_restores_category_leading_zero() -> None:
     )
 
 
+def test_canonical_nodot_restores_category_00_double_zero() -> None:
+    # Both category zeros stripped: '11' -> '0011' (00.11), not '011' (01.1).
+    # The single-pad candidate names a different entry, so only the 4-char form
+    # matches the operation name.
+    names = {
+        "011": "Diagnostic procedures on skull, brain, and cerebral meninges",
+        "0011": "Infusion of drotrecogin alfa (activated)",
+    }
+
+    assert (
+        _BUILD.canonical_nodot("11", "Infusion of drotrecogin alfa (activated)", names)
+        == "0011"
+    )
+
+
 def test_canonical_nodot_leaves_legitimate_three_digit_code() -> None:
     # 55.4 -> '554' is a real 3-digit code; the padded '0554' does not match the
     # name, so it must be left untouched.

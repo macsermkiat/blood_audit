@@ -8,12 +8,12 @@ AS036,9991,9991,0.931,1,false,0480,Acupuncture for anesthesia
 AS037,9991,9991,0.860,1,false,9439,Acupuncture for anesthesia
 AS039,9984,9984,1.000,0,true,,Isolation
 AS040,8960,8960,1.000,1,false,9670,Continuous intra-arterial blood gas monitoring
-AS041,12,12,0.923,1,false,9396,Administration of inhaled nitric oxide
+AS041,0012,0012,0.923,1,false,9396,Administration of inhaled nitric oxide
 AS042,9605,9605,0.987,1,false,9670,Other intubation of respiratory tract
 AS044,8606,8606,0.918,1,false,0390,Insertion of totally implantable infusion pump
 AS048,8911,8911,1.000,0,true,,Tonometry
 AS049,9981,9981,0.973,0,true,,Hypothermia (central) (local)
-AS050,11,11,0.894,1,false,0391,Infusion of drotrecogin alfa (activated)
+AS050,0011,0011,0.894,1,false,0391,Infusion of drotrecogin alfa (activated)
 AS051,0391,0391,0.996,1,false,1770,Injection of anesthetic into spinal canal for analgesia
 AS052,9462,9462,0.978,0,true,,Alcohol detoxification
 AS053,9991,9991,0.903,1,false,15,Acupuncture for anesthesia
@@ -26,7 +26,7 @@ AS059,0481,0481,0.967,1,false,0480,Injection of anesthetic into peripheral nerve
 AS060,9427,9427,1.000,1,false,9424,Other electroshock therapy
 AS061,0481,0481,1.000,1,false,0480,Injection of anesthetic into peripheral nerve for analgesia
 AS062,0481,0481,1.000,1,false,0489,Injection of anesthetic into peripheral nerve for analgesia
-AS064,68,68,0.982,1,false,8960,Intravascular pressure measurement of peripheral arteries
+AS064,0068,0068,0.982,1,false,8960,Intravascular pressure measurement of peripheral arteries
 AS065,3897,3897,0.962,1,false,8962,Central venous catheter placement with guidance
 AS066,8964,8964,1.000,1,false,3721,Pulmonary artery wedge monitoring
 AS067,9906,9906,0.978,1,false,9919,Transfusion of coagulation factors
@@ -88,7 +88,7 @@ CC027,3727,3727,1.000,1,false,3726,Cardiac mapping
 CC028,3783,3783,0.969,1,false,3787,Initial insertion of dual-chamber device
 CC029,3782,3782,0.971,1,false,3783,"Initial insertion of single-chamber device, rate responsive"
 CC030,3794,3794,1.000,1,false,3796,"Implantation or replacement of automatic cardioverter/defibrillator, total system [AICD]"
-CC031,28,28,1.000,1,false,22,"Intravascular imaging, other specified vessel(s)"
+CC031,0028,0028,1.000,1,false,0022,"Intravascular imaging, other specified vessel(s)"
 CC032,3728,3728,1.000,1,false,8853,Intracardiac echocardiography
 CC033,3728,3728,1.000,1,false,8872,Intracardiac echocardiography
 CC034,8850,8850,0.962,1,false,3710,"Angiocardiography, not otherwise specified"
@@ -110,7 +110,7 @@ CC049,8945,8945,0.978,1,false,8948,Artificial pacemaker rate check
 CC050,9336,9336,0.905,0,true,,Cardiac retraining
 CC051,9984,9984,1.000,0,true,,Isolation
 CC052,3609,3609,0.987,2,false,3603,Other removal of coronary artery obstruction
-CC059,33,33,0.846,1,false,8839,Computer assisted surgery with fluoroscopy
+CC059,0033,0033,0.846,1,false,8839,Computer assisted surgery with fluoroscopy
 CC060,8872,8872,0.989,1,false,3728,Diagnostic ultrasound of heart
 CC061,3570,3570,1.000,1,false,3560,Other and unspecified repair of unspecified septal defect of heart
 CC064,8872,8872,1.000,1,false,3728,Diagnostic ultrasound of heart
@@ -119,15 +119,15 @@ CC066,3780,3780,0.957,1,false,3781,"Insertion of permanent pacemaker, initial or
 CC067,3782,3782,1.000,1,false,3781,"Initial insertion of single-chamber device, rate responsive"
 CC068,3772,3772,0.983,1,false,3783,Initial insertion of transvenous leads [electrodes] into atrium and ventricle
 CC069,3772,3772,0.983,1,false,3783,Initial insertion of transvenous leads [electrodes] into atrium and ventricle
-CC070,53,53,1.000,1,false,50,Implantation or replacement of cardiac resynchronization pacemaker pulse generator only [CRT-P]
+CC070,0053,0053,1.000,1,false,0050,Implantation or replacement of cardiac resynchronization pacemaker pulse generator only [CRT-P]
 CC071,3795,3795,0.970,1,false,3796,Implantation of automatic cardioverter/defibrillator lead(s) only
 CC072,3813,3813,0.886,1,false,8414,"Endarterectomy, upper limb vessels"
 CC073,8425,8425,0.807,0,true,,Toe reattachment
 CC074,3795,3795,1.000,1,false,3796,Implantation of automatic cardioverter/defibrillator lead(s) only
-CC075,51,51,1.000,1,false,50,"Implantation of cardiac resynchronization defibrillator, total system [CRT-D]"
+CC075,0051,0051,1.000,1,false,0050,"Implantation of cardiac resynchronization defibrillator, total system [CRT-D]"
 CC076,3607,3607,0.960,1,false,3950,Insertion of drug-eluting coronary artery stent(s)
-CC077,63,63,1.000,1,false,62,Percutaneous insertion of carotid artery stent(s)
-CC078,3990,3990,1.000,1,false,63,Insertion of non-drug-eluting peripheral (non-coronary) vessel stent(s)
+CC077,0063,0063,1.000,1,false,62,Percutaneous insertion of carotid artery stent(s)
+CC078,3990,3990,1.000,1,false,0063,Insertion of non-drug-eluting peripheral (non-coronary) vessel stent(s)
 CC079,3765,3765,0.972,1,false,3766,Implant of single ventricular (extracorporeal) external heart assist system
 CC080,3965,3965,1.000,1,false,3966,Extracorporeal membrane oxygenation [ECMO]
 CC081,8949,8949,1.000,1,false,8945,Automatic implantable cardioverter/defibrillator (AICD) check
@@ -138,29 +138,29 @@ CC104,66,66,0.967,1,false,3950,Percutaneous transluminal coronary angioplasty [P
 CC105,3502,3502,0.973,1,false,3512,"Closed heart valvotomy, mitral valve"
 CC106,3501,3501,0.926,1,false,3522,"Closed heart valvotomy, aortic valve"
 CC107,62,62,0.966,3,false,,Percutaneous angioplasty of intracranial vessel(s)
-CC108,45,45,1.000,1,false,65,Insertion of one vascular stent
+CC108,0045,0045,1.000,1,false,0065,Insertion of one vascular stent
 CC109,66,66,0.954,1,false,3507,Percutaneous transluminal coronary angioplasty [PTCA]
 CC110,3541,3541,1.000,1,false,3542,Enlargement of existing atrial septal defect
 CC111,3772,3772,1.000,1,false,3778,Initial insertion of transvenous leads [electrodes] into atrium and ventricle
 CC112,3796,3796,1.000,1,false,3794,Implantation of automatic cardioverter/defibrillator pulse generator only
-CC113,51,51,1.000,1,false,50,"Implantation of cardiac resynchronization defibrillator, total system [CRT-D]"
+CC113,0051,0051,1.000,1,false,0050,"Implantation of cardiac resynchronization defibrillator, total system [CRT-D]"
 CC114,3761,3761,1.000,1,false,3762,Implant of pulsation balloon
 CC115,8872,8872,1.000,1,false,3728,Diagnostic ultrasound of heart
 CC116,8941,8941,1.000,1,false,8944,Cardiovascular stress test using treadmill
 CC117,8944,8944,1.000,1,false,8942,Other cardiovascular stress test
 CC118,66,66,0.901,0,true,,Percutaneous transluminal coronary angioplasty [PTCA]
-CC119,63,63,0.994,1,false,2106,Percutaneous insertion of carotid artery stent(s)
+CC119,0063,0063,0.994,1,false,2106,Percutaneous insertion of carotid artery stent(s)
 CC120,66,66,1.000,1,false,3950,Percutaneous transluminal coronary angioplasty [PTCA]
 CC121,8845,8845,1.000,1,false,8846,Arteriography of renal arteries
 CC122,8862,8862,0.977,1,false,8848,Phlebography of pulmonary veins using contrast material
 CC123,8844,8844,0.963,1,false,8843,Arteriography of other intrathoracic vessels
 CC124,8961,8961,0.989,1,false,9964,Systemic arterial pressure monitoring
-CC125,8961,8961,0.816,1,false,96,Systemic arterial pressure monitoring
+CC125,8961,8961,0.816,1,false,0096,Systemic arterial pressure monitoring
 CC126,3699,3699,0.969,1,false,3799,Other operations on vessels of heart
-CC127,40,40,0.979,1,false,41,Procedure on single vessel
+CC127,0040,0040,0.979,1,false,0041,Procedure on single vessel
 CC128,3728,3728,1.000,1,false,8872,Intracardiac echocardiography
-CC129,52,52,0.958,1,false,50,Implantation or replacement of transvenous lead [electrode] into left ventricular coronary venous system
-CC130,53,53,0.909,1,false,51,Implantation or replacement of cardiac resynchronization pacemaker pulse generator only [CRT-P]
+CC129,52,52,0.958,1,false,0050,Implantation or replacement of transvenous lead [electrode] into left ventricular coronary venous system
+CC130,0053,0053,0.909,1,false,0051,Implantation or replacement of cardiac resynchronization pacemaker pulse generator only [CRT-P]
 CC131,8955,8955,1.000,1,false,8957,Phonocardiogram with ECG lead
 CC132,8944,8944,1.000,1,false,8941,Other cardiovascular stress test
 CC133,8952,8952,0.931,1,false,8950,Electrocardiogram
@@ -192,9 +192,9 @@ CCMR002,8941,8941,0.930,1,false,9205,Cardiovascular stress test using treadmill
 CCMR003,8941,8941,1.000,1,false,8944,Cardiovascular stress test using treadmill
 CCMR004,3699,3699,0.947,1,false,3799,Other operations on vessels of heart
 CCMR005,8848,8848,0.972,1,false,3888,Arteriography of femoral and other lower extremity arteries
-CCMR006,32,32,0.846,1,false,3829,Computer assisted surgery with MR/MRA
-CCMR007,3973,3973,0.873,1,false,32,Endovascular implantation of graft in thoracic aorta
-CCMR008,32,32,0.843,1,false,8842,Computer assisted surgery with MR/MRA
+CCMR006,0032,0032,0.846,1,false,3829,Computer assisted surgery with MR/MRA
+CCMR007,3973,3973,0.873,1,false,0032,Endovascular implantation of graft in thoracic aorta
+CCMR008,0032,0032,0.843,1,false,8842,Computer assisted surgery with MR/MRA
 CCMR009,8845,8845,1.000,1,false,3924,Arteriography of renal arteries
 CCMR010,8892,8892,0.985,1,false,8894,Magnetic resonance imaging of chest and myocardium
 CCMR011,8859,8859,0.953,1,false,8857,Intra-operative coronary fluorescence vascular angiography
@@ -222,7 +222,7 @@ CCX024,3726,3726,1.000,1,false,3727,Catheter based invasive electrophysiologic t
 CCX025,3727,3727,1.000,0,true,,Cardiac mapping
 CCX026,3727,3727,1.000,2,false,5196,Cardiac mapping
 CCX027,3727,3727,1.000,1,false,3726,Cardiac mapping
-CCX031,28,28,1.000,1,false,22,"Intravascular imaging, other specified vessel(s)"
+CCX031,0028,0028,1.000,1,false,0022,"Intravascular imaging, other specified vessel(s)"
 CCX032,3728,3728,1.000,1,false,8872,Intracardiac echocardiography
 CCX033,3728,3728,1.000,1,false,8872,Intracardiac echocardiography
 CCX034,8850,8850,0.962,1,false,3710,"Angiocardiography, not otherwise specified"
@@ -242,24 +242,24 @@ CCX047,8953,8953,0.994,0,true,,Vectorcardiogram (with ECG)
 CCX048,8952,8952,1.000,0,true,,Electrocardiogram
 CCX049,8945,8945,0.978,1,false,8948,Artificial pacemaker rate check
 CCX050,9336,9336,0.905,0,true,,Cardiac retraining
-CCX059,33,33,0.846,1,false,8839,Computer assisted surgery with fluoroscopy
+CCX059,0033,0033,0.846,1,false,8839,Computer assisted surgery with fluoroscopy
 CCX060,8872,8872,0.989,1,false,3728,Diagnostic ultrasound of heart
 CCX061,3570,3570,1.000,1,false,3560,Other and unspecified repair of unspecified septal defect of heart
 CCX072,3813,3813,0.886,1,false,8414,"Endarterectomy, upper limb vessels"
 CCX073,8425,8425,0.807,0,true,,Toe reattachment
 CCX107,62,62,0.966,3,false,,Percutaneous angioplasty of intracranial vessel(s)
-CCX108,45,45,0.952,1,false,62,Insertion of one vascular stent
+CCX108,0045,0045,0.952,1,false,62,Insertion of one vascular stent
 CCX109,66,66,0.954,1,false,3507,Percutaneous transluminal coronary angioplasty [PTCA]
 CCX110,3541,3541,0.982,1,false,3542,Enlargement of existing atrial septal defect
 CCX111,3772,3772,1.000,1,false,3778,Initial insertion of transvenous leads [electrodes] into atrium and ventricle
 CCX112,3796,3796,1.000,1,false,3794,Implantation of automatic cardioverter/defibrillator pulse generator only
-CCX113,51,51,1.000,1,false,50,"Implantation of cardiac resynchronization defibrillator, total system [CRT-D]"
+CCX113,0051,0051,1.000,1,false,0050,"Implantation of cardiac resynchronization defibrillator, total system [CRT-D]"
 CCX114,3761,3761,1.000,1,false,3762,Implant of pulsation balloon
 CCX115,3728,3728,1.000,1,false,8872,Intracardiac echocardiography
 CCX116,8941,8941,1.000,1,false,8944,Cardiovascular stress test using treadmill
 CCX117,8944,8944,1.000,1,false,8942,Other cardiovascular stress test
 CCX118,66,66,0.901,0,true,,Percutaneous transluminal coronary angioplasty [PTCA]
-CCX119,63,63,0.948,1,false,66,Percutaneous insertion of carotid artery stent(s)
+CCX119,0063,0063,0.948,1,false,66,Percutaneous insertion of carotid artery stent(s)
 CCX120,66,66,1.000,1,false,3950,Percutaneous transluminal coronary angioplasty [PTCA]
 CCX121,8845,8845,1.000,1,false,8846,Arteriography of renal arteries
 CCX122,8862,8862,0.977,1,false,8848,Phlebography of pulmonary veins using contrast material
@@ -906,7 +906,7 @@ DM382,0886,0886,0.922,1,false,8682,Lower eyelid rhytidectomy
 DM383,613,613,1.000,1,false,544,Excision or destruction of lesion or tissue of scrotum
 DM384,613,613,0.993,1,false,1829,Excision or destruction of lesion or tissue of scrotum
 DM385,3022,3022,0.868,0,true,,Vocal cordectomy
-DM386,1,1,1.000,1,false,2,Therapeutic ultrasound of vessels of head and neck
+DM386,0001,0001,1.000,1,false,0002,Therapeutic ultrasound of vessels of head and neck
 DM387,8626,8626,0.886,1,false,8602,Ligation of dermal appendage
 DM388,8602,8602,0.978,1,false,8626,Injection or tattooing of skin lesion or defect
 DM389,8626,8626,1.000,1,false,8602,Ligation of dermal appendage
@@ -958,7 +958,7 @@ EC090,3975,3975,0.977,1,false,3976,Endovascular embolization or occlusion of ves
 EC095,9984,9984,1.000,0,true,,Isolation
 EC114,387,387,1.000,1,false,8866,Interruption of the vena cava
 ECA4403,3790,3790,0.860,1,false,3736,Insertion of left atrial appendage device
-ECA4813,45,45,1.000,1,false,3990,Insertion of one vascular stent
+ECA4813,0045,0045,1.000,1,false,3990,Insertion of one vascular stent
 ECA4818,3972,3972,0.992,1,false,4444,Endovascular (total) embolization or occlusion of head and neck vessels
 ECA4833,387,387,1.000,1,false,3790,Interruption of the vena cava
 ECB4403,9984,9984,1.000,0,true,,Isolation
@@ -1018,7 +1018,7 @@ EN215,9607,9607,0.983,1,false,9608,Insertion of other (naso-)gastric tube
 EN216,3195,3195,1.000,1,false,3175,Tracheoesophageal fistulization
 EN217,9723,9723,0.989,1,false,9655,Replacement of tracheostomy tube
 EN218,9984,9984,1.000,0,true,,Isolation
-EN219,31,31,1.000,1,false,33,Computer assisted surgery with CT/CTA
+EN219,31,31,1.000,1,false,0033,Computer assisted surgery with CT/CTA
 EN220,310,310,0.899,0,true,,Injection of larynx
 EN221,8551,8551,0.969,1,false,8455,Unilateral injection into breast for augmentation
 EN222,9923,9923,0.826,0,true,,Injection of steroid
@@ -1063,11 +1063,11 @@ EQ660,3429,3429,0.951,1,false,6011,Other diagnostic procedures on mediastinum
 EQ665,0613,0613,0.968,1,false,8591,Biopsy of parathyroid gland
 EQ675,8152,8152,1.000,0,true,,Partial hip replacement
 EQ676,8181,8181,1.000,1,false,8188,Partial shoulder replacement
-EQ677,71,71,1.000,1,false,70,"Revision of hip replacement, acetabular component"
-EQ678,82,82,0.965,2,false,70,"Revision of knee replacement, femoral component"
+EQ677,0071,0071,1.000,1,false,0070,"Revision of hip replacement, acetabular component"
+EQ678,0082,0082,0.965,2,false,0070,"Revision of knee replacement, femoral component"
 EQ679,9984,9984,0.995,0,true,,Isolation
-EQ680,75,75,1.000,2,false,85,"Hip bearing surface, metal-on-metal"
-EQ681,85,85,0.953,1,false,75,"Resurfacing hip, total, acetabulum and femoral head"
+EQ680,75,75,1.000,2,false,0085,"Hip bearing surface, metal-on-metal"
+EQ681,0085,0085,0.953,1,false,75,"Resurfacing hip, total, acetabulum and femoral head"
 EQ742,9984,9984,1.000,0,true,,Isolation
 EQ743,9984,9984,1.000,0,true,,Isolation
 EQ744,9984,9984,1.000,0,true,,Isolation
@@ -1854,7 +1854,7 @@ IS129,4467,4467,0.871,1,false,4242,Laparoscopic procedures for creation of esoph
 IS130,5411,5411,1.000,0,true,,Exploratory laparotomy
 IS131,5501,5501,0.935,1,false,5581,Nephrotomy
 IS132,6352,6352,1.000,1,false,625,Reduction of torsion of testis or spermatic cord
-IS133,35,35,0.958,1,false,9984,Computer assisted surgery with multiple datasets
+IS133,0035,0035,0.958,1,false,9984,Computer assisted surgery with multiple datasets
 IS134,5411,5411,1.000,0,true,,Exploratory laparotomy
 IS135,8682,8682,1.000,0,true,,Facial rhytidectomy
 IS136,5462,5462,0.959,1,false,5461,Delayed closure of granulating abdominal wound
@@ -1919,7 +1919,7 @@ IS195,523,523,1.000,1,false,4141,Marsupialization of pancreatic cyst
 IS196,5021,5021,0.983,1,false,5531,Marsupialization of lesion of liver
 IS197,523,523,1.000,1,false,4141,Marsupialization of pancreatic cyst
 IS198,7669,7669,1.000,0,true,,Other facial bone repair
-IS199,8699,8699,0.935,1,false,35,Other operations on skin and subcutaneous tissue
+IS199,8699,8699,0.935,1,false,0035,Other operations on skin and subcutaneous tissue
 IS200,581,581,1.000,0,true,,Urethral meatotomy
 IS201,8584,8584,0.945,0,true,,Pedicle graft to breast
 IS202,0206,0206,1.000,1,false,7639,Other cranial osteoplasty
@@ -2084,7 +2084,7 @@ IT021,8123,8123,1.000,1,false,8124,Arthrodesis of shoulder
 IT022,8102,8102,0.934,1,false,8108,"Other cervical fusion of the anterior column, anterior technique"
 IT023,8163,8163,0.920,1,false,8105,Fusion or refusion of 4-8 vertebrae
 IT024,8713,8713,1.000,2,false,8015,Temporomandibular contrast arthrogram
-IT025,70,70,0.974,1,false,72,"Revision of hip replacement, both acetabular and femoral components"
+IT025,0070,0070,0.974,1,false,0072,"Revision of hip replacement, both acetabular and femoral components"
 IT026,8184,8184,1.000,1,false,8151,Total elbow replacement
 IT027,8171,8171,1.000,1,false,8172,Arthroplasty of metacarpophalangeal and interphalangeal joint with implant
 IT028,8151,8151,1.000,1,false,8152,Total hip replacement
@@ -2177,11 +2177,11 @@ IT114,94,94,1.000,1,false,58,Intra-operative neurophysiologic monitoring
 IT115,94,94,1.000,1,false,58,Intra-operative neurophysiologic monitoring
 IT116,8204,8204,0.981,1,false,8604,Incision and drainage of palmar or thenar space
 IT117,8604,8604,1.000,1,false,4901,Other incision with drainage of skin and subcutaneous tissue
-IT118,33,33,0.974,1,false,8896,Computer assisted surgery with fluoroscopy
+IT118,0033,0033,0.974,1,false,8896,Computer assisted surgery with fluoroscopy
 IT119,9984,9984,1.000,0,true,,Isolation
 IT120,7860,7860,1.000,1,false,7867,"Removal of implanted devices from bone, unspecified site"
 IT121,9345,9345,0.924,0,true,,Thomas' splint traction
-IT122,84,84,0.882,1,false,7753,"Revision of total knee replacement, tibial insert (liner)"
+IT122,0084,0084,0.882,1,false,7753,"Revision of total knee replacement, tibial insert (liner)"
 IT123,7915,7915,1.000,1,false,7916,"Closed reduction of fracture with internal fixation, femur"
 IT124,7918,7918,0.977,1,false,7938,"Closed reduction of fracture with internal fixation, phalanges of foot"
 IT125,0302,0302,0.871,1,false,8893,Reopening of laminectomy site
@@ -2207,7 +2207,7 @@ IT144,2762,2762,1.000,1,false,2763,Correction of cleft palate
 IT145,7931,7931,0.937,1,false,7939,"Open reduction of fracture with internal fixation, humerus"
 IT146,7920,7920,1.000,1,false,7910,"Open reduction of fracture without internal fixation, unspecified site"
 IT147,8006,8006,0.945,1,false,8005,"Arthrotomy for removal of prosthesis without replacement, knee"
-IT148,71,71,0.985,1,false,70,"Revision of hip replacement, acetabular component"
+IT148,0071,0071,0.985,1,false,0070,"Revision of hip replacement, acetabular component"
 IT149,5598,5598,1.000,1,false,5586,Removal of mechanical kidney
 IT150,8623,8623,1.000,1,false,8627,"Removal of nail, nail bed, or nail fold"
 IT151,7869,7869,1.000,1,false,7860,"Removal of implanted devices from bone, other bones"
@@ -2269,7 +2269,7 @@ IW016,9716,9716,0.970,1,false,9357,Replacement of wound packing or drain
 IW017,9357,9357,1.000,1,false,9658,Application of other wound dressing
 IW018,9357,9357,0.980,1,false,9743,Application of other wound dressing
 IW019,3894,3894,1.000,1,false,3892,Venous cutdown
-IW020,8960,8960,0.961,1,false,68,Continuous intra-arterial blood gas monitoring
+IW020,8960,8960,0.961,1,false,0068,Continuous intra-arterial blood gas monitoring
 IW022,9393,9393,0.967,1,false,9960,Nonmechanical methods of resuscitation
 IW023,9648,9648,1.000,1,false,9647,Irrigation of other indwelling urinary catheter
 IW024,9633,9633,1.000,1,false,9607,Gastric lavage
@@ -2444,7 +2444,7 @@ IW199,9984,9984,1.000,0,true,,Isolation
 IW200,9984,9984,1.000,0,true,,Isolation
 IW201,9984,9984,1.000,0,true,,Isolation
 IW202,7538,7538,1.000,0,true,,Fetal pulse oximetry
-IW203,8961,8961,1.000,1,false,68,Systemic arterial pressure monitoring
+IW203,8961,8961,1.000,1,false,0068,Systemic arterial pressure monitoring
 IW204,9984,9984,1.000,0,true,,Isolation
 IW205,9984,9984,1.000,0,true,,Isolation
 IW206,9396,9396,1.000,0,true,,Other oxygen enrichment
@@ -2460,7 +2460,7 @@ KM007,3894,3894,0.935,0,true,,Venous cutdown
 KM008,9918,9918,0.971,1,false,1770,Injection or infusion of electrolytes
 KM009,9918,9918,0.983,1,false,9637,Injection or infusion of electrolytes
 KM010,9903,9903,1.000,1,false,9918,Other transfusion of whole blood
-KM011,9394,9394,1.000,1,false,12,Respiratory medication administered by nebulizer
+KM011,9394,9394,1.000,1,false,0012,Respiratory medication administered by nebulizer
 KM012,5794,5794,1.000,1,false,5711,Insertion of indwelling urinary catheter
 KM013,5794,5794,1.000,1,false,5795,Insertion of indwelling urinary catheter
 KM014,5795,5795,0.955,1,false,9763,Replacement of indwelling urinary catheter
@@ -2646,7 +2646,7 @@ MD104,9933,9933,0.949,1,false,8910,Vaccination against tuberculosis
 MD105,3322,3322,1.000,2,false,3321,Fiber-optic bronchoscopy
 MD106,8732,8732,0.998,1,false,8731,Other contrast bronchogram
 MD107,3491,3491,1.000,1,false,3420,Thoracentesis
-MD108,86,86,0.976,1,false,74,"Resurfacing hip, partial, femoral head"
+MD108,0086,0086,0.976,1,false,74,"Resurfacing hip, partial, femoral head"
 MD109,3326,3326,1.000,1,false,3393,Closed [percutaneous] [needle] biopsy of lung
 MD110,9984,9984,1.000,0,true,,Isolation
 MD112,8937,8937,1.000,1,false,8938,Vital capacity determination
@@ -2656,7 +2656,7 @@ MD115,5598,5598,0.986,1,false,9984,Removal of mechanical kidney
 MD116,3321,3321,0.955,1,false,3322,Bronchoscopy through artificial stoma
 MD117,3404,3404,1.000,1,false,9741,Insertion of intercostal catheter for drainage
 MD124,3323,3323,0.954,0,true,,Other bronchoscopy
-MD125,28,28,0.937,1,false,8878,"Intravascular imaging, other specified vessel(s)"
+MD125,0028,0028,0.937,1,false,8878,"Intravascular imaging, other specified vessel(s)"
 MD126,3429,3429,0.982,1,false,5091,Other diagnostic procedures on mediastinum
 MD127,3323,3323,1.000,1,false,3321,Other bronchoscopy
 MD128,3391,3391,0.946,0,true,,Bronchial dilation
@@ -2664,7 +2664,7 @@ MD129,3391,3391,1.000,1,false,6095,Bronchial dilation
 MD130,4543,4543,0.866,1,false,9906,Endoscopic destruction of other lesion or tissue of large intestine
 MD131,4833,4833,0.924,1,false,6021,Destruction of rectal lesion or tissue by laser
 MD132,9604,9604,1.000,1,false,9605,Insertion of endotracheal tube
-MD133,33,33,0.846,1,false,8839,Computer assisted surgery with fluoroscopy
+MD133,0033,0033,0.846,1,false,8839,Computer assisted surgery with fluoroscopy
 MD134,5831,5831,0.905,1,false,3209,Endoscopic excision or destruction of lesion or tissue of urethra
 MD135,1143,1143,1.000,1,false,4944,Cryotherapy of corneal lesion
 MD136,3320,3320,0.966,0,true,,Thoracoscopic lung biopsy
@@ -2679,7 +2679,7 @@ MD144,3491,3491,0.916,0,true,,Thoracentesis
 MD145,3420,3420,1.000,1,false,3424,Thoracoscopic pleural biopsy
 MD146,3323,3323,1.000,1,false,3322,Other bronchoscopy
 MD147,3227,3227,1.000,1,false,3371,"Bronchoscopic bronchial thermoplasty, ablation of airway smooth muscle"
-MD148,9928,9928,1.000,1,false,14,Injection or infusion of biological response modifier [BRM] as an antineoplastic agent
+MD148,9928,9928,1.000,1,false,0014,Injection or infusion of biological response modifier [BRM] as an antineoplastic agent
 MD149,0481,0481,0.931,1,false,0531,Injection of anesthetic into peripheral nerve for analgesia
 MD159,3371,3371,0.985,1,false,3222,"Endoscopic insertion or replacement of bronchial valve(s), single lobe"
 MD160,8937,8937,0.903,1,false,8958,Vital capacity determination
@@ -2689,13 +2689,13 @@ MD163,8960,8960,1.000,1,false,8965,Continuous intra-arterial blood gas monitorin
 MD164,8942,8942,0.967,1,false,8938,Masters' two-step stress test
 MD165,9395,9395,0.831,0,true,,Hyperbaric oxygenation
 MD166,7538,7538,1.000,0,true,,Fetal pulse oximetry
-MD167,12,12,0.837,1,false,8958,Administration of inhaled nitric oxide
+MD167,0012,0012,0.837,1,false,8958,Administration of inhaled nitric oxide
 MD168,9391,9391,0.953,1,false,8958,Intermittent positive pressure breathing [IPPB]
 MD169,3723,3723,0.859,1,false,8854,Combined right and left heart cardiac catheterization
 MD202,8914,8914,1.000,0,true,,Electroencephalogram
 MD203,8914,8914,0.990,0,true,,Electroencephalogram
 MD204,8919,8919,1.000,1,false,8914,Video and radio-telemetered electroencephalographic monitoring
-MD211,3811,3811,0.961,1,false,21,"Endarterectomy, intracranial vessels"
+MD211,3811,3811,0.961,1,false,0021,"Endarterectomy, intracranial vessels"
 MD212,8877,8877,1.000,1,false,8841,Diagnostic ultrasound of peripheral vascular system
 MD213,419,419,0.917,1,false,9308,Other diagnostic procedures on cranial and peripheral nerves and ganglia
 MD214,9308,9308,1.000,1,false,9525,Electromyography
@@ -2710,7 +2710,7 @@ MD222,9401,9401,1.000,1,false,9408,Administration of intelligence test
 MD223,9401,9401,1.000,1,false,9408,Administration of intelligence test
 MD224,419,419,0.918,1,false,0476,Other diagnostic procedures on cranial and peripheral nerves and ganglia
 MD225,9372,9372,0.905,0,true,,Dysphasia training
-MD226,63,63,0.928,1,false,9509,Percutaneous insertion of carotid artery stent(s)
+MD226,0063,0063,0.928,1,false,9509,Percutaneous insertion of carotid artery stent(s)
 MD227,8917,8917,0.858,0,true,,Polysomnogram
 MD228,0581,0581,0.883,1,false,0519,Repair of sympathetic nerve or ganglion
 MD229,9927,9927,0.852,0,true,,Iontophoresis
@@ -2779,7 +2779,7 @@ MD364,4229,4229,1.000,1,false,4516,Other diagnostic procedures on esophagus
 MD365,2211,2211,0.967,1,false,3728,Closed [endoscopic] [needle] biopsy of nasal sinus
 MD366,9984,9984,1.000,0,true,,Isolation
 MD367,4836,4836,0.983,1,false,4532,[Endoscopic] polypectomy of rectum
-MD368,4449,4449,0.928,1,false,44,Other control of hemorrhage of stomach or duodenum
+MD368,4449,4449,0.928,1,false,0044,Other control of hemorrhage of stomach or duodenum
 MD369,4491,4491,1.000,1,false,4291,Ligation of gastric varices
 MD370,4233,4233,1.000,1,false,4931,Endoscopic excision or destruction of lesion or tissue of esophagus
 MD371,9926,9926,1.000,0,true,,Injection of tranquilizer
@@ -2874,7 +2874,7 @@ MD722,9375,9375,1.000,1,false,9374,Other speech training and therapy
 MD723,9984,9984,1.000,0,true,,Isolation
 MD750,9912,9912,0.960,0,true,,Immunization for allergy
 MD751,9394,9394,0.978,1,false,9465,Respiratory medication administered by nebulizer
-MD752,14,14,0.892,1,false,9922,Injection or infusion of oxazolidinone class of antibiotics
+MD752,0014,0014,0.892,1,false,9922,Injection or infusion of oxazolidinone class of antibiotics
 MD753,9984,9984,1.000,0,true,,Isolation
 MD754,9984,9984,0.805,0,true,,Isolation
 MD756,9912,9912,0.902,0,true,,Immunization for allergy
@@ -2889,7 +2889,7 @@ MD764,9984,9984,1.000,0,true,,Isolation
 MD765,9465,9465,0.954,0,true,,Drug detoxification
 MD766,9912,9912,0.980,0,true,,Immunization for allergy
 MD767,9912,9912,0.912,1,false,9163,Immunization for allergy
-MD768,12,12,0.779,1,false,9394,Administration of inhaled nitric oxide
+MD768,0012,0012,0.779,1,false,9394,Administration of inhaled nitric oxide
 MD769,8938,8938,0.924,1,false,8937,Other nonoperative respiratory measurements
 MD770,9401,9401,0.996,1,false,9542,Administration of intelligence test
 MD771,9402,9402,1.000,1,false,8913,Administration of psychologic test
@@ -2976,7 +2976,7 @@ OB043,741,741,0.987,1,false,7499,Low cervical cesarean section
 OB047,9984,9984,1.000,0,true,,Isolation
 OB048,9983,9983,1.000,0,true,,Other phototherapy
 OB049,9982,9982,1.000,0,true,,Ultraviolet light therapy
-OB050,33,33,0.914,1,false,6619,Computer assisted surgery with fluoroscopy
+OB050,0033,0033,0.914,1,false,6619,Computer assisted surgery with fluoroscopy
 OB059,8878,8878,1.000,1,false,8781,Diagnostic ultrasound of gravid uterus
 OB060,8878,8878,1.000,1,false,751,Diagnostic ultrasound of gravid uterus
 OB061,8878,8878,1.000,1,false,751,Diagnostic ultrasound of gravid uterus
@@ -3014,7 +3014,7 @@ OB135,7534,7534,1.000,0,true,,Other fetal monitoring
 OB136,8878,8878,1.000,1,false,8781,Diagnostic ultrasound of gravid uterus
 OB137,8878,8878,0.886,1,false,9217,Diagnostic ultrasound of gravid uterus
 OB138,8878,8878,1.000,1,false,9501,Diagnostic ultrasound of gravid uterus
-OB139,12,12,0.955,1,false,9396,Administration of inhaled nitric oxide
+OB139,0012,0012,0.955,1,false,9396,Administration of inhaled nitric oxide
 OL001,672,672,1.000,0,true,,Conization of cervix
 OL002,9984,9984,1.000,0,true,,Isolation
 OL003,9984,9984,1.000,0,true,,Isolation
@@ -3059,7 +3059,7 @@ OT024,9984,9984,1.000,0,true,,Isolation
 OT025,2751,2751,0.993,1,false,6441,Suture of laceration of lip
 OT026,5794,5794,1.000,1,false,5711,Insertion of indwelling urinary catheter
 OT027,3892,3892,0.957,1,false,9908,Umbilical vein catheterization
-OT029,33,33,1.000,1,false,8875,Computer assisted surgery with fluoroscopy
+OT029,0033,0033,1.000,1,false,8875,Computer assisted surgery with fluoroscopy
 OT108,9711,9711,1.000,1,false,9712,Replacement of cast on upper limb
 OT109,7865,7865,1.000,1,false,7867,"Removal of implanted devices from bone, femur"
 OT110,9346,9346,1.000,1,false,9345,Other skin traction of limbs
@@ -3109,9 +3109,9 @@ OT153,7806,7806,0.929,0,true,,"Bone graft, patella"
 OT154,9351,9351,1.000,1,false,9352,Application of plaster jacket
 OT156,8271,8271,0.884,1,false,8241,Tendon pulley reconstruction of hand
 OT158,7869,7869,0.895,1,false,9343,"Removal of implanted devices from bone, other bones"
-OT161,34,34,1.000,1,false,33,Imageless computer assisted surgery
+OT161,0034,0034,1.000,1,false,0033,Imageless computer assisted surgery
 OT603,9984,9984,1.000,0,true,,Isolation
-OT604,33,33,1.000,1,false,34,Computer assisted surgery with fluoroscopy
+OT604,0033,0033,1.000,1,false,0034,Computer assisted surgery with fluoroscopy
 OT605,9984,9984,1.000,0,true,,Isolation
 P0001,9604,9604,1.000,1,false,9605,Insertion of endotracheal tube
 P0002,3894,3894,1.000,1,false,3892,Venous cutdown
@@ -3193,7 +3193,7 @@ P0083,9984,9984,1.000,0,true,,Isolation
 P0084,3778,3778,0.939,1,false,3964,Insertion of temporary transvenous pacemaker system
 P0085,3780,3780,1.000,1,false,3781,"Insertion of permanent pacemaker, initial or replacement, type of device not specified"
 P0086,3761,3761,1.000,1,false,3762,Implant of pulsation balloon
-P0088,3725,3725,1.000,1,false,49,Biopsy of heart
+P0088,3725,3725,1.000,1,false,0049,Biopsy of heart
 P0089,370,370,1.000,0,true,,Pericardiocentesis
 P0090,8964,8964,1.000,1,false,8963,Pulmonary artery wedge monitoring
 P0091,9901,9901,1.000,0,true,,Exchange transfusion
@@ -4250,7 +4250,7 @@ P1235,8451,8451,0.941,1,false,8108,Insertion of interbody spinal fusion device
 P1236,8101,8101,0.914,0,true,,Atlas-axis spinal fusion
 P1237,8107,8107,0.950,1,false,8138,"Lumbar and lumbosacral fusion of the posterior column, posterior technique"
 P1238,8111,8111,1.000,1,false,8117,Ankle fusion
-P1239,8121,8121,1.000,1,false,85,Arthrodesis of hip
+P1239,8121,8121,1.000,1,false,0085,Arthrodesis of hip
 P1240,8122,8122,1.000,1,false,8124,Arthrodesis of knee
 P1241,8123,8123,1.000,1,false,8122,Arthrodesis of shoulder
 P1242,8124,8124,1.000,1,false,8184,Arthrodesis of elbow
@@ -4430,9 +4430,9 @@ P1415,3951,3951,1.000,0,true,,Clipping of aneurysm
 P1416,0242,0242,1.000,1,false,0243,Replacement of ventricular shunt
 P1417,8165,8165,1.000,1,false,8166,Percutaneous vertebroplasty
 P1418,8696,8696,1.000,1,false,0120,Insertion or replacement of other neurostimulator pulse generator
-P1419,39,39,1.000,1,false,35,Other computer assisted surgery
+P1419,0039,0039,1.000,1,false,0035,Other computer assisted surgery
 P1420,0392,0392,0.958,1,false,038,Injection of other agent into spinal canal
-P1421,44,44,0.967,1,false,3975,Procedure on vessel bifurcation
+P1421,0044,0044,0.967,1,false,3975,Procedure on vessel bifurcation
 P1422,3830,3830,0.875,1,false,3955,"Resection of vessel with anastomosis, unspecified site"
 P1423,7701,7701,1.000,1,false,7721,"Sequestrectomy, scapula, clavicle, and thorax [ribs and sternum]"
 P1424,7702,7702,0.975,0,true,,"Sequestrectomy, humerus"
@@ -4571,10 +4571,10 @@ P1556,8145,8145,1.000,1,false,8143,Other repair of the cruciate ligaments
 P1557,8146,8146,1.000,1,false,8143,Other repair of the collateral ligaments
 P1558,8149,8149,1.000,0,true,,Other repair of ankle
 P1559,8149,8149,0.972,0,true,,Other repair of ankle
-P1560,70,70,1.000,1,false,72,"Revision of hip replacement, both acetabular and femoral components"
-P1561,80,80,1.000,1,false,82,"Revision of knee replacement, total (all components)"
+P1560,0070,0070,1.000,1,false,0072,"Revision of hip replacement, both acetabular and femoral components"
+P1561,0080,0080,1.000,1,false,0082,"Revision of knee replacement, total (all components)"
 P1562,8157,8157,1.000,1,false,8116,Replacement of joint of foot and toe
-P1563,8159,8159,1.000,1,false,80,"Revision of joint replacement of lower extremity, not elsewhere classified"
+P1563,8159,8159,1.000,1,false,0080,"Revision of joint replacement of lower extremity, not elsewhere classified"
 P1564,8166,8166,1.000,1,false,8165,Percutaneous vertebral augmentation
 P1565,8171,8171,1.000,1,false,8172,Arthroplasty of metacarpophalangeal and interphalangeal joint with implant
 P1566,8172,8172,1.000,1,false,8171,Arthroplasty of metacarpophalangeal and interphalangeal joint without implant
@@ -4591,7 +4591,7 @@ P1576,066,066,0.973,1,false,285,Excision of lingual thyroid
 P1577,8192,8192,0.968,1,false,8294,Injection of therapeutic substance into joint or ligament
 P1578,8195,8195,1.000,1,false,8193,Suture of capsule or ligament of other lower extremity
 P1579,8196,8196,0.998,0,true,,Other repair of joint
-P1580,8197,8197,1.000,1,false,71,Revision of joint replacement of upper extremity
+P1580,8197,8197,1.000,1,false,0071,Revision of joint replacement of upper extremity
 P1581,8198,8198,0.838,1,false,8039,Other diagnostic procedures on joint structures
 P1582,8301,8301,0.961,1,false,8201,Exploration of tendon sheath
 P1583,8204,8204,1.000,1,false,8246,Incision and drainage of palmar or thenar space
@@ -4758,9 +4758,9 @@ P1743,9220,9220,0.951,1,false,8849,Infusion of liquid brachytherapy radioisotope
 P1744,311,311,1.000,0,true,,Temporary tracheostomy
 P1745,1341,1341,1.000,1,false,1369,Phacoemulsification and aspiration of cataract
 P1746,0476,0476,0.993,1,false,043,Repair of old traumatic injury of cranial and peripheral nerves
-P1747,70,70,1.000,1,false,72,"Revision of hip replacement, both acetabular and femoral components"
+P1747,0070,0070,1.000,1,false,0072,"Revision of hip replacement, both acetabular and femoral components"
 P1748,9363,9363,0.950,1,false,9315,"Osteopathic manipulative treatment using low- velocity, high-amplitude forces"
-P1749,33,33,0.846,1,false,8839,Computer assisted surgery with fluoroscopy
+P1749,0033,0033,0.846,1,false,8839,Computer assisted surgery with fluoroscopy
 P1750,9614,9614,0.985,1,false,9619,Vaginal packing
 P1751,5459,5459,0.997,1,false,6589,Other lysis of peritoneal adhesions
 P1752,7024,7024,1.000,1,false,6711,Vaginal biopsy
@@ -4858,7 +4858,7 @@ P1843,9736,9736,1.000,1,false,7662,Removal of other external mandibular fixation
 P1844,1652,1652,0.884,1,false,7669,Exenteration of orbit with therapeutic removal of orbital bone
 P1845,0609,0609,0.979,1,false,0691,Other incision of thyroid field
 P1846,576,576,1.000,0,true,,Partial cystectomy
-P1847,51,51,0.968,1,false,50,"Implantation of cardiac resynchronization defibrillator, total system [CRT-D]"
+P1847,0051,0051,0.968,1,false,0050,"Implantation of cardiac resynchronization defibrillator, total system [CRT-D]"
 P1848,3179,3179,1.000,1,false,3348,Other repair and plastic operations on trachea
 P1849,3351,3351,0.995,1,false,3350,Unilateral lung transplantation
 P1850,3352,3352,1.000,1,false,336,Bilateral lung transplantation
@@ -5255,7 +5255,7 @@ P2288,1131,1131,0.975,1,false,1132,Transposition of pterygium
 P2289,1661,1661,0.987,1,false,1164,Secondary insertion of ocular implant
 P2290,1473,1473,0.958,1,false,1471,Mechanical vitrectomy by anterior approach
 P2291,1372,1372,0.978,1,false,138,Secondary insertion of intraocular lens prosthesis
-P2292,35,35,0.961,1,false,9984,Computer assisted surgery with multiple datasets
+P2292,0035,0035,0.961,1,false,9984,Computer assisted surgery with multiple datasets
 P2293,1132,1132,0.960,1,false,1213,Excision of pterygium with corneal graft
 P2294,1213,1213,0.968,1,false,1293,Excision of prolapsed iris
 P2295,1473,1473,0.939,1,false,1471,Mechanical vitrectomy by anterior approach
@@ -5311,7 +5311,7 @@ P2349,1521,1521,0.952,1,false,1529,Lengthening procedure on one extraocular musc
 P2351,1172,1172,1.000,1,false,9502,Keratophakia
 P2352,1741,1741,1.000,1,false,1743,Open robotic assisted procedure
 P2353,1366,1366,0.882,1,false,1483,Mechanical fragmentation of secondary membrane [after cataract]
-P2354,31,31,1.000,1,false,34,Computer assisted surgery with CT/CTA
+P2354,31,31,1.000,1,false,0034,Computer assisted surgery with CT/CTA
 P9001,9982,9982,0.882,0,true,,Ultraviolet light therapy
 P9002,9982,9982,0.948,0,true,,Ultraviolet light therapy
 P9003,0821,0821,0.907,0,true,,Excision of chalazion
@@ -5426,7 +5426,7 @@ PE023,3022,3022,0.884,0,true,,Vocal cordectomy
 PE024,3022,3022,0.910,0,true,,Vocal cordectomy
 PE025,3022,3022,0.973,0,true,,Vocal cordectomy
 PE026,613,613,0.843,1,false,8783,Excision or destruction of lesion or tissue of scrotum
-PE027,47,47,0.888,1,false,1771,Insertion of three vascular stents
+PE027,0047,0047,0.888,1,false,1771,Insertion of three vascular stents
 PE028,9221,9221,0.960,0,true,,Superficial radiation
 PE029,1771,1771,0.998,1,false,8783,Non-coronary intra-operative fluorescence vascular angiography [IFVA]
 PE030,9222,9222,0.869,0,true,,Orthovoltage radiation
@@ -5462,7 +5462,7 @@ PE079,3995,3995,1.000,1,false,3895,Hemodialysis
 PE081,3995,3995,1.000,1,false,3895,Hemodialysis
 PE083,8937,8937,1.000,1,false,8938,Vital capacity determination
 PE084,8960,8960,0.994,1,false,8965,Continuous intra-arterial blood gas monitoring
-PE085,12,12,1.000,1,false,9394,Administration of inhaled nitric oxide
+PE085,0012,0012,1.000,1,false,9394,Administration of inhaled nitric oxide
 PE112,9623,9623,1.000,1,false,4991,Dilation of anal sphincter
 PE116,9983,9983,0.972,0,true,,Other phototherapy
 PE117,9982,9982,0.996,0,true,,Ultraviolet light therapy
@@ -5535,7 +5535,7 @@ PE411,8961,8961,0.944,1,false,8950,Systemic arterial pressure monitoring
 PE412,8932,8932,1.000,0,true,,Esophageal manometry
 PE413,8932,8932,0.992,0,true,,Esophageal manometry
 PE414,8932,8932,1.000,0,true,,Esophageal manometry
-PE416,9394,9394,1.000,1,false,12,Respiratory medication administered by nebulizer
+PE416,9394,9394,1.000,1,false,0012,Respiratory medication administered by nebulizer
 PE417,8960,8960,0.983,1,false,7538,Continuous intra-arterial blood gas monitoring
 PE418,7538,7538,0.975,0,true,,Fetal pulse oximetry
 PE419,9984,9984,1.000,0,true,,Isolation
@@ -5582,7 +5582,7 @@ PT383,8838,8838,1.000,1,false,8704,Other computerized axial tomography
 PT386,9534,9534,1.000,0,true,,Ocular prosthetics
 PT389,9323,9323,1.000,0,true,,Fitting of orthotic device
 PT394,9241,9241,1.000,0,true,,Intra-operative electron radiation therapy
-PT395,8897,8897,1.000,1,false,32,Magnetic resonance imaging of other and unspecified sites
+PT395,8897,8897,1.000,1,false,0032,Magnetic resonance imaging of other and unspecified sites
 PT396,9231,9231,0.895,1,false,9239,Single source photon radiosurgery
 PT412,9224,9224,0.929,1,false,9241,Teleradiotherapy using photons
 PT429,9225,9225,0.981,1,false,9224,Teleradiotherapy using electrons
@@ -5749,7 +5749,7 @@ RH114,9984,9984,1.000,0,true,,Isolation
 RH115,9316,9316,1.000,1,false,9314,Mobilization of other joints
 RH116,8868,8868,1.000,0,true,,Impedance phlebography
 RH117,9319,9319,0.953,1,false,9312,"Exercise, not elsewhere classified"
-RH118,9322,9322,0.999,1,false,33,Ambulation and gait training
+RH118,9322,9322,0.999,1,false,0033,Ambulation and gait training
 RH119,9393,9393,0.925,1,false,9318,Nonmechanical methods of resuscitation
 RH121,9984,9984,1.000,0,true,,Isolation
 RH123,9333,9333,1.000,2,false,9332,Other hydrotherapy
@@ -5810,8 +5810,8 @@ RH215,9309,9309,1.000,1,false,9339,Other diagnostic physical therapy procedure
 RH216,9383,9383,0.958,0,true,,Occupational therapy
 RH217,9375,9375,1.000,1,false,9371,Other speech training and therapy
 RH218,9375,9375,1.000,1,false,9927,Other speech training and therapy
-RH220,9322,9322,0.988,1,false,33,Ambulation and gait training
-RH221,9322,9322,1.000,1,false,33,Ambulation and gait training
+RH220,9322,9322,0.988,1,false,0033,Ambulation and gait training
+RH221,9322,9322,1.000,1,false,0033,Ambulation and gait training
 RH222,9984,9984,1.000,0,true,,Isolation
 RH223,9375,9375,0.954,0,true,,Other speech training and therapy
 RH224,9383,9383,0.966,0,true,,Occupational therapy
@@ -6023,7 +6023,7 @@ RT092,9224,9224,0.968,1,false,9225,Teleradiotherapy using photons
 RT093,9241,9241,0.980,0,true,,Intra-operative electron radiation therapy
 RT094,9224,9224,0.970,0,true,,Teleradiotherapy using photons
 RT095,9231,9231,1.000,1,false,9221,Single source photon radiosurgery
-RT100,1770,1770,1.000,1,false,13,Intravenous infusion of clofarabine
+RT100,1770,1770,1.000,1,false,0013,Intravenous infusion of clofarabine
 RT102,9904,9904,0.981,1,false,9903,Transfusion of packed cells
 RT108,9225,9225,1.000,1,false,9241,Teleradiotherapy using electrons
 RT109,9227,9227,1.000,1,false,9220,Implantation or insertion of radioactive elements
@@ -6064,7 +6064,7 @@ RT285,9984,9984,1.000,0,true,,Isolation
 RT286,9738,9738,0.936,1,false,9739,Removal of sutures from head and neck
 RT287,8570,8570,0.938,1,false,9998,"Total reconstruction of breast, not otherwise specified"
 RT288,9358,9358,0.892,1,false,9224,Application of pressure trousers
-RT289,9739,9739,0.979,1,false,1,Removal of other therapeutic device from head and neck
+RT289,9739,9739,0.979,1,false,0001,Removal of other therapeutic device from head and neck
 RT302,9225,9225,0.950,1,false,9224,Teleradiotherapy using electrons
 RT303,9241,9241,1.000,1,false,9224,Intra-operative electron radiation therapy
 RT304,9241,9241,1.000,1,false,9224,Intra-operative electron radiation therapy
@@ -6094,7 +6094,7 @@ RT381,9224,9224,0.999,0,true,,Teleradiotherapy using photons
 RT382,9224,9224,1.000,1,false,8839,Teleradiotherapy using photons
 RT383,8838,8838,0.933,1,false,31,Other computerized axial tomography
 RT384,9241,9241,0.957,0,true,,Intra-operative electron radiation therapy
-RT386,9323,9323,0.932,1,false,12,Fitting of orthotic device
+RT386,9323,9323,0.932,1,false,0012,Fitting of orthotic device
 RT391,9984,9984,1.000,0,true,,Isolation
 RT392,9241,9241,0.957,0,true,,Intra-operative electron radiation therapy
 RT393,9224,9224,0.999,0,true,,Teleradiotherapy using photons
@@ -6127,9 +6127,9 @@ RT510,8895,8895,0.944,1,false,8894,"Magnetic resonance imaging of pelvis, prosta
 RT512,8891,8891,1.000,1,false,8894,Magnetic resonance imaging of brain and brain stem
 RT513,3823,3823,0.934,1,false,0117,Intravascular spectroscopy
 RT514,9230,9230,1.000,1,false,9231,"Stereotactic radiosurgery, not otherwise specified"
-RT518,32,32,0.822,1,false,8877,Computer assisted surgery with MR/MRA
+RT518,0032,0032,0.822,1,false,8877,Computer assisted surgery with MR/MRA
 RT519,8865,8865,1.000,1,false,8863,Phlebography of other Intra-Abdominal veins using contrast material
-RT520,63,63,0.868,1,false,8841,Percutaneous insertion of carotid artery stent(s)
+RT520,0063,0063,0.868,1,false,8841,Percutaneous insertion of carotid artery stent(s)
 RT521,8861,8861,1.000,1,false,8863,Phlebography of veins of head and neck using contrast material
 RT522,8892,8892,1.000,1,false,8741,Magnetic resonance imaging of chest and myocardium
 RT524,8892,8892,1.000,1,false,8894,Magnetic resonance imaging of chest and myocardium
@@ -6217,7 +6217,7 @@ SM016,0531,0531,0.998,1,false,0481,Injection of anesthetic into sympathetic nerv
 SM017,8604,8604,0.998,1,false,9991,Other incision with drainage of skin and subcutaneous tissue
 SM018,8396,8396,1.000,1,false,0481,Injection of therapeutic substance into bursa
 SM019,0481,0481,1.000,1,false,0531,Injection of anesthetic into peripheral nerve for analgesia
-SM020,10,10,0.926,1,false,8396,Implantation of chemotherapeutic agent
+SM020,0010,0010,0.926,1,false,8396,Implantation of chemotherapeutic agent
 SM021,0481,0481,1.000,1,false,1691,Injection of anesthetic into peripheral nerve for analgesia
 SM022,9984,9984,1.000,0,true,,Isolation
 SM023,9356,9356,0.963,1,false,0481,Application of pressure dressing
@@ -6270,7 +6270,7 @@ SU045,8923,8923,1.000,1,false,8921,Urethral sphincter electromyogram
 SU046,8925,8925,1.000,1,false,8921,Urethral pressure profile [UPP]
 SU047,8922,8922,0.999,0,true,,Cystometrogram
 SU048,6011,6011,0.939,1,false,6015,Closed [percutaneous] [needle] biopsy of prostate
-SU051,8877,8877,1.000,1,false,68,Diagnostic ultrasound of peripheral vascular system
+SU051,8877,8877,1.000,1,false,0068,Diagnostic ultrasound of peripheral vascular system
 SU052,5794,5794,1.000,1,false,5711,Insertion of indwelling urinary catheter
 SU053,5794,5794,1.000,1,false,5795,Insertion of indwelling urinary catheter
 SU054,5795,5795,0.961,1,false,5794,Replacement of indwelling urinary catheter
@@ -6281,7 +6281,7 @@ SU058,9648,9648,1.000,1,false,9647,Irrigation of other indwelling urinary cathet
 SU059,4413,4413,1.000,0,true,,Other gastroscopy
 SU060,9851,9851,1.000,1,false,9859,"Extracorporeal shockwave lithotripsy [ESWL] of the kidney, ureter and/or bladder"
 SU061,9851,9851,1.000,1,false,9859,"Extracorporeal shockwave lithotripsy [ESWL] of the kidney, ureter and/or bladder"
-SU062,33,33,1.000,1,false,8896,Computer assisted surgery with fluoroscopy
+SU062,0033,0033,1.000,1,false,8896,Computer assisted surgery with fluoroscopy
 SU063,9984,9984,1.000,0,true,,Isolation
 SU066,4523,4523,1.000,1,false,4524,Colonoscopy
 SU067,4524,4524,1.000,0,true,,Flexible sigmoidoscopy
@@ -6403,7 +6403,7 @@ W0008,5794,5794,1.000,1,false,5795,Insertion of indwelling urinary catheter
 W0009,5794,5794,1.000,1,false,5795,Insertion of indwelling urinary catheter
 W0010,9648,9648,0.969,1,false,9647,Irrigation of other indwelling urinary catheter
 W0011,9903,9903,0.992,1,false,9918,Other transfusion of whole blood
-W0015,9925,9925,0.971,1,false,14,Injection or infusion of cancer chemotherapeutic substance
+W0015,9925,9925,0.971,1,false,0014,Injection or infusion of cancer chemotherapeutic substance
 W0016,9716,9716,0.990,1,false,9357,Replacement of wound packing or drain
 W0017,9357,9357,1.000,1,false,8659,Application of other wound dressing
 W0018,9357,9357,1.000,1,false,9356,Application of other wound dressing

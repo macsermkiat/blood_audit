@@ -107,25 +107,28 @@ def parse_first_choice(cell: str) -> tuple[str, str, str]:
 
 
 def canonical_nodot(code: str, name: str, icd9cm_names: Mapping[str, str]) -> str:
-    """Restore a 2-digit-category leading zero the raw export stripped.
+    """Restore category leading zeros the raw export stripped.
 
-    ``Mapping INCPT ICD9.csv`` stores codes dotless (``'309'``), so a code whose
-    true category is ``0X`` (03.09 -> ``'0309'``) arrives with the zero gone
-    (``'309'``, which reads as 30.9). The dotless string alone is ambiguous, so
-    the operation NAME disambiguates against the ICD-9-CM master: prefer the
-    zero-padded form only when IT matches the name and the raw form does not.
-    Legitimate 3-digit codes (55.4 -> ``'554'``, ``'Partial nephrectomy'``) are
-    left untouched. Absent an ICD-9-CM map (unit tests), the code is unchanged.
+    ``Mapping INCPT ICD9.csv`` stores codes dotless (``'309'``), and can strip
+    one OR both category leading zeros: ``03.09 -> '309'`` (reads as 30.9) and
+    ``00.11 -> '11'`` (reads as 11). The dotless string alone is ambiguous, so
+    the operation NAME disambiguates against the ICD-9-CM master: when the raw
+    code does not name its own entry, try each zero-padded form up to the
+    4-character canonical width, fewest pads first, and take the one whose name
+    matches. Legitimate short codes (55.4 -> ``'554'``, ``'Partial
+    nephrectomy'``) name their own entry and are left untouched. Absent an
+    ICD-9-CM map (unit tests), the code is unchanged.
     """
     raw = code.strip()
     if not raw or not icd9cm_names:
         return raw
     name_norm = name.strip().casefold()
-    padded = "0" + raw
-    padded_ok = icd9cm_names.get(padded, "").strip().casefold() == name_norm
-    raw_ok = icd9cm_names.get(raw, "").strip().casefold() == name_norm
-    if padded_ok and not raw_ok:
-        return padded
+    if icd9cm_names.get(raw, "").strip().casefold() == name_norm:
+        return raw
+    for pad in range(1, 5 - len(raw)):
+        candidate = "0" * pad + raw
+        if icd9cm_names.get(candidate, "").strip().casefold() == name_norm:
+            return candidate
     return raw
 
 
