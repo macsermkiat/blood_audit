@@ -51,6 +51,7 @@ PLANNED_OP_SOURCE_CODE_DENYLIST: frozenset[str] = frozenset(
         "AS058",
         "MD529",
         "MD530",
+        "SU030",
         "SU062",
         "P0001",
         "P0067",
@@ -60,8 +61,26 @@ PLANNED_OP_SOURCE_CODE_DENYLIST: frozenset[str] = frozenset(
     }
 )
 """Reviewed pilot non-operative billing codes (anesthesia, dialysis,
-fluoroscopy, ETT, intralesional injection, pupil dilation, spinal taps).
-Exact codes only — never prefixes. Additions require clinician review."""
+fluoroscopy, ETT, intralesional injection, pupil dilation, spinal taps). Exact,
+UNCONDITIONAL denials — applied regardless of the resolved code's MSBOS status.
+``SU030`` (#211) is exact-only because ``SU`` is NOT a safe prefix family.
+Additions require clinician review. For the guarded PREFIX families, see
+:data:`PLANNED_OP_SOURCE_CODE_DENYLIST_PREFIXES`."""
+
+PLANNED_OP_SOURCE_CODE_DENYLIST_PREFIXES: frozenset[str] = frozenset({"AS", "ML", "X"})
+"""Guarded source-code prefix families for planned-op exclusion (#211).
+
+Prefixes were historically forbidden ("never prefixes"). They are now permitted
+ONLY under two conditions, both established by a full-master data review
+(10,544 OPRTACT codes x bridge x MSBOS x pilot frequency, 2026-07-19):
+(1) a ZERO-MSBOS-CROSSOVER GUARD — a prefixed candidate is excluded ONLY when
+its resolved code is NOT in the MSBOS universe, so a prefix can NEVER suppress a
+verdict-capable operation, now or after any bridge/schedule re-export; and
+(2) the family has zero MSBOS crossover across the full master AND uniformly
+non-operative names. Only ``AS`` (anesthesia services + peri-op POC labs),
+``ML`` (lab/pathology specimen processing), and ``X`` (imaging) qualify.
+``P``/``L``/``SU``/``MD``/``CC``/``OT`` are explicitly NOT safe as prefixes
+(each maps real operations into MSBOS)."""
 
 _SENTINEL_PREFIX = "INCPT:"
 
@@ -137,6 +156,11 @@ def _failure(status: PickStatus) -> PlannedOpPick:
 def _nodot(code: str) -> str:
     """Strip decimal points ONLY — never add or remove leading zeros."""
     return code.replace(".", "")
+
+
+def _has_denied_prefix(source_code: str, prefixes: frozenset[str]) -> bool:
+    """True if the OPRTACT source code starts with any denied prefix family."""
+    return any(source_code.startswith(prefix) for prefix in prefixes)
 
 
 def _derive(event: OperativeEvent, bridge: OprtactBridge) -> _Candidate:
@@ -218,6 +242,7 @@ def select_planned_op_v2(
     bridge: OprtactBridge,
     *,
     denylist: frozenset[str] = PLANNED_OP_SOURCE_CODE_DENYLIST,
+    denylist_prefixes: frozenset[str] = PLANNED_OP_SOURCE_CODE_DENYLIST_PREFIXES,
     msbos_codes: Collection[str],
     approved_non_blood_codes: Collection[str],
     cluster_window_seconds: int = PLANNED_OP_CLUSTER_WINDOW_SECONDS,
@@ -242,6 +267,10 @@ def select_planned_op_v2(
         for candidate in (_derive(event, bridge) for event in in_window)
         if candidate.source_code not in denylist
         and _nodot(candidate.resolved_icd9) not in approved_non_blood_codes
+        and not (
+            _has_denied_prefix(candidate.source_code, denylist_prefixes)
+            and _nodot(candidate.resolved_icd9) not in msbos_codes
+        )
     ]
     if not survivors:
         return _failure("all_candidates_excluded")
@@ -376,6 +405,7 @@ __all__ = [
     "BRIDGE_HARD_VERDICT_MIN_SCORE",
     "PLANNED_OP_CLUSTER_WINDOW_SECONDS",
     "PLANNED_OP_SOURCE_CODE_DENYLIST",
+    "PLANNED_OP_SOURCE_CODE_DENYLIST_PREFIXES",
     "PLANNED_OP_WINDOW_HOURS",
     "PickSource",
     "PickStatus",
