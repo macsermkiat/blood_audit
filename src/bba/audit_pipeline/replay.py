@@ -29,6 +29,7 @@ import re
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date
+from enum import StrEnum
 from typing import Final, NamedTuple
 from zoneinfo import ZoneInfo
 
@@ -50,6 +51,10 @@ from bba.deterministic_classifier import (
     PERIOP_MIN_EBL_ML,
     UNIVERSAL_LOW_HB_APPROPRIATE_THRESHOLD,
     ClassifierResult,
+)
+from bba.deterministic_classifier.rationales import (
+    PREOP_DECLARED_EXEMPT,
+    RESERVE_AHEAD_RATIONALES,
 )
 from bba.llm_client.models import BatchSubmissionResult, RawBatchResponse
 from bba.llm_client.parser import parse_platelet_structured_response
@@ -84,8 +89,6 @@ Production wires :func:`bba.quote_grounder.verify_citations`; tests
 inject deterministic stubs (always-True for happy path, always-False
 for the adversarial-grounder case).
 """
-
-_RESERVE_AHEAD_RATIONALES = frozenset({"preop_defer_llm", "preop_defer_llm_declared"})
 
 
 def default_verifier(
@@ -168,6 +171,46 @@ ALL_CANDIDATES_EXCLUDED_REVIEW_REASON = "all_candidates_excluded"
 _RETURNS_TERMINALS = frozenset({"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"})
 
 
+class ReservationEligibility(StrEnum):
+    """Why a result may enter MSBOS reservation screening — derived, not persisted.
+
+    Computed on demand from ``(classification, rationale)`` by
+    :func:`reservation_eligibility`; nothing new is stored on the audit row. The
+    typed value lets downstream routing dispatch on an enum the type-checker
+    guards instead of comparing the free-form ``rationale`` slug.
+
+    * :attr:`RESERVE_AHEAD` — a reserve-ahead deferral (a crossmatch/declared
+      reservation routed to the LLM), still reservation-screen eligible.
+    * :attr:`DECLARED_EXEMPT` — a declared pre-op order (exempt from the
+      transfusion judgment) that remains reservation-screen eligible.
+    * :attr:`NONE` — not reservation-screen eligible (factual returns and the
+      legacy peri-op exemption remain terminal ahead of MSBOS).
+    """
+
+    RESERVE_AHEAD = "reserve_ahead"
+    DECLARED_EXEMPT = "declared_exempt"
+    NONE = "none"
+
+
+def reservation_eligibility(
+    classifier_result: ClassifierResult | PlateletClassifierResult,
+) -> ReservationEligibility:
+    """Classify a result's MSBOS reservation eligibility from its verdict class.
+
+    Derived from ``(classification, rationale)`` only; this reads no persisted
+    field beyond the two the classifier already emits.
+    """
+    if classifier_result.classification == "PERIOP_TRANSFUSION_EXEMPT":
+        if classifier_result.rationale == PREOP_DECLARED_EXEMPT:
+            return ReservationEligibility.DECLARED_EXEMPT
+        return ReservationEligibility.NONE
+    if classifier_result.classification in _RETURNS_TERMINALS:
+        return ReservationEligibility.NONE
+    if classifier_result.rationale in RESERVE_AHEAD_RATIONALES:
+        return ReservationEligibility.RESERVE_AHEAD
+    return ReservationEligibility.NONE
+
+
 def is_msbos_eligible(
     classifier_result: ClassifierResult | PlateletClassifierResult,
 ) -> bool:
@@ -177,11 +220,7 @@ def is_msbos_eligible(
     remain reservation-screen eligible. Factual returns and the legacy peri-op
     exemption remain terminal ahead of MSBOS.
     """
-    if classifier_result.classification == "PERIOP_TRANSFUSION_EXEMPT":
-        return classifier_result.rationale == "preop_declared_exempt"
-    if classifier_result.classification in _RETURNS_TERMINALS:
-        return False
-    return classifier_result.rationale in _RESERVE_AHEAD_RATIONALES
+    return reservation_eligibility(classifier_result) is not ReservationEligibility.NONE
 
 
 def _planned_op_gate(decision: object) -> str:
@@ -1373,7 +1412,7 @@ def _build_audit_row(
     reserve_ahead = (
         context.component != "platelet"
         and feature_flags.RESERVE_AHEAD_ROUTER_ENABLED
-        and classifier_result.rationale in _RESERVE_AHEAD_RATIONALES
+        and classifier_result.rationale in RESERVE_AHEAD_RATIONALES
     )
     # For platelet rows, parse via parse_platelet_structured_response which
     # enforces the three hard-signal booleans.  A schema mismatch (missing or
@@ -2178,6 +2217,7 @@ __all__ = [
     "PERIOP_GUARDRAIL_MIN_EBL_ML",
     "PERIOP_OVERCLEAR_WINDOW_HOURS",
     "PLATELET_RESERVATION_REVIEW_REASON",
+    "ReservationEligibility",
     "Verifier",
     "apply_batch_results",
     "default_verifier",
@@ -2193,6 +2233,7 @@ __all__ = [
     "is_platelet_reservation_review",
     "llm_overclear_suspect",
     "periop_contradiction",
+    "reservation_eligibility",
     "select_winning_attempt",
     "split_leaked_summaries",
 ]

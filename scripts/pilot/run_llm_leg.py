@@ -112,6 +112,7 @@ from bba.deterministic_classifier import (
 )
 from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import ClassifierInputs
+from bba.deterministic_classifier.rationales import RESERVE_AHEAD_RATIONALES
 from bba.declared_use import (
     DeclaredUse,
     DeclaredUseLabel,
@@ -348,11 +349,11 @@ DETERMINISTIC_FINAL = frozenset(
     }
 )
 
-# Mirror bba.audit_pipeline.pipeline._RESERVE_AHEAD_RATIONALES so declared-only
-# deferrals (rationale "preop_defer_llm_declared") dispatch to
-# RESERVE_AHEAD_REVIEW here too. Kept a local mirror for the same reason the
-# leg mirrors the classifier-input helpers.
-_RESERVE_AHEAD_RATIONALES = frozenset({"preop_defer_llm", "preop_defer_llm_declared"})
+# Reserve-ahead dispatch set, from the single source of truth in the
+# deterministic_classifier package (candidate 4) so declared-only deferrals
+# (rationale "preop_defer_llm_declared") dispatch to RESERVE_AHEAD_REVIEW here
+# too, with no local copy that can drift from the library.
+_RESERVE_AHEAD_RATIONALES = RESERVE_AHEAD_RATIONALES
 
 
 def _planned_op_icd9(

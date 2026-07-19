@@ -81,6 +81,11 @@ from bba.deterministic_classifier.models import (
     ClassifierInputs,
     ClassifierResult,
 )
+from bba.deterministic_classifier.rationales import (
+    PREOP_DECLARED_EXEMPT,
+    PREOP_DEFER_LLM,
+    PREOP_DEFER_LLM_DECLARED,
+)
 
 HB_GT_10_THRESHOLD: float = 10.0
 """PRD §6 Hb (g/dL) ceiling AT OR ABOVE which the deterministic
@@ -223,7 +228,7 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
                 classification="PERIOP_TRANSFUSION_EXEMPT",
                 bypass_reason=BypassReason.PERIOP_TRANSFUSION_EXEMPT,
                 cohort_threshold=threshold,
-                rationale="preop_declared_exempt",
+                rationale=PREOP_DECLARED_EXEMPT,
             )
     else:
         # A confirmed transfusion (a unit not returned, or an explicit
@@ -410,7 +415,7 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
             bypass_reason=BypassReason.NONE,
             cohort_threshold=threshold,
             rationale=(
-                "preop_defer_llm" if structured_upcoming else "preop_defer_llm_declared"
+                PREOP_DEFER_LLM if structured_upcoming else PREOP_DEFER_LLM_DECLARED
             ),
         )
 

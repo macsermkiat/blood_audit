@@ -48,6 +48,7 @@ from bba.deterministic_classifier import (
 )
 from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import ClassifierInputs
+from bba.deterministic_classifier.rationales import PREOP_DECLARED_EXEMPT
 from bba.declared_use import DeclaredUseLabel, collapse_usetype, label_for
 from bba.feature_flags import (
     DECLARED_USETYPE_ENABLED,
@@ -1369,7 +1370,7 @@ def main() -> None:
                     oprtact_bridge=oprtact_bridge,
                 )
                 plt_row.update(msbos_columns)
-                if plt_rationale == "preop_declared_exempt":
+                if plt_rationale == PREOP_DECLARED_EXEMPT:
                     plt_overlay = _declared_platelet_overlay(msbos_columns)
                     if plt_overlay is not None:
                         plt_classification, plt_rationale = plt_overlay
@@ -1600,7 +1601,7 @@ def main() -> None:
                 oprtact_bridge=oprtact_bridge,
             )
             row.update(msbos_columns)
-            if clf.rationale == "preop_declared_exempt":
+            if clf.rationale == PREOP_DECLARED_EXEMPT:
                 overlay = _declared_msbos_overlay(msbos_columns)
                 if overlay is not None:
                     row.update(
