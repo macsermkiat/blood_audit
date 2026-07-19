@@ -202,10 +202,19 @@ def test_rbc_overlay_precedence_matrix(pipeline: ModuleType) -> None:
     # Legacy \x00AMBIG row under picker-OFF: reason set but NO provenance ->
     # stays declared-exempt (forced-off parity).
     assert overlay({"msbos_reason": "ambiguous_planned_op"}) is None
-    # All-candidates-excluded declared surgery -> review, not silent exempt.
-    assert overlay({"msbos_op_pick_status": "all_candidates_excluded"}) == (
-        "NEEDS_REVIEW",
-        "all_candidates_excluded",
+    # All-candidates-excluded declared surgery with reserved units -> review; a
+    # zero-unit (screen-only) reservation has nothing to judge -> stays exempt.
+    assert overlay(
+        {"msbos_op_pick_status": "all_candidates_excluded", "msbos_reserved_units": 1}
+    ) == ("NEEDS_REVIEW", "all_candidates_excluded")
+    assert (
+        overlay(
+            {
+                "msbos_op_pick_status": "all_candidates_excluded",
+                "msbos_reserved_units": 0,
+            }
+        )
+        is None
     )
     # A ceiling over is no longer "ambiguous_planned_op"; it routes as an over
     # even though the pick_status stays ambiguous_top_rank.

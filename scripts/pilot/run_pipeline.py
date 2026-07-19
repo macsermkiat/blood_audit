@@ -442,9 +442,14 @@ def _declared_msbos_overlay(
     pick_status = msbos_columns.get("msbos_op_pick_status", "")
     if msbos_columns.get("msbos_reason") == "ambiguous_planned_op" and pick_status:
         return ("NEEDS_REVIEW", "ambiguous_planned_op")
-    if pick_status == "all_candidates_excluded":
+    if (
+        pick_status == "all_candidates_excluded"
+        and int(msbos_columns.get("msbos_reserved_units") or 0) > 0
+    ):
         # Reserved units + declared surgery but no identifiable operation after
-        # exclusions -> review, not silent exempt (#210/#213).
+        # exclusions -> review, not silent exempt (#210/#213). A zero-unit
+        # (screen-only) reservation has nothing to over-reserve, so it stays
+        # declared-exempt rather than routing to review.
         return ("NEEDS_REVIEW", "all_candidates_excluded")
     if gate == "bridge_disagreement":
         return ("NEEDS_REVIEW", "preop_reservation_bridge_disagreement")

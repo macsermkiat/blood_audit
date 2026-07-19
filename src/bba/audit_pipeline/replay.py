@@ -375,6 +375,11 @@ def is_all_candidates_excluded_review(
     decision = context.reservation_decision
     if decision is None or _planned_op_status(decision) != "all_candidates_excluded":
         return False
+    # A zero-unit (screen-only) reservation has nothing to over-reserve, so it
+    # stays declared-exempt rather than routing to review (kept in sync with the
+    # det-leg overlay guard).
+    if int(getattr(decision, "reserved_units", 0) or 0) <= 0:
+        return False
     return (
         classifier_result.classification not in _RETURNS_TERMINALS
         or is_msbos_eligible(classifier_result)

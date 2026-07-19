@@ -42,6 +42,8 @@ _REVIEW_MARKER_KEYS = frozenset(
         "all_candidates_excluded",
         "bridge_disagreement",
         "bridge_over_unconfirmed",
+        "platelet_bridge_disagreement",
+        "platelet_bridge_over_unconfirmed",
     }
 )
 

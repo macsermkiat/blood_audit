@@ -605,6 +605,20 @@ def test_is_all_candidates_excluded_review_matches_det_overlay(
             reference_hash="d" * 64,
         )
 
+    class _CtxZeroUnits:
+        # all_candidates_excluded but zero reserved units (screen-only) -> nothing
+        # to over-reserve -> stays exempt, not review (synced with det overlay).
+        reservation_decision = ReservationDecision(
+            reserved_units=0,
+            is_over=False,
+            reason="no_planned_op",
+            reference_hash="d" * 64,
+        ).model_copy(
+            update={
+                "planned_op": _provenance("", pick_status="all_candidates_excluded")
+            }
+        )
+
     assert (
         is_all_candidates_excluded_review(
             classifier_result=cres,
@@ -616,6 +630,13 @@ def test_is_all_candidates_excluded_review_matches_det_overlay(
         is_all_candidates_excluded_review(
             classifier_result=cres,
             context=_CtxPlainNoPlan,  # type: ignore[arg-type]
+        )
+        is False
+    )
+    assert (
+        is_all_candidates_excluded_review(
+            classifier_result=cres,
+            context=_CtxZeroUnits,  # type: ignore[arg-type]
         )
         is False
     )

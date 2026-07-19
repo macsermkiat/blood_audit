@@ -418,6 +418,7 @@ def test_review_markers_are_skipped_not_tallied_or_failed() -> None:
         _row("over", "PREOP_OVER_RESERVATION"),
         _row("disagree", "NEEDS_REVIEW"),
         _row("excluded", "NEEDS_REVIEW"),
+        _row("plt-disagree", "NEEDS_REVIEW", component="platelet"),
     ]
     calls = [
         _call("over", "over_reservation"),
@@ -441,6 +442,17 @@ def test_review_markers_are_skipped_not_tallied_or_failed() -> None:
                 "reason": "no_planned_op",
                 "resolved_icd9": "",
                 "note_resolved": False,
+            },
+        ),
+        _call(
+            "plt-disagree",
+            "platelet_bridge_disagreement",
+            model_id="msbos-platelet-reservation",
+            payload={
+                "platelet_bridge_disagreement": True,
+                "audit_id": "plt-disagree",
+                "reason": "within_major_non_neuraxial",
+                "resolved_icd9": "0613",
             },
         ),
     ]
