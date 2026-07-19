@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 RAW_FILENAME = "Mapping INCPT ICD9.csv"
+ICD9CM_FILENAME = "ICD9CM.csv"
 OUT_FILENAME = "oprtact_icd9_bridge.csv"
 REQUIRED_COLUMNS = (
     "OPRTACT",
@@ -73,6 +74,7 @@ class BuildCounts:
     eligible: int = 0
     blank_key_skipped: int = 0
     collapsed_duplicates: int = 0
+    leading_zero_restored: int = 0
     conflicts: list[str] = field(default_factory=list)
 
 
@@ -104,10 +106,51 @@ def parse_first_choice(cell: str) -> tuple[str, str, str]:
     return icd9, name, score
 
 
+def canonical_nodot(code: str, name: str, icd9cm_names: Mapping[str, str]) -> str:
+    """Restore a 2-digit-category leading zero the raw export stripped.
+
+    ``Mapping INCPT ICD9.csv`` stores codes dotless (``'309'``), so a code whose
+    true category is ``0X`` (03.09 -> ``'0309'``) arrives with the zero gone
+    (``'309'``, which reads as 30.9). The dotless string alone is ambiguous, so
+    the operation NAME disambiguates against the ICD-9-CM master: prefer the
+    zero-padded form only when IT matches the name and the raw form does not.
+    Legitimate 3-digit codes (55.4 -> ``'554'``, ``'Partial nephrectomy'``) are
+    left untouched. Absent an ICD-9-CM map (unit tests), the code is unchanged.
+    """
+    raw = code.strip()
+    if not raw or not icd9cm_names:
+        return raw
+    name_norm = name.strip().casefold()
+    padded = "0" + raw
+    padded_ok = icd9cm_names.get(padded, "").strip().casefold() == name_norm
+    raw_ok = icd9cm_names.get(raw, "").strip().casefold() == name_norm
+    if padded_ok and not raw_ok:
+        return padded
+    return raw
+
+
+def load_icd9cm_names(path: Path) -> dict[str, str]:
+    """Map dotless ICD-9-CM procedure code -> canonical name (first wins)."""
+    names: dict[str, str] = {}
+    with path.open(encoding="utf-8-sig", newline="") as f:
+        for record in csv.DictReader(f):
+            code = (record.get("Icd9cm") or "").strip()
+            if code:
+                names.setdefault(code, (record.get("Name") or "").strip())
+    return names
+
+
 def build_rows(
     records: Iterable[Mapping[str, str]],
+    icd9cm_names: Mapping[str, str] | None = None,
 ) -> tuple[list[dict[str, str]], BuildCounts]:
-    """Apply the row rules to raw records; return sorted output rows + counts."""
+    """Apply the row rules to raw records; return sorted output rows + counts.
+
+    ``icd9cm_names`` maps dotless ICD-9 code -> canonical name; when supplied it
+    drives :func:`canonical_nodot` to restore leading zeros the raw export lost.
+    Omitted (unit tests), codes pass through verbatim.
+    """
+    icd9cm_names = icd9cm_names or {}
     counts = BuildCounts()
     by_key: dict[str, dict[str, str]] = {}
     for record in records:
@@ -120,6 +163,12 @@ def build_rows(
             continue
         counts.eligible += 1
         icd9, name, score = parse_first_choice(first_choice)
+        nodot = canonical_nodot(icd9.replace(".", ""), name, icd9cm_names)
+        if nodot != icd9.replace(".", ""):
+            counts.leading_zero_restored += 1
+        # The raw export is dotless, so the canonical code IS the nodot form; a
+        # (test-only) dotted source keeps its dotted icd9 while nodot normalizes.
+        icd9_out = icd9 if "." in icd9 else nodot
         human_index = (record.get("Human suggestion") or "").strip()
         human_icd9 = ""
         selected_column = SELECTED_CHOICE_COLUMNS.get(human_index)
@@ -129,11 +178,14 @@ def build_rows(
                 # Malformed non-blank cells fail loud via the shared grammar;
                 # a blank cell means the index points at nothing (no-selection,
                 # same handling as out-of-range indexes).
-                human_icd9, _, _ = parse_first_choice(selected_cell)
+                h_icd9, h_name, _ = parse_first_choice(selected_cell)
+                human_icd9 = canonical_nodot(
+                    h_icd9.replace(".", ""), h_name, icd9cm_names
+                )
         row = {
             "oprtact": oprtact,
-            "icd9": icd9,
-            "icd9_nodot": icd9.replace(".", ""),
+            "icd9": icd9_out,
+            "icd9_nodot": nodot,
             "score": score,
             "human_index": human_index,
             "human_agreed": "true" if human_index == "0" else "false",
@@ -144,13 +196,13 @@ def build_rows(
         if existing is None:
             by_key[oprtact] = row
             continue
-        if (existing["icd9"], existing["score"]) == (icd9, score):
+        if (existing["icd9"], existing["score"]) == (icd9_out, score):
             counts.collapsed_duplicates += 1
             continue
         raise BridgeBuildError(
             f"duplicate OPRTACT {oprtact} with conflicting First Choice: "
             f"kept ({existing['icd9']}, score={existing['score']}) vs "
-            f"new ({icd9}, score={score})"
+            f"new ({icd9_out}, score={score})"
         )
     return [by_key[key] for key in sorted(by_key)], counts
 
@@ -179,6 +231,15 @@ def main() -> None:
         sys.stderr.write(f"ERROR: raw mapping export not found: {src}\n")
         sys.exit(1)
 
+    icd9cm_src = args.raw_dir / ICD9CM_FILENAME
+    if not icd9cm_src.is_file():
+        sys.stderr.write(
+            f"ERROR: ICD-9-CM master not found (needed to restore leading zeros): "
+            f"{icd9cm_src}\n"
+        )
+        sys.exit(1)
+    icd9cm_names = load_icd9cm_names(icd9cm_src)
+
     with src.open(encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         fieldnames = reader.fieldnames or []
@@ -187,7 +248,7 @@ def main() -> None:
             sys.stderr.write(f"ERROR: missing required columns: {missing}\n")
             sys.exit(1)
         try:
-            rows, counts = build_rows(reader)
+            rows, counts = build_rows(reader, icd9cm_names)
         except BridgeBuildError as exc:
             sys.stderr.write(f"ERROR: {exc}\n")
             sys.exit(1)
@@ -208,6 +269,10 @@ def main() -> None:
     )
     print(
         f"[collapsed]  identical duplicate keys collapsed: {counts.collapsed_duplicates}",
+        file=sys.stderr,
+    )
+    print(
+        f"[zero-fix]   category leading zeros restored: {counts.leading_zero_restored}",
         file=sys.stderr,
     )
     print(f"[output]     bridge rows written: {len(rows)}", file=sys.stderr)
