@@ -237,6 +237,7 @@ def test_precision_is_pending_with_non_additive_assertion_denominators() -> None
             False,
             "red_cell",
         ),
+        ("ceiling", "over_ceiling", False, "red_cell"),
         ("plt-major", "over_major_non_neuraxial", False, "platelet"),
         ("plt-neuraxial", "over_neuraxial", False, "platelet"),
         ("plt-cardiac", "over_cardiac_cpb", False, "platelet"),
@@ -279,6 +280,7 @@ def test_precision_is_pending_with_non_additive_assertion_denominators() -> None
         "note_resolved_over_assertions": 1,
         "over_gm_excess": 1,
         "over_type_and_screen_crossmatched": 1,
+        "over_ceiling": 1,
     }
     assert precision.platelet_assertion_denominators.model_dump() == {
         "over_major_non_neuraxial": 1,
@@ -406,6 +408,61 @@ def test_marker_requires_exactly_one_true_boolean_key(
     # Act / Assert
     with pytest.raises(PilotReportError, match="exactly one true marker key"):
         _build([row], [call])
+
+
+def test_review_markers_are_skipped_not_tallied_or_failed() -> None:
+    # Picker-v2 NEEDS_REVIEW terminals (bridge disagreement / all-candidates-
+    # excluded) carry a review-only request key, so the committee report skips
+    # them rather than tripping the exactly-one-marker-key validation (#196/#210).
+    rows = [
+        _row("over", "PREOP_OVER_RESERVATION"),
+        _row("disagree", "NEEDS_REVIEW"),
+        _row("excluded", "NEEDS_REVIEW"),
+        _row("plt-disagree", "NEEDS_REVIEW", component="platelet"),
+    ]
+    calls = [
+        _call("over", "over_reservation"),
+        _call(
+            "disagree",
+            "bridge_disagreement",
+            payload={
+                "bridge_disagreement": True,
+                "audit_id": "disagree",
+                "reason": "within_recommendation",
+                "resolved_icd9": "1000",
+                "note_resolved": False,
+            },
+        ),
+        _call(
+            "excluded",
+            "all_candidates_excluded",
+            payload={
+                "all_candidates_excluded": True,
+                "audit_id": "excluded",
+                "reason": "no_planned_op",
+                "resolved_icd9": "",
+                "note_resolved": False,
+            },
+        ),
+        _call(
+            "plt-disagree",
+            "platelet_bridge_disagreement",
+            model_id="msbos-platelet-reservation",
+            payload={
+                "platelet_bridge_disagreement": True,
+                "audit_id": "plt-disagree",
+                "reason": "within_major_non_neuraxial",
+                "resolved_icd9": "0613",
+            },
+        ),
+    ]
+
+    report = _build(rows, calls)
+
+    # Only the real over-assertion is tallied; both review markers are ignored.
+    assert report.provenance.total_reservation_markers == 1
+    assert report.reconciliation.over_marker_count == 1
+    assert report.precision.rbc_assertion_denominators.none_bucket_over_assertions == 1
 
 
 def test_marker_key_must_match_model_family() -> None:

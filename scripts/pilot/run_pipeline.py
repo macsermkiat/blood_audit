@@ -85,7 +85,7 @@ from bba.preop_reservation import (
 from bba.preop_reservation.bridge import OprtactBridge, load_oprtact_bridge
 from bba.preop_reservation.models import PlannedOpProvenance
 from bba.preop_reservation.planned_op import (
-    attach_planned_op,
+    finalize_planned_op,
     planned_op_v2_for_events,
 )
 from bba.returns_ledger import ReturnsSummary, rows_for_admission, summarize_returns
@@ -263,6 +263,7 @@ MSBOS_PICKER_V2_FIELDNAMES = [
     "msbos_candidate_count",
     "msbos_tie_count",
     "msbos_bridge_hash",
+    "msbos_ceiling_basis",
 ]
 
 
@@ -399,8 +400,25 @@ def _picker_v2_columns(provenance: PlannedOpProvenance) -> dict[str, Any]:
         "msbos_candidate_count": provenance.candidate_count,
         "msbos_tie_count": provenance.tie_count,
         "msbos_bridge_hash": provenance.bridge_hash,
+        "msbos_ceiling_basis": _ceiling_basis(provenance),
         "_bridge_gate": provenance.gate,
     }
+
+
+def _ceiling_basis(provenance: PlannedOpProvenance) -> str:
+    """Human-readable dominance-ceiling basis for a ceiling row (#212/#213).
+
+    ``"G/M 2 (8101,8103)"`` on a ceiling row, ``""`` on any non-ceiling pick.
+    Populated whenever ``ceiling_token`` is set; the code list is omitted when
+    empty (never on a real ceiling, which always spans >=1 code).
+    """
+    if not provenance.ceiling_token:
+        return ""
+    units = provenance.ceiling_units if provenance.ceiling_units is not None else 0
+    basis = f"{provenance.ceiling_token} {units}"
+    if provenance.ceiling_codes:
+        basis += f" ({provenance.ceiling_codes})"
+    return basis
 
 
 def _declared_msbos_overlay(
@@ -409,13 +427,30 @@ def _declared_msbos_overlay(
     """Classification/rationale override for a declared-exempt RBC row.
 
     Picker-v2 verdict gate (#199): ambiguity first (the pick itself is
-    unreliable), then the disagreement guard, then the score gate on an over.
-    Flag-off rows never carry "_bridge_gate"/"msbos_op_pick_status", so only
-    the legacy over/operation-unresolved branches can fire there.
+    unreliable), then all-excluded, the disagreement guard, then the score gate
+    on an over. Flag-off rows never carry "_bridge_gate"/"msbos_op_pick_status",
+    so only the legacy over/operation-unresolved branches can fire there.
+
+    Ceiling routing (#210/#213): a ceiling-judged row no longer carries the
+    ``ambiguous_planned_op`` reason, so the ambiguity flip keys on the reason
+    AND picker provenance (a legacy \x00AMBIG row under picker-OFF has the
+    reason but no provenance and must stay declared-exempt) — the ceiling over
+    then routes through the ``msbos_is_over`` branch, and within_ceiling stays
+    declared-exempt (annotated).
     """
     gate = msbos_columns.get("_bridge_gate", "")
-    if msbos_columns.get("msbos_op_pick_status") == "ambiguous_top_rank":
+    pick_status = msbos_columns.get("msbos_op_pick_status", "")
+    if msbos_columns.get("msbos_reason") == "ambiguous_planned_op" and pick_status:
         return ("NEEDS_REVIEW", "ambiguous_planned_op")
+    if (
+        pick_status == "all_candidates_excluded"
+        and int(msbos_columns.get("msbos_reserved_units") or 0) > 0
+    ):
+        # Reserved units + declared surgery but no identifiable operation after
+        # exclusions -> review, not silent exempt (#210/#213). A zero-unit
+        # (screen-only) reservation has nothing to over-reserve, so it stays
+        # declared-exempt rather than routing to review.
+        return ("NEEDS_REVIEW", "all_candidates_excluded")
     if gate == "bridge_disagreement":
         return ("NEEDS_REVIEW", "preop_reservation_bridge_disagreement")
     if msbos_columns.get("msbos_is_over") is True:
@@ -525,6 +560,17 @@ def _msbos_reservation_columns(
             planned_icd9_nodot=planned,
             reference=msbos_reference,
         )
+    # Finalize (dominance ceiling + provenance/gate) BEFORE the report columns
+    # build so msbos_reason/msbos_is_over/report columns AND the declared-exempt
+    # overlay all see the post-ceiling verdict (#210/#213). Picker-off (pick is
+    # None) never finalizes, so the flag-off columns stay byte-identical.
+    if pick is not None and oprtact_bridge is not None:
+        decision = finalize_planned_op(
+            decision,
+            pick,
+            reference=msbos_reference,
+            bridge_hash=oprtact_bridge.content_hash,
+        )
     columns = {
         "msbos_reserved_units": decision.reserved_units,
         "msbos_token": decision.msbos,
@@ -534,13 +580,6 @@ def _msbos_reservation_columns(
         "msbos_resolved_icd9": decision.resolved_icd9,
         "msbos_reference_hash": decision.reference_hash,
     }
-    if pick is not None and oprtact_bridge is not None:
-        decision = attach_planned_op(
-            decision,
-            pick,
-            reference=msbos_reference,
-            bridge_hash=oprtact_bridge.content_hash,
-        )
     if decision.planned_op is not None:
         columns.update(_picker_v2_columns(decision.planned_op))
     return columns
@@ -605,7 +644,9 @@ def _msbos_platelet_columns(
         reference_hash=msbos_reference.content_hash,
     )
     if pick is not None and oprtact_bridge is not None:
-        decision = attach_planned_op(
+        # finalize is the shared seam (RBC + platelet); platelet is out of
+        # ceiling scope, so this attaches provenance/gate only (no ceiling).
+        decision = finalize_planned_op(
             decision,
             pick,
             reference=msbos_reference,

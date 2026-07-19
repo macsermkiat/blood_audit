@@ -27,13 +27,18 @@ from __future__ import annotations
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Literal, TypeVar
+from typing import Literal, TypeVar, cast
 
 from pydantic import BaseModel
 
 from bba.cohort_detector.models import OperativeEvent
 from bba.preop_reservation.bridge import OprtactBridge
-from bba.preop_reservation.models import PlannedOpProvenance
+from bba.preop_reservation.models import (
+    MsbosRow,
+    PlannedOpProvenance,
+    ReservationDecision,
+    ReservationReason,
+)
 from bba.preop_reservation.reference import MsbosReference
 
 PLANNED_OP_WINDOW_HOURS = 72
@@ -51,6 +56,7 @@ PLANNED_OP_SOURCE_CODE_DENYLIST: frozenset[str] = frozenset(
         "AS058",
         "MD529",
         "MD530",
+        "SU030",
         "SU062",
         "P0001",
         "P0067",
@@ -60,8 +66,26 @@ PLANNED_OP_SOURCE_CODE_DENYLIST: frozenset[str] = frozenset(
     }
 )
 """Reviewed pilot non-operative billing codes (anesthesia, dialysis,
-fluoroscopy, ETT, intralesional injection, pupil dilation, spinal taps).
-Exact codes only — never prefixes. Additions require clinician review."""
+fluoroscopy, ETT, intralesional injection, pupil dilation, spinal taps). Exact,
+UNCONDITIONAL denials — applied regardless of the resolved code's MSBOS status.
+``SU030`` (#211) is exact-only because ``SU`` is NOT a safe prefix family.
+Additions require clinician review. For the guarded PREFIX families, see
+:data:`PLANNED_OP_SOURCE_CODE_DENYLIST_PREFIXES`."""
+
+PLANNED_OP_SOURCE_CODE_DENYLIST_PREFIXES: frozenset[str] = frozenset({"AS", "ML", "X"})
+"""Guarded source-code prefix families for planned-op exclusion (#211).
+
+Prefixes were historically forbidden ("never prefixes"). They are now permitted
+ONLY under two conditions, both established by a full-master data review
+(10,544 OPRTACT codes x bridge x MSBOS x pilot frequency, 2026-07-19):
+(1) a ZERO-MSBOS-CROSSOVER GUARD — a prefixed candidate is excluded ONLY when
+its resolved code is NOT in the MSBOS universe, so a prefix can NEVER suppress a
+verdict-capable operation, now or after any bridge/schedule re-export; and
+(2) the family has zero MSBOS crossover across the full master AND uniformly
+non-operative names. Only ``AS`` (anesthesia services + peri-op POC labs),
+``ML`` (lab/pathology specimen processing), and ``X`` (imaging) qualify.
+``P``/``L``/``SU``/``MD``/``CC``/``OT`` are explicitly NOT safe as prefixes
+(each maps real operations into MSBOS)."""
 
 _SENTINEL_PREFIX = "INCPT:"
 
@@ -88,8 +112,30 @@ PickSource = Literal["icd9", "incpt_bridge"]
 
 
 @dataclass(frozen=True, slots=True)
+class PlannedOpClusterMember:
+    """One member of a planned-op ambiguity set (spec #210, ticket #212).
+
+    Carries exactly the facts the dominance-ceiling verdict gate needs to judge
+    a ceiling over per-member. ``source`` mirrors :class:`PlannedOpPick`
+    (``"icd9"``, ``"incpt_bridge"``, or ``None`` for an unresolvable sentinel)."""
+
+    resolved_icd9: str
+    source: PickSource | None
+    bridge_score: float | None
+    human_agreed: bool | None
+    human_icd9: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class PlannedOpPick:
-    """Fully-populated planned-op selection result with bridge provenance."""
+    """Fully-populated planned-op selection result with bridge provenance.
+
+    The ``cluster_*`` fields (spec #210, #212) are populated ONLY on an
+    ``ambiguous_top_rank`` pick and describe the ambiguity set that the
+    dominance-ceiling rule judges: ``cluster_codes`` is the sorted distinct
+    dotless resolved code set, ``cluster_all_eligible`` is the dominance
+    precondition (every member resolves into MSBOS), and ``cluster_members``
+    carries the per-member gate facts. They stay empty on any other pick."""
 
     resolved_icd9: str
     source_code: str
@@ -103,6 +149,9 @@ class PlannedOpPick:
     pick_status: PickStatus
     candidate_count: int
     tie_count: int
+    cluster_codes: tuple[str, ...] = ()
+    cluster_all_eligible: bool = False
+    cluster_members: tuple[PlannedOpClusterMember, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +186,11 @@ def _failure(status: PickStatus) -> PlannedOpPick:
 def _nodot(code: str) -> str:
     """Strip decimal points ONLY — never add or remove leading zeros."""
     return code.replace(".", "")
+
+
+def _has_denied_prefix(source_code: str, prefixes: frozenset[str]) -> bool:
+    """True if the OPRTACT source code starts with any denied prefix family."""
+    return any(source_code.startswith(prefix) for prefix in prefixes)
 
 
 def _derive(event: OperativeEvent, bridge: OprtactBridge) -> _Candidate:
@@ -195,6 +249,9 @@ def _result(
     status: PickStatus,
     candidate_count: int,
     tie_count: int,
+    cluster_codes: tuple[str, ...] = (),
+    cluster_all_eligible: bool = False,
+    cluster_members: tuple[PlannedOpClusterMember, ...] = (),
 ) -> PlannedOpPick:
     return PlannedOpPick(
         resolved_icd9=candidate.resolved_icd9,
@@ -209,7 +266,37 @@ def _result(
         pick_status=status,
         candidate_count=candidate_count,
         tie_count=tie_count,
+        cluster_codes=cluster_codes,
+        cluster_all_eligible=cluster_all_eligible,
+        cluster_members=cluster_members,
     )
+
+
+def _cluster_fields(
+    members: list[_Candidate], msbos_codes: Collection[str]
+) -> tuple[tuple[str, ...], bool, tuple[PlannedOpClusterMember, ...]]:
+    """Derive the ambiguity-set fields for a pick (deterministic ordering).
+
+    ``cluster_codes`` is the sorted distinct dotless resolved code set (drives
+    the ceiling union); ``cluster_all_eligible`` is the dominance precondition —
+    EVERY member (incl. the rank-1 winner) must resolve into MSBOS, else the
+    ceiling is voided; ``cluster_members`` carries the per-member gate facts,
+    ordered deterministically so the pick is input-order-independent.
+    """
+    codes = tuple(sorted({_nodot(c.resolved_icd9) for c in members}))
+    all_eligible = all(_nodot(c.resolved_icd9) in msbos_codes for c in members)
+    ordered = sorted(members, key=_presentation_key)
+    cluster_members = tuple(
+        PlannedOpClusterMember(
+            resolved_icd9=c.resolved_icd9,
+            source=c.source,
+            bridge_score=c.bridge_score,
+            human_agreed=c.human_agreed,
+            human_icd9=c.human_icd9,
+        )
+        for c in ordered
+    )
+    return codes, all_eligible, cluster_members
 
 
 def select_planned_op_v2(
@@ -218,6 +305,7 @@ def select_planned_op_v2(
     bridge: OprtactBridge,
     *,
     denylist: frozenset[str] = PLANNED_OP_SOURCE_CODE_DENYLIST,
+    denylist_prefixes: frozenset[str] = PLANNED_OP_SOURCE_CODE_DENYLIST_PREFIXES,
     msbos_codes: Collection[str],
     approved_non_blood_codes: Collection[str],
     cluster_window_seconds: int = PLANNED_OP_CLUSTER_WINDOW_SECONDS,
@@ -242,6 +330,10 @@ def select_planned_op_v2(
         for candidate in (_derive(event, bridge) for event in in_window)
         if candidate.source_code not in denylist
         and _nodot(candidate.resolved_icd9) not in approved_non_blood_codes
+        and not (
+            _has_denied_prefix(candidate.source_code, denylist_prefixes)
+            and _nodot(candidate.resolved_icd9) not in msbos_codes
+        )
     ]
     if not survivors:
         return _failure("all_candidates_excluded")
@@ -252,24 +344,40 @@ def select_planned_op_v2(
     tie_count = len(rank1)
     rank1_dt = rank1[0].event.operative_datetime
 
-    ambiguous = len({c.resolved_icd9 for c in rank1}) > 1
-    if not ambiguous:
+    # Derive the ambiguity set (spec #210/#212). The tie branch and the cluster
+    # branch each derive their OWN member set: the tie branch's set is rank1
+    # itself, while the cluster branch's is the cluster-window survivors. (The
+    # cluster set does not exist on the tie path, so it must not be threaded
+    # across the two branches.)
+    ambiguity_members: list[_Candidate] | None = None
+    if len({c.resolved_icd9 for c in rank1}) > 1:
+        ambiguity_members = rank1
+    else:
         cluster_window = timedelta(seconds=cluster_window_seconds)
-        cluster_codes = {
-            _nodot(c.resolved_icd9)
+        cluster_window_survivors = [
+            c
             for c in survivors
             if abs(c.event.operative_datetime - rank1_dt) <= cluster_window
-            and _nodot(c.resolved_icd9) in msbos_codes
+        ]
+        distinct_msbos_codes = {
+            _nodot(c.resolved_icd9)
+            for c in cluster_window_survivors
+            if _nodot(c.resolved_icd9) in msbos_codes
         }
-        ambiguous = len(cluster_codes) > 1
+        if len(distinct_msbos_codes) > 1:
+            ambiguity_members = cluster_window_survivors
 
     winner = min(rank1, key=_presentation_key)
-    if ambiguous:
+    if ambiguity_members is not None:
+        codes, all_eligible, members = _cluster_fields(ambiguity_members, msbos_codes)
         return _result(
             winner,
             status="ambiguous_top_rank",
             candidate_count=candidate_count,
             tie_count=tie_count,
+            cluster_codes=codes,
+            cluster_all_eligible=all_eligible,
+            cluster_members=members,
         )
     status: PickStatus = (
         "selected_blank_code" if winner.resolved_icd9 == "" else "selected"
@@ -339,6 +447,51 @@ def _bridge_gate(
     return ""
 
 
+def ceiling_row(rows: Collection[MsbosRow]) -> MsbosRow:
+    """The most permissive recommendation across a set (spec #210, #212).
+
+    G/M with the maximum units dominates; else T/S (0 units); else none (0). A
+    reservation strictly over this ceiling is over under every reading in the
+    set. An empty set (never passed under the dominance precondition) yields the
+    conservative ``none`` 0.
+    """
+    gm_units = [row.recommended_units for row in rows if row.msbos == "G/M"]
+    if gm_units:
+        return MsbosRow(msbos="G/M", recommended_units=max(gm_units))
+    if any(row.msbos == "T/S" for row in rows):
+        return MsbosRow(msbos="T/S", recommended_units=0)
+    return MsbosRow(msbos="none", recommended_units=0)
+
+
+def _base_provenance(
+    pick: PlannedOpPick,
+    *,
+    bridge_hash: str,
+    gate: Literal["", "bridge_disagreement", "bridge_over_unconfirmed"],
+    ceiling_token: str = "",
+    ceiling_units: int | None = None,
+    ceiling_codes: str = "",
+) -> PlannedOpProvenance:
+    """Build the picker-v2 provenance for a pick (shared by attach + finalize)."""
+    return PlannedOpProvenance(
+        source_code=pick.source_code,
+        source=pick.source or "",
+        bridge_icd9=pick.resolved_icd9 if pick.source == "incpt_bridge" else "",
+        bridge_score=pick.bridge_score,
+        human_index=pick.human_index or "",
+        human_agreed=pick.human_agreed,
+        human_icd9=pick.human_icd9 or "",
+        pick_status=pick.pick_status,
+        candidate_count=pick.candidate_count,
+        tie_count=pick.tie_count,
+        bridge_hash=bridge_hash,
+        gate=gate,
+        ceiling_token=ceiling_token,
+        ceiling_units=ceiling_units,
+        ceiling_codes=ceiling_codes,
+    )
+
+
 def attach_planned_op(
     decision: _DecisionT,
     pick: PlannedOpPick,
@@ -351,24 +504,155 @@ def attach_planned_op(
     Works for both the RBC ``ReservationDecision`` and the platelet
     ``PlateletReservationDecision`` — both carry the optional ``planned_op``
     field and expose ``is_over``. The raw ``is_over`` judgment is preserved
-    for audit; the verdict overlay consults ``planned_op.gate`` instead.
+    for audit; the verdict overlay consults ``planned_op.gate`` instead. The
+    non-ceiling arm of :func:`finalize_planned_op`; the ceiling arm builds its
+    own provenance so the two never clobber.
     """
     is_over = bool(getattr(decision, "is_over", False))
-    provenance = PlannedOpProvenance(
-        source_code=pick.source_code,
-        source=pick.source or "",
-        bridge_icd9=pick.resolved_icd9 if pick.source == "incpt_bridge" else "",
-        bridge_score=pick.bridge_score,
-        human_index=pick.human_index or "",
-        human_agreed=pick.human_agreed,
-        human_icd9=pick.human_icd9 or "",
-        pick_status=pick.pick_status,
-        candidate_count=pick.candidate_count,
-        tie_count=pick.tie_count,
+    provenance = _base_provenance(
+        pick,
         bridge_hash=bridge_hash,
         gate=_bridge_gate(pick, is_over=is_over, reference=reference),
     )
     return decision.model_copy(update={"planned_op": provenance})
+
+
+def _member_from_pick(pick: PlannedOpPick) -> PlannedOpClusterMember:
+    """The single-code ceiling's sole member is the pick's own winner."""
+    return PlannedOpClusterMember(
+        resolved_icd9=pick.resolved_icd9,
+        source=pick.source,
+        bridge_score=pick.bridge_score,
+        human_agreed=pick.human_agreed,
+        human_icd9=pick.human_icd9,
+    )
+
+
+def _member_disagrees(
+    member: PlannedOpClusterMember, *, reference: MsbosReference
+) -> bool:
+    """First-Choice vs human-selected code disagreement for one bridge member."""
+    if member.source != "incpt_bridge":
+        return False
+    human_icd9 = member.human_icd9 or ""
+    if not human_icd9 or human_icd9 == member.resolved_icd9:
+        return False
+    first_hits = reference.resolve(_nodot(member.resolved_icd9)) is not None
+    human_hits = reference.resolve(_nodot(human_icd9)) is not None
+    return first_hits or human_hits
+
+
+def _member_confirmed(member: PlannedOpClusterMember) -> bool:
+    """Per-member hard-verdict confirmation (exact-ICD9 members always pass)."""
+    if member.source != "incpt_bridge":
+        return True
+    score = member.bridge_score if member.bridge_score is not None else 0.0
+    return score >= BRIDGE_HARD_VERDICT_MIN_SCORE and bool(member.human_agreed)
+
+
+def _ceiling_gate(
+    members: tuple[PlannedOpClusterMember, ...],
+    *,
+    is_over: bool,
+    reference: MsbosReference,
+) -> Literal["", "bridge_disagreement", "bridge_over_unconfirmed"]:
+    """Aggregate verdict gate over a ceiling ambiguity set (spec #210, #212).
+
+    The gate applies ONLY to a ceiling OVER — it is the reason an over LOSES its
+    hard power. A ceiling over keeps hard power ONLY when EVERY bridge-sourced
+    member is gate-confirmed AND none disagrees (the presentation winner's
+    provenance alone is not sufficient for a mixed cluster); disagreement
+    precedes the score gate. within_ceiling (not an over) is NEVER gated — it
+    stays declared-exempt + annotated per ruling #2, its exposure surfaced in the
+    shadow-over report rather than routed to review.
+    """
+    if not is_over:
+        return ""
+    if any(_member_disagrees(member, reference=reference) for member in members):
+        return "bridge_disagreement"
+    if not all(_member_confirmed(member) for member in members):
+        return "bridge_over_unconfirmed"
+    return ""
+
+
+def _finalize_rbc_ceiling(
+    decision: ReservationDecision,
+    pick: PlannedOpPick,
+    *,
+    reference: MsbosReference,
+    bridge_hash: str,
+) -> ReservationDecision | None:
+    """Compute a dominance-ceiling verdict for an ambiguous RBC reservation.
+
+    Returns the finalized decision (ceiling verdict + provenance + gate written
+    atomically), or ``None`` when no ceiling applies (the caller falls back to
+    :func:`attach_planned_op`). Two ceiling cases: a cluster ambiguity whose set
+    fully resolves into MSBOS (>=2 distinct codes), or a single ambiguous_code.
+    """
+    if (
+        pick.pick_status == "ambiguous_top_rank"
+        and pick.cluster_all_eligible
+        and len(pick.cluster_codes) >= 2
+    ):
+        codes = pick.cluster_codes
+        members = pick.cluster_members
+    elif decision.reason == "ambiguous_code":
+        codes = (_nodot(decision.resolved_icd9),)
+        members = (_member_from_pick(pick),)
+    else:
+        return None
+
+    rows: set[MsbosRow] = set()
+    for code in codes:
+        rows |= reference.rows_for(code)
+    ceiling = ceiling_row(rows)
+    is_over = decision.reserved_units > ceiling.recommended_units
+    reason: ReservationReason = "over_ceiling" if is_over else "within_ceiling"
+    provenance = _base_provenance(
+        pick,
+        bridge_hash=bridge_hash,
+        gate=_ceiling_gate(members, is_over=is_over, reference=reference),
+        ceiling_token=ceiling.msbos,
+        ceiling_units=ceiling.recommended_units,
+        ceiling_codes=",".join(codes),
+    )
+    return decision.model_copy(
+        update={
+            "resolved_icd9": pick.resolved_icd9,
+            "msbos": ceiling.msbos,
+            "recommended_units": ceiling.recommended_units,
+            "is_over": is_over,
+            "reason": reason,
+            "note_resolved": False,
+            "planned_op": provenance,
+        }
+    )
+
+
+def finalize_planned_op(
+    decision: _DecisionT,
+    pick: PlannedOpPick,
+    *,
+    reference: MsbosReference,
+    bridge_hash: str,
+) -> _DecisionT:
+    """Compute the dominance ceiling (RBC only) then attach provenance + gate.
+
+    Supersedes :func:`attach_planned_op` at every call site (both legs). For an
+    ambiguous RBC reservation whose set fully resolves into MSBOS it judges the
+    reservation against the most permissive tariff (over_ceiling/within_ceiling)
+    and gates a ceiling over per-member; otherwise it attaches provenance
+    unchanged. Platelet decisions never get a ceiling (out of scope, spec #210).
+    """
+    if isinstance(decision, ReservationDecision):
+        ceilinged = _finalize_rbc_ceiling(
+            decision, pick, reference=reference, bridge_hash=bridge_hash
+        )
+        if ceilinged is not None:
+            return cast(_DecisionT, ceilinged)
+    return attach_planned_op(
+        decision, pick, reference=reference, bridge_hash=bridge_hash
+    )
 
 
 __all__ = [
@@ -376,11 +660,15 @@ __all__ = [
     "BRIDGE_HARD_VERDICT_MIN_SCORE",
     "PLANNED_OP_CLUSTER_WINDOW_SECONDS",
     "PLANNED_OP_SOURCE_CODE_DENYLIST",
+    "PLANNED_OP_SOURCE_CODE_DENYLIST_PREFIXES",
     "PLANNED_OP_WINDOW_HOURS",
     "PickSource",
     "PickStatus",
+    "PlannedOpClusterMember",
     "PlannedOpPick",
     "attach_planned_op",
+    "ceiling_row",
+    "finalize_planned_op",
     "planned_op_v2_for_events",
     "select_planned_op_v2",
 ]

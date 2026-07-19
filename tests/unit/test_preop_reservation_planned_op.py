@@ -15,6 +15,7 @@ from bba.preop_reservation.bridge import OprtactBridge, _bridge_from_rows
 from bba.preop_reservation.planned_op import (
     PLANNED_OP_CLUSTER_WINDOW_SECONDS,
     PLANNED_OP_SOURCE_CODE_DENYLIST,
+    PLANNED_OP_SOURCE_CODE_DENYLIST_PREFIXES,
     PLANNED_OP_WINDOW_HOURS,
     PlannedOpPick,
     select_planned_op_v2,
@@ -70,6 +71,7 @@ def _pick(
     msbos_codes: frozenset[str] = frozenset(),
     approved: frozenset[str] = frozenset(),
     denylist: frozenset[str] = PLANNED_OP_SOURCE_CODE_DENYLIST,
+    denylist_prefixes: frozenset[str] = PLANNED_OP_SOURCE_CODE_DENYLIST_PREFIXES,
     cluster_window_seconds: int = PLANNED_OP_CLUSTER_WINDOW_SECONDS,
 ) -> PlannedOpPick:
     return select_planned_op_v2(
@@ -77,6 +79,7 @@ def _pick(
         _ORDER_DT,
         bridge if bridge is not None else _bridge(),
         denylist=denylist,
+        denylist_prefixes=denylist_prefixes,
         msbos_codes=msbos_codes,
         approved_non_blood_codes=approved,
         cluster_window_seconds=cluster_window_seconds,
@@ -389,3 +392,178 @@ def test_events_input_is_not_mutated_and_result_is_deterministic() -> None:
     assert first.resolved_icd9 == "8151"
     # AS056 is denylisted; 8151 (+2h) and 7915 (+50h) both survive in-window.
     assert first.candidate_count == 2
+
+
+# --- guarded-prefix denylist (families AS/ML/X + exact SU030, #211) ----------
+
+
+def test_prefix_denied_non_msbos_code_is_skipped() -> None:
+    # An AS* anesthesia charge bridging to a non-MSBOS code is excluded by the
+    # prefix family (AS999 is NOT in the exact denylist, so this exercises the
+    # PREFIX path); a later real operation is selected instead.
+    bridge = _bridge(
+        [
+            _bridge_row("AS999", icd9="3895", score="0.99", human_index="0"),
+            _bridge_row("P1247", icd9="8151", score="0.99", human_index="0"),
+        ]
+    )
+    events = [
+        _event("INCPT:AS999", hours=1.0),
+        _event("INCPT:P1247", hours=2.0),
+    ]
+
+    pick = _pick(events, bridge=bridge, msbos_codes=frozenset({"8151"}))
+
+    assert pick.pick_status == "selected"
+    assert pick.resolved_icd9 == "8151"
+    assert pick.source_code == "P1247"
+    assert pick.candidate_count == 1
+
+
+def test_prefix_denied_but_msbos_mapped_code_survives_crossover_guard() -> None:
+    # Zero-MSBOS-crossover invariant: a prefixed source code whose RESOLVED code
+    # IS in the MSBOS universe must NEVER be suppressed by the prefix rule — a
+    # prefix can never hide a verdict-capable operation.
+    bridge = _bridge([_bridge_row("AS999", icd9="8151", score="0.99", human_index="0")])
+
+    pick = _pick(
+        [_event("INCPT:AS999")], bridge=bridge, msbos_codes=frozenset({"8151"})
+    )
+
+    assert pick.pick_status == "selected"
+    assert pick.resolved_icd9 == "8151"
+    assert pick.source_code == "AS999"
+
+
+def test_ml_and_x_prefix_families_are_denied_when_non_msbos() -> None:
+    for oprtact in ("ML001", "X042"):
+        bridge = _bridge(
+            [
+                _bridge_row(oprtact, icd9="3895", score="0.99", human_index="0"),
+                _bridge_row("P1247", icd9="8151", score="0.99", human_index="0"),
+            ]
+        )
+        events = [
+            _event(f"INCPT:{oprtact}", hours=1.0),
+            _event("INCPT:P1247", hours=2.0),
+        ]
+
+        pick = _pick(events, bridge=bridge, msbos_codes=frozenset({"8151"}))
+
+        assert pick.pick_status == "selected", oprtact
+        assert pick.resolved_icd9 == "8151", oprtact
+
+
+def test_su030_exact_code_is_denied_even_when_msbos_mapped() -> None:
+    # SU030 is an EXACT denial (SU is NOT a safe prefix family): it is suppressed
+    # unconditionally, even though it bridges to an MSBOS-mapped code here.
+    bridge = _bridge(
+        [
+            _bridge_row("SU030", icd9="8151", score="0.99", human_index="0"),
+            _bridge_row("P1247", icd9="5122", score="0.99", human_index="0"),
+        ]
+    )
+    events = [
+        _event("INCPT:SU030", hours=1.0),
+        _event("INCPT:P1247", hours=2.0),
+    ]
+
+    pick = _pick(events, bridge=bridge, msbos_codes=frozenset({"8151", "5122"}))
+
+    assert pick.pick_status == "selected"
+    assert pick.source_code == "P1247"
+    assert pick.resolved_icd9 == "5122"
+
+
+def test_prefixes_do_not_affect_non_prefixed_source_codes() -> None:
+    # A plain sentinel code that does not start with a denied prefix is untouched.
+    bridge = _bridge([_bridge_row("P1247", icd9="8151", score="0.99", human_index="0")])
+
+    pick = _pick(
+        [_event("INCPT:P1247")], bridge=bridge, msbos_codes=frozenset({"8151"})
+    )
+
+    assert pick.pick_status == "selected"
+    assert pick.resolved_icd9 == "8151"
+    assert pick.source_code == "P1247"
+
+
+def test_all_in_window_prefix_denied_is_all_excluded() -> None:
+    # Only a prefix-denied non-MSBOS candidate in-window -> all_candidates_excluded.
+    bridge = _bridge([_bridge_row("AS999", icd9="3895", score="0.99", human_index="0")])
+
+    pick = _pick(
+        [_event("INCPT:AS999")], bridge=bridge, msbos_codes=frozenset({"8151"})
+    )
+
+    _assert_failure(pick, "all_candidates_excluded")
+
+
+# --- ambiguity-set / cluster fields (#212) -----------------------------------
+
+
+def test_cluster_ambiguity_populates_cluster_fields() -> None:
+    events = [
+        _event("7915", hours=1.0),
+        _event("8151", hours=1.0, seconds=30.0),
+    ]
+
+    pick = _pick(events, msbos_codes=frozenset({"7915", "8151"}))
+
+    assert pick.pick_status == "ambiguous_top_rank"
+    assert pick.cluster_codes == ("7915", "8151")
+    assert pick.cluster_all_eligible is True
+    assert {m.resolved_icd9 for m in pick.cluster_members} == {"7915", "8151"}
+    assert all(m.source == "icd9" for m in pick.cluster_members)
+
+
+def test_tie_ambiguity_derives_its_own_member_set() -> None:
+    events = [
+        _event("6561", hours=1.0),
+        _event("544", hours=1.0),
+    ]
+
+    pick = _pick(events, msbos_codes=frozenset({"6561", "544"}))
+
+    assert pick.pick_status == "ambiguous_top_rank"
+    assert pick.cluster_codes == ("544", "6561")
+    assert pick.cluster_all_eligible is True
+    assert len(pick.cluster_members) == 2
+
+
+def test_cluster_with_non_msbos_member_is_not_all_eligible() -> None:
+    # A third near-simultaneous survivor resolves outside MSBOS -> the dominance
+    # precondition fails even though two MSBOS codes triggered the ambiguity.
+    events = [
+        _event("7915", hours=1.0),
+        _event("8151", hours=1.0, seconds=10.0),
+        _event("9999", hours=1.0, seconds=20.0),
+    ]
+
+    pick = _pick(events, msbos_codes=frozenset({"7915", "8151"}))
+
+    assert pick.pick_status == "ambiguous_top_rank"
+    assert pick.cluster_all_eligible is False
+    assert "9999" in pick.cluster_codes
+
+
+def test_selected_pick_has_empty_cluster_fields() -> None:
+    pick = _pick([_event("8151")], msbos_codes=frozenset({"8151"}))
+
+    assert pick.pick_status == "selected"
+    assert pick.cluster_codes == ()
+    assert pick.cluster_all_eligible is False
+    assert pick.cluster_members == ()
+
+
+def test_cluster_fields_are_input_order_independent() -> None:
+    events = [
+        _event("7915", hours=1.0),
+        _event("8151", hours=1.0, seconds=30.0),
+    ]
+    codes = frozenset({"7915", "8151"})
+
+    forward = _pick(events, msbos_codes=codes)
+    reversed_pick = _pick(list(reversed(events)), msbos_codes=codes)
+
+    assert forward == reversed_pick

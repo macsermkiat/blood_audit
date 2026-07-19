@@ -163,6 +163,7 @@ PREOP_OVER_RESERVATION_BRIDGE_UNCONFIRMED_REVIEW_REASON = (
     "preop_over_reservation_bridge_unconfirmed"
 )
 PLANNED_OP_AMBIGUOUS_REVIEW_REASON = "ambiguous_planned_op"
+ALL_CANDIDATES_EXCLUDED_REVIEW_REASON = "all_candidates_excluded"
 
 _RETURNS_TERMINALS = frozenset({"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"})
 
@@ -340,7 +341,44 @@ def is_planned_op_ambiguous_review(
     if not feature_flags.MSBOS_RESERVATION_ENABLED:
         return False
     decision = context.reservation_decision
-    if decision is None or _planned_op_status(decision) != "ambiguous_top_rank":
+    if decision is None:
+        return False
+    # Key on the DECISION REASON (not pick_status): a ceiling-judged row keeps
+    # its ambiguous_top_rank pick but no longer carries the ambiguous reason, so
+    # it must route through the over/within predicates instead. Provenance must
+    # be present, so a legacy picker-off \x00AMBIG row (reason set, no
+    # provenance) stays out of ambiguous review (#210/#213).
+    reason = getattr(decision, "reason", "")
+    if reason != "ambiguous_planned_op" or not _planned_op_status(decision):
+        return False
+    return (
+        classifier_result.classification not in _RETURNS_TERMINALS
+        or is_msbos_eligible(classifier_result)
+    )
+
+
+def is_all_candidates_excluded_review(
+    *,
+    classifier_result: ClassifierResult | PlateletClassifierResult,
+    context: PipelineRowContext,
+) -> bool:
+    """True iff the RBC picker-v2 excluded every in-window candidate (review).
+
+    A declared surgery with reserved units but no identifiable operation after
+    denylist / approved-set exclusions warrants review, not silent exempt
+    (spec #210). Mirrors the det-leg overlay's ``all_candidates_excluded``
+    branch so both legs stay verdict-equivalent (the pick leaves a
+    ``no_planned_op`` decision, so only the pick_status distinguishes it).
+    """
+    if not feature_flags.MSBOS_RESERVATION_ENABLED:
+        return False
+    decision = context.reservation_decision
+    if decision is None or _planned_op_status(decision) != "all_candidates_excluded":
+        return False
+    # A zero-unit (screen-only) reservation has nothing to over-reserve, so it
+    # stays declared-exempt rather than routing to review (kept in sync with the
+    # det-leg overlay guard).
+    if int(getattr(decision, "reserved_units", 0) or 0) <= 0:
         return False
     return (
         classifier_result.classification not in _RETURNS_TERMINALS
@@ -2124,6 +2162,7 @@ def _confidence_from_attempts(
 
 __all__ = [
     "ADMINISTRATION_CONTRADICTION_REVIEW_REASON",
+    "ALL_CANDIDATES_EXCLUDED_REVIEW_REASON",
     "EMPTY_REASONING_REVIEW_REASON",
     "LLM_NATIVE_REVIEW_ASSERT_REASON",
     "LLM_OVERCLEAR_ASSERT_REASON",
@@ -2142,6 +2181,7 @@ __all__ = [
     "Verifier",
     "apply_batch_results",
     "default_verifier",
+    "is_all_candidates_excluded_review",
     "is_bridge_disagreement_review",
     "is_bridge_over_unconfirmed_review",
     "is_msbos_eligible",

@@ -18,6 +18,8 @@ ReservationReason = Literal[
     "operation_unresolved",
     "no_planned_op",
     "ambiguous_planned_op",
+    "over_ceiling",
+    "within_ceiling",
 ]
 
 
@@ -52,6 +54,12 @@ class PlannedOpProvenance(BaseModel):
     score>=threshold + human-agreement confirmation required for a hard
     verdict); ``""`` means no gate applies (exact-ICD9 pick, confirmed
     bridge pick, or an ambiguous pick whose gate is suppressed).
+
+    The ``ceiling_*`` fields (spec #210, ticket #212) record the dominance
+    ceiling when the finalize seam judged an ambiguity set against its most
+    permissive tariff: ``ceiling_token``/``ceiling_units`` are the ceiling
+    ``MsbosRow``, and ``ceiling_codes`` is the comma-joined dotless code set the
+    ceiling spans. All three stay empty on a non-ceiling pick.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -68,6 +76,9 @@ class PlannedOpProvenance(BaseModel):
     tie_count: int = 0
     bridge_hash: str = ""
     gate: Literal["", "bridge_disagreement", "bridge_over_unconfirmed"] = ""
+    ceiling_token: str = ""
+    ceiling_units: int | None = None
+    ceiling_codes: str = ""
 
 
 class ReservationDecision(BaseModel):

@@ -31,6 +31,21 @@ _PLATELET_MARKER_KEYS = frozenset(
 )
 _MARKER_KEYS = _RBC_MARKER_KEYS | _PLATELET_MARKER_KEYS
 _OVER_MARKER_KEYS = frozenset({"over_reservation", "platelet_over_reservation"})
+# Picker-v2 NEEDS_REVIEW terminals (spec #196/#210): persisted as msbos-* calls
+# whose request key is the review tag (marker_tag.replace("-", "_")), NOT a
+# verdict/coverage marker key. The committee report tallies over-assertions and
+# coverage, so it skips these — but a marker with NO recognized key at all is
+# still malformed and fails loud.
+_REVIEW_MARKER_KEYS = frozenset(
+    {
+        "planned_op_ambiguous",
+        "all_candidates_excluded",
+        "bridge_disagreement",
+        "bridge_over_unconfirmed",
+        "platelet_bridge_disagreement",
+        "platelet_bridge_over_unconfirmed",
+    }
+)
 
 _RBC_REASONS = frozenset(get_args(ReservationReason))
 _PLATELET_REASONS = frozenset(get_args(PlateletReservationReason))
@@ -106,6 +121,7 @@ class RbcPrecisionDenominators(_FrozenModel):
     note_resolved_over_assertions: int
     over_gm_excess: int
     over_type_and_screen_crossmatched: int
+    over_ceiling: int
 
 
 class PlateletPrecisionDenominators(_FrozenModel):
@@ -229,8 +245,31 @@ def _parse_marker(call: LlmCall) -> _Marker:
     return _Marker(call.audit_id, key, reason)
 
 
+def _is_review_marker(call: LlmCall) -> bool:
+    """True if a marker call is a picker-v2 NEEDS_REVIEW terminal (spec #196/#210).
+
+    These carry a review-only request key (not a verdict/coverage marker key), so
+    the committee report skips them rather than tripping the exactly-one-marker
+    validation. A genuinely malformed marker (no recognized key at all) is NOT a
+    review marker and still fails loud.
+    """
+    payload = call.request_json
+    return any(payload.get(key) is True for key in _REVIEW_MARKER_KEYS)
+
+
 def _marker_calls(calls: Sequence[LlmCall]) -> tuple[LlmCall, ...]:
-    return tuple(call for call in calls if call.model_id.startswith("msbos-"))
+    """The RBC + platelet verdict/coverage markers the committee report tallies.
+
+    Ingests ``msbos-*`` calls but SKIPS picker-v2 review terminals (bridge
+    disagreement / over-unconfirmed / ambiguous-planned-op / all-candidates-
+    excluded): those are NEEDS_REVIEW markers, not over-assertion or coverage
+    data points, so they never contribute to the report.
+    """
+    return tuple(
+        call
+        for call in calls
+        if call.model_id.startswith("msbos-") and not _is_review_marker(call)
+    )
 
 
 def _validate_scope(
@@ -362,6 +401,7 @@ def _precision(markers: Sequence[_Marker]) -> PrecisionSection:
             over_type_and_screen_crossmatched=rbc_over_reasons[
                 "over_type_and_screen_crossmatched"
             ],
+            over_ceiling=rbc_over_reasons["over_ceiling"],
         ),
         platelet_assertion_denominators=PlateletPrecisionDenominators(
             **{

@@ -344,8 +344,13 @@ def test_msbos_flag_on_renders_summary_cases_counts_glossary_and_css(
         in rendered
     )
     # R4 is an annotated platelet over row and is counted alongside RBC returns.
-    assert "Returned (4): 2 above / 1 within / 1 unresolved" in rendered
-    assert "Peri-op exempt (1): 0 above / 1 within / 0 unresolved" in rendered
+    assert (
+        "Returned (4): 2 above / 1 within / 0 within-ceiling / 1 unresolved" in rendered
+    )
+    assert (
+        "Peri-op exempt (1): 0 above / 1 within / 0 within-ceiling / 0 unresolved"
+        in rendered
+    )
     assert "MSBOS reservation: </div>" not in rendered
     assert "<dt>above</dt>" in rendered
     assert "INFORMATIONAL" in rendered

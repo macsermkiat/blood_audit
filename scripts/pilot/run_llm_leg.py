@@ -76,10 +76,12 @@ from bba.audit_pipeline.pipeline import (
     rbc_task_mode,
 )
 from bba.audit_pipeline.replay import (
+    ALL_CANDIDATES_EXCLUDED_REVIEW_REASON,
     PLANNED_OP_AMBIGUOUS_REVIEW_REASON,
     PREOP_OVER_RESERVATION_BRIDGE_UNCONFIRMED_REVIEW_REASON,
     PREOP_RESERVATION_BRIDGE_DISAGREEMENT_REVIEW_REASON,
     apply_batch_results,
+    is_all_candidates_excluded_review,
     is_bridge_disagreement_review,
     is_bridge_over_unconfirmed_review,
     is_msbos_eligible,
@@ -150,13 +152,14 @@ from bba.preop_reservation import (
     REVIEW_REASONS as PLATELET_REVIEW_REASONS,
     ReservationDecision,
     evaluate_platelet_reservation,
+    evaluate_reservation,
     evaluate_reservation_with_notes,
     load_msbos_reference,
     reserved_units_by_component,
 )
 from bba.preop_reservation.bridge import load_oprtact_bridge
 from bba.preop_reservation.planned_op import (
-    attach_planned_op,
+    finalize_planned_op,
     planned_op_v2_for_events,
 )
 from bba.ingest.date_parser import parse_kcmh_english_date
@@ -270,10 +273,12 @@ if MSBOS_RESERVATION_PILOT_ENABLED:
     # old +msbos4 token would silently retain the pre-correction verdict.
     CODE_VERSION += "+msbos5"
 if MSBOS_RESERVATION_PILOT_ENABLED and MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED:
-    # +opbound (#196/#199): picker-v2 changes which operation MSBOS judges and
-    # gates bridge-sourced overs, so it needs a fresh code identity. Appended
-    # ONLY when BOTH seams are on; picker-v2 OFF keeps ...+msbos5 exactly.
-    CODE_VERSION += "+opbound"
+    # +opbound2 (#210): the guarded-prefix denylist changes which operation MSBOS
+    # judges, and the dominance-ceiling rule flips some declared-exempt/ambiguous
+    # rows to over_ceiling / within_ceiling / NEEDS_REVIEW, so it needs a fresh
+    # code identity distinct from +opbound. Appended ONLY when BOTH seams are on;
+    # picker-v2 OFF keeps ...+msbos5 exactly (byte-identical to the flag-off run).
+    CODE_VERSION += "+opbound2"
 if DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED:
     # +usetypeonly: USETYPE is the sole pre-op router; procedure facts are evidence.
     CODE_VERSION += "+usetypeonly"
@@ -1595,7 +1600,9 @@ def main() -> None:
                     reference_hash=msbos_reference.content_hash,
                 )
                 if plt_pick is not None and oprtact_bridge is not None:
-                    platelet_reservation_decision = attach_planned_op(
+                    # Shared finalize seam; platelet is out of ceiling scope, so
+                    # this attaches provenance/gate only (no ceiling).
+                    platelet_reservation_decision = finalize_planned_op(
                         platelet_reservation_decision,
                         plt_pick,
                         reference=msbos_reference,
@@ -2129,7 +2136,20 @@ def main() -> None:
                     note_texts=note_texts,
                 )
             if rbc_pick is not None and oprtact_bridge is not None:
-                reservation_decision = attach_planned_op(
+                # notes > ceiling > review (#210/#213): a note-RESOLVED row keeps
+                # its specific tariff; if notes FAILED to disambiguate an
+                # ambiguous_code (operation_unresolved), fall back to the
+                # single-code dominance ceiling by re-deriving the pre-notes
+                # ambiguous_code decision so finalize judges the full tariff set.
+                # Gated inside the picker-on block, so picker-off keeps
+                # operation_unresolved byte-identical to the pre-ceiling leg.
+                if reservation_decision.reason == "operation_unresolved":
+                    reservation_decision = evaluate_reservation(
+                        reserved_units=reserved,
+                        planned_icd9_nodot=planned,
+                        reference=msbos_reference,
+                    )
+                reservation_decision = finalize_planned_op(
                     reservation_decision,
                     rbc_pick,
                     reference=msbos_reference,
@@ -2322,6 +2342,23 @@ def main() -> None:
                         "multiple distinct MSBOS-eligible codes; the planned "
                         "operation cannot be selected automatically and "
                         "clinician review is required."
+                    ),
+                )
+                bridge_review_ctxs.append(ctx)
+                continue
+            if is_all_candidates_excluded_review(classifier_result=cres, context=ctx):
+                _persist_bridge_gate_review_row(
+                    ctx,
+                    classifier_result=cres,
+                    audit_store=audit_store,
+                    run_id=RUN_ID,
+                    review_reason=ALL_CANDIDATES_EXCLUDED_REVIEW_REASON,
+                    marker_tag="all-candidates-excluded",
+                    reasoning_en=(
+                        "Reserved units and a declared surgery, but every "
+                        "in-window candidate operation was excluded (ancillary "
+                        "billing / denylisted codes); no operation could be "
+                        "identified, so clinician review is required."
                     ),
                 )
                 bridge_review_ctxs.append(ctx)
