@@ -558,14 +558,19 @@ def _ceiling_gate(
 ) -> Literal["", "bridge_disagreement", "bridge_over_unconfirmed"]:
     """Aggregate verdict gate over a ceiling ambiguity set (spec #210, #212).
 
-    A ceiling over keeps hard power ONLY when EVERY bridge-sourced member is
-    gate-confirmed AND none disagrees — the presentation winner's provenance
-    alone is not sufficient for a mixed cluster. Disagreement precedes the score
-    gate. within_ceiling (not an over) is never gated.
+    The gate applies ONLY to a ceiling OVER — it is the reason an over LOSES its
+    hard power. A ceiling over keeps hard power ONLY when EVERY bridge-sourced
+    member is gate-confirmed AND none disagrees (the presentation winner's
+    provenance alone is not sufficient for a mixed cluster); disagreement
+    precedes the score gate. within_ceiling (not an over) is NEVER gated — it
+    stays declared-exempt + annotated per ruling #2, its exposure surfaced in the
+    shadow-over report rather than routed to review.
     """
+    if not is_over:
+        return ""
     if any(_member_disagrees(member, reference=reference) for member in members):
         return "bridge_disagreement"
-    if is_over and not all(_member_confirmed(member) for member in members):
+    if not all(_member_confirmed(member) for member in members):
         return "bridge_over_unconfirmed"
     return ""
 

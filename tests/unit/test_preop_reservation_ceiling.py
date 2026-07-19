@@ -398,6 +398,35 @@ def test_within_ceiling_never_gated_even_with_unconfirmed_member() -> None:
     assert decision.planned_op.gate == ""
 
 
+def test_within_ceiling_never_gated_even_with_disagreeing_member() -> None:
+    # Ruling #2: within_ceiling stays declared-exempt even when a bridge member's
+    # First-Choice and human codes disagree. The disagreement is exposure the
+    # shadow-over report surfaces, NOT a review flip.
+    reference = _reference([("1111", "G/M", 2), ("2222", "T/S", 0)])
+    pick = _cluster_pick(
+        codes=("1111", "2222"),
+        members=(
+            _member("1111"),
+            _member(
+                "2222",
+                source="incpt_bridge",
+                score=0.50,
+                human_agreed=False,
+                human_icd9="1111",  # differs from resolved 2222, hits MSBOS
+            ),
+        ),
+    )
+
+    decision = finalize_planned_op(
+        _ambig_decision(2), pick, reference=reference, bridge_hash=_BRIDGE_HASH
+    )
+
+    assert decision.reason == "within_ceiling"
+    assert decision.is_over is False
+    assert decision.planned_op is not None
+    assert decision.planned_op.gate == ""
+
+
 # --- non-ceiling passthrough + platelet no-op --------------------------------
 
 
