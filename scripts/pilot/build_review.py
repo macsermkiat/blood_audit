@@ -41,6 +41,10 @@ from bba.feature_flags import (
     MSBOS_RESERVATION_ENABLED,
     RETURNS_LEDGER_ENABLED,
 )
+from bba.preop_reservation.reason_presentation import (
+    WITHIN_REASONS as _MSBOS_WITHIN_REASONS,
+    bucket_for,
+)
 
 WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
 _msbos_env = os.environ.get("BBA_PILOT_MSBOS_RESERVATION")
@@ -278,31 +282,10 @@ _RETURNS_TERMINALS = frozenset({"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_E
 _MSBOS_RENDER_CLASSES = _RETURNS_TERMINALS | frozenset(
     {"PREOP_OVER_RESERVATION", "NEEDS_REVIEW"}
 )
-_MSBOS_ABOVE_REASONS = frozenset(
-    {
-        "over_gm_excess",
-        "over_none",
-        "over_type_and_screen_crossmatched",
-        "over_ceiling",
-        "over_major_non_neuraxial",
-        "over_neuraxial",
-        "over_cardiac_cpb",
-    }
-)
-_MSBOS_WITHIN_REASONS = frozenset(
-    {
-        "within_recommendation",
-        "type_and_screen_screen_only",
-        "within_ceiling",
-        "within_major_non_neuraxial",
-        "within_neuraxial",
-        "within_cardiac_cpb",
-        "no_reserved_units",
-    }
-)
-# unresolved = everything else with a nonblank reason: ambiguous_code, unresolved_code,
-# ambiguous_planned_op, no_planned_op, operation_unresolved, reservation_lookup_miss,
-# uncategorised_procedure, ambiguous_category, missing_pre_op_count.
+# The reason -> bucket vocabulary now lives in one place:
+# bba.preop_reservation.reason_presentation. _MSBOS_ABOVE_REASONS /
+# _MSBOS_WITHIN_REASONS are derived there from the library Literals; "unresolved"
+# is every other reason (bucket_for's default).
 
 
 def _display_cls(cls: str | None, rationale: str | None = None) -> str:
@@ -336,19 +319,13 @@ def _ceiling_basis_short(det: dict[str, str]) -> str:
 
 
 def _msbos_reason_bucket(reason: str) -> str | None:
+    # A blank reason has no bucket (skipped by the tally); every other reason is
+    # classified by the single-home table. within_ceiling stays its own scannable
+    # bucket (the shadow-over exposure, #210/#214); over_ceiling folds into "above".
     normalized = reason.strip()
     if not normalized:
         return None
-    # within_ceiling is its own scannable bucket (the shadow-over exposure), not
-    # folded into "within" (#210/#214). over_ceiling folds into "above" (a real
-    # over under the most permissive tariff).
-    if normalized == "within_ceiling":
-        return "within_ceiling"
-    if normalized in _MSBOS_ABOVE_REASONS:
-        return "above"
-    if normalized in _MSBOS_WITHIN_REASONS:
-        return "within"
-    return "unresolved"
+    return bucket_for(normalized)
 
 
 def _fmt_plt_k(value: object) -> str:
