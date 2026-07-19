@@ -76,10 +76,12 @@ from bba.audit_pipeline.pipeline import (
     rbc_task_mode,
 )
 from bba.audit_pipeline.replay import (
+    ALL_CANDIDATES_EXCLUDED_REVIEW_REASON,
     PLANNED_OP_AMBIGUOUS_REVIEW_REASON,
     PREOP_OVER_RESERVATION_BRIDGE_UNCONFIRMED_REVIEW_REASON,
     PREOP_RESERVATION_BRIDGE_DISAGREEMENT_REVIEW_REASON,
     apply_batch_results,
+    is_all_candidates_excluded_review,
     is_bridge_disagreement_review,
     is_bridge_over_unconfirmed_review,
     is_msbos_eligible,
@@ -2340,6 +2342,23 @@ def main() -> None:
                         "multiple distinct MSBOS-eligible codes; the planned "
                         "operation cannot be selected automatically and "
                         "clinician review is required."
+                    ),
+                )
+                bridge_review_ctxs.append(ctx)
+                continue
+            if is_all_candidates_excluded_review(classifier_result=cres, context=ctx):
+                _persist_bridge_gate_review_row(
+                    ctx,
+                    classifier_result=cres,
+                    audit_store=audit_store,
+                    run_id=RUN_ID,
+                    review_reason=ALL_CANDIDATES_EXCLUDED_REVIEW_REASON,
+                    marker_tag="all-candidates-excluded",
+                    reasoning_en=(
+                        "Reserved units and a declared surgery, but every "
+                        "in-window candidate operation was excluded (ancillary "
+                        "billing / denylisted codes); no operation could be "
+                        "identified, so clinician review is required."
                     ),
                 )
                 bridge_review_ctxs.append(ctx)

@@ -562,3 +562,68 @@ def test_is_planned_op_ambiguous_review_rekeyed_on_reason_and_provenance(
         )
         is True
     )
+
+
+def test_is_all_candidates_excluded_review_matches_det_overlay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # #210: the LLM leg must route all_candidates_excluded to review like the det
+    # overlay (twin parity). The pick leaves a no_planned_op decision, so only
+    # the all_candidates_excluded provenance distinguishes it from a plain
+    # no-plan row.
+    from bba.audit_pipeline.replay import is_all_candidates_excluded_review
+    from bba.deterministic_classifier import ClassifierResult
+    from bba.deterministic_classifier.models import BypassReason
+
+    monkeypatch.setattr(feature_flags, "MSBOS_RESERVATION_ENABLED", True)
+    cres = ClassifierResult(
+        classification="PERIOP_TRANSFUSION_EXEMPT",
+        rationale="preop_declared_exempt",
+        cohort_threshold=None,
+        bypass_reason=BypassReason.NONE,
+    )
+
+    class _CtxExcluded:
+        reservation_decision = ReservationDecision(
+            reserved_units=2,
+            is_over=False,
+            reason="no_planned_op",
+            reference_hash="d" * 64,
+        ).model_copy(
+            update={
+                "planned_op": _provenance("", pick_status="all_candidates_excluded")
+            }
+        )
+
+    class _CtxPlainNoPlan:
+        # no_planned_op WITHOUT the all_candidates_excluded provenance (e.g. a
+        # legacy picker-off row) must NOT route to review.
+        reservation_decision = ReservationDecision(
+            reserved_units=2,
+            is_over=False,
+            reason="no_planned_op",
+            reference_hash="d" * 64,
+        )
+
+    assert (
+        is_all_candidates_excluded_review(
+            classifier_result=cres,
+            context=_CtxExcluded,  # type: ignore[arg-type]
+        )
+        is True
+    )
+    assert (
+        is_all_candidates_excluded_review(
+            classifier_result=cres,
+            context=_CtxPlainNoPlan,  # type: ignore[arg-type]
+        )
+        is False
+    )
+    monkeypatch.setattr(feature_flags, "MSBOS_RESERVATION_ENABLED", False)
+    assert (
+        is_all_candidates_excluded_review(
+            classifier_result=cres,
+            context=_CtxExcluded,  # type: ignore[arg-type]
+        )
+        is False
+    )
