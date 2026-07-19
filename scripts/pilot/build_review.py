@@ -41,6 +41,7 @@ from bba.feature_flags import (
     MSBOS_RESERVATION_ENABLED,
     RETURNS_LEDGER_ENABLED,
 )
+from bba.deterministic_classifier.rationales import PREOP_DECLARED_EXEMPT
 from bba.preop_reservation.reason_presentation import (
     WITHIN_REASONS as _MSBOS_WITHIN_REASONS,
     bucket_for,
@@ -293,7 +294,7 @@ def _display_cls(cls: str | None, rationale: str | None = None) -> str:
     if RETURNS_LEDGER_ENABLED and normalized == "RETURNED_NOT_TRANSFUSED":
         return "Returned — not transfused (excluded)"
     if RETURNS_LEDGER_ENABLED and normalized == "PERIOP_TRANSFUSION_EXEMPT":
-        if rationale == "preop_declared_exempt":
+        if rationale == PREOP_DECLARED_EXEMPT:
             return "Declared pre-op order — exempt (excluded)"
         return "Peri-op transfusion — exempt (excluded)"
     return _CLS_DISPLAY.get(normalized, cls or "Excluded")

@@ -59,6 +59,7 @@ from bba.deterministic_classifier import (
     classify,
     periop_envelope,
 )
+from bba.deterministic_classifier.rationales import RESERVE_AHEAD_RATIONALES
 from bba.llm_client.models import (
     AnthropicTransport,
     BatchSubmissionRequest,
@@ -100,7 +101,8 @@ _RETURNS_TERMINAL_CLASSIFICATIONS = frozenset(
     {"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"}
 )
 
-_RESERVE_AHEAD_RATIONALES = frozenset({"preop_defer_llm", "preop_defer_llm_declared"})
+# Single source of truth in the deterministic_classifier package (candidate 4).
+_RESERVE_AHEAD_RATIONALES = RESERVE_AHEAD_RATIONALES
 
 # Returns-terminal classification -> its structured bypass-reason value, for the
 # deterministic-platelet marker call's request_json. A platelet result carries
