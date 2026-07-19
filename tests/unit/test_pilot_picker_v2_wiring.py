@@ -1,6 +1,6 @@
 """Pilot wiring tests for the planned-op picker v2 seam (ticket #199).
 
-Covers the 2x2 flag/schema matrix, the +opbound CODE_VERSION token, the
+Covers the 2x2 flag/schema matrix, the +opbound2 CODE_VERSION token, the
 declared-row verdict overlays (RBC + platelet), and the det-leg MSBOS helpers
 running with a synthetic bridge. Import-level only: never calls
 run_llm_leg.main() and never touches the network.
@@ -143,11 +143,15 @@ def test_llm_leg_opbound_token_gated_on_both_seams(
         "run_llm_leg.py", f"pilot_run_llm_leg_p2_{msbos_env}{picker_env}"
     )
 
-    assert ("+opbound" in module.CODE_VERSION) is expect_token
+    # Exact-suffix pin (#210): the token is +opbound2, NOT +opbound. Checking
+    # for "+opbound2" fails on a stale "+opbound" (which is not a substring of
+    # the surrounding "...+opbound+..."), unlike the old loose substring check.
+    assert ("+opbound2" in module.CODE_VERSION) is expect_token
     if msbos_env == "1" and picker_env == "0":
         assert "+msbos5" in module.CODE_VERSION
+        assert "+opbound" not in module.CODE_VERSION
     if expect_token:
-        assert "+msbos5+opbound" in module.CODE_VERSION
+        assert "+msbos5+opbound2" in module.CODE_VERSION
 
 
 def test_picker_default_is_on_with_env_escape_hatch(
@@ -186,14 +190,52 @@ def pipeline() -> ModuleType:
 def test_rbc_overlay_precedence_matrix(pipeline: ModuleType) -> None:
     overlay = pipeline._declared_msbos_overlay
 
-    # Ambiguity outranks everything.
+    # Ambiguity (reason + provenance present) outranks everything.
     assert overlay(
         {
+            "msbos_reason": "ambiguous_planned_op",
             "msbos_op_pick_status": "ambiguous_top_rank",
             "_bridge_gate": "bridge_disagreement",
             "msbos_is_over": True,
         }
     ) == ("NEEDS_REVIEW", "ambiguous_planned_op")
+    # Legacy \x00AMBIG row under picker-OFF: reason set but NO provenance ->
+    # stays declared-exempt (forced-off parity).
+    assert overlay({"msbos_reason": "ambiguous_planned_op"}) is None
+    # All-candidates-excluded declared surgery -> review, not silent exempt.
+    assert overlay({"msbos_op_pick_status": "all_candidates_excluded"}) == (
+        "NEEDS_REVIEW",
+        "all_candidates_excluded",
+    )
+    # A ceiling over is no longer "ambiguous_planned_op"; it routes as an over
+    # even though the pick_status stays ambiguous_top_rank.
+    assert overlay(
+        {
+            "msbos_reason": "over_ceiling",
+            "msbos_op_pick_status": "ambiguous_top_rank",
+            "msbos_is_over": True,
+        }
+    ) == ("PREOP_OVER_RESERVATION", "preop_over_reservation")
+    # A gated ceiling over -> review.
+    assert overlay(
+        {
+            "msbos_reason": "over_ceiling",
+            "msbos_op_pick_status": "ambiguous_top_rank",
+            "_bridge_gate": "bridge_over_unconfirmed",
+            "msbos_is_over": True,
+        }
+    ) == ("NEEDS_REVIEW", "preop_over_reservation_bridge_unconfirmed")
+    # within_ceiling stays declared-exempt (annotated).
+    assert (
+        overlay(
+            {
+                "msbos_reason": "within_ceiling",
+                "msbos_op_pick_status": "ambiguous_top_rank",
+                "msbos_is_over": False,
+            }
+        )
+        is None
+    )
     # Disagreement fires before the score gate.
     assert overlay({"_bridge_gate": "bridge_disagreement", "msbos_is_over": True}) == (
         "NEEDS_REVIEW",
@@ -349,6 +391,126 @@ def test_rbc_columns_without_bridge_have_no_picker_columns(
     assert columns["msbos_reason"] == "within_recommendation"
 
 
+# --- dominance ceiling routing through the det helper (#210/#213) --------------
+
+
+def _ambiguous_code_reference():
+    rows = [
+        {
+            "icd9_code_nodot": "1234",
+            "msbos": "G/M",
+            "recommended_units": "2",
+            "operation": "Synthetic op a",
+            "procedure_group": "Synthetic group",
+        },
+        {
+            "icd9_code_nodot": "1234",
+            "msbos": "T/S",
+            "recommended_units": "0",
+            "operation": "Synthetic op b",
+            "procedure_group": "Synthetic group",
+        },
+    ]
+    return _reference_from_rows(rows, content_hash="e" * 64)
+
+
+def test_rbc_cluster_over_ceiling_routes_hard(pipeline: ModuleType) -> None:
+    # Two same-time distinct MSBOS ops (8151 G/M 2, 4573 T/S 0) -> ambiguity set;
+    # reserved 5 exceeds the G/M 2 ceiling -> hard over_ceiling.
+    reference = _reference()
+
+    columns = pipeline._msbos_reservation_columns(
+        classification="PERIOP_TRANSFUSION_EXEMPT",
+        hn="HN1",
+        reqno="REQ1",
+        op_events=[_event("8151"), _event("4573")],
+        order_datetime=_ORDER_DT,
+        reserved_units_map={("HN1", "REQ1", ComponentFamily.RED_CELL): 5},
+        msbos_reference=reference,
+        oprtact_bridge=_bridge(),
+    )
+
+    assert columns["msbos_reason"] == "over_ceiling"
+    assert columns["msbos_is_over"] is True
+    assert columns["msbos_op_pick_status"] == "ambiguous_top_rank"
+    assert columns["msbos_ceiling_basis"] == "G/M 2 (4573,8151)"
+    assert columns["_bridge_gate"] == ""
+    assert pipeline._declared_msbos_overlay(columns) == (
+        "PREOP_OVER_RESERVATION",
+        "preop_over_reservation",
+    )
+
+
+def test_rbc_cluster_within_ceiling_stays_exempt(pipeline: ModuleType) -> None:
+    reference = _reference()
+
+    columns = pipeline._msbos_reservation_columns(
+        classification="PERIOP_TRANSFUSION_EXEMPT",
+        hn="HN1",
+        reqno="REQ1",
+        op_events=[_event("8151"), _event("4573")],
+        order_datetime=_ORDER_DT,
+        reserved_units_map={("HN1", "REQ1", ComponentFamily.RED_CELL): 2},
+        msbos_reference=reference,
+        oprtact_bridge=_bridge(),
+    )
+
+    assert columns["msbos_reason"] == "within_ceiling"
+    assert columns["msbos_is_over"] is False
+    assert columns["msbos_ceiling_basis"] == "G/M 2 (4573,8151)"
+    assert pipeline._declared_msbos_overlay(columns) is None
+
+
+def test_rbc_single_code_ambiguous_ceiling_routes(pipeline: ModuleType) -> None:
+    # One code resolving to two tariffs (G/M 2 + T/S 0); reserved 5 over the
+    # G/M 2 ceiling -> over_ceiling with the confirmed exact/bridge gate.
+    reference = _ambiguous_code_reference()
+    bridge = _bridge(icd9="1234", score="0.99", human_index="0")
+
+    columns = pipeline._msbos_reservation_columns(
+        classification="PERIOP_TRANSFUSION_EXEMPT",
+        hn="HN1",
+        reqno="REQ1",
+        op_events=[_event("INCPT:PX001")],
+        order_datetime=_ORDER_DT,
+        reserved_units_map={("HN1", "REQ1", ComponentFamily.RED_CELL): 5},
+        msbos_reference=reference,
+        oprtact_bridge=bridge,
+    )
+
+    assert columns["msbos_reason"] == "over_ceiling"
+    assert columns["msbos_is_over"] is True
+    assert columns["msbos_ceiling_basis"] == "G/M 2 (1234)"
+    assert columns["_bridge_gate"] == ""
+    assert pipeline._declared_msbos_overlay(columns) == (
+        "PREOP_OVER_RESERVATION",
+        "preop_over_reservation",
+    )
+
+
+def test_rbc_all_candidates_excluded_routes_review(pipeline: ModuleType) -> None:
+    # A single in-window denylisted charge (AS058) with reserved units + declared
+    # surgery -> all_candidates_excluded -> NEEDS_REVIEW, not silent exempt.
+    reference = _reference()
+
+    columns = pipeline._msbos_reservation_columns(
+        classification="PERIOP_TRANSFUSION_EXEMPT",
+        hn="HN1",
+        reqno="REQ1",
+        op_events=[_event("INCPT:AS058")],
+        order_datetime=_ORDER_DT,
+        reserved_units_map={("HN1", "REQ1", ComponentFamily.RED_CELL): 2},
+        msbos_reference=reference,
+        oprtact_bridge=_bridge(),
+    )
+
+    assert columns["msbos_op_pick_status"] == "all_candidates_excluded"
+    assert pipeline._declared_msbos_overlay(columns) == (
+        "NEEDS_REVIEW",
+        "all_candidates_excluded",
+    )
+
+
 def test_platelet_columns_with_bridge_carry_provenance(pipeline: ModuleType) -> None:
     reference = _reference()
     bridge = _bridge(icd9="1733", human_index="1", human_icd9="4573")
@@ -386,14 +548,14 @@ def test_llm_leg_flag_resolution_matches_det_leg(
 
     assert det.MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED is True
     assert llm.MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED is True
-    # Both legs share the library picker + gate seams (twin parity is
+    # Both legs share the library picker + finalize seams (twin parity is
     # structural: one implementation, two dispatch sites).
     from bba.preop_reservation.planned_op import (
-        attach_planned_op,
+        finalize_planned_op,
         planned_op_v2_for_events,
     )
 
     assert det.planned_op_v2_for_events is planned_op_v2_for_events
     assert llm.planned_op_v2_for_events is planned_op_v2_for_events
-    assert det.attach_planned_op is attach_planned_op
-    assert llm.attach_planned_op is attach_planned_op
+    assert det.finalize_planned_op is finalize_planned_op
+    assert llm.finalize_planned_op is finalize_planned_op

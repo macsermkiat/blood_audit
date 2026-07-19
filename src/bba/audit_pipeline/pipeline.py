@@ -134,6 +134,9 @@ def _planned_op_annotation(decision: object) -> dict[str, object] | None:
         "tie_count": provenance.tie_count,
         "bridge_hash": provenance.bridge_hash,
         "gate": provenance.gate,
+        "ceiling_token": provenance.ceiling_token,
+        "ceiling_units": provenance.ceiling_units,
+        "ceiling_codes": provenance.ceiling_codes,
     }
 
 

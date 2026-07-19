@@ -63,6 +63,9 @@ _PROVENANCE_DICT = {
     "tie_count": 1,
     "bridge_hash": "f" * 64,
     "gate": "bridge_disagreement",
+    "ceiling_token": "",
+    "ceiling_units": None,
+    "ceiling_codes": "",
 }
 
 
@@ -310,6 +313,32 @@ def test_rbc_over_marker_embeds_full_provenance() -> None:
         "note_resolved": False,
         "planned_op": _PROVENANCE_DICT,
     }
+
+
+def test_rbc_marker_carries_ceiling_fields_when_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A ceiling-judged pick propagates ceiling_token/units/codes into the marker.
+    monkeypatch.setattr(feature_flags, "MSBOS_RESERVATION_ENABLED", True)
+    ceiling_provenance = _PROVENANCE.model_copy(
+        update={
+            "pick_status": "ambiguous_top_rank",
+            "gate": "",
+            "ceiling_token": "G/M",
+            "ceiling_units": 2,
+            "ceiling_codes": "8101,8103",
+        }
+    )
+    call = _deterministic_marker_call(
+        context=_rbc_context(_rbc_decision(planned_op=ceiling_provenance)),
+        classifier_result=_rbc_classifier(),
+        run_id=_RUN_ID,
+    )
+
+    planned_op = call.response_json["reservation_annotation"]["planned_op"]
+    assert planned_op["ceiling_token"] == "G/M"
+    assert planned_op["ceiling_units"] == 2
+    assert planned_op["ceiling_codes"] == "8101,8103"
 
 
 def test_rbc_over_marker_without_pick_keeps_legacy_shape() -> None:

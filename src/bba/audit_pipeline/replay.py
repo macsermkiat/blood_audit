@@ -340,7 +340,15 @@ def is_planned_op_ambiguous_review(
     if not feature_flags.MSBOS_RESERVATION_ENABLED:
         return False
     decision = context.reservation_decision
-    if decision is None or _planned_op_status(decision) != "ambiguous_top_rank":
+    if decision is None:
+        return False
+    # Key on the DECISION REASON (not pick_status): a ceiling-judged row keeps
+    # its ambiguous_top_rank pick but no longer carries the ambiguous reason, so
+    # it must route through the over/within predicates instead. Provenance must
+    # be present, so a legacy picker-off \x00AMBIG row (reason set, no
+    # provenance) stays out of ambiguous review (#210/#213).
+    reason = getattr(decision, "reason", "")
+    if reason != "ambiguous_planned_op" or not _planned_op_status(decision):
         return False
     return (
         classifier_result.classification not in _RETURNS_TERMINALS

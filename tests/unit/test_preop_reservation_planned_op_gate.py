@@ -494,3 +494,71 @@ def test_review_reason_constants_are_frozen_strings() -> None:
         == "preop_over_reservation_bridge_unconfirmed"
     )
     assert PLANNED_OP_AMBIGUOUS_REVIEW_REASON == "ambiguous_planned_op"
+
+
+def test_is_planned_op_ambiguous_review_rekeyed_on_reason_and_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # #210/#213: the predicate keys on the decision REASON (+ provenance
+    # presence), not the pick_status, so a ceiling-judged row routes as an over
+    # and a legacy picker-off \x00AMBIG row (no provenance) stays out.
+    from bba.audit_pipeline.replay import is_planned_op_ambiguous_review
+    from bba.deterministic_classifier import ClassifierResult
+    from bba.deterministic_classifier.models import BypassReason
+
+    monkeypatch.setattr(feature_flags, "MSBOS_RESERVATION_ENABLED", True)
+    cres = ClassifierResult(
+        classification="PERIOP_TRANSFUSION_EXEMPT",
+        rationale="preop_declared_exempt",
+        cohort_threshold=None,
+        bypass_reason=BypassReason.NONE,
+    )
+
+    class _CtxCeiling:
+        # Keeps its ambiguous_top_rank pick, but reason is now over_ceiling.
+        reservation_decision = ReservationDecision(
+            reserved_units=5,
+            is_over=True,
+            reason="over_ceiling",
+            reference_hash="d" * 64,
+        ).model_copy(
+            update={"planned_op": _provenance("", pick_status="ambiguous_top_rank")}
+        )
+
+    class _CtxLegacyAmbig:
+        # Picker-off \x00AMBIG: ambiguous reason but no provenance.
+        reservation_decision = ReservationDecision(
+            reserved_units=2,
+            is_over=False,
+            reason="ambiguous_planned_op",
+            reference_hash="d" * 64,
+        )
+
+    class _CtxAmbiguous:
+        reservation_decision = ReservationDecision(
+            reserved_units=2,
+            is_over=False,
+            reason="ambiguous_planned_op",
+            reference_hash="d" * 64,
+        ).model_copy(
+            update={"planned_op": _provenance("", pick_status="ambiguous_top_rank")}
+        )
+
+    assert (
+        is_planned_op_ambiguous_review(classifier_result=cres, context=_CtxCeiling)  # type: ignore[arg-type]
+        is False
+    )
+    assert (
+        is_planned_op_ambiguous_review(
+            classifier_result=cres,
+            context=_CtxLegacyAmbig,  # type: ignore[arg-type]
+        )
+        is False
+    )
+    assert (
+        is_planned_op_ambiguous_review(
+            classifier_result=cres,
+            context=_CtxAmbiguous,  # type: ignore[arg-type]
+        )
+        is True
+    )
