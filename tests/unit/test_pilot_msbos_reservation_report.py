@@ -410,6 +410,49 @@ def test_marker_requires_exactly_one_true_boolean_key(
         _build([row], [call])
 
 
+def test_review_markers_are_skipped_not_tallied_or_failed() -> None:
+    # Picker-v2 NEEDS_REVIEW terminals (bridge disagreement / all-candidates-
+    # excluded) carry a review-only request key, so the committee report skips
+    # them rather than tripping the exactly-one-marker-key validation (#196/#210).
+    rows = [
+        _row("over", "PREOP_OVER_RESERVATION"),
+        _row("disagree", "NEEDS_REVIEW"),
+        _row("excluded", "NEEDS_REVIEW"),
+    ]
+    calls = [
+        _call("over", "over_reservation"),
+        _call(
+            "disagree",
+            "bridge_disagreement",
+            payload={
+                "bridge_disagreement": True,
+                "audit_id": "disagree",
+                "reason": "within_recommendation",
+                "resolved_icd9": "1000",
+                "note_resolved": False,
+            },
+        ),
+        _call(
+            "excluded",
+            "all_candidates_excluded",
+            payload={
+                "all_candidates_excluded": True,
+                "audit_id": "excluded",
+                "reason": "no_planned_op",
+                "resolved_icd9": "",
+                "note_resolved": False,
+            },
+        ),
+    ]
+
+    report = _build(rows, calls)
+
+    # Only the real over-assertion is tallied; both review markers are ignored.
+    assert report.provenance.total_reservation_markers == 1
+    assert report.reconciliation.over_marker_count == 1
+    assert report.precision.rbc_assertion_denominators.none_bucket_over_assertions == 1
+
+
 def test_marker_key_must_match_model_family() -> None:
     # Arrange
     row = _row("wrong-family", "PREOP_OVER_RESERVATION")
