@@ -52,6 +52,15 @@ class MsbosReference:
         """All dotless ICD-9 codes present in the schedule."""
         return frozenset(self._rows_by_code)
 
+    def rows_for(self, icd9_nodot: str) -> frozenset[MsbosRow]:
+        """All MSBOS recommendations for a code (dedup'd, T/S-normalised); () if absent.
+
+        Unlike :meth:`resolve`, this returns the full recommendation set even
+        when a code is ambiguous (>1 row), so the dominance-ceiling rule (#212)
+        can judge a reservation against the most permissive tariff in the set.
+        """
+        return self._rows_by_code.get(icd9_nodot.strip(), frozenset())
+
     def candidates_for(self, icd9_nodot: str) -> tuple[CandidateOperation, ...]:
         """Raw candidate operations sharing this code (deterministically sorted); () if absent."""
         return self._candidates_by_code.get(icd9_nodot.strip(), ())

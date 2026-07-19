@@ -497,3 +497,73 @@ def test_all_in_window_prefix_denied_is_all_excluded() -> None:
     )
 
     _assert_failure(pick, "all_candidates_excluded")
+
+
+# --- ambiguity-set / cluster fields (#212) -----------------------------------
+
+
+def test_cluster_ambiguity_populates_cluster_fields() -> None:
+    events = [
+        _event("7915", hours=1.0),
+        _event("8151", hours=1.0, seconds=30.0),
+    ]
+
+    pick = _pick(events, msbos_codes=frozenset({"7915", "8151"}))
+
+    assert pick.pick_status == "ambiguous_top_rank"
+    assert pick.cluster_codes == ("7915", "8151")
+    assert pick.cluster_all_eligible is True
+    assert {m.resolved_icd9 for m in pick.cluster_members} == {"7915", "8151"}
+    assert all(m.source == "icd9" for m in pick.cluster_members)
+
+
+def test_tie_ambiguity_derives_its_own_member_set() -> None:
+    events = [
+        _event("6561", hours=1.0),
+        _event("544", hours=1.0),
+    ]
+
+    pick = _pick(events, msbos_codes=frozenset({"6561", "544"}))
+
+    assert pick.pick_status == "ambiguous_top_rank"
+    assert pick.cluster_codes == ("544", "6561")
+    assert pick.cluster_all_eligible is True
+    assert len(pick.cluster_members) == 2
+
+
+def test_cluster_with_non_msbos_member_is_not_all_eligible() -> None:
+    # A third near-simultaneous survivor resolves outside MSBOS -> the dominance
+    # precondition fails even though two MSBOS codes triggered the ambiguity.
+    events = [
+        _event("7915", hours=1.0),
+        _event("8151", hours=1.0, seconds=10.0),
+        _event("9999", hours=1.0, seconds=20.0),
+    ]
+
+    pick = _pick(events, msbos_codes=frozenset({"7915", "8151"}))
+
+    assert pick.pick_status == "ambiguous_top_rank"
+    assert pick.cluster_all_eligible is False
+    assert "9999" in pick.cluster_codes
+
+
+def test_selected_pick_has_empty_cluster_fields() -> None:
+    pick = _pick([_event("8151")], msbos_codes=frozenset({"8151"}))
+
+    assert pick.pick_status == "selected"
+    assert pick.cluster_codes == ()
+    assert pick.cluster_all_eligible is False
+    assert pick.cluster_members == ()
+
+
+def test_cluster_fields_are_input_order_independent() -> None:
+    events = [
+        _event("7915", hours=1.0),
+        _event("8151", hours=1.0, seconds=30.0),
+    ]
+    codes = frozenset({"7915", "8151"})
+
+    forward = _pick(events, msbos_codes=codes)
+    reversed_pick = _pick(list(reversed(events)), msbos_codes=codes)
+
+    assert forward == reversed_pick
