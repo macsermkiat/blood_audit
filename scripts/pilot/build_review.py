@@ -283,6 +283,7 @@ _MSBOS_ABOVE_REASONS = frozenset(
         "over_gm_excess",
         "over_none",
         "over_type_and_screen_crossmatched",
+        "over_ceiling",
         "over_major_non_neuraxial",
         "over_neuraxial",
         "over_cardiac_cpb",
@@ -292,6 +293,7 @@ _MSBOS_WITHIN_REASONS = frozenset(
     {
         "within_recommendation",
         "type_and_screen_screen_only",
+        "within_ceiling",
         "within_major_non_neuraxial",
         "within_neuraxial",
         "within_cardiac_cpb",
@@ -314,10 +316,34 @@ def _display_cls(cls: str | None, rationale: str | None = None) -> str:
     return _CLS_DISPLAY.get(normalized, cls or "Excluded")
 
 
+def _msbos_count_breakdown(label: str, counts: dict[str, int]) -> str:
+    """One MSBOS bucket-count line; within-ceiling is surfaced separately (#214)."""
+    return (
+        f"{label} ({counts['denominator']}): "
+        f"{counts['above']} above / "
+        f"{counts['within']} within / "
+        f"{counts['within_ceiling']} within-ceiling / "
+        f"{counts['unresolved']} unresolved"
+    )
+
+
+def _ceiling_basis_short(det: dict[str, str]) -> str:
+    """The token+units part of msbos_ceiling_basis, dropping the code list.
+
+    ``"G/M 2 (8101,8103)"`` -> ``"G/M 2"``; blank stays blank. Escaped for HTML.
+    """
+    return esc((det.get("msbos_ceiling_basis") or "").split(" (")[0])
+
+
 def _msbos_reason_bucket(reason: str) -> str | None:
     normalized = reason.strip()
     if not normalized:
         return None
+    # within_ceiling is its own scannable bucket (the shadow-over exposure), not
+    # folded into "within" (#210/#214). over_ceiling folds into "above" (a real
+    # over under the most permissive tariff).
+    if normalized == "within_ceiling":
+        return "within_ceiling"
     if normalized in _MSBOS_ABOVE_REASONS:
         return "above"
     if normalized in _MSBOS_WITHIN_REASONS:
@@ -411,6 +437,12 @@ def _msbos_summary_pill(det: dict[str, str]) -> str:
     elif reason == "over_type_and_screen_crossmatched":
         text = f"T/S; {reserved}u reserved"
         pill_class = "cls-msbos-warn"
+    elif reason == "over_ceiling":
+        text = f"over ceiling {_ceiling_basis_short(det)}"
+        pill_class = "cls-msbos-warn"
+    elif reason == "within_ceiling":
+        text = f"within ceiling {_ceiling_basis_short(det)}"
+        pill_class = "cls-msbos-ok"
     elif reason in _MSBOS_WITHIN_REASONS:
         text = "within"
         pill_class = "cls-msbos-ok"
@@ -536,6 +568,16 @@ def _msbos_case_line(det: dict[str, str], det_class: str) -> str:
         text = f"Reserved {reserved}; MSBOS tariff {token} {recommended}"
     elif reason == "type_and_screen_screen_only":
         text = f"Reserved {reserved}; MSBOS tariff T/S"
+    elif reason == "over_ceiling":
+        text = (
+            f"Reserved {reserved}; over ceiling "
+            f"{esc(det.get('msbos_ceiling_basis', ''))}"
+        )
+    elif reason == "within_ceiling":
+        text = (
+            f"Reserved {reserved}; within ceiling "
+            f"{esc(det.get('msbos_ceiling_basis', ''))}"
+        )
     elif reason in {"ambiguous_code", "unresolved_code"}:
         text = "MSBOS operation code unresolved"
     elif reason in {
@@ -1101,7 +1143,13 @@ def main() -> None:
     summary_rows: list[dict[str, str]] = []
     case_mismatch_tags: list[str] = []
     msbos_counts: dict[str, dict[str, int]] = {
-        render_class: {"denominator": 0, "above": 0, "within": 0, "unresolved": 0}
+        render_class: {
+            "denominator": 0,
+            "above": 0,
+            "within": 0,
+            "within_ceiling": 0,
+            "unresolved": 0,
+        }
         for render_class in _MSBOS_RENDER_CLASSES
     }
 
@@ -2043,14 +2091,8 @@ def main() -> None:
         exempt_counts = msbos_counts["PERIOP_TRANSFUSION_EXEMPT"]
         msbos_counts_html = (
             "<div class='msbos-counts'>"
-            f"Returned ({returned_counts['denominator']}): "
-            f"{returned_counts['above']} above / "
-            f"{returned_counts['within']} within / "
-            f"{returned_counts['unresolved']} unresolved<br>"
-            f"Peri-op exempt ({exempt_counts['denominator']}): "
-            f"{exempt_counts['above']} above / "
-            f"{exempt_counts['within']} within / "
-            f"{exempt_counts['unresolved']} unresolved"
+            f"{_msbos_count_breakdown('Returned', returned_counts)}<br>"
+            f"{_msbos_count_breakdown('Peri-op exempt', exempt_counts)}"
             "</div>"
         )
         # Post-flip verdict classes (#201): a declared row MSBOS reclassified
@@ -2063,14 +2105,8 @@ def main() -> None:
             msbos_counts_html = msbos_counts_html.replace(
                 "</div>",
                 "<br>"
-                f"Over-reserved ({over_counts['denominator']}): "
-                f"{over_counts['above']} above / "
-                f"{over_counts['within']} within / "
-                f"{over_counts['unresolved']} unresolved<br>"
-                f"MSBOS review ({review_counts['denominator']}): "
-                f"{review_counts['above']} above / "
-                f"{review_counts['within']} within / "
-                f"{review_counts['unresolved']} unresolved"
+                f"{_msbos_count_breakdown('Over-reserved', over_counts)}<br>"
+                f"{_msbos_count_breakdown('MSBOS review', review_counts)}"
                 "</div>",
                 1,
             )
@@ -2306,6 +2342,17 @@ def main() -> None:
         "but the mapping lacks the confidence (score >= 0.95) plus human "
         "agreement required for a hard PREOP_OVER_RESERVATION — routed to "
         "review, never asserted.</dd>\n"
+        "<dt>over ceiling</dt><dd>The planned operation was ambiguous (a "
+        "near-simultaneous cluster or one code with several tariffs), but EVERY "
+        "candidate resolves into MSBOS, so the reservation is judged against the "
+        "MOST PERMISSIVE tariff in the set (the ceiling). Reserved units exceed "
+        "even that ceiling, so the row is over under every reading — a hard "
+        "PREOP_OVER_RESERVATION when the set is exact/gate-confirmed, otherwise "
+        "review.</dd>\n"
+        "<dt>within ceiling</dt><dd>An ambiguous-but-all-eligible reservation "
+        "that is within the most permissive tariff (the ceiling). It stays "
+        "declared-exempt and annotated; it may still be over under the set's "
+        "least-permissive member (a shadow-over surfaced as its own count).</dd>\n"
         if MSBOS_RESERVATION_PILOT_ENABLED and MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED
         else ""
     )

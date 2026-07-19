@@ -119,6 +119,49 @@ def test_case_line_without_picker_columns_is_unchanged(review: ModuleType) -> No
     assert line == "Reserved 5; MSBOS tariff G/M 2"
 
 
+# --- dominance ceiling rendering (#210/#214) ----------------------------------
+
+
+def _ceiling_row(reason: str, **extra: str) -> dict[str, str]:
+    return {
+        "classification": "PREOP_OVER_RESERVATION",
+        "msbos_reason": reason,
+        "msbos_reserved_units": "5",
+        "msbos_ceiling_basis": "G/M 2 (4573,8151)",
+        "msbos_op_pick_status": "ambiguous_top_rank",
+        **extra,
+    }
+
+
+def test_over_ceiling_pill_and_case_line(review: ModuleType) -> None:
+    row = _ceiling_row("over_ceiling")
+
+    pill = review._msbos_summary_pill(row)
+    line = review._msbos_case_line(row, "PREOP_OVER_RESERVATION")
+
+    # Pill shows the short token+units; the case line carries the full basis.
+    assert "over ceiling G/M 2" in pill
+    assert "(4573,8151)" not in pill
+    assert "over ceiling G/M 2 (4573,8151)" in line
+
+
+def test_within_ceiling_pill_and_case_line(review: ModuleType) -> None:
+    row = dict(
+        _ceiling_row("within_ceiling"), classification="PERIOP_TRANSFUSION_EXEMPT"
+    )
+
+    pill = review._msbos_summary_pill(row)
+    line = review._msbos_case_line(row, "PERIOP_TRANSFUSION_EXEMPT")
+
+    assert "within ceiling G/M 2" in pill
+    assert "within ceiling G/M 2 (4573,8151)" in line
+
+
+def test_within_ceiling_is_its_own_count_bucket(review: ModuleType) -> None:
+    assert review._msbos_reason_bucket("within_ceiling") == "within_ceiling"
+    assert review._msbos_reason_bucket("over_ceiling") == "above"
+
+
 def test_case_line_non_bridge_pick_shows_status_only(review: ModuleType) -> None:
     line = review._msbos_case_line(
         _over_row(
@@ -165,8 +208,14 @@ def test_counts_do_not_crash_on_post_flip_classes(
         msbos_enabled=True,
     ).decode()
 
-    assert "Over-reserved (1): 1 above / 0 within / 0 unresolved" in rendered
-    assert "MSBOS review (1): 0 above / 0 within / 1 unresolved" in rendered
+    assert (
+        "Over-reserved (1): 1 above / 0 within / 0 within-ceiling / 0 unresolved"
+        in rendered
+    )
+    assert (
+        "MSBOS review (1): 0 above / 0 within / 0 within-ceiling / 1 unresolved"
+        in rendered
+    )
 
 
 # --- glossary ----------------------------------------------------------------

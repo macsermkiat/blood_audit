@@ -237,6 +237,7 @@ def test_precision_is_pending_with_non_additive_assertion_denominators() -> None
             False,
             "red_cell",
         ),
+        ("ceiling", "over_ceiling", False, "red_cell"),
         ("plt-major", "over_major_non_neuraxial", False, "platelet"),
         ("plt-neuraxial", "over_neuraxial", False, "platelet"),
         ("plt-cardiac", "over_cardiac_cpb", False, "platelet"),
@@ -279,6 +280,7 @@ def test_precision_is_pending_with_non_additive_assertion_denominators() -> None
         "note_resolved_over_assertions": 1,
         "over_gm_excess": 1,
         "over_type_and_screen_crossmatched": 1,
+        "over_ceiling": 1,
     }
     assert precision.platelet_assertion_denominators.model_dump() == {
         "over_major_non_neuraxial": 1,

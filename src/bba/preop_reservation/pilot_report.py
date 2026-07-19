@@ -106,6 +106,7 @@ class RbcPrecisionDenominators(_FrozenModel):
     note_resolved_over_assertions: int
     over_gm_excess: int
     over_type_and_screen_crossmatched: int
+    over_ceiling: int
 
 
 class PlateletPrecisionDenominators(_FrozenModel):
@@ -362,6 +363,7 @@ def _precision(markers: Sequence[_Marker]) -> PrecisionSection:
             over_type_and_screen_crossmatched=rbc_over_reasons[
                 "over_type_and_screen_crossmatched"
             ],
+            over_ceiling=rbc_over_reasons["over_ceiling"],
         ),
         platelet_assertion_denominators=PlateletPrecisionDenominators(
             **{
