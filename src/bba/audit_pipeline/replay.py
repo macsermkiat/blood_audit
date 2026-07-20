@@ -28,9 +28,11 @@ import hashlib
 import re
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
-from typing import Final, NamedTuple
+from functools import cache
+from typing import Final, NamedTuple, Protocol
 from zoneinfo import ZoneInfo
 
 from bba import feature_flags
@@ -1136,6 +1138,158 @@ def _platelet_overclear_floor(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _Verdict:
+    final_classification: Classification
+    review_reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _GuardrailContext:
+    row: PipelineRowContext
+    result: BatchSubmissionResult
+    rule_classification: Classification
+    reserve_ahead: bool
+    summary_en: str
+    summary_th: str
+    get_grounded_indications: Callable[[], tuple[dict[str, object], ...]]
+    platelet_hard_signals: PlateletHardSignals | None
+
+
+class _Guardrail(Protocol):
+    def __call__(
+        self, verdict: _Verdict, ctx: _GuardrailContext, /
+    ) -> _Verdict | None: ...
+
+
+def _reserve_ahead_guardrail(
+    verdict: _Verdict, ctx: _GuardrailContext, /
+) -> _Verdict | None:
+    if not ctx.reserve_ahead:
+        return None
+    grounded_admin = _grounded_administration_evidence(ctx.result, ctx.row)
+    intraop = (
+        ctx.row.periop_summary is not None
+        and ctx.row.periop_summary.intraop_transfusion
+    )
+    ebl_ok = (
+        ctx.row.periop_summary is not None
+        and ctx.row.periop_summary.blood_loss_ml is not None
+        and ctx.row.periop_summary.blood_loss_ml >= PERIOP_GUARDRAIL_MIN_EBL_ML
+    )
+    extractor_marker = (
+        ctx.row.administration_summary is not None
+        and ctx.row.administration_summary.has_affirmative_marker
+    )
+    structured_admin = intraop or ebl_ok
+    admin_confirmed = bool(grounded_admin) or extractor_marker or structured_admin
+    if not admin_confirmed:
+        return _Verdict(
+            "PREOP_RESERVATION_UNCONFIRMED",
+            PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON,
+        )
+    if structured_admin and not _administration_claimed_from_result(ctx.result):
+        return _Verdict("NEEDS_REVIEW", ADMINISTRATION_CONTRADICTION_REVIEW_REASON)
+    return None
+
+
+def _periop_contradiction_guardrail(
+    verdict: _Verdict, ctx: _GuardrailContext, /
+) -> _Verdict | None:
+    if ctx.row.component != "platelet" and periop_contradiction(
+        verdict.final_classification, ctx.row
+    ):
+        return _Verdict("NEEDS_REVIEW", PERIOP_CONTRADICTION_REVIEW_REASON)
+    return None
+
+
+def _rbc_overclear_guardrail(
+    verdict: _Verdict, ctx: _GuardrailContext, /
+) -> _Verdict | None:
+    if not (
+        ctx.row.component != "platelet"
+        and not ctx.reserve_ahead
+        and llm_overclear_suspect(
+            verdict.final_classification, ctx.rule_classification, ctx.row
+        )
+    ):
+        return None
+    if not _rbc_payload_well_formed(ctx.result):
+        return _Verdict("NEEDS_REVIEW", LLM_OVERCLEAR_REVIEW_REASON)
+    grounded_indications = ctx.get_grounded_indications()
+    if qualified_bleeding_exempt(
+        grounded_indications, order_date=_order_local_date(ctx.row)
+    ):
+        return None
+    if (
+        _grounded_acs_indication(grounded_indications)
+        or _qualified_hemodynamic_floor(grounded_indications, ctx.row)
+        or _grounded_true_subthreshold_indication(grounded_indications, ctx.row)
+    ):
+        return _Verdict("NEEDS_REVIEW", LLM_OVERCLEAR_REVIEW_REASON)
+    return _Verdict("INAPPROPRIATE", LLM_OVERCLEAR_ASSERT_REASON)
+
+
+def _native_review_guardrail(
+    verdict: _Verdict, ctx: _GuardrailContext, /
+) -> _Verdict | None:
+    if not (
+        ctx.row.component != "platelet"
+        and verdict.final_classification == "NEEDS_REVIEW"
+        and verdict.review_reason is None
+        and (ctx.summary_en.strip() or ctx.summary_th.strip())
+        and _rbc_payload_well_formed(ctx.result)
+        and not _has_structured_hard_signal(ctx.row)
+    ):
+        return None
+    grounded_indications = ctx.get_grounded_indications()
+    if (
+        not qualified_bleeding_exempt(
+            grounded_indications,
+            order_date=_order_local_date(ctx.row),
+        )
+        and not _grounded_acs_indication(grounded_indications)
+        and not _qualified_hemodynamic_floor(grounded_indications, ctx.row)
+        and not _grounded_true_subthreshold_indication(grounded_indications, ctx.row)
+    ):
+        return _Verdict("INAPPROPRIATE", LLM_NATIVE_REVIEW_ASSERT_REASON)
+    return None
+
+
+def _platelet_overclear_guardrail(
+    verdict: _Verdict, ctx: _GuardrailContext, /
+) -> _Verdict | None:
+    if ctx.row.component == "platelet" and _platelet_overclear_floor(
+        verdict.final_classification,
+        ctx.rule_classification,
+        ctx.platelet_hard_signals,
+    ):
+        return _Verdict("NEEDS_REVIEW", PLATELET_OVERCLEAR_REVIEW_REASON)
+    return None
+
+
+def _empty_reasoning_overlay(
+    verdict: _Verdict, ctx: _GuardrailContext, /
+) -> _Verdict | None:
+    if ctx.summary_en.strip() or ctx.summary_th.strip():
+        return None
+    review_reason = verdict.review_reason
+    if review_reason is None or review_reason in _LLM_ASSERT_REASONS:
+        review_reason = EMPTY_REASONING_REVIEW_REASON
+    return _Verdict("NEEDS_REVIEW", review_reason)
+
+
+_PRIMARY_GUARDRAILS: Final[tuple[_Guardrail, ...]] = (
+    _reserve_ahead_guardrail,
+    _periop_contradiction_guardrail,
+    _rbc_overclear_guardrail,
+    _native_review_guardrail,
+    _platelet_overclear_guardrail,
+)
+
+_POST_TERMINAL_OVERLAYS: Final[tuple[_Guardrail, ...]] = (_empty_reasoning_overlay,)
+
+
 def apply_batch_results(
     response: RawBatchResponse,
     *,
@@ -1447,160 +1601,35 @@ def _build_audit_row(
     negative_evidence = _negative_evidence_from_result(winning_result)
     confidence = _confidence_from_attempts(indications)
     escalated = any("opus" in record.result.model_id for record in attempts)
-    # Reserve-ahead asymmetric gate (#109): replaces the interim #108 exemption.
-    _gate_terminal = False
-    if reserve_ahead:
-        grounded_admin = _grounded_administration_evidence(winning_result, context)
-        intraop = (
-            context.periop_summary is not None
-            and context.periop_summary.intraop_transfusion
-        )
-        ebl_ok = (
-            context.periop_summary is not None
-            and context.periop_summary.blood_loss_ml is not None
-            and context.periop_summary.blood_loss_ml >= PERIOP_GUARDRAIL_MIN_EBL_ML
-        )
-        extractor_marker = (
-            context.administration_summary is not None
-            and context.administration_summary.has_affirmative_marker
-        )
-        structured_admin = intraop or ebl_ok
-        admin_confirmed = bool(grounded_admin) or extractor_marker or structured_admin
-        if not admin_confirmed:
-            final_classification = "PREOP_RESERVATION_UNCONFIRMED"
-            review_reason = PREOP_RESERVATION_UNCONFIRMED_REVIEW_REASON
-            _gate_terminal = True
-        elif structured_admin and not _administration_claimed_from_result(
-            winning_result
-        ):
-            # The reserve-ahead prompt explicitly asks whether administration was
-            # documented, so administration_claimed=False is the model's explicit
-            # refusal to claim it. Structured intra-op/EBL evidence conflicts with
-            # that answer and reaches a human rather than being silently resolved.
-            # The confirmation predicate has precedence: structured evidence first
-            # sets admin_confirmed=True; this overlay only re-routes to review.
-            final_classification = "NEEDS_REVIEW"
-            review_reason = ADMINISTRATION_CONTRADICTION_REVIEW_REASON
-            _gate_terminal = True
-        # Otherwise administration is confirmed without contradiction. The
-        # reservation-appropriateness verdict flows through the normal chain;
-        # reserve_ahead continues to exempt only the B1 high-Hb assertion.
-    # Peri-op contradiction guardrail (Case 107): a hard deterministic
-    # peri-op signal overrides a non-committal / soft-negative LLM verdict.
-    # We rewrite the classification + review_reason but keep verifier_pass,
-    # the reasoning summaries, and the indications so the human reviewer sees
-    # exactly what the model concluded and why it is being second-guessed.
-    # The peri-op + RBC over-clear guardrails read Hb / cohort / periop_summary
-    # off ``context``; on a PLATELET row those are inert sentinels
-    # (:meth:`PipelineRowContext.for_platelet`), so both are gated OFF platelet
-    # rows (Stage B MED-2). The platelet leg has its own over-clear guardrail
-    # below.
-    if _gate_terminal:
-        pass
-    elif context.component != "platelet" and periop_contradiction(
-        final_classification, context
-    ):
-        final_classification = "NEEDS_REVIEW"
-        review_reason = PERIOP_CONTRADICTION_REVIEW_REASON
-    # B1 over-clear guardrail (Cases 47 / 100): assert INAPPROPRIATE when an
-    # LLM clears a withheld deterministic verdict without a structured hard
-    # signal or the committee-approved qualified-major-bleeding exemption.
-    # The exemption only ever sees indications whose quote grounds in the
-    # row's evidence bundle — a fabricated bleed quote must never auto-clear.
-    # A payload missing a schema-required list field may have LOST cited
-    # evidence, so it floors to human review instead of asserting. A grounded
-    # high-confidence ACS citation also floors (never asserts, never
-    # auto-clears): ACS is in the prompt's HARD vocabulary but has no
-    # structured extractor and no prose exemption path. Checked after peri-op
-    # so that earlier winner remains authoritative; the LLM reasoning and
-    # indications are preserved for auditability.
-    # For a gate-confirmed reserve-ahead row, the model's APPROPRIATE value judges
-    # the reservation decision, so the transfusion-focused B1 high-Hb assertion
-    # must not rewrite it.
-    elif (
-        context.component != "platelet"
-        and not reserve_ahead
-        and llm_overclear_suspect(final_classification, rule_classification, context)
-    ):
-        if not _rbc_payload_well_formed(winning_result):
-            final_classification = "NEEDS_REVIEW"
-            review_reason = LLM_OVERCLEAR_REVIEW_REASON
-        else:
-            _grounded = _grounded_indications(indications, context)
-            if not qualified_bleeding_exempt(
-                _grounded, order_date=_order_local_date(context)
-            ):
-                if (
-                    _grounded_acs_indication(_grounded)
-                    or _qualified_hemodynamic_floor(_grounded, context)
-                    or _grounded_true_subthreshold_indication(_grounded, context)
-                ):
-                    # A prompt-defined hard indication the structured system
-                    # cannot dismiss — ACS (no extractor exists), instability
-                    # (cited prose or the structured snapshot) qualified per
-                    # the #98 ruling, or a structurally true sub-floor Hb the
-                    # deterministic leg withheld as unreliable. Floor to a
-                    # human; never assert against it (and never auto-clear on
-                    # it either).
-                    final_classification = "NEEDS_REVIEW"
-                    review_reason = LLM_OVERCLEAR_REVIEW_REASON
-                else:
-                    final_classification = "INAPPROPRIATE"
-                    review_reason = LLM_OVERCLEAR_ASSERT_REASON
-            # else: a grounded qualified major bleed keeps the clear
-            # APPROPRIATE.
-    # WHY: the prompt no longer permits a native NEEDS_REVIEW hedge. Convert a
-    # well-formed, explained hedge to the committee's clear-cut verdict only
-    # when neither a structured hard signal nor a qualified (grounded) bleed
-    # makes it a genuine human case; a drifted payload or a parse/schema
-    # failure (non-None reason) stays a human case.
-    elif (
-        context.component != "platelet"
-        and final_classification == "NEEDS_REVIEW"
-        and review_reason is None
-        and (summary_en.strip() or summary_th.strip())
-        and _rbc_payload_well_formed(winning_result)
-        and not _has_structured_hard_signal(context)
-        and not qualified_bleeding_exempt(
-            _grounded_indications(indications, context),
-            order_date=_order_local_date(context),
-        )
-        # A grounded high-confidence ACS / hemodynamic citation or a
-        # structurally true sub-floor Hb makes the hedge a genuine human
-        # case (same rationale as the over-clear floors above).
-        and not _grounded_acs_indication(_grounded_indications(indications, context))
-        and not _qualified_hemodynamic_floor(
-            _grounded_indications(indications, context), context
-        )
-        and not _grounded_true_subthreshold_indication(
-            _grounded_indications(indications, context), context
-        )
-    ):
-        final_classification = "INAPPROPRIATE"
-        review_reason = LLM_NATIVE_REVIEW_ASSERT_REASON
-    # Platelet over-clear guardrail (Stage C2, "ADD hard signals" ruling): an
-    # LLM APPROPRIATE on any withheld platelet verdict with NO grounded platelet
-    # hard signal floors to review.  Keyed on context.component only — NOT on
-    # PLATELET_LLM_ENABLED — so the guardrail stays active during crash-recovery
-    # replay/resume even when the flag is toggled off after the batch was
-    # submitted. The flag's sole job is gating SUBMISSION (whether platelet rows
-    # enter the LLM leg at all); once a row reaches this persist path it must
-    # always be protected. Uses the already-parsed _plt_signals from the primary
-    # platelet parse above (no second parse of winning_result).
-    elif context.component == "platelet" and _platelet_overclear_floor(
-        final_classification, rule_classification, _plt_signals
-    ):
-        final_classification = "NEEDS_REVIEW"
-        review_reason = PLATELET_OVERCLEAR_REVIEW_REASON
-    # Empty-reasoning guardrail: a verdict with no reasoning in either
-    # language cannot be audited by the committee. Separate `if` (not
-    # elif) so it composes with the guardrails above. Preserve genuine review
-    # provenance, but overwrite assertion provenance when this net changes the
-    # final verdict: invariant — an assertion slug implies INAPPROPRIATE.
-    if not summary_en.strip() and not summary_th.strip():
-        final_classification = "NEEDS_REVIEW"
-        if review_reason is None or review_reason in _LLM_ASSERT_REASONS:
-            review_reason = EMPTY_REASONING_REVIEW_REASON
+
+    @cache
+    def get_grounded_indications() -> tuple[dict[str, object], ...]:
+        if context.component == "platelet":
+            return ()
+        return _grounded_indications(indications, context)
+
+    guardrail_context = _GuardrailContext(
+        row=context,
+        result=winning_result,
+        rule_classification=rule_classification,
+        reserve_ahead=reserve_ahead,
+        summary_en=summary_en,
+        summary_th=summary_th,
+        get_grounded_indications=get_grounded_indications,
+        platelet_hard_signals=_plt_signals,
+    )
+    verdict = _Verdict(final_classification, review_reason)
+    for guardrail in _PRIMARY_GUARDRAILS:
+        terminal = guardrail(verdict, guardrail_context)
+        if terminal is not None:
+            verdict = terminal
+            break
+    for overlay in _POST_TERMINAL_OVERLAYS:
+        overlaid = overlay(verdict, guardrail_context)
+        if overlaid is not None:
+            verdict = overlaid
+    final_classification = verdict.final_classification
+    review_reason = verdict.review_reason
     return AuditRow(
         audit_id=context.order.audit_id,
         run_id=run_id,
