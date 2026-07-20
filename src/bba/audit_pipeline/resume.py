@@ -50,6 +50,7 @@ from bba.audit_pipeline.state_machine import is_terminal, transition
 from bba.audit_pipeline.store import BatchRunStore
 from bba.audit_store import AuditStore, LlmCall
 from bba.deterministic_classifier import ClassifierResult, classify
+from bba.deterministic_classifier.rationales import RESERVE_AHEAD_RATIONALES
 from bba.llm_client.models import (
     AnthropicTransport,
     BatchSubmissionRequest,
@@ -59,7 +60,8 @@ from bba.llm_client.models import (
 )
 
 
-_RESERVE_AHEAD_RATIONALES = frozenset({"preop_defer_llm", "preop_defer_llm_declared"})
+# Single source of truth in the deterministic_classifier package (candidate 4).
+_RESERVE_AHEAD_RATIONALES = RESERVE_AHEAD_RATIONALES
 
 
 def resume_on_startup(
