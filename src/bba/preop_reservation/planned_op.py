@@ -14,7 +14,9 @@ Design (advisor-frozen):
   ``outside_window``.
 * Denylist + resolved-code exclusions are skip-and-continue: ranking proceeds
   over the survivors, never converting a denial into "no plan".
-* Ambiguity uses the ``(or_flag, operative_datetime)`` equivalence key ONLY;
+* Ranking prefers surgical events, then a resolved code over a blank one (a
+  code-less discharge-summary row must not outrank a coded op), then the
+  earliest datetime. Ambiguity uses that same rank-equivalence key;
   ``resolved_icd9`` picks a deterministic presentation candidate strictly
   AFTER ambiguity is decided.
 * The near-simultaneous cluster rule only ever triggers review
@@ -41,8 +43,10 @@ from bba.preop_reservation.models import (
 )
 from bba.preop_reservation.reference import MsbosReference
 
-PLANNED_OP_WINDOW_HOURS = 72
-"""Inclusive pre-op horizon, hours (parity with PRE_OP_CROSSMATCH_WINDOW_HOURS)."""
+PLANNED_OP_WINDOW_HOURS = 14 * 24
+"""Inclusive pre-op horizon, hours. 14 days: reserve-ahead elective orders book
+blood days before the operation, so a 72h horizon dropped genuine planned ops
+(CABG at +3d, esophagectomy at +14d) to ``outside_window``."""
 
 PLANNED_OP_CLUSTER_WINDOW_SECONDS = 60
 """Near-simultaneous charge cluster window around the rank-1 candidate,
@@ -231,8 +235,17 @@ def _derive(event: OperativeEvent, bridge: OprtactBridge) -> _Candidate:
     )
 
 
-def _rank_key(candidate: _Candidate) -> tuple[bool, datetime]:
-    return (not candidate.event.or_flag, candidate.event.operative_datetime)
+def _rank_key(candidate: _Candidate) -> tuple[bool, bool, datetime]:
+    # (1) surgical events first, (2) a resolved code before a blank one, (3)
+    # earliest. The blank-de-prioritization is the #196 fix: a code-less
+    # discharge-summary row (blank ICD-9, and a blank INTIME that defaults to
+    # midnight) sorts earliest by datetime and would otherwise outrank the real
+    # coded op row for the same surgery, yielding a spurious selected_blank_code.
+    return (
+        not candidate.event.or_flag,
+        candidate.resolved_icd9 == "",
+        candidate.event.operative_datetime,
+    )
 
 
 def _presentation_key(candidate: _Candidate) -> tuple[str, str, str]:

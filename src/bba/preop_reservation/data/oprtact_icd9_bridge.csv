@@ -1,43 +1,43 @@
 ﻿oprtact,icd9,icd9_nodot,score,human_index,human_agreed,human_icd9,name
-AN008,412,412,0.935,1,false,411,Open biopsy of cranial or peripheral nerve or ganglion
+AN008,0412,0412,0.935,1,false,411,Open biopsy of cranial or peripheral nerve or ganglion
 AS012,7534,7534,0.989,0,true,,Other fetal monitoring
 AS014,9504,9504,0.927,1,false,9991,Eye examination under anesthesia
 AS017,9991,9991,1.000,1,false,9992,Acupuncture for anesthesia
 AS019,3897,3897,1.000,1,false,8962,Central venous catheter placement with guidance
-AS036,9991,9991,0.931,1,false,480,Acupuncture for anesthesia
+AS036,9991,9991,0.931,1,false,0480,Acupuncture for anesthesia
 AS037,9991,9991,0.860,1,false,9439,Acupuncture for anesthesia
 AS039,9984,9984,1.000,0,true,,Isolation
 AS040,8960,8960,1.000,1,false,9670,Continuous intra-arterial blood gas monitoring
-AS041,12,12,0.923,1,false,9396,Administration of inhaled nitric oxide
+AS041,0012,0012,0.923,1,false,9396,Administration of inhaled nitric oxide
 AS042,9605,9605,0.987,1,false,9670,Other intubation of respiratory tract
-AS044,8606,8606,0.918,1,false,390,Insertion of totally implantable infusion pump
+AS044,8606,8606,0.918,1,false,0390,Insertion of totally implantable infusion pump
 AS048,8911,8911,1.000,0,true,,Tonometry
 AS049,9981,9981,0.973,0,true,,Hypothermia (central) (local)
-AS050,11,11,0.894,1,false,391,Infusion of drotrecogin alfa (activated)
-AS051,391,391,0.996,1,false,1770,Injection of anesthetic into spinal canal for analgesia
+AS050,0011,0011,0.894,1,false,0391,Infusion of drotrecogin alfa (activated)
+AS051,0391,0391,0.996,1,false,1770,Injection of anesthetic into spinal canal for analgesia
 AS052,9462,9462,0.978,0,true,,Alcohol detoxification
 AS053,9991,9991,0.903,1,false,15,Acupuncture for anesthesia
-AS054,9991,9991,0.850,1,false,391,Acupuncture for anesthesia
+AS054,9991,9991,0.850,1,false,0391,Acupuncture for anesthesia
 AS055,9604,9604,1.000,1,false,3322,Insertion of endotracheal tube
 AS056,9425,9425,1.000,1,false,9429,Other psychiatric drug therapy
-AS057,9991,9991,0.906,1,false,531,Acupuncture for anesthesia
+AS057,9991,9991,0.906,1,false,0531,Acupuncture for anesthesia
 AS058,8872,8872,1.000,1,false,8878,Diagnostic ultrasound of heart
-AS059,481,481,0.967,1,false,480,Injection of anesthetic into peripheral nerve for analgesia
+AS059,0481,0481,0.967,1,false,0480,Injection of anesthetic into peripheral nerve for analgesia
 AS060,9427,9427,1.000,1,false,9424,Other electroshock therapy
-AS061,481,481,1.000,1,false,480,Injection of anesthetic into peripheral nerve for analgesia
-AS062,481,481,1.000,1,false,489,Injection of anesthetic into peripheral nerve for analgesia
-AS064,68,68,0.982,1,false,8960,Intravascular pressure measurement of peripheral arteries
+AS061,0481,0481,1.000,1,false,0480,Injection of anesthetic into peripheral nerve for analgesia
+AS062,0481,0481,1.000,1,false,0489,Injection of anesthetic into peripheral nerve for analgesia
+AS064,0068,0068,0.982,1,false,8960,Intravascular pressure measurement of peripheral arteries
 AS065,3897,3897,0.962,1,false,8962,Central venous catheter placement with guidance
 AS066,8964,8964,1.000,1,false,3721,Pulmonary artery wedge monitoring
 AS067,9906,9906,0.978,1,false,9919,Transfusion of coagulation factors
 AS068,9984,9984,1.000,0,true,,Isolation
 AS069,9604,9604,1.000,1,false,3148,Insertion of endotracheal tube
-AS070,480,480,1.000,1,false,481,"Peripheral nerve injection, not otherwise specified"
+AS070,0480,0480,1.000,1,false,0481,"Peripheral nerve injection, not otherwise specified"
 AS071,8968,8968,1.000,1,false,8967,Monitoring of cardiac output by other technique
-AS072,94,94,1.000,1,false,442,Intra-operative neurophysiologic monitoring
-AS073,94,94,0.992,1,false,117,Intra-operative neurophysiologic monitoring
-AS075,9526,9526,0.845,1,false,476,"Tonography, provocative tests, and other glaucoma testing"
-AS076,531,531,0.938,0,true,,Injection of anesthetic into sympathetic nerve for analgesia
+AS072,94,94,1.000,1,false,0442,Intra-operative neurophysiologic monitoring
+AS073,94,94,0.992,1,false,0117,Intra-operative neurophysiologic monitoring
+AS075,9526,9526,0.845,1,false,0476,"Tonography, provocative tests, and other glaucoma testing"
+AS076,0531,0531,0.938,0,true,,Injection of anesthetic into sympathetic nerve for analgesia
 AS077,8192,8192,0.941,0,true,,Injection of therapeutic substance into joint or ligament
 AS078,8192,8192,1.000,0,true,,Injection of therapeutic substance into joint or ligament
 AS079,9925,9925,0.991,1,false,9929,Injection or infusion of cancer chemotherapeutic substance
@@ -45,7 +45,7 @@ AS080,9984,9984,0.782,0,true,,Isolation
 AS081,8968,8968,1.000,1,false,7538,Monitoring of cardiac output by other technique
 AS082,9051,9051,0.997,1,false,9906,"Microscopic examination of blood, bacterial smear"
 AS084,9973,9973,0.985,1,false,9900,Therapeutic erythrocytapheresis
-AS085,395,395,0.850,2,false,531,Spinal blood patch
+AS085,0395,0395,0.850,2,false,0531,Spinal blood patch
 AS086,9984,9984,0.991,0,true,,Isolation
 BB604,9972,9972,1.000,0,true,,Therapeutic leukopheresis
 BB605,9979,9979,0.960,1,false,9971,Other therapeutic apheresis
@@ -88,7 +88,7 @@ CC027,3727,3727,1.000,1,false,3726,Cardiac mapping
 CC028,3783,3783,0.969,1,false,3787,Initial insertion of dual-chamber device
 CC029,3782,3782,0.971,1,false,3783,"Initial insertion of single-chamber device, rate responsive"
 CC030,3794,3794,1.000,1,false,3796,"Implantation or replacement of automatic cardioverter/defibrillator, total system [AICD]"
-CC031,28,28,1.000,1,false,22,"Intravascular imaging, other specified vessel(s)"
+CC031,0028,0028,1.000,1,false,0022,"Intravascular imaging, other specified vessel(s)"
 CC032,3728,3728,1.000,1,false,8853,Intracardiac echocardiography
 CC033,3728,3728,1.000,1,false,8872,Intracardiac echocardiography
 CC034,8850,8850,0.962,1,false,3710,"Angiocardiography, not otherwise specified"
@@ -110,7 +110,7 @@ CC049,8945,8945,0.978,1,false,8948,Artificial pacemaker rate check
 CC050,9336,9336,0.905,0,true,,Cardiac retraining
 CC051,9984,9984,1.000,0,true,,Isolation
 CC052,3609,3609,0.987,2,false,3603,Other removal of coronary artery obstruction
-CC059,33,33,0.846,1,false,8839,Computer assisted surgery with fluoroscopy
+CC059,0033,0033,0.846,1,false,8839,Computer assisted surgery with fluoroscopy
 CC060,8872,8872,0.989,1,false,3728,Diagnostic ultrasound of heart
 CC061,3570,3570,1.000,1,false,3560,Other and unspecified repair of unspecified septal defect of heart
 CC064,8872,8872,1.000,1,false,3728,Diagnostic ultrasound of heart
@@ -119,15 +119,15 @@ CC066,3780,3780,0.957,1,false,3781,"Insertion of permanent pacemaker, initial or
 CC067,3782,3782,1.000,1,false,3781,"Initial insertion of single-chamber device, rate responsive"
 CC068,3772,3772,0.983,1,false,3783,Initial insertion of transvenous leads [electrodes] into atrium and ventricle
 CC069,3772,3772,0.983,1,false,3783,Initial insertion of transvenous leads [electrodes] into atrium and ventricle
-CC070,53,53,1.000,1,false,50,Implantation or replacement of cardiac resynchronization pacemaker pulse generator only [CRT-P]
+CC070,0053,0053,1.000,1,false,0050,Implantation or replacement of cardiac resynchronization pacemaker pulse generator only [CRT-P]
 CC071,3795,3795,0.970,1,false,3796,Implantation of automatic cardioverter/defibrillator lead(s) only
 CC072,3813,3813,0.886,1,false,8414,"Endarterectomy, upper limb vessels"
 CC073,8425,8425,0.807,0,true,,Toe reattachment
 CC074,3795,3795,1.000,1,false,3796,Implantation of automatic cardioverter/defibrillator lead(s) only
-CC075,51,51,1.000,1,false,50,"Implantation of cardiac resynchronization defibrillator, total system [CRT-D]"
+CC075,0051,0051,1.000,1,false,0050,"Implantation of cardiac resynchronization defibrillator, total system [CRT-D]"
 CC076,3607,3607,0.960,1,false,3950,Insertion of drug-eluting coronary artery stent(s)
-CC077,63,63,1.000,1,false,62,Percutaneous insertion of carotid artery stent(s)
-CC078,3990,3990,1.000,1,false,63,Insertion of non-drug-eluting peripheral (non-coronary) vessel stent(s)
+CC077,0063,0063,1.000,1,false,62,Percutaneous insertion of carotid artery stent(s)
+CC078,3990,3990,1.000,1,false,0063,Insertion of non-drug-eluting peripheral (non-coronary) vessel stent(s)
 CC079,3765,3765,0.972,1,false,3766,Implant of single ventricular (extracorporeal) external heart assist system
 CC080,3965,3965,1.000,1,false,3966,Extracorporeal membrane oxygenation [ECMO]
 CC081,8949,8949,1.000,1,false,8945,Automatic implantable cardioverter/defibrillator (AICD) check
@@ -138,29 +138,29 @@ CC104,66,66,0.967,1,false,3950,Percutaneous transluminal coronary angioplasty [P
 CC105,3502,3502,0.973,1,false,3512,"Closed heart valvotomy, mitral valve"
 CC106,3501,3501,0.926,1,false,3522,"Closed heart valvotomy, aortic valve"
 CC107,62,62,0.966,3,false,,Percutaneous angioplasty of intracranial vessel(s)
-CC108,45,45,1.000,1,false,65,Insertion of one vascular stent
+CC108,0045,0045,1.000,1,false,0065,Insertion of one vascular stent
 CC109,66,66,0.954,1,false,3507,Percutaneous transluminal coronary angioplasty [PTCA]
 CC110,3541,3541,1.000,1,false,3542,Enlargement of existing atrial septal defect
 CC111,3772,3772,1.000,1,false,3778,Initial insertion of transvenous leads [electrodes] into atrium and ventricle
 CC112,3796,3796,1.000,1,false,3794,Implantation of automatic cardioverter/defibrillator pulse generator only
-CC113,51,51,1.000,1,false,50,"Implantation of cardiac resynchronization defibrillator, total system [CRT-D]"
+CC113,0051,0051,1.000,1,false,0050,"Implantation of cardiac resynchronization defibrillator, total system [CRT-D]"
 CC114,3761,3761,1.000,1,false,3762,Implant of pulsation balloon
 CC115,8872,8872,1.000,1,false,3728,Diagnostic ultrasound of heart
 CC116,8941,8941,1.000,1,false,8944,Cardiovascular stress test using treadmill
 CC117,8944,8944,1.000,1,false,8942,Other cardiovascular stress test
 CC118,66,66,0.901,0,true,,Percutaneous transluminal coronary angioplasty [PTCA]
-CC119,63,63,0.994,1,false,2106,Percutaneous insertion of carotid artery stent(s)
+CC119,0063,0063,0.994,1,false,2106,Percutaneous insertion of carotid artery stent(s)
 CC120,66,66,1.000,1,false,3950,Percutaneous transluminal coronary angioplasty [PTCA]
 CC121,8845,8845,1.000,1,false,8846,Arteriography of renal arteries
 CC122,8862,8862,0.977,1,false,8848,Phlebography of pulmonary veins using contrast material
 CC123,8844,8844,0.963,1,false,8843,Arteriography of other intrathoracic vessels
 CC124,8961,8961,0.989,1,false,9964,Systemic arterial pressure monitoring
-CC125,8961,8961,0.816,1,false,96,Systemic arterial pressure monitoring
+CC125,8961,8961,0.816,1,false,0096,Systemic arterial pressure monitoring
 CC126,3699,3699,0.969,1,false,3799,Other operations on vessels of heart
-CC127,40,40,0.979,1,false,41,Procedure on single vessel
+CC127,0040,0040,0.979,1,false,0041,Procedure on single vessel
 CC128,3728,3728,1.000,1,false,8872,Intracardiac echocardiography
-CC129,52,52,0.958,1,false,50,Implantation or replacement of transvenous lead [electrode] into left ventricular coronary venous system
-CC130,53,53,0.909,1,false,51,Implantation or replacement of cardiac resynchronization pacemaker pulse generator only [CRT-P]
+CC129,52,52,0.958,1,false,0050,Implantation or replacement of transvenous lead [electrode] into left ventricular coronary venous system
+CC130,0053,0053,0.909,1,false,0051,Implantation or replacement of cardiac resynchronization pacemaker pulse generator only [CRT-P]
 CC131,8955,8955,1.000,1,false,8957,Phonocardiogram with ECG lead
 CC132,8944,8944,1.000,1,false,8941,Other cardiovascular stress test
 CC133,8952,8952,0.931,1,false,8950,Electrocardiogram
@@ -192,9 +192,9 @@ CCMR002,8941,8941,0.930,1,false,9205,Cardiovascular stress test using treadmill
 CCMR003,8941,8941,1.000,1,false,8944,Cardiovascular stress test using treadmill
 CCMR004,3699,3699,0.947,1,false,3799,Other operations on vessels of heart
 CCMR005,8848,8848,0.972,1,false,3888,Arteriography of femoral and other lower extremity arteries
-CCMR006,32,32,0.846,1,false,3829,Computer assisted surgery with MR/MRA
-CCMR007,3973,3973,0.873,1,false,32,Endovascular implantation of graft in thoracic aorta
-CCMR008,32,32,0.843,1,false,8842,Computer assisted surgery with MR/MRA
+CCMR006,0032,0032,0.846,1,false,3829,Computer assisted surgery with MR/MRA
+CCMR007,3973,3973,0.873,1,false,0032,Endovascular implantation of graft in thoracic aorta
+CCMR008,0032,0032,0.843,1,false,8842,Computer assisted surgery with MR/MRA
 CCMR009,8845,8845,1.000,1,false,3924,Arteriography of renal arteries
 CCMR010,8892,8892,0.985,1,false,8894,Magnetic resonance imaging of chest and myocardium
 CCMR011,8859,8859,0.953,1,false,8857,Intra-operative coronary fluorescence vascular angiography
@@ -222,7 +222,7 @@ CCX024,3726,3726,1.000,1,false,3727,Catheter based invasive electrophysiologic t
 CCX025,3727,3727,1.000,0,true,,Cardiac mapping
 CCX026,3727,3727,1.000,2,false,5196,Cardiac mapping
 CCX027,3727,3727,1.000,1,false,3726,Cardiac mapping
-CCX031,28,28,1.000,1,false,22,"Intravascular imaging, other specified vessel(s)"
+CCX031,0028,0028,1.000,1,false,0022,"Intravascular imaging, other specified vessel(s)"
 CCX032,3728,3728,1.000,1,false,8872,Intracardiac echocardiography
 CCX033,3728,3728,1.000,1,false,8872,Intracardiac echocardiography
 CCX034,8850,8850,0.962,1,false,3710,"Angiocardiography, not otherwise specified"
@@ -242,24 +242,24 @@ CCX047,8953,8953,0.994,0,true,,Vectorcardiogram (with ECG)
 CCX048,8952,8952,1.000,0,true,,Electrocardiogram
 CCX049,8945,8945,0.978,1,false,8948,Artificial pacemaker rate check
 CCX050,9336,9336,0.905,0,true,,Cardiac retraining
-CCX059,33,33,0.846,1,false,8839,Computer assisted surgery with fluoroscopy
+CCX059,0033,0033,0.846,1,false,8839,Computer assisted surgery with fluoroscopy
 CCX060,8872,8872,0.989,1,false,3728,Diagnostic ultrasound of heart
 CCX061,3570,3570,1.000,1,false,3560,Other and unspecified repair of unspecified septal defect of heart
 CCX072,3813,3813,0.886,1,false,8414,"Endarterectomy, upper limb vessels"
 CCX073,8425,8425,0.807,0,true,,Toe reattachment
 CCX107,62,62,0.966,3,false,,Percutaneous angioplasty of intracranial vessel(s)
-CCX108,45,45,0.952,1,false,62,Insertion of one vascular stent
+CCX108,0045,0045,0.952,1,false,62,Insertion of one vascular stent
 CCX109,66,66,0.954,1,false,3507,Percutaneous transluminal coronary angioplasty [PTCA]
 CCX110,3541,3541,0.982,1,false,3542,Enlargement of existing atrial septal defect
 CCX111,3772,3772,1.000,1,false,3778,Initial insertion of transvenous leads [electrodes] into atrium and ventricle
 CCX112,3796,3796,1.000,1,false,3794,Implantation of automatic cardioverter/defibrillator pulse generator only
-CCX113,51,51,1.000,1,false,50,"Implantation of cardiac resynchronization defibrillator, total system [CRT-D]"
+CCX113,0051,0051,1.000,1,false,0050,"Implantation of cardiac resynchronization defibrillator, total system [CRT-D]"
 CCX114,3761,3761,1.000,1,false,3762,Implant of pulsation balloon
 CCX115,3728,3728,1.000,1,false,8872,Intracardiac echocardiography
 CCX116,8941,8941,1.000,1,false,8944,Cardiovascular stress test using treadmill
 CCX117,8944,8944,1.000,1,false,8942,Other cardiovascular stress test
 CCX118,66,66,0.901,0,true,,Percutaneous transluminal coronary angioplasty [PTCA]
-CCX119,63,63,0.948,1,false,66,Percutaneous insertion of carotid artery stent(s)
+CCX119,0063,0063,0.948,1,false,66,Percutaneous insertion of carotid artery stent(s)
 CCX120,66,66,1.000,1,false,3950,Percutaneous transluminal coronary angioplasty [PTCA]
 CCX121,8845,8845,1.000,1,false,8846,Arteriography of renal arteries
 CCX122,8862,8862,0.977,1,false,8848,Phlebography of pulmonary veins using contrast material
@@ -280,20 +280,20 @@ CCXMR010,8872,8872,0.952,1,false,8853,Diagnostic ultrasound of heart
 CCXMR011,8969,8969,0.964,1,false,8857,Monitoring of coronary blood flow
 CCXMR013,8941,8941,1.000,1,false,8944,Cardiovascular stress test using treadmill
 CCXMR014,8894,8894,0.979,1,false,8891,Magnetic resonance imaging of musculoskeletal
-CN001,581,581,0.883,1,false,519,Repair of sympathetic nerve or ganglion
+CN001,0581,0581,0.883,1,false,0519,Repair of sympathetic nerve or ganglion
 CN002,9927,9927,0.899,0,true,,Iontophoresis
 CN003,8881,8881,0.983,0,true,,Cerebral thermography
 CN004,9003,9003,0.967,1,false,9001,"Microscopic examination of specimen from nervous system and of spinal fluid, culture and sensitivity"
 CN007,9401,9401,1.000,1,false,9402,Administration of intelligence test
 CN008,9401,9401,1.000,1,false,9402,Administration of intelligence test
-CN009,474,474,0.944,1,false,412,Other anastomosis of cranial or peripheral nerve
-CN201,412,412,0.972,1,false,9308,Open biopsy of cranial or peripheral nerve or ganglion
+CN009,0474,0474,0.944,1,false,0412,Other anastomosis of cranial or peripheral nerve
+CN201,0412,0412,0.972,1,false,9308,Open biopsy of cranial or peripheral nerve or ganglion
 CN202,1501,1501,0.874,1,false,9954,Biopsy of extraocular muscle or tendon
-CN204,372,372,0.985,1,false,379,Spinal subarachnoid-ureteral shunt
-CN205,412,412,0.972,1,false,9308,Open biopsy of cranial or peripheral nerve or ganglion
+CN204,0372,0372,0.985,1,false,0379,Spinal subarachnoid-ureteral shunt
+CN205,0412,0412,0.972,1,false,9308,Open biopsy of cranial or peripheral nerve or ganglion
 CN206,1501,1501,0.874,1,false,9954,Biopsy of extraocular muscle or tendon
 DE001,9984,9984,1.000,0,true,,Isolation
-DE099,481,481,1.000,1,false,531,Injection of anesthetic into peripheral nerve for analgesia
+DE099,0481,0481,1.000,1,false,0531,Injection of anesthetic into peripheral nerve for analgesia
 DE100,2349,2349,0.938,0,true,,Other dental restoration
 DE101,232,232,1.000,1,false,233,Restoration of tooth by filling
 DE102,232,232,0.993,1,false,233,Restoration of tooth by filling
@@ -610,7 +610,7 @@ DM025,9983,9983,0.995,0,true,,Other phototherapy
 DM026,9984,9984,1.000,0,true,,Isolation
 DM027,8619,8619,0.899,1,false,8625,Other diagnostic procedures on skin and subcutaneous tissue
 DM028,8611,8611,0.845,1,false,6411,Closed biopsy of skin and subcutaneous tissue
-DM029,811,811,1.000,1,false,864,Biopsy of eyelid
+DM029,0811,0811,1.000,1,false,864,Biopsy of eyelid
 DM030,9221,9221,0.863,0,true,,Superficial radiation
 DM031,4903,4903,0.897,1,false,284,Excision of perianal skin tags
 DM032,7111,7111,0.968,0,true,,Biopsy of vulva
@@ -685,73 +685,73 @@ DM147,8682,8682,1.000,0,true,,Facial rhytidectomy
 DM148,8682,8682,0.828,0,true,,Facial rhytidectomy
 DM149,8682,8682,0.985,0,true,,Facial rhytidectomy
 DM150,2741,2741,0.893,0,true,,Labial frenectomy
-DM151,8692,8692,0.954,1,false,863,Electrolysis and other epilation of skin
-DM152,8692,8692,0.862,1,false,863,Electrolysis and other epilation of skin
-DM153,8692,8692,0.849,1,false,863,Electrolysis and other epilation of skin
-DM154,8692,8692,0.847,1,false,863,Electrolysis and other epilation of skin
-DM155,8692,8692,0.892,1,false,863,Electrolysis and other epilation of skin
-DM156,8692,8692,0.927,1,false,891,Electrolysis and other epilation of skin
-DM157,8692,8692,0.903,1,false,891,Electrolysis and other epilation of skin
-DM158,8692,8692,0.867,1,false,891,Electrolysis and other epilation of skin
-DM159,8692,8692,0.925,1,false,863,Electrolysis and other epilation of skin
+DM151,8692,8692,0.954,1,false,0863,Electrolysis and other epilation of skin
+DM152,8692,8692,0.862,1,false,0863,Electrolysis and other epilation of skin
+DM153,8692,8692,0.849,1,false,0863,Electrolysis and other epilation of skin
+DM154,8692,8692,0.847,1,false,0863,Electrolysis and other epilation of skin
+DM155,8692,8692,0.892,1,false,0863,Electrolysis and other epilation of skin
+DM156,8692,8692,0.927,1,false,0891,Electrolysis and other epilation of skin
+DM157,8692,8692,0.903,1,false,0891,Electrolysis and other epilation of skin
+DM158,8692,8692,0.867,1,false,0891,Electrolysis and other epilation of skin
+DM159,8692,8692,0.925,1,false,0863,Electrolysis and other epilation of skin
 DM160,8692,8692,0.833,1,false,8664,Electrolysis and other epilation of skin
 DM161,8692,8692,0.837,1,false,8664,Electrolysis and other epilation of skin
-DM162,8692,8692,0.849,1,false,891,Electrolysis and other epilation of skin
+DM162,8692,8692,0.849,1,false,0891,Electrolysis and other epilation of skin
 DM163,8692,8692,1.000,1,false,8664,Electrolysis and other epilation of skin
-DM164,8692,8692,0.923,1,false,891,Electrolysis and other epilation of skin
-DM165,8692,8692,0.905,1,false,891,Electrolysis and other epilation of skin
-DM166,8692,8692,0.927,1,false,891,Electrolysis and other epilation of skin
-DM167,8692,8692,0.874,1,false,863,Electrolysis and other epilation of skin
-DM168,863,863,0.895,1,false,8692,Reconstruction of eyelid with hair follicle graft
-DM169,8692,8692,0.849,1,false,863,Electrolysis and other epilation of skin
-DM170,8692,8692,0.962,1,false,863,Electrolysis and other epilation of skin
-DM171,8692,8692,0.914,1,false,891,Electrolysis and other epilation of skin
-DM172,8692,8692,0.947,1,false,891,Electrolysis and other epilation of skin
-DM173,8692,8692,0.995,1,false,863,Electrolysis and other epilation of skin
-DM174,8692,8692,0.930,1,false,863,Electrolysis and other epilation of skin
-DM175,8692,8692,0.910,1,false,891,Electrolysis and other epilation of skin
-DM176,8692,8692,0.952,1,false,891,Electrolysis and other epilation of skin
-DM177,8692,8692,0.855,1,false,891,Electrolysis and other epilation of skin
-DM178,8692,8692,0.816,1,false,891,Electrolysis and other epilation of skin
-DM179,8692,8692,0.865,1,false,891,Electrolysis and other epilation of skin
+DM164,8692,8692,0.923,1,false,0891,Electrolysis and other epilation of skin
+DM165,8692,8692,0.905,1,false,0891,Electrolysis and other epilation of skin
+DM166,8692,8692,0.927,1,false,0891,Electrolysis and other epilation of skin
+DM167,8692,8692,0.874,1,false,0863,Electrolysis and other epilation of skin
+DM168,0863,0863,0.895,1,false,8692,Reconstruction of eyelid with hair follicle graft
+DM169,8692,8692,0.849,1,false,0863,Electrolysis and other epilation of skin
+DM170,8692,8692,0.962,1,false,0863,Electrolysis and other epilation of skin
+DM171,8692,8692,0.914,1,false,0891,Electrolysis and other epilation of skin
+DM172,8692,8692,0.947,1,false,0891,Electrolysis and other epilation of skin
+DM173,8692,8692,0.995,1,false,0863,Electrolysis and other epilation of skin
+DM174,8692,8692,0.930,1,false,0863,Electrolysis and other epilation of skin
+DM175,8692,8692,0.910,1,false,0891,Electrolysis and other epilation of skin
+DM176,8692,8692,0.952,1,false,0891,Electrolysis and other epilation of skin
+DM177,8692,8692,0.855,1,false,0891,Electrolysis and other epilation of skin
+DM178,8692,8692,0.816,1,false,0891,Electrolysis and other epilation of skin
+DM179,8692,8692,0.865,1,false,0891,Electrolysis and other epilation of skin
 DM180,8692,8692,1.000,1,false,6021,Electrolysis and other epilation of skin
-DM181,8692,8692,0.862,1,false,863,Electrolysis and other epilation of skin
+DM181,8692,8692,0.862,1,false,0863,Electrolysis and other epilation of skin
 DM182,8692,8692,0.850,1,false,8664,Electrolysis and other epilation of skin
-DM183,8692,8692,1.000,1,false,863,Electrolysis and other epilation of skin
+DM183,8692,8692,1.000,1,false,0863,Electrolysis and other epilation of skin
 DM184,8692,8692,0.963,1,false,1251,Electrolysis and other epilation of skin
 DM185,8692,8692,1.000,1,false,8664,Electrolysis and other epilation of skin
 DM186,8692,8692,0.956,1,false,9712,Electrolysis and other epilation of skin
 DM187,8692,8692,0.937,1,false,1251,Electrolysis and other epilation of skin
-DM188,863,863,0.876,1,false,9712,Reconstruction of eyelid with hair follicle graft
-DM189,8692,8692,1.000,1,false,863,Electrolysis and other epilation of skin
-DM190,863,863,0.818,1,false,8692,Reconstruction of eyelid with hair follicle graft
-DM191,8692,8692,0.886,1,false,863,Electrolysis and other epilation of skin
-DM192,8692,8692,0.959,1,false,863,Electrolysis and other epilation of skin
+DM188,0863,0863,0.876,1,false,9712,Reconstruction of eyelid with hair follicle graft
+DM189,8692,8692,1.000,1,false,0863,Electrolysis and other epilation of skin
+DM190,0863,0863,0.818,1,false,8692,Reconstruction of eyelid with hair follicle graft
+DM191,8692,8692,0.886,1,false,0863,Electrolysis and other epilation of skin
+DM192,8692,8692,0.959,1,false,0863,Electrolysis and other epilation of skin
 DM193,8692,8692,0.978,1,false,8664,Electrolysis and other epilation of skin
 DM194,8692,8692,0.913,1,false,6021,Electrolysis and other epilation of skin
 DM195,8692,8692,1.000,1,false,8664,Electrolysis and other epilation of skin
-DM196,8692,8692,0.884,1,false,891,Electrolysis and other epilation of skin
-DM197,8692,8692,0.907,1,false,891,Electrolysis and other epilation of skin
+DM196,8692,8692,0.884,1,false,0891,Electrolysis and other epilation of skin
+DM197,8692,8692,0.907,1,false,0891,Electrolysis and other epilation of skin
 DM198,8692,8692,0.962,1,false,8664,Electrolysis and other epilation of skin
 DM199,8692,8692,0.970,1,false,8664,Electrolysis and other epilation of skin
 DM200,8692,8692,0.998,1,false,8664,Electrolysis and other epilation of skin
 DM201,8692,8692,1.000,1,false,8664,Electrolysis and other epilation of skin
-DM202,8692,8692,0.914,1,false,863,Electrolysis and other epilation of skin
+DM202,8692,8692,0.914,1,false,0863,Electrolysis and other epilation of skin
 DM203,8692,8692,0.988,1,false,8664,Electrolysis and other epilation of skin
 DM204,6021,6021,0.797,1,false,1364,Transurethral (ultrasound) guided laser induced prostatectomy (TULIP)
 DM205,3829,3829,0.762,1,false,6021,Other diagnostic procedures on blood vessels
 DM206,6021,6021,0.800,1,false,8886,Transurethral (ultrasound) guided laser induced prostatectomy (TULIP)
 DM207,3829,3829,0.812,1,false,9912,Other diagnostic procedures on blood vessels
 DM208,9395,9395,0.868,0,true,,Hyperbaric oxygenation
-DM209,886,886,0.865,1,false,8682,Lower eyelid rhytidectomy
+DM209,0886,0886,0.865,1,false,8682,Lower eyelid rhytidectomy
 DM212,8682,8682,0.883,0,true,,Facial rhytidectomy
 DM213,8162,8162,0.755,1,false,8625,Fusion or refusion of 2-3 vertebrae
 DM214,6021,6021,0.852,1,false,8682,Transurethral (ultrasound) guided laser induced prostatectomy (TULIP)
-DM215,886,886,1.000,1,false,8682,Lower eyelid rhytidectomy
+DM215,0886,0886,1.000,1,false,8682,Lower eyelid rhytidectomy
 DM217,8682,8682,0.956,0,true,,Facial rhytidectomy
 DM218,8682,8682,0.963,0,true,,Facial rhytidectomy
-DM219,6021,6021,0.828,1,false,886,Transurethral (ultrasound) guided laser induced prostatectomy (TULIP)
-DM220,886,886,0.898,1,false,9912,Lower eyelid rhytidectomy
+DM219,6021,6021,0.828,1,false,0886,Transurethral (ultrasound) guided laser induced prostatectomy (TULIP)
+DM220,0886,0886,0.898,1,false,9912,Lower eyelid rhytidectomy
 DM222,9912,9912,0.887,0,true,,Immunization for allergy
 DM225,8682,8682,0.975,0,true,,Facial rhytidectomy
 DM226,8682,8682,0.890,0,true,,Facial rhytidectomy
@@ -759,39 +759,39 @@ DM227,8682,8682,1.000,0,true,,Facial rhytidectomy
 DM228,9982,9982,0.910,0,true,,Ultraviolet light therapy
 DM229,8692,8692,1.000,1,false,5792,Electrolysis and other epilation of skin
 DM230,9983,9983,0.925,0,true,,Other phototherapy
-DM231,863,863,0.920,1,false,2743,Reconstruction of eyelid with hair follicle graft
-DM232,8692,8692,0.929,1,false,891,Electrolysis and other epilation of skin
+DM231,0863,0863,0.920,1,false,2743,Reconstruction of eyelid with hair follicle graft
+DM232,8692,8692,0.929,1,false,0891,Electrolysis and other epilation of skin
 DM233,8692,8692,0.979,1,false,8664,Electrolysis and other epilation of skin
 DM234,8692,8692,0.958,1,false,8664,Electrolysis and other epilation of skin
-DM235,8692,8692,0.928,1,false,863,Electrolysis and other epilation of skin
+DM235,8692,8692,0.928,1,false,0863,Electrolysis and other epilation of skin
 DM236,8692,8692,0.830,1,false,8664,Electrolysis and other epilation of skin
-DM237,8692,8692,0.987,1,false,863,Electrolysis and other epilation of skin
+DM237,8692,8692,0.987,1,false,0863,Electrolysis and other epilation of skin
 DM238,8692,8692,0.882,1,false,8664,Electrolysis and other epilation of skin
 DM239,8692,8692,0.922,1,false,8664,Electrolysis and other epilation of skin
-DM240,8692,8692,0.988,1,false,863,Electrolysis and other epilation of skin
+DM240,8692,8692,0.988,1,false,0863,Electrolysis and other epilation of skin
 DM241,8692,8692,1.000,1,false,8664,Electrolysis and other epilation of skin
-DM242,8692,8692,0.957,1,false,863,Electrolysis and other epilation of skin
-DM243,8692,8692,0.917,1,false,863,Electrolysis and other epilation of skin
-DM244,8692,8692,0.925,1,false,863,Electrolysis and other epilation of skin
-DM245,863,863,0.923,1,false,8692,Reconstruction of eyelid with hair follicle graft
-DM246,8692,8692,0.939,1,false,863,Electrolysis and other epilation of skin
+DM242,8692,8692,0.957,1,false,0863,Electrolysis and other epilation of skin
+DM243,8692,8692,0.917,1,false,0863,Electrolysis and other epilation of skin
+DM244,8692,8692,0.925,1,false,0863,Electrolysis and other epilation of skin
+DM245,0863,0863,0.923,1,false,8692,Reconstruction of eyelid with hair follicle graft
+DM246,8692,8692,0.939,1,false,0863,Electrolysis and other epilation of skin
 DM247,8692,8692,0.932,1,false,8664,Electrolysis and other epilation of skin
 DM248,8692,8692,0.882,1,false,8664,Electrolysis and other epilation of skin
 DM249,8692,8692,0.916,1,false,8664,Electrolysis and other epilation of skin
 DM250,8692,8692,0.910,1,false,8664,Electrolysis and other epilation of skin
 DM251,8692,8692,0.942,1,false,8664,Electrolysis and other epilation of skin
-DM252,8692,8692,0.949,1,false,863,Electrolysis and other epilation of skin
+DM252,8692,8692,0.949,1,false,0863,Electrolysis and other epilation of skin
 DM253,8692,8692,0.888,1,false,8664,Electrolysis and other epilation of skin
 DM254,8692,8692,0.870,1,false,9985,Electrolysis and other epilation of skin
 DM255,8692,8692,0.910,1,false,8664,Electrolysis and other epilation of skin
-DM256,8692,8692,0.951,1,false,863,Electrolysis and other epilation of skin
-DM257,8692,8692,0.897,1,false,863,Electrolysis and other epilation of skin
-DM258,8692,8692,0.882,1,false,863,Electrolysis and other epilation of skin
+DM256,8692,8692,0.951,1,false,0863,Electrolysis and other epilation of skin
+DM257,8692,8692,0.897,1,false,0863,Electrolysis and other epilation of skin
+DM258,8692,8692,0.882,1,false,0863,Electrolysis and other epilation of skin
 DM259,8692,8692,0.942,1,false,8664,Electrolysis and other epilation of skin
 DM260,8692,8692,0.918,1,false,8447,Electrolysis and other epilation of skin
 DM261,8692,8692,0.926,1,false,8447,Electrolysis and other epilation of skin
-DM262,8692,8692,0.845,1,false,863,Electrolysis and other epilation of skin
-DM263,8692,8692,0.997,1,false,863,Electrolysis and other epilation of skin
+DM262,8692,8692,0.845,1,false,0863,Electrolysis and other epilation of skin
+DM263,8692,8692,0.997,1,false,0863,Electrolysis and other epilation of skin
 DM264,8692,8692,0.918,1,false,8664,Electrolysis and other epilation of skin
 DM265,8692,8692,0.999,1,false,9164,Electrolysis and other epilation of skin
 DM266,9983,9983,0.904,0,true,,Other phototherapy
@@ -840,15 +840,15 @@ DM316,9927,9927,0.833,0,true,,Iontophoresis
 DM317,7122,7122,0.940,1,false,8603,Incision of Bartholin's gland (cyst)
 DM318,8625,8625,0.974,1,false,9215,Dermabrasion
 DM319,9221,9221,0.929,0,true,,Superficial radiation
-DM320,8664,8664,1.000,1,false,863,Hair transplant
-DM321,8664,8664,1.000,1,false,863,Hair transplant
-DM322,8664,8664,1.000,1,false,863,Hair transplant
-DM323,8664,8664,1.000,1,false,863,Hair transplant
-DM324,8664,8664,1.000,1,false,863,Hair transplant
-DM325,8664,8664,1.000,1,false,863,Hair transplant
-DM326,8664,8664,1.000,1,false,881,Hair transplant
-DM327,8664,8664,1.000,1,false,863,Hair transplant
-DM328,8664,8664,1.000,1,false,863,Hair transplant
+DM320,8664,8664,1.000,1,false,0863,Hair transplant
+DM321,8664,8664,1.000,1,false,0863,Hair transplant
+DM322,8664,8664,1.000,1,false,0863,Hair transplant
+DM323,8664,8664,1.000,1,false,0863,Hair transplant
+DM324,8664,8664,1.000,1,false,0863,Hair transplant
+DM325,8664,8664,1.000,1,false,0863,Hair transplant
+DM326,8664,8664,1.000,1,false,0881,Hair transplant
+DM327,8664,8664,1.000,1,false,0863,Hair transplant
+DM328,8664,8664,1.000,1,false,0863,Hair transplant
 DM329,8582,8582,1.000,1,false,4191,Split-thickness graft to breast
 DM330,9983,9983,1.000,0,true,,Other phototherapy
 DM331,9982,9982,0.984,0,true,,Ultraviolet light therapy
@@ -899,14 +899,14 @@ DM375,8625,8625,0.849,1,false,8682,Dermabrasion
 DM376,8682,8682,1.000,0,true,,Facial rhytidectomy
 DM377,8682,8682,0.952,0,true,,Facial rhytidectomy
 DM378,8682,8682,0.991,0,true,,Facial rhytidectomy
-DM379,887,887,0.856,1,false,1364,Upper eyelid rhytidectomy
+DM379,0887,0887,0.856,1,false,1364,Upper eyelid rhytidectomy
 DM380,6021,6021,0.758,1,false,1251,Transurethral (ultrasound) guided laser induced prostatectomy (TULIP)
 DM381,8682,8682,0.794,0,true,,Facial rhytidectomy
-DM382,886,886,0.922,1,false,8682,Lower eyelid rhytidectomy
+DM382,0886,0886,0.922,1,false,8682,Lower eyelid rhytidectomy
 DM383,613,613,1.000,1,false,544,Excision or destruction of lesion or tissue of scrotum
 DM384,613,613,0.993,1,false,1829,Excision or destruction of lesion or tissue of scrotum
 DM385,3022,3022,0.868,0,true,,Vocal cordectomy
-DM386,1,1,1.000,1,false,2,Therapeutic ultrasound of vessels of head and neck
+DM386,0001,0001,1.000,1,false,0002,Therapeutic ultrasound of vessels of head and neck
 DM387,8626,8626,0.886,1,false,8602,Ligation of dermal appendage
 DM388,8602,8602,0.978,1,false,8626,Injection or tattooing of skin lesion or defect
 DM389,8626,8626,1.000,1,false,8602,Ligation of dermal appendage
@@ -932,7 +932,7 @@ DM408,9984,9984,1.000,0,true,,Isolation
 DM409,8831,8831,0.902,0,true,,Skeletal series
 DM410,9912,9912,0.914,0,true,,Immunization for allergy
 DM411,9912,9912,0.884,0,true,,Immunization for allergy
-DM412,886,886,0.926,1,false,9821,Lower eyelid rhytidectomy
+DM412,0886,0886,0.926,1,false,9821,Lower eyelid rhytidectomy
 DM413,9221,9221,0.894,0,true,,Superficial radiation
 DM414,3148,3148,0.948,1,false,9166,Other diagnostic procedures on larynx
 DM415,8885,8885,0.981,0,true,,Breast thermography
@@ -958,7 +958,7 @@ EC090,3975,3975,0.977,1,false,3976,Endovascular embolization or occlusion of ves
 EC095,9984,9984,1.000,0,true,,Isolation
 EC114,387,387,1.000,1,false,8866,Interruption of the vena cava
 ECA4403,3790,3790,0.860,1,false,3736,Insertion of left atrial appendage device
-ECA4813,45,45,1.000,1,false,3990,Insertion of one vascular stent
+ECA4813,0045,0045,1.000,1,false,3990,Insertion of one vascular stent
 ECA4818,3972,3972,0.992,1,false,4444,Endovascular (total) embolization or occlusion of head and neck vessels
 ECA4833,387,387,1.000,1,false,3790,Interruption of the vena cava
 ECB4403,9984,9984,1.000,0,true,,Isolation
@@ -986,7 +986,7 @@ EN113,9546,9546,1.000,1,false,9541,Other auditory and vestibular function tests
 EN114,2039,2039,1.000,1,false,1811,Other diagnostic procedures on middle and inner ear
 EN115,2096,2096,0.987,1,false,2098,"Implantation or replacement of cochlear prosthetic device, not otherwise specified"
 EN116,9548,9548,1.000,0,true,,Fitting of hearing aid
-EN117,471,471,0.844,1,false,472,Hypoglossal-facial anastomosis
+EN117,0471,0471,0.844,1,false,0472,Hypoglossal-facial anastomosis
 EN118,9304,9304,1.000,1,false,9964,Manual testing of muscle function
 EN119,9373,9373,0.861,1,false,9814,Esophageal speech training
 EN120,9375,9375,0.981,1,false,9372,Other speech training and therapy
@@ -995,7 +995,7 @@ EN122,8704,8704,1.000,0,true,,Other tomography of head
 EN123,9546,9546,0.956,1,false,9541,Other auditory and vestibular function tests
 EN124,9544,9544,0.906,1,false,9523,Clinical vestibular function tests
 EN125,9322,9322,0.893,0,true,,Ambulation and gait training
-EN126,8871,8871,0.933,1,false,613,Diagnostic ultrasound of head and neck
+EN126,8871,8871,0.933,1,false,0613,Diagnostic ultrasound of head and neck
 EN127,8871,8871,1.000,1,false,8872,Diagnostic ultrasound of head and neck
 EN128,94,94,1.000,1,false,9308,Intra-operative neurophysiologic monitoring
 EN129,9308,9308,1.000,1,false,9525,Electromyography
@@ -1018,7 +1018,7 @@ EN215,9607,9607,0.983,1,false,9608,Insertion of other (naso-)gastric tube
 EN216,3195,3195,1.000,1,false,3175,Tracheoesophageal fistulization
 EN217,9723,9723,0.989,1,false,9655,Replacement of tracheostomy tube
 EN218,9984,9984,1.000,0,true,,Isolation
-EN219,31,31,1.000,1,false,33,Computer assisted surgery with CT/CTA
+EN219,31,31,1.000,1,false,0033,Computer assisted surgery with CT/CTA
 EN220,310,310,0.899,0,true,,Injection of larynx
 EN221,8551,8551,0.969,1,false,8455,Unilateral injection into breast for augmentation
 EN222,9923,9923,0.826,0,true,,Injection of steroid
@@ -1060,14 +1060,14 @@ EQ218,1475,1475,1.000,1,false,1472,Injection of vitreous substitute
 EQ649,1371,1371,1.000,1,false,1369,"Insertion of intraocular lens prosthesis at time of cataract extraction, one-stage"
 EQ650,9984,9984,1.000,0,true,,Isolation
 EQ660,3429,3429,0.951,1,false,6011,Other diagnostic procedures on mediastinum
-EQ665,613,613,0.968,1,false,8591,Biopsy of parathyroid gland
+EQ665,0613,0613,0.968,1,false,8591,Biopsy of parathyroid gland
 EQ675,8152,8152,1.000,0,true,,Partial hip replacement
 EQ676,8181,8181,1.000,1,false,8188,Partial shoulder replacement
-EQ677,71,71,1.000,1,false,70,"Revision of hip replacement, acetabular component"
-EQ678,82,82,0.965,2,false,70,"Revision of knee replacement, femoral component"
+EQ677,0071,0071,1.000,1,false,0070,"Revision of hip replacement, acetabular component"
+EQ678,0082,0082,0.965,2,false,0070,"Revision of knee replacement, femoral component"
 EQ679,9984,9984,0.995,0,true,,Isolation
-EQ680,75,75,1.000,2,false,85,"Hip bearing surface, metal-on-metal"
-EQ681,85,85,0.953,1,false,75,"Resurfacing hip, total, acetabulum and femoral head"
+EQ680,75,75,1.000,2,false,0085,"Hip bearing surface, metal-on-metal"
+EQ681,0085,0085,0.953,1,false,75,"Resurfacing hip, total, acetabulum and femoral head"
 EQ742,9984,9984,1.000,0,true,,Isolation
 EQ743,9984,9984,1.000,0,true,,Isolation
 EQ744,9984,9984,1.000,0,true,,Isolation
@@ -1078,7 +1078,7 @@ ER003,8604,8604,0.854,1,false,8623,Other incision with drainage of skin and subc
 ER004,9921,9921,0.950,0,true,,Injection of antibiotic
 ER005,3899,3899,1.000,0,true,,Other puncture of vein
 ER006,9918,9918,0.945,1,false,9908,Injection or infusion of electrolytes
-ER010,294,294,1.000,1,false,295,Insertion or replacement of skull tongs or halo traction device
+ER010,0294,0294,1.000,1,false,0295,Insertion or replacement of skull tongs or halo traction device
 ER011,9984,9984,1.000,0,true,,Isolation
 ER012,5425,5425,1.000,1,false,8813,Peritoneal lavage
 ER013,3894,3894,1.000,1,false,3897,Venous cutdown
@@ -1087,13 +1087,13 @@ ER015,9812,9812,0.961,1,false,9813,Removal of intraluminal foreign body from nos
 ER016,9651,9651,0.999,1,false,9821,Irrigation of eye
 ER017,9604,9604,1.000,1,false,9605,Insertion of endotracheal tube
 ER019,9960,9960,1.000,1,false,9393,"Cardiopulmonary resuscitation, not otherwise specified"
-ER020,221,221,1.000,1,false,110,Insertion or replacement of external ventricular drain [EVD]
+ER020,0221,0221,1.000,1,false,110,Insertion or replacement of external ventricular drain [EVD]
 ER021,8950,8950,0.973,1,false,8951,Ambulatory cardiac monitoring
 ER022,8872,8872,1.000,1,false,8871,Diagnostic ultrasound of heart
 ER023,9607,9607,1.000,1,false,9608,Insertion of other (naso-)gastric tube
 ER024,9633,9633,1.000,1,false,9607,Gastric lavage
 ER025,6909,6909,1.000,1,false,6902,Other dilation and curettage
-ER026,331,331,1.000,1,false,109,Spinal tap
+ER026,0331,0331,1.000,1,false,0109,Spinal tap
 ER027,9782,9782,0.944,1,false,5491,Removal of peritoneal drainage device
 ER028,3491,3491,1.000,1,false,3404,Thoracentesis
 ER030,9394,9394,1.000,1,false,8937,Respiratory medication administered by nebulizer
@@ -1158,18 +1158,18 @@ EY010,1251,1251,0.987,1,false,1253,Goniopuncture without goniotomy
 EY011,1454,1454,1.000,1,false,1434,Repair of retinal detachment with laser photocoagulation
 EY012,8911,8911,0.879,0,true,,Tonometry
 EY013,8889,8889,0.986,1,false,9502,Thermography of other sites
-EY018,809,809,0.960,1,false,821,Other incision of eyelid
-EY019,821,821,1.000,0,true,,Excision of chalazion
-EY020,892,892,1.000,1,false,891,Cryosurgical epilation of eyelid
+EY018,0809,0809,0.960,1,false,0821,Other incision of eyelid
+EY019,0821,0821,1.000,0,true,,Excision of chalazion
+EY020,0892,0892,1.000,1,false,0891,Cryosurgical epilation of eyelid
 EY021,9821,9821,1.000,1,false,110,Removal of superficial foreign body from eye without incision
 EY024,100,100,0.953,1,false,9821,Removal of embedded foreign body from conjunctiva by incision
 EY025,1091,1091,0.977,0,true,,Subconjunctival injection
-EY026,887,887,1.000,1,false,886,Upper eyelid rhytidectomy
-EY027,820,820,0.974,1,false,823,"Removal of lesion of eyelid, not otherwise specified"
-EY028,887,887,1.000,1,false,886,Upper eyelid rhytidectomy
-EY029,891,891,1.000,1,false,893,Electrosurgical epilation of eyelid
-EY030,944,944,0.997,1,false,919,Intubation of nasolacrimal duct
-EY031,852,852,1.000,1,false,802,Blepharorrhaphy
+EY026,0887,0887,1.000,1,false,0886,Upper eyelid rhytidectomy
+EY027,820,820,0.974,1,false,0823,"Removal of lesion of eyelid, not otherwise specified"
+EY028,0887,0887,1.000,1,false,0886,Upper eyelid rhytidectomy
+EY029,0891,0891,1.000,1,false,0893,Electrosurgical epilation of eyelid
+EY030,0944,0944,0.997,1,false,0919,Intubation of nasolacrimal duct
+EY031,0852,0852,1.000,1,false,0802,Blepharorrhaphy
 EY032,1153,1153,1.000,1,false,1049,Repair of corneal laceration or wound with conjunctival flap
 EY033,9738,9738,1.000,1,false,9783,Removal of sutures from head and neck
 EY034,9505,9505,1.000,0,true,,Visual field study
@@ -1184,7 +1184,7 @@ EY044,9506,9506,1.000,0,true,,Color vision study
 EY047,9515,9515,0.974,0,true,,Ocular motility study
 EY048,9512,9512,0.935,1,false,9516,Fluorescein angiography or angioscopy of eye
 EY049,8911,8911,1.000,1,false,9526,Tonometry
-EY050,991,991,1.000,1,false,951,Obliteration of lacrimal punctum
+EY050,0991,0991,1.000,1,false,0951,Obliteration of lacrimal punctum
 EY053,1341,1341,1.000,1,false,1369,Phacoemulsification and aspiration of cataract
 EY054,1341,1341,1.000,1,false,1343,Phacoemulsification and aspiration of cataract
 EY055,1359,1359,1.000,1,false,1351,Other extracapsular extraction of lens
@@ -1192,22 +1192,22 @@ EY057,1264,1264,0.991,0,true,,Trabeculectomy ab externo
 EY058,1449,1449,1.000,0,true,,Other scleral buckling
 EY059,1474,1474,1.000,1,false,1411,Other mechanical vitrectomy
 EY060,1359,1359,1.000,1,false,1351,Other extracapsular extraction of lens
-EY063,822,822,1.000,1,false,824,Excision of other minor lesion of eyelid
-EY064,849,849,1.000,1,false,844,Other repair of entropion or ectropion
-EY066,834,834,1.000,1,false,833,Repair of blepharoptosis by other levator muscle techniques
+EY063,0822,0822,1.000,1,false,0824,Excision of other minor lesion of eyelid
+EY064,0849,0849,1.000,1,false,0844,Other repair of entropion or ectropion
+EY066,0834,0834,1.000,1,false,0833,Repair of blepharoptosis by other levator muscle techniques
 EY068,8382,8382,1.000,0,true,,Graft of muscle or fascia
 EY077,1639,1639,1.000,1,false,1631,Other evisceration of eyeball
 EY078,1642,1642,0.983,1,false,1649,Enucleation of eyeball with other synchronous implant
 EY079,1661,1661,0.958,1,false,1372,Secondary insertion of ocular implant
 EY083,9984,9984,1.000,0,true,,Isolation
-EY085,442,442,0.901,1,false,851,Other cranial nerve decompression
+EY085,0442,0442,0.901,1,false,0851,Other cranial nerve decompression
 EY089,1221,1221,1.000,1,false,1291,Diagnostic aspiration of anterior chamber of eye
-EY090,822,822,1.000,1,false,885,Excision of other minor lesion of eyelid
+EY090,0822,0822,1.000,1,false,0885,Excision of other minor lesion of eyelid
 EY091,9412,9412,0.955,1,false,897,"Routine psychiatric visit, not otherwise specified"
 EY092,8911,8911,1.000,0,true,,Tonometry
 EY093,9532,9532,0.921,1,false,1172,"Prescription, fitting, and dispensing of contact lens"
 EY094,1229,1229,0.890,1,false,1283,"Other diagnostic procedures on iris, ciliary body, sclera, and anterior chamber"
-EY095,93,93,0.851,1,false,991,Other operations on lacrimal gland
+EY095,093,093,0.851,1,false,0991,Other operations on lacrimal gland
 EY096,1176,1176,0.906,0,true,,Epikeratophakia
 EY097,9984,9984,1.000,0,true,,Isolation
 EY098,9534,9534,1.000,0,true,,Ocular prosthetics
@@ -1222,10 +1222,10 @@ EY143,1171,1171,1.000,1,false,9532,Keratomileusis
 EY143A,1171,1171,1.000,1,false,1175,Keratomileusis
 EY144,9532,9532,0.870,1,false,1171,"Prescription, fitting, and dispensing of contact lens"
 EY145,8882,8882,0.955,0,true,,Ocular thermography
-EY146,991,991,1.000,1,false,8882,Obliteration of lacrimal punctum
+EY146,0991,0991,1.000,1,false,8882,Obliteration of lacrimal punctum
 EY147,3824,3824,1.000,1,false,3825,Intravascular imaging of coronary vessel(s) by optical coherence tomography [OCT]
 EY148,9516,9516,1.000,1,false,9512,P32 and other tracer studies of eye
-EY149,892,892,0.855,1,false,893,Cryosurgical epilation of eyelid
+EY149,0892,0892,0.855,1,false,0893,Cryosurgical epilation of eyelid
 EY150,1621,1621,1.000,1,false,9501,Ophthalmoscopy
 EY151,1475,1475,0.987,0,true,,Injection of vitreous substitute
 EY152,9534,9534,1.000,0,true,,Ocular prosthetics
@@ -1238,11 +1238,11 @@ EY209,1171,1171,1.000,1,false,1175,Keratomileusis
 EY210,1171,1171,1.000,1,false,1179,Keratomileusis
 EY211,1171,1171,1.000,1,false,1179,Keratomileusis
 EY212,8911,8911,1.000,0,true,,Tonometry
-EY301,941,941,1.000,1,false,943,Probing of lacrimal punctum
+EY301,0941,0941,1.000,1,false,0943,Probing of lacrimal punctum
 EY314,1475,1475,1.000,1,false,1472,Injection of vitreous substitute
 EY315,310,310,0.982,0,true,,Injection of larynx
 EY316,9511,9511,1.000,0,true,,Fundus photography
-EY318,821,821,0.997,0,true,,Excision of chalazion
+EY318,0821,0821,0.997,0,true,,Excision of chalazion
 EY401,1132,1132,1.000,1,false,1139,Excision of pterygium with corneal graft
 EY402,1139,1139,0.968,1,false,1132,Other excision of pterygium
 EY404,1426,1426,1.000,1,false,1427,Destruction of chorioretinal lesion by radiation therapy
@@ -1261,8 +1261,8 @@ EY424,1452,1452,1.000,1,false,1459,Repair of retinal detachment with cryotherapy
 EY425,1432,1432,1.000,1,false,1452,Repair of retinal tear by cryotherapy
 EY426,1342,1342,1.000,1,false,1369,Mechanical phacofragmentation and aspiration of cataract by posterior route
 EY427,1441,1441,0.985,1,false,1459,Scleral buckling with implant
-EY428,981,981,1.000,1,false,944,Dacryocystorhinostomy [DCR]
-EY429,982,982,1.000,1,false,981,Conjunctivocystorhinostomy
+EY428,0981,0981,1.000,1,false,0944,Dacryocystorhinostomy [DCR]
+EY429,0982,0982,1.000,1,false,0981,Conjunctivocystorhinostomy
 EY430,1162,1162,0.977,1,false,1161,Other lamellar keratoplasty
 EY431,1511,1511,0.993,1,false,1521,Recession of one extraocular muscle
 EY432,1521,1521,0.905,1,false,1529,Lengthening procedure on one extraocular muscle
@@ -1403,7 +1403,7 @@ IB072,9614,9614,1.000,1,false,9619,Vaginal packing
 IE001,2241,2241,0.826,0,true,,Frontal sinusotomy
 IE002,2261,2261,1.000,1,false,2231,Excision of lesion of maxillary sinus with Caldwell-Luc approach
 IE003,2231,2231,0.981,1,false,2261,Radical maxillary antrotomy
-IE004,472,472,1.000,1,false,471,Accessory-facial anastomosis
+IE004,0472,0472,1.000,1,false,0471,Accessory-facial anastomosis
 IE005,286,286,1.000,1,false,283,Adenoidectomy without tonsillectomy
 IE006,2042,2042,1.000,0,true,,Radical mastoidectomy
 IE007,2264,2264,1.000,1,false,2252,Sphenoidectomy
@@ -1451,23 +1451,23 @@ IE048,1802,1802,0.931,1,false,1839,Incision of external auditory canal
 IE049,2431,2431,1.000,1,false,2411,Excision of lesion or tissue of gum
 IE050,2731,2731,0.901,1,false,2732,Local excision or destruction of lesion or tissue of bony palate
 IE051,4835,4835,0.948,1,false,2722,Local excision of rectal lesion or tissue
-IE052,66,66,1.000,1,false,285,Excision of lingual thyroid
-IE053,285,285,1.000,1,false,66,Excision of lingual tonsil
+IE052,066,066,1.000,1,false,285,Excision of lingual thyroid
+IE053,285,285,1.000,1,false,066,Excision of lingual tonsil
 IE054,2743,2743,0.943,1,false,4531,Other excision of lesion or tissue of lip
 IE055,632,632,0.873,1,false,292,Excision of cyst of epididymis
 IE056,244,244,0.965,1,false,762,Excision of dental lesion of jaw
 IE057,1821,1821,1.000,1,false,292,Excision of preauricular sinus
 IE058,2632,2632,0.993,0,true,,Complete sialoadenectomy
 IE059,2632,2632,1.000,0,true,,Complete sialoadenectomy
-IE060,67,67,1.000,1,false,292,Excision of thyroglossal duct or tract
+IE060,067,067,1.000,1,false,292,Excision of thyroglossal duct or tract
 IE061,284,284,1.000,0,true,,Excision of tonsil tag
 IE062,3179,3179,0.990,1,false,3175,Other repair and plastic operations on trachea
 IE063,2107,2107,0.897,1,false,2219,Control of epistaxis by excision of nasal mucosa and skin grafting of septum and lateral nasal wall
 IE064,9732,9732,0.935,0,true,,Removal of nasal packing
 IE065,3022,3022,1.000,1,false,3009,Vocal cordectomy
 IE066,2059,2059,1.000,1,false,2032,Other excision of middle ear
-IE067,442,442,0.927,1,false,471,Other cranial nerve decompression
-IE068,472,472,0.944,1,false,43,Accessory-facial anastomosis
+IE067,0442,0442,0.927,1,false,0471,Other cranial nerve decompression
+IE068,0472,0472,0.944,1,false,043,Accessory-facial anastomosis
 IE069,9811,9811,0.952,1,false,9812,Removal of intraluminal foreign body from ear without incision
 IE070,9811,9811,0.977,1,false,9813,Removal of intraluminal foreign body from ear without incision
 IE071,9814,9814,0.863,1,false,9813,Removal of intraluminal foreign body from larynx without incision
@@ -1475,7 +1475,7 @@ IE072,9815,9815,1.000,1,false,9814,Removal of intraluminal foreign body from tra
 IE073,2242,2242,0.964,0,true,,Frontal sinusectomy
 IE074,2242,2242,0.874,0,true,,Frontal sinusectomy
 IE075,301,301,0.948,0,true,,Hemilaryngectomy
-IE076,471,471,0.936,1,false,472,Hypoglossal-facial anastomosis
+IE076,0471,0471,0.936,1,false,0472,Hypoglossal-facial anastomosis
 IE077,2096,2096,0.994,1,false,2097,"Implantation or replacement of cochlear prosthetic device, not otherwise specified"
 IE078,271,271,1.000,0,true,,Incision of palate
 IE079,310,310,1.000,0,true,,Injection of larynx
@@ -1501,8 +1501,8 @@ IE098,2753,2753,1.000,1,false,2763,Closure of fistula of mouth
 IE099,186,186,1.000,1,false,1802,Reconstruction of external auditory canal
 IE100,252,252,1.000,0,true,,Partial glossectomy
 IE101,5022,5022,1.000,0,true,,Partial hepatectomy
-IE102,681,681,1.000,1,false,689,Complete parathyroidectomy
-IE103,611,611,1.000,1,false,613,Closed [percutaneous] [needle] biopsy of thyroid gland
+IE102,0681,0681,1.000,1,false,0689,Complete parathyroidectomy
+IE103,611,611,1.000,1,false,0613,Closed [percutaneous] [needle] biopsy of thyroid gland
 IE104,3129,3129,1.000,1,false,311,Other permanent tracheostomy
 IE105,254,254,1.000,0,true,,Radical glossectomy
 IE106,2042,2042,1.000,0,true,,Radical mastoidectomy
@@ -1512,7 +1512,7 @@ IE109,199,199,0.962,1,false,1954,Other repair of middle ear
 IE110,5141,5141,0.933,1,false,260,Common duct exploration for removal of calculus
 IE111,2096,2096,0.904,1,false,2097,"Implantation or replacement of cochlear prosthetic device, not otherwise specified"
 IE112,9218,9218,0.958,0,true,,Total body scan
-IE113,602,602,1.000,1,false,609,Reopening of wound of thyroid field
+IE113,0602,0602,1.000,1,false,0609,Reopening of wound of thyroid field
 IE114,2491,2491,0.869,1,false,2755,Extension or deepening of buccolabial or lingual sulcus
 IE115,2754,2754,1.000,0,true,,Repair of cleft lip
 IE116,3164,3164,1.000,1,false,3169,Repair of laryngeal fracture
@@ -1525,7 +1525,7 @@ IE122,215,215,0.987,1,false,2188,Submucous resection of nasal septum
 IE123,2184,2184,1.000,0,true,,Revision rhinoplasty
 IE124,2041,2041,1.000,0,true,,Simple mastoidectomy
 IE125,2041,2041,0.975,0,true,,Simple mastoidectomy
-IE126,2264,2264,1.000,1,false,121,Sphenoidectomy
+IE126,2264,2264,1.000,1,false,0121,Sphenoidectomy
 IE127,1919,1919,1.000,1,false,1911,Other stapedectomy
 IE128,8682,8682,0.811,0,true,,Facial rhytidectomy
 IE129,185,185,1.000,1,false,1871,Surgical correction of prominent ear
@@ -1534,17 +1534,17 @@ IE131,2641,2641,1.000,1,false,2632,Suture of laceration of salivary gland
 IE132,2551,2551,1.000,1,false,7171,Suture of laceration of tongue
 IE133,3171,3171,1.000,1,false,3161,Suture of laceration of trachea
 IE134,311,311,1.000,0,true,,Temporary tracheostomy
-IE135,62,62,1.000,1,false,639,Unilateral thyroid lobectomy
+IE135,062,062,1.000,1,false,0639,Unilateral thyroid lobectomy
 IE136,283,283,1.000,1,false,282,Tonsillectomy with adenoidectomy
 IE138,253,253,1.000,0,true,,Complete glossectomy
 IE139,4042,4042,0.952,1,false,4040,"Radical neck dissection, bilateral"
 IE140,304,304,1.000,0,true,,Radical laryngectomy
 IE141,1652,1652,0.920,1,false,7666,Exenteration of orbit with therapeutic removal of orbital bone
-IE142,681,681,1.000,1,false,689,Complete parathyroidectomy
+IE142,0681,0681,1.000,1,false,0689,Complete parathyroidectomy
 IE143,2629,2629,0.924,1,false,2632,Other excision of salivary gland lesion
-IE144,2183,2183,1.000,1,false,864,Total nasal reconstruction
-IE145,652,652,1.000,1,false,651,Complete substernal thyroidectomy
-IE146,64,64,1.000,1,false,652,Complete thyroidectomy
+IE144,2183,2183,1.000,1,false,0864,Total nasal reconstruction
+IE145,0652,0652,1.000,1,false,0651,Complete substernal thyroidectomy
+IE146,064,064,1.000,1,false,0652,Complete thyroidectomy
 IE147,2161,2161,1.000,1,false,2169,Turbinectomy by diathermy or cryosurgery
 IE148,1953,1953,1.000,0,true,,Type III tympanoplasty
 IE149,2772,2772,0.975,0,true,,Excision of uvula
@@ -1555,45 +1555,45 @@ IO002,1512,1512,1.000,1,false,1511,Advancement of one extraocular muscle
 IO003,1213,1213,0.976,1,false,1293,Excision of prolapsed iris
 IO006,4104,4104,0.914,1,false,4109,Autologous hematopoietic stem cell transplant without purging
 IO007,1021,1021,1.000,1,false,3325,Biopsy of conjunctiva
-IO008,1122,1122,1.000,1,false,511,Biopsy of cornea
+IO008,1122,1122,1.000,1,false,0511,Biopsy of cornea
 IO009,1501,1501,0.941,1,false,157,Biopsy of extraocular muscle or tendon
-IO010,811,811,0.970,0,true,,Biopsy of eyelid
-IO011,911,911,0.943,1,false,90,Biopsy of lacrimal gland
-IO012,912,912,1.000,1,false,96,Biopsy of lacrimal sac
-IO013,852,852,1.000,1,false,838,Blepharorrhaphy
+IO010,0811,0811,0.970,0,true,,Biopsy of eyelid
+IO011,0911,0911,0.943,1,false,090,Biopsy of lacrimal gland
+IO012,0912,0912,1.000,1,false,096,Biopsy of lacrimal sac
+IO013,0852,0852,1.000,1,false,0838,Blepharorrhaphy
 IO014,310,310,0.906,0,true,,Injection of larynx
-IO015,851,851,1.000,1,false,921,Canthotomy
+IO015,0851,0851,1.000,1,false,0921,Canthotomy
 IO016,1371,1371,0.996,1,false,1369,"Insertion of intraocular lens prosthesis at time of cataract extraction, one-stage"
 IO017,1341,1341,1.000,1,false,1267,Phacoemulsification and aspiration of cataract
 IO018,1371,1371,0.975,1,false,1341,"Insertion of intraocular lens prosthesis at time of cataract extraction, one-stage"
 IO019,1371,1371,0.971,1,false,1341,"Insertion of intraocular lens prosthesis at time of cataract extraction, one-stage"
 IO020,1169,1169,1.000,2,false,1161,Other corneal transplant
-IO021,982,982,1.000,1,false,983,Conjunctivocystorhinostomy
-IO022,983,983,1.000,1,false,982,Conjunctivorhinostomy with insertion of tube or stent
+IO021,0982,0982,1.000,1,false,0983,Conjunctivocystorhinostomy
+IO022,0983,0983,1.000,1,false,0982,Conjunctivorhinostomy with insertion of tube or stent
 IO023,1164,1164,0.972,1,false,1160,Other penetrating keratoplasty
-IO024,971,971,1.000,1,false,972,Correction of everted punctum
-IO025,838,838,1.000,1,false,859,Correction of lid retraction
-IO026,838,838,1.000,1,false,843,Correction of lid retraction
-IO027,892,892,1.000,1,false,891,Cryosurgical epilation of eyelid
+IO024,0971,0971,1.000,1,false,0972,Correction of everted punctum
+IO025,0838,0838,1.000,1,false,0859,Correction of lid retraction
+IO026,0838,0838,1.000,1,false,0843,Correction of lid retraction
+IO027,0892,0892,1.000,1,false,0891,Cryosurgical epilation of eyelid
 IO028,1143,1143,1.000,1,false,1142,Cryotherapy of corneal lesion
 IO029,1272,1272,1.000,1,false,1271,Cyclocryotherapy
 IO030,1273,1273,1.000,0,true,,Cyclophotocoagulation
-IO031,981,981,1.000,1,false,96,Dacryocystorhinostomy [DCR]
+IO031,0981,0981,1.000,1,false,096,Dacryocystorhinostomy [DCR]
 IO032,1422,1422,1.000,1,false,1421,Destruction of chorioretinal lesion by cryotherapy
-IO033,1032,1032,1.000,1,false,825,Destruction of lesion of conjunctiva
-IO034,825,825,1.000,1,false,642,Destruction of lesion of eyelid
+IO033,1032,1032,1.000,1,false,0825,Destruction of lesion of conjunctiva
+IO034,0825,0825,1.000,1,false,642,Destruction of lesion of eyelid
 IO035,1221,1221,1.000,1,false,1411,Diagnostic aspiration of anterior chamber of eye
 IO036,1411,1411,1.000,1,false,1221,Diagnostic aspiration of vitreous
 IO037,1364,1364,0.929,1,false,1365,Discission of secondary membrane [after cataract]
-IO038,891,891,0.952,1,false,892,Electrosurgical epilation of eyelid
+IO038,0891,0891,0.952,1,false,0892,Electrosurgical epilation of eyelid
 IO039,1273,1273,1.000,0,true,,Cyclophotocoagulation
-IO040,96,96,1.000,1,false,949,Excision of lacrimal sac and passage
+IO040,096,096,1.000,1,false,0949,Excision of lacrimal sac and passage
 IO041,1244,1244,1.000,1,false,1243,Excision of lesion of ciliary body
 IO042,1242,1242,1.000,1,false,1222,Excision of lesion of iris
-IO043,921,921,0.894,1,false,923,Excision of lesion of lacrimal gland
+IO043,0921,0921,0.894,1,false,0923,Excision of lesion of lacrimal gland
 IO044,1031,1031,1.000,1,false,1693,Excision of lesion or tissue of conjunctiva
-IO045,824,824,1.000,1,false,823,"Excision of major lesion of eyelid, full-thickness"
-IO046,824,824,0.958,1,false,823,"Excision of major lesion of eyelid, full-thickness"
+IO045,0824,0824,1.000,1,false,0823,"Excision of major lesion of eyelid, full-thickness"
+IO046,0824,0824,0.958,1,false,0823,"Excision of major lesion of eyelid, full-thickness"
 IO047,1132,1132,1.000,1,false,1139,Excision of pterygium with corneal graft
 IO048,1132,1132,1.000,1,false,1139,Excision of pterygium with corneal graft
 IO049,1139,1139,0.995,1,false,1132,Other excision of pterygium
@@ -1604,103 +1604,103 @@ IO053,132,132,1.000,1,false,1359,Extracapsular extraction of lens by linear extr
 IO054,133,133,1.000,1,false,132,Extracapsular extraction of lens by simple aspiration (and irrigation) technique
 IO055,1253,1253,1.000,1,false,1252,Goniotomy with goniopuncture
 IO056,110,110,1.000,1,false,9821,Magnetic removal of embedded foreign body from cornea
-IO057,952,952,1.000,1,false,959,Incision of lacrimal canaliculi
-IO058,90,90,1.000,1,false,921,Incision of lacrimal gland
-IO059,951,951,1.000,1,false,972,Incision of lacrimal punctum
-IO060,953,953,1.000,1,false,912,Incision of lacrimal sac
+IO057,0952,0952,1.000,1,false,0959,Incision of lacrimal canaliculi
+IO058,090,090,1.000,1,false,0921,Incision of lacrimal gland
+IO059,0951,0951,1.000,1,false,0972,Incision of lacrimal punctum
+IO060,0953,0953,1.000,1,false,0912,Incision of lacrimal sac
 IO061,1292,1292,0.947,1,false,1221,Injection into anterior chamber
 IO062,1475,1475,1.000,1,false,1472,Injection of vitreous substitute
 IO063,1371,1371,1.000,1,false,1372,"Insertion of intraocular lens prosthesis at time of cataract extraction, one-stage"
 IO064,1371,1371,1.000,1,false,138,"Insertion of intraocular lens prosthesis at time of cataract extraction, one-stage"
-IO065,944,944,1.000,1,false,943,Intubation of nasolacrimal duct
+IO065,0944,0944,1.000,1,false,0943,Intubation of nasolacrimal duct
 IO066,1521,1521,1.000,1,false,1522,Lengthening procedure on one extraocular muscle
-IO067,881,881,1.000,1,false,106,Linear repair of laceration of eyelid or eyebrow
-IO068,881,881,1.000,1,false,2432,Linear repair of laceration of eyelid or eyebrow
-IO069,886,886,0.958,1,false,887,Lower eyelid rhytidectomy
+IO067,0881,0881,1.000,1,false,106,Linear repair of laceration of eyelid or eyebrow
+IO068,0881,0881,1.000,1,false,2432,Linear repair of laceration of eyelid or eyebrow
+IO069,0886,0886,0.958,1,false,0887,Lower eyelid rhytidectomy
 IO071,1231,1231,1.000,0,true,,Lysis of goniosynechiae
 IO072,1232,1232,1.000,1,false,1231,Lysis of other anterior synechiae
 IO073,1233,1233,1.000,1,false,1232,Lysis of posterior synechiae
 IO074,1342,1342,1.000,1,false,1341,Mechanical phacofragmentation and aspiration of cataract by posterior route
 IO075,1141,1141,1.000,1,false,1149,Mechanical removal of corneal epithelium
 IO076,1473,1473,1.000,1,false,1471,Mechanical vitrectomy by anterior approach
-IO077,991,991,1.000,1,false,951,Obliteration of lacrimal punctum
+IO077,0991,0991,1.000,1,false,0951,Obliteration of lacrimal punctum
 IO078,153,153,1.000,1,false,154,"Operations on two or more extraocular muscles involving temporary detachment from globe, one or both eyes"
 IO079,1601,1601,1.000,0,true,,Orbitotomy with bone flap
 IO080,1602,1602,1.000,1,false,1609,Orbitotomy with insertion of orbital implant
-IO081,859,859,1.000,1,false,843,Other adjustment of lid position
-IO082,859,859,0.979,1,false,849,Other adjustment of lid position
+IO081,0859,0859,1.000,1,false,0843,Other adjustment of lid position
+IO082,0859,0859,0.979,1,false,0849,Other adjustment of lid position
 IO083,1049,1049,1.000,0,true,,Other conjunctivoplasty
 IO084,1033,1033,1.000,1,false,4349,Other destructive procedures on conjunctiva
 IO085,1029,1029,1.000,1,false,1021,Other diagnostic procedures on conjunctiva
 IO086,1139,1139,1.000,1,false,1132,Other excision of pterygium
-IO087,891,891,1.000,1,false,892,Electrosurgical epilation of eyelid
+IO087,0891,0891,1.000,1,false,0892,Electrosurgical epilation of eyelid
 IO088,1139,1139,1.000,1,false,1132,Other excision of pterygium
 IO089,1269,1269,0.961,1,false,1267,Other scleral fistulizing procedure
-IO090,809,809,0.976,1,false,801,Other incision of eyelid
+IO090,0809,0809,0.976,1,false,801,Other incision of eyelid
 IO091,1319,1319,0.992,1,false,1311,Other intracapsular extraction of lens
 IO092,1214,1214,1.000,1,false,1212,Other iridectomy
 IO093,1239,1239,0.868,1,false,1229,Other iridoplasty
 IO094,1169,1169,0.961,0,true,,Other corneal transplant
-IO095,949,949,0.962,1,false,944,Other manipulation of lacrimal passage
+IO095,0949,0949,0.962,1,false,0944,Other manipulation of lacrimal passage
 IO096,1099,1099,0.993,1,false,1044,Other operations on conjunctiva
 IO097,1661,1661,1.000,1,false,1372,Secondary insertion of ocular implant
-IO098,873,873,1.000,1,false,874,"Reconstruction of eyelid involving lid margin, full-thickness"
-IO099,871,871,0.964,1,false,882,"Reconstruction of eyelid involving lid margin, partial-thickness"
-IO100,870,870,0.996,1,false,869,"Reconstruction of eyelid, not otherwise specified"
+IO098,873,873,1.000,1,false,0874,"Reconstruction of eyelid involving lid margin, full-thickness"
+IO099,0871,0871,0.964,1,false,0882,"Reconstruction of eyelid involving lid margin, partial-thickness"
+IO100,0870,0870,0.996,1,false,0869,"Reconstruction of eyelid, not otherwise specified"
 IO101,1149,1149,0.959,1,false,1143,Other removal or destruction of corneal lesion
-IO102,849,849,0.949,1,false,844,Other repair of entropion or ectropion
-IO103,849,849,1.000,1,false,844,Other repair of entropion or ectropion
+IO102,0849,0849,0.949,1,false,0844,Other repair of entropion or ectropion
+IO103,0849,0849,1.000,1,false,0844,Other repair of entropion or ectropion
 IO104,1434,1434,1.000,1,false,1439,Repair of retinal tear by laser photocoagulation
 IO105,1474,1474,1.000,1,false,1472,Other mechanical vitrectomy
 IO108,1163,1163,1.000,1,false,1164,Penetrating keratoplasty with autograft
 IO109,1341,1341,1.000,1,false,1343,Phacoemulsification and aspiration of cataract
 IO110,1661,1661,1.000,1,false,1372,Secondary insertion of ocular implant
 IO111,1264,1264,0.934,0,true,,Trabeculectomy ab externo
-IO112,942,942,1.000,1,false,941,Probing of lacrimal canaliculi
-IO113,941,941,1.000,1,false,943,Probing of lacrimal punctum
-IO114,943,943,1.000,1,false,941,Probing of nasolacrimal duct
+IO112,0942,0942,1.000,1,false,0941,Probing of lacrimal canaliculi
+IO113,0941,0941,1.000,1,false,0943,Probing of lacrimal punctum
+IO114,0943,0943,1.000,1,false,0941,Probing of nasolacrimal duct
 IO115,1474,1474,1.000,1,false,1473,Other mechanical vitrectomy
 IO118,1511,1511,1.000,1,false,1529,Recession of one extraocular muscle
 IO119,1042,1042,1.000,1,false,1043,Reconstruction of conjunctival cul-de-sac with free graft
-IO120,861,861,0.953,1,false,869,Reconstruction of eyelid with skin flap or graft
-IO121,874,874,0.972,1,false,861,"Other reconstruction of eyelid, full-thickness"
-IO122,863,863,1.000,1,false,873,Reconstruction of eyelid with hair follicle graft
-IO123,862,862,1.000,1,false,861,Reconstruction of eyelid with mucous membrane flap or graft
-IO124,862,862,0.983,1,false,861,Reconstruction of eyelid with mucous membrane flap or graft
-IO125,864,864,1.000,1,false,862,Reconstruction of eyelid with tarsoconjunctival flap
-IO126,837,837,1.000,1,false,834,Reduction of overcorrection of ptosis
-IO127,837,837,1.000,1,false,834,Reduction of overcorrection of ptosis
+IO120,0861,0861,0.953,1,false,0869,Reconstruction of eyelid with skin flap or graft
+IO121,0874,0874,0.972,1,false,0861,"Other reconstruction of eyelid, full-thickness"
+IO122,0863,0863,1.000,1,false,873,Reconstruction of eyelid with hair follicle graft
+IO123,0862,0862,1.000,1,false,0861,Reconstruction of eyelid with mucous membrane flap or graft
+IO124,0862,0862,0.983,1,false,0861,Reconstruction of eyelid with mucous membrane flap or graft
+IO125,0864,0864,1.000,1,false,0862,Reconstruction of eyelid with tarsoconjunctival flap
+IO126,0837,0837,1.000,1,false,0834,Reduction of overcorrection of ptosis
+IO127,0837,0837,1.000,1,false,0834,Reduction of overcorrection of ptosis
 IO128,100,100,1.000,1,false,110,Removal of embedded foreign body from conjunctiva by incision
 IO129,1400,1400,1.000,1,false,1402,"Removal of foreign body from posterior segment of eye, not otherwise specified"
 IO130,138,138,1.000,1,false,1473,Removal of implanted lens
 IO131,1200,1200,1.000,1,false,1202,"Removal of intraocular foreign body from anterior segment of eye, not otherwise specified"
-IO132,820,820,1.000,1,false,823,"Removal of lesion of eyelid, not otherwise specified"
+IO132,820,820,1.000,1,false,0823,"Removal of lesion of eyelid, not otherwise specified"
 IO133,146,146,1.000,1,false,1401,Removal of surgically implanted material from posterior segment of eye
 IO134,1293,1293,0.993,1,false,1201,Removal or destruction of epithelial downgrowth from anterior chamber
-IO135,832,832,0.980,1,false,831,Repair of blepharoptosis by frontalis muscle technique with fascial sling
-IO136,832,832,1.000,1,false,831,Repair of blepharoptosis by frontalis muscle technique with fascial sling
-IO137,831,831,1.000,1,false,832,Repair of blepharoptosis by frontalis muscle technique with suture
-IO138,831,831,1.000,1,false,832,Repair of blepharoptosis by frontalis muscle technique with suture
-IO139,834,834,1.000,1,false,833,Repair of blepharoptosis by other levator muscle techniques
-IO140,834,834,1.000,1,false,833,Repair of blepharoptosis by other levator muscle techniques
-IO141,836,836,0.998,1,false,834,Repair of blepharoptosis by other techniques
-IO142,834,834,0.956,1,false,836,Repair of blepharoptosis by other levator muscle techniques
-IO143,833,833,1.000,1,false,834,Repair of blepharoptosis by resection or advancement of levator muscle or aponeurosis
-IO144,835,835,1.000,1,false,836,Repair of blepharoptosis by tarsal technique
-IO145,835,835,1.000,1,false,833,Repair of blepharoptosis by tarsal technique
-IO146,835,835,0.971,1,false,833,Repair of blepharoptosis by tarsal technique
-IO147,973,973,1.000,0,true,,Repair of canaliculus
+IO135,0832,0832,0.980,1,false,0831,Repair of blepharoptosis by frontalis muscle technique with fascial sling
+IO136,0832,0832,1.000,1,false,0831,Repair of blepharoptosis by frontalis muscle technique with fascial sling
+IO137,0831,0831,1.000,1,false,0832,Repair of blepharoptosis by frontalis muscle technique with suture
+IO138,0831,0831,1.000,1,false,0832,Repair of blepharoptosis by frontalis muscle technique with suture
+IO139,0834,0834,1.000,1,false,0833,Repair of blepharoptosis by other levator muscle techniques
+IO140,0834,0834,1.000,1,false,0833,Repair of blepharoptosis by other levator muscle techniques
+IO141,0836,0836,0.998,1,false,0834,Repair of blepharoptosis by other techniques
+IO142,0834,0834,0.956,1,false,0836,Repair of blepharoptosis by other levator muscle techniques
+IO143,0833,0833,1.000,1,false,0834,Repair of blepharoptosis by resection or advancement of levator muscle or aponeurosis
+IO144,0835,0835,1.000,1,false,0836,Repair of blepharoptosis by tarsal technique
+IO145,0835,0835,1.000,1,false,0833,Repair of blepharoptosis by tarsal technique
+IO146,0835,0835,0.971,1,false,0833,Repair of blepharoptosis by tarsal technique
+IO147,0973,0973,1.000,0,true,,Repair of canaliculus
 IO148,1153,1153,1.000,1,false,1151,Repair of corneal laceration or wound with conjunctival flap
-IO149,842,842,0.993,1,false,849,Repair of entropion or ectropion by suture technique
-IO150,841,841,1.000,1,false,844,Repair of entropion or ectropion by thermocauterization
-IO151,841,841,1.000,1,false,844,Repair of entropion or ectropion by thermocauterization
-IO152,841,841,1.000,1,false,844,Repair of entropion or ectropion by thermocauterization
-IO153,844,844,1.000,1,false,849,Repair of entropion or ectropion with lid reconstruction
-IO154,844,844,1.000,1,false,843,Repair of entropion or ectropion with lid reconstruction
-IO155,843,843,1.000,1,false,844,Repair of entropion or ectropion with wedge resection
+IO149,0842,0842,0.993,1,false,0849,Repair of entropion or ectropion by suture technique
+IO150,0841,0841,1.000,1,false,0844,Repair of entropion or ectropion by thermocauterization
+IO151,0841,0841,1.000,1,false,0844,Repair of entropion or ectropion by thermocauterization
+IO152,0841,0841,1.000,1,false,0844,Repair of entropion or ectropion by thermocauterization
+IO153,0844,0844,1.000,1,false,0849,Repair of entropion or ectropion with lid reconstruction
+IO154,0844,0844,1.000,1,false,0843,Repair of entropion or ectropion with lid reconstruction
+IO155,0843,0843,1.000,1,false,0844,Repair of entropion or ectropion with wedge resection
 IO156,157,157,1.000,1,false,1519,Repair of injury of extraocular muscle
-IO157,884,884,0.988,1,false,885,"Repair of laceration involving lid margin, full-thickness"
-IO158,882,882,0.944,1,false,884,"Repair of laceration involving lid margin, partial-thickness"
+IO157,0884,0884,0.988,1,false,0885,"Repair of laceration involving lid margin, full-thickness"
+IO158,0882,0882,0.944,1,false,0884,"Repair of laceration involving lid margin, partial-thickness"
 IO159,106,106,1.000,1,false,1281,Repair of laceration of conjunctiva
 IO160,1152,1152,1.000,1,false,1151,Repair of postoperative wound dehiscence of cornea
 IO161,1432,1432,1.000,1,false,1431,Repair of retinal tear by cryotherapy
@@ -1721,15 +1721,15 @@ IO175,1291,1291,1.000,1,false,1221,Therapeutic evacuation of anterior chamber
 IO176,1264,1264,0.995,0,true,,Trabeculectomy ab externo
 IO177,1254,1254,1.000,0,true,,Trabeculotomy ab externo
 IO178,155,155,1.000,1,false,159,Transposition of extraocular muscles
-IO180,887,887,1.000,1,false,886,Upper eyelid rhytidectomy
+IO180,0887,0887,1.000,1,false,0886,Upper eyelid rhytidectomy
 IS001,1871,1871,1.000,1,false,185,Construction of auricle of ear
 IS002,1871,1871,1.000,1,false,186,Construction of auricle of ear
 IS003,7061,7061,0.956,0,true,,Vaginal construction
 IS004,4852,4852,1.000,1,false,4851,Open abdominoperineal resection of the rectum
 IS005,5422,5422,0.962,1,false,8574,Biopsy of abdominal wall or umbilicus
 IS006,8417,8417,1.000,1,false,8415,Amputation above knee
-IS007,73,73,1.000,1,false,722,Bilateral adrenalectomy
-IS008,722,722,1.000,1,false,73,Unilateral adrenalectomy
+IS007,073,073,1.000,1,false,0722,Bilateral adrenalectomy
+IS008,0722,0722,1.000,1,false,073,Unilateral adrenalectomy
 IS009,8417,8417,1.000,1,false,8445,Amputation above knee
 IS010,643,643,1.000,1,false,6445,Amputation of penis
 IS011,643,643,1.000,1,false,6445,Amputation of penis
@@ -1774,7 +1774,7 @@ IS049,4610,4610,0.982,1,false,4620,"Colostomy, not otherwise specified"
 IS050,4613,4613,0.988,0,true,,Permanent colostomy
 IS051,5142,5142,1.000,1,false,5141,Common duct exploration for relief of other obstruction
 IS052,5141,5141,1.000,1,false,5151,Common duct exploration for removal of calculus
-IS053,64,64,1.000,1,false,652,Complete thyroidectomy
+IS053,064,064,1.000,1,false,0652,Complete thyroidectomy
 IS054,4442,4442,0.935,1,false,4441,Suture of duodenal ulcer site
 IS055,4441,4441,1.000,1,false,4449,Suture of gastric ulcer site
 IS056,4442,4442,0.996,1,false,4440,Suture of duodenal ulcer site
@@ -1841,7 +1841,7 @@ IS116,631,631,1.000,1,false,6394,Excision of varicocele and hydrocele of spermat
 IS117,4531,4531,0.920,1,false,8626,Other local excision of lesion of duodenum
 IS118,8521,8521,1.000,1,false,8523,Local excision of lesion of breast
 IS119,8521,8521,1.000,1,false,8512,Local excision of lesion of breast
-IS120,67,67,1.000,1,false,292,Excision of thyroglossal duct or tract
+IS120,067,067,1.000,1,false,292,Excision of thyroglossal duct or tract
 IS121,5847,5847,1.000,0,true,,Urethral meatoplasty
 IS122,632,632,1.000,1,false,6391,Excision of cyst of epididymis
 IS123,5341,5341,0.960,1,false,5751,Other and open repair of umbilical hernia with graft or prosthesis
@@ -1854,7 +1854,7 @@ IS129,4467,4467,0.871,1,false,4242,Laparoscopic procedures for creation of esoph
 IS130,5411,5411,1.000,0,true,,Exploratory laparotomy
 IS131,5501,5501,0.935,1,false,5581,Nephrotomy
 IS132,6352,6352,1.000,1,false,625,Reduction of torsion of testis or spermatic cord
-IS133,35,35,0.958,1,false,9984,Computer assisted surgery with multiple datasets
+IS133,0035,0035,0.958,1,false,9984,Computer assisted surgery with multiple datasets
 IS134,5411,5411,1.000,0,true,,Exploratory laparotomy
 IS135,8682,8682,1.000,0,true,,Facial rhytidectomy
 IS136,5462,5462,0.959,1,false,5461,Delayed closure of granulating abdominal wound
@@ -1870,11 +1870,11 @@ IS145,4311,4311,1.000,1,false,9702,Percutaneous [endoscopic] gastrostomy [PEG]
 IS146,4319,4319,0.996,1,false,4311,Other gastrostomy
 IS147,1239,1239,1.000,0,true,,Other iridoplasty
 IS148,4946,4946,1.000,0,true,,Excision of hemorrhoids
-IS149,8664,8664,1.000,1,false,863,Hair transplant
+IS149,8664,8664,1.000,1,false,0863,Hair transplant
 IS150,427,427,1.000,1,false,8302,Esophagomyotomy
 IS151,1735,1735,1.000,1,false,4575,Laparoscopic left hemicolectomy
 IS152,4573,4573,0.997,1,false,1733,Open and other right hemicolectomy
-IS153,639,639,0.966,1,false,62,Other partial thyroidectomy
+IS153,0639,0639,0.966,1,false,062,Other partial thyroidectomy
 IS154,5022,5022,0.852,0,true,,Partial hepatectomy
 IS155,5022,5022,0.933,0,true,,Partial hepatectomy
 IS156,5339,5339,0.936,1,false,5349,Other bilateral femoral herniorrhaphy
@@ -1898,14 +1898,14 @@ IS173,5141,5141,1.000,1,false,5151,Common duct exploration for removal of calcul
 IS174,8753,8753,1.000,1,false,5123,Intraoperative cholangiogram
 IS175,4467,4467,1.000,1,false,4466,Laparoscopic procedures for creation of esophagogastric sphincteric competence
 IS176,5912,5912,0.951,1,false,5451,Laparoscopic lysis of perivesical adhesions
-IS177,729,729,1.000,1,false,721,Other partial adrenalectomy
+IS177,0729,0729,1.000,1,false,0721,Other partial adrenalectomy
 IS178,5421,5421,1.000,1,false,1742,Laparoscopy
 IS179,5421,5421,0.999,1,false,5014,Laparoscopy
 IS180,5412,5412,1.000,1,false,5495,Reopening of recent laparotomy site
 IS181,4467,4467,1.000,1,false,4466,Laparoscopic procedures for creation of esophagogastric sphincteric competence
 IS182,9984,9984,1.000,0,true,,Isolation
 IS183,9984,9984,1.000,0,true,,Isolation
-IS184,833,833,0.984,1,false,834,Repair of blepharoptosis by resection or advancement of levator muscle or aponeurosis
+IS184,0833,0833,0.984,1,false,0834,Repair of blepharoptosis by resection or advancement of levator muscle or aponeurosis
 IS185,631,631,0.996,1,false,6372,Excision of varicocele and hydrocele of spermatic cord
 IS186,8690,8690,0.891,1,false,8555,Extraction of fat for graft or banking
 IS187,5059,5059,1.000,0,true,,Other transplant of liver
@@ -1919,10 +1919,10 @@ IS195,523,523,1.000,1,false,4141,Marsupialization of pancreatic cyst
 IS196,5021,5021,0.983,1,false,5531,Marsupialization of lesion of liver
 IS197,523,523,1.000,1,false,4141,Marsupialization of pancreatic cyst
 IS198,7669,7669,1.000,0,true,,Other facial bone repair
-IS199,8699,8699,0.935,1,false,35,Other operations on skin and subcutaneous tissue
+IS199,8699,8699,0.935,1,false,0035,Other operations on skin and subcutaneous tissue
 IS200,581,581,1.000,0,true,,Urethral meatotomy
 IS201,8584,8584,0.945,0,true,,Pedicle graft to breast
-IS202,206,206,1.000,1,false,7639,Other cranial osteoplasty
+IS202,0206,0206,1.000,1,false,7639,Other cranial osteoplasty
 IS203,8545,8545,1.000,1,false,8548,Unilateral radical mastectomy
 IS204,8545,8545,1.000,1,false,8547,Unilateral radical mastectomy
 IS205,4040,4040,1.000,1,false,4041,"Radical neck dissection, not otherwise specified"
@@ -1992,21 +1992,21 @@ IS268,415,415,1.000,0,true,,Total splenectomy
 IS269,415,415,1.000,0,true,,Total splenectomy
 IS270,415,415,0.975,0,true,,Total splenectomy
 IS271,8607,8607,1.000,1,false,3895,Insertion of totally implantable vascular access device [VAD]
-IS272,64,64,1.000,1,false,651,Complete thyroidectomy
+IS272,064,064,1.000,1,false,0651,Complete thyroidectomy
 IS273,603,603,1.000,1,false,604,Suprapubic prostatectomy
 IS274,5718,5718,0.962,1,false,5717,Other suprapubic cystostomy
-IS275,45,45,0.863,1,false,476,Cranial or peripheral nerve graft
+IS275,045,045,0.863,1,false,0476,Cranial or peripheral nerve graft
 IS276,8229,8229,1.000,1,false,8321,Excision of other lesion of soft tissue of hand
 IS277,4442,4442,1.000,1,false,4440,Suture of duodenal ulcer site
 IS278,6269,6269,1.000,0,true,,Other repair of testis
 IS279,4440,4440,1.000,1,false,4442,"Suture of peptic ulcer, not otherwise specified"
-IS280,8606,8606,0.989,1,false,371,Insertion of totally implantable infusion pump
+IS280,8606,8606,0.989,1,false,0371,Insertion of totally implantable infusion pump
 IS281,8376,8376,0.964,1,false,8375,Other tendon transposition
 IS282,6211,6211,0.998,1,false,6212,Closed [percutaneous] [needle] biopsy of testis
 IS283,6211,6211,1.000,1,false,6212,Closed [percutaneous] [needle] biopsy of testis
 IS284,9984,9984,0.951,0,true,,Isolation
 IS285,3402,3402,0.957,0,true,,Exploratory thoracotomy
-IS286,62,62,1.000,1,false,631,Unilateral thyroid lobectomy
+IS286,062,062,1.000,1,false,0631,Unilateral thyroid lobectomy
 IS287,8411,8411,1.000,1,false,8116,Amputation of toe
 IS288,5995,5995,1.000,1,false,9851,Ultrasonic fragmentation of urinary stones
 IS289,6011,6011,0.950,1,false,6018,Closed [percutaneous] [needle] biopsy of prostate
@@ -2018,8 +2018,8 @@ IS294,4401,4401,1.000,1,false,4403,Truncal vagotomy
 IS295,8545,8545,1.000,1,false,8547,Unilateral radical mastectomy
 IS296,8541,8541,1.000,1,false,8543,Unilateral simple mastectomy
 IS297,5531,5531,0.959,1,false,6731,Marsupialization of kidney lesion
-IS298,887,887,1.000,1,false,886,Upper eyelid rhytidectomy
-IS299,886,886,1.000,1,false,887,Lower eyelid rhytidectomy
+IS298,0887,0887,1.000,1,false,0886,Upper eyelid rhytidectomy
+IS299,0886,0886,1.000,1,false,0887,Lower eyelid rhytidectomy
 IS300,5641,5641,0.959,0,true,,Partial ureterectomy
 IS301,562,562,1.000,1,false,427,Ureterotomy
 IS302,5846,5846,1.000,1,false,5844,Other reconstruction of urethra
@@ -2038,17 +2038,17 @@ IS314,3927,3927,1.000,1,false,3942,Arteriovenostomy for renal dialysis
 IS315,3927,3927,1.000,1,false,3943,Arteriovenostomy for renal dialysis
 IS316,3927,3927,1.000,1,false,3943,Arteriovenostomy for renal dialysis
 IS317,3927,3927,1.000,1,false,3943,Arteriovenostomy for renal dialysis
-IS318,205,205,1.000,2,false,16,Insertion of skull plate
+IS318,0205,0205,1.000,2,false,016,Insertion of skull plate
 IS319,8229,8229,1.000,1,false,344,Excision of other lesion of soft tissue of hand
-IS320,128,128,0.923,1,false,110,Placement of intracerebral catheter(s) via burr hole(s)
+IS320,0128,0128,0.923,1,false,110,Placement of intracerebral catheter(s) via burr hole(s)
 IS321,9984,9984,1.000,0,true,,Isolation
-IS322,8102,8102,1.000,1,false,309,"Other cervical fusion of the anterior column, anterior technique"
-IS323,239,239,0.976,1,false,379,Ventricular shunt to extracranial site NEC
+IS322,8102,8102,1.000,1,false,0309,"Other cervical fusion of the anterior column, anterior technique"
+IS323,239,239,0.976,1,false,0379,Ventricular shunt to extracranial site NEC
 IS324,391,391,0.974,1,false,5586,Intra-abdominal venous shunt
-IS325,499,499,0.976,1,false,749,Other operations on cranial and peripheral nerves
-IS326,472,472,0.998,1,false,474,Accessory-facial anastomosis
-IS327,401,401,0.954,1,false,406,Excision of acoustic neuroma
-IS328,309,309,0.892,1,false,34,Other exploration and decompression of spinal canal
+IS325,0499,0499,0.976,1,false,0749,Other operations on cranial and peripheral nerves
+IS326,0472,0472,0.998,1,false,0474,Accessory-facial anastomosis
+IS327,0401,0401,0.954,1,false,0406,Excision of acoustic neuroma
+IS328,0309,0309,0.892,1,false,034,Other exploration and decompression of spinal canal
 IS331,8521,8521,1.000,1,false,8520,Local excision of lesion of breast
 IS332,8521,8521,0.999,1,false,8512,Local excision of lesion of breast
 IS333,8607,8607,1.000,1,false,8606,Insertion of totally implantable vascular access device [VAD]
@@ -2084,7 +2084,7 @@ IT021,8123,8123,1.000,1,false,8124,Arthrodesis of shoulder
 IT022,8102,8102,0.934,1,false,8108,"Other cervical fusion of the anterior column, anterior technique"
 IT023,8163,8163,0.920,1,false,8105,Fusion or refusion of 4-8 vertebrae
 IT024,8713,8713,1.000,2,false,8015,Temporomandibular contrast arthrogram
-IT025,70,70,0.974,1,false,72,"Revision of hip replacement, both acetabular and femoral components"
+IT025,0070,0070,0.974,1,false,0072,"Revision of hip replacement, both acetabular and femoral components"
 IT026,8184,8184,1.000,1,false,8151,Total elbow replacement
 IT027,8171,8171,1.000,1,false,8172,Arthroplasty of metacarpophalangeal and interphalangeal joint with implant
 IT028,8151,8151,1.000,1,false,8152,Total hip replacement
@@ -2135,7 +2135,7 @@ IT072,8011,8011,1.000,0,true,,"Other arthrotomy, shoulder"
 IT073,8622,8622,0.964,1,false,8628,"Excisional debridement of wound, infection, or burn"
 IT074,8622,8622,1.000,1,false,8628,"Excisional debridement of wound, infection, or burn"
 IT075,7706,7706,0.963,0,true,,"Sequestrectomy, patella"
-IT076,309,309,1.000,1,false,302,Other exploration and decompression of spinal canal
+IT076,0309,0309,1.000,1,false,0302,Other exploration and decompression of spinal canal
 IT077,8406,8406,1.000,0,true,,Disarticulation of elbow
 IT078,8418,8418,1.000,0,true,,Disarticulation of hip
 IT079,8416,8416,1.000,0,true,,Disarticulation of knee
@@ -2169,7 +2169,7 @@ IT106,8669,8669,1.000,1,false,8583,Other skin graft to other sites
 IT107,8663,8663,0.940,1,false,8583,Full-thickness skin graft to other sites
 IT108,7753,7753,1.000,1,false,7751,Other bunionectomy with soft tissue correction
 IT109,7753,7753,1.000,1,false,7751,Other bunionectomy with soft tissue correction
-IT110,294,294,0.963,1,false,9341,Insertion or replacement of skull tongs or halo traction device
+IT110,0294,0294,0.963,1,false,9341,Insertion or replacement of skull tongs or halo traction device
 IT111,7756,7756,1.000,0,true,,Repair of hammer toe
 IT112,9342,9342,0.950,0,true,,Other spinal traction
 IT113,94,94,1.000,1,false,8968,Intra-operative neurophysiologic monitoring
@@ -2177,14 +2177,14 @@ IT114,94,94,1.000,1,false,58,Intra-operative neurophysiologic monitoring
 IT115,94,94,1.000,1,false,58,Intra-operative neurophysiologic monitoring
 IT116,8204,8204,0.981,1,false,8604,Incision and drainage of palmar or thenar space
 IT117,8604,8604,1.000,1,false,4901,Other incision with drainage of skin and subcutaneous tissue
-IT118,33,33,0.974,1,false,8896,Computer assisted surgery with fluoroscopy
+IT118,0033,0033,0.974,1,false,8896,Computer assisted surgery with fluoroscopy
 IT119,9984,9984,1.000,0,true,,Isolation
 IT120,7860,7860,1.000,1,false,7867,"Removal of implanted devices from bone, unspecified site"
 IT121,9345,9345,0.924,0,true,,Thomas' splint traction
-IT122,84,84,0.882,1,false,7753,"Revision of total knee replacement, tibial insert (liner)"
+IT122,0084,0084,0.882,1,false,7753,"Revision of total knee replacement, tibial insert (liner)"
 IT123,7915,7915,1.000,1,false,7916,"Closed reduction of fracture with internal fixation, femur"
 IT124,7918,7918,0.977,1,false,7938,"Closed reduction of fracture with internal fixation, phalanges of foot"
-IT125,302,302,0.871,1,false,8893,Reopening of laminectomy site
+IT125,0302,0302,0.871,1,false,8893,Reopening of laminectomy site
 IT126,7835,7835,0.989,1,false,7833,"Limb lengthening procedures, femur"
 IT127,7832,7832,1.000,1,false,7835,"Limb lengthening procedures, humerus"
 IT128,7833,7833,1.000,1,false,7839,"Limb lengthening procedures, radius and ulna"
@@ -2193,8 +2193,8 @@ IT130,8255,8255,0.925,1,false,8385,Other change in hand muscle or tendon length
 IT131,7972,7972,0.942,1,false,7695,Closed reduction of dislocation of elbow
 IT132,7976,7976,0.984,1,false,7971,Closed reduction of dislocation of knee
 IT133,8143,8143,0.981,2,false,8363,Triad knee repair
-IT134,443,443,0.943,1,false,444,Release of carpal tunnel
-IT135,449,449,1.000,1,false,479,Other peripheral nerve or ganglion decompression or lysis of adhesions
+IT134,0443,0443,0.943,1,false,0444,Release of carpal tunnel
+IT135,0449,0449,1.000,1,false,0479,Other peripheral nerve or ganglion decompression or lysis of adhesions
 IT136,7933,7933,1.000,1,false,7854,"Open reduction of fracture with internal fixation, carpals and metacarpals"
 IT137,7935,7935,1.000,1,false,7915,"Open reduction of fracture with internal fixation, femur"
 IT138,7921,7921,0.986,1,false,7931,"Open reduction of fracture without internal fixation, humerus"
@@ -2207,7 +2207,7 @@ IT144,2762,2762,1.000,1,false,2763,Correction of cleft palate
 IT145,7931,7931,0.937,1,false,7939,"Open reduction of fracture with internal fixation, humerus"
 IT146,7920,7920,1.000,1,false,7910,"Open reduction of fracture without internal fixation, unspecified site"
 IT147,8006,8006,0.945,1,false,8005,"Arthrotomy for removal of prosthesis without replacement, knee"
-IT148,71,71,0.985,1,false,70,"Revision of hip replacement, acetabular component"
+IT148,0071,0071,0.985,1,false,0070,"Revision of hip replacement, acetabular component"
 IT149,5598,5598,1.000,1,false,5586,Removal of mechanical kidney
 IT150,8623,8623,1.000,1,false,8627,"Removal of nail, nail bed, or nail fold"
 IT151,7869,7869,1.000,1,false,7860,"Removal of implanted devices from bone, other bones"
@@ -2222,7 +2222,7 @@ IT159,8363,8363,1.000,0,true,,Rotator cuff repair
 IT160,8245,8245,1.000,1,false,8362,Other suture of other tendon of hand
 IT161,1681,1681,1.000,0,true,,Repair of wound of orbit
 IT162,5462,5462,0.950,1,false,8659,Delayed closure of granulating abdominal wound
-IT163,881,881,1.000,1,false,8659,Linear repair of laceration of eyelid or eyebrow
+IT163,0881,0881,1.000,1,false,8659,Linear repair of laceration of eyelid or eyebrow
 IT164,8422,8422,1.000,0,true,,Finger reattachment
 IT165,843,843,1.000,1,false,8417,Revision of amputation stump
 IT166,843,843,1.000,1,false,8417,Revision of amputation stump
@@ -2269,7 +2269,7 @@ IW016,9716,9716,0.970,1,false,9357,Replacement of wound packing or drain
 IW017,9357,9357,1.000,1,false,9658,Application of other wound dressing
 IW018,9357,9357,0.980,1,false,9743,Application of other wound dressing
 IW019,3894,3894,1.000,1,false,3892,Venous cutdown
-IW020,8960,8960,0.961,1,false,68,Continuous intra-arterial blood gas monitoring
+IW020,8960,8960,0.961,1,false,0068,Continuous intra-arterial blood gas monitoring
 IW022,9393,9393,0.967,1,false,9960,Nonmechanical methods of resuscitation
 IW023,9648,9648,1.000,1,false,9647,Irrigation of other indwelling urinary catheter
 IW024,9633,9633,1.000,1,false,9607,Gastric lavage
@@ -2288,7 +2288,7 @@ IW042,9984,9984,1.000,0,true,,Isolation
 IW043,632,632,0.914,1,false,523,Excision of cyst of epididymis
 IW044,8604,8604,0.954,1,false,4901,Other incision with drainage of skin and subcutaneous tissue
 IW045,6441,6441,0.937,1,false,7071,Suture of laceration of penis
-IW046,941,941,0.988,1,false,949,Probing of lacrimal punctum
+IW046,0941,0941,0.988,1,false,0949,Probing of lacrimal punctum
 IW047,9812,9812,1.000,1,false,9822,Removal of intraluminal foreign body from nose without incision
 IW048,9811,9811,1.000,1,false,110,Removal of intraluminal foreign body from ear without incision
 IW049,9984,9984,1.000,0,true,,Isolation
@@ -2320,8 +2320,8 @@ IW075,3148,3148,1.000,1,false,3142,Other diagnostic procedures on larynx
 IW076,4413,4413,1.000,3,false,,Other gastroscopy
 IW077,4414,4414,1.000,1,false,4516,Closed [endoscopic] biopsy of stomach
 IW078,4449,4449,1.000,1,false,4443,Other control of hemorrhage of stomach or duodenum
-IW079,331,331,1.000,1,false,101,Spinal tap
-IW080,611,611,1.000,1,false,613,Closed [percutaneous] [needle] biopsy of thyroid gland
+IW079,0331,0331,1.000,1,false,0101,Spinal tap
+IW080,611,611,1.000,1,false,0613,Closed [percutaneous] [needle] biopsy of thyroid gland
 IW081,7534,7534,1.000,0,true,,Other fetal monitoring
 IW082,8843,8843,1.000,1,false,8862,Arteriography of pulmonary arteries
 IW083,8843,8843,1.000,1,false,8845,Arteriography of pulmonary arteries
@@ -2350,7 +2350,7 @@ IW105,5091,5091,0.914,1,false,5592,Percutaneous aspiration of liver
 IW106,9308,9308,1.000,1,false,419,Electromyography
 IW107,9411,9411,0.987,1,false,8905,Psychiatric mental status determination
 IW108,9523,9523,1.000,1,false,94,Visual evoked potential [VEP]
-IW109,9308,9308,0.926,1,false,412,Electromyography
+IW109,9308,9308,0.926,1,false,0412,Electromyography
 IW110,8938,8938,1.000,1,false,8937,Other nonoperative respiratory measurements
 IW111,6411,6411,1.000,0,true,,Biopsy of penis
 IW112,9901,9901,1.000,0,true,,Exchange transfusion
@@ -2428,7 +2428,7 @@ IW183,9408,9408,1.000,1,false,9401,Other psychologic evaluation and testing
 IW184,9383,9383,0.999,0,true,,Occupational therapy
 IW185,9375,9375,1.000,1,false,9374,Other speech training and therapy
 IW186,8964,8964,1.000,1,false,3721,Pulmonary artery wedge monitoring
-IW187,331,331,0.998,1,false,101,Spinal tap
+IW187,0331,0331,0.998,1,false,0101,Spinal tap
 IW188,640,640,1.000,1,false,6493,Circumcision
 IW189,8883,8883,0.951,3,false,,Bone thermography
 IW190,9983,9983,1.000,0,true,,Other phototherapy
@@ -2444,11 +2444,11 @@ IW199,9984,9984,1.000,0,true,,Isolation
 IW200,9984,9984,1.000,0,true,,Isolation
 IW201,9984,9984,1.000,0,true,,Isolation
 IW202,7538,7538,1.000,0,true,,Fetal pulse oximetry
-IW203,8961,8961,1.000,1,false,68,Systemic arterial pressure monitoring
+IW203,8961,8961,1.000,1,false,0068,Systemic arterial pressure monitoring
 IW204,9984,9984,1.000,0,true,,Isolation
 IW205,9984,9984,1.000,0,true,,Isolation
 IW206,9396,9396,1.000,0,true,,Other oxygen enrichment
-IW208,390,390,1.000,1,false,9905,Insertion of catheter into spinal canal for infusion of therapeutic or palliative substances
+IW208,0390,0390,1.000,1,false,9905,Insertion of catheter into spinal canal for infusion of therapeutic or palliative substances
 IW209,9398,9398,0.975,1,false,7905,Other control of atmospheric pressure and composition
 KM001,9396,9396,1.000,0,true,,Other oxygen enrichment
 KM002,9396,9396,1.000,0,true,,Other oxygen enrichment
@@ -2460,16 +2460,16 @@ KM007,3894,3894,0.935,0,true,,Venous cutdown
 KM008,9918,9918,0.971,1,false,1770,Injection or infusion of electrolytes
 KM009,9918,9918,0.983,1,false,9637,Injection or infusion of electrolytes
 KM010,9903,9903,1.000,1,false,9918,Other transfusion of whole blood
-KM011,9394,9394,1.000,1,false,12,Respiratory medication administered by nebulizer
+KM011,9394,9394,1.000,1,false,0012,Respiratory medication administered by nebulizer
 KM012,5794,5794,1.000,1,false,5711,Insertion of indwelling urinary catheter
 KM013,5794,5794,1.000,1,false,5795,Insertion of indwelling urinary catheter
 KM014,5795,5795,0.955,1,false,9763,Replacement of indwelling urinary catheter
 KM015,9604,9604,1.000,1,false,9603,Insertion of endotracheal tube
 KM016,9960,9960,1.000,1,false,6441,"Cardiopulmonary resuscitation, not otherwise specified"
 KM017,9357,9357,1.000,1,false,9783,Application of other wound dressing
-L0001,443,443,1.000,1,false,444,Release of carpal tunnel
+L0001,0443,0443,1.000,1,false,0444,Release of carpal tunnel
 L0002,3989,3989,0.851,1,false,9964,"Other operations on carotid body, carotid sinus and other vascular bodies"
-L0003,442,442,0.852,1,false,9526,Other cranial nerve decompression
+L0003,0442,0442,0.852,1,false,9526,Other cranial nerve decompression
 L0004,2772,2772,1.000,2,false,2722,Excision of uvula
 L0005,2772,2772,1.000,3,false,,Excision of uvula
 L0006,3175,3175,1.000,1,false,3179,Reconstruction of trachea and construction of artificial larynx
@@ -2482,8 +2482,8 @@ L0012,6581,6581,1.000,1,false,6589,Laparoscopic lysis of adhesions of ovary and 
 L0013,1736,1736,0.993,1,false,1739,Laparoscopic sigmoidectomy
 L0014,5184,5184,1.000,1,false,5181,Endoscopic dilation of ampulla and biliary duct
 L0015,6841,6841,1.000,1,false,6851,Laparoscopic total abdominal hysterectomy
-L0016,722,722,1.000,1,false,73,Unilateral adrenalectomy
-L0017,73,73,0.997,1,false,722,Bilateral adrenalectomy
+L0016,0722,0722,1.000,1,false,073,Unilateral adrenalectomy
+L0017,073,073,0.997,1,false,0722,Bilateral adrenalectomy
 L0018,4849,4849,1.000,1,false,4842,Other pull-through resection of rectum
 L0019,4852,4852,0.990,1,false,4851,Open abdominoperineal resection of the rectum
 L0020,4561,4561,0.880,1,false,1739,Multiple segmental resection of small intestine
@@ -2491,7 +2491,7 @@ L0021,554,554,0.879,0,true,,Partial nephrectomy
 L0022,604,604,0.948,1,false,6069,Retropubic prostatectomy
 L0023,5551,5551,1.000,1,false,6871,Nephroureterectomy
 L0024,605,605,1.000,0,true,,Radical prostatectomy
-L0025,639,639,0.954,1,false,64,Other partial thyroidectomy
+L0025,0639,0639,0.954,1,false,064,Other partial thyroidectomy
 L0026,6529,6529,1.000,1,false,6525,Other local excision or destruction of ovary
 L0027,6602,6602,0.975,1,false,6673,Salpingostomy
 L0028,6524,6524,1.000,1,false,6522,Laparoscopic wedge resection of ovary
@@ -2521,10 +2521,10 @@ L0051,693,693,1.000,1,false,6841,Paracervical uterine denervation
 L0052,688,688,1.000,0,true,,Pelvic evisceration
 L0053,6841,6841,1.000,1,false,6831,Laparoscopic total abdominal hysterectomy
 L0054,6581,6581,1.000,1,false,6679,Laparoscopic lysis of adhesions of ovary and fallopian tube
-L0055,232,232,1.000,1,false,102,Ventricular shunt to circulatory system
-L0056,115,115,0.914,0,true,,Biopsy of skull
-L0057,765,765,0.947,1,false,764,"Total excision of pituitary gland, transsphenoidal approach"
-L0058,113,113,0.901,1,false,114,Closed [percutaneous] [needle] biopsy of brain
+L0055,0232,0232,1.000,1,false,0102,Ventricular shunt to circulatory system
+L0056,0115,0115,0.914,0,true,,Biopsy of skull
+L0057,0765,0765,0.947,1,false,0764,"Total excision of pituitary gland, transsphenoidal approach"
+L0058,0113,0113,0.901,1,false,0114,Closed [percutaneous] [needle] biopsy of brain
 L0059,3322,3322,1.000,0,true,,Fiber-optic bronchoscopy
 L0060,3323,3323,1.000,1,false,3321,Other bronchoscopy
 L0061,3391,3391,1.000,1,false,5792,Bronchial dilation
@@ -2570,7 +2570,7 @@ L0103,4701,4701,1.000,0,true,,Laparoscopic appendectomy
 L0104,4711,4711,1.000,1,false,4719,Laparoscopic incidental appendectomy
 L0105,5123,5123,1.000,1,false,5122,Laparoscopic cholecystectomy
 L0107,4851,4851,0.906,1,false,4863,Laparoscopic abdominoperineal resection of the rectum
-L0108,981,981,1.000,1,false,959,Dacryocystorhinostomy [DCR]
+L0108,0981,0981,1.000,1,false,0959,Dacryocystorhinostomy [DCR]
 L0109,1273,1273,0.954,0,true,,Cyclophotocoagulation
 L0110,5587,5587,1.000,1,false,1742,Correction of ureteropelvic junction
 L0111,554,554,1.000,0,true,,Partial nephrectomy
@@ -2600,7 +2600,7 @@ L0179,1745,1745,1.000,1,false,3459,Thoracoscopic robotic assisted procedure
 L0180,5252,5252,1.000,0,true,,Distal pancreatectomy
 L0181,5252,5252,1.000,0,true,,Distal pancreatectomy
 L0182,5022,5022,1.000,0,true,,Partial hepatectomy
-L0183,722,722,1.000,1,false,73,Unilateral adrenalectomy
+L0183,0722,0722,1.000,1,false,073,Unilateral adrenalectomy
 L0184,554,554,1.000,0,true,,Partial nephrectomy
 L0185,5587,5587,0.985,1,false,5511,Correction of ureteropelvic junction
 L0186,7078,7078,1.000,1,false,7077,Vaginal suspension and fixation with graft or prosthesis
@@ -2611,12 +2611,12 @@ MB001,9163,9163,1.000,1,false,9093,"Microscopic examination of specimen from ski
 MD001,9357,9357,1.000,1,false,9356,Application of other wound dressing
 MD003,9921,9921,0.950,0,true,,Injection of antibiotic
 MD004,5497,5497,0.882,1,false,9917,Injection of locally-acting therapeutic substance into peritoneal cavity
-MD005,5596,5596,0.976,1,false,390,Other injection of therapeutic substance into kidney
+MD005,5596,5596,0.976,1,false,0390,Other injection of therapeutic substance into kidney
 MD006,7696,7696,1.000,1,false,9923,Injection of therapeutic substance into temporomandibular joint
 MD007,9903,9903,1.000,1,false,3892,Other transfusion of whole blood
 MD008,2751,2751,0.962,1,false,8365,Suture of laceration of lip
 MD009,9396,9396,1.000,0,true,,Other oxygen enrichment
-MD010,331,331,1.000,1,false,101,Spinal tap
+MD010,0331,0331,1.000,1,false,0101,Spinal tap
 MD011,9782,9782,0.944,1,false,5491,Removal of peritoneal drainage device
 MD012,3491,3491,1.000,1,false,3404,Thoracentesis
 MD013,8191,8191,1.000,1,false,8038,Arthrocentesis
@@ -2646,7 +2646,7 @@ MD104,9933,9933,0.949,1,false,8910,Vaccination against tuberculosis
 MD105,3322,3322,1.000,2,false,3321,Fiber-optic bronchoscopy
 MD106,8732,8732,0.998,1,false,8731,Other contrast bronchogram
 MD107,3491,3491,1.000,1,false,3420,Thoracentesis
-MD108,86,86,0.976,1,false,74,"Resurfacing hip, partial, femoral head"
+MD108,0086,0086,0.976,1,false,74,"Resurfacing hip, partial, femoral head"
 MD109,3326,3326,1.000,1,false,3393,Closed [percutaneous] [needle] biopsy of lung
 MD110,9984,9984,1.000,0,true,,Isolation
 MD112,8937,8937,1.000,1,false,8938,Vital capacity determination
@@ -2656,7 +2656,7 @@ MD115,5598,5598,0.986,1,false,9984,Removal of mechanical kidney
 MD116,3321,3321,0.955,1,false,3322,Bronchoscopy through artificial stoma
 MD117,3404,3404,1.000,1,false,9741,Insertion of intercostal catheter for drainage
 MD124,3323,3323,0.954,0,true,,Other bronchoscopy
-MD125,28,28,0.937,1,false,8878,"Intravascular imaging, other specified vessel(s)"
+MD125,0028,0028,0.937,1,false,8878,"Intravascular imaging, other specified vessel(s)"
 MD126,3429,3429,0.982,1,false,5091,Other diagnostic procedures on mediastinum
 MD127,3323,3323,1.000,1,false,3321,Other bronchoscopy
 MD128,3391,3391,0.946,0,true,,Bronchial dilation
@@ -2664,7 +2664,7 @@ MD129,3391,3391,1.000,1,false,6095,Bronchial dilation
 MD130,4543,4543,0.866,1,false,9906,Endoscopic destruction of other lesion or tissue of large intestine
 MD131,4833,4833,0.924,1,false,6021,Destruction of rectal lesion or tissue by laser
 MD132,9604,9604,1.000,1,false,9605,Insertion of endotracheal tube
-MD133,33,33,0.846,1,false,8839,Computer assisted surgery with fluoroscopy
+MD133,0033,0033,0.846,1,false,8839,Computer assisted surgery with fluoroscopy
 MD134,5831,5831,0.905,1,false,3209,Endoscopic excision or destruction of lesion or tissue of urethra
 MD135,1143,1143,1.000,1,false,4944,Cryotherapy of corneal lesion
 MD136,3320,3320,0.966,0,true,,Thoracoscopic lung biopsy
@@ -2679,8 +2679,8 @@ MD144,3491,3491,0.916,0,true,,Thoracentesis
 MD145,3420,3420,1.000,1,false,3424,Thoracoscopic pleural biopsy
 MD146,3323,3323,1.000,1,false,3322,Other bronchoscopy
 MD147,3227,3227,1.000,1,false,3371,"Bronchoscopic bronchial thermoplasty, ablation of airway smooth muscle"
-MD148,9928,9928,1.000,1,false,14,Injection or infusion of biological response modifier [BRM] as an antineoplastic agent
-MD149,481,481,0.931,1,false,531,Injection of anesthetic into peripheral nerve for analgesia
+MD148,9928,9928,1.000,1,false,0014,Injection or infusion of biological response modifier [BRM] as an antineoplastic agent
+MD149,0481,0481,0.931,1,false,0531,Injection of anesthetic into peripheral nerve for analgesia
 MD159,3371,3371,0.985,1,false,3222,"Endoscopic insertion or replacement of bronchial valve(s), single lobe"
 MD160,8937,8937,0.903,1,false,8958,Vital capacity determination
 MD161,9304,9304,0.938,1,false,8944,Manual testing of muscle function
@@ -2689,13 +2689,13 @@ MD163,8960,8960,1.000,1,false,8965,Continuous intra-arterial blood gas monitorin
 MD164,8942,8942,0.967,1,false,8938,Masters' two-step stress test
 MD165,9395,9395,0.831,0,true,,Hyperbaric oxygenation
 MD166,7538,7538,1.000,0,true,,Fetal pulse oximetry
-MD167,12,12,0.837,1,false,8958,Administration of inhaled nitric oxide
+MD167,0012,0012,0.837,1,false,8958,Administration of inhaled nitric oxide
 MD168,9391,9391,0.953,1,false,8958,Intermittent positive pressure breathing [IPPB]
 MD169,3723,3723,0.859,1,false,8854,Combined right and left heart cardiac catheterization
 MD202,8914,8914,1.000,0,true,,Electroencephalogram
 MD203,8914,8914,0.990,0,true,,Electroencephalogram
 MD204,8919,8919,1.000,1,false,8914,Video and radio-telemetered electroencephalographic monitoring
-MD211,3811,3811,0.961,1,false,21,"Endarterectomy, intracranial vessels"
+MD211,3811,3811,0.961,1,false,0021,"Endarterectomy, intracranial vessels"
 MD212,8877,8877,1.000,1,false,8841,Diagnostic ultrasound of peripheral vascular system
 MD213,419,419,0.917,1,false,9308,Other diagnostic procedures on cranial and peripheral nerves and ganglia
 MD214,9308,9308,1.000,1,false,9525,Electromyography
@@ -2708,11 +2708,11 @@ MD220,9401,9401,1.000,1,false,9402,Administration of intelligence test
 MD221,9402,9402,1.000,1,false,9401,Administration of psychologic test
 MD222,9401,9401,1.000,1,false,9408,Administration of intelligence test
 MD223,9401,9401,1.000,1,false,9408,Administration of intelligence test
-MD224,419,419,0.918,1,false,476,Other diagnostic procedures on cranial and peripheral nerves and ganglia
+MD224,419,419,0.918,1,false,0476,Other diagnostic procedures on cranial and peripheral nerves and ganglia
 MD225,9372,9372,0.905,0,true,,Dysphasia training
-MD226,63,63,0.928,1,false,9509,Percutaneous insertion of carotid artery stent(s)
+MD226,0063,0063,0.928,1,false,9509,Percutaneous insertion of carotid artery stent(s)
 MD227,8917,8917,0.858,0,true,,Polysomnogram
-MD228,581,581,0.883,1,false,519,Repair of sympathetic nerve or ganglion
+MD228,0581,0581,0.883,1,false,0519,Repair of sympathetic nerve or ganglion
 MD229,9927,9927,0.852,0,true,,Iontophoresis
 MD230,9401,9401,1.000,1,false,9408,Administration of intelligence test
 MD231,9401,9401,1.000,1,false,9408,Administration of intelligence test
@@ -2752,7 +2752,7 @@ MD327,8951,8951,1.000,0,true,,Rhythm electrocardiogram
 MD328,8932,8932,1.000,0,true,,Esophageal manometry
 MD329,4976,4976,0.994,1,false,9623,Removal of artificial anal sphincter
 MD330,8763,8763,0.941,0,true,,Small bowel series
-MD332,613,613,0.979,1,false,5424,Biopsy of parathyroid gland
+MD332,0613,0613,0.979,1,false,5424,Biopsy of parathyroid gland
 MD333,524,524,0.867,1,false,4412,Internal drainage of pancreatic cyst
 MD334,4514,4514,1.000,1,false,4527,Closed [endoscopic] biopsy of small intestine
 MD335,4974,4974,0.915,1,false,4992,Gracilis muscle transplant for anal incontinence
@@ -2779,7 +2779,7 @@ MD364,4229,4229,1.000,1,false,4516,Other diagnostic procedures on esophagus
 MD365,2211,2211,0.967,1,false,3728,Closed [endoscopic] [needle] biopsy of nasal sinus
 MD366,9984,9984,1.000,0,true,,Isolation
 MD367,4836,4836,0.983,1,false,4532,[Endoscopic] polypectomy of rectum
-MD368,4449,4449,0.928,1,false,44,Other control of hemorrhage of stomach or duodenum
+MD368,4449,4449,0.928,1,false,0044,Other control of hemorrhage of stomach or duodenum
 MD369,4491,4491,1.000,1,false,4291,Ligation of gastric varices
 MD370,4233,4233,1.000,1,false,4931,Endoscopic excision or destruction of lesion or tissue of esophagus
 MD371,9926,9926,1.000,0,true,,Injection of tranquilizer
@@ -2845,7 +2845,7 @@ MD550,3895,3895,0.995,1,false,5498,Venous catheterization for renal dialysis
 MD551,3995,3995,1.000,1,false,3895,Hemodialysis
 MD552,5569,5569,0.922,1,false,4191,Other kidney transplantation
 MD603,8871,8871,1.000,1,false,9201,Diagnostic ultrasound of head and neck
-MD605,601,601,0.970,1,false,611,Aspiration of thyroid field
+MD605,0601,0601,0.970,1,false,611,Aspiration of thyroid field
 MD606,56,56,0.969,1,false,57,Insertion or replacement of implantable pressure sensor with lead for intracardiac or great vessel hemodynamic monitoring
 MD607,56,56,0.958,1,false,3826,Insertion or replacement of implantable pressure sensor with lead for intracardiac or great vessel hemodynamic monitoring
 MD608,9917,9917,0.927,0,true,,Injection of insulin
@@ -2853,15 +2853,15 @@ MD609,9917,9917,1.000,0,true,,Injection of insulin
 MD702,9322,9322,0.897,1,false,9309,Ambulation and gait training
 MD703,9525,9525,0.884,0,true,,Electromyogram of eye [EMG]
 MD704,8836,8836,0.964,1,false,8592,Lymphangiogram of lower limb
-MD705,59,59,0.991,1,false,5999,Other operations on nervous system
+MD705,059,059,0.991,1,false,5999,Other operations on nervous system
 MD706,9546,9546,0.846,1,false,9309,Other auditory and vestibular function tests
 MD707,9308,9308,1.000,1,false,9525,Electromyography
 MD708,9308,9308,1.000,1,false,419,Electromyography
-MD709,9308,9308,0.942,1,false,481,Electromyography
+MD709,9308,9308,0.942,1,false,0481,Electromyography
 MD710,8913,8913,1.000,0,true,,Neurologic examination
 MD711,9462,9462,0.968,0,true,,Alcohol detoxification
 MD712,8949,8949,1.000,1,false,293,Automatic implantable cardioverter/defibrillator (AICD) check
-MD713,8606,8606,0.972,1,false,390,Insertion of totally implantable infusion pump
+MD713,8606,8606,0.972,1,false,0390,Insertion of totally implantable infusion pump
 MD714,8913,8913,1.000,0,true,,Neurologic examination
 MD715,9401,9401,1.000,1,false,9409,Administration of intelligence test
 MD716,8913,8913,0.994,0,true,,Neurologic examination
@@ -2874,7 +2874,7 @@ MD722,9375,9375,1.000,1,false,9374,Other speech training and therapy
 MD723,9984,9984,1.000,0,true,,Isolation
 MD750,9912,9912,0.960,0,true,,Immunization for allergy
 MD751,9394,9394,0.978,1,false,9465,Respiratory medication administered by nebulizer
-MD752,14,14,0.892,1,false,9922,Injection or infusion of oxazolidinone class of antibiotics
+MD752,0014,0014,0.892,1,false,9922,Injection or infusion of oxazolidinone class of antibiotics
 MD753,9984,9984,1.000,0,true,,Isolation
 MD754,9984,9984,0.805,0,true,,Isolation
 MD756,9912,9912,0.902,0,true,,Immunization for allergy
@@ -2889,7 +2889,7 @@ MD764,9984,9984,1.000,0,true,,Isolation
 MD765,9465,9465,0.954,0,true,,Drug detoxification
 MD766,9912,9912,0.980,0,true,,Immunization for allergy
 MD767,9912,9912,0.912,1,false,9163,Immunization for allergy
-MD768,12,12,0.779,1,false,9394,Administration of inhaled nitric oxide
+MD768,0012,0012,0.779,1,false,9394,Administration of inhaled nitric oxide
 MD769,8938,8938,0.924,1,false,8937,Other nonoperative respiratory measurements
 MD770,9401,9401,0.996,1,false,9542,Administration of intelligence test
 MD771,9402,9402,1.000,1,false,8913,Administration of psychologic test
@@ -2936,7 +2936,7 @@ NC017,9984,9984,1.000,0,true,,Isolation
 NC018,5711,5711,1.000,3,false,,Percutaneous aspiration of bladder
 NC020,9992,9992,1.000,1,false,9991,Other acupuncture
 NC021,9984,9984,1.000,0,true,,Isolation
-NC201,581,581,0.883,1,false,519,Repair of sympathetic nerve or ganglion
+NC201,0581,0581,0.883,1,false,0519,Repair of sympathetic nerve or ganglion
 NC202,9927,9927,0.899,0,true,,Iontophoresis
 NC203,8881,8881,0.983,0,true,,Cerebral thermography
 OB001,8878,8878,1.000,1,false,9217,Diagnostic ultrasound of gravid uterus
@@ -2953,10 +2953,10 @@ OB013,1143,1143,1.000,1,false,1032,Cryotherapy of corneal lesion
 OB014,6733,6733,0.970,1,false,6719,Destruction of lesion of cervix by cryosurgery
 OB015,9984,9984,1.000,0,true,,Isolation
 OB016,4831,4831,0.934,1,false,1142,Radical electrocoagulation of rectal lesion or tissue
-OB017,4233,4233,0.937,1,false,825,Endoscopic excision or destruction of lesion or tissue of esophagus
+OB017,4233,4233,0.937,1,false,0825,Endoscopic excision or destruction of lesion or tissue of esophagus
 OB018,9357,9357,1.000,1,false,9356,Application of other wound dressing
 OB020,9921,9921,0.965,0,true,,Injection of antibiotic
-OB021,5596,5596,0.976,1,false,390,Other injection of therapeutic substance into kidney
+OB021,5596,5596,0.976,1,false,0390,Other injection of therapeutic substance into kidney
 OB022,9918,9918,0.945,1,false,9908,Injection or infusion of electrolytes
 OB023,2751,2751,0.993,1,false,6441,Suture of laceration of lip
 OB024,8604,8604,1.000,1,false,4901,Other incision with drainage of skin and subcutaneous tissue
@@ -2976,7 +2976,7 @@ OB043,741,741,0.987,1,false,7499,Low cervical cesarean section
 OB047,9984,9984,1.000,0,true,,Isolation
 OB048,9983,9983,1.000,0,true,,Other phototherapy
 OB049,9982,9982,1.000,0,true,,Ultraviolet light therapy
-OB050,33,33,0.914,1,false,6619,Computer assisted surgery with fluoroscopy
+OB050,0033,0033,0.914,1,false,6619,Computer assisted surgery with fluoroscopy
 OB059,8878,8878,1.000,1,false,8781,Diagnostic ultrasound of gravid uterus
 OB060,8878,8878,1.000,1,false,751,Diagnostic ultrasound of gravid uterus
 OB061,8878,8878,1.000,1,false,751,Diagnostic ultrasound of gravid uterus
@@ -3014,7 +3014,7 @@ OB135,7534,7534,1.000,0,true,,Other fetal monitoring
 OB136,8878,8878,1.000,1,false,8781,Diagnostic ultrasound of gravid uterus
 OB137,8878,8878,0.886,1,false,9217,Diagnostic ultrasound of gravid uterus
 OB138,8878,8878,1.000,1,false,9501,Diagnostic ultrasound of gravid uterus
-OB139,12,12,0.955,1,false,9396,Administration of inhaled nitric oxide
+OB139,0012,0012,0.955,1,false,9396,Administration of inhaled nitric oxide
 OL001,672,672,1.000,0,true,,Conization of cervix
 OL002,9984,9984,1.000,0,true,,Isolation
 OL003,9984,9984,1.000,0,true,,Isolation
@@ -3035,10 +3035,10 @@ OL032,751,751,1.000,1,false,5491,Diagnostic amniocentesis
 OL033,7533,7533,1.000,1,false,751,Fetal blood sampling and biopsy
 OL207,9141,9141,0.918,1,false,9189,"Microscopic examination of specimen from female genital tract, bacterial smear"
 OL401,9174,9174,1.000,1,false,9195,"Microscopic examination of specimen from operative wound, parasitology"
-OR052,887,887,1.000,1,false,886,Upper eyelid rhytidectomy
-OR053,887,887,1.000,1,false,886,Upper eyelid rhytidectomy
-OR054,886,886,0.963,1,false,887,Lower eyelid rhytidectomy
-OR055,886,886,0.928,1,false,887,Lower eyelid rhytidectomy
+OR052,0887,0887,1.000,1,false,0886,Upper eyelid rhytidectomy
+OR053,0887,0887,1.000,1,false,0886,Upper eyelid rhytidectomy
+OR054,0886,0886,0.963,1,false,0887,Lower eyelid rhytidectomy
+OR055,0886,0886,0.928,1,false,0887,Lower eyelid rhytidectomy
 OR056,2185,2185,1.000,1,false,2186,Augmentation rhinoplasty
 OR057,8008,8008,0.918,1,false,8468,"Arthrotomy for removal of prosthesis without replacement, foot and toe"
 OR060,9984,9984,1.000,0,true,,Isolation
@@ -3059,7 +3059,7 @@ OT024,9984,9984,1.000,0,true,,Isolation
 OT025,2751,2751,0.993,1,false,6441,Suture of laceration of lip
 OT026,5794,5794,1.000,1,false,5711,Insertion of indwelling urinary catheter
 OT027,3892,3892,0.957,1,false,9908,Umbilical vein catheterization
-OT029,33,33,1.000,1,false,8875,Computer assisted surgery with fluoroscopy
+OT029,0033,0033,1.000,1,false,8875,Computer assisted surgery with fluoroscopy
 OT108,9711,9711,1.000,1,false,9712,Replacement of cast on upper limb
 OT109,7865,7865,1.000,1,false,7867,"Removal of implanted devices from bone, femur"
 OT110,9346,9346,1.000,1,false,9345,Other skin traction of limbs
@@ -3109,9 +3109,9 @@ OT153,7806,7806,0.929,0,true,,"Bone graft, patella"
 OT154,9351,9351,1.000,1,false,9352,Application of plaster jacket
 OT156,8271,8271,0.884,1,false,8241,Tendon pulley reconstruction of hand
 OT158,7869,7869,0.895,1,false,9343,"Removal of implanted devices from bone, other bones"
-OT161,34,34,1.000,1,false,33,Imageless computer assisted surgery
+OT161,0034,0034,1.000,1,false,0033,Imageless computer assisted surgery
 OT603,9984,9984,1.000,0,true,,Isolation
-OT604,33,33,1.000,1,false,34,Computer assisted surgery with fluoroscopy
+OT604,0033,0033,1.000,1,false,0034,Computer assisted surgery with fluoroscopy
 OT605,9984,9984,1.000,0,true,,Isolation
 P0001,9604,9604,1.000,1,false,9605,Insertion of endotracheal tube
 P0002,3894,3894,1.000,1,false,3892,Venous cutdown
@@ -3175,7 +3175,7 @@ P0064,8611,8611,0.966,1,false,6411,Closed biopsy of skin and subcutaneous tissue
 P0065,613,613,0.903,1,false,6732,Excision or destruction of lesion or tissue of scrotum
 P0066,1142,1142,1.000,0,true,,Thermocauterization of corneal lesion
 P0067,9919,9919,0.993,0,true,,Injection of anticoagulant
-P0068,891,891,1.000,1,false,5831,Electrosurgical epilation of eyelid
+P0068,0891,0891,1.000,1,false,5831,Electrosurgical epilation of eyelid
 P0069,4233,4233,0.843,1,false,9632,Endoscopic excision or destruction of lesion or tissue of esophagus
 P0070,7122,7122,1.000,1,false,7121,Incision of Bartholin's gland (cyst)
 P0071,700,700,1.000,1,false,7012,Culdocentesis
@@ -3193,12 +3193,12 @@ P0083,9984,9984,1.000,0,true,,Isolation
 P0084,3778,3778,0.939,1,false,3964,Insertion of temporary transvenous pacemaker system
 P0085,3780,3780,1.000,1,false,3781,"Insertion of permanent pacemaker, initial or replacement, type of device not specified"
 P0086,3761,3761,1.000,1,false,3762,Implant of pulsation balloon
-P0088,3725,3725,1.000,1,false,49,Biopsy of heart
+P0088,3725,3725,1.000,1,false,0049,Biopsy of heart
 P0089,370,370,1.000,0,true,,Pericardiocentesis
 P0090,8964,8964,1.000,1,false,8963,Pulmonary artery wedge monitoring
 P0091,9901,9901,1.000,0,true,,Exchange transfusion
 P0092,3892,3892,1.000,1,false,3897,Umbilical vein catheterization
-P0093,331,331,1.000,1,false,109,Spinal tap
+P0093,0331,0331,1.000,1,false,0109,Spinal tap
 P0094,7399,7399,0.985,1,false,741,Other operations assisting delivery
 P0095,729,729,0.988,1,false,733,Unspecified instrumental delivery
 P0097,6711,6711,0.979,0,true,,Endocervical biopsy
@@ -3214,139 +3214,139 @@ P0107,9427,9427,1.000,1,false,9424,Other electroshock therapy
 P0110,9346,9346,1.000,1,false,9345,Other skin traction of limbs
 P0155,8952,8952,1.000,1,false,8951,Electrocardiogram
 P0156,8872,8872,1.000,1,false,3728,Diagnostic ultrasound of heart
-P0200,112,112,1.000,1,false,111,Open biopsy of cerebral meninges
-P0201,114,114,0.942,0,true,,Open biopsy of brain
-P0202,115,115,1.000,1,false,113,Biopsy of skull
-P0203,121,121,1.000,1,false,2250,Incision and drainage of cranial sinus
-P0204,302,302,0.917,1,false,123,Reopening of laminectomy site
-P0205,125,125,1.000,0,true,,Other craniectomy
-P0206,124,124,0.998,0,true,,Other craniotomy
-P0207,123,123,0.970,1,false,131,Reopening of craniotomy site
-P0208,123,123,0.998,1,false,124,Reopening of craniotomy site
-P0209,126,126,0.962,1,false,128,Insertion of catheter(s) into cranial cavity or tissue
+P0200,0112,0112,1.000,1,false,111,Open biopsy of cerebral meninges
+P0201,0114,0114,0.942,0,true,,Open biopsy of brain
+P0202,0115,0115,1.000,1,false,0113,Biopsy of skull
+P0203,0121,0121,1.000,1,false,2250,Incision and drainage of cranial sinus
+P0204,0302,0302,0.917,1,false,0123,Reopening of laminectomy site
+P0205,0125,0125,1.000,0,true,,Other craniectomy
+P0206,0124,0124,0.998,0,true,,Other craniotomy
+P0207,0123,0123,0.970,1,false,0131,Reopening of craniotomy site
+P0208,0123,0123,0.998,1,false,0124,Reopening of craniotomy site
+P0209,0126,0126,0.962,1,false,0128,Insertion of catheter(s) into cranial cavity or tissue
 P0210,7700,7700,0.938,1,false,7709,"Sequestrectomy, unspecified site"
-P0211,110,110,0.895,1,false,131,Intracranial pressure monitoring
-P0212,131,131,1.000,1,false,3951,Incision of cerebral meninges
-P0213,131,131,1.000,1,false,126,Incision of cerebral meninges
-P0214,131,131,1.000,1,false,126,Incision of cerebral meninges
-P0215,132,132,1.000,0,true,,Lobotomy and tractotomy
-P0216,128,128,0.928,1,false,5201,Placement of intracerebral catheter(s) via burr hole(s)
-P0217,112,112,1.000,1,false,131,Open biopsy of cerebral meninges
-P0218,152,152,1.000,1,false,153,Hemispherectomy
-P0219,153,153,1.000,0,true,,Lobectomy of brain
-P0220,114,114,0.933,0,true,,Open biopsy of brain
+P0211,110,110,0.895,1,false,0131,Intracranial pressure monitoring
+P0212,0131,0131,1.000,1,false,3951,Incision of cerebral meninges
+P0213,0131,0131,1.000,1,false,0126,Incision of cerebral meninges
+P0214,0131,0131,1.000,1,false,0126,Incision of cerebral meninges
+P0215,0132,0132,1.000,0,true,,Lobotomy and tractotomy
+P0216,0128,0128,0.928,1,false,5201,Placement of intracerebral catheter(s) via burr hole(s)
+P0217,0112,0112,1.000,1,false,0131,Open biopsy of cerebral meninges
+P0218,0152,0152,1.000,1,false,0153,Hemispherectomy
+P0219,0153,0153,1.000,0,true,,Lobectomy of brain
+P0220,0114,0114,0.933,0,true,,Open biopsy of brain
 P0221,7601,7601,1.000,1,false,7963,Sequestrectomy of facial bone
 P0222,3001,3001,1.000,1,false,6521,Marsupialization of laryngeal cyst
-P0223,153,153,0.905,0,true,,Lobectomy of brain
-P0224,16,16,1.000,1,false,115,Excision of lesion of skull
-P0225,201,201,1.000,1,false,125,Opening of cranial suture
-P0226,125,125,1.000,0,true,,Other craniectomy
-P0227,205,205,1.000,1,false,203,Insertion of skull plate
+P0223,0153,0153,0.905,0,true,,Lobectomy of brain
+P0224,016,016,1.000,1,false,0115,Excision of lesion of skull
+P0225,0201,0201,1.000,1,false,0125,Opening of cranial suture
+P0226,0125,0125,1.000,0,true,,Other craniectomy
+P0227,0205,0205,1.000,1,false,0203,Insertion of skull plate
 P0228,8341,8341,0.981,1,false,8343,Excision of tendon for graft
-P0229,205,205,1.000,1,false,207,Insertion of skull plate
-P0230,205,205,0.943,1,false,16,Insertion of skull plate
-P0231,207,207,1.000,0,true,,Removal of skull plate
-P0232,211,211,1.000,1,false,212,Simple suture of dura mater of brain
-P0233,352,352,1.000,1,false,4463,Repair of spinal myelomeningocele
-P0234,212,212,0.989,1,false,211,Other repair of cerebral meninges
-P0235,205,205,1.000,1,false,204,Insertion of skull plate
+P0229,0205,0205,1.000,1,false,0207,Insertion of skull plate
+P0230,0205,0205,0.943,1,false,016,Insertion of skull plate
+P0231,0207,0207,1.000,0,true,,Removal of skull plate
+P0232,0211,0211,1.000,1,false,0212,Simple suture of dura mater of brain
+P0233,0352,0352,1.000,1,false,4463,Repair of spinal myelomeningocele
+P0234,0212,0212,0.989,1,false,0211,Other repair of cerebral meninges
+P0235,0205,0205,1.000,1,false,0204,Insertion of skull plate
 P0236,9984,9984,1.000,0,true,,Isolation
-P0237,213,213,1.000,1,false,211,Ligation of meningeal vessel
-P0238,221,221,1.000,1,false,110,Insertion or replacement of external ventricular drain [EVD]
-P0239,239,239,1.000,1,false,232,Ventricular shunt to extracranial site NEC
-P0240,243,243,0.938,1,false,242,Removal of ventricular shunt
-P0241,243,243,1.000,1,false,241,Removal of ventricular shunt
-P0242,292,292,0.996,1,false,116,Repair of brain
-P0243,309,309,1.000,1,false,302,Other exploration and decompression of spinal canal
-P0244,31,31,0.880,1,false,441,Division of intraspinal nerve root
-P0245,301,301,0.912,1,false,309,Removal of foreign body from spinal canal
-P0246,42,42,1.000,1,false,31,Destruction of cranial and peripheral nerves
-P0247,34,34,1.000,1,false,332,Excision or destruction of lesion of spinal cord or spinal meninges
-P0248,351,351,1.000,1,false,352,Repair of spinal meningocele
-P0249,352,352,0.955,1,false,351,Repair of spinal myelomeningocele
+P0237,213,213,1.000,1,false,0211,Ligation of meningeal vessel
+P0238,0221,0221,1.000,1,false,110,Insertion or replacement of external ventricular drain [EVD]
+P0239,239,239,1.000,1,false,0232,Ventricular shunt to extracranial site NEC
+P0240,0243,0243,0.938,1,false,0242,Removal of ventricular shunt
+P0241,0243,0243,1.000,1,false,0241,Removal of ventricular shunt
+P0242,0292,0292,0.996,1,false,116,Repair of brain
+P0243,0309,0309,1.000,1,false,0302,Other exploration and decompression of spinal canal
+P0244,031,031,0.880,1,false,0441,Division of intraspinal nerve root
+P0245,0301,0301,0.912,1,false,0309,Removal of foreign body from spinal canal
+P0246,042,042,1.000,1,false,031,Destruction of cranial and peripheral nerves
+P0247,034,034,1.000,1,false,0332,Excision or destruction of lesion of spinal cord or spinal meninges
+P0248,0351,0351,1.000,1,false,0352,Repair of spinal meningocele
+P0249,0352,0352,0.955,1,false,0351,Repair of spinal myelomeningocele
 P0250,7905,7905,0.976,1,false,7904,"Closed reduction of fracture without internal fixation, femur"
-P0251,36,36,1.000,1,false,479,Lysis of adhesions of spinal cord and nerve roots
-P0252,43,43,1.000,1,false,476,Suture of cranial and peripheral nerves
-P0253,471,471,0.891,1,false,441,Hypoglossal-facial anastomosis
-P0254,443,443,1.000,1,false,444,Release of carpal tunnel
-P0255,476,476,0.987,1,false,45,Repair of old traumatic injury of cranial and peripheral nerves
-P0256,471,471,1.000,1,false,472,Hypoglossal-facial anastomosis
-P0257,472,472,1.000,1,false,471,Accessory-facial anastomosis
-P0258,472,472,0.891,1,false,474,Accessory-facial anastomosis
-P0259,43,43,1.000,1,false,474,Suture of cranial and peripheral nerves
-P0260,511,511,1.000,1,false,412,Biopsy of sympathetic nerve or ganglion
-P0261,522,522,1.000,1,false,523,Cervical sympathectomy
-P0262,523,523,1.000,0,true,,Lumbar sympathectomy
-P0263,602,602,1.000,1,false,609,Reopening of wound of thyroid field
+P0251,036,036,1.000,1,false,0479,Lysis of adhesions of spinal cord and nerve roots
+P0252,043,043,1.000,1,false,0476,Suture of cranial and peripheral nerves
+P0253,0471,0471,0.891,1,false,0441,Hypoglossal-facial anastomosis
+P0254,0443,0443,1.000,1,false,0444,Release of carpal tunnel
+P0255,0476,0476,0.987,1,false,045,Repair of old traumatic injury of cranial and peripheral nerves
+P0256,0471,0471,1.000,1,false,0472,Hypoglossal-facial anastomosis
+P0257,0472,0472,1.000,1,false,0471,Accessory-facial anastomosis
+P0258,0472,0472,0.891,1,false,0474,Accessory-facial anastomosis
+P0259,043,043,1.000,1,false,0474,Suture of cranial and peripheral nerves
+P0260,0511,0511,1.000,1,false,0412,Biopsy of sympathetic nerve or ganglion
+P0261,0522,0522,1.000,1,false,0523,Cervical sympathectomy
+P0262,0523,0523,1.000,0,true,,Lumbar sympathectomy
+P0263,0602,0602,1.000,1,false,0609,Reopening of wound of thyroid field
 P0264,3941,3941,0.954,1,false,3802,Control of hemorrhage following vascular surgery
-P0265,612,612,1.000,1,false,611,Open biopsy of thyroid gland
-P0266,613,613,1.000,1,false,619,Biopsy of parathyroid gland
-P0267,62,62,1.000,1,false,639,Unilateral thyroid lobectomy
-P0268,639,639,0.966,1,false,62,Other partial thyroidectomy
-P0269,631,631,0.972,1,false,7763,Excision of lesion of thyroid
-P0270,64,64,1.000,1,false,651,Complete thyroidectomy
-P0271,64,64,0.960,1,false,652,Complete thyroidectomy
-P0272,651,651,1.000,1,false,650,Partial substernal thyroidectomy
-P0273,652,652,1.000,1,false,651,Complete substernal thyroidectomy
-P0274,639,639,0.986,1,false,66,Other partial thyroidectomy
-P0275,62,62,1.000,1,false,639,Unilateral thyroid lobectomy
-P0276,67,67,1.000,1,false,292,Excision of thyroglossal duct or tract
-P0277,681,681,1.000,1,false,689,Complete parathyroidectomy
-P0278,681,681,1.000,1,false,689,Complete parathyroidectomy
-P0279,691,691,1.000,1,false,64,Division of thyroid isthmus
-P0280,692,692,1.000,1,false,743,Ligation of thyroid vessels
-P0281,693,693,0.956,0,true,,Suture of thyroid gland
-P0282,695,695,1.000,1,false,694,Parathyroid tissue reimplantation
-P0283,722,722,1.000,1,false,73,Unilateral adrenalectomy
-P0284,73,73,1.000,1,false,729,Bilateral adrenalectomy
-P0285,781,781,1.000,1,false,784,Other partial excision of thymus
+P0265,0612,0612,1.000,1,false,611,Open biopsy of thyroid gland
+P0266,0613,0613,1.000,1,false,0619,Biopsy of parathyroid gland
+P0267,062,062,1.000,1,false,0639,Unilateral thyroid lobectomy
+P0268,0639,0639,0.966,1,false,062,Other partial thyroidectomy
+P0269,0631,0631,0.972,1,false,7763,Excision of lesion of thyroid
+P0270,064,064,1.000,1,false,0651,Complete thyroidectomy
+P0271,064,064,0.960,1,false,0652,Complete thyroidectomy
+P0272,0651,0651,1.000,1,false,0650,Partial substernal thyroidectomy
+P0273,0652,0652,1.000,1,false,0651,Complete substernal thyroidectomy
+P0274,0639,0639,0.986,1,false,066,Other partial thyroidectomy
+P0275,062,062,1.000,1,false,0639,Unilateral thyroid lobectomy
+P0276,067,067,1.000,1,false,292,Excision of thyroglossal duct or tract
+P0277,0681,0681,1.000,1,false,0689,Complete parathyroidectomy
+P0278,0681,0681,1.000,1,false,0689,Complete parathyroidectomy
+P0279,0691,0691,1.000,1,false,064,Division of thyroid isthmus
+P0280,0692,0692,1.000,1,false,0743,Ligation of thyroid vessels
+P0281,0693,0693,0.956,0,true,,Suture of thyroid gland
+P0282,0695,0695,1.000,1,false,0694,Parathyroid tissue reimplantation
+P0283,0722,0722,1.000,1,false,073,Unilateral adrenalectomy
+P0284,073,073,1.000,1,false,0729,Bilateral adrenalectomy
+P0285,0781,0781,1.000,1,false,0784,Other partial excision of thymus
 P0286,801,801,0.957,0,true,,Incision of lid margin
-P0287,802,802,1.000,1,false,852,Severing of blepharorrhaphy
-P0288,811,811,0.970,0,true,,Biopsy of eyelid
-P0289,821,821,1.000,0,true,,Excision of chalazion
-P0290,822,822,0.908,1,false,823,Excision of other minor lesion of eyelid
-P0291,871,871,0.923,1,false,882,"Reconstruction of eyelid involving lid margin, partial-thickness"
-P0292,824,824,0.964,1,false,884,"Excision of major lesion of eyelid, full-thickness"
-P0293,831,831,0.991,1,false,832,Repair of blepharoptosis by frontalis muscle technique with suture
-P0294,832,832,0.980,1,false,831,Repair of blepharoptosis by frontalis muscle technique with fascial sling
-P0295,834,834,1.000,1,false,833,Repair of blepharoptosis by other levator muscle techniques
-P0296,834,834,0.989,1,false,833,Repair of blepharoptosis by other levator muscle techniques
-P0297,835,835,1.000,1,false,833,Repair of blepharoptosis by tarsal technique
-P0298,887,887,1.000,1,false,886,Upper eyelid rhytidectomy
-P0299,887,887,1.000,1,false,886,Upper eyelid rhytidectomy
-P0300,837,837,1.000,1,false,834,Reduction of overcorrection of ptosis
-P0301,838,838,1.000,1,false,837,Correction of lid retraction
-P0302,842,842,1.000,1,false,849,Repair of entropion or ectropion by suture technique
-P0303,843,843,1.000,1,false,844,Repair of entropion or ectropion with wedge resection
-P0304,844,844,1.000,1,false,849,Repair of entropion or ectropion with lid reconstruction
-P0305,851,851,1.000,1,false,921,Canthotomy
-P0306,852,852,1.000,1,false,802,Blepharorrhaphy
-P0307,859,859,1.000,1,false,843,Other adjustment of lid position
-P0308,852,852,1.000,1,false,802,Blepharorrhaphy
-P0309,861,861,1.000,1,false,864,Reconstruction of eyelid with skin flap or graft
-P0310,862,862,1.000,1,false,861,Reconstruction of eyelid with mucous membrane flap or graft
-P0311,863,863,1.000,1,false,873,Reconstruction of eyelid with hair follicle graft
-P0312,864,864,1.000,1,false,862,Reconstruction of eyelid with tarsoconjunctival flap
-P0313,873,873,0.973,1,false,871,"Reconstruction of eyelid involving lid margin, full-thickness"
+P0287,0802,0802,1.000,1,false,0852,Severing of blepharorrhaphy
+P0288,0811,0811,0.970,0,true,,Biopsy of eyelid
+P0289,0821,0821,1.000,0,true,,Excision of chalazion
+P0290,0822,0822,0.908,1,false,0823,Excision of other minor lesion of eyelid
+P0291,0871,0871,0.923,1,false,0882,"Reconstruction of eyelid involving lid margin, partial-thickness"
+P0292,0824,0824,0.964,1,false,0884,"Excision of major lesion of eyelid, full-thickness"
+P0293,0831,0831,0.991,1,false,0832,Repair of blepharoptosis by frontalis muscle technique with suture
+P0294,0832,0832,0.980,1,false,0831,Repair of blepharoptosis by frontalis muscle technique with fascial sling
+P0295,0834,0834,1.000,1,false,0833,Repair of blepharoptosis by other levator muscle techniques
+P0296,0834,0834,0.989,1,false,0833,Repair of blepharoptosis by other levator muscle techniques
+P0297,0835,0835,1.000,1,false,0833,Repair of blepharoptosis by tarsal technique
+P0298,0887,0887,1.000,1,false,0886,Upper eyelid rhytidectomy
+P0299,0887,0887,1.000,1,false,0886,Upper eyelid rhytidectomy
+P0300,0837,0837,1.000,1,false,0834,Reduction of overcorrection of ptosis
+P0301,0838,0838,1.000,1,false,0837,Correction of lid retraction
+P0302,0842,0842,1.000,1,false,0849,Repair of entropion or ectropion by suture technique
+P0303,0843,0843,1.000,1,false,0844,Repair of entropion or ectropion with wedge resection
+P0304,0844,0844,1.000,1,false,0849,Repair of entropion or ectropion with lid reconstruction
+P0305,0851,0851,1.000,1,false,0921,Canthotomy
+P0306,0852,0852,1.000,1,false,0802,Blepharorrhaphy
+P0307,0859,0859,1.000,1,false,0843,Other adjustment of lid position
+P0308,0852,0852,1.000,1,false,0802,Blepharorrhaphy
+P0309,0861,0861,1.000,1,false,0864,Reconstruction of eyelid with skin flap or graft
+P0310,0862,0862,1.000,1,false,0861,Reconstruction of eyelid with mucous membrane flap or graft
+P0311,0863,0863,1.000,1,false,873,Reconstruction of eyelid with hair follicle graft
+P0312,0864,0864,1.000,1,false,0862,Reconstruction of eyelid with tarsoconjunctival flap
+P0313,873,873,0.973,1,false,0871,"Reconstruction of eyelid involving lid margin, full-thickness"
 P0314,873,873,0.895,1,false,872,"Reconstruction of eyelid involving lid margin, full-thickness"
-P0315,881,881,1.000,1,false,106,Linear repair of laceration of eyelid or eyebrow
-P0316,882,882,1.000,1,false,883,"Repair of laceration involving lid margin, partial-thickness"
-P0317,884,884,0.990,1,false,882,"Repair of laceration involving lid margin, full-thickness"
-P0318,886,886,0.958,1,false,887,Lower eyelid rhytidectomy
-P0319,953,953,1.000,1,false,96,Incision of lacrimal sac
-P0320,921,921,0.894,1,false,923,Excision of lesion of lacrimal gland
-P0321,922,922,1.000,1,false,923,Other partial dacryoadenectomy
-P0322,923,923,1.000,0,true,,Total dacryoadenectomy
-P0323,941,941,1.000,1,false,943,Probing of lacrimal punctum
-P0324,942,942,1.000,1,false,941,Probing of lacrimal canaliculi
-P0325,943,943,1.000,1,false,941,Probing of nasolacrimal duct
-P0326,951,951,1.000,1,false,972,Incision of lacrimal punctum
-P0327,953,953,1.000,1,false,912,Incision of lacrimal sac
-P0328,96,96,1.000,1,false,949,Excision of lacrimal sac and passage
-P0329,973,973,1.000,0,true,,Repair of canaliculus
-P0330,981,981,1.000,1,false,96,Dacryocystorhinostomy [DCR]
-P0331,982,982,1.000,1,false,983,Conjunctivocystorhinostomy
-P0332,991,991,1.000,1,false,951,Obliteration of lacrimal punctum
+P0315,0881,0881,1.000,1,false,106,Linear repair of laceration of eyelid or eyebrow
+P0316,0882,0882,1.000,1,false,0883,"Repair of laceration involving lid margin, partial-thickness"
+P0317,0884,0884,0.990,1,false,0882,"Repair of laceration involving lid margin, full-thickness"
+P0318,0886,0886,0.958,1,false,0887,Lower eyelid rhytidectomy
+P0319,0953,0953,1.000,1,false,096,Incision of lacrimal sac
+P0320,0921,0921,0.894,1,false,0923,Excision of lesion of lacrimal gland
+P0321,0922,0922,1.000,1,false,0923,Other partial dacryoadenectomy
+P0322,0923,0923,1.000,0,true,,Total dacryoadenectomy
+P0323,0941,0941,1.000,1,false,0943,Probing of lacrimal punctum
+P0324,0942,0942,1.000,1,false,0941,Probing of lacrimal canaliculi
+P0325,0943,0943,1.000,1,false,0941,Probing of nasolacrimal duct
+P0326,0951,0951,1.000,1,false,0972,Incision of lacrimal punctum
+P0327,0953,0953,1.000,1,false,0912,Incision of lacrimal sac
+P0328,096,096,1.000,1,false,0949,Excision of lacrimal sac and passage
+P0329,0973,0973,1.000,0,true,,Repair of canaliculus
+P0330,0981,0981,1.000,1,false,096,Dacryocystorhinostomy [DCR]
+P0331,0982,0982,1.000,1,false,0983,Conjunctivocystorhinostomy
+P0332,0991,0991,1.000,1,false,0951,Obliteration of lacrimal punctum
 P0333,1021,1021,1.000,1,false,3325,Biopsy of conjunctiva
 P0334,1031,1031,1.000,1,false,1693,Excision of lesion or tissue of conjunctiva
 P0335,1041,1041,1.000,1,false,1042,Repair of symblepharon with free graft
@@ -3354,7 +3354,7 @@ P0337,106,106,1.000,1,false,1281,Repair of laceration of conjunctiva
 P0338,1091,1091,1.000,0,true,,Subconjunctival injection
 P0339,110,110,1.000,1,false,100,Magnetic removal of embedded foreign body from cornea
 P0340,1121,1121,1.000,1,false,9022,Scraping of cornea for smear or culture
-P0341,1122,1122,1.000,1,false,511,Biopsy of cornea
+P0341,1122,1122,1.000,1,false,0511,Biopsy of cornea
 P0342,1131,1131,1.000,1,false,1139,Transposition of pterygium
 P0343,1132,1132,1.000,1,false,1139,Excision of pterygium with corneal graft
 P0344,1151,1151,1.000,1,false,1281,Suture of corneal laceration
@@ -4250,7 +4250,7 @@ P1235,8451,8451,0.941,1,false,8108,Insertion of interbody spinal fusion device
 P1236,8101,8101,0.914,0,true,,Atlas-axis spinal fusion
 P1237,8107,8107,0.950,1,false,8138,"Lumbar and lumbosacral fusion of the posterior column, posterior technique"
 P1238,8111,8111,1.000,1,false,8117,Ankle fusion
-P1239,8121,8121,1.000,1,false,85,Arthrodesis of hip
+P1239,8121,8121,1.000,1,false,0085,Arthrodesis of hip
 P1240,8122,8122,1.000,1,false,8124,Arthrodesis of knee
 P1241,8123,8123,1.000,1,false,8122,Arthrodesis of shoulder
 P1242,8124,8124,1.000,1,false,8184,Arthrodesis of elbow
@@ -4375,7 +4375,7 @@ P1360,8672,8672,1.000,1,false,8584,Advancement of pedicle graft
 P1361,8673,8673,1.000,1,false,8674,Attachment of pedicle or flap graft to hand
 P1362,8674,8674,0.972,1,false,8670,Attachment of pedicle or flap graft to other sites
 P1363,8675,8675,1.000,1,false,8670,Revision of pedicle or flap graft
-P1364,8681,8681,1.000,1,false,471,Repair for facial weakness
+P1364,8681,8681,1.000,1,false,0471,Repair for facial weakness
 P1365,8682,8682,1.000,0,true,,Facial rhytidectomy
 P1366,8690,8690,0.978,1,false,8687,Extraction of fat for graft or banking
 P1367,4663,4663,0.979,1,false,5422,Fixation of large intestine to abdominal wall
@@ -4399,40 +4399,40 @@ P1384,9813,9813,0.983,1,false,9801,Removal of intraluminal foreign body from pha
 P1385,9814,9814,1.000,1,false,9811,Removal of intraluminal foreign body from larynx without incision
 P1386,9815,9815,1.000,1,false,9814,Removal of intraluminal foreign body from trachea and bronchus without incision
 P1387,9819,9819,1.000,1,false,9802,Removal of intraluminal foreign body from urethra without incision
-P1388,110,110,1.000,1,false,221,Intracranial pressure monitoring
-P1389,113,113,1.000,1,false,111,Closed [percutaneous] [needle] biopsy of brain
-P1390,122,122,1.000,1,false,129,Removal of intracranial neurostimulator lead(s)
-P1391,128,128,1.000,1,false,126,Placement of intracerebral catheter(s) via burr hole(s)
+P1388,110,110,1.000,1,false,0221,Intracranial pressure monitoring
+P1389,0113,0113,1.000,1,false,111,Closed [percutaneous] [needle] biopsy of brain
+P1390,122,122,1.000,1,false,0129,Removal of intracranial neurostimulator lead(s)
+P1391,0128,0128,1.000,1,false,0126,Placement of intracerebral catheter(s) via burr hole(s)
 P1392,293,293,0.925,1,false,393,Implantation or replacement of intracranial neurostimulator lead(s)
-P1393,294,294,1.000,1,false,295,Insertion or replacement of skull tongs or halo traction device
-P1394,295,295,1.000,1,false,294,Removal of skull tongs or halo traction device
-P1395,331,331,1.000,1,false,372,Spinal tap
-P1396,332,332,0.956,1,false,34,Biopsy of spinal cord or spinal meninges
-P1397,359,359,1.000,1,false,352,Other repair and plastic operations on spinal cord structures
-P1398,371,371,1.000,1,false,379,Spinal subarachnoid-peritoneal shunt
-P1399,379,379,1.000,1,false,371,Other shunt of spinal theca
-P1400,390,390,1.000,1,false,391,Insertion of catheter into spinal canal for infusion of therapeutic or palliative substances
+P1393,0294,0294,1.000,1,false,0295,Insertion or replacement of skull tongs or halo traction device
+P1394,0295,0295,1.000,1,false,0294,Removal of skull tongs or halo traction device
+P1395,0331,0331,1.000,1,false,0372,Spinal tap
+P1396,0332,0332,0.956,1,false,034,Biopsy of spinal cord or spinal meninges
+P1397,0359,0359,1.000,1,false,0352,Other repair and plastic operations on spinal cord structures
+P1398,0371,0371,1.000,1,false,0379,Spinal subarachnoid-peritoneal shunt
+P1399,0379,0379,1.000,1,false,0371,Other shunt of spinal theca
+P1400,0390,0390,1.000,1,false,0391,Insertion of catheter into spinal canal for infusion of therapeutic or palliative substances
 P1401,393,393,1.000,1,false,394,Implantation or replacement of spinal neurostimulator lead(s)
 P1402,394,394,1.000,1,false,393,Removal of spinal neurostimulator lead(s)
-P1403,397,397,1.000,1,false,398,Revision of spinal thecal shunt
-P1404,398,398,1.000,1,false,397,Removal of spinal thecal shunt
-P1405,401,401,1.000,1,false,9546,Excision of acoustic neuroma
-P1406,407,407,1.000,1,false,406,Other excision or avulsion of cranial and peripheral nerves
+P1403,0397,0397,1.000,1,false,0398,Revision of spinal thecal shunt
+P1404,0398,0398,1.000,1,false,0397,Removal of spinal thecal shunt
+P1405,0401,0401,1.000,1,false,9546,Excision of acoustic neuroma
+P1406,0407,0407,1.000,1,false,0406,Other excision or avulsion of cranial and peripheral nerves
 P1407,5024,5024,0.969,1,false,3224,Percutaneous ablation of liver lesion or tissue
-P1408,442,442,1.000,1,false,441,Other cranial nerve decompression
-P1409,753,753,1.000,1,false,754,Partial excision of pineal gland
-P1410,761,761,0.960,1,false,764,"Partial excision of pituitary gland, transfrontal approach"
-P1411,765,765,1.000,1,false,768,"Total excision of pituitary gland, transsphenoidal approach"
-P1412,401,401,0.961,1,false,2022,Excision of acoustic neuroma
+P1408,0442,0442,1.000,1,false,0441,Other cranial nerve decompression
+P1409,0753,0753,1.000,1,false,0754,Partial excision of pineal gland
+P1410,0761,0761,0.960,1,false,0764,"Partial excision of pituitary gland, transfrontal approach"
+P1411,0765,0765,1.000,1,false,0768,"Total excision of pituitary gland, transsphenoidal approach"
+P1412,0401,0401,0.961,1,false,2022,Excision of acoustic neuroma
 P1413,3861,3861,1.000,1,false,3841,"Other excision of vessels, intracranial vessels"
 P1414,3928,3928,1.000,1,false,3811,Extracranial-intracranial (EC-IC) vascular bypass
 P1415,3951,3951,1.000,0,true,,Clipping of aneurysm
-P1416,242,242,1.000,1,false,243,Replacement of ventricular shunt
+P1416,0242,0242,1.000,1,false,0243,Replacement of ventricular shunt
 P1417,8165,8165,1.000,1,false,8166,Percutaneous vertebroplasty
-P1418,8696,8696,1.000,1,false,120,Insertion or replacement of other neurostimulator pulse generator
-P1419,39,39,1.000,1,false,35,Other computer assisted surgery
-P1420,392,392,0.958,1,false,38,Injection of other agent into spinal canal
-P1421,44,44,0.967,1,false,3975,Procedure on vessel bifurcation
+P1418,8696,8696,1.000,1,false,0120,Insertion or replacement of other neurostimulator pulse generator
+P1419,0039,0039,1.000,1,false,0035,Other computer assisted surgery
+P1420,0392,0392,0.958,1,false,038,Injection of other agent into spinal canal
+P1421,0044,0044,0.967,1,false,3975,Procedure on vessel bifurcation
 P1422,3830,3830,0.875,1,false,3955,"Resection of vessel with anastomosis, unspecified site"
 P1423,7701,7701,1.000,1,false,7721,"Sequestrectomy, scapula, clavicle, and thorax [ribs and sternum]"
 P1424,7702,7702,0.975,0,true,,"Sequestrectomy, humerus"
@@ -4571,10 +4571,10 @@ P1556,8145,8145,1.000,1,false,8143,Other repair of the cruciate ligaments
 P1557,8146,8146,1.000,1,false,8143,Other repair of the collateral ligaments
 P1558,8149,8149,1.000,0,true,,Other repair of ankle
 P1559,8149,8149,0.972,0,true,,Other repair of ankle
-P1560,70,70,1.000,1,false,72,"Revision of hip replacement, both acetabular and femoral components"
-P1561,80,80,1.000,1,false,82,"Revision of knee replacement, total (all components)"
+P1560,0070,0070,1.000,1,false,0072,"Revision of hip replacement, both acetabular and femoral components"
+P1561,0080,0080,1.000,1,false,0082,"Revision of knee replacement, total (all components)"
 P1562,8157,8157,1.000,1,false,8116,Replacement of joint of foot and toe
-P1563,8159,8159,1.000,1,false,80,"Revision of joint replacement of lower extremity, not elsewhere classified"
+P1563,8159,8159,1.000,1,false,0080,"Revision of joint replacement of lower extremity, not elsewhere classified"
 P1564,8166,8166,1.000,1,false,8165,Percutaneous vertebral augmentation
 P1565,8171,8171,1.000,1,false,8172,Arthroplasty of metacarpophalangeal and interphalangeal joint with implant
 P1566,8172,8172,1.000,1,false,8171,Arthroplasty of metacarpophalangeal and interphalangeal joint without implant
@@ -4587,11 +4587,11 @@ P1572,8182,8182,1.000,1,false,7981,Repair of recurrent dislocation of shoulder
 P1573,8183,8183,0.943,0,true,,Other repair of shoulder
 P1574,8184,8184,1.000,0,true,,Total elbow replacement
 P1575,8185,8185,1.000,0,true,,Other repair of elbow
-P1576,66,66,0.973,1,false,285,Excision of lingual thyroid
+P1576,066,066,0.973,1,false,285,Excision of lingual thyroid
 P1577,8192,8192,0.968,1,false,8294,Injection of therapeutic substance into joint or ligament
 P1578,8195,8195,1.000,1,false,8193,Suture of capsule or ligament of other lower extremity
 P1579,8196,8196,0.998,0,true,,Other repair of joint
-P1580,8197,8197,1.000,1,false,71,Revision of joint replacement of upper extremity
+P1580,8197,8197,1.000,1,false,0071,Revision of joint replacement of upper extremity
 P1581,8198,8198,0.838,1,false,8039,Other diagnostic procedures on joint structures
 P1582,8301,8301,0.961,1,false,8201,Exploration of tendon sheath
 P1583,8204,8204,1.000,1,false,8246,Incision and drainage of palmar or thenar space
@@ -4674,7 +4674,7 @@ P1659,8482,8482,1.000,1,false,8483,Insertion or replacement of pedicle-based dyn
 P1660,8483,8483,0.993,1,false,8482,Revision of pedicle-based dynamic stabilization device(s)
 P1661,8484,8484,1.000,1,false,8485,Insertion or replacement of facet replacement device(s)
 P1662,1871,1871,0.953,1,false,9781,Construction of auricle of ear
-P1663,476,476,1.000,1,false,475,Repair of old traumatic injury of cranial and peripheral nerves
+P1663,0476,0476,1.000,1,false,0475,Repair of old traumatic injury of cranial and peripheral nerves
 P1664,9363,9363,0.950,1,false,9315,"Osteopathic manipulative treatment using low- velocity, high-amplitude forces"
 P1665,1802,1802,0.813,1,false,1839,Incision of external auditory canal
 P1666,1839,1839,0.972,1,false,1802,Other excision of external ear
@@ -4706,7 +4706,7 @@ P1691,2191,2191,1.000,1,false,2954,Lysis of adhesions of nose
 P1692,2201,2201,1.000,1,false,2202,Puncture of nasal sinus for aspiration or lavage
 P1693,2241,2241,0.860,0,true,,Frontal sinusotomy
 P1694,222,222,0.893,0,true,,Intranasal antrotomy
-P1695,2253,2253,0.959,1,false,762,Incision of multiple nasal sinuses
+P1695,2253,2253,0.959,1,false,0762,Incision of multiple nasal sinuses
 P1696,7666,7666,0.979,1,false,2262,Total osteoplasty [osteotomy] of maxilla
 P1697,2431,2431,0.981,1,false,2411,Excision of lesion or tissue of gum
 P1698,2593,2593,0.993,1,false,2592,Lysis of adhesions of tongue
@@ -4720,7 +4720,7 @@ P1705,2201,2201,1.000,1,false,2261,Puncture of nasal sinus for aspiration or lav
 P1706,2953,2953,0.850,1,false,3162,Closure of other fistula of pharynx
 P1707,2954,2954,1.000,1,false,8291,Lysis of pharyngeal adhesions
 P1708,9601,9601,0.839,1,false,3391,Insertion of nasopharyngeal airway
-P1709,768,768,0.793,1,false,3021,"Total excision of pituitary gland, other specified approach"
+P1709,0768,0768,0.793,1,false,3021,"Total excision of pituitary gland, other specified approach"
 P1710,3022,3022,1.000,1,false,3021,Vocal cordectomy
 P1711,3143,3143,0.870,1,false,2121,Closed [endoscopic] biopsy of larynx
 P1712,3143,3143,1.000,1,false,4824,Closed [endoscopic] biopsy of larynx
@@ -4738,8 +4738,8 @@ P1723,8601,8601,0.978,1,false,5091,Aspiration of skin and subcutaneous tissue
 P1724,3001,3001,0.988,1,false,6521,Marsupialization of laryngeal cyst
 P1725,863,863,0.819,1,false,8339,Other local excision or destruction of lesion or tissue of skin and subcutaneous tissue
 P1726,2021,2021,0.850,0,true,,Incision of mastoid
-P1727,203,203,1.000,1,false,1601,Formation of cranial bone flap
-P1728,713,713,0.899,1,false,3483,"Biopsy of pituitary gland, transfrontal approach"
+P1727,0203,0203,1.000,1,false,1601,Formation of cranial bone flap
+P1728,0713,0713,0.899,1,false,3483,"Biopsy of pituitary gland, transfrontal approach"
 P1729,2271,2271,1.000,1,false,2279,Closure of nasal sinus fistula
 P1730,2271,2271,0.875,1,false,2252,Closure of nasal sinus fistula
 P1731,3143,3143,0.982,1,false,3022,Closed [endoscopic] biopsy of larynx
@@ -4757,10 +4757,10 @@ P1742,4252,4252,0.953,1,false,4242,Intrathoracic esophagogastrostomy
 P1743,9220,9220,0.951,1,false,8849,Infusion of liquid brachytherapy radioisotope
 P1744,311,311,1.000,0,true,,Temporary tracheostomy
 P1745,1341,1341,1.000,1,false,1369,Phacoemulsification and aspiration of cataract
-P1746,476,476,0.993,1,false,43,Repair of old traumatic injury of cranial and peripheral nerves
-P1747,70,70,1.000,1,false,72,"Revision of hip replacement, both acetabular and femoral components"
+P1746,0476,0476,0.993,1,false,043,Repair of old traumatic injury of cranial and peripheral nerves
+P1747,0070,0070,1.000,1,false,0072,"Revision of hip replacement, both acetabular and femoral components"
 P1748,9363,9363,0.950,1,false,9315,"Osteopathic manipulative treatment using low- velocity, high-amplitude forces"
-P1749,33,33,0.846,1,false,8839,Computer assisted surgery with fluoroscopy
+P1749,0033,0033,0.846,1,false,8839,Computer assisted surgery with fluoroscopy
 P1750,9614,9614,0.985,1,false,9619,Vaginal packing
 P1751,5459,5459,0.997,1,false,6589,Other lysis of peritoneal adhesions
 P1752,7024,7024,1.000,1,false,6711,Vaginal biopsy
@@ -4772,15 +4772,15 @@ P1757,7122,7122,1.000,1,false,7121,Incision of Bartholin's gland (cyst)
 P1758,7591,7591,1.000,1,false,7592,Evacuation of obstetrical incisional hematoma of perineum
 P1759,697,697,1.000,1,false,9771,Insertion of intrauterine contraceptive device
 P1760,94,94,1.000,1,false,9308,Intra-operative neurophysiologic monitoring
-P1761,231,231,0.974,1,false,235,Ventricular shunt to structure in head and neck
-P1762,232,232,1.000,1,false,234,Ventricular shunt to circulatory system
-P1763,233,233,1.000,1,false,234,Ventricular shunt to thoracic cavity
-P1764,234,234,0.950,1,false,239,Ventricular shunt to abdominal cavity and organs
-P1765,235,235,0.995,1,false,239,Ventricular shunt to urinary system
-P1766,221,221,1.000,1,false,222,Insertion or replacement of external ventricular drain [EVD]
-P1767,301,301,1.000,1,false,8893,Removal of foreign body from spinal canal
-P1768,302,302,1.000,1,false,123,Reopening of laminectomy site
-P1769,309,309,1.000,1,false,339,Other exploration and decompression of spinal canal
+P1761,0231,0231,0.974,1,false,0235,Ventricular shunt to structure in head and neck
+P1762,0232,0232,1.000,1,false,0234,Ventricular shunt to circulatory system
+P1763,0233,0233,1.000,1,false,0234,Ventricular shunt to thoracic cavity
+P1764,0234,0234,0.950,1,false,239,Ventricular shunt to abdominal cavity and organs
+P1765,0235,0235,0.995,1,false,239,Ventricular shunt to urinary system
+P1766,0221,0221,1.000,1,false,0222,Insertion or replacement of external ventricular drain [EVD]
+P1767,0301,0301,1.000,1,false,8893,Removal of foreign body from spinal canal
+P1768,0302,0302,1.000,1,false,0123,Reopening of laminectomy site
+P1769,0309,0309,1.000,1,false,339,Other exploration and decompression of spinal canal
 P1770,9815,9815,1.000,1,false,3323,Removal of intraluminal foreign body from trachea and bronchus without incision
 P1771,9656,9656,1.000,1,false,3322,Other lavage of bronchus and trachea
 P1772,8932,8932,0.959,0,true,,Esophageal manometry
@@ -4791,9 +4791,9 @@ P1776,5845,5845,0.852,1,false,5846,Repair of hypospadias or epispadias
 P1777,5994,5994,0.967,1,false,9763,Replacement of cystostomy tube
 P1778,7639,7639,0.993,1,false,7644,Partial ostectomy of other facial bone
 P1779,7669,7669,0.972,0,true,,Other facial bone repair
-P1780,351,351,0.995,1,false,3573,Repair of spinal meningocele
-P1781,331,331,1.000,1,false,101,Spinal tap
-P1782,391,391,0.953,1,false,392,Injection of anesthetic into spinal canal for analgesia
+P1780,0351,0351,0.995,1,false,3573,Repair of spinal meningocele
+P1781,0331,0331,1.000,1,false,0101,Spinal tap
+P1782,0391,0391,0.953,1,false,0392,Injection of anesthetic into spinal canal for analgesia
 P1783,864,864,1.000,1,false,863,Radical excision of skin lesion
 P1784,8602,8602,0.982,1,false,4942,Injection or tattooing of skin lesion or defect
 P1785,4011,4011,0.937,1,false,4029,Biopsy of lymphatic structure
@@ -4825,8 +4825,8 @@ P1810,3808,3808,1.000,1,false,3803,"Incision of vessel, lower limb arteries"
 P1811,3809,3809,1.000,1,false,3807,"Incision of vessel, lower limb veins"
 P1812,3832,3832,0.937,1,false,3842,"Resection of vessel with anastomosis, other vessels of head and neck"
 P1813,4543,4543,0.936,1,false,4349,Endoscopic destruction of other lesion or tissue of large intestine
-P1814,729,729,1.000,1,false,4687,Other partial adrenalectomy
-P1815,8664,8664,1.000,1,false,881,Hair transplant
+P1814,0729,0729,1.000,1,false,4687,Other partial adrenalectomy
+P1815,8664,8664,1.000,1,false,0881,Hair transplant
 P1816,294,294,0.898,1,false,2769,Plastic operation on pharynx
 P1817,4495,4495,0.863,1,false,4439,Laparoscopic gastric restrictive procedure
 P1818,4632,4632,1.000,1,false,4432,Percutaneous (endoscopic) jejunostomy [PEJ]
@@ -4856,9 +4856,9 @@ P1841,6011,6011,1.000,1,false,6012,Closed [percutaneous] [needle] biopsy of pros
 P1842,6242,6242,0.993,1,false,6372,Removal of remaining testis
 P1843,9736,9736,1.000,1,false,7662,Removal of other external mandibular fixation device
 P1844,1652,1652,0.884,1,false,7669,Exenteration of orbit with therapeutic removal of orbital bone
-P1845,609,609,0.979,1,false,691,Other incision of thyroid field
+P1845,0609,0609,0.979,1,false,0691,Other incision of thyroid field
 P1846,576,576,1.000,0,true,,Partial cystectomy
-P1847,51,51,0.968,1,false,50,"Implantation of cardiac resynchronization defibrillator, total system [CRT-D]"
+P1847,0051,0051,0.968,1,false,0050,"Implantation of cardiac resynchronization defibrillator, total system [CRT-D]"
 P1848,3179,3179,1.000,1,false,3348,Other repair and plastic operations on trachea
 P1849,3351,3351,0.995,1,false,3350,Unilateral lung transplantation
 P1850,3352,3352,1.000,1,false,336,Bilateral lung transplantation
@@ -4933,14 +4933,14 @@ P1918,544,544,0.804,1,false,6733,Excision or destruction of peritoneal tissue
 P1919,5839,5839,0.964,1,false,8089,Other local excision or destruction of lesion or tissue of urethra
 P1920,1839,1839,1.000,1,false,1831,Other excision of external ear
 P1922,4524,4524,1.000,0,true,,Flexible sigmoidoscopy
-P1923,887,887,0.975,1,false,886,Upper eyelid rhytidectomy
+P1923,0887,0887,0.975,1,false,0886,Upper eyelid rhytidectomy
 P1924,3832,3832,1.000,1,false,3843,"Resection of vessel with anastomosis, other vessels of head and neck"
-P1925,887,887,1.000,1,false,886,Upper eyelid rhytidectomy
+P1925,0887,0887,1.000,1,false,0886,Upper eyelid rhytidectomy
 P1926,3711,3711,1.000,1,false,3710,Cardiotomy
 P1927,5561,5561,1.000,0,true,,Renal autotransplantation
 P1928,7663,7663,0.955,1,false,7692,Osteoplasty [osteotomy] of body of mandible
-P1929,8664,8664,1.000,1,false,863,Hair transplant
-P1930,62,62,0.932,1,false,639,Unilateral thyroid lobectomy
+P1929,8664,8664,1.000,1,false,0863,Hair transplant
+P1930,062,062,0.932,1,false,0639,Unilateral thyroid lobectomy
 P1931,310,310,1.000,0,true,,Injection of larynx
 P1932,311,311,1.000,0,true,,Temporary tracheostomy
 P1933,688,688,1.000,0,true,,Pelvic evisceration
@@ -4962,14 +4962,14 @@ P1948,8573,8573,0.967,1,false,8575,"Transverse rectus abdominis myocutaneous (TR
 P1949,8682,8682,1.000,0,true,,Facial rhytidectomy
 P1950,8689,8689,0.964,1,false,872,Other repair and reconstruction of skin and subcutaneous tissue
 P1951,8777,8777,1.000,1,false,8776,Other cystogram
-P1952,650,650,1.000,1,false,651,"Substernal thyroidectomy, not otherwise specified"
+P1952,0650,0650,1.000,1,false,0651,"Substernal thyroidectomy, not otherwise specified"
 P1953,4311,4311,1.000,1,false,4432,Percutaneous [endoscopic] gastrostomy [PEG]
 P1954,4632,4632,0.950,1,false,4432,Percutaneous (endoscopic) jejunostomy [PEJ]
 P1955,4311,4311,0.967,1,false,4319,Percutaneous [endoscopic] gastrostomy [PEG]
 P1956,4851,4851,0.906,1,false,4863,Laparoscopic abdominoperineal resection of the rectum
 P1957,403,403,1.000,1,false,4029,Regional lymph node excision
-P1958,681,681,1.000,1,false,689,Complete parathyroidectomy
-P1959,689,689,1.000,0,true,,Other parathyroidectomy
+P1958,0681,0681,1.000,1,false,0689,Complete parathyroidectomy
+P1959,0689,0689,1.000,0,true,,Other parathyroidectomy
 P1960,4573,4573,0.945,1,false,1735,Open and other right hemicolectomy
 P1961,4652,4652,0.987,1,false,4576,Closure of stoma of large intestine
 P1962,4946,4946,1.000,0,true,,Excision of hemorrhoids
@@ -5101,7 +5101,7 @@ P2087,1512,1512,1.000,1,false,1511,Advancement of one extraocular muscle
 P2088,1522,1522,0.918,1,false,1521,Shortening procedure on one extraocular muscle
 P2089,1519,1519,1.000,1,false,1511,Other operations on one extraocular muscle involving temporary detachment from globe
 P2090,1529,1529,1.000,1,false,1511,Other operations on one extraocular muscle
-P2091,442,442,0.855,1,false,441,Other cranial nerve decompression
+P2091,0442,0442,0.855,1,false,0441,Other cranial nerve decompression
 P2092,161,161,1.000,1,false,1200,"Removal of penetrating foreign body from eye, not otherwise specified"
 P2093,1623,1623,1.000,1,false,1622,Biopsy of eyeball and orbit
 P2094,9513,9513,0.943,0,true,,Ultrasound study of eye
@@ -5118,27 +5118,27 @@ P2104,1669,1669,1.000,1,false,1665,Other secondary procedures after removal of e
 P2105,1671,1671,1.000,0,true,,Removal of ocular implant
 P2106,1672,1672,0.963,1,false,1671,Removal of orbital implant
 P2107,1609,1609,1.000,0,true,,Other orbitotomy
-P2108,825,825,0.987,1,false,6732,Destruction of lesion of eyelid
-P2109,859,859,0.994,1,false,889,Other adjustment of lid position
-P2110,861,861,0.907,1,false,869,Reconstruction of eyelid with skin flap or graft
-P2111,887,887,1.000,1,false,886,Upper eyelid rhytidectomy
-P2112,891,891,0.952,1,false,892,Electrosurgical epilation of eyelid
-P2113,892,892,1.000,1,false,891,Cryosurgical epilation of eyelid
-P2114,911,911,0.877,1,false,922,Biopsy of lacrimal gland
-P2115,912,912,1.000,1,false,96,Biopsy of lacrimal sac
-P2116,944,944,1.000,1,false,943,Intubation of nasolacrimal duct
-P2117,951,951,1.000,1,false,991,Incision of lacrimal punctum
-P2118,952,952,1.000,1,false,959,Incision of lacrimal canaliculi
-P2119,971,971,1.000,1,false,972,Correction of everted punctum
+P2108,0825,0825,0.987,1,false,6732,Destruction of lesion of eyelid
+P2109,0859,0859,0.994,1,false,889,Other adjustment of lid position
+P2110,0861,0861,0.907,1,false,0869,Reconstruction of eyelid with skin flap or graft
+P2111,0887,0887,1.000,1,false,0886,Upper eyelid rhytidectomy
+P2112,0891,0891,0.952,1,false,0892,Electrosurgical epilation of eyelid
+P2113,0892,0892,1.000,1,false,0891,Cryosurgical epilation of eyelid
+P2114,0911,0911,0.877,1,false,0922,Biopsy of lacrimal gland
+P2115,0912,0912,1.000,1,false,096,Biopsy of lacrimal sac
+P2116,0944,0944,1.000,1,false,0943,Intubation of nasolacrimal duct
+P2117,0951,0951,1.000,1,false,0991,Incision of lacrimal punctum
+P2118,0952,0952,1.000,1,false,0959,Incision of lacrimal canaliculi
+P2119,0971,0971,1.000,1,false,0972,Correction of everted punctum
 P2120,1371,1371,0.879,1,false,1390,"Insertion of intraocular lens prosthesis at time of cataract extraction, one-stage"
-P2121,831,831,0.955,1,false,832,Repair of blepharoptosis by frontalis muscle technique with suture
-P2122,834,834,1.000,1,false,833,Repair of blepharoptosis by other levator muscle techniques
-P2123,837,837,1.000,1,false,859,Reduction of overcorrection of ptosis
-P2124,838,838,0.938,1,false,837,Correction of lid retraction
-P2125,842,842,1.000,1,false,849,Repair of entropion or ectropion by suture technique
-P2126,844,844,1.000,1,false,849,Repair of entropion or ectropion with lid reconstruction
-P2127,852,852,1.000,1,false,802,Blepharorrhaphy
-P2128,852,852,1.000,1,false,802,Blepharorrhaphy
+P2121,0831,0831,0.955,1,false,0832,Repair of blepharoptosis by frontalis muscle technique with suture
+P2122,0834,0834,1.000,1,false,0833,Repair of blepharoptosis by other levator muscle techniques
+P2123,0837,0837,1.000,1,false,0859,Reduction of overcorrection of ptosis
+P2124,0838,0838,0.938,1,false,0837,Correction of lid retraction
+P2125,0842,0842,1.000,1,false,0849,Repair of entropion or ectropion by suture technique
+P2126,0844,0844,1.000,1,false,0849,Repair of entropion or ectropion with lid reconstruction
+P2127,0852,0852,1.000,1,false,0802,Blepharorrhaphy
+P2128,0852,0852,1.000,1,false,0802,Blepharorrhaphy
 P2129,100,100,1.000,1,false,2891,Removal of embedded foreign body from conjunctiva by incision
 P2130,1401,1401,1.000,1,false,1402,Removal of foreign body from posterior segment of eye with use of magnet
 P2131,1402,1402,0.964,1,false,1202,Removal of foreign body from posterior segment of eye without use of magnet
@@ -5159,7 +5159,7 @@ P2145,1042,1042,1.000,1,false,1043,Reconstruction of conjunctival cul-de-sac wit
 P2146,1161,1161,0.957,1,false,1162,Lamellar keratoplasty with autograft
 P2147,4999,4999,1.000,0,true,,Other operations on anus
 P2148,1042,1042,1.000,1,false,1043,Reconstruction of conjunctival cul-de-sac with free graft
-P2149,870,870,0.955,1,false,872,"Reconstruction of eyelid, not otherwise specified"
+P2149,0870,0870,0.955,1,false,872,"Reconstruction of eyelid, not otherwise specified"
 P2150,1282,1282,0.883,0,true,,Repair of scleral fistula
 P2151,1661,1661,1.000,1,false,1371,Secondary insertion of ocular implant
 P2152,1319,1319,1.000,1,false,1311,Other intracapsular extraction of lens
@@ -5255,7 +5255,7 @@ P2288,1131,1131,0.975,1,false,1132,Transposition of pterygium
 P2289,1661,1661,0.987,1,false,1164,Secondary insertion of ocular implant
 P2290,1473,1473,0.958,1,false,1471,Mechanical vitrectomy by anterior approach
 P2291,1372,1372,0.978,1,false,138,Secondary insertion of intraocular lens prosthesis
-P2292,35,35,0.961,1,false,9984,Computer assisted surgery with multiple datasets
+P2292,0035,0035,0.961,1,false,9984,Computer assisted surgery with multiple datasets
 P2293,1132,1132,0.960,1,false,1213,Excision of pterygium with corneal graft
 P2294,1213,1213,0.968,1,false,1293,Excision of prolapsed iris
 P2295,1473,1473,0.939,1,false,1471,Mechanical vitrectomy by anterior approach
@@ -5268,54 +5268,54 @@ P2301,1231,1231,0.970,0,true,,Lysis of goniosynechiae
 P2303,9984,9984,0.958,0,true,,Isolation
 P2304,1263,1263,0.941,1,false,1235,Iridencleisis and iridotasis
 P2305,1253,1253,0.967,1,false,1264,Goniotomy with goniopuncture
-P2306,833,833,1.000,1,false,834,Repair of blepharoptosis by resection or advancement of levator muscle or aponeurosis
-P2308,887,887,1.000,1,false,836,Upper eyelid rhytidectomy
-P2309,887,887,0.997,1,false,836,Upper eyelid rhytidectomy
-P2310,887,887,1.000,1,false,889,Upper eyelid rhytidectomy
-P2311,832,832,1.000,1,false,831,Repair of blepharoptosis by frontalis muscle technique with fascial sling
-P2312,832,832,1.000,1,false,831,Repair of blepharoptosis by frontalis muscle technique with fascial sling
-P2313,832,832,1.000,1,false,831,Repair of blepharoptosis by frontalis muscle technique with fascial sling
-P2314,832,832,1.000,1,false,831,Repair of blepharoptosis by frontalis muscle technique with fascial sling
-P2315,886,886,0.911,1,false,887,Lower eyelid rhytidectomy
-P2316,886,886,0.954,1,false,887,Lower eyelid rhytidectomy
+P2306,0833,0833,1.000,1,false,0834,Repair of blepharoptosis by resection or advancement of levator muscle or aponeurosis
+P2308,0887,0887,1.000,1,false,0836,Upper eyelid rhytidectomy
+P2309,0887,0887,0.997,1,false,0836,Upper eyelid rhytidectomy
+P2310,0887,0887,1.000,1,false,889,Upper eyelid rhytidectomy
+P2311,0832,0832,1.000,1,false,0831,Repair of blepharoptosis by frontalis muscle technique with fascial sling
+P2312,0832,0832,1.000,1,false,0831,Repair of blepharoptosis by frontalis muscle technique with fascial sling
+P2313,0832,0832,1.000,1,false,0831,Repair of blepharoptosis by frontalis muscle technique with fascial sling
+P2314,0832,0832,1.000,1,false,0831,Repair of blepharoptosis by frontalis muscle technique with fascial sling
+P2315,0886,0886,0.911,1,false,0887,Lower eyelid rhytidectomy
+P2316,0886,0886,0.954,1,false,0887,Lower eyelid rhytidectomy
 P2318,856,856,0.945,0,true,,Mastopexy
 P2319,856,856,0.838,0,true,,Mastopexy
-P2320,887,887,1.000,1,false,886,Upper eyelid rhytidectomy
-P2321,887,887,1.000,1,false,856,Upper eyelid rhytidectomy
-P2322,887,887,1.000,1,false,802,Upper eyelid rhytidectomy
-P2323,887,887,1.000,1,false,886,Upper eyelid rhytidectomy
-P2324,873,873,0.975,1,false,884,"Reconstruction of eyelid involving lid margin, full-thickness"
-P2325,835,835,1.000,1,false,832,Repair of blepharoptosis by tarsal technique
+P2320,0887,0887,1.000,1,false,0886,Upper eyelid rhytidectomy
+P2321,0887,0887,1.000,1,false,856,Upper eyelid rhytidectomy
+P2322,0887,0887,1.000,1,false,0802,Upper eyelid rhytidectomy
+P2323,0887,0887,1.000,1,false,0886,Upper eyelid rhytidectomy
+P2324,873,873,0.975,1,false,0884,"Reconstruction of eyelid involving lid margin, full-thickness"
+P2325,0835,0835,1.000,1,false,0832,Repair of blepharoptosis by tarsal technique
 P2326,153,153,0.964,1,false,154,"Operations on two or more extraocular muscles involving temporary detachment from globe, one or both eyes"
-P2327,861,861,1.000,1,false,862,Reconstruction of eyelid with skin flap or graft
-P2328,862,862,1.000,1,false,861,Reconstruction of eyelid with mucous membrane flap or graft
-P2329,864,864,1.000,1,false,872,Reconstruction of eyelid with tarsoconjunctival flap
-P2330,881,881,1.000,1,false,2432,Linear repair of laceration of eyelid or eyebrow
-P2332,973,973,1.000,0,true,,Repair of canaliculus
+P2327,0861,0861,1.000,1,false,0862,Reconstruction of eyelid with skin flap or graft
+P2328,0862,0862,1.000,1,false,0861,Reconstruction of eyelid with mucous membrane flap or graft
+P2329,0864,0864,1.000,1,false,872,Reconstruction of eyelid with tarsoconjunctival flap
+P2330,0881,0881,1.000,1,false,2432,Linear repair of laceration of eyelid or eyebrow
+P2332,0973,0973,1.000,0,true,,Repair of canaliculus
 P2333,1601,1601,0.957,0,true,,Orbitotomy with bone flap
 P2334,1662,1662,1.000,1,false,1672,Revision and reinsertion of ocular implant
-P2335,892,892,0.999,1,false,891,Cryosurgical epilation of eyelid
-P2336,859,859,1.000,1,false,844,Other adjustment of lid position
-P2337,864,864,0.888,1,false,870,Reconstruction of eyelid with tarsoconjunctival flap
-P2338,891,891,0.975,1,false,892,Electrosurgical epilation of eyelid
-P2340,971,971,1.000,1,false,972,Correction of everted punctum
-P2341,837,837,1.000,1,false,834,Reduction of overcorrection of ptosis
-P2342,844,844,1.000,1,false,849,Repair of entropion or ectropion with lid reconstruction
-P2343,981,981,1.000,1,false,943,Dacryocystorhinostomy [DCR]
-P2344,981,981,1.000,1,false,944,Dacryocystorhinostomy [DCR]
-P2345,872,872,0.967,1,false,874,"Other reconstruction of eyelid, partial-thickness"
-P2346,852,852,1.000,1,false,802,Blepharorrhaphy
+P2335,0892,0892,0.999,1,false,0891,Cryosurgical epilation of eyelid
+P2336,0859,0859,1.000,1,false,0844,Other adjustment of lid position
+P2337,0864,0864,0.888,1,false,0870,Reconstruction of eyelid with tarsoconjunctival flap
+P2338,0891,0891,0.975,1,false,0892,Electrosurgical epilation of eyelid
+P2340,0971,0971,1.000,1,false,0972,Correction of everted punctum
+P2341,0837,0837,1.000,1,false,0834,Reduction of overcorrection of ptosis
+P2342,0844,0844,1.000,1,false,0849,Repair of entropion or ectropion with lid reconstruction
+P2343,0981,0981,1.000,1,false,0943,Dacryocystorhinostomy [DCR]
+P2344,0981,0981,1.000,1,false,0944,Dacryocystorhinostomy [DCR]
+P2345,872,872,0.967,1,false,0874,"Other reconstruction of eyelid, partial-thickness"
+P2346,0852,0852,1.000,1,false,0802,Blepharorrhaphy
 P2347,1511,1511,1.000,1,false,1529,Recession of one extraocular muscle
 P2348,156,156,1.000,1,false,1511,Revision of extraocular muscle surgery
 P2349,1521,1521,0.952,1,false,1529,Lengthening procedure on one extraocular muscle
 P2351,1172,1172,1.000,1,false,9502,Keratophakia
 P2352,1741,1741,1.000,1,false,1743,Open robotic assisted procedure
 P2353,1366,1366,0.882,1,false,1483,Mechanical fragmentation of secondary membrane [after cataract]
-P2354,31,31,1.000,1,false,34,Computer assisted surgery with CT/CTA
+P2354,31,31,1.000,1,false,0034,Computer assisted surgery with CT/CTA
 P9001,9982,9982,0.882,0,true,,Ultraviolet light therapy
 P9002,9982,9982,0.948,0,true,,Ultraviolet light therapy
-P9003,821,821,0.907,0,true,,Excision of chalazion
-P9004,821,821,0.921,0,true,,Excision of chalazion
+P9003,0821,0821,0.907,0,true,,Excision of chalazion
+P9004,0821,0821,0.921,0,true,,Excision of chalazion
 P9005,1141,1141,0.987,0,true,,Mechanical removal of corneal epithelium
 P9006,1141,1141,0.963,0,true,,Mechanical removal of corneal epithelium
 P9007,1171,1171,1.000,1,false,1141,Keratomileusis
@@ -5340,7 +5340,7 @@ P9013,1164,1164,0.992,1,false,1169,Other penetrating keratoplasty
 P9014,1171,1171,0.930,1,false,1149,Keratomileusis
 P9015,1171,1171,0.994,2,false,1192,Keratomileusis
 PA101,411,411,0.879,1,false,9014,Closed [percutaneous] [needle] biopsy of cranial or peripheral nerve or ganglion
-PA102,639,639,0.964,1,false,652,Other partial thyroidectomy
+PA102,0639,0639,0.964,1,false,0652,Other partial thyroidectomy
 PA103,4041,4041,0.988,1,false,4040,"Radical neck dissection, unilateral"
 PA104,1642,1642,1.000,1,false,1649,Enucleation of eyeball with other synchronous implant
 PA105,1642,1642,0.949,1,false,1659,Enucleation of eyeball with other synchronous implant
@@ -5407,10 +5407,10 @@ PA165,8545,8545,1.000,1,false,8548,Unilateral radical mastectomy
 PA166,6411,6411,0.945,2,false,8619,Biopsy of penis
 PA167,8611,8611,1.000,1,false,6411,Closed biopsy of skin and subcutaneous tissue
 PA168,8030,8030,0.954,1,false,2724,"Biopsy of joint structure, unspecified site"
-PA169,811,811,0.970,0,true,,Biopsy of eyelid
+PA169,0811,0811,0.970,0,true,,Biopsy of eyelid
 PA170,9984,9984,1.000,0,true,,Isolation
 PA171,403,403,1.000,1,false,4051,Regional lymph node excision
-PA172,8321,8321,1.000,1,false,811,Open biopsy of soft tissue
+PA172,8321,8321,1.000,1,false,0811,Open biopsy of soft tissue
 PE010,3995,3995,0.978,1,false,5498,Hemodialysis
 PE011,3322,3322,0.983,0,true,,Fiber-optic bronchoscopy
 PE012,8938,8938,0.940,1,false,8958,Other nonoperative respiratory measurements
@@ -5426,7 +5426,7 @@ PE023,3022,3022,0.884,0,true,,Vocal cordectomy
 PE024,3022,3022,0.910,0,true,,Vocal cordectomy
 PE025,3022,3022,0.973,0,true,,Vocal cordectomy
 PE026,613,613,0.843,1,false,8783,Excision or destruction of lesion or tissue of scrotum
-PE027,47,47,0.888,1,false,1771,Insertion of three vascular stents
+PE027,0047,0047,0.888,1,false,1771,Insertion of three vascular stents
 PE028,9221,9221,0.960,0,true,,Superficial radiation
 PE029,1771,1771,0.998,1,false,8783,Non-coronary intra-operative fluorescence vascular angiography [IFVA]
 PE030,9222,9222,0.869,0,true,,Orthovoltage radiation
@@ -5434,13 +5434,13 @@ PE031,1771,1771,0.911,1,false,8783,Non-coronary intra-operative fluorescence vas
 PE032,1771,1771,0.875,1,false,8811,Non-coronary intra-operative fluorescence vascular angiography [IFVA]
 PE033,1142,1142,0.996,1,false,4831,Thermocauterization of corneal lesion
 PE034,1771,1771,0.916,1,false,1033,Non-coronary intra-operative fluorescence vascular angiography [IFVA]
-PE035,745,745,0.983,1,false,719,Reimplantation of adrenal tissue
-PE036,769,769,0.877,1,false,762,"Total excision of pituitary gland, unspecified approach"
-PE037,73,73,0.933,1,false,719,Bilateral adrenalectomy
+PE035,0745,0745,0.983,1,false,719,Reimplantation of adrenal tissue
+PE036,0769,0769,0.877,1,false,0762,"Total excision of pituitary gland, unspecified approach"
+PE037,073,073,0.933,1,false,719,Bilateral adrenalectomy
 PE038,9964,9964,0.974,0,true,,Carotid sinus stimulation
 PE039,8942,8942,0.903,1,false,8763,Masters' two-step stress test
 PE040,9526,9526,1.000,1,false,8942,"Tonography, provocative tests, and other glaucoma testing"
-PE041,769,769,0.886,1,false,762,"Total excision of pituitary gland, unspecified approach"
+PE041,0769,0769,0.886,1,false,0762,"Total excision of pituitary gland, unspecified approach"
 PE042,9964,9964,1.000,0,true,,Carotid sinus stimulation
 PE043,9401,9401,0.939,1,false,8924,Administration of intelligence test
 PE056,9984,9984,1.000,0,true,,Isolation
@@ -5462,7 +5462,7 @@ PE079,3995,3995,1.000,1,false,3895,Hemodialysis
 PE081,3995,3995,1.000,1,false,3895,Hemodialysis
 PE083,8937,8937,1.000,1,false,8938,Vital capacity determination
 PE084,8960,8960,0.994,1,false,8965,Continuous intra-arterial blood gas monitoring
-PE085,12,12,1.000,1,false,9394,Administration of inhaled nitric oxide
+PE085,0012,0012,1.000,1,false,9394,Administration of inhaled nitric oxide
 PE112,9623,9623,1.000,1,false,4991,Dilation of anal sphincter
 PE116,9983,9983,0.972,0,true,,Other phototherapy
 PE117,9982,9982,0.996,0,true,,Ultraviolet light therapy
@@ -5474,12 +5474,12 @@ PE122,2591,2591,1.000,1,false,2592,Lingual frenotomy
 PE201,9357,9357,1.000,1,false,9356,Application of other wound dressing
 PE203,9924,9924,0.968,1,false,8592,Injection of other hormone
 PE204,5497,5497,0.882,1,false,9917,Injection of locally-acting therapeutic substance into peritoneal cavity
-PE205,5596,5596,0.976,1,false,390,Other injection of therapeutic substance into kidney
+PE205,5596,5596,0.976,1,false,0390,Other injection of therapeutic substance into kidney
 PE206,7696,7696,1.000,1,false,9923,Injection of therapeutic substance into temporomandibular joint
 PE207,3892,3892,0.957,1,false,9908,Umbilical vein catheterization
 PE208,2751,2751,0.993,1,false,6441,Suture of laceration of lip
 PE209,9396,9396,1.000,0,true,,Other oxygen enrichment
-PE210,331,331,1.000,1,false,101,Spinal tap
+PE210,0331,0331,1.000,1,false,0101,Spinal tap
 PE211,9782,9782,0.944,1,false,5491,Removal of peritoneal drainage device
 PE212,3491,3491,1.000,1,false,3404,Thoracentesis
 PE213,8191,8191,1.000,1,false,8292,Arthrocentesis
@@ -5525,7 +5525,7 @@ PE401,8914,8914,1.000,0,true,,Electroencephalogram
 PE402,8919,8919,1.000,1,false,8163,Video and radio-telemetered electroencephalographic monitoring
 PE403,9543,9543,1.000,0,true,,Audiological evaluation
 PE404,9546,9546,1.000,1,false,9547,Other auditory and vestibular function tests
-PE405,9981,9981,1.000,1,false,117,Hypothermia (central) (local)
+PE405,9981,9981,1.000,1,false,0117,Hypothermia (central) (local)
 PE406,8917,8917,1.000,1,false,8918,Polysomnogram
 PE407,8917,8917,1.000,1,false,8918,Polysomnogram
 PE408,8917,8917,0.970,3,false,,Polysomnogram
@@ -5535,7 +5535,7 @@ PE411,8961,8961,0.944,1,false,8950,Systemic arterial pressure monitoring
 PE412,8932,8932,1.000,0,true,,Esophageal manometry
 PE413,8932,8932,0.992,0,true,,Esophageal manometry
 PE414,8932,8932,1.000,0,true,,Esophageal manometry
-PE416,9394,9394,1.000,1,false,12,Respiratory medication administered by nebulizer
+PE416,9394,9394,1.000,1,false,0012,Respiratory medication administered by nebulizer
 PE417,8960,8960,0.983,1,false,7538,Continuous intra-arterial blood gas monitoring
 PE418,7538,7538,0.975,0,true,,Fetal pulse oximetry
 PE419,9984,9984,1.000,0,true,,Isolation
@@ -5543,7 +5543,7 @@ PE420,9984,9984,1.000,0,true,,Isolation
 PE421,9984,9984,1.000,0,true,,Isolation
 PL079,8960,8960,1.000,1,false,7538,Continuous intra-arterial blood gas monitoring
 PL088,8611,8611,0.986,1,false,8621,Closed biopsy of skin and subcutaneous tissue
-PL089,864,864,0.983,1,false,822,Radical excision of skin lesion
+PL089,864,864,0.983,1,false,0822,Radical excision of skin lesion
 PL308,9541,9541,1.000,2,false,9547,Audiometry
 PT080,9231,9231,1.000,0,true,,Single source photon radiosurgery
 PT083,8838,8838,1.000,1,false,9224,Other computerized axial tomography
@@ -5582,7 +5582,7 @@ PT383,8838,8838,1.000,1,false,8704,Other computerized axial tomography
 PT386,9534,9534,1.000,0,true,,Ocular prosthetics
 PT389,9323,9323,1.000,0,true,,Fitting of orthotic device
 PT394,9241,9241,1.000,0,true,,Intra-operative electron radiation therapy
-PT395,8897,8897,1.000,1,false,32,Magnetic resonance imaging of other and unspecified sites
+PT395,8897,8897,1.000,1,false,0032,Magnetic resonance imaging of other and unspecified sites
 PT396,9231,9231,0.895,1,false,9239,Single source photon radiosurgery
 PT412,9224,9224,0.929,1,false,9241,Teleradiotherapy using photons
 PT429,9225,9225,0.981,1,false,9224,Teleradiotherapy using electrons
@@ -5697,7 +5697,7 @@ Q0019,7534,7534,1.000,0,true,,Other fetal monitoring
 Q0020,7534,7534,0.966,0,true,,Other fetal monitoring
 Q0021,7534,7534,1.000,0,true,,Other fetal monitoring
 Q0022,1770,1770,0.945,1,false,8606,Intravenous infusion of clofarabine
-Q0023,1770,1770,1.000,1,false,481,Intravenous infusion of clofarabine
+Q0023,1770,1770,1.000,1,false,0481,Intravenous infusion of clofarabine
 Q0024,9633,9633,0.904,2,false,9343,Gastric lavage
 Q0025,9356,9356,0.880,1,false,9366,Application of pressure dressing
 Q0026,9981,9981,1.000,0,true,,Hypothermia (central) (local)
@@ -5749,7 +5749,7 @@ RH114,9984,9984,1.000,0,true,,Isolation
 RH115,9316,9316,1.000,1,false,9314,Mobilization of other joints
 RH116,8868,8868,1.000,0,true,,Impedance phlebography
 RH117,9319,9319,0.953,1,false,9312,"Exercise, not elsewhere classified"
-RH118,9322,9322,0.999,1,false,33,Ambulation and gait training
+RH118,9322,9322,0.999,1,false,0033,Ambulation and gait training
 RH119,9393,9393,0.925,1,false,9318,Nonmechanical methods of resuscitation
 RH121,9984,9984,1.000,0,true,,Isolation
 RH123,9333,9333,1.000,2,false,9332,Other hydrotherapy
@@ -5797,7 +5797,7 @@ RH202,9324,9324,1.000,1,false,9314,Training in use of prosthetic or orthotic dev
 RH203,9322,9322,0.948,1,false,9383,Ambulation and gait training
 RH204,9314,9314,1.000,1,false,9317,Training in joint movements
 RH205,9314,9314,0.941,1,false,9317,Training in joint movements
-RH206,476,476,0.946,1,false,474,Repair of old traumatic injury of cranial and peripheral nerves
+RH206,0476,0476,0.946,1,false,0474,Repair of old traumatic injury of cranial and peripheral nerves
 RH207,3720,3720,0.929,1,false,9964,Noninvasive programmed electrical stimulation [NIPS]
 RH208,9375,9375,1.000,1,false,9322,Other speech training and therapy
 RH209,9401,9401,0.958,1,false,9436,Administration of intelligence test
@@ -5810,8 +5810,8 @@ RH215,9309,9309,1.000,1,false,9339,Other diagnostic physical therapy procedure
 RH216,9383,9383,0.958,0,true,,Occupational therapy
 RH217,9375,9375,1.000,1,false,9371,Other speech training and therapy
 RH218,9375,9375,1.000,1,false,9927,Other speech training and therapy
-RH220,9322,9322,0.988,1,false,33,Ambulation and gait training
-RH221,9322,9322,1.000,1,false,33,Ambulation and gait training
+RH220,9322,9322,0.988,1,false,0033,Ambulation and gait training
+RH221,9322,9322,1.000,1,false,0033,Ambulation and gait training
 RH222,9984,9984,1.000,0,true,,Isolation
 RH223,9375,9375,0.954,0,true,,Other speech training and therapy
 RH224,9383,9383,0.966,0,true,,Occupational therapy
@@ -5833,14 +5833,14 @@ RH240,9309,9309,1.000,1,false,9339,Other diagnostic physical therapy procedure
 RH241,9315,9315,1.000,0,true,,Mobilization of spine
 RH242,9336,9336,0.948,0,true,,Cardiac retraining
 RH243,9336,9336,1.000,0,true,,Cardiac retraining
-RH244,481,481,0.983,1,false,480,Injection of anesthetic into peripheral nerve for analgesia
+RH244,0481,0481,0.983,1,false,0480,Injection of anesthetic into peripheral nerve for analgesia
 RH245,9322,9322,0.974,1,false,9314,Ambulation and gait training
 RH246,9324,9324,0.952,1,false,9303,Training in use of prosthetic or orthotic device
 RH247,8363,8363,0.813,0,true,,Rotator cuff repair
 RH248,9331,9331,0.955,0,true,,Assisted exercise in pool
 RH249,9319,9319,1.000,1,false,9313,"Exercise, not elsewhere classified"
 RH250,9312,9312,0.935,1,false,9331,Other active musculoskeletal exercise
-RH251,8681,8681,0.972,1,false,471,Repair for facial weakness
+RH251,8681,8681,0.972,1,false,0471,Repair for facial weakness
 RH252,9311,9311,1.000,1,false,9451,Assisting exercise
 RH253,9375,9375,1.000,1,false,4292,Other speech training and therapy
 RH254,9383,9383,1.000,0,true,,Occupational therapy
@@ -5872,7 +5872,7 @@ RH511,8627,8627,0.941,1,false,9829,"Debridement of nail, nail bed, or nail fold"
 RH512,7253,7253,0.828,1,false,9738,Total breech extraction with forceps to aftercoming head
 RH514,9357,9357,1.000,1,false,9356,Application of other wound dressing
 RH515,9984,9984,1.000,0,true,,Isolation
-RH601,419,419,0.958,1,false,404,Other diagnostic procedures on cranial and peripheral nerves and ganglia
+RH601,419,419,0.958,1,false,0404,Other diagnostic procedures on cranial and peripheral nerves and ganglia
 RH602,9308,9308,1.000,1,false,9525,Electromyography
 RH603,9523,9523,1.000,1,false,94,Visual evoked potential [VEP]
 RH604,9546,9546,1.000,1,false,2031,Other auditory and vestibular function tests
@@ -5900,7 +5900,7 @@ RN010,8941,8941,0.969,1,false,9205,Cardiovascular stress test using treadmill
 RN011,9215,9215,0.960,3,false,,Pulmonary scan
 RN012,8941,8941,1.000,1,false,8944,Cardiovascular stress test using treadmill
 RN013,9213,9213,0.958,2,false,9215,Parathyroid scan
-RN014,372,372,0.898,1,false,232,Spinal subarachnoid-ureteral shunt
+RN014,0372,0372,0.898,1,false,0232,Spinal subarachnoid-ureteral shunt
 RN015,9204,9204,1.000,1,false,9214,Gastrointestinal scan and radioisotope function study
 RN016,9204,9204,1.000,1,false,9203,Gastrointestinal scan and radioisotope function study
 RN017,9214,9214,1.000,0,true,,Bone scan
@@ -5932,7 +5932,7 @@ RN043,9215,9215,1.000,1,false,9216,Pulmonary scan
 RN044,9215,9215,1.000,1,false,9213,Pulmonary scan
 RN045,9216,9216,1.000,0,true,,Scan of lymphatic system
 RN046,9216,9216,1.000,0,true,,Scan of lymphatic system
-RN047,9213,9213,1.000,1,false,613,Parathyroid scan
+RN047,9213,9213,1.000,1,false,0613,Parathyroid scan
 RN048,2619,2619,0.883,1,false,260,Other diagnostic procedures on salivary glands and ducts
 RN049,9215,9215,1.000,0,true,,Pulmonary scan
 RN050,9201,9201,0.939,1,false,611,Thyroid scan and radioisotope function studies
@@ -5950,9 +5950,9 @@ RN063,8877,8877,1.000,1,false,9213,Diagnostic ultrasound of peripheral vascular 
 RN064,3997,3997,1.000,0,true,,Other perfusion
 RN069,9984,9984,1.000,0,true,,Isolation
 RN071,9201,9201,1.000,1,false,9202,Thyroid scan and radioisotope function studies
-RN072,9201,9201,0.918,1,false,639,Thyroid scan and radioisotope function studies
+RN072,9201,9201,0.918,1,false,0639,Thyroid scan and radioisotope function studies
 RN073,9201,9201,0.934,1,false,611,Thyroid scan and radioisotope function studies
-RN074,651,651,0.963,1,false,62,Partial substernal thyroidectomy
+RN074,0651,0651,0.963,1,false,062,Partial substernal thyroidectomy
 RN075,9214,9214,0.902,2,false,9422,Bone scan
 RN076,9214,9214,0.892,2,false,1770,Bone scan
 RN077,8077,8077,0.983,0,true,,"Synovectomy, ankle"
@@ -5967,14 +5967,14 @@ RN096,9209,9209,1.000,1,false,9204,Other radioisotope function studies
 RN099,9204,9204,1.000,1,false,9209,Gastrointestinal scan and radioisotope function study
 RN100,8763,8763,0.964,0,true,,Small bowel series
 RN101,9214,9214,1.000,0,true,,Bone scan
-RN102,601,601,0.936,1,false,691,Aspiration of thyroid field
-RN103,9201,9201,0.908,1,false,66,Thyroid scan and radioisotope function studies
+RN102,0601,0601,0.936,1,false,0691,Aspiration of thyroid field
+RN103,9201,9201,0.908,1,false,066,Thyroid scan and radioisotope function studies
 RN104,9214,9214,1.000,2,false,9213,Bone scan
 RN105,9214,9214,1.000,0,true,,Bone scan
 RN106,9205,9205,1.000,1,false,9213,Cardiovascular and hematopoietic scan and radioisotope function study
 RN108,9205,9205,0.989,1,false,8892,Cardiovascular and hematopoietic scan and radioisotope function study
-RN110,9201,9201,0.906,1,false,64,Thyroid scan and radioisotope function studies
-RN111,694,694,0.871,1,false,9201,Thyroid tissue reimplantation
+RN110,9201,9201,0.906,1,false,064,Thyroid scan and radioisotope function studies
+RN111,0694,0694,0.871,1,false,9201,Thyroid tissue reimplantation
 RN112,403,403,1.000,1,false,9216,Regional lymph node excision
 RN113,9984,9984,1.000,0,true,,Isolation
 RN114,8763,8763,0.989,0,true,,Small bowel series
@@ -6008,7 +6008,7 @@ RT050,9241,9241,1.000,1,false,9222,Intra-operative electron radiation therapy
 RT060,9221,9221,1.000,0,true,,Superficial radiation
 RT064,9222,9222,1.000,0,true,,Orthovoltage radiation
 RT072,9225,9225,0.863,1,false,9241,Teleradiotherapy using electrons
-RT075,9224,9224,0.997,1,false,602,Teleradiotherapy using photons
+RT075,9224,9224,0.997,1,false,0602,Teleradiotherapy using photons
 RT080,9224,9224,1.000,1,false,9225,Teleradiotherapy using photons
 RT081,9226,9226,0.953,1,false,9225,Teleradiotherapy of other particulate radiation
 RT082,9224,9224,0.948,1,false,8839,Teleradiotherapy using photons
@@ -6023,7 +6023,7 @@ RT092,9224,9224,0.968,1,false,9225,Teleradiotherapy using photons
 RT093,9241,9241,0.980,0,true,,Intra-operative electron radiation therapy
 RT094,9224,9224,0.970,0,true,,Teleradiotherapy using photons
 RT095,9231,9231,1.000,1,false,9221,Single source photon radiosurgery
-RT100,1770,1770,1.000,1,false,13,Intravenous infusion of clofarabine
+RT100,1770,1770,1.000,1,false,0013,Intravenous infusion of clofarabine
 RT102,9904,9904,0.981,1,false,9903,Transfusion of packed cells
 RT108,9225,9225,1.000,1,false,9241,Teleradiotherapy using electrons
 RT109,9227,9227,1.000,1,false,9220,Implantation or insertion of radioactive elements
@@ -6064,7 +6064,7 @@ RT285,9984,9984,1.000,0,true,,Isolation
 RT286,9738,9738,0.936,1,false,9739,Removal of sutures from head and neck
 RT287,8570,8570,0.938,1,false,9998,"Total reconstruction of breast, not otherwise specified"
 RT288,9358,9358,0.892,1,false,9224,Application of pressure trousers
-RT289,9739,9739,0.979,1,false,1,Removal of other therapeutic device from head and neck
+RT289,9739,9739,0.979,1,false,0001,Removal of other therapeutic device from head and neck
 RT302,9225,9225,0.950,1,false,9224,Teleradiotherapy using electrons
 RT303,9241,9241,1.000,1,false,9224,Intra-operative electron radiation therapy
 RT304,9241,9241,1.000,1,false,9224,Intra-operative electron radiation therapy
@@ -6094,7 +6094,7 @@ RT381,9224,9224,0.999,0,true,,Teleradiotherapy using photons
 RT382,9224,9224,1.000,1,false,8839,Teleradiotherapy using photons
 RT383,8838,8838,0.933,1,false,31,Other computerized axial tomography
 RT384,9241,9241,0.957,0,true,,Intra-operative electron radiation therapy
-RT386,9323,9323,0.932,1,false,12,Fitting of orthotic device
+RT386,9323,9323,0.932,1,false,0012,Fitting of orthotic device
 RT391,9984,9984,1.000,0,true,,Isolation
 RT392,9241,9241,0.957,0,true,,Intra-operative electron radiation therapy
 RT393,9224,9224,0.999,0,true,,Teleradiotherapy using photons
@@ -6119,17 +6119,17 @@ RT494,9241,9241,1.000,0,true,,Intra-operative electron radiation therapy
 RT496,9231,9231,0.945,1,false,9239,Single source photon radiosurgery
 RT500,8891,8891,1.000,1,false,8894,Magnetic resonance imaging of brain and brain stem
 RT501,8894,8894,1.000,1,false,8891,Magnetic resonance imaging of musculoskeletal
-RT502,8894,8894,0.982,1,false,761,Magnetic resonance imaging of musculoskeletal
+RT502,8894,8894,0.982,1,false,0761,Magnetic resonance imaging of musculoskeletal
 RT503,2253,2253,1.000,1,false,8935,Incision of multiple nasal sinuses
-RT505,8891,8891,0.963,1,false,232,Magnetic resonance imaging of brain and brain stem
+RT505,8891,8891,0.963,1,false,0232,Magnetic resonance imaging of brain and brain stem
 RT509,8891,8891,0.945,1,false,8894,Magnetic resonance imaging of brain and brain stem
 RT510,8895,8895,0.944,1,false,8894,"Magnetic resonance imaging of pelvis, prostate, and bladder"
 RT512,8891,8891,1.000,1,false,8894,Magnetic resonance imaging of brain and brain stem
-RT513,3823,3823,0.934,1,false,117,Intravascular spectroscopy
+RT513,3823,3823,0.934,1,false,0117,Intravascular spectroscopy
 RT514,9230,9230,1.000,1,false,9231,"Stereotactic radiosurgery, not otherwise specified"
-RT518,32,32,0.822,1,false,8877,Computer assisted surgery with MR/MRA
+RT518,0032,0032,0.822,1,false,8877,Computer assisted surgery with MR/MRA
 RT519,8865,8865,1.000,1,false,8863,Phlebography of other Intra-Abdominal veins using contrast material
-RT520,63,63,0.868,1,false,8841,Percutaneous insertion of carotid artery stent(s)
+RT520,0063,0063,0.868,1,false,8841,Percutaneous insertion of carotid artery stent(s)
 RT521,8861,8861,1.000,1,false,8863,Phlebography of veins of head and neck using contrast material
 RT522,8892,8892,1.000,1,false,8741,Magnetic resonance imaging of chest and myocardium
 RT524,8892,8892,1.000,1,false,8894,Magnetic resonance imaging of chest and myocardium
@@ -6144,7 +6144,7 @@ RT534,8895,8895,1.000,1,false,8792,"Magnetic resonance imaging of pelvis, prosta
 RT535,8773,8773,0.940,0,true,,Intravenous pyelogram
 RT536,8895,8895,0.967,1,false,8892,"Magnetic resonance imaging of pelvis, prostate, and bladder"
 RT541,9984,9984,1.000,0,true,,Isolation
-RT542,59,59,0.906,1,false,5999,Other operations on nervous system
+RT542,059,059,0.906,1,false,5999,Other operations on nervous system
 RT543,8893,8893,0.995,1,false,8894,Magnetic resonance imaging of spinal canal
 RT544,8894,8894,1.000,1,false,8891,Magnetic resonance imaging of musculoskeletal
 RT545,8893,8893,0.989,1,false,8891,Magnetic resonance imaging of spinal canal
@@ -6164,9 +6164,9 @@ RT561,8894,8894,1.000,1,false,8892,Magnetic resonance imaging of musculoskeletal
 RT562,8894,8894,1.000,1,false,8891,Magnetic resonance imaging of musculoskeletal
 RT563,8894,8894,1.000,1,false,8891,Magnetic resonance imaging of musculoskeletal
 RT567,8896,8896,0.908,1,false,8894,Other intraoperative magnetic resonance imaging
-RT568,8894,8894,0.873,1,false,115,Magnetic resonance imaging of musculoskeletal
+RT568,8894,8894,0.873,1,false,0115,Magnetic resonance imaging of musculoskeletal
 RT569,8894,8894,1.000,1,false,8717,Magnetic resonance imaging of musculoskeletal
-RT570,442,442,0.853,1,false,419,Other cranial nerve decompression
+RT570,0442,0442,0.853,1,false,419,Other cranial nerve decompression
 RT571,8721,8721,0.931,0,true,,Contrast myelogram
 RT572,8896,8896,0.968,1,false,8891,Other intraoperative magnetic resonance imaging
 SC107,9984,9984,1.000,0,true,,Isolation
@@ -6188,7 +6188,7 @@ SC239,9984,9984,1.000,0,true,,Isolation
 SC240,9984,9984,1.000,0,true,,Isolation
 SC245,9984,9984,1.000,0,true,,Isolation
 SC252,9,9,0.978,1,false,9332,Other therapeutic ultrasound
-SC253,492,492,0.976,1,false,491,Implantation or replacement of peripheral neurostimulator lead(s)
+SC253,492,492,0.976,1,false,0491,Implantation or replacement of peripheral neurostimulator lead(s)
 SC300,9984,9984,1.000,0,true,,Isolation
 SE001,8365,8365,0.971,1,false,2751,Other suture of muscle or fascia
 SE003,9984,9984,0.799,0,true,,Isolation
@@ -6213,14 +6213,14 @@ SL003,8917,8917,0.907,1,false,9391,Polysomnogram
 SL004,8917,8917,0.970,1,false,8918,Polysomnogram
 SL005,8917,8917,1.000,1,false,8918,Polysomnogram
 SL006,8918,8918,1.000,1,false,8917,Other sleep disorder function tests
-SM016,531,531,0.998,1,false,481,Injection of anesthetic into sympathetic nerve for analgesia
+SM016,0531,0531,0.998,1,false,0481,Injection of anesthetic into sympathetic nerve for analgesia
 SM017,8604,8604,0.998,1,false,9991,Other incision with drainage of skin and subcutaneous tissue
-SM018,8396,8396,1.000,1,false,481,Injection of therapeutic substance into bursa
-SM019,481,481,1.000,1,false,531,Injection of anesthetic into peripheral nerve for analgesia
-SM020,10,10,0.926,1,false,8396,Implantation of chemotherapeutic agent
-SM021,481,481,1.000,1,false,1691,Injection of anesthetic into peripheral nerve for analgesia
+SM018,8396,8396,1.000,1,false,0481,Injection of therapeutic substance into bursa
+SM019,0481,0481,1.000,1,false,0531,Injection of anesthetic into peripheral nerve for analgesia
+SM020,0010,0010,0.926,1,false,8396,Implantation of chemotherapeutic agent
+SM021,0481,0481,1.000,1,false,1691,Injection of anesthetic into peripheral nerve for analgesia
 SM022,9984,9984,1.000,0,true,,Isolation
-SM023,9356,9356,0.963,1,false,481,Application of pressure dressing
+SM023,9356,9356,0.963,1,false,0481,Application of pressure dressing
 SSC106,9984,9984,1.000,0,true,,Isolation
 SSC107,9984,9984,1.000,0,true,,Isolation
 SSC108,9984,9984,1.000,0,true,,Isolation
@@ -6234,7 +6234,7 @@ SU003,8622,8622,0.944,1,false,9357,"Excisional debridement of wound, infection, 
 SU004,8622,8622,0.987,1,false,8628,"Excisional debridement of wound, infection, or burn"
 SU005,9921,9921,0.950,0,true,,Injection of antibiotic
 SU006,3894,3894,1.000,0,true,,Venous cutdown
-SU007,1292,1292,1.000,1,false,489,Injection into anterior chamber
+SU007,1292,1292,1.000,1,false,0489,Injection into anterior chamber
 SU008,9923,9923,0.878,0,true,,Injection of steroid
 SU009,3992,3992,1.000,1,false,3852,Injection of sclerosing agent into vein
 SU010,9903,9903,1.000,1,false,9918,Other transfusion of whole blood
@@ -6270,7 +6270,7 @@ SU045,8923,8923,1.000,1,false,8921,Urethral sphincter electromyogram
 SU046,8925,8925,1.000,1,false,8921,Urethral pressure profile [UPP]
 SU047,8922,8922,0.999,0,true,,Cystometrogram
 SU048,6011,6011,0.939,1,false,6015,Closed [percutaneous] [needle] biopsy of prostate
-SU051,8877,8877,1.000,1,false,68,Diagnostic ultrasound of peripheral vascular system
+SU051,8877,8877,1.000,1,false,0068,Diagnostic ultrasound of peripheral vascular system
 SU052,5794,5794,1.000,1,false,5711,Insertion of indwelling urinary catheter
 SU053,5794,5794,1.000,1,false,5795,Insertion of indwelling urinary catheter
 SU054,5795,5795,0.961,1,false,5794,Replacement of indwelling urinary catheter
@@ -6281,7 +6281,7 @@ SU058,9648,9648,1.000,1,false,9647,Irrigation of other indwelling urinary cathet
 SU059,4413,4413,1.000,0,true,,Other gastroscopy
 SU060,9851,9851,1.000,1,false,9859,"Extracorporeal shockwave lithotripsy [ESWL] of the kidney, ureter and/or bladder"
 SU061,9851,9851,1.000,1,false,9859,"Extracorporeal shockwave lithotripsy [ESWL] of the kidney, ureter and/or bladder"
-SU062,33,33,1.000,1,false,8896,Computer assisted surgery with fluoroscopy
+SU062,0033,0033,1.000,1,false,8896,Computer assisted surgery with fluoroscopy
 SU063,9984,9984,1.000,0,true,,Isolation
 SU066,4523,4523,1.000,1,false,4524,Colonoscopy
 SU067,4524,4524,1.000,0,true,,Flexible sigmoidoscopy
@@ -6333,11 +6333,11 @@ SU151,9712,9712,1.000,1,false,7906,Replacement of cast on lower limb
 SU152,9353,9353,1.000,0,true,,Application of other cast
 SU156,8934,8934,0.928,1,false,8871,Digital examination of rectum
 SU157,4901,4901,1.000,1,false,8604,Incision of perianal abscess
-SU158,864,864,0.918,1,false,822,Radical excision of skin lesion
+SU158,864,864,0.918,1,false,0822,Radical excision of skin lesion
 SU159,8339,8339,1.000,1,false,8621,Excision of lesion of other soft tissue
 SU160,632,632,0.948,1,false,7124,Excision of cyst of epididymis
 SU161,4023,4023,0.973,1,false,4021,Excision of axillary lymph node
-SU162,8321,8321,1.000,1,false,811,Open biopsy of soft tissue
+SU162,8321,8321,1.000,1,false,0811,Open biopsy of soft tissue
 SU163,8623,8623,0.863,1,false,8627,"Removal of nail, nail bed, or nail fold"
 SU164,613,613,0.902,1,false,251,Excision or destruction of lesion or tissue of scrotum
 SU165,3927,3927,1.000,1,false,3943,Arteriovenostomy for renal dialysis
@@ -6347,12 +6347,12 @@ SU169,4901,4901,1.000,1,false,4902,Incision of perianal abscess
 SU173,4824,4824,0.956,1,false,4525,Closed [endoscopic] biopsy of rectum
 SU175,4931,4931,0.861,1,false,613,Endoscopic excision or destruction of lesion or tissue of anus
 SU177,6732,6732,1.000,1,false,5831,Destruction of lesion of cervix by cauterization
-SU180,886,886,0.970,1,false,887,Lower eyelid rhytidectomy
-SU181,886,886,0.970,1,false,887,Lower eyelid rhytidectomy
+SU180,0886,0886,0.970,1,false,0887,Lower eyelid rhytidectomy
+SU181,0886,0886,0.970,1,false,0887,Lower eyelid rhytidectomy
 SU182,2186,2186,0.956,0,true,,Limited rhinoplasty
 SU183,2184,2184,0.997,0,true,,Revision rhinoplasty
 SU184,8684,8684,1.000,1,false,2559,Relaxation of scar or web contracture of skin
-SU185,837,837,1.000,1,false,833,Reduction of overcorrection of ptosis
+SU185,0837,0837,1.000,1,false,0833,Reduction of overcorrection of ptosis
 SU186,4525,4525,1.000,1,false,4824,Closed [endoscopic] biopsy of large intestine
 SU187,4525,4525,1.000,1,false,4824,Closed [endoscopic] biopsy of large intestine
 SU188,4524,4524,0.984,0,true,,Flexible sigmoidoscopy
@@ -6403,7 +6403,7 @@ W0008,5794,5794,1.000,1,false,5795,Insertion of indwelling urinary catheter
 W0009,5794,5794,1.000,1,false,5795,Insertion of indwelling urinary catheter
 W0010,9648,9648,0.969,1,false,9647,Irrigation of other indwelling urinary catheter
 W0011,9903,9903,0.992,1,false,9918,Other transfusion of whole blood
-W0015,9925,9925,0.971,1,false,14,Injection or infusion of cancer chemotherapeutic substance
+W0015,9925,9925,0.971,1,false,0014,Injection or infusion of cancer chemotherapeutic substance
 W0016,9716,9716,0.990,1,false,9357,Replacement of wound packing or drain
 W0017,9357,9357,1.000,1,false,8659,Application of other wound dressing
 W0018,9357,9357,1.000,1,false,9356,Application of other wound dressing
@@ -6412,7 +6412,7 @@ W0020,9335,9335,0.932,0,true,,Other heat therapy
 W0021,9644,9644,1.000,1,false,9143,Vaginal douche
 W0022,8934,8934,1.000,1,false,8933,Digital examination of rectum
 W0023,9639,9639,1.000,0,true,,Other transanal enema
-W0026,942,942,0.979,1,false,941,Probing of lacrimal canaliculi
+W0026,0942,0942,0.979,1,false,0941,Probing of lacrimal canaliculi
 W0027,9653,9653,1.000,1,false,222,Irrigation of nasal passages
 W0028,9984,9984,1.000,0,true,,Isolation
 W0029,9984,9984,1.000,0,true,,Isolation

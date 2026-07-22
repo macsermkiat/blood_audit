@@ -198,16 +198,25 @@ def test_event_exactly_at_order_time_is_kept() -> None:
     assert pick.matched_datetime == _ORDER_DT
 
 
-def test_event_exactly_at_72h_is_kept() -> None:
+def test_event_exactly_at_window_is_kept() -> None:
     pick = _pick([_event("8151", hours=float(PLANNED_OP_WINDOW_HOURS))])
 
     assert pick.pick_status == "selected"
 
 
-def test_event_just_past_72h_is_outside_window() -> None:
+def test_event_just_past_window_is_outside_window() -> None:
     pick = _pick([_event("8151", hours=float(PLANNED_OP_WINDOW_HOURS), seconds=1.0)])
 
     _assert_failure(pick, "outside_window")
+
+
+def test_reserve_ahead_op_within_14_days_is_kept() -> None:
+    # A reserve-ahead elective op 10 days out is now in-window (72h -> 14d);
+    # under the old 72h horizon this dropped to outside_window.
+    pick = _pick([_event("8151", hours=10 * 24.0)])
+
+    assert pick.pick_status == "selected"
+    assert pick.resolved_icd9 == "8151"
 
 
 def test_past_only_events_are_no_future_event() -> None:
@@ -224,7 +233,7 @@ def test_in_window_denied_plus_outside_window_clean_is_all_excluded() -> None:
     # outside_window.
     events = [
         _event("INCPT:MD530", hours=1.0),
-        _event("8151", hours=100.0),
+        _event("8151", hours=float(PLANNED_OP_WINDOW_HOURS) + 24.0),
     ]
 
     pick = _pick(events)
@@ -370,6 +379,37 @@ def test_blank_code_winner_is_selected_blank_code() -> None:
     assert pick.source == "icd9"
     assert pick.candidate_count == 1
     assert pick.tie_count == 1
+
+
+def test_coded_op_outranks_earlier_blank_code_row() -> None:
+    # Regression (#196): a code-less discharge-summary row (blank ICD-9, blank
+    # INTIME -> midnight) sorts earliest by datetime, but a resolvable code is
+    # the better MSBOS planning signal, so the coded op must win rather than
+    # producing a spurious selected_blank_code for a case that in fact has a code.
+    events = [
+        _event("", hours=1.0),  # code-less row, earlier (midnight in the wild)
+        _event("0309", hours=5.0),  # real coded op, later the same day
+    ]
+
+    pick = _pick(events, msbos_codes=frozenset({"0309"}))
+
+    assert pick.pick_status == "selected"
+    assert pick.resolved_icd9 == "0309"
+    assert pick.candidate_count == 2
+    assert pick.tie_count == 1
+
+
+def test_coded_op_outranks_same_time_blank_code_row() -> None:
+    # Same-timestamp collision of a blank row and a coded op: the coded op wins.
+    events = [
+        _event("", hours=1.0),
+        _event("0309", hours=1.0),
+    ]
+
+    pick = _pick(events, msbos_codes=frozenset({"0309"}))
+
+    assert pick.pick_status == "selected"
+    assert pick.resolved_icd9 == "0309"
 
 
 # --- purity ------------------------------------------------------------------

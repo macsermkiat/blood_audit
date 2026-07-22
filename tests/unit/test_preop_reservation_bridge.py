@@ -188,6 +188,69 @@ def test_build_rows_dotted_icd9_normalizes_nodot() -> None:
     assert rows[0]["icd9_nodot"] == "0602"
 
 
+def test_canonical_nodot_restores_category_leading_zero() -> None:
+    # The raw export stripped the 0X category zero: '309' must become '0309'
+    # because the ICD-9-CM name matches 03.09, not 30.9.
+    names = {
+        "0309": "Other exploration and decompression of spinal canal",
+        "309": "Other operations on larynx",
+    }
+
+    assert (
+        _BUILD.canonical_nodot(
+            "309", "Other exploration and decompression of spinal canal", names
+        )
+        == "0309"
+    )
+
+
+def test_canonical_nodot_restores_category_00_double_zero() -> None:
+    # Both category zeros stripped: '11' -> '0011' (00.11), not '011' (01.1).
+    # The single-pad candidate names a different entry, so only the 4-char form
+    # matches the operation name.
+    names = {
+        "011": "Diagnostic procedures on skull, brain, and cerebral meninges",
+        "0011": "Infusion of drotrecogin alfa (activated)",
+    }
+
+    assert (
+        _BUILD.canonical_nodot("11", "Infusion of drotrecogin alfa (activated)", names)
+        == "0011"
+    )
+
+
+def test_canonical_nodot_leaves_legitimate_three_digit_code() -> None:
+    # 55.4 -> '554' is a real 3-digit code; the padded '0554' does not match the
+    # name, so it must be left untouched.
+    names = {"554": "Partial nephrectomy"}
+
+    assert _BUILD.canonical_nodot("554", "Partial nephrectomy", names) == "554"
+
+
+def test_canonical_nodot_no_map_is_identity() -> None:
+    assert _BUILD.canonical_nodot("309", "anything", {}) == "309"
+
+
+def test_build_rows_restores_leading_zero_with_icd9cm_map() -> None:
+    names = {"0309": "Other exploration and decompression of spinal canal"}
+    rows, counts = _BUILD.build_rows(
+        [
+            _raw_row(
+                oprtact="P0243",
+                first_choice=(
+                    "309::Other exploration and decompression of "
+                    "spinal canal (score=1.000)"
+                ),
+            )
+        ],
+        names,
+    )
+
+    assert rows[0]["icd9"] == "0309"
+    assert rows[0]["icd9_nodot"] == "0309"
+    assert counts.leading_zero_restored == 1
+
+
 @pytest.mark.parametrize(
     ("human", "agreed"),
     [("0", "true"), ("1", "false"), ("", "false"), ("4", "false")],
@@ -390,7 +453,9 @@ def test_packaged_bridge_smoke() -> None:
         for entry in (bridge.get(c) for c in _PILOT_SOURCE_CODES)
         if entry is not None and reference.resolve(entry.icd9_nodot) is not None
     }
-    assert len(msbos_hits) == 17
+    # 18, not 17: the category leading-zero fix restored 0302 (P0204,
+    # "Reopening of laminectomy site"), which now resolves in the MSBOS ref.
+    assert len(msbos_hits) == 18
 
 
 def test_packaged_bridge_first_choice_spot_checks() -> None:
