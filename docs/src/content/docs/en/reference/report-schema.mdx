@@ -45,17 +45,18 @@ of nine literals:
 - `INSUFFICIENT_EVIDENCE`
 - `POTENTIALLY_INAPPROPRIATE` *(rule-only; not used by every report
   section)*
-- `PREOP_OVER_RESERVATION` *(MSBOS over-reservation; counted in the
-  `over_reservation_count` column, scored as an inappropriate-side
-  finding)*
+- `PREOP_OVER_RESERVATION` *(MSBOS over-reservation; scored as
+  `INAPPROPRIATE` in the report aggregates)*
 - `PREOP_RESERVATION_UNCONFIRMED` *(flag-gated, default-off)*
 - `RETURNED_NOT_TRANSFUSED` *(returns terminal; **excluded from
   scoring**)*
 - `PERIOP_TRANSFUSION_EXEMPT` *(returns / declared-use terminal;
   **excluded from scoring**)*
 
-`hospital_trend`, `ward_scorecard`, and `cohort_exception` now carry an
-`over_reservation_count` column alongside the classification buckets.
+The `hospital_trend`, `ward_scorecard`, and `cohort_exception` aggregate
+models additionally track an `over_reservation_count` field; the CSV
+writer does not serialize it as a column yet, so the emitted CSV headers
+are unchanged.
 
 `LLM_REVIEW` is a routing concept inside the deterministic classifier;
 it is not a stored value. Failed quote-grounding becomes

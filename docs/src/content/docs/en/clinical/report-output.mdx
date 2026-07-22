@@ -27,19 +27,20 @@ source file.
 
 | Section file | Audience | Contents |
 | --- | --- | --- |
-| `hospital_trend.csv` | QI committee | One row per month covered: total / appropriate / inappropriate / needs_review / insufficient_evidence counts, plus inappropriate_rate and `over_reservation_count` (MSBOS over-reservations). |
-| `ward_scorecard.csv` | Ward leads + QI committee | One row per `ward_id`. Same counts as the hospital trend (including `over_reservation_count`), scoped to the ward. |
+| `hospital_trend.csv` | QI committee | One row per month covered: total / appropriate / inappropriate / needs_review / insufficient_evidence counts, plus inappropriate_rate. |
+| `ward_scorecard.csv` | Ward leads + QI committee | One row per `ward_id`. Same counts as the hospital trend, scoped to the ward. |
 | `physician_own_view_<physician_id>.csv` | The named physician only | One file per physician. Holds the physician's own absolute numbers plus peer median / p25 / p75 inappropriate-rate quartiles. No other physician's individual rate is in the file. |
 | `indication_distribution.csv` | QI committee | One row per distinct indication code. An order with N indication codes contributes 1 to each. |
-| `cohort_exception.csv` | QI committee | One row per `cohort_applied` (including `default`), with `over_reservation_count`. Useful for spotting cohorts with unusual inappropriate-rates. |
+| `cohort_exception.csv` | QI committee | One row per `cohort_applied` (including `default`). Useful for spotting cohorts with unusual inappropriate-rates. |
 | `pipeline_health.csv` | QI committee | Single-row operational summary: classified vs needs-review vs insufficient-evidence counts and rates. Documentation absence is its own bucket — never folded into "inappropriate". |
 | `report_<YYYY-MM-DD>.pdf` | QI committee | Single PDF with all the above sections rendered as tables, plus the reproducibility footer on every page. |
 
 Orders whose `final_classification` is `RETURNED_NOT_TRANSFUSED` or
 `PERIOP_TRANSFUSION_EXEMPT` are **excluded from appropriateness
 scoring** — they never inflate or dilute a ward's or physician's rate.
-`PREOP_OVER_RESERVATION` rows are counted in `over_reservation_count`
-and scored on the inappropriate side.
+`PREOP_OVER_RESERVATION` rows are scored on the inappropriate side (the
+aggregate models also track them as an internal over-reservation count,
+not yet a CSV column).
 
 ## Per-physician separation by design
 

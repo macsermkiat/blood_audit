@@ -6,9 +6,10 @@ description: The three environment variables blood_audit requires before any aud
 import AtAGlance from "../../../../components/AtAGlance.astro";
 import EnvVarChecklist from "../../../../components/EnvVarChecklist.astro";
 
-blood_audit enforces a strict 3-variable contract for the full
-deployment. Missing or malformed values fail fast with `CliError` — they
-never silently degrade.
+blood_audit enforces a strict env-var contract for the full deployment:
+three core variables, plus two attribution inputs for the wired
+`bba report` subcommand. Missing or malformed values fail fast with
+`CliError` — they never silently degrade.
 
 <AtAGlance
   items={[
@@ -28,10 +29,14 @@ never silently degrade.
 | `BBA_DATA_DIR` | Yes — validated at every CLI invocation | `bba.cli.main._resolve_data_dir` |
 | `BBA_DB_URL` | No — needed in Phase 1.5 | `bba.audit_pipeline.store.PostgresBatchRunStore`, `bba.review_actions` |
 | `ANTHROPIC_API_KEY` | No — needed in Phase 1.5 | `bba.llm_client` (Anthropic Batch API) |
+| `BBA_BDVST_CSV` | Only for `bba report` | `bba.cli.main._get_ward_resolver` (fails loud when unset) |
+| `BBA_DCT_CSV` | Only for `bba report` | `bba.cli.main._get_physician_resolver` (fails loud when unset) |
 
-Set all three when configuring a long-lived deployment. Only
+Set all of these when configuring a long-lived deployment. Only
 `BBA_DATA_DIR` is strictly required for running the Phase 1 ingest leg
-locally.
+locally; the wired `bba report` subcommand additionally requires
+`BBA_BDVST_CSV` and `BBA_DCT_CSV` for its ward/physician attribution
+resolvers.
 
 ## Important details
 
@@ -74,7 +79,7 @@ the flag kill-switches for the default-ON features
 `BBA_PILOT_MSBOS_PLANNED_OP_PICKER_V2=0`). These are documented on
 [Run the pipeline](/blood_audit/en/operators/run-pipeline/) and
 [Doctor & department ranking](/blood_audit/en/operators/doctor-ranking/);
-the strict 3-variable contract above applies to the supported CLI only.
+the table above covers the supported CLI only.
 
 ## Verify
 

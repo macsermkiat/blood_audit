@@ -93,8 +93,10 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
   verdict ไป review เปิดโดยค่าเริ่มต้น
   (`MSBOS_PLANNED_OP_PICKER_V2_ENABLED`)
 - **CLI `bba report` เชื่อมแล้ว** สร้าง committee CSVs, per-physician CSVs
-  และ PDF จาก audit store; report sections ได้คอลัมน์
-  `over_reservation_count` เพิ่ม ส่วน `evaluate`, `serve-dashboard` และ
+  และ PDF จาก audit store; ต้องตั้ง `BBA_BDVST_CSV` / `BBA_DCT_CSV`
+  สำหรับ attribution resolvers; aggregate model ของ report ได้ field
+  `over_reservation_count` เพิ่ม (ยังไม่ serialize เป็นคอลัมน์ CSV)
+  ส่วน `evaluate`, `serve-dashboard` และ
   `sentinel` ยังเป็น integration seams
 - **Refactors (#218, #222, #223)** รวมคลังคำ reason ของ MSBOS reservation
   ไว้ที่เดียว (`preop_reservation.reason_presentation`); typed derived

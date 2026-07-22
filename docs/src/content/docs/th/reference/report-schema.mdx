@@ -42,16 +42,17 @@ audit store, resolve ward/physician attribution จาก `BBA_BDVST_CSV` /
 `INSUFFICIENT_EVIDENCE`, `POTENTIALLY_INAPPROPRIATE`) บวก terminal
 ด้าน routing/การจองเลือดอีก 4 ค่า:
 
-- `PREOP_OVER_RESERVATION` — การจองเลือดเกิน MSBOS; นับในคอลัมน์
-  `over_reservation_count` และคิดคะแนนอยู่ฝั่ง inappropriate
+- `PREOP_OVER_RESERVATION` — การจองเลือดเกิน MSBOS; คิดคะแนนเป็น
+  `INAPPROPRIATE` ใน report aggregates
 - `PREOP_RESERVATION_UNCONFIRMED` — อยู่หลัง flag, ปิดโดยค่าเริ่มต้น
 - `RETURNED_NOT_TRANSFUSED` — returns terminal;
   **ถูกตัดออกจากการคิดคะแนน**
 - `PERIOP_TRANSFUSION_EXEMPT` — terminal จาก returns / declared-use;
   **ถูกตัดออกจากการคิดคะแนน**
 
-`hospital_trend`, `ward_scorecard` และ `cohort_exception` มีคอลัมน์
-`over_reservation_count` เพิ่มควบคู่กับ bucket ของ classification
+aggregate model ของ `hospital_trend`, `ward_scorecard` และ
+`cohort_exception` มี field `over_reservation_count` เพิ่ม แต่ CSV writer
+ยังไม่ serialize เป็นคอลัมน์ — header ของไฟล์ CSV ที่ออกมายังเหมือนเดิม
 
 `INSUFFICIENT_EVIDENCE` ต้องอยู่เป็น class แยก เพราะหมายถึงหลักฐานไม่พอ
 ไม่ใช่หลักฐานว่าการให้เลือดไม่เหมาะสม การรวมค่านี้เข้า `INAPPROPRIATE`

@@ -106,9 +106,11 @@ will live at
   reservation marker; bridge disagreements gate the verdict to review.
   Default-ON (`MSBOS_PLANNED_OP_PICKER_V2_ENABLED`).
 - **CLI `bba report` wired.** Renders committee CSVs, per-physician CSVs,
-  and the PDF from the audit store; report sections gained an
-  `over_reservation_count` column. `evaluate`, `serve-dashboard`, and
-  `sentinel` remain integration seams.
+  and the PDF from the audit store; requires `BBA_BDVST_CSV` /
+  `BBA_DCT_CSV` for the attribution resolvers. The report aggregate
+  models gained an `over_reservation_count` field (not yet serialized as
+  a CSV column). `evaluate`, `serve-dashboard`, and `sentinel` remain
+  integration seams.
 - **Refactors (#218, #222, #223).** Single home for the MSBOS reservation
   reason vocabulary (`preop_reservation.reason_presentation`); a typed
   derived seam for reserve-ahead / declared-exempt routing; and
