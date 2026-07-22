@@ -18,7 +18,7 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
     { label: "ชุด output", value: "CSV 6 ส่วนสำหรับคณะกรรมการ, physician own-view CSV และ PDF" },
     { label: "Privacy", value: "physician own-view แยกหนึ่งไฟล์ต่อหนึ่งแพทย์", tone: "ok" },
     { label: "ทำซ้ำได้", value: "ทุกแถว/หน้ามี policy, model, redactor, prompt และ evidence hashes" },
-    { label: "สถานะ CLI", value: "bba report ยังเป็น integration seam จนกว่าจะเชื่อม ReportInputs", tone: "warn" },
+    { label: "สถานะ CLI", value: "bba report --run-id <id> เชื่อมแล้ว: committee CSVs + per-physician CSVs + PDF จาก audit store", tone: "ok" },
   ]}
 />
 
@@ -26,12 +26,18 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
 
 | ไฟล์ | ผู้ใช้หลัก | ใช้ทำอะไร |
 | --- | --- | --- |
-| `hospital_trend.csv` | QI committee | ดูแนวโน้มระดับโรงพยาบาล |
-| `ward_scorecard.csv` | QI committee | ดูรูปแบบระดับ ward โดยไม่ใช้เป็นบทลงโทษ |
+| `hospital_trend.csv` | QI committee | ดูแนวโน้มระดับโรงพยาบาล รวมคอลัมน์ `over_reservation_count` (การจองเลือดเกิน MSBOS) |
+| `ward_scorecard.csv` | QI committee | ดูรูปแบบระดับ ward (รวม `over_reservation_count`) โดยไม่ใช้เป็นบทลงโทษ |
 | `indication_breakdown.csv` | QI committee | แยกตาม indication |
-| `cohort_exception.csv` | QI committee | ดูบริบททางคลินิก/threshold ที่ผิดปกติ |
+| `cohort_exception.csv` | QI committee | ดูบริบททางคลินิก/threshold ที่ผิดปกติ พร้อม `over_reservation_count` |
 | `pipeline_health.csv` | IT + QI | ติดตาม failures, NEEDS_REVIEW และ grounding issues |
 | `physician_own_view/*.csv` | แพทย์ผู้ทบทวน | ให้แพทย์ดูเฉพาะรายการของตนเอง |
+
+คำสั่งที่ `final_classification` เป็น `RETURNED_NOT_TRANSFUSED` หรือ
+`PERIOP_TRANSFUSION_EXEMPT` จะ **ถูกตัดออกจากการคิดคะแนนความเหมาะสม**
+— ไม่ทำให้อัตราของ ward หรือของแพทย์สูงขึ้นหรือเจือจางลง ส่วนแถว
+`PREOP_OVER_RESERVATION` จะถูกนับใน `over_reservation_count`
+และคิดคะแนนอยู่ฝั่ง inappropriate
 
 ## กฎ privacy
 

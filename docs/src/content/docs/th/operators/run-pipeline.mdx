@@ -41,6 +41,16 @@ uv sync
 export ANTHROPIC_API_KEY=sk-ant-...
 export BBA_PILOT_WORK_DIR=/tmp/bba_mini
 
+# ตัวเลือก override:
+#   BBA_BDVSTTRANS_CSV=...                    override ไฟล์ส่งออก returns ledger
+#                                             (ค่าเริ่มต้นคือ BDVSTTRANS
+#                                             มาตรฐานใน data/encrypted)
+#   BBA_PILOT_MSBOS_RESERVATION=0             บังคับปิดส่วน MSBOS
+#   BBA_PILOT_DECLARED_USETYPE=0              บังคับปิด declared-USETYPE
+#   BBA_PILOT_DECLARED_USE_PREOP_EXEMPT=0     กลับไปใช้ routing ก่อนผ่าตัดแบบเดิม
+#   BBA_PILOT_MSBOS_PLANNED_OP_PICKER_V2=0    บังคับปิด picker v2
+# (ทั้งสี่ฟีเจอร์ default-ON)
+
 # ขั้น 1 — สุ่มประมาณ 10 เคสจาก bundle ที่เข้ารหัส → bundle/ + manifest
 uv run python scripts/pilot/sample_bundle.py
 
@@ -65,6 +75,12 @@ open "$BBA_PILOT_WORK_DIR/review.html"
 | 3 | `run_llm_leg.py` | `llm_report.json` + `data/audit_store/` |
 | 4 | `build_review.py` | `review.html` (หน้าเดียวสำหรับคนตรวจ) |
 
+`report.csv` จากขั้น 2 ยังมีคอลัมน์ overlay ที่ default-ON ด้วย:
+สถานะจาก returns ledger (`RETURNED_NOT_TRANSFUSED` /
+`PERIOP_TRANSFUSION_EXEMPT`), routing ตาม USETYPE แบบ declared-use
+และ verdict การจองเลือดตาม MSBOS (`PREOP_OVER_RESERVATION` +
+เหตุผลการจอง พร้อม provenance ของ picker v2)
+
 :::note[LLM เห็นอะไรและไม่เห็นอะไร]
 pilot **ไม่** ส่ง progress / focus notes แบบข้อความอิสระไปยัง API
 เพราะ bundle นั้นยังไม่ผ่าน de-identification ส่งออกเฉพาะสัญญาณที่เป็น
@@ -74,7 +90,7 @@ pilot **ไม่** ส่ง progress / focus notes แบบข้อควา
 
 ## เส้นทาง B — รันแบบ production (CLI ที่รองรับ)
 
-รัน `bba` CLI ที่ wire แล้ว กับข้อมูลส่งออก HOSxP เต็ม 12 ไฟล์
+รัน `bba` CLI ที่ wire แล้ว กับข้อมูลส่งออก HOSxP เต็ม 13 ไฟล์
 
 ```bash
 export BBA_DATA_DIR=/path/to/persistent/data   # run-state ตอนนี้ (Parquet + DuckDB วางแผนไว้)
@@ -104,5 +120,5 @@ uv run bba audit --input /path/to/hosxp_bundle/BDVST.csv
 ## ขั้นถัดไป
 
 - [ตัวแปรสภาพแวดล้อม](/blood_audit/th/operators/env-vars/) — ทุกตัวแปรที่ CLI อ่าน
-- [Ingest CSV](/blood_audit/th/operators/ingest-csv/) — รูปแบบ bundle 12 ไฟล์
+- [Ingest CSV](/blood_audit/th/operators/ingest-csv/) — รูปแบบ bundle 13 ไฟล์
 - [แก้ปัญหาเบื้องต้น](/blood_audit/th/operators/troubleshooting/) — ปัญหาที่พบบ่อย

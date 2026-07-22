@@ -77,6 +77,12 @@ When the LLM analysis leg is wired, this command will additionally:
 - Run the six fail-closed quote-grounding layers on every LLM response.
 - Write one `AuditRow` per audited order to the audit store, with
   `rule_classification` and `final_classification` set.
+  `final_classification` includes the routing/reservation terminals
+  (`RETURNED_NOT_TRANSFUSED`, `PERIOP_TRANSFUSION_EXEMPT`,
+  `PREOP_OVER_RESERVATION`, flag-gated
+  `PREOP_RESERVATION_UNCONFIRMED`); returned / peri-op-exempt rows that
+  carried a pre-op reservation also embed an MSBOS
+  `reservation_annotation` (annotation, never a verdict change).
 
 Batch progress is tracked in a `batch_runs` row per audited order
 (`pending` → `submitted` → `partial` → `complete`; `failed` is

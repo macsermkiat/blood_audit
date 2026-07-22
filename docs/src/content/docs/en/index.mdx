@@ -43,6 +43,12 @@ procedures, medications, blood-order patterns, and procedure timing in a fixed
 order. This analysis leg runs today through the pilot scripts and is wired into
 the CLI in Phase 1.5.
 
+Before any Hb judgment, three default-ON routing arms may terminal an order
+out of appropriateness scoring: the **returns ledger** (per-unit BDVSTTRANS
+disposition), **declared-use USETYPE routing** (order-level surgical /
+type-and-screen intent), and the **MSBOS pre-op reservation audit**
+(over-reservation screening for planned operations).
+
 The final `final_classification` stored for each transfusion is one of:
 
 - `APPROPRIATE` — the order matched policy.
@@ -53,6 +59,15 @@ The final `final_classification` stored for each transfusion is one of:
   (uncertain reasoning, failed quote-grounding, or low confidence).
 - `INSUFFICIENT_EVIDENCE` — documented evidence was missing; the row is
   *not* `INAPPROPRIATE`, by design.
+- `RETURNED_NOT_TRANSFUSED` — every unit was returned un-transfused
+  (returns terminal; **excluded from scoring**).
+- `PERIOP_TRANSFUSION_EXEMPT` — declared surgical / type-and-screen use or
+  peri-op transfusion (returns terminal; **excluded from scoring**).
+- `PREOP_OVER_RESERVATION` — reserved units exceeded the MSBOS
+  recommendation for the planned operation (counts as an over-reservation
+  finding, not an Hb verdict).
+- `PREOP_RESERVATION_UNCONFIRMED` — reserve-ahead order whose transfusion
+  could not be confirmed (behind a default-off flag).
 
 Rows that the deterministic classifier routes to the LLM go through six
 fail-closed quote-grounding layers; a failed grounding becomes
@@ -88,6 +103,11 @@ platelet LLM leg sits behind the default-off `PLATELET_LLM_ENABLED` flag, and
 the RBC path is byte-identical throughout.
 
 ## The 12 pipeline stages
+
+The 12-stage core below is the RBC/platelet analysis leg. The three
+default-ON overlay arms (returns ledger, declared-use routing, MSBOS
+reservation) sit in front of it and can terminal an order before the
+Hb/count stages run.
 
 <PipelineDiagram />
 

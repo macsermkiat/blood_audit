@@ -27,6 +27,17 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
 - `hallucination_suspect` — `review_reason` สำหรับ quote-grounding failure
 - `run_id` — hash จาก input + schema + code version เพื่อ idempotency
 - `SafeId` — placeholder ที่ใช้แทน PHI เช่น `PHI_xxx_001`
+- `returns_ledger` / `not_transfused` — การรวม disposition รายยูนิตจาก
+  BDVSTTRANS ที่อยู่เบื้องหลัง `RETURNED_NOT_TRANSFUSED`
+- `USETYPE` / `declared_use` — สัญญาณ declared-use ณ เวลาสั่ง ที่อยู่
+  เบื้องหลัง `PERIOP_TRANSFUSION_EXEMPT` (`preop_declared_exempt`)
+- `MSBOS` / `preop_reservation` — pre-op reservation audit ที่อยู่เบื้องหลัง
+  `PREOP_OVER_RESERVATION` รวมถึง planned-op picker และ
+  OPRTACT→ICD9 bridge
+- `reservation_annotation` — MSBOS annotation ที่ฝังบนแถว returns-terminal
+  (เป็น annotation เท่านั้น ไม่เปลี่ยน verdict)
+- `feature_flags` — module ของ runtime flag; flag 5 จาก 7 ตัวเปิดโดย
+  ค่าเริ่มต้น
 
 ## Module สำคัญ
 

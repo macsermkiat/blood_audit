@@ -2,16 +2,17 @@
 
 Post-hoc audit of inpatient adult transfusion appropriateness at Chulalongkorn Hospital (KCMH), against PR 17.2 + AABB 2023 guidelines. Phase 1 audits red blood cell (RBC) orders; Phase 2 extends the same pipeline to platelet orders.
 
-> **Status:** 26 modules under `src/bba/`, version `0.1.0`.
+> **Status:** 30 modules under `src/bba/`, version `0.1.0`.
 > - **Phase 1 (RBC)** is feature-complete at module level. `bba audit` runs the ingest leg today; the analysis leg (deterministic classifier → LLM review → quote grounding) runs via the pilot scripts and is wired into the CLI in Phase 1.5.
 > - **Phase 2 (platelet auditor)** is **merged** (PR #85). The deterministic leg is live; the platelet LLM leg is behind a default-off flag (`feature_flags.PLATELET_LLM_ENABLED`). The RBC path is byte-identical throughout.
+> - **2026-07 wave (all default-ON):** the BDVSTTRANS **returns ledger** (returned / peri-op-transfused terminals, excluded from scoring), **declared-use USETYPE routing** (order-level pre-op exemption; USETYPE is the only pre-op router), and the **MSBOS pre-op reservation audit** (over-reservation screening with planned-op picker v2 + OPRTACT→ICD9 bridge). See [What's new since Phase 1](#whats-new-since-phase-1).
 > - Pilot validation against one month of historical data is pending clinical co-lead sign-off (M8). Phase B operative-table re-encryption is pending KCMH IT (#2).
 
 Full requirements: **[PRD — issue #1](https://github.com/macsermkiat/blood_audit/issues/1)**.
 
 ## What this is (and isn't)
 
-- **Is:** a post-hoc Quality Improvement pipeline. Reads finished HOSxP exports, routes each blood-bank order to its component family, then classifies each RBC unit against the 3-tier Hb policy (cohort-aware thresholds + deterministic bypasses) and each platelet unit against the §5.1 count gate. Verdicts are `APPROPRIATE` / `NEEDS_REVIEW` / `INSUFFICIENT_EVIDENCE` / `POTENTIALLY_INAPPROPRIATE` / `INAPPROPRIATE`.
+- **Is:** a post-hoc Quality Improvement pipeline. Reads finished HOSxP exports, routes each blood-bank order to its component family, then classifies each RBC unit against the 3-tier Hb policy (cohort-aware thresholds + deterministic bypasses) and each platelet unit against the §5.1 count gate. Core verdicts are `APPROPRIATE` / `NEEDS_REVIEW` / `INSUFFICIENT_EVIDENCE` / `POTENTIALLY_INAPPROPRIATE` / `INAPPROPRIATE`, plus four routing/reservation terminals: `RETURNED_NOT_TRANSFUSED` and `PERIOP_TRANSFUSION_EXEMPT` (excluded from appropriateness scoring), `PREOP_OVER_RESERVATION` (MSBOS over-reservation), and `PREOP_RESERVATION_UNCONFIRMED` (flag-gated, default-off).
 - **Is not:** a real-time clinical decision support tool. Nothing in this codebase is intended to influence a transfusion order at the point of care.
 
 ## Quickstart
@@ -33,6 +34,8 @@ The pipeline reads a HOSxP CSV bundle. No sample data ships in-repo (PHI exposur
 | `ANTHROPIC_API_KEY` | path A (LLM leg) | Anthropic API key (`sk-ant-...`) |
 | `BBA_PILOT_WORK_DIR` | paths A, C (pilot scripts) | where outputs land (e.g. `/tmp/bba_mini`) |
 | `BBA_REVIEW_XLSX`, `BBA_BDVST_CSV`, `BBA_DCT_CSV` | path C (ranking) | verdict source + attribution inputs |
+| `BBA_BDVSTTRANS_CSV` | path A (optional) | returns-ledger BDVSTTRANS export override (defaults to the canonical `data/encrypted` export) |
+| `BBA_PILOT_MSBOS_RESERVATION=0` etc. | path A (optional) | kill-switches for the default-ON pilot flags (see [Feature flags](#feature-flags)) |
 
 ## Run the pipeline
 
@@ -72,6 +75,12 @@ uv run python scripts/pilot/build_review.py    # 4. assemble review          →
 open "$BBA_PILOT_WORK_DIR/review.html"
 ```
 
+Step 2's `report.csv` now also carries the default-ON overlay columns: returns-ledger
+disposition (`RETURNED_NOT_TRANSFUSED` / `PERIOP_TRANSFUSION_EXEMPT` terminals),
+declared-use USETYPE routing, and MSBOS reservation verdicts
+(`PREOP_OVER_RESERVATION` + reservation reasons). See
+[What's new since Phase 1](#whats-new-since-phase-1).
+
 To iterate on a single case without re-running the whole batch, set
 `BBA_PILOT_ONLY_REQNO` (with a fresh `BBA_PILOT_RUN_ID`) — the fresh record is
 merged into `llm_report.json` and the other cases keep theirs. See
@@ -79,7 +88,7 @@ merged into `llm_report.json` and the other cases keep theirs. See
 
 ### Path B — ingest a full export (supported `bba` CLI)
 
-Runs the wired `bba` CLI against a full 12-file HOSxP export.
+Runs the wired `bba` CLI against a full 13-file HOSxP export.
 
 ```bash
 export BBA_DATA_DIR=/path/to/persistent/data   # run-state today (Parquet + DuckDB planned)
@@ -121,14 +130,14 @@ open "$BBA_PILOT_WORK_DIR/doctor_rankings.html"
 
 | Subcommand | Status | Notes |
 |------------|--------|-------|
-| `bba ingest <csv> [--schema-version v1]` | Wired | Validates + hashes + normalizes the 12-table HOSxP bundle, then writes the run completion marker (marker-only today; Parquet loader is the intended next storage). `--schema-version` selects the ingest schema (default `v1`). |
+| `bba ingest <csv> [--schema-version v1]` | Wired | Validates + hashes + normalizes the 13-table HOSxP bundle, then writes the run completion marker (marker-only today; Parquet loader is the intended next storage). `--schema-version` selects the ingest schema (default `v1`). |
 | `bba audit --input <csv>` | Wired | Run-level idempotent; `--force` overrides with an `audit_log` row. |
 | `bba evaluate --run-id <id>` | Integration seam | Underlying `bba.eval_harness` primitives ship and are tested; the CLI hand-off composes them against the deployment's `audit_store`. Raises `CliError` until wired. |
-| `bba report --run-id <id> --format html\|pdf\|json` | Integration seam | Underlying `bba.report_generator` ships; CLI needs the deployment to source `ReportInputs` from the store. |
+| `bba report --run-id <id> --format html\|pdf\|json` | Wired | Renders the monthly report from the audit store: committee CSVs + per-physician CSVs + PDF under `$BBA_DATA_DIR/reports/<run_id>/`. Ward/physician attribution resolvers come from `BBA_BDVST_CSV` / `BBA_DCT_CSV`. |
 | `bba serve-dashboard --port 8000` | Integration seam | FastAPI app from `bba.dashboard.create_app` ships; CLI needs deployment-specific resolvers (auth, snapshot dir, PHI un-redactor). |
 | `bba sentinel --weekly\|--quarterly` | Integration seam | `bba.monitoring` primitives ship; CLI needs the deployment's cadence dispatcher. |
 
-The four integration seams **fail loud** with a `CliError` describing the missing glue — they do not fabricate defaults that would silently mis-configure the underlying module.
+The three remaining integration seams (`evaluate`, `serve-dashboard`, `sentinel`) **fail loud** with a `CliError` describing the missing glue — they do not fabricate defaults that would silently mis-configure the underlying module.
 
 Examples (Path B; `BBA_DATA_DIR` must be set):
 
@@ -150,11 +159,12 @@ uv run bba audit --input /path/to/hosxp_bundle/BDVST.csv --force
 
 ## Expected input bundle
 
-The HOSxP export directory must contain these 12 CSV files (header validation is strict; see `src/bba/ingest/schemas.py` for column lists):
+The HOSxP export directory must contain these 13 CSV files (header validation is strict; see `src/bba/ingest/schemas.py` for column lists):
 
 ```
 BDVST.csv                       Blood-bank visit (one row per unit)
-BDVSTDT.csv                     Blood-bank visit dates / times
+BDVSTDT.csv                     Blood-bank visit dates / times (USETYPE drives declared-use routing)
+BDVSTTRANS.csv                  Unit disposition ledger (returns / transfusion status, per-unit)
 BDTYPE.csv                      Blood-component-type dictionary
 BDVSTST.csv                     Blood-bank visit status
 Diagnosis.csv                   ICD-10 admission + discharge dx
@@ -520,7 +530,7 @@ WHERE
 
 ## Architecture
 
-26 modules under `src/bba/`. See **[`docs/CONTEXT.md`](docs/CONTEXT.md)** for the module glossary — every public interface, invariant, and seam is documented there. Read it before touching anything.
+30 modules under `src/bba/`. See **[`docs/CONTEXT.md`](docs/CONTEXT.md)** for the module glossary — every public interface, invariant, and seam is documented there. Read it before touching anything.
 
 Coarse dependency shape (the RBC path is Phase 1; the platelet path is Phase 2 and forks at the `component_map` intake gate):
 
@@ -539,13 +549,38 @@ evidence_bundle_builder → deid_redactor → prompt_builder → llm_client ─�
       eval_harness, monitoring, review_actions, dashboard, report_generator, attribution, verification, cli
 ```
 
-Modules added since the initial Phase 1 build: `component_map` (component-family intake gate), `platelet_lookup`, `platelet_classifier`, `platelet_guardrail` (Phase 2 platelet auditor); `attribution` (doctor/department appropriateness ranking); `verification` (before/after scoring for the peri-op fix).
+Modules added since the initial Phase 1 build: `component_map` (component-family intake gate), `platelet_lookup`, `platelet_classifier`, `platelet_guardrail` (Phase 2 platelet auditor); `attribution` (doctor/department appropriateness ranking); `verification` (before/after scoring for the peri-op fix); `returns_ledger` (BDVSTTRANS unit-disposition aggregation); `declared_use` (order-time declared use from `BDVSTDT.USETYPE`); `preop_reservation` (MSBOS pre-op reservation evaluation, planned-op picker + OPRTACT→ICD9 bridge); `feature_flags` (runtime flag module).
 
 ## What's new since Phase 1
 
 - **Phase 2 — platelet auditor (merged, PR #85).** `component_map` routes each blood-bank order to a component family (`RED_CELL`, `PLATELET`, `FFP`, `CRYO`, `WHOLE_BLOOD`, `UNKNOWN`) from the BDTYPE dictionary name. Platelet orders go through `platelet_lookup` (count value layer) and `platelet_classifier` (§5.1 gate). The gate **auto-clears nothing**: count ≥ 100 ×10³/µL → `POTENTIALLY_INAPPROPRIATE` (routes to the LLM review leg), count < 100 → `NEEDS_REVIEW` (defers to the LLM leg), missing count → `INSUFFICIENT_EVIDENCE` by default. The platelet LLM leg (`PLATELET_REVIEW` prompt + grounded-hard-signal over-clear guardrail) is behind default-off `feature_flags.PLATELET_LLM_ENABLED` — so today only missing-count `INSUFFICIENT_EVIDENCE` rows are written deterministic-final; present-count orders (`POTENTIALLY_INAPPROPRIATE` / `NEEDS_REVIEW`) are classified but orphan (skipped, **not reviewed**) until the flag is enabled.
 - **Doctor / department attribution (Feature 2, PR #82).** `bba.attribution` ranks the top-10 ordering doctors and departments by blood-order appropriateness in three buckets (appropriate / inappropriate / unresolved). Attribution is `BDVST.DCTREQ` → `DCT.csv`; the verdict source is swappable (`VerdictSource`) — the current build ranks on the 300-case human review, and a full-cohort pipeline verdict source drops in without other changes. Driven by `scripts/pilot/rank_doctors.py` and surfaced through the `serve-dashboard` integration seam.
 - **Cohort refinements.** Orthopedic surgery is now its own `ORTHO_SURGERY` cohort (Hb floor 8.0, PR #83), split out from the cardiac cohort. A `CARDIOPULMONARY_COMORBIDITY` cohort (heart-disease floor 8.0) and the peri-op defer-to-LLM behavior landed in PR #81 — pre-op crossmatch defers to the LLM, and hard peri-op evidence (`intraop_transfusion` or `EBL ≥ 500 mL`) bypasses.
+- **Returns ledger (spec #119; go-live PR #138).** `returns_ledger` aggregates the per-unit `BDVSTTRANS` disposition export. Orders whose units were all returned un-transfused terminal as `RETURNED_NOT_TRANSFUSED`; orders transfused peri-operatively terminal as `PERIOP_TRANSFUSION_EXEMPT`. Both are **excluded from appropriateness scoring** — they route out, they don't judge. Default-ON (`RETURNS_LEDGER_ENABLED`); `BBA_BDVSTTRANS_CSV` overrides the ledger path in the pilot legs.
+- **Declared-use USETYPE routing (specs #147 + #194/#195).** `declared_use` interprets the order-time `BDVSTDT.USETYPE`. Orders declared surgical (`M/G`) or type-and-screen (`T/S`) are exempt at the order level (`preop_declared_exempt` → `PERIOP_TRANSFUSION_EXEMPT`) regardless of the unit ledger, and **USETYPE is now the only pre-op router** — the legacy bare-surgical ≤6h / ≤72h deterministic-APPROPRIATE bypasses are retired while the flags are ON (structured routing keeps the 6h/72h windows). Default-ON (`DECLARED_USETYPE_ENABLED`, `DECLARED_USE_PREOP_EXEMPT_ENABLED`).
+- **MSBOS pre-op reservation audit (specs #159–#175).** `preop_reservation` audits reserved units for planned operations against the MSBOS / OPBloodLimit reference. Over-reservation surfaces as the `PREOP_OVER_RESERVATION` review class; the platelet leg screens reserved platelets against clinician-signed count cutoffs (MNS 80k; neuraxial 100k; cardiac-CPB 100k, per 10³/µL). Never-guess rules: a missing count with reserved units routes to review, and zero reserved units is never "over". Returned/exempt orders still carry an MSBOS `reservation_annotation` (annotation, not verdict) so C:T waste stays visible. Default-ON (`MSBOS_RESERVATION_ENABLED`).
+- **Planned-op picker v2 + OPRTACT→ICD9 bridge (specs #196–#216).** The MSBOS arm picks the planned operation inside a 72-hour window via a vendored OPRTACT→ICD9 bridge reference (`scripts/build_oprtact_icd9_bridge.py`), with a guarded-prefix denylist, a dominance-ceiling rule, and full picker provenance embedded on every reservation marker. Bridge disagreements gate the verdict to review instead of guessing. Default-ON (`MSBOS_PLANNED_OP_PICKER_V2_ENABLED`, effective only with the MSBOS flag).
+- **Administration-confirmation gate (spec #105).** Reserve-ahead orders whose transfusion can't be confirmed from the record terminal as `PREOP_RESERVATION_UNCONFIRMED` instead of receiving an Hb verdict. Behind the default-OFF `RESERVE_AHEAD_ROUTER_ENABLED` flag pending the #109 clinical gate.
+- **CLI `bba report` is wired.** Renders committee CSVs, per-physician CSVs, and the PDF from the audit store (`build_report_inputs` + `generate_monthly_report`); no longer a `CliError` seam. Report sections now include an `over_reservation_count` column.
+- **Doctor ranking verdict source is selectable.** `BBA_VERDICT_SOURCE=pipeline` ranks on full-cohort pipeline verdicts from the audit store; the default remains the 300-case human-review workbook (`human`).
+- **MSBOS name-match offline study (specs #185–#193).** A Tier-1 deterministic + Tier-2 LLM procedure-name matcher (`scripts/pilot/msbos_name_match_study.py`) for reservation cases the coded pickers can't resolve. Annotation-only offline study — not wired into the pipeline.
+
+## Feature flags
+
+Runtime flags live in `src/bba/feature_flags.py` (plain module constants — the pilot scripts apply the `BBA_PILOT_*` env overrides):
+
+| Flag | Default | Pilot kill-switch / override |
+|------|---------|------------------------------|
+| `RETURNS_LEDGER_ENABLED` | **ON** | — |
+| `DECLARED_USETYPE_ENABLED` | **ON** | `BBA_PILOT_DECLARED_USETYPE=0` |
+| `DECLARED_USE_PREOP_EXEMPT_ENABLED` | **ON** | `BBA_PILOT_DECLARED_USE_PREOP_EXEMPT=0` |
+| `MSBOS_RESERVATION_ENABLED` | **ON** | `BBA_PILOT_MSBOS_RESERVATION=0` |
+| `MSBOS_PLANNED_OP_PICKER_V2_ENABLED` | **ON** (needs the MSBOS flag) | `BBA_PILOT_MSBOS_PLANNED_OP_PICKER_V2` |
+| `PLATELET_LLM_ENABLED` | off | — |
+| `RESERVE_AHEAD_ROUTER_ENABLED` | off (pending #109 gate) | `BBA_PILOT_RESERVE_AHEAD_ROUTER` |
+
+The active combination is encoded in the pilot store code-version token — currently
+`pilot-mini+returns+declared+msbos5+opbound2+usetypeonly` with all defaults.
 
 ## Safety & policy notes
 
@@ -558,6 +593,8 @@ Modules added since the initial Phase 1 build: `component_map` (component-family
 - **Platelet auditor auto-clears nothing.** `platelet_classifier` never emits `APPROPRIATE` or `INAPPROPRIATE` in v1: because the policies withhold platelets at very low counts for several exclusion populations (TTP/HIT transfusion is actively harmful), every present count routes onward to review or the LLM rather than dead-ending as deterministic-final. Pinned by a hypothesis property test (CR-M2).
 - **Component families are isolated at intake.** `component_map` keeps platelet statistics out of RBC reporting and the dashboard, and excludes `FFP` / `CRYO` / `WHOLE_BLOOD` with a precise reason rather than guessing them into an auditable family.
 - **Run-level idempotency is enforced at the store layer.** `bba audit` cannot accidentally produce two rows for the same `(run_id, encounter_id)` pair.
+- **Returns-terminal and declared-exempt orders never enter appropriateness statistics.** `RETURNED_NOT_TRANSFUSED` and `PERIOP_TRANSFUSION_EXEMPT` are routing terminals, excluded from scoring in reports, ranking, and the dashboard; only `PREOP_OVER_RESERVATION` counts against a service (as an over-reservation bucket).
+- **The MSBOS arm never guesses.** Unresolved or ambiguous planned operations, bridge disagreements, and missing pre-op counts with reserved units all route to review — none auto-clear and none auto-flag. Melena is treated as digested/old blood: it never satisfies the >300 mL active-bleeding volume exemption (shock or low Hb are the only clears).
 
 ## How this was built (history)
 
@@ -603,3 +640,5 @@ Then `gh issue close N` after review passes. Parallel work happened in `git work
 Modules without deps were built in parallel.
 
 Phase 2 (platelet auditor) and the attribution/cohort features followed the same workflow on feature branches: `feat/periop-defer-llm` (#81, peri-op defer + cardiopulmonary cohort), `feat/doctor-dept-ranking` (#82, `attribution`), `feat/ortho-surgery-cohort` (#83, `ORTHO_SURGERY` split), `feat/platelet-auditor` (#84, deterministic core), and `feat/platelet-pipeline-dispatch` (#85, live-pipeline integration + platelet LLM leg).
+
+The 2026-07 wave followed the same spec → tickets → review workflow: returns ledger (spec #119, PRs #120–#138), declared-use USETYPE routing (spec #147, PRs #148–#152 + #194/#195), MSBOS reservation (specs #159–#176, PRs #160–#184), name-match study (spec #185, PRs #190–#193), and planned-op picker v2 + bridge (spec #196, PRs #202–#216).

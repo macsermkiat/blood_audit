@@ -25,7 +25,8 @@ normalization และเขียน completion marker ของ run
 
 ## 2. `bba.audit_orders`
 
-เลือกเฉพาะ RBC orders และสร้าง anchor หนึ่งรายการต่อคำสั่งให้เลือดที่ต้อง audit
+เลือก RBC และ platelet orders ที่ต้อง audit (intake gate `bba.component_map`
+แยก component family ให้แต่ละ order) และสร้าง anchor หนึ่งรายการต่อคำสั่งให้เลือด
 
 ## 3. `bba.hb_lookup`
 
@@ -48,6 +49,13 @@ malignancy หรือ unknown
 ใช้กฎ 3-tier Hb, bypass และ review flags เพื่อสร้าง `rule_classification`
 ผลที่ auto-classify ได้จะจบโดยไม่เรียก LLM ส่วน `NEEDS_REVIEW` และ
 `POTENTIALLY_INAPPROPRIATE` จะเข้าสู่ LLM route
+
+Overlay arms 3 ตัว (เปิดเป็น default-ON) ทำงานที่ stage นี้: returns ledger
+(`bba.returns_ledger`) จบ order เป็น `RETURNED_NOT_TRANSFUSED` ได้,
+declared-use USETYPE routing (`bba.declared_use`) จบเป็น
+`PERIOP_TRANSFUSION_EXEMPT` และ MSBOS reservation audit
+(`bba.preop_reservation`) รายงาน `PREOP_OVER_RESERVATION`
+เมื่อจองเลือดเกินสำหรับ planned operation
 
 ## 7. `bba.evidence_bundle_builder`
 

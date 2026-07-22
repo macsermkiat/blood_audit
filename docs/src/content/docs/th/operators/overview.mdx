@@ -65,6 +65,11 @@ import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
 - มี exclusion แบบเด็ดขาดสำหรับผลิตภัณฑ์ที่ไม่ใช่ RBC, ผู้ป่วยอายุ < 15 ปี,
   และ ICD-10 conditions ที่อยู่นอก scope ส่วนคำสั่งที่ไม่มี Hb ก่อนให้เลือด
   จะถูกเก็บเป็น `INSUFFICIENT_EVIDENCE`
+- มี routing สามส่วนที่ default-ON ซึ่งปิดจบ (terminal) คำสั่งได้ก่อนถึง
+  นโยบาย Hb: คำสั่งที่คืนเลือดโดยไม่ได้ให้ (`RETURNED_NOT_TRANSFUSED`) และ
+  คำสั่งที่ระบุว่าเป็นงานผ่าตัด / type-and-screen (`PERIOP_TRANSFUSION_EXEMPT`)
+  จะไม่นับในการให้คะแนน ส่วนการจองเลือดเกิน MSBOS จะแสดงเป็น
+  `PREOP_OVER_RESERVATION`
 - PHI ทั้งหมดจะถูก de-identify ก่อนที่ข้อมูลใด ๆ จะออกจาก audit container
 
 ## ขั้นถัดไป

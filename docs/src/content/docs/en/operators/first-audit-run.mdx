@@ -82,9 +82,13 @@ ls "$BBA_DATA_DIR/audit_runs/<RUN_ID>/"
 
 Once the LLM analysis leg is wired, `bba audit` will additionally write
 one `AuditRow` per audited order to the audit store. The
-`final_classification` column holds one of `APPROPRIATE`,
-`INAPPROPRIATE`, `NEEDS_REVIEW`, `INSUFFICIENT_EVIDENCE`, or
-`POTENTIALLY_INAPPROPRIATE`. `LLM_REVIEW` is a routing concept (not a
+`final_classification` column holds one of the five core verdicts —
+`APPROPRIATE`, `INAPPROPRIATE`, `NEEDS_REVIEW`,
+`INSUFFICIENT_EVIDENCE`, `POTENTIALLY_INAPPROPRIATE` — or one of the
+routing/reservation terminals: `RETURNED_NOT_TRANSFUSED` and
+`PERIOP_TRANSFUSION_EXEMPT` (excluded from scoring),
+`PREOP_OVER_RESERVATION`, and `PREOP_RESERVATION_UNCONFIRMED`
+(flag-gated, default-off). `LLM_REVIEW` is a routing concept (not a
 stored value); failed quote-grounding becomes
 `final_classification = NEEDS_REVIEW` with `review_reason` set.
 

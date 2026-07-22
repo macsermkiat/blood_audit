@@ -1,15 +1,20 @@
 ---
 title: Integration seams
-description: Four CLI subcommands raise CliError by design — they are deployment hand-offs, not bugs.
+description: Three CLI subcommands raise CliError by design — they are deployment hand-offs, not bugs.
 ---
 
 import AtAGlance from "../../../../components/AtAGlance.astro";
 import IntegrationSeamCard from "../../../../components/IntegrationSeamCard.astro";
 
-Four subcommands of `bba` raise `CliError` when invoked in Phase 1. This is
+Three subcommands of `bba` raise `CliError` when invoked in Phase 1. This is
 **by design**: the underlying modules ship and are tested, but the CLI
 hand-off requires deployment-specific wiring (auth, stores, resolvers)
 that does not belong in Phase 1. Do not "fix" them.
+
+(`bba report` used to be the fourth seam; it is now **wired** — it
+renders committee CSVs, per-physician CSVs, and the PDF from the audit
+store, resolving ward/physician attribution from `BBA_BDVST_CSV` /
+`BBA_DCT_CSV`.)
 
 <AtAGlance
   items={[
@@ -24,12 +29,6 @@ that does not belong in Phase 1. Do not "fix" them.
   command="bba evaluate --run-id RUN_ID"
   missingGlue="Composition of bba.eval_harness primitives (stratified_sample, agreement, cluster_ci) into an end-to-end harness."
   rationale="Phase 1 ships the primitives; the harness shape depends on which gold-standard cohort the deployment selects."
-/>
-
-<IntegrationSeamCard
-  command="bba report --run-id RUN_ID --format html|pdf|json"
-  missingGlue="A ReportInputs resolver that pulls from audit_store, monitoring, and review_actions in your deployment's combination."
-  rationale="The 6-section report schema is fixed in src/bba/report_generator/. The CLI does not know your deployment's data fan-in."
 />
 
 <IntegrationSeamCard

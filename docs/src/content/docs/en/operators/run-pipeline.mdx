@@ -42,6 +42,16 @@ uv sync
 export ANTHROPIC_API_KEY=sk-ant-...
 export BBA_PILOT_WORK_DIR=/tmp/bba_mini
 
+# Optional overrides:
+#   BBA_BDVSTTRANS_CSV=...                    returns-ledger export override
+#                                             (defaults to the canonical
+#                                             data/encrypted BDVSTTRANS)
+#   BBA_PILOT_MSBOS_RESERVATION=0             force the MSBOS arm off
+#   BBA_PILOT_DECLARED_USETYPE=0              force declared-USETYPE off
+#   BBA_PILOT_DECLARED_USE_PREOP_EXEMPT=0     restore legacy pre-op routing
+#   BBA_PILOT_MSBOS_PLANNED_OP_PICKER_V2=0    force picker v2 off
+# (all four features are default-ON)
+
 # Step 1 — sample ~10 cases from the encrypted bundle → bundle/ + manifest
 uv run python scripts/pilot/sample_bundle.py
 
@@ -66,6 +76,12 @@ What each step produces:
 | 3 | `run_llm_leg.py` | `llm_report.json` + `data/audit_store/` |
 | 4 | `build_review.py` | `review.html` (one page for human review) |
 
+Step 2's `report.csv` also carries the default-ON overlay columns:
+returns-ledger disposition (`RETURNED_NOT_TRANSFUSED` /
+`PERIOP_TRANSFUSION_EXEMPT`), declared-use USETYPE routing, and MSBOS
+reservation verdicts (`PREOP_OVER_RESERVATION` + reservation reasons,
+with picker-v2 provenance).
+
 :::note[What the LLM does and doesn't see]
 The pilot does **not** send free-text progress / focus notes to the API —
 that bundle has not been through de-identification. Only structured signals
@@ -75,7 +91,7 @@ go out: ICD-10 diagnoses, Hb history, CBC values, meds, and vital-sign
 
 ## Path B — Production run (supported CLI)
 
-Runs the wired `bba` CLI against a full 12-file HOSxP export.
+Runs the wired `bba` CLI against a full 13-file HOSxP export.
 
 ```bash
 export BBA_DATA_DIR=/path/to/persistent/data   # run-state today (Parquet + DuckDB planned)
@@ -105,5 +121,5 @@ code version is a no-op. Pass `--force` to override (writes a compliance row to
 ## Next steps
 
 - [Environment variables](/blood_audit/en/operators/env-vars/) — every variable the CLI reads.
-- [Ingest CSV](/blood_audit/en/operators/ingest-csv/) — the expected 12-file bundle shape.
+- [Ingest CSV](/blood_audit/en/operators/ingest-csv/) — the expected 13-file bundle shape.
 - [Troubleshooting](/blood_audit/en/operators/troubleshooting/) — common failures.

@@ -40,9 +40,10 @@ The lockfile is frozen. **Do not set `UV_LOCKED=1`** — it conflicts with
 uv run bba --help
 ```
 
-You should see six subcommands. Four of them — `evaluate`, `report`,
+You should see six subcommands. Three of them — `evaluate`,
 `serve-dashboard`, `sentinel` — raise `CliError` by design. That is
 **not a bug**; see [Integration seams](/blood_audit/en/operators/integration-seams/).
+(`report` is wired: it renders the monthly report from the audit store.)
 
 ## GitHub Pages one-time setup (docs site only)
 

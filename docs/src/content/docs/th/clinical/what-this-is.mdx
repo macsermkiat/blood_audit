@@ -21,13 +21,20 @@ import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
 ## สรุปในย่อหน้าเดียว
 
 blood_audit เป็นระบบออดิทย้อนหลังสำหรับการให้เลือดแดงเข้มข้น
-(RBC, red blood cell) ในผู้ป่วยในผู้ใหญ่ ณ โรงพยาบาลจุฬาฯ
-ระบบอ่านข้อมูลที่ส่งออกจาก HOSxP หลังการให้เลือดเสร็จสิ้นแล้ว
-และบันทึกผลสำหรับแต่ละหน่วยเลือดเป็น 1 ใน 5 ค่า:
-`APPROPRIATE`, `INAPPROPRIATE`, `NEEDS_REVIEW`,
-`INSUFFICIENT_EVIDENCE`, หรือ `POTENTIALLY_INAPPROPRIATE`
+(RBC, red blood cell) และเกล็ดเลือด (platelet) ในผู้ป่วยในผู้ใหญ่
+ณ โรงพยาบาลจุฬาฯ ระบบอ่านข้อมูลที่ส่งออกจาก HOSxP
+หลังการให้เลือดเสร็จสิ้นแล้ว และบันทึกผลสำหรับแต่ละคำสั่งที่ audit
+เป็น 1 ใน 5 classification หลัก — `APPROPRIATE`, `INAPPROPRIATE`,
+`NEEDS_REVIEW`, `INSUFFICIENT_EVIDENCE`, หรือ
+`POTENTIALLY_INAPPROPRIATE` — หรือ 1 ใน 4 terminal
+ด้าน routing/การจองเลือด: `RETURNED_NOT_TRANSFUSED` และ
+`PERIOP_TRANSFUSION_EXEMPT` (ทุกยูนิตถูกคืนโดยไม่ได้ให้เลือด
+หรือประกาศใช้เพื่อผ่าตัด; ถูกตัดออกจากการคิดคะแนนความเหมาะสม),
+`PREOP_OVER_RESERVATION` (จองเลือดเกินคำแนะนำ MSBOS
+สำหรับการผ่าตัดที่วางแผนไว้) และ `PREOP_RESERVATION_UNCONFIRMED`
+(อยู่หลัง flag, ปิดโดยค่าเริ่มต้น)
 
-ตรรกะการตัดสินใจอ้างอิงแนวทางภายในของ KCMH คือ PR 17.2
+ตรรกะการตัดสินความเหมาะสมอ้างอิงแนวทางภายในของ KCMH คือ PR 17.2
 (Procedure Revision 17.2) และมาตรฐาน AABB 2023 (Association for the
 Advancement of Blood &amp; Biotherapies) โดยใช้เกณฑ์ฮีโมโกลบิน (Hb)
 แบบ 3 ชั้น ร่วมกับบริบททางคลินิกและ bypass ที่ต้องมีหลักฐานรองรับ

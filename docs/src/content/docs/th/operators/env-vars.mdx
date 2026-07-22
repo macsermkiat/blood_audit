@@ -52,6 +52,18 @@ postgresql+psycopg://bba_user@db.internal:5432/blood_audit
 `src/bba/audit_pipeline/cost_guard.py` จะปฏิเสธ live API access ระหว่างเทสต์
 เพื่อป้องกันการส่ง batch โดยไม่ตั้งใจระหว่างพัฒนา
 
+## ตัวแปรเฉพาะ pilot
+
+ส่วน pilot (เส้นทาง A / เส้นทาง C) อ่านตัวแปร `BBA_PILOT_*` ชุดที่กว้างกว่า
+รวมถึง `BBA_BDVSTTRANS_CSV` (override ไฟล์ส่งออก returns ledger) และ
+kill-switch ของ flag สำหรับฟีเจอร์ที่ default-ON
+(`BBA_PILOT_MSBOS_RESERVATION=0`, `BBA_PILOT_DECLARED_USETYPE=0`,
+`BBA_PILOT_DECLARED_USE_PREOP_EXEMPT=0`,
+`BBA_PILOT_MSBOS_PLANNED_OP_PICKER_V2=0`) ตัวแปรเหล่านี้มีเอกสารอยู่ที่
+[รัน pipeline](/blood_audit/th/operators/run-pipeline/) และ
+[จัดอันดับแพทย์และแผนก](/blood_audit/th/operators/doctor-ranking/)
+ส่วนสัญญาแบบเข้มงวด 3 ตัวแปรด้านบนใช้กับ CLI ที่รองรับเท่านั้น
+
 ## ตรวจสอบ
 
 ```bash

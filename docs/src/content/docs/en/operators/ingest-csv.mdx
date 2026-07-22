@@ -13,7 +13,7 @@ shape, but they are not emitted by `bba ingest` yet.
 
 <AtAGlance
   items={[
-    { label: "Bundle size", value: "12 canonical HOSxP CSV tables.", tone: "ok" },
+    { label: "Bundle size", value: "13 canonical HOSxP CSV tables.", tone: "ok" },
     { label: "Validation", value: "Headers must match schema v1; unknown or missing required columns fail." },
     { label: "Output today", value: "Run completion marker after schema validation and row normalization." },
     { label: "PHI rule", value: "Use PHI_xxx placeholders in docs and issues, never real HN/AN.", tone: "warn" },
@@ -22,12 +22,13 @@ shape, but they are not emitted by `bba ingest` yet.
 
 ## Expected tables
 
-The HOSxP export bundle contains 12 canonical tables:
+The HOSxP export bundle contains 13 canonical tables:
 
 | Table | Used for |
 | --- | --- |
 | `BDVST` | Transfusion order header: HN, AN, REQNO, product, request datetime, ordering doctor (DCTREQ). |
-| `BDVSTDT` | Order detail rows and product/unit-level context. |
+| `BDVSTDT` | Order detail rows and product/unit-level context. `USETYPE` here drives the declared-use pre-op routing. |
+| `BDVSTTRANS` | Per-unit disposition ledger (returned / transfused / incompatible status) — the returns-ledger source behind `RETURNED_NOT_TRANSFUSED`. |
 | `BDTYPE` | Blood-product reference. |
 | `BDVSTST` | Transfusion-status reference. |
 | `Diagnosis` | ICD-10 diagnosis evidence for exclusions and cohorts. |

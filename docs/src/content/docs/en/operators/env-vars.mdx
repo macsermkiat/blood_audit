@@ -64,6 +64,18 @@ Required before `bba audit` invokes the Batch API. The cost guard in
 `src/bba/audit_pipeline/cost_guard.py` rejects live API access in tests
 to prevent accidental Batch submission during development.
 
+## Pilot-only variables
+
+The pilot legs (Path A / Path C) read a wider set of `BBA_PILOT_*`
+variables plus `BBA_BDVSTTRANS_CSV` (returns-ledger export override) and
+the flag kill-switches for the default-ON features
+(`BBA_PILOT_MSBOS_RESERVATION=0`, `BBA_PILOT_DECLARED_USETYPE=0`,
+`BBA_PILOT_DECLARED_USE_PREOP_EXEMPT=0`,
+`BBA_PILOT_MSBOS_PLANNED_OP_PICKER_V2=0`). These are documented on
+[Run the pipeline](/blood_audit/en/operators/run-pipeline/) and
+[Doctor & department ranking](/blood_audit/en/operators/doctor-ranking/);
+the strict 3-variable contract above applies to the supported CLI only.
+
 ## Verify
 
 ```bash

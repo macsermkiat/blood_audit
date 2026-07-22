@@ -39,13 +39,23 @@ import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
 
 ## กรณีข้ามเกณฑ์ Hb และกรณีที่ต้องส่งทบทวน
 
+เกณฑ์ Hb ธรรมดาไม่ใช่การตรวจแรก มีทางออกด้าน routing ระดับคำสั่ง 2 ทาง
+ที่รันก่อนการพิจารณา Hb ใด ๆ (เปิดโดยค่าเริ่มต้นทั้งคู่):
+
+- **ทุกยูนิตถูกคืนโดยไม่ได้ให้เลือด** (ตาม unit ledger `BDVSTTRANS`)
+  → `RETURNED_NOT_TRANSFUSED` ไม่มีการให้เลือดเกิดขึ้น คำสั่งนี้ถูกตัดออก
+  จากการคิดคะแนนความเหมาะสม (แต่ยังมองเห็นได้ในฐานะ
+  crossmatch-to-transfusion waste)
+- **ประกาศใช้เพื่อผ่าตัด / type-and-screen** (`BDVSTDT.USETYPE` `M/G` หรือ
+  `T/S`) → `PERIOP_TRANSFUSION_EXEMPT` การประกาศการใช้ของแพทย์ถือเป็น
+  ที่สุด การให้เลือดช่วง peri-op จะไม่ถูกตัดสินด้วยนโยบาย Hb ของ ward
+  และถูกตัดออกจากการคิดคะแนนเช่นกัน
+
 หลังตัดกรณีไม่มี Hb ออกแล้ว ระบบให้ Hb < 7.0 เป็นกฎแรกก่อน route ตาม
 cohort จากนั้นจึงตรวจหลักฐาน priority สูงอื่น:
 
 - **Hb < 7.0 g/dL** → `APPROPRIATE` แบบ deterministic ก่อนดู cohort
 - **บริบท MTP** → `APPROPRIATE` แบบ deterministic
-- **Peri-procedural ≤ 6 ชั่วโมงก่อน order** → `APPROPRIATE`
-- **Pre-op crossmatch ≤ 72 ชั่วโมงหลัง order** → `APPROPRIATE`
 - **Delta-Hb trigger** → `APPROPRIATE` เมื่อ Hb drop เข้าเงื่อนไข:
   - ลดลง ≥ 1.5 g/dL ภายใน 6 ชั่วโมง
   - ลดลง ≥ 2.0 g/dL ภายใน 12 ชั่วโมง
@@ -55,7 +65,23 @@ cohort จากนั้นจึงตรวจหลักฐาน priority 
 - **Unknown หรือ non-threshold clinical context** → `NEEDS_REVIEW` เมื่อ
   Hb ≥ 7.0
 
+เฉพาะ legacy mode (เมื่อบังคับปิด flag declared-use): peri-procedural
+anchor ≤ 6 ชั่วโมงก่อน order จะ auto-clear ส่วน pre-op crossmatch ≤ 72
+ชั่วโมงก่อนการผ่าตัดที่จะมาถึงจะ **ส่งต่อให้ LLM** แทนการ auto-clear —
+การจองเลือดไม่ใช่ข้อบ่งชี้
+
 Vital signs เช่น hypotension หรือ tachycardia ไม่ทำให้เกิด bypass ด้วยตัวเอง
+
+## การคัดกรองการจองเลือดก่อนผ่าตัด (MSBOS)
+
+แยกจากผลตัดสินการให้เลือด คำสั่งที่จองเลือดสำหรับการผ่าตัดที่วางแผนไว้
+จะถูกคัดกรองเทียบกับ MSBOS / OPBloodLimit reference (เปิดโดยค่าเริ่มต้น)
+การจองเลือดมากกว่าคำแนะนำสำหรับ procedure ที่วางแผนไว้จะแสดงเป็น
+`PREOP_OVER_RESERVATION` ส่วน platelet leg เทียบ platelet count
+ก่อนผ่าตัดกับ cutoff ที่แพทย์ลงนามรับรอง (MNS 80, neuraxial 100,
+cardiac-CPB 100, ×10³/µL) การคัดกรองนี้ไม่เดาเด็ดขาด: procedure ที่
+resolve ไม่ได้, code ที่กำกวม และ count ที่ขาดหาย จะถูกส่งไป review
+แทนการ flag อัตโนมัติ
 
 ## Exclusions และหลักฐานไม่เพียงพอ
 

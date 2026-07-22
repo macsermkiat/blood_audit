@@ -8,9 +8,9 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
 <AtAGlance
   title="สรุป release"
   items={[
-    { label: "Current version", value: "0.1.0 ใน pyproject.toml (26 modules ภายใต้ bba.*)", tone: "ok" },
+    { label: "Current version", value: "0.1.0 ใน pyproject.toml (30 modules ภายใต้ bba.*)", tone: "ok" },
     { label: "Release notes", value: "หลัง tag แล้ว GitHub Releases จะเป็นแหล่งอ้างอิงหลัก" },
-    { label: "Phase 2", value: "Platelet auditor merged (PR #85); deterministic leg ใช้งานได้แล้ว, LLM leg ปิดโดยค่าเริ่มต้น" },
+    { label: "2026-07 wave", value: "Returns ledger, declared-use USETYPE routing และ MSBOS reservation audit merged ครบแล้ว และเปิดโดยค่าเริ่มต้น" },
     { label: "ยังไม่รวม", value: "pilot validation, production wiring และ Phase B re-encryption", tone: "warn" },
   ]}
 />
@@ -46,9 +46,64 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
   ไม่สามารถ clear order ปัจจุบันได้อีกต่อไป ข้อความที่ไม่มีวันที่หรืออ่านไม่ได้
   จะไม่ถูกแตะต้อง — gate นี้ได้เพียงระงับข้อยกเว้นเท่านั้น RBC prompt ระบุกฎ
   current-episode เดียวกันเพื่อให้ verdict ของโมเดลตรงกับ guardrail
+- **Melena ถูกตัดสิทธิ์จาก volume exemption** Melena คือเลือดเก่าที่ถูกย่อย
+  แล้ว ไม่ใช่ active bleeding: จึงไม่มีทางเข้าเงื่อนไข active-bleeding
+  volume exemption > 300 mL คำสั่งเหล่านี้ clear ได้ผ่านหลักฐาน shock
+  หรือ Hb ต่ำเท่านั้น
+- **Returns ledger (spec #119; go-live PR #138)** `bba.returns_ledger`
+  รวมข้อมูล disposition รายยูนิตจาก export `BDVSTTRANS` คำสั่งที่ทุกยูนิต
+  ถูกคืนโดยไม่ได้ให้เลือดจะจบเป็น `RETURNED_NOT_TRANSFUSED`; คำสั่งที่
+  ให้เลือดช่วง peri-op เป็น `PERIOP_TRANSFUSION_EXEMPT` ทั้งสองค่าถูกตัด
+  ออกจากการคิดคะแนนความเหมาะสม เปิดโดยค่าเริ่มต้น
+  (`RETURNS_LEDGER_ENABLED`); platelet leg ใช้ short-circuit เดียวกัน
+  และ `BDVSTTRANS` กลายเป็น canonical ingest table ลำดับที่ 13
+- **Administration-confirmation gate (spec #105)** คำสั่งแบบ reserve-ahead
+  ที่ยืนยันการให้เลือดไม่ได้จะจบเป็น `PREOP_RESERVATION_UNCONFIRMED`
+  แทนการได้ Hb verdict — อยู่หลัง flag `RESERVE_AHEAD_ROUTER_ENABLED`
+  ที่ปิดโดยค่าเริ่มต้น ระหว่างรอ clinical gate (#109)
+- **Declared-use USETYPE routing (spec #147; PRs #148–#152, #194, #195)**
+  `bba.declared_use` ตีความ `BDVSTDT.USETYPE` ณ เวลาสั่ง คำสั่งที่ประกาศ
+  ใช้เพื่อผ่าตัด (`M/G`) หรือ type-and-screen (`T/S`) ได้รับการยกเว้น
+  ระดับคำสั่ง (`preop_declared_exempt` → `PERIOP_TRANSFUSION_EXEMPT`)
+  และตอนนี้ USETYPE เป็น pre-op router **เพียงตัวเดียว** — deterministic
+  arms แบบ bare-surgical ≤ 6 h / ≤ 72 h เดิมถูกปลดออก ตราบที่ flag
+  ที่เปิดโดยค่าเริ่มต้น (`DECLARED_USETYPE_ENABLED`,
+  `DECLARED_USE_PREOP_EXEMPT_ENABLED`) ยังเปิดอยู่
+- **MSBOS pre-op reservation audit (specs #159–#175)**
+  `bba.preop_reservation` ออดิทยูนิตที่จองสำหรับการผ่าตัดที่วางแผนไว้
+  เทียบกับ MSBOS / OPBloodLimit reference; การจองเกินแสดงเป็น
+  `PREOP_OVER_RESERVATION` ส่วน platelet leg คัดกรองเทียบกับ count cutoff
+  ที่แพทย์ลงนามรับรอง (MNS 80k, neuraxial 100k, cardiac-CPB 100k)
+  กฎ never-guess ส่งกรณี resolve ไม่ได้ / กำกวม / ไม่มี count ไป review
+  เปิดโดยค่าเริ่มต้น (`MSBOS_RESERVATION_ENABLED`)
+- **Returns-terminal MSBOS annotation (spec #176; PRs #181–#184)**
+  คำสั่งที่ถูกคืน / ได้รับการยกเว้น peri-op ซึ่งมีการจองเลือดก่อนผ่าตัด
+  จะฝัง `reservation_annotation` (เป็น annotation เท่านั้น ไม่เปลี่ยน
+  verdict) เพื่อให้ crossmatch-to-transfusion waste ยังมองเห็นได้บนแถว
+  ที่ถูกตัดออก
+- **MSBOS name-match offline study (spec #185; PRs #190–#193)** การจับคู่
+  ชื่อ procedure แบบ Tier-1 deterministic + Tier-2 LLM สำหรับกรณีจองเลือด
+  ที่ picker แบบ coded resolve ไม่ได้ เป็น offline study แบบ
+  annotation-only; ยังไม่เชื่อมเข้า pipeline
+- **Planned-op picker v2 + OPRTACT→ICD9 bridge (spec #196; PRs #202–#216)**
+  ตอนนี้ MSBOS arm เลือกการผ่าตัดที่วางแผนไว้ภายในหน้าต่าง 72 ชั่วโมง
+  ผ่าน OPRTACT→ICD9 bridge reference ที่ vendored ไว้ พร้อม
+  guarded-prefix denylist, กฎ dominance-ceiling และ picker provenance
+  ที่ฝังบน reservation marker ทุกตัว; ความขัดแย้งของ bridge จะ gate
+  verdict ไป review เปิดโดยค่าเริ่มต้น
+  (`MSBOS_PLANNED_OP_PICKER_V2_ENABLED`)
+- **CLI `bba report` เชื่อมแล้ว** สร้าง committee CSVs, per-physician CSVs
+  และ PDF จาก audit store; report sections ได้คอลัมน์
+  `over_reservation_count` เพิ่ม ส่วน `evaluate`, `serve-dashboard` และ
+  `sentinel` ยังเป็น integration seams
+- **Refactors (#218, #222, #223)** รวมคลังคำ reason ของ MSBOS reservation
+  ไว้ที่เดียว (`preop_reservation.reason_presentation`); typed derived
+  seam สำหรับ reserve-ahead / declared-exempt routing; และรวม guardrails
+  ของ `_build_audit_row` เป็น ordered list
 
 ## ยังไม่ใช่ระบบ production ที่เชื่อมใช้งานจริง
 
-ยังไม่รวมการเชื่อม integration-seam subcommands, platelet LLM leg ใน
+ยังไม่รวมการเชื่อม integration-seam subcommands ที่เหลืออีก 3 คำสั่ง
+(`evaluate`, `serve-dashboard`, `sentinel`), platelet LLM leg ใน
 production (ปิดด้วย flag จนกว่าจะมี clinician sign-off), pilot validation
 หรือ re-encryption workflow ของ Phase B

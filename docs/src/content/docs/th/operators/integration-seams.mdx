@@ -20,16 +20,14 @@ Integration seam คือจุดที่โค้ดภายในพร้
 ส่วนเชื่อมกับระบบจริงของ deployment เช่น database, scheduler, policy store
 หรือ key management จึงตั้งใจให้ fail loud แทนการทำงานด้วยค่า default ปลอม
 
+(`bba report` เคยเป็น seam ตัวที่สี่ ตอนนี้ **เชื่อมแล้ว** — ใช้ render
+CSV สำหรับคณะกรรมการ, CSV รายแพทย์ และ PDF จาก audit store โดย resolve
+attribution ของ ward/แพทย์จาก `BBA_BDVST_CSV` / `BBA_DCT_CSV`)
+
 <IntegrationSeamCard
   command="bba evaluate"
   phase="Phase 1.5"
   rationale="ต้องรู้ gold-standard cohort และ validation set ของ deployment ก่อนจึงจะประเมินได้อย่างมีความหมาย"
-/>
-
-<IntegrationSeamCard
-  command="bba report"
-  phase="Phase 1.5"
-  rationale="ต้องมี ReportInputs จาก audit store และ policy/model hash จริงก่อนสร้างรายงาน QI"
 />
 
 <IntegrationSeamCard

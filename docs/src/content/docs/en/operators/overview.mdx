@@ -66,6 +66,11 @@ For Phase 1.5 analysis/reporting:
 - Hard exclusions filter out non-RBC products, age < 15, and out-of-scope
   ICD-10 conditions. Orders without pre-transfusion Hb are retained as
   `INSUFFICIENT_EVIDENCE`.
+- Three default-ON routing arms can terminal an order before the Hb
+  policy: returned-un-transfused orders (`RETURNED_NOT_TRANSFUSED`) and
+  declared surgical / type-and-screen orders (`PERIOP_TRANSFUSION_EXEMPT`)
+  are excluded from scoring, and MSBOS over-reservation surfaces as
+  `PREOP_OVER_RESERVATION`.
 - All PHI is de-identified before any data leaves the audit container.
 
 ## Next steps

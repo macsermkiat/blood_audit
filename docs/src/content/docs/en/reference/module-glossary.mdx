@@ -21,7 +21,7 @@ that adds a new public concept — keep it the source of truth.
 
 ## Why we link out
 
-`CONTEXT.md` is large (~2700 lines) and is updated as part of the dev
+`CONTEXT.md` is large (~3600 lines) and is updated as part of the dev
 workflow. Mirroring it into MDX would force a manual sync step that
 inevitably drifts. Linking to the GitHub-rendered version guarantees the
 docs site shows the live glossary without divergence risk.
@@ -40,6 +40,17 @@ Common concept slugs to search for in the glossary:
 - `parse_warning` — non-fatal ingest issues that surface in the run summary.
 - `idempotent re-run` — the contract that re-running the same input is
   a no-op.
+- `returns_ledger` / `not_transfused` — the BDVSTTRANS per-unit
+  disposition aggregation behind `RETURNED_NOT_TRANSFUSED`.
+- `USETYPE` / `declared_use` — the order-time declared-use signal behind
+  `PERIOP_TRANSFUSION_EXEMPT` (`preop_declared_exempt`).
+- `MSBOS` / `preop_reservation` — the pre-op reservation audit behind
+  `PREOP_OVER_RESERVATION`, including the planned-op picker and the
+  OPRTACT→ICD9 bridge.
+- `reservation_annotation` — the MSBOS annotation embedded on
+  returns-terminal rows (annotation, never a verdict change).
+- `feature_flags` — the runtime flag module; five of the seven flags are
+  default-ON.
 
 For the full set, open the glossary on GitHub:
 [`docs/CONTEXT.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/CONTEXT.md).

@@ -39,14 +39,23 @@ defer to those documents in case of conflict.
 
 ## Bypass and review paths
 
-The plain Hb tier is not the first check. After excluding missing Hb, the
-algorithm first applies the global low-Hb rule and then looks for other
-high-precedence evidence:
+The plain Hb tier is not the first check. Two order-level routing exits
+run before any Hb reasoning (both default-ON):
+
+- **All units returned un-transfused** (per the BDVSTTRANS unit ledger)
+  → `RETURNED_NOT_TRANSFUSED`. No transfusion occurred; the order is
+  excluded from appropriateness scoring (it remains visible as
+  crossmatch-to-transfusion waste).
+- **Declared surgical use / type-and-screen** (`BDVSTDT.USETYPE` `M/G` or
+  `T/S`) → `PERIOP_TRANSFUSION_EXEMPT`. The clinician's declared use is
+  authoritative; peri-op transfusions are not judged against the ward Hb
+  policy. Also excluded from scoring.
+
+After excluding missing Hb, the algorithm applies the global low-Hb rule
+and then looks for other high-precedence evidence:
 
 - **Hb < 7.0 g/dL** → deterministic `APPROPRIATE` before cohort routing.
 - **MTP clinical context** → deterministic `APPROPRIATE`.
-- **Peri-procedural ≤ 6h before order** → deterministic `APPROPRIATE`.
-- **Pre-op crossmatch ≤ 72h after order** → deterministic `APPROPRIATE`.
 - **Delta-Hb trigger** → deterministic `APPROPRIATE` when the Hb drop meets:
   - ≥ 1.5 g/dL drop within 6 hours
   - ≥ 2.0 g/dL drop within 12 hours
@@ -56,8 +65,24 @@ high-precedence evidence:
 - **Unknown or non-threshold clinical context** → `NEEDS_REVIEW` when
   Hb is ≥ 7.0.
 
+Legacy mode only (when the declared-use flag is forced off): a
+peri-procedural anchor ≤ 6h before the order auto-clears, and a pre-op
+crossmatch ≤ 72h before an upcoming operation **defers to the LLM**
+rather than auto-clearing — a reservation is not an indication.
+
 Vital-sign abnormalities alone (low BP, tachycardia) do not trigger the
 bypass.
+
+## Pre-op reservation screening (MSBOS)
+
+Separately from the transfusion verdict, orders reserved for a planned
+operation are screened against the MSBOS / OPBloodLimit reference
+(default-ON). Reserving more units than the recommendation for the
+planned procedure surfaces as `PREOP_OVER_RESERVATION`; the platelet leg
+compares the pre-op platelet count against clinician-signed cutoffs
+(MNS 80, neuraxial 100, cardiac-CPB 100, ×10³/µL). The screen never
+guesses: unresolved procedures, ambiguous codes, and missing counts route
+to review instead of auto-flagging.
 
 ## Exclusions and insufficient evidence
 

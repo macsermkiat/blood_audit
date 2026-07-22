@@ -7,16 +7,16 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
 
 <AtAGlance
   items={[
-    { label: "Current version", value: "0.1.0 in pyproject.toml (26 modules under bba.*).", tone: "ok" },
+    { label: "Current version", value: "0.1.0 in pyproject.toml (30 modules under bba.*).", tone: "ok" },
     { label: "Release notes", value: "GitHub Releases becomes canonical after tag." },
-    { label: "Phase 2", value: "Platelet auditor merged (PR #85); deterministic leg live, LLM leg default-off." },
+    { label: "2026-07 wave", value: "Returns ledger, declared-use USETYPE routing, and MSBOS reservation audit all merged and default-ON." },
     { label: "Not included", value: "Pilot validation, production wiring, and Phase B re-encryption.", tone: "warn" },
   ]}
 />
 
 ## Status
 
-26 modules under `bba.*` are merged to `main`, `version = "0.1.0"` in
+30 modules under `bba.*` are merged to `main`, `version = "0.1.0"` in
 `pyproject.toml`. The `v0.1.0` tag itself is pending — the maintainer will
 trigger it explicitly with shared-state intent.
 
@@ -60,10 +60,64 @@ will live at
   untouched — the gate can only withhold the exemption. The RBC prompt states
   the same current-episode rule so the model's verdict agrees with the
   guardrail.
+- **Melena disqualified from the volume exemption.** Melena is digested /
+  old blood, not active bleeding: it never satisfies the > 300 mL
+  active-bleeding volume exemption; such orders clear only via shock or
+  low-Hb evidence.
+- **Returns ledger (spec #119; go-live PR #138).** `bba.returns_ledger`
+  aggregates the per-unit `BDVSTTRANS` disposition export. Orders whose
+  units were all returned un-transfused terminal as
+  `RETURNED_NOT_TRANSFUSED`; peri-op transfused orders as
+  `PERIOP_TRANSFUSION_EXEMPT`. Both are excluded from appropriateness
+  scoring. Default-ON (`RETURNS_LEDGER_ENABLED`); the platelet leg shares
+  the same short-circuit. `BDVSTTRANS` became the 13th canonical ingest
+  table.
+- **Administration-confirmation gate (spec #105).** Reserve-ahead orders
+  whose transfusion cannot be confirmed terminal as
+  `PREOP_RESERVATION_UNCONFIRMED` instead of receiving an Hb verdict —
+  behind the default-off `RESERVE_AHEAD_ROUTER_ENABLED` flag pending the
+  clinical gate (#109).
+- **Declared-use USETYPE routing (spec #147; PRs #148–#152, #194, #195).**
+  `bba.declared_use` interprets order-time `BDVSTDT.USETYPE`. Orders
+  declared surgical (`M/G`) or type-and-screen (`T/S`) are exempt at the
+  order level (`preop_declared_exempt` → `PERIOP_TRANSFUSION_EXEMPT`), and
+  USETYPE is now the **only** pre-op router — the legacy bare-surgical
+  ≤ 6 h / ≤ 72 h deterministic arms are retired while the default-ON flags
+  (`DECLARED_USETYPE_ENABLED`, `DECLARED_USE_PREOP_EXEMPT_ENABLED`) hold.
+- **MSBOS pre-op reservation audit (specs #159–#175).**
+  `bba.preop_reservation` audits reserved units for planned operations
+  against the MSBOS / OPBloodLimit reference; over-reservation surfaces as
+  `PREOP_OVER_RESERVATION`. The platelet leg screens against
+  clinician-signed count cutoffs (MNS 80k, neuraxial 100k, cardiac-CPB
+  100k). Never-guess rules route unresolved / ambiguous / missing-count
+  cases to review. Default-ON (`MSBOS_RESERVATION_ENABLED`).
+- **Returns-terminal MSBOS annotation (spec #176; PRs #181–#184).**
+  Returned / peri-op-exempt orders that carried a pre-op reservation now
+  embed a `reservation_annotation` (annotation, never a verdict change) so
+  crossmatch-to-transfusion waste stays visible on excluded rows.
+- **MSBOS name-match offline study (spec #185; PRs #190–#193).** Tier-1
+  deterministic + Tier-2 LLM procedure-name matching for reservation cases
+  the coded pickers cannot resolve. Annotation-only offline study; not
+  pipeline-wired.
+- **Planned-op picker v2 + OPRTACT→ICD9 bridge (spec #196; PRs #202–#216).**
+  The MSBOS arm now picks the planned operation inside a 72-hour window via
+  a vendored OPRTACT→ICD9 bridge reference, with a guarded-prefix denylist,
+  a dominance-ceiling rule, and picker provenance embedded on every
+  reservation marker; bridge disagreements gate the verdict to review.
+  Default-ON (`MSBOS_PLANNED_OP_PICKER_V2_ENABLED`).
+- **CLI `bba report` wired.** Renders committee CSVs, per-physician CSVs,
+  and the PDF from the audit store; report sections gained an
+  `over_reservation_count` column. `evaluate`, `serve-dashboard`, and
+  `sentinel` remain integration seams.
+- **Refactors (#218, #222, #223).** Single home for the MSBOS reservation
+  reason vocabulary (`preop_reservation.reason_presentation`); a typed
+  derived seam for reserve-ahead / declared-exempt routing; and
+  `_build_audit_row` guardrails folded into an ordered list.
 
 ## What is explicitly out of scope for now
 
-- Wiring of the four integration-seam subcommands.
+- Wiring of the three remaining integration-seam subcommands
+  (`evaluate`, `serve-dashboard`, `sentinel`).
 - The platelet LLM leg in production (behind the default-off flag until
   clinician sign-off).
 - Pilot validation (M8 — gating milestone before any production

@@ -37,7 +37,7 @@ The PDF filename embeds the first-of-month date
 ## Stored classifications (used by every section)
 
 The `final_classification` column comes from the audit store and is one
-of five literals:
+of nine literals:
 
 - `APPROPRIATE`
 - `INAPPROPRIATE`
@@ -45,6 +45,17 @@ of five literals:
 - `INSUFFICIENT_EVIDENCE`
 - `POTENTIALLY_INAPPROPRIATE` *(rule-only; not used by every report
   section)*
+- `PREOP_OVER_RESERVATION` *(MSBOS over-reservation; counted in the
+  `over_reservation_count` column, scored as an inappropriate-side
+  finding)*
+- `PREOP_RESERVATION_UNCONFIRMED` *(flag-gated, default-off)*
+- `RETURNED_NOT_TRANSFUSED` *(returns terminal; **excluded from
+  scoring**)*
+- `PERIOP_TRANSFUSION_EXEMPT` *(returns / declared-use terminal;
+  **excluded from scoring**)*
+
+`hospital_trend`, `ward_scorecard`, and `cohort_exception` now carry an
+`over_reservation_count` column alongside the classification buckets.
 
 `LLM_REVIEW` is a routing concept inside the deterministic classifier;
 it is not a stored value. Failed quote-grounding becomes
@@ -75,6 +86,7 @@ belongs to its local month, not to the UTC-month it happens to fall in.
 ## How this is produced
 
 `bba.report_generator.generate_monthly_report(inputs: ReportInputs)`. The
-CLI wrapper (`bba report`) is an
-[integration seam](/blood_audit/en/operators/integration-seams/) in
-Phase 1 — wire `ReportInputs` from your deployment's data sources.
+CLI wrapper (`bba report --run-id <id>`) is **wired**: it sources
+`ReportInputs` from the audit store, resolves ward/physician attribution
+from `BBA_BDVST_CSV` / `BBA_DCT_CSV`, and writes the committee CSVs,
+per-physician CSVs, and PDF under `$BBA_DATA_DIR/reports/<run_id>/`.

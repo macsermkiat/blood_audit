@@ -30,7 +30,28 @@ report/
   report.pdf
 ```
 
+CLI `bba report --run-id <id>` **เชื่อมแล้ว**: ดึง `ReportInputs` จาก
+audit store, resolve ward/physician attribution จาก `BBA_BDVST_CSV` /
+`BBA_DCT_CSV` และเขียน committee CSVs, per-physician CSVs และ PDF
+ไว้ใต้ `$BBA_DATA_DIR/reports/<run_id>/`
+
 ## กฎ classification
+
+คอลัมน์ `final_classification` มาจาก audit store และเป็น 1 ใน 9 ค่า:
+5 classification หลัก (`APPROPRIATE`, `INAPPROPRIATE`, `NEEDS_REVIEW`,
+`INSUFFICIENT_EVIDENCE`, `POTENTIALLY_INAPPROPRIATE`) บวก terminal
+ด้าน routing/การจองเลือดอีก 4 ค่า:
+
+- `PREOP_OVER_RESERVATION` — การจองเลือดเกิน MSBOS; นับในคอลัมน์
+  `over_reservation_count` และคิดคะแนนอยู่ฝั่ง inappropriate
+- `PREOP_RESERVATION_UNCONFIRMED` — อยู่หลัง flag, ปิดโดยค่าเริ่มต้น
+- `RETURNED_NOT_TRANSFUSED` — returns terminal;
+  **ถูกตัดออกจากการคิดคะแนน**
+- `PERIOP_TRANSFUSION_EXEMPT` — terminal จาก returns / declared-use;
+  **ถูกตัดออกจากการคิดคะแนน**
+
+`hospital_trend`, `ward_scorecard` และ `cohort_exception` มีคอลัมน์
+`over_reservation_count` เพิ่มควบคู่กับ bucket ของ classification
 
 `INSUFFICIENT_EVIDENCE` ต้องอยู่เป็น class แยก เพราะหมายถึงหลักฐานไม่พอ
 ไม่ใช่หลักฐานว่าการให้เลือดไม่เหมาะสม การรวมค่านี้เข้า `INAPPROPRIATE`
