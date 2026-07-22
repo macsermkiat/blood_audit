@@ -84,11 +84,12 @@ the table above covers the supported CLI only.
 ## Verify
 
 ```bash
-env | grep -E '^(BBA_DATA_DIR|BBA_DB_URL|ANTHROPIC_API_KEY)='
+env | grep -E '^(BBA_DATA_DIR|BBA_DB_URL|ANTHROPIC_API_KEY|BBA_BDVST_CSV|BBA_DCT_CSV)='
 ```
 
-All three lines should print. Values for `ANTHROPIC_API_KEY` should never
-be logged; redact before sharing terminal output.
+Every variable your phase needs should print (all five for a full
+deployment that runs `bba report`). Values for `ANTHROPIC_API_KEY`
+should never be logged; redact before sharing terminal output.
 
 ## Next steps
 

@@ -18,16 +18,14 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
 ## Output layout
 
 ```text
-report/
-  committee/
-    hospital_trend.csv
-    ward_scorecard.csv
-    indication_breakdown.csv
-    cohort_exception.csv
-    pipeline_health.csv
-  physician_own_view/
-    PHYSICIAN_SAFE_ID.csv
-  report.pdf
+$BBA_DATA_DIR/reports/<run_id>/
+  hospital_trend.csv                      # committee
+  ward_scorecard.csv                      # committee
+  indication_distribution.csv             # committee
+  cohort_exception.csv                    # committee
+  pipeline_health.csv                     # committee
+  physician_own_view_<physician_id>.csv   # หนึ่งไฟล์ต่อแพทย์
+  report_<YYYY-MM-DD>.pdf                 # committee PDF
 ```
 
 CLI `bba report --run-id <id>` **เชื่อมแล้ว**: ดึง `ReportInputs` จาก

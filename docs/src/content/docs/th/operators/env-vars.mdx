@@ -74,10 +74,11 @@ kill-switch ของ flag สำหรับฟีเจอร์ที่ defa
 ## ตรวจสอบ
 
 ```bash
-env | grep -E '^(BBA_DATA_DIR|BBA_DB_URL|ANTHROPIC_API_KEY)='
+env | grep -E '^(BBA_DATA_DIR|BBA_DB_URL|ANTHROPIC_API_KEY|BBA_BDVST_CSV|BBA_DCT_CSV)='
 ```
 
-ควรเห็นค่าที่จำเป็นครบตาม phase ที่ใช้งาน ห้าม log ค่า
+ควรเห็นค่าที่จำเป็นครบตาม phase ที่ใช้งาน (ครบทั้งห้าตัวสำหรับ
+deployment เต็มที่รัน `bba report`) ห้าม log ค่า
 `ANTHROPIC_API_KEY`; ลบออกก่อนแชร์ output จาก terminal เสมอ
 
 ## ขั้นถัดไป
