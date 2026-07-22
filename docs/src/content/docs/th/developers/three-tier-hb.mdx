@@ -17,10 +17,34 @@ import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
   items={[
     { label: "ข้อมูลแรก", value: "Hb ก่อนให้เลือดจากตาราง Lab" },
     { label: "บริบท", value: "ใช้ ICD-9-CM, ICD-10, MED, Lab ANC และรูปแบบคำสั่งเลือด" },
-    { label: "Bypass", value: "MTP, peri-procedural, pre-op crossmatch และ delta-Hb อาจหยุดก่อนได้", tone: "ok" },
+    { label: "Bypass", value: "MTP และ delta-Hb อาจหยุดก่อนได้; peri-procedural / pre-op crossmatch เป็น legacy flag-OFF-only", tone: "ok" },
     { label: "ส่งทบทวน", value: "บริบทไม่ชัด, ไม่มี threshold, gray zone, Hb สูง และ safety flag จะส่งทบทวน", tone: "warn" },
   ]}
 />
+
+## ก่อนถึง Hb tier: ทางออก returns และ declared-use (default-ON)
+
+ทางออกระดับ order สองทางทำงาน**ก่อน**การใช้เหตุผลเรื่อง Hb ใด ๆ:
+
+1. **Returns terminal** ถ้า unit ledger จาก BDVSTTRANS แสดงว่าทุก unit
+   ไปถึง terminal ที่ไม่ใช่การให้เลือด (ถูกคืนหรือ crossmatch-incompatible)
+   order จะออกเป็น `RETURNED_NOT_TRANSFUSED` — ไม่มีการให้เลือดเกิดขึ้น
+   จึงไม่มีอะไรให้ตัดสิน หลักฐาน intra-op transfusion เชิงโครงสร้างหรือ
+   EBL ≥ 500 mL ขัดแย้งกับ negative ledger และทำให้ order อยู่ใน chain
+   ปกติต่อไป (fail loud)
+2. **Declared-use exemption** เมื่อ `DECLARED_USE_PREOP_EXEMPT_ENABLED`
+   (default-ON) order ที่ `BDVSTDT.USETYPE` ประกาศเป็น surgical use
+   (`2` → `surgery`) หรือ type-and-screen (`3` → `type_screen`) จะออกเป็น `PERIOP_TRANSFUSION_EXEMPT`
+   (`rationale=preop_declared_exempt`) — ledger ที่หายหรือสรุปไม่ได้
+   ไม่ลบล้าง exemption แต่ทางออก all-returned ตามข้อเท็จจริงด้านบน
+   มี precedence สูงกว่า การประกาศ
+   ของแพทย์ถือเป็น authoritative สำหรับ pre-op routing — USETYPE เป็น
+   pre-op router **เดียว**ใน default mode
+
+ทางออกทั้งสอง**ไม่ถูกนับใน appropriateness scoring** เมื่อบังคับปิด
+declared-use flag ระบบจะใช้ legacy behavior แทน: การให้เลือดที่ยืนยันแล้ว
+ภายใน peri-operative envelope เป็น exempt และ arm เรื่องเวลา procedure
+≤ 6 h / ≤ 72 h ด้านล่างจะกลับมาทำงาน
 
 ## "Cohort" ในที่นี้หมายถึงอะไร
 
@@ -67,8 +91,8 @@ import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
 | 2 | Hb < 7.0 g/dL หรือไม่ | **Lab** current Hb | กฎ low-Hb นี้ทำงานก่อน route ตาม cohort รวมถึง `UNKNOWN`, active heme malignancy, hemodilution และ single-low-Hb-no-trend | `APPROPRIATE` จบโดยไม่เรียก LLM |
 | 3 | ข้อมูล procedure missing หรือไม่ | availability ของ procedure-event join | ถ้า join ใช้ไม่ได้และ Hb ≥ 7.0 ระบบไม่รู้แน่ว่ามี cardiac/orthopedic procedure หรือไม่ | `NEEDS_REVIEW` ส่ง LLM/คนทบทวน |
 | 4 | pattern เหมือน MTP หรือไม่ | ประวัติคำสั่งเลือดรอบ anchor: RBC units, FFP flag, platelet flag | หลังยืนยันว่า procedure-event join ใช้งานได้แล้ว ระบบดูช่วง **1 ชั่วโมงก่อน order** ถ้า RBC รวม **≥ 4 units** หรือ RBC + FFP + platelet co-order จะ trigger MTP | `APPROPRIATE` จบโดยไม่เรียก LLM |
-| 5 | มี procedure ภายใน 6 ชั่วโมงก่อน order หรือไม่ | **IPTSUMOPRT** + **ICD9CM** | คำนวณ `procedure_proximity_hours`; procedure ที่เกิดก่อนหรือเท่ากับ order และอยู่ใน **≤ 6 ชั่วโมง** trigger peri-procedural bypass | `APPROPRIATE` |
-| 6 | มี upcoming procedure ภายใน 72 ชั่วโมงหลัง order หรือไม่ | **IPTSUMOPRT** + **ICD9CM** | คำนวณ `upcoming_procedure_hours`; procedure ในอนาคต **≤ 72 ชั่วโมง** เป็นหลักฐาน pre-op crossmatch/surgical preparation | `APPROPRIATE` |
+| 5 | *(legacy flag-OFF เท่านั้น)* มี procedure ภายใน 6 ชั่วโมงก่อน order หรือไม่ | **IPTSUMOPRT** + **ICD9CM** | ทำงานเฉพาะเมื่อบังคับปิด `DECLARED_USE_PREOP_EXEMPT_ENABLED` คำนวณ `procedure_proximity_hours`; procedure ที่เกิดก่อนหรือเท่ากับ order และอยู่ใน **≤ 6 ชั่วโมง** trigger peri-procedural bypass ใน default USETYPE-only mode ความใกล้ procedure เป็นหลักฐานให้ LLM ไม่ใช่ deterministic bypass | `APPROPRIATE` *(legacy mode)* |
+| 6 | *(legacy flag-OFF เท่านั้น)* มี upcoming procedure ภายใน 72 ชั่วโมงหลัง order หรือไม่ | **IPTSUMOPRT** + **ICD9CM** | ทำงานเฉพาะเมื่อบังคับปิด declared-use flag procedure ในอนาคต **≤ 72 ชั่วโมง** (หรือ declared surgical intent เดี่ยว ๆ) ที่ Hb ≥ cohort floor จะ **defer ไปยัง LLM** (`rationale=preop_defer_llm` / `preop_defer_llm_declared`) — การจองเลือดไม่ใช่ indication จึงไม่ auto-clear; Hb ต่ำกว่า threshold ยัง clear ได้ที่ step 9/10 (Hb คือ indication) ส่วนใน default mode order ที่ declare ใช้ผ่าตัดออกเป็น `PERIOP_TRANSFUSION_EXEMPT` ไปแล้ว | `NEEDS_REVIEW` ส่ง LLM *(legacy mode)* |
 | 7 | Hb drop เร็วจนเข้า acute blood loss trigger หรือไม่ | **Lab** prior Hb observations | เทียบ current Hb กับ prior Hb สูงสุดในแต่ละ window: ลด **≥ 1.5 ใน 6h**, **≥ 2.0 ใน 12h**, หรือ **≥ 2.5 ใน 24h** | `APPROPRIATE` |
 | 8 | เป็น cohort ที่ไม่มี numeric threshold หรือไม่ | ผล cohort จาก ICD-10, MED, Lab ANC และหลักฐานคำสั่งเลือด/หัตถการ | `UNKNOWN` ออกที่ step 3 และ `MTP` ออกที่ step 4 แล้ว โดยหลักคือ active heme malignancy ที่ Hb ≥ 7.0: heme ICD-10 + chemo med ล่าสุด + ANC < 500 | `NEEDS_REVIEW` |
 | 9 | Hb ต่ำกว่า threshold ของ cohort หรือไม่ | **Lab** current Hb + threshold ของ cohort และตรวจ **MED** crystalloid/Hb trend | สำหรับ cohort threshold สูงกว่า 7.0 ค่า Hb 7.0 ถึงต่ำกว่า threshold มัก appropriate แต่ถ้า crystalloid ≥ 2 L ใน 4h หรือ Hb < 8 ครั้งเดียวโดยไม่มี prior Hb 24h จะไม่ auto-appropriate | ส่วนใหญ่ `APPROPRIATE`; safety flag เป็น `NEEDS_REVIEW` |
@@ -112,26 +136,36 @@ import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
 กฎ Hb tier ตาม cohort อยู่ช่วงท้ายของ classifier แต่กฎ Hb < 7.0 เป็นกฎต้นทาง
 และกฎอื่นหลังจากนั้นยัง short-circuit ได้:
 
+0. unit ledger คืนครบทุก unit → `RETURNED_NOT_TRANSFUSED`; declared
+   surgical / type-and-screen `USETYPE` → `PERIOP_TRANSFUSION_EXEMPT`
+   (ทั้งคู่ default-ON ทำงานก่อนทุกกฎด้านล่าง)
 1. `Hb missing` → `INSUFFICIENT_EVIDENCE`
 2. Hb < 7.0 g/dL → `APPROPRIATE`
 3. cohort `UNKNOWN` → `NEEDS_REVIEW`
 4. cohort `MTP` → `APPROPRIATE`
-5. peri-procedural anchor ≤ 6h → `APPROPRIATE`
-6. pre-op crossmatch / upcoming procedure ≤ 72h → `APPROPRIATE`
+5. *(legacy flag-OFF เท่านั้น)* peri-procedural anchor ≤ 6h → `APPROPRIATE`
+6. *(legacy flag-OFF เท่านั้น)* pre-op crossmatch / upcoming procedure ≤ 72h
+   หรือ declared surgical intent, Hb ≥ cohort floor → `NEEDS_REVIEW`
+   (defer ไปยัง LLM; ไม่ auto-clear)
 7. delta-Hb trigger → `APPROPRIATE`
 8. non-threshold cohort → `NEEDS_REVIEW`
 9. hemodilution (Hb < threshold + crystalloid ≥ 2L/4h) → `NEEDS_REVIEW`
 10. single-low-Hb-no-trend (Hb < 8 ครั้งเดียว + ไม่มี prior Hb 24h) → `NEEDS_REVIEW`
 11. Hb-tier rule ตาม matrix
 
+หลังจบ Hb chain, MSBOS reservation arm (default-ON) สามารถแทน verdict
+ด้วย `PREOP_OVER_RESERVATION` เมื่อจำนวน unit ที่จองเกินคำแนะนำ MSBOS
+ของ planned operation ที่เลือก — ดูรายละเอียดใน
+[Module glossary](/blood_audit/th/reference/module-glossary/)
+
 ## ทำไม vital signs ไม่เป็น bypass เดี่ยว
 
 KCMH PR 17.2 และ AABB 2023 ใช้ Hb เป็น published threshold
 การให้เลือดจาก vital-sign instability เป็น clinical judgment นอกขอบเขต
 deterministic ของ audit นี้ ดังนั้น vital signs และ note จะยังถูกเก็บเป็น
-หลักฐานสำหรับ LLM หรือ human review ได้ แต่มีเฉพาะหลักฐานเชิงโครงสร้าง เช่น
-MTP, procedure timing, pre-op crossmatch หรือ delta-Hb เท่านั้นที่ auto-bypass
-กฎ Hb ได้
+หลักฐานสำหรับ LLM หรือ human review ได้ แต่มีเฉพาะหลักฐานเชิงโครงสร้าง
+MTP หรือ delta-Hb (บวก procedure-timing arms แบบ legacy flag-OFF)
+เท่านั้นที่ auto-bypass กฎ Hb ได้
 
 ## ตำแหน่งใน code
 

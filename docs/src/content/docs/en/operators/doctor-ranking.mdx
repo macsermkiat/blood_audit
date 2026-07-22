@@ -35,10 +35,16 @@ The attribution chain resolves an order back to a doctor:
 
 - An order's `REQNO` → `BDVST.DCTREQ` → the `DCT.csv` doctor registry.
 
-The verdict source is **swappable** through the `VerdictSource` seam. The
-current build ranks on the 300-case human-review workbook (Sheet1, column J).
-The next build swaps in full-cohort pipeline verdicts through the same seam —
-gated on the peri-op classifier fix, with no other code changes.
+The verdict source is **swappable** through the `VerdictSource` seam and
+selectable at runtime with `BBA_VERDICT_SOURCE`: the default `human`
+ranks on the 300-case human-review workbook (Sheet1, column J), and
+`pipeline` ranks on full-cohort pipeline verdicts read from the audit
+store (`BBA_AUDIT_STORE_DIR` + `BBA_RUN_ID` / `BBA_CODE_VERSION`).
+With the pipeline source, scorecards also carry the returns terminals
+(`RETURNED_NOT_TRANSFUSED` / `PERIOP_TRANSFUSION_EXEMPT`) as an
+*excluded* bucket and fold `PREOP_OVER_RESERVATION` into the
+inappropriate side while counting it separately as
+`over_reservation_count`.
 
 This is a **pilot script / integration seam**, not a top-level `bba`
 subcommand. It is also surfaced through the `serve-dashboard` integration seam
@@ -63,6 +69,11 @@ missing, printing which one.
 | `BBA_BDVST_CSV` | BDVST export containing `REQNO` + `DCTREQ`. | `../Bloodbank/data/encrypted/BDVST.csv` (relative to repo root) |
 | `BBA_DCT_CSV` | The `DCT.csv` doctor registry. | `../Bloodbank/data/raw/DCT.csv` |
 | `BBA_PILOT_WORK_DIR` | Output directory. | `/tmp/bba_mini` |
+| `BBA_VERDICT_SOURCE` | Verdict source: `human` or `pipeline`. | `human` |
+| `BBA_AUDIT_STORE_DIR` | Audit-store directory (pipeline source only). | — |
+| `BBA_RUN_ID` | run_id scope for store reads (pipeline source only). | — |
+| `BBA_CODE_VERSION` | code-version scope for store reads (pipeline source only). | — |
+| `BBA_PILOT_REPORT_CSV` | The per-order pilot `report.csv` (supplies the mean pre-transfusion trigger). Required for **every** run — human or pipeline source — and fails loud when the file is missing. | `$BBA_PILOT_WORK_DIR/report.csv` |
 
 ### Example invocation
 

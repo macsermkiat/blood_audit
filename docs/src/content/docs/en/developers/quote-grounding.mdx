@@ -36,7 +36,10 @@ separately.
 `hallucination_suspect` is a `review_reason` flag, not a classification
 literal. The stored `Classification` literals are `APPROPRIATE`,
 `INAPPROPRIATE`, `NEEDS_REVIEW`, `INSUFFICIENT_EVIDENCE`,
-`POTENTIALLY_INAPPROPRIATE` — see [Audit store](/blood_audit/en/developers/audit-store/).
+`POTENTIALLY_INAPPROPRIATE`, plus the routing/reservation terminals
+`PREOP_RESERVATION_UNCONFIRMED`, `PREOP_OVER_RESERVATION`,
+`RETURNED_NOT_TRANSFUSED`, and `PERIOP_TRANSFUSION_EXEMPT` — see
+[Audit store](/blood_audit/en/developers/audit-store/).
 
 ## The medical-NLI layer is opt-in
 

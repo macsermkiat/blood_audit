@@ -37,14 +37,25 @@ Classification = Literal[
     "NEEDS_REVIEW",
     "INSUFFICIENT_EVIDENCE",
     "POTENTIALLY_INAPPROPRIATE",
+    "PREOP_RESERVATION_UNCONFIRMED",
+    "PREOP_OVER_RESERVATION",
+    "RETURNED_NOT_TRANSFUSED",
+    "PERIOP_TRANSFUSION_EXEMPT",
 ]
 ```
+
+The last four are routing / reservation terminals added by the returns
+ledger, declared-use USETYPE, and MSBOS reservation arms:
+`RETURNED_NOT_TRANSFUSED` and `PERIOP_TRANSFUSION_EXEMPT` are
+deterministic-final and **excluded from appropriateness scoring**;
+`PREOP_OVER_RESERVATION` is the MSBOS over-reservation finding;
+`PREOP_RESERVATION_UNCONFIRMED` is flag-gated (default-off).
 
 `AuditRow` carries two classification fields:
 
 - `rule_classification` — the deterministic classifier's output.
 - `final_classification` — the winner after the LLM leg and quote
-  grounding (same five literals).
+  grounding (same nine literals).
 
 **Routing concepts that are not stored**:
 

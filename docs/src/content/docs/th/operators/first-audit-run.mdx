@@ -78,8 +78,12 @@ ls "$BBA_DATA_DIR/audit_runs/<RUN_ID>/"
 
 เมื่อเชื่อม LLM analysis แล้ว `bba audit` จะเขียน `AuditRow`
 1 แถวต่อคำสั่งให้เลือดที่ตรวจสอบลงใน audit store เพิ่มเติม
-คอลัมน์ `final_classification` จะมีค่าเป็น 1 ใน `APPROPRIATE`,
-`INAPPROPRIATE`, `NEEDS_REVIEW`, `INSUFFICIENT_EVIDENCE`, หรือ
-`POTENTIALLY_INAPPROPRIATE` ส่วน `LLM_REVIEW` เป็นแนวคิดการ routing
+คอลัมน์ `final_classification` จะมีค่าเป็น 1 ใน verdict หลัก 5 ค่า —
+`APPROPRIATE`, `INAPPROPRIATE`, `NEEDS_REVIEW`,
+`INSUFFICIENT_EVIDENCE`, `POTENTIALLY_INAPPROPRIATE` — หรือเป็น terminal
+ฝั่ง routing/reservation: `RETURNED_NOT_TRANSFUSED` และ
+`PERIOP_TRANSFUSION_EXEMPT` (ไม่นับในการให้คะแนน),
+`PREOP_OVER_RESERVATION` และ `PREOP_RESERVATION_UNCONFIRMED`
+(มี flag ควบคุม, default-off) ส่วน `LLM_REVIEW` เป็นแนวคิดการ routing
 (ไม่ใช่ค่าที่บันทึกจริง) ถ้า quote-grounding ล้มเหลวจะกลายเป็น
 `final_classification = NEEDS_REVIEW` พร้อม `review_reason` ที่ระบุ

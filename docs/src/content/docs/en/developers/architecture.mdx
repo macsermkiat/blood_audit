@@ -1,6 +1,6 @@
 ---
 title: Architecture
-description: How the 26 modules under bba.* fit together.
+description: How the 30 modules under bba.* fit together.
 ---
 
 import AtAGlance from "../../../../components/AtAGlance.astro";
@@ -11,7 +11,7 @@ import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
 
 <AtAGlance
   items={[
-    { label: "Shape", value: "26 packages, 12 happy-path stages (RBC), deterministic-first. Intake forks into RBC (Phase 1) and platelet (Phase 2) legs." },
+    { label: "Shape", value: "30 modules, 12 happy-path stages (RBC), deterministic-first. Intake forks into RBC (Phase 1) and platelet (Phase 2) legs; returns/declared-use/MSBOS overlay arms are default-ON." },
     { label: "Boundary", value: "Only bba.audit_pipeline orchestrates across stage boundaries." },
     { label: "Phase 1 CLI", value: "bba audit wires ingest only; analysis modules are implemented for Phase 1.5.", tone: "warn" },
     { label: "Safety invariant", value: "No real-time output; de-id before LLM; quote grounding fail-closed.", tone: "ok" },
@@ -30,7 +30,7 @@ below (Phase 1), and platelet orders take the platelet leg (Phase 2 — merged,
 PR #85). The RBC path is byte-identical whether or not the platelet feature is
 enabled.
 
-## Module map (26 packages)
+## Module map (30 modules)
 
 | Module | Role |
 | --- | --- |
@@ -40,7 +40,7 @@ enabled.
 | `bba.hb_lookup` | Pre-transfusion Hb from the Lab table. |
 | `bba.vitals_extractor` | BP, HR, urine output, temperature from MED + progress notes. |
 | `bba.cohort_detector` | Deterministic cohort assignment: default, cardiac-surgery, ortho-surgery, ESRD-EPO, cardiopulmonary-comorbidity (heart disease), MTP, active heme malignancy, unknown. |
-| `bba.deterministic_classifier` | 3-tier Hb engine → `APPROPRIATE`, `NEEDS_REVIEW`, `INSUFFICIENT_EVIDENCE`, `POTENTIALLY_INAPPROPRIATE`. |
+| `bba.deterministic_classifier` | 3-tier Hb engine → `APPROPRIATE`, `NEEDS_REVIEW`, `INSUFFICIENT_EVIDENCE`, `POTENTIALLY_INAPPROPRIATE`, plus the routing terminals `RETURNED_NOT_TRANSFUSED` / `PERIOP_TRANSFUSION_EXEMPT`. Never emits `INAPPROPRIATE` (LLM-only). |
 | `bba.evidence_bundle_builder` | Structures evidence (unredacted) for the LLM context window. |
 | `bba.deid_redactor` | De-identifies the bundle before any data leaves the audit container. |
 | `bba.prompt_builder` | Few-shot + clinical-history system message. |
@@ -59,7 +59,11 @@ enabled.
 | `bba.platelet_guardrail` | Over-clear guardrail for the platelet LLM leg (grounded hard signals; gated by default-off `PLATELET_LLM_ENABLED`). |
 | `bba.attribution` | Ranks top-10 ordering doctors / departments by appropriateness (`BDVST.DCTREQ` → `DCT.csv`; swappable verdict source). |
 | `bba.verification` | Before/after scoring for the peri-op fix (confusion matrix by mechanism). |
-| `bba.cli` | Click entry point; dispatches to six subcommands. |
+| `bba.returns_ledger` | BDVSTTRANS per-unit disposition aggregation → `not_transfused` / `transfused` / `inconclusive`; feeds the returns terminals. Default-ON. |
+| `bba.declared_use` | Interprets order-time `BDVSTDT.USETYPE` (declared surgical / type-and-screen intent); the sole pre-op router in default mode. Default-ON. |
+| `bba.preop_reservation` | MSBOS reservation evaluation: reference loader, planned-op picker v2, OPRTACT→ICD9 bridge, RBC + platelet legs, reason vocabulary (`reason_presentation`). Default-ON. |
+| `bba.feature_flags` | Runtime flag module (7 flags; pilot legs apply `BBA_PILOT_*` env overrides). |
+| `bba.cli` | Click entry point; dispatches to six subcommands (`report` is wired; `evaluate` / `serve-dashboard` / `sentinel` remain seams). |
 
 The full glossary lives in [Module glossary](/blood_audit/en/reference/module-glossary/)
 (transcluded from `docs/CONTEXT.md`).
@@ -84,6 +88,7 @@ The full glossary lives in [Module glossary](/blood_audit/en/reference/module-gl
 
 ## Where the integration seams live
 
-`bba.dashboard`, `bba.report_generator`, `bba.eval_harness`, and the
-sentinel orchestration in `bba.monitoring` ship complete but are not wired
-to the CLI by default. See [Integration seams](/blood_audit/en/operators/integration-seams/).
+`bba.dashboard`, `bba.eval_harness`, and the sentinel orchestration in
+`bba.monitoring` ship complete but are not wired to the CLI by default
+(`bba report` is now wired to `bba.report_generator`). See
+[Integration seams](/blood_audit/en/operators/integration-seams/).

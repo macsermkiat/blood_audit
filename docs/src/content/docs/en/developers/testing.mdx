@@ -23,15 +23,16 @@ uv sync
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src                # Success on src/
-uv run mypy tests              # 212 errors expected (advisory)
+uv run mypy tests              # ~676 errors expected (advisory)
 uv run pytest -q
 ```
 
-Expected pytest output without Docker: ~1789 pass / ~49 skip / 0 errors.
-With Docker running, the testcontainers-postgres tests exercise instead
-of skipping: ~1832 pass / ~6 skip.
+Expected pytest output without Docker: ~3771 pass / ~49 skip / 0 errors
+(verified 2026-07-22 at the picker-v2 wave). With Docker running, the
+testcontainers-postgres tests exercise instead of skipping and the skip
+count drops to single digits.
 
-## Why `mypy tests` has 212 errors
+## Why `mypy tests` has hundreds of advisory errors
 
 Type-helper sloppiness in test fixtures: `float` passed where
 `int | None` is expected, raw `str` where `Literal[...]` is expected.

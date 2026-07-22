@@ -62,6 +62,28 @@ Asia/Bangkok (PRD §"Tz-aware throughout": datetimes stored UTC, rendered
 Asia/Bangkok). An order at 23:00 Bangkok on the 31st belongs to the
 month it was placed locally, not to the UTC-month it happens to fall in.
 
+## Classification projection and exclusions
+
+The audit store persists nine `final_classification` values, but the report
+counts are computed over the four reportable labels
+(`APPROPRIATE` / `INAPPROPRIATE` / `NEEDS_REVIEW` / `INSUFFICIENT_EVIDENCE`).
+`bba.report_generator.builder` reconciles the difference before the counts
+below are tallied:
+
+- **Excluded before projection (non-scorable).** `RETURNED_NOT_TRANSFUSED`
+  and `PERIOP_TRANSFUSION_EXEMPT` rows are dropped from the report input
+  entirely (spec #119) — they are absent from `total_orders` and every
+  count/rate, mirroring their exclusion from attribution rates. The default
+  projector fails loud on them, so they must be filtered upstream.
+- **`PREOP_OVER_RESERVATION` → `INAPPROPRIATE`** (ticket #162). It counts
+  as an inappropriate-side finding in the tallies below; the aggregate
+  models additionally track an `over_reservation_count` field that the CSV
+  writer does not yet serialize as a column.
+- **Requires an injected projector.** `POTENTIALLY_INAPPROPRIATE` and
+  `PREOP_RESERVATION_UNCONFIRMED` have no default mapping — the caller must
+  supply a `classification_projector` (e.g. pooling the latter into
+  Unresolved) or the run fails loud rather than guessing.
+
 ## CSV section schemas
 
 ### `hospital_trend.csv`

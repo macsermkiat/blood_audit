@@ -24,8 +24,12 @@ uv run mypy src
 uv run pytest
 ```
 
-`mypy tests` เป็น advisory ในตอนนี้ เพราะยังมี debt ใน test helpers
-แต่ `mypy src` ต้องผ่านแบบ strict
+ผล pytest ที่คาดหวังเมื่อไม่มี Docker: ~3771 pass / ~49 skip / 0 errors
+(ยืนยัน 2026-07-22) เมื่อ Docker ทำงาน testcontainers-postgres tests
+จะรันจริงแทนการ skip และจำนวน skip ลดลงเหลือหลักหน่วย
+
+`mypy tests` เป็น advisory ในตอนนี้ (~676 errors) เพราะยังมี debt ใน
+test helpers แต่ `mypy src` ต้องผ่านแบบ strict
 
 ## LLM และ cost guard
 

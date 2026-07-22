@@ -9,7 +9,7 @@ import PipelineDiagram from "../../../../components/PipelineDiagram.astro";
 <AtAGlance
   title="สรุปสถาปัตยกรรม"
   items={[
-    { label: "โครงสร้าง", value: "26 packages, 12 happy-path stages (RBC), deterministic-first; intake แยกเป็น RBC (Phase 1) และ platelet (Phase 2) legs" },
+    { label: "โครงสร้าง", value: "30 modules, 12 happy-path stages (RBC), deterministic-first; intake แยกเป็น RBC (Phase 1) และ platelet (Phase 2) legs; overlay arms returns/declared-use/MSBOS เปิดเป็น default-ON" },
     { label: "ขอบเขต", value: "มีเพียง bba.audit_pipeline ที่ orchestrate ข้าม stage" },
     { label: "Phase 1 CLI", value: "bba audit เชื่อม ingest ก่อน; analysis modules จะ wire ใน Phase 1.5", tone: "warn" },
     { label: "Safety invariant", value: "ไม่มี real-time output; de-id ก่อน LLM; quote grounding fail-closed", tone: "ok" },
@@ -31,7 +31,7 @@ Intake แยกที่ `bba.component_map`: คำสั่งเลือด
 
 ## กลุ่ม package สำคัญ
 
-รายชื่อเต็ม 26 modules อยู่ใน [Module glossary](/blood_audit/th/reference/module-glossary/)
+รายชื่อเต็ม 30 modules อยู่ใน [Module glossary](/blood_audit/th/reference/module-glossary/)
 (อ้างอิงจาก `docs/CONTEXT.md`) ตารางนี้แสดงเฉพาะ package หลัก:
 
 | Package | หน้าที่ |
@@ -41,13 +41,17 @@ Intake แยกที่ `bba.component_map`: คำสั่งเลือด
 | `bba.component_map` | intake gate: แยก component family (RED_CELL, PLATELET, FFP, CRYO, WHOLE_BLOOD, UNKNOWN) และ fork RBC/platelet legs |
 | `bba.hb_lookup` | หา Hb ก่อนให้เลือดและ prior Hb trend |
 | `bba.cohort_detector` | assign clinical-context cohort เช่น default, cardiac surgery, ortho-surgery, ESRD-EPO, cardiopulmonary-comorbidity (heart disease), MTP, unknown |
-| `bba.deterministic_classifier` | ใช้กฎ 3-tier Hb และ bypass/review rules |
+| `bba.deterministic_classifier` | ใช้กฎ 3-tier Hb และ bypass/review rules; ปล่อย routing terminals `RETURNED_NOT_TRANSFUSED` / `PERIOP_TRANSFUSION_EXEMPT` ได้ด้วย และไม่ปล่อย `INAPPROPRIATE` เอง (LLM-only) |
 | `bba.evidence_bundle_builder` | รวมหลักฐานสำหรับแถวที่ต้องเข้า LLM route |
 | `bba.deid_redactor` | de-identify bundle ก่อนออกจาก container |
 | `bba.quote_grounder` | ตรวจ citation ของ LLM แบบ fail-closed |
 | `bba.audit_store` | เขียน AuditRow, LlmCall และ batch/run state |
 | `bba.platelet_classifier` | §5.1 platelet gate; ไม่ auto-clear อะไรเลย (≥ 100 → review, &lt; 100 → defer-LLM, ไม่มีค่า → `INSUFFICIENT_EVIDENCE`) |
 | `bba.attribution` | จัดอันดับแพทย์/แผนก 10 อันดับตามความเหมาะสม (`BDVST.DCTREQ` → `DCT.csv`) |
+| `bba.returns_ledger` | รวม disposition ต่อ unit จาก BDVSTTRANS → `not_transfused` / `transfused` / `inconclusive`; ป้อน returns terminals เปิดเป็น default-ON |
+| `bba.declared_use` | ตีความ `BDVSTDT.USETYPE` ตอนสั่ง (declared surgical / type-and-screen intent); เป็น pre-op router เดียวใน default mode เปิดเป็น default-ON |
+| `bba.preop_reservation` | ประเมิน MSBOS reservation: reference loader, planned-op picker v2, OPRTACT→ICD9 bridge, RBC + platelet legs และ reason vocabulary (`reason_presentation`) เปิดเป็น default-ON |
+| `bba.feature_flags` | โมดูล runtime flag (7 flags; pilot legs ใช้ env override `BBA_PILOT_*`) |
 
 ## เส้นทาง failure
 

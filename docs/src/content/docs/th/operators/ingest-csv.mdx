@@ -14,7 +14,7 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
 <AtAGlance
   title="สรุปสั้น"
   items={[
-    { label: "ขนาด bundle", value: "ใช้ตาราง CSV จาก HOSxP จำนวน 12 ตารางหลัก", tone: "ok" },
+    { label: "ขนาด bundle", value: "ใช้ตาราง CSV จาก HOSxP จำนวน 13 ตารางหลัก", tone: "ok" },
     { label: "การตรวจ", value: "header ต้องตรงกับ schema v1; คอลัมน์ขาดหรือคอลัมน์แปลกจะ fail" },
     { label: "ผลลัพธ์วันนี้", value: "completion marker หลังตรวจ schema และ normalize rows สำเร็จ" },
     { label: "กฎ PHI", value: "ในเอกสารและ issue ใช้ PHI_xxx เสมอ ห้ามใส่ HN/AN จริง", tone: "warn" },
@@ -23,12 +23,13 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
 
 ## ตารางที่ต้องมี
 
-ชุดข้อมูลส่งออกจาก HOSxP มีตารางหลัก 12 ตาราง:
+ชุดข้อมูลส่งออกจาก HOSxP มีตารางหลัก 13 ตาราง:
 
 | ตาราง | ใช้ทำอะไร |
 | --- | --- |
 | `BDVST` | header ของคำสั่งเลือด: HN, AN, REQNO, ชนิดผลิตภัณฑ์, วันเวลา request, แพทย์ผู้สั่ง (DCTREQ) |
-| `BDVSTDT` | รายละเอียดคำสั่งและบริบทระดับ unit/product |
+| `BDVSTDT` | รายละเอียดคำสั่งและบริบทระดับ unit/product ส่วน `USETYPE` ในตารางนี้เป็นตัวขับ routing แบบ declared-use ก่อนผ่าตัด |
+| `BDVSTTRANS` | ledger สถานะรายยูนิต (คืนเลือด / ให้แล้ว / เข้ากันไม่ได้) — แหล่งข้อมูล returns ledger เบื้องหลัง `RETURNED_NOT_TRANSFUSED` |
 | `BDTYPE` | reference ของชนิดผลิตภัณฑ์เลือด |
 | `BDVSTST` | reference ของสถานะการให้เลือด |
 | `Diagnosis` | หลักฐาน ICD-10 สำหรับ exclusion และบริบททางคลินิก |

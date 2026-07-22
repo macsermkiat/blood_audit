@@ -36,9 +36,11 @@ the run completion marker. Idempotent on the file content.
 
 ### 2. `bba.audit_orders`
 
-Filters the ingested orders down to RBC transfusion orders. Hard
-exclusions: age < 15, non-RBC products (LPRC, LDPRC, SDR), ICD-10 gates.
-Resolves the per-order anchor datetime.
+Filters the ingested orders down to auditable RBC and platelet
+transfusion orders (the `component_map` intake gate routes each order to
+its component family). Hard exclusions: age < 15, out-of-scope products
+(LPRC, LDPRC, SDR), ICD-10 gates. Resolves the per-order anchor
+datetime.
 
 ### 3. `bba.hb_lookup`
 
@@ -61,7 +63,12 @@ the Hb threshold or review route in the deterministic classifier.
 ### 6. `bba.deterministic_classifier`
 
 The 3-tier engine. See [3-tier Hb classifier](/blood_audit/en/developers/three-tier-hb/)
-for the full rule.
+for the full rule. Three default-ON overlay arms act at this stage:
+the returns ledger (`bba.returns_ledger`) can terminal the order as
+`RETURNED_NOT_TRANSFUSED`, declared-use USETYPE routing
+(`bba.declared_use`) as `PERIOP_TRANSFUSION_EXEMPT`, and the MSBOS
+reservation audit (`bba.preop_reservation`) can surface
+`PREOP_OVER_RESERVATION` for planned-operation over-reservation.
 
 ### 7. `bba.evidence_bundle_builder`
 

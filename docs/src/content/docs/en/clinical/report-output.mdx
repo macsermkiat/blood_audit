@@ -5,9 +5,9 @@ description: What the QI committee sees — six CSV sections plus a PDF summary.
 
 import AtAGlance from "../../../../components/AtAGlance.astro";
 
-In Phase 1 this page describes the intended report output. The `bba report`
-CLI path still depends on deployment-specific `ReportInputs` wiring before
-it can produce these artifacts end to end.
+This page describes the report output. The `bba report --run-id <id>`
+CLI subcommand is wired: it produces these artifacts end to end from the
+audit store (attribution resolvers via `BBA_BDVST_CSV` / `BBA_DCT_CSV`).
 
 The audit pipeline's monthly report schema lives in
 [`docs/report-schema.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/report-schema.md).
@@ -19,7 +19,7 @@ source file.
     { label: "Output set", value: "Six committee CSV sections, per-physician own-view CSVs, and one PDF." },
     { label: "Privacy", value: "Physician own-view files are split one physician per file.", tone: "ok" },
     { label: "Reproducible", value: "Every row/page carries policy, model, redactor, prompt, and evidence hashes." },
-    { label: "CLI status", value: "bba report is an integration seam until deployment wires ReportInputs.", tone: "warn" },
+    { label: "CLI status", value: "bba report --run-id <id> is wired: committee CSVs + per-physician CSVs + PDF from the audit store.", tone: "ok" },
   ]}
 />
 
@@ -34,6 +34,13 @@ source file.
 | `cohort_exception.csv` | QI committee | One row per `cohort_applied` (including `default`). Useful for spotting cohorts with unusual inappropriate-rates. |
 | `pipeline_health.csv` | QI committee | Single-row operational summary: classified vs needs-review vs insufficient-evidence counts and rates. Documentation absence is its own bucket — never folded into "inappropriate". |
 | `report_<YYYY-MM-DD>.pdf` | QI committee | Single PDF with all the above sections rendered as tables, plus the reproducibility footer on every page. |
+
+Orders whose `final_classification` is `RETURNED_NOT_TRANSFUSED` or
+`PERIOP_TRANSFUSION_EXEMPT` are **excluded from appropriateness
+scoring** — they never inflate or dilute a ward's or physician's rate.
+`PREOP_OVER_RESERVATION` rows are scored on the inappropriate side (the
+aggregate models also track them as an internal over-reservation count,
+not yet a CSV column).
 
 ## Per-physician separation by design
 
@@ -57,7 +64,7 @@ reproduce any line from the same inputs plus the same code.
 ## How this is produced
 
 `bba.report_generator.generate_monthly_report(inputs: ReportInputs)`.
-The `bba report` CLI subcommand is an
-[integration seam](/blood_audit/en/operators/integration-seams/) in
-Phase 1 — the deployer wires `ReportInputs` from the configured audit
-store.
+The `bba report --run-id <id>` CLI subcommand is **wired**: it sources
+`ReportInputs` from the audit store, resolves ward/physician attribution
+from `BBA_BDVST_CSV` / `BBA_DCT_CSV`, and writes everything under
+`$BBA_DATA_DIR/reports/<run_id>/`.

@@ -16,10 +16,34 @@ to the LLM for positive-evidence reasoning and quote grounding.
   items={[
     { label: "First input", value: "Current pre-transfusion Hb from Lab." },
     { label: "Context input", value: "Cohort from ICD-9-CM, ICD-10, MED, Lab ANC, and blood-order pattern." },
-    { label: "Bypasses", value: "MTP, peri-procedural, pre-op crossmatch, and delta-Hb can stop early.", tone: "ok" },
+    { label: "Bypasses", value: "MTP and delta-Hb can stop early. Peri-procedural / pre-op crossmatch bypasses are legacy flag-OFF-only.", tone: "ok" },
     { label: "Low-Hb rule", value: "Hb < 7.0 g/dL is APPROPRIATE before cohort-specific review routes.", tone: "ok" },
   ]}
 />
+
+## Before the Hb tier: returns and declared-use exits (default-ON)
+
+Two order-level exits run **before** any Hb reasoning:
+
+1. **Returns terminal.** If the BDVSTTRANS unit ledger shows every unit
+   reached a non-transfusion terminal (returned or crossmatch-incompatible),
+   the order exits as `RETURNED_NOT_TRANSFUSED` — no transfusion occurred,
+   so there is nothing to judge. Structured intra-op transfusion or
+   EBL ≥ 500 mL contradicts the negative ledger and keeps the order in the
+   normal chain (fail loud).
+2. **Declared-use exemption.** With `DECLARED_USE_PREOP_EXEMPT_ENABLED`
+   (default-ON), an order whose `BDVSTDT.USETYPE` declares surgical use
+   (`2` → `surgery`) or type-and-screen (`3` → `type_screen`) exits as `PERIOP_TRANSFUSION_EXEMPT`
+   (`rationale=preop_declared_exempt`). Ledger absence or
+   inconclusiveness does not defeat the exemption — but the factual
+   all-returned exit above has higher precedence. The clinician's
+   declared use is authoritative for pre-op routing — USETYPE is the
+   **only** pre-op router in default mode.
+
+Both exits are **excluded from appropriateness scoring**. When the
+declared-use flag is forced off, the legacy behavior applies instead:
+a confirmed transfusion inside a peri-operative envelope is exempt, and
+the ≤ 6 h / ≤ 72 h procedure-timing arms below become live again.
 
 ## What "cohort" means here
 
@@ -79,8 +103,8 @@ the operational checklist the audit follows for one RBC order:
 | 2 | Is Hb < 7.0 g/dL? | **Lab** current Hb. | This global low-Hb rule runs before cohort-specific review routes, including `UNKNOWN`, active heme malignancy, hemodilution, and single-low-Hb-no-trend. | `APPROPRIATE`, final without LLM. |
 | 3 | Is procedure data missing? | Procedure-event join availability. | This is not the same as "no procedure found." If the procedure join is unavailable and Hb is ≥ 7.0, the audit cannot safely know whether cardiac/orthopedic procedure rules apply. | `NEEDS_REVIEW`, routed to LLM/human review. |
 | 4 | Does the order look like massive transfusion protocol (MTP)? | Blood-order history around the anchor: RBC units, FFP co-order flag, platelet co-order flag. | After procedure-event availability is confirmed, the detector checks the **1-hour window before the order**. MTP fires if RBC units total **≥ 4** in that window, or if RBC + FFP + platelets are co-ordered in the window. | `APPROPRIATE`, final without LLM. |
-| 5 | Is there a procedure within 6 hours before the order? | **IPTSUMOPRT** procedure rows joined to **ICD9CM** procedure dictionary. | The pipeline computes `procedure_proximity_hours` from operative procedure timing. A procedure at or before the order and within **≤ 6 hours** triggers the peri-procedural bypass. | `APPROPRIATE`, final without LLM. |
-| 6 | Is there an upcoming procedure within 72 hours after the order? | **IPTSUMOPRT** + **ICD9CM** upcoming operative procedure timing. | The pipeline computes `upcoming_procedure_hours`. A future operative event within **≤ 72 hours** is treated as pre-op crossmatch / surgical-preparation evidence. | `APPROPRIATE`, final without LLM. |
+| 5 | *(legacy flag-OFF only)* Is there a procedure within 6 hours before the order? | **IPTSUMOPRT** procedure rows joined to **ICD9CM** procedure dictionary. | Only runs when `DECLARED_USE_PREOP_EXEMPT_ENABLED` is forced off. The pipeline computes `procedure_proximity_hours`; a procedure at or before the order and within **≤ 6 hours** triggers the peri-procedural bypass. In default USETYPE-only mode, proximity is LLM evidence, not a deterministic bypass. | `APPROPRIATE`, final without LLM *(legacy mode)*. |
+| 6 | *(legacy flag-OFF only)* Is there an upcoming procedure within 72 hours after the order? | **IPTSUMOPRT** + **ICD9CM** upcoming operative procedure timing. | Only runs when the declared-use flag is forced off. A future operative event within **≤ 72 hours** (or a bare declared surgical intent) with Hb ≥ the cohort floor **defers to the LLM** (`rationale=preop_defer_llm` / `preop_defer_llm_declared`) — a reservation is not an indication, so it is never auto-cleared. A sub-threshold Hb still clears at step 9/10 (the Hb is the indication). In default mode, declared-use orders already exited as `PERIOP_TRANSFUSION_EXEMPT`. | `NEEDS_REVIEW`, routed to LLM *(legacy mode)*. |
 | 7 | Did Hb drop fast enough to suggest acute blood loss? | **Lab** prior Hb observations. | The current Hb is compared with the highest prior Hb in each window. Any one trigger is enough: drop **≥ 1.5 g/dL in 6h**, **≥ 2.0 in 12h**, or **≥ 2.5 in 24h**. | `APPROPRIATE`, final without LLM. |
 | 8 | Is this a non-threshold cohort? | Cohort result from ICD-10, MED, Lab ANC, and blood-order/procedure evidence. | `UNKNOWN` already exited at step 3 and `MTP` exited at step 4. In practice this catches Hb ≥ 7.0 active heme malignancy: heme ICD-10 + recent chemo med + ANC < 500. | `NEEDS_REVIEW`, routed to LLM/human review. |
 | 9 | Is Hb below the cohort threshold? | **Lab** current Hb plus cohort threshold. Also checks **MED** crystalloid volume and Hb trend. | For higher-threshold cohorts, Hb 7.0 up to the cohort threshold is usually appropriate. Two safety checks can stop auto-appropriate: **≥ 2 L crystalloid in prior 4h** means possible hemodilution; isolated Hb < 8 with no prior 24h Hb means no trend. | Usually `APPROPRIATE`; hemodilution or single-low-Hb-no-trend gives `NEEDS_REVIEW`. |
@@ -126,12 +150,17 @@ fixed order:
 The cohort-specific Hb-tier rule is late in the classifier. The global
 Hb < 7.0 rule is early, and later checks can still short-circuit the result:
 
+0. All-returned unit ledger → `RETURNED_NOT_TRANSFUSED`; declared
+   surgical / type-and-screen `USETYPE` → `PERIOP_TRANSFUSION_EXEMPT`
+   (both default-ON, before every rule below)
 1. `Hb missing` → `INSUFFICIENT_EVIDENCE`
 2. Hb < 7.0 g/dL → `APPROPRIATE`
 3. Cohort `UNKNOWN` → `NEEDS_REVIEW`
 4. Cohort `MTP` (massive transfusion protocol) → `APPROPRIATE`
-5. Peri-procedural anchor ≤ 6h → `APPROPRIATE`
-6. Pre-op crossmatch / upcoming procedure ≤ 72h → `APPROPRIATE`
+5. *(legacy flag-OFF only)* Peri-procedural anchor ≤ 6h → `APPROPRIATE`
+6. *(legacy flag-OFF only)* Pre-op crossmatch / upcoming procedure ≤ 72h or
+   declared surgical intent, Hb ≥ cohort floor → `NEEDS_REVIEW` (defers to
+   the LLM; never auto-clears)
 7. Delta-Hb trigger → `APPROPRIATE`
 8. Non-threshold cohort → `NEEDS_REVIEW`
 9. Hemodilution (Hb < threshold + ≥ 2L crystalloid / 4h) → `NEEDS_REVIEW`
@@ -140,19 +169,25 @@ Hb < 7.0 rule is early, and later checks can still short-circuit the result:
 
 ## The bypass paths to `APPROPRIATE`
 
-Four bypasses can return `APPROPRIATE` before the plain Hb-tier rule:
+In default USETYPE-only mode, two bypasses can return `APPROPRIATE`
+before the plain Hb-tier rule:
 
 - **MTP cohort** — the massive-transfusion-protocol pattern is already
   clinically load-bearing enough to stop the deterministic classifier.
-- **Peri-procedural ≤ 6h** — the order is within 6 hours after an active
-  surgical or procedural episode.
-- **Pre-op crossmatch ≤ 72h** — the order is within 72 hours before an
-  upcoming operative event, consistent with surgical preparation.
 - **Delta-Hb trigger** (the acute-blood-loss override) — a documented
   Hb drop meets one of:
   - ≥ 1.5 g/dL drop within 6 hours
   - ≥ 2.0 g/dL drop within 12 hours
   - ≥ 2.5 g/dL drop within 24 hours
+
+Two further arms exist only when `DECLARED_USE_PREOP_EXEMPT_ENABLED` is
+forced off (legacy mode):
+
+- **Peri-procedural ≤ 6h** — the order is within 6 hours after an active
+  surgical or procedural episode → `APPROPRIATE`.
+- **Pre-op crossmatch ≤ 72h / declared surgical intent** — defers to the
+  LLM (`NEEDS_REVIEW`) when Hb is at or above the cohort floor; a
+  reservation is not an indication, so this arm never auto-clears.
 
 ## Review flags before auto-appropriate
 
@@ -166,6 +201,12 @@ sub-threshold `APPROPRIATE` row and send it to review instead:
 
 Vital signs (low BP, high HR) are **supporting evidence only**. They
 never trigger a bypass on their own and never override the Hb tier.
+
+After the Hb chain, the MSBOS reservation arm (default-ON) can replace a
+would-be verdict with `PREOP_OVER_RESERVATION` when the reserved units
+exceed the MSBOS recommendation for the picked planned operation — see
+the MSBOS notes in the
+[module glossary](/blood_audit/en/reference/module-glossary/).
 
 ## Threshold summary
 
@@ -190,8 +231,8 @@ Hemoglobin is the published threshold in KCMH PR 17.2 and AABB 2023.
 Vital-sign-driven transfusion is a discretionary clinical judgment
 outside the audit's deterministic scope. Vitals and notes enter the LLM
 evidence bundle or human-review surface when a row routes to review, but
-only structured MTP, procedure-timing, pre-op crossmatch, or delta-Hb evidence
-can auto-bypass the Hb tier.
+only structured MTP or delta-Hb evidence (plus the legacy flag-OFF
+procedure-timing arms) can auto-bypass the Hb tier.
 
 ## Where this lives in code
 

@@ -41,9 +41,10 @@ Lockfile ถูก freeze ไว้แล้ว **ห้ามตั้ง `UV_L
 uv run bba --help
 ```
 
-จะเห็น subcommand 6 ตัว โดย 4 ตัว คือ `evaluate`, `report`,
+จะเห็น subcommand 6 ตัว โดย 3 ตัว คือ `evaluate`,
 `serve-dashboard` และ `sentinel` จะ raise `CliError` โดยตั้งใจ
 **ไม่ใช่บั๊ก** ดูรายละเอียดที่ [Integration seams](/blood_audit/th/operators/integration-seams/)
+(ส่วน `report` เชื่อมแล้ว: ใช้ render รายงานรายเดือนจาก audit store)
 
 ## ตั้งค่า GitHub Pages ครั้งเดียว (เฉพาะการเผยแพร่เอกสารนี้)
 
