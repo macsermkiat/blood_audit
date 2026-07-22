@@ -64,7 +64,7 @@ reproduce any line from the same inputs plus the same code.
 ## How this is produced
 
 `bba.report_generator.generate_monthly_report(inputs: ReportInputs)`.
-The `bba report` CLI subcommand is an
-[integration seam](/blood_audit/en/operators/integration-seams/) in
-Phase 1 — the deployer wires `ReportInputs` from the configured audit
-store.
+The `bba report --run-id <id>` CLI subcommand is **wired**: it sources
+`ReportInputs` from the audit store, resolves ward/physician attribution
+from `BBA_BDVST_CSV` / `BBA_DCT_CSV`, and writes everything under
+`$BBA_DATA_DIR/reports/<run_id>/`.

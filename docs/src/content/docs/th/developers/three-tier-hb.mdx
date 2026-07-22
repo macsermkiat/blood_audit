@@ -35,7 +35,9 @@ import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
 2. **Declared-use exemption** เมื่อ `DECLARED_USE_PREOP_EXEMPT_ENABLED`
    (default-ON) order ที่ `BDVSTDT.USETYPE` ประกาศเป็น surgical use
    (`M/G`) หรือ type-and-screen (`T/S`) จะออกเป็น `PERIOP_TRANSFUSION_EXEMPT`
-   (`rationale=preop_declared_exempt`) โดยไม่สน ledger การประกาศ
+   (`rationale=preop_declared_exempt`) — ledger ที่หายหรือสรุปไม่ได้
+   ไม่ลบล้าง exemption แต่ทางออก all-returned ตามข้อเท็จจริงด้านบน
+   มี precedence สูงกว่า การประกาศ
    ของแพทย์ถือเป็น authoritative สำหรับ pre-op routing — USETYPE เป็น
    pre-op router **เดียว**ใน default mode
 
