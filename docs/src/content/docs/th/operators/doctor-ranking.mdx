@@ -71,7 +71,7 @@ uv run python scripts/pilot/rank_doctors.py
 | `BBA_AUDIT_STORE_DIR` | ไดเรกทอรีของ audit store (เฉพาะแหล่ง pipeline) | — |
 | `BBA_RUN_ID` | ขอบเขต run_id สำหรับอ่านจาก store (เฉพาะแหล่ง pipeline) | — |
 | `BBA_CODE_VERSION` | ขอบเขต code version สำหรับอ่านจาก store (เฉพาะแหล่ง pipeline) | — |
-| `BBA_PILOT_REPORT_CSV` | ไฟล์ `report.csv` ของ pilot ที่ใช้เป็น input (เฉพาะแหล่ง pipeline) | `$BBA_PILOT_WORK_DIR/report.csv` |
+| `BBA_PILOT_REPORT_CSV` | ไฟล์ `report.csv` ราย order ของ pilot (ให้ค่า mean pre-transfusion trigger) จำเป็นสำหรับ**ทุก** run ไม่ว่า human หรือ pipeline — ถ้าไฟล์หายจะ fail loud | `$BBA_PILOT_WORK_DIR/report.csv` |
 
 ### ตัวอย่างการรัน
 

@@ -73,7 +73,7 @@ missing, printing which one.
 | `BBA_AUDIT_STORE_DIR` | Audit-store directory (pipeline source only). | — |
 | `BBA_RUN_ID` | run_id scope for store reads (pipeline source only). | — |
 | `BBA_CODE_VERSION` | code-version scope for store reads (pipeline source only). | — |
-| `BBA_PILOT_REPORT_CSV` | The pilot `report.csv` input (pipeline source only). | `$BBA_PILOT_WORK_DIR/report.csv` |
+| `BBA_PILOT_REPORT_CSV` | The per-order pilot `report.csv` (supplies the mean pre-transfusion trigger). Required for **every** run — human or pipeline source — and fails loud when the file is missing. | `$BBA_PILOT_WORK_DIR/report.csv` |
 
 ### Example invocation
 

@@ -43,11 +43,13 @@ procedures, medications, blood-order patterns, and procedure timing in a fixed
 order. This analysis leg runs today through the pilot scripts and is wired into
 the CLI in Phase 1.5.
 
-Before any Hb judgment, three default-ON routing arms may terminal an order
-out of appropriateness scoring: the **returns ledger** (per-unit BDVSTTRANS
-disposition), **declared-use USETYPE routing** (order-level surgical /
-type-and-screen intent), and the **MSBOS pre-op reservation audit**
-(over-reservation screening for planned operations).
+Before any Hb judgment, three default-ON routing arms act on the order.
+Two can terminal it **out of appropriateness scoring**: the **returns
+ledger** (per-unit BDVSTTRANS disposition) and **declared-use USETYPE
+routing** (order-level surgical / type-and-screen intent). The third, the
+**MSBOS pre-op reservation audit**, screens planned-operation
+reservations — its `PREOP_OVER_RESERVATION` finding **still counts
+against the service** (scored on the inappropriate side).
 
 The final `final_classification` stored for each transfusion is one of:
 
