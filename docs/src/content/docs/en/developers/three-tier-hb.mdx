@@ -33,7 +33,7 @@ Two order-level exits run **before** any Hb reasoning:
    normal chain (fail loud).
 2. **Declared-use exemption.** With `DECLARED_USE_PREOP_EXEMPT_ENABLED`
    (default-ON), an order whose `BDVSTDT.USETYPE` declares surgical use
-   (`M/G`) or type-and-screen (`T/S`) exits as `PERIOP_TRANSFUSION_EXEMPT`
+   (`2` → `surgery`) or type-and-screen (`3` → `type_screen`) exits as `PERIOP_TRANSFUSION_EXEMPT`
    (`rationale=preop_declared_exempt`). Ledger absence or
    inconclusiveness does not defeat the exemption — but the factual
    all-returned exit above has higher precedence. The clinician's

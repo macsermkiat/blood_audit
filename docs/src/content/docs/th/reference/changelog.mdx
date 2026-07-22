@@ -63,7 +63,7 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
   ที่ปิดโดยค่าเริ่มต้น ระหว่างรอ clinical gate (#109)
 - **Declared-use USETYPE routing (spec #147; PRs #148–#152, #194, #195)**
   `bba.declared_use` ตีความ `BDVSTDT.USETYPE` ณ เวลาสั่ง คำสั่งที่ประกาศ
-  ใช้เพื่อผ่าตัด (`M/G`) หรือ type-and-screen (`T/S`) ได้รับการยกเว้น
+  ใช้เพื่อผ่าตัด (USETYPE `2` → `surgery`) หรือ type-and-screen (`3` → `type_screen`) ได้รับการยกเว้น
   ระดับคำสั่ง (`preop_declared_exempt` → `PERIOP_TRANSFUSION_EXEMPT`)
   และตอนนี้ USETYPE เป็น pre-op router **เพียงตัวเดียว** — deterministic
   arms แบบ bare-surgical ≤ 6 h / ≤ 72 h เดิมถูกปลดออก ตราบที่ flag

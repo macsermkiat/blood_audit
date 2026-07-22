@@ -46,10 +46,10 @@ run before any Hb reasoning (both default-ON):
   → `RETURNED_NOT_TRANSFUSED`. No transfusion occurred; the order is
   excluded from appropriateness scoring (it remains visible as
   crossmatch-to-transfusion waste).
-- **Declared surgical use / type-and-screen** (`BDVSTDT.USETYPE` `M/G` or
-  `T/S`) → `PERIOP_TRANSFUSION_EXEMPT`. The clinician's declared use is
-  authoritative; peri-op transfusions are not judged against the ward Hb
-  policy. Also excluded from scoring.
+- **Declared surgical use / type-and-screen** (`BDVSTDT.USETYPE` code
+  `2` → `surgery` or `3` → `type_screen`) → `PERIOP_TRANSFUSION_EXEMPT`.
+  The clinician's declared use is authoritative; peri-op transfusions are
+  not judged against the ward Hb policy. Also excluded from scoring.
 
 After excluding missing Hb, the algorithm applies the global low-Hb rule
 and then looks for other high-precedence evidence:

@@ -46,8 +46,8 @@ import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
   → `RETURNED_NOT_TRANSFUSED` ไม่มีการให้เลือดเกิดขึ้น คำสั่งนี้ถูกตัดออก
   จากการคิดคะแนนความเหมาะสม (แต่ยังมองเห็นได้ในฐานะ
   crossmatch-to-transfusion waste)
-- **ประกาศใช้เพื่อผ่าตัด / type-and-screen** (`BDVSTDT.USETYPE` `M/G` หรือ
-  `T/S`) → `PERIOP_TRANSFUSION_EXEMPT` การประกาศการใช้ของแพทย์ถือเป็น
+- **ประกาศใช้เพื่อผ่าตัด / type-and-screen** (`BDVSTDT.USETYPE` code
+  `2` → `surgery` หรือ `3` → `type_screen`) → `PERIOP_TRANSFUSION_EXEMPT` การประกาศการใช้ของแพทย์ถือเป็น
   ที่สุด การให้เลือดช่วง peri-op จะไม่ถูกตัดสินด้วยนโยบาย Hb ของ ward
   และถูกตัดออกจากการคิดคะแนนเช่นกัน
 

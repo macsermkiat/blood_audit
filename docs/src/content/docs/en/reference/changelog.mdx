@@ -79,7 +79,8 @@ will live at
   clinical gate (#109).
 - **Declared-use USETYPE routing (spec #147; PRs #148–#152, #194, #195).**
   `bba.declared_use` interprets order-time `BDVSTDT.USETYPE`. Orders
-  declared surgical (`M/G`) or type-and-screen (`T/S`) are exempt at the
+  whose `USETYPE` code declares surgical use (`2` → `surgery`) or
+  type-and-screen (`3` → `type_screen`) are exempt at the
   order level (`preop_declared_exempt` → `PERIOP_TRANSFUSION_EXEMPT`), and
   USETYPE is now the **only** pre-op router — the legacy bare-surgical
   ≤ 6 h / ≤ 72 h deterministic arms are retired while the default-ON flags
