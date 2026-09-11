@@ -447,11 +447,18 @@ def main() -> None:
                 in all_pairs
             ),
         )
+    # Cut by admission (related_reqnos), not by sampled REQNO: the returns
+    # pre-flight attributes an in-window "gave blood" note on an all-returned
+    # order to a NOT-returned unit of a sibling order on the same admission, and
+    # it prefers this copy when present. A REQNO-only cut hides every unsampled
+    # sibling and yields a false "hidden transfusion" HOLD (68019920 -> 68020779
+    # on the 2026-09 rebuild). Every consumer joins by REQNO exactly, so the
+    # extra rows cannot change a verdict.
     if (SRC / "BDVSTTRANS.csv").exists():
         _filter(
             "BDVSTTRANS.csv",
             "BDVSTTRANS.csv",
-            lambda r: (r.get("Reqno") or r.get("REQNO")) in all_reqnos,
+            lambda r: (r.get("Reqno") or r.get("REQNO")) in related_reqnos,
             cols=BDVSTTRANS_COLS,
         )
 
