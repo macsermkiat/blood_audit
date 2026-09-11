@@ -7,7 +7,10 @@ Strategy:
    {LPRC, LDPRC, SDR}), with BDVSTST in {4, 5}, REQTYPE == 'P',
    CANCELDATE NULL, AN non-null.
 2. Random-sample N (HN, REQNO) keys (seed configurable so reruns are
-   reproducible).
+   reproducible), or, when ``BBA_PILOT_REQNO_FILE`` is set, take exactly the
+   listed REQNOs from the eligible orders. A seed reproduces a sample only on
+   the exact BDVST snapshot it was drawn from; the list rebuilds a reviewed
+   sample on any export that still holds those orders.
 3. Optionally sample an additional M platelet orders using a SEPARATE
    ``random.Random`` instance seeded by ``BBA_PILOT_PLATELET_SEED``.
    The platelet RNG never touches the RBC RNG — the two instances are
@@ -34,6 +37,12 @@ Environment variables:
   (default: 0, opt-in so the bundle is RBC-only unless explicitly set).
 * ``BBA_PILOT_PLATELET_SEED`` — platelet RNG seed, independent from the
   RBC seed (default: 20260520).
+* ``BBA_PILOT_REQNO_FILE`` — text file with one REQNO per line (blank lines
+  and lines starting with ``#`` are ignored). The RBC sample is exactly those
+  orders, in file order; ``BBA_PILOT_SAMPLE_N`` / ``BBA_PILOT_SAMPLE_SEED`` are
+  ignored and the manifest records ``list`` as the seed. Exits, writing
+  nothing, if the file is missing or empty, lists a REQNO twice, or lists one
+  that is not an eligible RBC order or matches more than one (HN, AN).
 """
 
 from __future__ import annotations
@@ -42,6 +51,7 @@ import csv
 import os
 import random
 import sys
+from collections import Counter
 from pathlib import Path
 
 from bba.component_map import is_platelet_product
@@ -64,6 +74,7 @@ N = int(os.environ.get("BBA_PILOT_SAMPLE_N", "10"))
 SEED = int(os.environ.get("BBA_PILOT_SAMPLE_SEED", "20260519"))
 PLATELET_N = int(os.environ.get("BBA_PILOT_PLATELET_SAMPLE_N", "0"))
 PLATELET_SEED = int(os.environ.get("BBA_PILOT_PLATELET_SEED", "20260520"))
+REQNO_FILE = os.environ.get("BBA_PILOT_REQNO_FILE", "").strip()
 
 RBC = {"LPRC", "LDPRC", "SDR"}
 ELIGIBLE_STATUS = {"4", "5"}
@@ -182,13 +193,70 @@ def _copy_first_available(src_names: tuple[Path, ...], dst_name: str) -> int:
     return 0
 
 
+def _read_reqno_file(path: Path) -> list[str]:
+    """REQNOs from a text file: one per line; blank and ``#`` lines ignored.
+
+    ``utf-8-sig`` drops the byte-order mark Excel writes, which would otherwise
+    stick to the first REQNO.
+    """
+    if not path.is_file():
+        sys.exit(f"BBA_PILOT_REQNO_FILE not found: {path}")
+    reqnos = [
+        line.strip()
+        for line in path.read_text(encoding="utf-8-sig").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    if not reqnos:
+        sys.exit(f"BBA_PILOT_REQNO_FILE has no REQNOs: {path}")
+    duplicates = sorted(r for r, n in Counter(reqnos).items() if n > 1)
+    if duplicates:
+        sys.exit(
+            f"BBA_PILOT_REQNO_FILE lists REQNOs more than once: {', '.join(duplicates)}"
+        )
+    return reqnos
+
+
+def _select_listed(
+    candidates: list[tuple[str, str, str]], reqnos: list[str]
+) -> list[tuple[str, str, str]]:
+    """The eligible RBC orders for ``reqnos``, in list order.
+
+    Exits if a REQNO is not eligible, or if it matches more than one (HN, AN):
+    REQNOs can be reused across patients, and silently picking one would put
+    another patient's order in the bundle.
+    """
+    orders: dict[str, set[tuple[str, str, str]]] = {}
+    for hn, reqno, an in candidates:
+        orders.setdefault(reqno, set()).add((hn, reqno, an))
+    missing = [r for r in reqnos if r not in orders]
+    if missing:
+        sys.exit(
+            f"{len(missing)} listed REQNOs are not eligible RBC orders in "
+            f"{SRC / 'BDVST.csv'} (absent, cancelled, wrong status/type, or no RBC "
+            f"line item): {', '.join(missing[:20])}"
+        )
+    ambiguous = [r for r in reqnos if len(orders[r]) > 1]
+    if ambiguous:
+        sys.exit(
+            f"{len(ambiguous)} listed REQNOs match more than one (HN, AN) in "
+            f"{SRC / 'BDVST.csv'}; cannot tell which order was meant: "
+            f"{', '.join(ambiguous[:20])}"
+        )
+    return [next(iter(orders[r])) for r in reqnos]
+
+
 def main() -> None:
     if not SRC.exists():
         sys.exit(f"BBA_PILOT_RAW_DIR not found: {SRC}")
-    DST.mkdir(parents=True, exist_ok=True)
+    reqno_list = _read_reqno_file(Path(REQNO_FILE)) if REQNO_FILE else None
     print(f"raw  : {SRC}")
     print(f"work : {WORK}")
-    print(f"N={N}, seed={SEED}")
+    if reqno_list is not None:
+        print(
+            f"REQNO list: {REQNO_FILE} ({len(reqno_list)} REQNOs; N and seed ignored)"
+        )
+    else:
+        print(f"N={N}, seed={SEED}")
 
     # Pass 1 — index BDVSTDT REQNOs that carry at least one RBC line item.
     rbc_reqnos: set[str] = set()
@@ -216,11 +284,16 @@ def main() -> None:
                 continue
             candidates.append((hn, row["REQNO"], an))
     print(f"BDVST: {len(candidates)} eligible RBC orders")
-    if len(candidates) < N:
-        sys.exit(f"only {len(candidates)} candidates < N={N}")
-
-    rng = random.Random(SEED)
-    sample = rng.sample(candidates, N)
+    rbc_seed: int | str
+    if reqno_list is not None:
+        sample = _select_listed(candidates, reqno_list)
+        rbc_seed = "list"
+    else:
+        if len(candidates) < N:
+            sys.exit(f"only {len(candidates)} candidates < N={N}")
+        rng = random.Random(SEED)
+        sample = rng.sample(candidates, N)
+        rbc_seed = SEED
     sample_reqnos = {r for _, r, _ in sample}
     sample_pairs = {(h, a) for h, _, a in sample}
     sample_ans = {a for _, _, a in sample}
@@ -304,6 +377,8 @@ def main() -> None:
             if (hn, an) in all_pairs:
                 related_reqnos.add(row["REQNO"])
 
+    # Created only now, so every exit above leaves no output behind.
+    DST.mkdir(parents=True, exist_ok=True)
     print("\nWriting mini bundle:")
     _filter(
         "BDVST.csv",
@@ -393,7 +468,7 @@ def main() -> None:
         writer = csv.writer(fh)
         writer.writerow(["HN", "REQNO", "AN", "component", "seed"])
         for s in sample:
-            writer.writerow([s[0], s[1], s[2], "rbc", SEED])
+            writer.writerow([s[0], s[1], s[2], "rbc", rbc_seed])
         for s in platelet_sample:
             writer.writerow([s[0], s[1], s[2], "platelet", PLATELET_SEED])
     print(
