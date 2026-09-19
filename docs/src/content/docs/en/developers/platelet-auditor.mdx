@@ -117,14 +117,23 @@ Module: `src/bba/platelet_classifier/`.
 | Missing count, defer flag **ON** | `NEEDS_REVIEW` | `plt_missing_defer_llm` | Defers to the LLM leg. |
 | Missing count, defer flag **OFF** (**default**) | `INSUFFICIENT_EVIDENCE` | `plt_missing` | Terminal, no LLM. |
 | count ≥ 100 | `POTENTIALLY_INAPPROPRIATE` | `plt_ge_100` | Routes to review — **not terminal**. |
-| count < 100 (including < 10) | `NEEDS_REVIEW` | `plt_defer_llm` | Defers to the LLM leg. |
+| count < 10, **fresh**, heme/chemo/HSCT ICD-10 present, no withhold-population ICD-10, flag `PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED` **ON** (default OFF) | `APPROPRIATE` | `plt_lt_10_heme_prophylaxis` | Terminal. The medicine policy's "chemo / HSCT, no bleeding: 10,000/µL" row on structured codes only. |
+| count < 100 (including < 10) otherwise | `NEEDS_REVIEW` | `plt_defer_llm` | Defers to the LLM leg. |
 
 The missing-count defer flag mirrors the RBC `enable_missing_hb_positive_evidence`
 opt-in. It is a **SEED pending clinical sign-off**, and is **OFF by default**.
 
-### Safety invariant (CR-C1): the classifier never emits `APPROPRIATE`
+### Safety invariant (CR-C1): the classifier never emits `APPROPRIATE` unconditionally
 
-In v1 the classifier **never emits `APPROPRIATE` or `INAPPROPRIATE`**.
+With the auto-clear flag off (the default) the classifier **never emits
+`APPROPRIATE` or `INAPPROPRIATE`**. With it on, the single `APPROPRIATE` path is
+the cohort-gated prophylaxis clear above: it requires a heme-malignancy,
+chemotherapy or transplant diagnosis code AND the absence of every
+withhold-population code (ITP, TTP/TMA, HIT, aplastic anaemia other than the
+drug-induced D61.1, dengue, snakebite), so the populations listed below are
+excluded by code rather than by reading notes. The pilot override is
+`BBA_PILOT_PLATELET_AUTOCLEAR=1`; the threshold and both code lists are SEEDs
+pending hematology sign-off.
 `APPROPRIATE` would be deterministic-final — no LLM, no human — but the
 policies **WITHHOLD platelets at very low counts** for several exclusion
 populations:

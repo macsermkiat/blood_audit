@@ -10,8 +10,11 @@ Public-surface invariants (docs plan §5.1, §8/CR-C1, CR-M2):
 * ``PlateletClassifierResult.classification`` is one of the canonical
   :data:`bba.audit_store.Classification` values.
 
-* The platelet classifier NEVER emits ``"APPROPRIATE"`` or ``"INAPPROPRIATE"``
-  in v1. Platelet appropriateness is context-dependent (indication, procedure,
+* With :data:`bba.feature_flags.PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED` off
+  (the default) the platelet classifier NEVER emits ``"APPROPRIATE"`` or
+  ``"INAPPROPRIATE"``. With it on, the single ``APPROPRIATE`` path is the
+  cohort-gated prophylaxis clear (fresh count < 10, heme/chemo diagnosis, no
+  withhold population); ``"INAPPROPRIATE"`` is still never emitted. Otherwise, in v1, Platelet appropriateness is context-dependent (indication, procedure,
   and 6+ exclusion populations such as TTP/HIT/ITP/dengue where transfusion is
   withheld or harmful) and cannot be safely auto-cleared or auto-condemned by
   the deterministic layer. Everything with a count routes onward
@@ -44,6 +47,12 @@ class PlateletClassifierInputs(BaseModel):
       while ``True`` defers the missing-count case to the LLM
       (``NEEDS_REVIEW``) rather than dead-ending. A SEED pending clinical
       sign-off; set per-row only after QI committee approval.
+
+    * ``diagnosis_codes`` are the admission's ICD-10 codes (dotted or dotless,
+      any case) and ``platelet_freshness`` the lookup's freshness bucket. Both
+      are consulted ONLY by the cohort-gated prophylaxis auto-clear
+      (``enable_prophylaxis_autoclear``, default ``False``); with the flag off
+      they are inert and the gate is byte-identical to v1.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -51,6 +60,9 @@ class PlateletClassifierInputs(BaseModel):
     audit_id: str
     platelet_count: float | None
     enable_missing_platelet_defer: bool = False
+    diagnosis_codes: tuple[str, ...] = ()
+    platelet_freshness: str | None = None
+    enable_prophylaxis_autoclear: bool = False
 
 
 class PlateletClassifierResult(BaseModel):
@@ -65,8 +77,10 @@ class PlateletClassifierResult(BaseModel):
     ceiling), ``"plt_defer_llm"`` (below the ceiling → LLM), ``"plt_missing"``
     (no count, defer flag off → terminal documentation gap), or
     ``"plt_missing_defer_llm"`` (no count, defer flag on → routed to LLM).
-    There is deliberately no ``plt_lt_10`` slug: the very-low-count auto-clear
-    was removed as a patient-safety defect (§8/CR-C1).
+    There is deliberately no bare ``plt_lt_10`` slug: the unconditional
+    very-low-count auto-clear was removed as a patient-safety defect
+    (§8/CR-C1). The flag-gated ``"plt_lt_10_heme_prophylaxis"`` clear requires
+    a heme/chemo diagnosis AND the absence of every withhold population.
     """
 
     model_config = ConfigDict(frozen=True)

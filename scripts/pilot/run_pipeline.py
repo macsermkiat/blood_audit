@@ -55,6 +55,7 @@ from bba.feature_flags import (
     MSBOS_PLANNED_OP_PICKER_V2_ENABLED,
     MSBOS_RESERVATION_ENABLED,
     DECLARED_USE_PREOP_EXEMPT_ENABLED,
+    PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED,
     RETURNS_LEDGER_ENABLED,
 )
 from bba.hb_lookup import (
@@ -127,6 +128,16 @@ DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED = (
     _declared_preop_exempt_env == "1"
     if _declared_preop_exempt_env is not None
     else DECLARED_USE_PREOP_EXEMPT_ENABLED
+)
+# Cohort-gated platelet prophylaxis auto-clear (hematology sandbox,
+# 2026-09-19). Defaults to the library flag (OFF); BBA_PILOT_PLATELET_AUTOCLEAR
+# "1" forces on, anything else forces off. Flag-off keeps report.csv
+# byte-identical.
+_plt_autoclear_env = os.environ.get("BBA_PILOT_PLATELET_AUTOCLEAR")
+PLATELET_AUTOCLEAR_PILOT_ENABLED = (
+    _plt_autoclear_env == "1"
+    if _plt_autoclear_env is not None
+    else PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED
 )
 _msbos_env = os.environ.get("BBA_PILOT_MSBOS_RESERVATION")
 MSBOS_RESERVATION_PILOT_ENABLED = (
@@ -1314,6 +1325,9 @@ def main() -> None:
                     PlateletClassifierInputs(
                         audit_id=order.audit_id,
                         platelet_count=plt_result.value_k_ul,
+                        diagnosis_codes=order.diagnosis_codes,
+                        platelet_freshness=plt_result.freshness,
+                        enable_prophylaxis_autoclear=PLATELET_AUTOCLEAR_PILOT_ENABLED,
                     )
                 )
                 plt_classification = plt_clf.classification
