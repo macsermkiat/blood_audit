@@ -39,7 +39,7 @@ the run completion marker. Idempotent on the file content.
 Filters the ingested orders down to auditable RBC and platelet
 transfusion orders (the `component_map` intake gate routes each order to
 its component family). Hard exclusions: age < 15, out-of-scope products
-(LPRC, LDPRC, SDR), ICD-10 gates. Resolves the per-order anchor
+(anything outside LPRC, LDPRC, SDR, LDPRCI, LPRCI), ICD-10 gates. Resolves the per-order anchor
 datetime.
 
 ### 3. `bba.hb_lookup`

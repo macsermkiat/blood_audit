@@ -25,7 +25,7 @@ from bba.audit_orders.models import (
 from bba.component_map import PLATELET_PRODUCTS, is_platelet_product
 
 # Allow-listed RBC products per PRD §2 / issue #4 acceptance criteria.
-RBC_PRODUCTS: frozenset[str] = frozenset({"LPRC", "LDPRC", "SDR"})
+RBC_PRODUCTS: frozenset[str] = frozenset({"LPRC", "LDPRC", "SDR", "LDPRCI", "LPRCI"})
 
 # BDVSTST values eligible for audit per PRD §2. Status 6 is "refused" and
 # every other code (cancelled / never-issued / etc.) is out of scope for
