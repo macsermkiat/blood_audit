@@ -104,6 +104,14 @@ class RankedRow(BaseModel):
     platelet_order_n: int = Field(default=0, ge=0)
     """Number of scorable platelet orders the ``mean_platelet`` is based
     on; never exceeds ``total_orders``."""
+    hb_min: float | None = None
+    hb_max: float | None = None
+    """Lowest / highest pre-transfusion Hb (g/dL) among the same orders the
+    mean is over; ``None`` exactly when ``mean_hb`` is."""
+    platelet_min: float | None = None
+    platelet_max: float | None = None
+    """Lowest / highest pre-transfusion platelet count (×10³/µL) among the
+    same orders the mean is over; ``None`` exactly when ``mean_platelet`` is."""
 
 
 class RankingTable(BaseModel):

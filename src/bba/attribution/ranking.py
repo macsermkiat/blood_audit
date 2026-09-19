@@ -130,6 +130,10 @@ def rank_top_n(
                 hb_order_n=stats.hb_order_n if stats is not None else 0,
                 mean_platelet=stats.mean_platelet if stats is not None else None,
                 platelet_order_n=stats.platelet_order_n if stats is not None else 0,
+                hb_min=stats.hb_min if stats is not None else None,
+                hb_max=stats.hb_max if stats is not None else None,
+                platelet_min=stats.platelet_min if stats is not None else None,
+                platelet_max=stats.platelet_max if stats is not None else None,
             )
         )
     return tuple(rows)

@@ -83,8 +83,8 @@ class OrderLabValue(BaseModel):
 
 
 class GroupLabStats(BaseModel):
-    """Mean pre-transfusion triggers for one group (doctor or department),
-    kept strictly separate by component.
+    """Mean, min and max pre-transfusion triggers for one group (doctor or
+    department), kept strictly separate by component.
 
     Enforces, per component, the reporting invariant ``order_n == 0`` iff
     ``mean is None``: a group with no usable value must render as absent
@@ -95,16 +95,31 @@ class GroupLabStats(BaseModel):
 
     mean_hb: float | None = None
     hb_order_n: int = Field(default=0, ge=0)
+    hb_min: float | None = None
+    hb_max: float | None = None
     mean_platelet: float | None = None
     platelet_order_n: int = Field(default=0, ge=0)
+    platelet_min: float | None = None
+    platelet_max: float | None = None
 
     @model_validator(mode="after")
     def _mean_iff_sample(self) -> GroupLabStats:
-        for label, mean, n in (
-            ("mean_hb/hb_order_n", self.mean_hb, self.hb_order_n),
+        # min / max follow the same rule as the mean (clinician request,
+        # 2026-09-19: the range shows whether a high mean is one outlier or a
+        # habit), and can never straddle the mean.
+        for label, mean, lo, hi, n in (
+            (
+                "mean_hb/hb_order_n",
+                self.mean_hb,
+                self.hb_min,
+                self.hb_max,
+                self.hb_order_n,
+            ),
             (
                 "mean_platelet/platelet_order_n",
                 self.mean_platelet,
+                self.platelet_min,
+                self.platelet_max,
                 self.platelet_order_n,
             ),
         ):
@@ -114,6 +129,17 @@ class GroupLabStats(BaseModel):
                     "== 0 must hold if and only if the mean is None (got "
                     f"n={n}, mean={mean!r})"
                 )
+            if mean is None and (lo is not None or hi is not None):
+                raise ValueError(
+                    f"GroupLabStats invariant violated for {label}: min/max "
+                    f"cannot be present without a mean (got min={lo!r}, max={hi!r})"
+                )
+            if mean is not None and lo is not None and hi is not None:
+                if not (lo <= mean <= hi):
+                    raise ValueError(
+                        f"GroupLabStats invariant violated for {label}: "
+                        f"min <= mean <= max must hold (got {lo!r}, {mean!r}, {hi!r})"
+                    )
         return self
 
 
@@ -230,8 +256,12 @@ def _stats_from(hb_values: list[float], platelet_values: list[float]) -> GroupLa
     return GroupLabStats(
         mean_hb=_mean_or_none(hb_values),
         hb_order_n=len(hb_values),
+        hb_min=min(hb_values) if hb_values else None,
+        hb_max=max(hb_values) if hb_values else None,
         mean_platelet=_mean_or_none(platelet_values),
         platelet_order_n=len(platelet_values),
+        platelet_min=min(platelet_values) if platelet_values else None,
+        platelet_max=max(platelet_values) if platelet_values else None,
     )
 
 

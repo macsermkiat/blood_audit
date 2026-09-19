@@ -47,6 +47,7 @@ build_review.py         →  review.html    (single page for human review)
 | `BBA_PILOT_SAMPLE_N` | `10` | Number of orders to sample |
 | `BBA_PILOT_SAMPLE_SEED` | `20260519` | RNG seed for reproducibility |
 | `BBA_PILOT_REQNO_FILE` | _(unset)_ | Text file with one REQNO per line (blank lines and lines starting with `#` are ignored). `sample_bundle.py` builds the bundle from exactly those RBC orders instead of a seeded draw, and ignores `BBA_PILOT_SAMPLE_N` / `BBA_PILOT_SAMPLE_SEED`. Stops without writing anything if a REQNO is missing, is not an eligible RBC order, matches more than one (HN, AN), or is listed twice. Use a fresh `BBA_PILOT_WORK_DIR`: a failed run leaves an earlier run's files in place. Use it to rebuild a reviewed sample: a seed reproduces a sample only on the exact BDVST snapshot it was drawn from |
+| `BBA_PILOT_PLATELET_REQNO_FILE` | _(unset)_ | Same format as `BBA_PILOT_REQNO_FILE`, for platelet-ONLY orders: `sample_bundle.py` builds the platelet stream from exactly those orders and ignores `BBA_PILOT_PLATELET_SAMPLE_N` / `BBA_PILOT_PLATELET_SEED` (manifest seed = `list`). Stops without writing if a REQNO is not an eligible platelet-only order (a mixed RBC+platelet REQNO is rejected). Lets a doctor-restricted cohort carry its platelet orders |
 | `BBA_PILOT_ICD10_CSV` | `../Bloodbank/data/raw/ICD10.csv` | ICD-10 master dictionary |
 | `BBA_PILOT_LLM_MODEL` | `claude-sonnet-5` | Anthropic model id |
 | `BBA_PILOT_RUN_ID` | `pilot-mini` | run_id stamped on audit_store rows |
