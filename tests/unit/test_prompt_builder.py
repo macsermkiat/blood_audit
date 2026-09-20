@@ -1771,3 +1771,16 @@ class TestPlateletPromptExclusionOverride:
             rbc = system_prompt_for(task_mode=mode, cohort_threshold=7.0)
             assert "however low the count" not in rbc
             assert "is NOT chemotherapy" not in rbc
+
+    def test_procedure_does_not_override_a_restrictive_exclusion_line(self) -> None:
+        # Codex P1 on #235: TTP / HIT / snakebite / ITP lines permit transfusion
+        # only for the condition they name (life-threatening bleeding, emergency
+        # surgery for ITP). A routine CVC or LP must not clear those patients —
+        # in TTP and HIT the transfusion is actively harmful.
+        from bba.prompt_builder.system_prompt import platelet_system_prompt
+
+        prompt = platelet_system_prompt()
+        assert "a procedure indication 1–3 does NOT override" in prompt
+        assert "or a procedure indication 1–3, grounded in the notes, supports" not in (
+            prompt
+        )
