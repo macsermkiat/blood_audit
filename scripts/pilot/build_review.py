@@ -132,6 +132,11 @@ _EBL_RE = re.compile(
 )
 
 _RATIONALE_LABELS: dict[str, str] = {
+    "plt_defer_llm": "Platelet count on file — no deterministic verdict; indication judged by the LLM",
+    "plt_missing_defer_llm": "No usable platelet count — indication judged by the LLM",
+    "plt_missing": "No platelet count in the 7-day pre-order window",
+    "plt_ge_100": "Platelet count ≥ 100,000 /µL — above every policy threshold",
+    "plt_lt_10_heme_prophylaxis": "Fresh count < 10,000 /µL on a heme-malignancy / chemotherapy admission with no withhold population — prophylaxis auto-clear",
     "hb_lt_7_universal": "Hb < 7.0 g/dL — below the universal threshold; no bypass required",
     "hb_lt_threshold": "Hb below the cohort-specific threshold",
     "hb_7_to_10": "Hb 7.0–10.0 g/dL — gray zone; requires a documented clinical indication",
@@ -2461,7 +2466,38 @@ def main() -> None:
             "<option value='rbc'>RBC</option>"
             "<option value='platelet'>Platelet</option></select></label>"
         )
+        glossary_appropriate = (
+            "Order meets evidence-based indications. RBC: Hb below threshold or "
+            "qualifying bypass. Platelet: count below the policy threshold for a "
+            "documented indication (procedure, active bleeding, chemo/HSCT or "
+            "consumptive thrombocytopenia prophylaxis)."
+        )
+        glossary_potentially = (
+            "RBC: Hb above threshold and no qualifying bypass. Platelet: count "
+            "≥ 100,000 /µL, above every policy threshold. Warrants clinician review."
+        )
+        glossary_excluded = (
+            "Case excluded from audit scope (e.g. paediatric, hemoglobinopathy, "
+            "product outside the audited component lists)."
+        )
+        platelet_glossary_html = "".join(
+            f"\n<dt>{esc(code)}</dt><dd>{esc(label)}.</dd>"
+            for code, label in _RATIONALE_LABELS.items()
+            if code.startswith("plt_")
+        )
     else:
+        glossary_appropriate = (
+            "Order meets evidence-based indications (Hb below threshold or "
+            "qualifying bypass)."
+        )
+        glossary_potentially = (
+            "Hb above threshold and no qualifying bypass was identified; warrants "
+            "clinician review."
+        )
+        glossary_excluded = (
+            "Case excluded from audit scope (e.g. paediatric, non-RBC product)."
+        )
+        platelet_glossary_html = ""
         page_title = "KCMH RBC order appropriateness audit — human review"
         page_h1 = "KCMH RBC Order Appropriateness Audit — Human Review"
         orders_line = f"{n_cases} RBC orders"
@@ -2504,11 +2540,11 @@ LLM: Anthropic Batch classification on structured evidence only.
 <details style='margin:16px 0;'><summary><b>Glossary — verdict classes and classifier codes</b></summary>
 <div class='glossary-body'>
 <dl>
-<dt>APPROPRIATE</dt><dd>Order meets evidence-based indications (Hb below threshold or qualifying bypass).</dd>
-<dt>POTENTIALLY_INAPPROPRIATE</dt><dd>Hb above threshold and no qualifying bypass was identified; warrants clinician review.</dd>
+<dt>APPROPRIATE</dt><dd>{glossary_appropriate}</dd>
+<dt>POTENTIALLY_INAPPROPRIATE</dt><dd>{glossary_potentially}</dd>
 <dt>NEEDS_REVIEW</dt><dd>Classifier could not confidently classify; manual review required (e.g. haemodilution, single borderline Hb).</dd>
 <dt>INSUFFICIENT_EVIDENCE</dt><dd>LLM could not find enough structured evidence to classify.</dd>
-{returns_glossary_html}<dt>EXCLUDED</dt><dd>Case excluded from audit scope (e.g. paediatric, non-RBC product).</dd>
+{returns_glossary_html}<dt>EXCLUDED</dt><dd>{glossary_excluded}</dd>{platelet_glossary_html}
 <dt style='margin-top:14px;font-style:italic;'>Rationale codes</dt><dd></dd>
 <dt>hb_lt_7_universal</dt><dd>Hb &lt; 7.0 g/dL — below the universal threshold; no bypass required.</dd>
 <dt>hb_lt_threshold</dt><dd>Hb below the cohort-specific threshold.</dd>
@@ -2667,11 +2703,15 @@ LLM: Anthropic Batch classification on structured evidence only.
   var activeIdx = -1;
   function findActiveByScroll() {
     var mid = window.innerHeight / 2;
+    var firstVisible = -1;
     for (var i = caseEls.length - 1; i >= 0; i--) {
+      /* A display:none section reports a zero rect and would win the scan. */
+      if (caseEls[i].style.display === 'none') continue;
+      firstVisible = i;
       var r = caseEls[i].getBoundingClientRect();
       if (r.top <= mid) return i;
     }
-    return 0;
+    return firstVisible < 0 ? 0 : firstVisible;
   }
   /* ── IntersectionObserver scrollspy ── */
   var _activeNavLink = null;

@@ -782,3 +782,45 @@ def test_excluded_platelet_order_keeps_its_component_from_the_manifest(
     assert "data-component='platelet'" in rendered
     assert "(0 RBC, 1 platelet)" in rendered
     assert "Platelet count history" in rendered
+
+
+def test_platelet_page_explains_platelet_codes_and_verdicts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Codex P2 on #236: the glossary defined every verdict in Hb terms and left
+    # plt_* rationale codes as raw slugs, which is wrong or unreadable for the
+    # platelet cases the page now presents.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN1,P1,AN1,platelet\n",
+        report_csv=_PLT_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    assert "<dt>plt_defer_llm</dt>" in rendered
+    assert "<dt>plt_lt_10_heme_prophylaxis</dt>" in rendered
+    assert "Platelet: count below the policy threshold" in rendered
+    assert "non-RBC product" not in rendered
+    # The verdict box resolves the code to its label instead of a bare slug.
+    assert "indication judged by the LLM" in rendered
+
+
+def test_initial_keyboard_lookup_ignores_hidden_cases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Codex P2 on #236: before any case is active, findActiveByScroll scanned
+    # hidden sections too; a display:none section has a zero rect and was picked.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN2,R1,AN2,rbc\n",
+        report_csv=_RBC_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    assert "if (caseEls[i].style.display === 'none') continue;" in rendered
