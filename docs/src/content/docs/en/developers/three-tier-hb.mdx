@@ -7,7 +7,7 @@ import AlgorithmDecisionFlow from "../../../../components/AlgorithmDecisionFlow.
 import AtAGlance from "../../../../components/AtAGlance.astro";
 import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
 
-The deterministic classifier is the **authoritative** decision layer for
+The deterministic classifier is the authoritative decision layer for
 auto-classified rows. `APPROPRIATE` and `INSUFFICIENT_EVIDENCE` are final
 without an LLM call. `NEEDS_REVIEW` and `POTENTIALLY_INAPPROPRIATE` route
 to the LLM for positive-evidence reasoning and quote grounding.
@@ -23,31 +23,31 @@ to the LLM for positive-evidence reasoning and quote grounding.
 
 ## Before the Hb tier: returns and declared-use exits (default-ON)
 
-Two order-level exits run **before** any Hb reasoning:
+Two order-level exits run before any Hb reasoning:
 
-1. **Returns terminal.** If the BDVSTTRANS unit ledger shows every unit
+1. Returns terminal. If the BDVSTTRANS unit ledger shows every unit
    reached a non-transfusion terminal (returned or crossmatch-incompatible),
-   the order exits as `RETURNED_NOT_TRANSFUSED` — no transfusion occurred,
+   the order exits as `RETURNED_NOT_TRANSFUSED`: no transfusion occurred,
    so there is nothing to judge. Structured intra-op transfusion or
    EBL ≥ 500 mL contradicts the negative ledger and keeps the order in the
    normal chain (fail loud).
-2. **Declared-use exemption.** With `DECLARED_USE_PREOP_EXEMPT_ENABLED`
+2. Declared-use exemption. With `DECLARED_USE_PREOP_EXEMPT_ENABLED`
    (default-ON), an order whose `BDVSTDT.USETYPE` declares surgical use
    (`2` → `surgery`) or type-and-screen (`3` → `type_screen`) exits as `PERIOP_TRANSFUSION_EXEMPT`
    (`rationale=preop_declared_exempt`). Ledger absence or
-   inconclusiveness does not defeat the exemption — but the factual
+   inconclusiveness does not defeat the exemption, but the factual
    all-returned exit above has higher precedence. The clinician's
-   declared use is authoritative for pre-op routing — USETYPE is the
-   **only** pre-op router in default mode.
+   declared use is authoritative for pre-op routing. USETYPE is the
+   only pre-op router in default mode.
 
-Both exits are **excluded from appropriateness scoring**. When the
+Both exits are excluded from appropriateness scoring. When the
 declared-use flag is forced off, the legacy behavior applies instead:
 a confirmed transfusion inside a peri-operative envelope is exempt, and
 the ≤ 6 h / ≤ 72 h procedure-timing arms below become live again.
 
 ## What "cohort" means here
 
-In this project, a **cohort** is the clinical-context bucket assigned to
+In this project, a cohort is the clinical-context bucket assigned to
 one transfusion order before the Hb number is interpreted.
 
 It is not a research cohort and it is not a permanent patient label. It is
@@ -60,7 +60,7 @@ admissions or different transfusion dates if the surrounding evidence changes.
 For example, a patient with no current surgery signal might be `DEFAULT` on
 one admission, but `CARDIAC_SURGERY` after a later cardiac operation.
 
-The cohort matters because the audit does **not** use one Hb threshold for
+The cohort matters because the audit does not use one Hb threshold for
 everyone:
 
 - Some orders use a numeric Hb threshold, such as 7.0, 7.5, or 8.0 g/dL.
@@ -82,13 +82,13 @@ everyone:
 | `HEME_MALIGNANCY_ACTIVE` | Active hematologic malignancy context where one numeric threshold is not enough. | Heme-malignancy ICD-10 signal plus recent chemotherapy medication plus neutropenia. | Hb < 7.0 is `APPROPRIATE`; otherwise no numeric threshold is applied and the row routes to `NEEDS_REVIEW` / LLM context review. |
 | `UNKNOWN` | The audit does not have enough procedure data to safely choose a threshold. | Procedure events are unavailable, not merely empty. | Hb < 7.0 is `APPROPRIATE`; otherwise the classifier does not silently assume 7.0 and routes to `NEEDS_REVIEW`. |
 
-> The older `ORTHO_CARDIAC` cohort (orthopedic surgery **plus** cardiac
-> history) is **deprecated**: an orthopedic operation now raises the floor to
+> The older `ORTHO_CARDIAC` cohort (orthopedic surgery plus cardiac
+> history) is deprecated: an orthopedic operation now raises the floor to
 > 8.0 on its own, which subsumes the fused cohort. Its threshold is retained
 > only so audit-store rows written before the split still resolve.
 
-The key safety idea: **missing procedure data is different from no procedure
-found**. If procedure data is available and empty, the detector can fall
+The key safety idea: missing procedure data is different from no procedure
+found. If procedure data is available and empty, the detector can fall
 through to `DEFAULT`. If procedure data is unavailable, the detector returns
 `UNKNOWN` so a human can review the order.
 
@@ -129,16 +129,16 @@ fixed order:
 
 ## Source-to-rule map
 
-- **Lab**: current Hb, prior Hb trend, delta-Hb windows, Hb freshness, ANC for
+- Lab: current Hb, prior Hb trend, delta-Hb windows, Hb freshness, ANC for
   active heme-malignancy context.
-- **ICD-9-CM procedure codes**: cardiac surgery, orthopedic surgery,
+- ICD-9-CM procedure codes: cardiac surgery, orthopedic surgery,
   peri-procedural timing, pre-op crossmatch timing. Procedure rows come from
   `IPTSUMOPRT`; OR/non-OR status and procedure names come from `ICD9CM`.
-- **ICD-10 diagnosis codes**: cardiac history, ESRD, heme malignancy, and
+- ICD-10 diagnosis codes: cardiac history, ESRD, heme malignancy, and
   heart-disease comorbidity (the `CARDIOPULMONARY_COMORBIDITY` 8.0 g/dL floor).
-- **MED**: dialysis-medication signals, chemotherapy-medication signals,
+- MED: dialysis-medication signals, chemotherapy-medication signals,
   and crystalloid volume in the 4 hours before the order.
-- **Blood-order history**: MTP detection from RBC-unit clustering or
+- Blood-order history: MTP detection from RBC-unit clustering or
   RBC + FFP + platelet co-ordering.
 
 <AlgorithmDecisionFlow />
@@ -172,9 +172,9 @@ Hb < 7.0 rule is early, and later checks can still short-circuit the result:
 In default USETYPE-only mode, two bypasses can return `APPROPRIATE`
 before the plain Hb-tier rule:
 
-- **MTP cohort** — the massive-transfusion-protocol pattern is already
+- MTP cohort: the massive-transfusion-protocol pattern is already
   clinically load-bearing enough to stop the deterministic classifier.
-- **Delta-Hb trigger** (the acute-blood-loss override) — a documented
+- Delta-Hb trigger (the acute-blood-loss override): a documented
   Hb drop meets one of:
   - ≥ 1.5 g/dL drop within 6 hours
   - ≥ 2.0 g/dL drop within 12 hours
@@ -183,9 +183,9 @@ before the plain Hb-tier rule:
 Two further arms exist only when `DECLARED_USE_PREOP_EXEMPT_ENABLED` is
 forced off (legacy mode):
 
-- **Peri-procedural ≤ 6h** — the order is within 6 hours after an active
+- Peri-procedural ≤ 6h: the order is within 6 hours after an active
   surgical or procedural episode → `APPROPRIATE`.
-- **Pre-op crossmatch ≤ 72h / declared surgical intent** — defers to the
+- Pre-op crossmatch ≤ 72h / declared surgical intent: defers to the
   LLM (`NEEDS_REVIEW`) when Hb is at or above the cohort floor; a
   reservation is not an indication, so this arm never auto-clears.
 
@@ -194,17 +194,17 @@ forced off (legacy mode):
 After the global Hb < 7.0 rule, two checks can stop a would-be
 sub-threshold `APPROPRIATE` row and send it to review instead:
 
-- **Hemodilution flagged** — Hb is below threshold, but ≥ 2 L crystalloid
+- Hemodilution flagged: Hb is below threshold, but ≥ 2 L crystalloid
   in the prior 4 hours makes the Hb value suspect.
-- **Single-low-Hb-no-trend** — an isolated Hb < 8 g/dL has no prior 24-hour
+- Single-low-Hb-no-trend: an isolated Hb < 8 g/dL has no prior 24-hour
   Hb trend to confirm the anemia pattern.
 
-Vital signs (low BP, high HR) are **supporting evidence only**. They
+Vital signs (low BP, high HR) are supporting evidence only. They
 never trigger a bypass on their own and never override the Hb tier.
 
 After the Hb chain, the MSBOS reservation arm (default-ON) can replace a
 would-be verdict with `PREOP_OVER_RESERVATION` when the reserved units
-exceed the MSBOS recommendation for the picked planned operation — see
+exceed the MSBOS recommendation for the picked planned operation. See
 the MSBOS notes in the
 [module glossary](/blood_audit/en/reference/module-glossary/).
 
@@ -221,8 +221,8 @@ the MSBOS notes in the
 | Active heme malignancy | None | Hb < 7.0 is `APPROPRIATE`; Hb ≥ 7.0 routes to `NEEDS_REVIEW`; LLM interprets context. |
 | Unknown | None | Hb < 7.0 is `APPROPRIATE`; Hb ≥ 7.0 routes to `NEEDS_REVIEW`; the classifier refuses to assume a threshold. |
 
-> Deprecated: `ORTHO_CARDIAC` (orthopedic surgery **plus** cardiac history) is
-> no longer emitted — `ORTHO_SURGERY` applies the same 8.0 floor to an
+> Deprecated: `ORTHO_CARDIAC` (orthopedic surgery plus cardiac history) is
+> no longer emitted. `ORTHO_SURGERY` applies the same 8.0 floor to an
 > orthopedic operation alone.
 
 ## Why vitals are not standalone
@@ -236,11 +236,11 @@ procedure-timing arms) can auto-bypass the Hb tier.
 
 ## Where this lives in code
 
-- `src/bba/deterministic_classifier/classifier.py` — the rule engine
+- `src/bba/deterministic_classifier/classifier.py`: the rule engine
   with the full precedence list.
-- `src/bba/cohort_detector/rules.py` — cohort thresholds and cohort
+- `src/bba/cohort_detector/rules.py`: cohort thresholds and cohort
   predicate constants.
-- `src/bba/audit_pipeline/pipeline.py` — routes `NEEDS_REVIEW` and
+- `src/bba/audit_pipeline/pipeline.py`: routes `NEEDS_REVIEW` and
   `POTENTIALLY_INAPPROPRIATE` rule outputs to the LLM stage.
 - Policy text (paraphrased above): see KCMH PR 17.2 and the internal
   3-tier Hb specification.

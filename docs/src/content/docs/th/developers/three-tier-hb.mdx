@@ -24,32 +24,32 @@ import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
 
 ## ก่อนถึง Hb tier: ทางออก returns และ declared-use (default-ON)
 
-ทางออกระดับ order สองทางทำงาน**ก่อน**การใช้เหตุผลเรื่อง Hb ใด ๆ:
+ทางออกระดับ order สองทางทำงานก่อนการใช้เหตุผลเรื่อง Hb ใด ๆ:
 
-1. **Returns terminal** ถ้า unit ledger จาก BDVSTTRANS แสดงว่าทุก unit
+1. Returns terminal ถ้า unit ledger จาก BDVSTTRANS แสดงว่าทุก unit
    ไปถึง terminal ที่ไม่ใช่การให้เลือด (ถูกคืนหรือ crossmatch-incompatible)
-   order จะออกเป็น `RETURNED_NOT_TRANSFUSED` — ไม่มีการให้เลือดเกิดขึ้น
+   order จะออกเป็น `RETURNED_NOT_TRANSFUSED` เพราะไม่มีการให้เลือดเกิดขึ้น
    จึงไม่มีอะไรให้ตัดสิน หลักฐาน intra-op transfusion เชิงโครงสร้างหรือ
    EBL ≥ 500 mL ขัดแย้งกับ negative ledger และทำให้ order อยู่ใน chain
    ปกติต่อไป (fail loud)
-2. **Declared-use exemption** เมื่อ `DECLARED_USE_PREOP_EXEMPT_ENABLED`
+2. Declared-use exemption เมื่อ `DECLARED_USE_PREOP_EXEMPT_ENABLED`
    (default-ON) order ที่ `BDVSTDT.USETYPE` ประกาศเป็น surgical use
    (`2` → `surgery`) หรือ type-and-screen (`3` → `type_screen`) จะออกเป็น `PERIOP_TRANSFUSION_EXEMPT`
-   (`rationale=preop_declared_exempt`) — ledger ที่หายหรือสรุปไม่ได้
+   (`rationale=preop_declared_exempt`) ledger ที่หายหรือสรุปไม่ได้
    ไม่ลบล้าง exemption แต่ทางออก all-returned ตามข้อเท็จจริงด้านบน
    มี precedence สูงกว่า การประกาศ
-   ของแพทย์ถือเป็น authoritative สำหรับ pre-op routing — USETYPE เป็น
-   pre-op router **เดียว**ใน default mode
+   ของแพทย์ถือเป็น authoritative สำหรับ pre-op routing และ USETYPE เป็น
+   pre-op router เดียวใน default mode
 
-ทางออกทั้งสอง**ไม่ถูกนับใน appropriateness scoring** เมื่อบังคับปิด
+ทางออกทั้งสองไม่ถูกนับใน appropriateness scoring เมื่อบังคับปิด
 declared-use flag ระบบจะใช้ legacy behavior แทน: การให้เลือดที่ยืนยันแล้ว
 ภายใน peri-operative envelope เป็น exempt และ arm เรื่องเวลา procedure
 ≤ 6 h / ≤ 72 h ด้านล่างจะกลับมาทำงาน
 
 ## "Cohort" ในที่นี้หมายถึงอะไร
 
-ในโปรเจกต์นี้ **cohort** ไม่ได้หมายถึง cohort งานวิจัย และไม่ใช่ label ถาวร
-ของผู้ป่วย แต่หมายถึง **กลุ่มบริบททางคลินิกของคำสั่งให้เลือดหนึ่งรายการ**
+ในโปรเจกต์นี้ cohort ไม่ได้หมายถึง cohort งานวิจัย และไม่ใช่ label ถาวร
+ของผู้ป่วย แต่หมายถึงกลุ่มบริบททางคลินิกของคำสั่งให้เลือดหนึ่งรายการ
 ก่อนจะนำค่า Hb ไปเทียบ threshold
 
 พูดง่าย ๆ คือระบบถามว่า: "จากหัตถการ การวินิจฉัย ยาที่ได้รับ
@@ -72,11 +72,11 @@ declared-use flag ระบบจะใช้ legacy behavior แทน: กา�
 | `HEME_MALIGNANCY_ACTIVE` | active heme malignancy ที่ไม่ควรลดเหลือ threshold เดียว | ICD-10 heme malignancy + chemo med + ANC < 500 | Hb < 7.0 ให้ `APPROPRIATE`; ถ้า Hb ≥ 7.0 ไม่มี numeric threshold และส่ง `NEEDS_REVIEW` |
 | `UNKNOWN` | ข้อมูล procedure ไม่พอให้เลือก threshold อย่างปลอดภัย | procedure events unavailable ไม่ใช่แค่ไม่พบ procedure | Hb < 7.0 ให้ `APPROPRIATE`; ถ้า Hb ≥ 7.0 ไม่ assume default และส่ง `NEEDS_REVIEW` |
 
-> cohort เดิม `ORTHO_CARDIAC` (ผ่าตัด orthopedic **ร่วมกับ**ประวัติ cardiac)
-> ถูก **ยกเลิก**แล้ว เพราะ `ORTHO_SURGERY` ใช้ floor 8.0 กับการผ่าตัด
+> cohort เดิม `ORTHO_CARDIAC` (ผ่าตัด orthopedic ร่วมกับประวัติ cardiac)
+> ถูกยกเลิกแล้ว เพราะ `ORTHO_SURGERY` ใช้ floor 8.0 กับการผ่าตัด
 > orthopedic โดยลำพัง ซึ่งครอบคลุม cohort เดิม; threshold ยังเก็บไว้เพื่อให้แถวเก่า resolve ได้
 
-แนวคิดสำคัญคือ **ข้อมูลหัตถการ "ไม่มีให้ตรวจ" ไม่เหมือนกับ "ตรวจแล้วไม่พบหัตถการ"**
+แนวคิดสำคัญคือ ข้อมูลหัตถการ "ไม่มีให้ตรวจ" ไม่เหมือนกับ "ตรวจแล้วไม่พบหัตถการ"
 ถ้ามีข้อมูลหัตถการและไม่พบหัตถการพิเศษ ระบบตกไป `DEFAULT` ได้
 แต่ถ้า procedure join ใช้ไม่ได้ ระบบให้ `UNKNOWN` เพื่อให้คนทบทวน
 
@@ -116,15 +116,15 @@ declared-use flag ระบบจะใช้ legacy behavior แทน: กา�
 
 ## แผนที่ source → rule
 
-- **Lab**: current Hb, prior Hb trend, delta-Hb windows, Hb freshness และ ANC
-- **ICD-9-CM procedure**: cardiac surgery, orthopedic surgery,
+- Lab: current Hb, prior Hb trend, delta-Hb windows, Hb freshness และ ANC
+- ICD-9-CM procedure: cardiac surgery, orthopedic surgery,
   peri-procedural timing และ pre-op crossmatch timing; procedure rows มาจาก
   `IPTSUMOPRT` ส่วน OR/non-OR และชื่อ procedure มาจาก `ICD9CM`
-- **ICD-10 diagnosis**: cardiac history, ESRD, heme malignancy และ
+- ICD-10 diagnosis: cardiac history, ESRD, heme malignancy และ
   heart-disease comorbidity (floor 8.0 ของ `CARDIOPULMONARY_COMORBIDITY`)
-- **MED**: dialysis-medication signal, chemotherapy-medication signal,
+- MED: dialysis-medication signal, chemotherapy-medication signal,
   และ crystalloid volume ใน 4 ชั่วโมงก่อน order
-- **Blood-order history**: ตรวจ MTP จาก RBC-unit cluster หรือ RBC + FFP +
+- Blood-order history: ตรวจ MTP จาก RBC-unit cluster หรือ RBC + FFP +
   platelet co-ordering
 
 <AlgorithmDecisionFlow />
@@ -155,7 +155,7 @@ declared-use flag ระบบจะใช้ legacy behavior แทน: กา�
 
 หลังจบ Hb chain, MSBOS reservation arm (default-ON) สามารถแทน verdict
 ด้วย `PREOP_OVER_RESERVATION` เมื่อจำนวน unit ที่จองเกินคำแนะนำ MSBOS
-ของ planned operation ที่เลือก — ดูรายละเอียดใน
+ของ planned operation ที่เลือก ดูรายละเอียดใน
 [Module glossary](/blood_audit/th/reference/module-glossary/)
 
 ## ทำไม vital signs ไม่เป็น bypass เดี่ยว
@@ -169,7 +169,7 @@ MTP หรือ delta-Hb (บวก procedure-timing arms แบบ legacy flag
 
 ## ตำแหน่งใน code
 
-- `src/bba/deterministic_classifier/classifier.py` — rule engine และ precedence
-- `src/bba/cohort_detector/rules.py` — cohort thresholds และ predicate constants
-- `src/bba/audit_pipeline/pipeline.py` — route `NEEDS_REVIEW` และ
+- `src/bba/deterministic_classifier/classifier.py`: rule engine และ precedence
+- `src/bba/cohort_detector/rules.py`: cohort thresholds และ predicate constants
+- `src/bba/audit_pipeline/pipeline.py`: route `NEEDS_REVIEW` และ
   `POTENTIALLY_INAPPROPRIATE` ไปยัง LLM stage
