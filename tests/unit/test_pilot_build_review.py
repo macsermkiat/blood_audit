@@ -604,3 +604,251 @@ def test_msbos_platelet_case_line_maps_every_reason() -> None:
         "PERIOP_TRANSFUSION_EXEMPT",
     )
     assert exempt.endswith("; 1 transfused, 1 returned")
+
+
+# ---------------------------------------------------------------------------
+# Component-aware rendering (platelet orders on the shared review page)
+# ---------------------------------------------------------------------------
+
+_PLT_REPORT = (
+    "reqno,classification,rationale,component,platelet_count_k_ul,"
+    "platelet_freshness,hb_value_g_dl,cohort_label,cohort_threshold\n"
+    "P1,NEEDS_REVIEW,plt_defer_llm,platelet,11.0,fresh,,,\n"
+)
+_RBC_REPORT = (
+    "reqno,classification,rationale,component,platelet_count_k_ul,"
+    "platelet_freshness,hb_value_g_dl,cohort_label,cohort_threshold\n"
+    "R1,APPROPRIATE,hb_lt_7_universal,red_cell,,,6.5,cohort_unknown,7.0\n"
+)
+
+
+def test_platelet_case_shows_the_count_not_the_hb_anchor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A reviewer judging a platelet order needs the trigger count; the Hb value,
+    # Hb lookup anchor and Hb cohort threshold are RBC concepts that read as
+    # missing data ("—", "n/a") on a platelet case.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN1,P1,AN1,platelet\n",
+        report_csv=_PLT_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    assert "Platelet count @ order:" in rendered
+    assert "11,000 /µL" in rendered
+    assert "(fresh)" in rendered
+    assert "Hb @ anchor" not in rendered
+    assert "Hb lookup anchor" not in rendered
+    assert "Platelet count history" in rendered
+    assert "Hb history" not in rendered
+    assert "data-component='platelet'" in rendered
+
+
+def test_page_title_is_component_neutral_when_platelets_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv=("HN,REQNO,AN,component\nHN1,P1,AN1,platelet\nHN2,R1,AN2,rbc\n"),
+        report_csv=_PLT_REPORT + _RBC_REPORT.split("\n", 1)[1],
+        llm_json="[]",
+    ).decode()
+
+    assert "KCMH RBC Order Appropriateness Audit" not in rendered
+    assert "Blood Component Order Appropriateness Audit" in rendered
+    assert "1 RBC, 1 platelet" in rendered
+    # Mixed pages get a component column, a count column and a filter.
+    assert "<th>Comp</th>" in rendered and "<th>Plt (k/µL)</th>" in rendered
+    assert "id='filter-component'" in rendered
+    # The RBC case on the same page keeps its Hb strip.
+    assert "Hb @ anchor" in rendered
+
+
+def test_rbc_only_page_is_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # RBC-only reviews already in clinicians' hands must not change shape.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN2,R1,AN2,rbc\n",
+        report_csv=_RBC_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    assert "KCMH RBC Order Appropriateness Audit — Human Review" in rendered
+    assert "Hb @ anchor" in rendered and "Hb history" in rendered
+    assert "<th>Comp</th>" not in rendered
+    # No component CONTROL on an RBC-only page (the shared filter script may
+    # still name the element id).
+    assert "id='filter-component'" not in rendered
+    assert "data-component='" not in rendered
+
+
+def test_platelet_history_window_matches_the_gate_bounds() -> None:
+    # lookup_platelet() and the LLM bundle's _filter_platelet() use a STRICT
+    # 7-day lower bound and an inclusive order-time upper bound. The page says
+    # it shows the same window, so a count exactly 7 days old (which the gate
+    # ignores) must not be presented to the reviewer as decision evidence.
+    from datetime import datetime, timedelta
+
+    module = _load_build_review()
+    anchor = datetime(2025, 3, 8, 9, 0, tzinfo=module.TZ_LOCAL)
+
+    assert module._in_platelet_window(anchor, anchor) is True
+    assert (
+        module._in_platelet_window(
+            anchor - timedelta(days=7) + timedelta(minutes=1), anchor
+        )
+        is True
+    )
+    assert module._in_platelet_window(anchor - timedelta(days=7), anchor) is False
+    assert module._in_platelet_window(anchor + timedelta(minutes=1), anchor) is False
+    assert module._in_platelet_window(None, anchor) is False
+    assert module._in_platelet_window(anchor, None) is False
+
+
+def test_keyboard_navigation_skips_filtered_out_cases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Codex P2 on #236: with a filter active (component or mismatches), j/k
+    # stepped through the full case list and scrolled to display:none sections,
+    # so navigation appeared to stall on interleaved pages.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN2,R1,AN2,rbc\n",
+        report_csv=_RBC_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    assert "caseEls[next].style.display === 'none'" in rendered
+    assert "Math.min(activeIdx + 1, caseEls.length - 1)" not in rendered
+
+
+def test_mismatch_filter_reads_the_flag_from_the_nav_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Codex P2 on #236 (and a latent bug on main): the [!] / [!!] mismatch flag
+    # is rendered only inside the nav link, so a filter that looked for it
+    # inside the case section hid EVERY case when "Mismatches only" was ticked.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN2,R1,AN2,rbc\n",
+        report_csv=_RBC_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    assert "sec.querySelector('.nav-flag')" not in rendered
+    assert "link.querySelector('.nav-flag')" in rendered
+    # One implementation serves both controls.
+    assert "window.filterMismatches = applyFilters;" in rendered
+    assert "window.filterComponent = applyFilters;" in rendered
+
+
+def test_excluded_platelet_order_keeps_its_component_from_the_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Codex P2 on #236: an order excluded by build_audit_orders has a sparse
+    # report row with no component column value. Without the manifest it was
+    # rendered and counted as RBC, so the platelet filter hid it and the page
+    # header miscounted (308 RBC instead of 304 on the hematology sandbox).
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN1,P9,AN1,platelet\n",
+        report_csv=(
+            "reqno,classification,rationale,component\nP9,excluded,hemoglobinopathy,\n"
+        ),
+        llm_json="[]",
+    ).decode()
+
+    assert "data-component='platelet'" in rendered
+    assert "(0 RBC, 1 platelet)" in rendered
+    assert "Platelet count history" in rendered
+
+
+def test_platelet_page_explains_platelet_codes_and_verdicts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Codex P2 on #236: the glossary defined every verdict in Hb terms and left
+    # plt_* rationale codes as raw slugs, which is wrong or unreadable for the
+    # platelet cases the page now presents.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN1,P1,AN1,platelet\n",
+        report_csv=_PLT_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    assert "<dt>plt_defer_llm</dt>" in rendered
+    assert "<dt>plt_lt_10_heme_prophylaxis</dt>" in rendered
+    assert "Platelet: count below the policy threshold" in rendered
+    assert "non-RBC product" not in rendered
+    # The verdict box resolves the code to its label instead of a bare slug.
+    assert "indication judged by the LLM" in rendered
+
+
+def test_initial_keyboard_lookup_ignores_hidden_cases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Codex P2 on #236: before any case is active, findActiveByScroll scanned
+    # hidden sections too; a display:none section has a zero rect and was picked.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN2,R1,AN2,rbc\n",
+        report_csv=_RBC_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    assert "if (caseEls[i].style.display === 'none') continue;" in rendered
+    # With every case filtered out the lookup must not fall back to case 0,
+    # or `e` / `x` would act on a hidden case.
+    assert "return firstVisible;" in rendered
+    assert "firstVisible < 0 ? 0" not in rendered
+
+
+def test_applying_a_filter_drops_the_active_case(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Codex P2 on #236: a case active before filtering stayed active after it
+    # was hidden, so `e` marked a hidden case reviewed and `x` expanded it.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN2,R1,AN2,rbc\n",
+        report_csv=_RBC_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    apply_body = rendered.split("function applyFilters()", 1)[1].split(
+        "window.filterMismatches", 1
+    )[0]
+    assert "activeIdx = -1;" in apply_body
+    # Same function scope: the handler state is declared in the script that
+    # defines applyFilters, not in a separate block.
+    assert rendered.count("var activeIdx = -1;") == 1
