@@ -19,16 +19,16 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
 :::caution[ข้อมูล PHI จริง]
 ทั้งสองเส้นทางอ่านข้อมูลผู้ป่วยจริง ไฟล์ใด ๆ ที่ pilot เขียนใต้
 `$BBA_PILOT_WORK_DIR` (bundle ที่สุ่ม, `review.html`, audit store) มี
-**PHI จริง** ห้าม commit, ส่งอีเมล หรือแชร์นอกช่องทางตรวจที่ได้รับอนุมัติ
+PHI จริง ห้าม commit, ส่งอีเมล หรือแชร์นอกช่องทางตรวจที่ได้รับอนุมัติ
 :::
 
-## เส้นทาง A — รันแบบ pilot อย่างง่าย (ทดสอบ)
+## เส้นทาง A: รันแบบ pilot อย่างง่าย (ทดสอบ)
 
 วิธีที่เร็วที่สุดในการดู pipeline ทำงานครบจบ โดยสุ่มเคสประมาณ 10 เคส
 จาก bundle HOSxP ที่เข้ารหัส แล้วเดินผ่านสคริปต์ pilot สี่ตัว
 จบที่ไฟล์ `review.html` หน้าเดียวสำหรับแพทย์ตรวจ
 
-สคริปต์เหล่านี้อยู่ **นอก** แพ็กเกจ `bba` โดยตั้งใจ เป็น glue เชิง
+สคริปต์เหล่านี้อยู่นอกแพ็กเกจ `bba` โดยตั้งใจ เป็น glue เชิง
 deployment (ตัวอย่างการประกอบ modules) ไม่ใช่ entry point ที่รองรับ
 ดูรายละเอียดและตัวปรับค่าได้ที่
 [`scripts/pilot/README.md`](https://github.com/macsermkiat/blood_audit/blob/main/scripts/pilot/README.md)
@@ -82,13 +82,13 @@ open "$BBA_PILOT_WORK_DIR/review.html"
 เหตุผลการจอง พร้อม provenance ของ picker v2)
 
 :::note[LLM เห็นอะไรและไม่เห็นอะไร]
-pilot **ไม่** ส่ง progress / focus notes แบบข้อความอิสระไปยัง API
+pilot ไม่ส่ง progress / focus notes แบบข้อความอิสระไปยัง API
 เพราะ bundle นั้นยังไม่ผ่าน de-identification ส่งออกเฉพาะสัญญาณที่เป็น
 โครงสร้าง: ICD-10, ประวัติ Hb, ค่า CBC, รายการยา และ *ตัวเลข* สัญญาณชีพ
 ที่สกัดด้วย regex ในเครื่อง ตัวเนื้อความ narrative ไม่ออกจากเครื่อง
 :::
 
-## เส้นทาง B — รันแบบ production (CLI ที่รองรับ)
+## เส้นทาง B: รันแบบ production (CLI ที่รองรับ)
 
 รัน `bba` CLI ที่ wire แล้ว กับข้อมูลส่งออก HOSxP เต็ม 13 ไฟล์
 
@@ -106,7 +106,7 @@ uv run bba ingest /path/to/hosxp_bundle/BDVST.csv
 uv run bba audit --input /path/to/hosxp_bundle/BDVST.csv
 ```
 
-`bba audit` เป็น **run-level idempotent**: รันซ้ำด้วย input เดิม + code เดิม
+`bba audit` เป็น run-level idempotent: รันซ้ำด้วย input เดิม + code เดิม
 จะไม่เขียนซ้ำ ใช้ `--force` เพื่อ override (เขียน compliance row ลง
 `audit_log`) ดูสัญญาต่อ flag ได้ที่
 [รันออดิทครั้งแรก](/blood_audit/th/operators/first-audit-run/) และ
@@ -114,11 +114,11 @@ uv run bba audit --input /path/to/hosxp_bundle/BDVST.csv
 
 ## ควรรันอันไหน?
 
-- **เดโม pipeline หรือเช็กการเปลี่ยนแปลงครบจบ?** เส้นทาง A
-- **ออดิทข้อมูลจริงสำหรับคณะกรรมการ QI?** เส้นทาง B
+- ถ้าต้องการเดโม pipeline หรือเช็กการเปลี่ยนแปลงครบจบ ใช้เส้นทาง A
+- ถ้าต้องการออดิทข้อมูลจริงสำหรับคณะกรรมการ QI ใช้เส้นทาง B
 
 ## ขั้นถัดไป
 
-- [ตัวแปรสภาพแวดล้อม](/blood_audit/th/operators/env-vars/) — ทุกตัวแปรที่ CLI อ่าน
-- [Ingest CSV](/blood_audit/th/operators/ingest-csv/) — รูปแบบ bundle 13 ไฟล์
-- [แก้ปัญหาเบื้องต้น](/blood_audit/th/operators/troubleshooting/) — ปัญหาที่พบบ่อย
+- [ตัวแปรสภาพแวดล้อม](/blood_audit/th/operators/env-vars/): ทุกตัวแปรที่ CLI อ่าน
+- [Ingest CSV](/blood_audit/th/operators/ingest-csv/): รูปแบบ bundle 13 ไฟล์
+- [แก้ปัญหาเบื้องต้น](/blood_audit/th/operators/troubleshooting/): ปัญหาที่พบบ่อย

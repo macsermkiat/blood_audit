@@ -18,17 +18,17 @@ There are two ways to run the audit, depending on what you need:
 :::caution[Real PHI]
 Both paths read clinical data. Any file the pilot writes under
 `$BBA_PILOT_WORK_DIR` (sampled bundle, `review.html`, audit store) contains
-**real PHI** — never commit, email, or share it outside the approved review
+real PHI. Never commit, email, or share it outside the approved review
 channel.
 :::
 
-## Path A — Simple pilot run (smoke test)
+## Path A: simple pilot run (smoke test)
 
 The fastest way to see the full audit run end-to-end. It samples ~10 cases
 from an encrypted HOSxP bundle and walks them through four pilot scripts,
 ending in a single self-contained `review.html` for a clinician.
 
-These scripts live **outside** the `bba` package on purpose: they are
+These scripts live outside the `bba` package on purpose: they are
 deployment-shaped glue (a worked example of how the modules compose), not a
 supported entry point. See
 [`scripts/pilot/README.md`](https://github.com/macsermkiat/blood_audit/blob/main/scripts/pilot/README.md)
@@ -83,13 +83,13 @@ reservation verdicts (`PREOP_OVER_RESERVATION` + reservation reasons,
 with picker-v2 provenance).
 
 :::note[What the LLM does and doesn't see]
-The pilot does **not** send free-text progress / focus notes to the API —
-that bundle has not been through de-identification. Only structured signals
+The pilot does not send free-text progress / focus notes to the API.
+That bundle has not been through de-identification. Only structured signals
 go out: ICD-10 diagnoses, Hb history, CBC values, meds, and vital-sign
 *numbers* extracted locally via regex. The narrative never leaves the machine.
 :::
 
-## Path B — Production run (supported CLI)
+## Path B: production run (supported CLI)
 
 Runs the wired `bba` CLI against a full 13-file HOSxP export.
 
@@ -107,7 +107,7 @@ uv run bba ingest /path/to/hosxp_bundle/BDVST.csv
 uv run bba audit --input /path/to/hosxp_bundle/BDVST.csv
 ```
 
-`bba audit` is **run-level idempotent**: re-running on the same input + same
+`bba audit` is run-level idempotent: re-running on the same input + same
 code version is a no-op. Pass `--force` to override (writes a compliance row to
 `audit_log`). For the per-flag contract see
 [First audit run](/blood_audit/en/operators/first-audit-run/) and
@@ -115,11 +115,11 @@ code version is a no-op. Pass `--force` to override (writes a compliance row to
 
 ## Which one should I run?
 
-- **Demoing the pipeline or sanity-checking a change end-to-end?** Path A.
-- **Auditing a real export for the QI committee?** Path B.
+- To demo the pipeline or sanity-check a change end-to-end, use Path A.
+- To audit a real export for the QI committee, use Path B.
 
 ## Next steps
 
-- [Environment variables](/blood_audit/en/operators/env-vars/) — every variable the CLI reads.
-- [Ingest CSV](/blood_audit/en/operators/ingest-csv/) — the expected 13-file bundle shape.
-- [Troubleshooting](/blood_audit/en/operators/troubleshooting/) — common failures.
+- [Environment variables](/blood_audit/en/operators/env-vars/): every variable the CLI reads.
+- [Ingest CSV](/blood_audit/en/operators/ingest-csv/): the expected 13-file bundle shape.
+- [Troubleshooting](/blood_audit/en/operators/troubleshooting/): common failures.
