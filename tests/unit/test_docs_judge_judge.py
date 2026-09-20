@@ -29,7 +29,6 @@ from docs_judge.judge import (  # noqa: E402
     audience_for,
     judge_blocks,
     language_for,
-    pair_blocks,
     rollup,
 )
 from docs_judge.questions import TELL_IDS  # noqa: E402
@@ -135,21 +134,6 @@ def test_rollup_counts_verdicts_and_ranks_tells_in_code() -> None:
     assert page.n_blocks == 3
 
 
-def test_pair_blocks_pairs_by_heading_ordinal_and_reports_unpaired() -> None:
-    en = (
-        _block("en/p.mdx", 0, "en intro paragraph long enough", "Intro"),
-        _block("en/p.mdx", 1, "en second para long enough", "Intro"),
-        _block("en/p.mdx", 2, "en details paragraph long enough", "Details"),
-    )
-    th = (
-        _block("th/p.mdx", 0, "th intro paragraph long enough", "บทนำ"),
-        _block("th/p.mdx", 1, "th details paragraph long enough", "รายละเอียด"),
-    )
-    pairs, unpaired = pair_blocks(en, th)
-    assert [(p.en.index, p.th.index) for p in pairs] == [(0, 0), (2, 1)]
-    assert [b.index for b in unpaired] == [1]
-
-
 def test_render_markdown_lists_pages_and_flagged_blocks() -> None:
     puff = "This groundbreaking system — a testament to innovation."
     client = FakeClient({puff: _answers("rewrite", {"significance": 0.9}, 1.0)})
@@ -163,20 +147,38 @@ def test_render_markdown_lists_pages_and_flagged_blocks() -> None:
     assert set(TELL_IDS) >= {"significance", "promotional", "rule_of_three"}
 
 
-def test_pair_blocks_with_condensed_translation_pairs_only_the_intro() -> None:
-    en = (
-        _block("en/p.mdx", 0, "en intro paragraph long enough", ""),
-        _block("en/p.mdx", 1, "en details paragraph long enough", "Details"),
-        _block("en/p.mdx", 2, "en extra section long enough", "Extra"),
+def test_judge_parity_records_the_alignment_probability_per_pair() -> None:
+    from docs_judge.judge import Pair, judge_parity
+
+    en = _block("en/p.mdx", 0, "english block long enough to judge")
+    th = _block("th/p.mdx", 0, "thai block long enough to judge")
+
+    class ParityClient:
+        def ask(
+            self, state: Mapping[str, Any], questions: Mapping[str, Any]
+        ) -> Mapping[str, Any]:
+            return {"answers": {"parity": {"type": "noul", "noul": 0.2}}}
+
+    (judged,) = judge_parity(ParityClient(), [Pair(en, th)], [0.41])
+    assert judged.parity == 0.2
+    assert judged.align_probability == 0.41
+
+
+def test_report_separates_content_drift_from_weakly_aligned_pairs() -> None:
+    from docs_judge.judge import Pair, ParityJudgment
+    from docs_judge.report import CONFIDENT_ALIGN
+
+    en_a = _block("en/p.mdx", 0, "english about hashes and identifiers")
+    th_a = _block("th/p.mdx", 0, "thai about something else entirely")
+    en_b = _block("en/q.mdx", 0, "english about the returns ledger")
+    th_b = _block("th/q.mdx", 0, "thai about the returns ledger, shorter")
+    parity = (
+        ParityJudgment(Pair(en_a, th_a), 0.1, 0.55),
+        ParityJudgment(Pair(en_b, th_b), 0.2, 0.97),
     )
-    th = (
-        _block("th/p.mdx", 0, "th intro paragraph long enough", ""),
-        _block("th/p.mdx", 1, "th condensed body long enough", "รายละเอียด"),
-    )
-    pairs, unpaired = pair_blocks(en, th)
-    assert [(p.en.index, p.th.index) for p in pairs] == [(0, 0)]
-    assert sorted((b.path, b.index) for b in unpaired) == [
-        ("en/p.mdx", 1),
-        ("en/p.mdx", 2),
-        ("th/p.mdx", 1),
-    ]
+    md = render_markdown(pages=(), judgments=(), parity=parity, calibration=None)
+    assert "1 on pairs aligned at" in md
+    assert "1 on weakly aligned pairs" in md
+    assert "english about the returns ledger" in md
+    assert "english about hashes and identifiers" not in md
+    assert CONFIDENT_ALIGN == 0.8

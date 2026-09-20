@@ -17,18 +17,19 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from .align import align_blocks
 from .blocks import Block, split_blocks
 from .calibrate import run_calibration
 from .jev import JevClient, TransportResponse
 from .judge import (
     BlockJudgment,
     PageSummary,
+    Pair,
     ParityJudgment,
     audience_for,
     judge_blocks,
     judge_parity,
     language_for,
-    pair_blocks,
     rollup,
 )
 from .prechecks import heading_title_case
@@ -125,8 +126,11 @@ def _parity(
         th_blocks = blocks_by_page.get(th_path)
         if th_blocks is None:
             continue
-        pairs, _ = pair_blocks(en_blocks, th_blocks)
-        out.extend(judge_parity(client, pairs, max_workers=workers))
+        aligned, _ = align_blocks(client, en_blocks, th_blocks, max_workers=workers)
+        matched = [a for a in aligned if a.th is not None]
+        pairs = [Pair(a.en, a.th) for a in matched if a.th is not None]
+        probabilities = [a.probability for a in matched]
+        out.extend(judge_parity(client, pairs, probabilities, max_workers=workers))
     return out
 
 

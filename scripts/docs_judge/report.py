@@ -89,18 +89,31 @@ def _block_lines(judgments: Sequence[BlockJudgment]) -> list[str]:
     return lines
 
 
+CONFIDENT_ALIGN = 0.8
+
+
 def _parity_lines(parity: Sequence[ParityJudgment]) -> list[str]:
-    low = sorted(
-        (p for p in parity if p.parity < PARITY_THRESHOLD), key=lambda p: p.parity
+    low = [p for p in parity if p.parity < PARITY_THRESHOLD]
+    drift = sorted(
+        (p for p in low if p.align_probability >= CONFIDENT_ALIGN),
+        key=lambda p: p.parity,
     )
+    weak = [p for p in low if p.align_probability < CONFIDENT_ALIGN]
     lines = [
-        f"{len(parity)} EN/TH block pairs judged; {len(low)} below "
-        f"parity {PARITY_THRESHOLD:.2f}.",
+        f"{len(parity)} EN/TH block pairs (Jev-aligned) judged. {len(low)} fall "
+        f"below parity {PARITY_THRESHOLD:.2f}: {len(drift)} on pairs aligned at "
+        f"{CONFIDENT_ALIGN:.2f} or better (real content drift), {len(weak)} on "
+        f"weakly aligned pairs (the blocks probably do not correspond at all).",
+        "",
+        "### Content drift on confidently aligned pairs",
         "",
     ]
-    for p in low:
+    if not drift:
+        lines.append("None.")
+    for p in drift:
         lines.append(
-            f"- parity {p.parity:.2f}: {p.pair.en.path} L{p.pair.en.line_start} "
+            f"- parity {p.parity:.2f} (aligned {p.align_probability:.2f}): "
+            f"{p.pair.en.path} L{p.pair.en.line_start} "
             f"vs {p.pair.th.path} L{p.pair.th.line_start}"
         )
         lines.append(f"  > EN: {_snippet(p.pair.en.text)}")

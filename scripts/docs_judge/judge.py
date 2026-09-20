@@ -88,6 +88,7 @@ class Pair:
 class ParityJudgment:
     pair: Pair
     parity: float
+    align_probability: float
 
 
 def audience_for(path: str) -> str:
@@ -183,62 +184,32 @@ def rollup(
     )
 
 
-def _heading_ordinals(blocks: Sequence[Block]) -> list[int]:
-    ordinals: list[int] = []
-    current = -1
-    last_heading: str | None = None
-    for block in blocks:
-        if block.heading != last_heading:
-            current += 1
-            last_heading = block.heading
-        ordinals.append(current)
-    return ordinals
-
-
-def pair_blocks(
-    en_blocks: Sequence[Block], th_blocks: Sequence[Block]
-) -> tuple[tuple[Pair, ...], tuple[Block, ...]]:
-    """Pair EN and TH blocks by heading ordinal, then by position under it."""
-    en_groups: dict[int, list[Block]] = {}
-    for block, ordinal in zip(en_blocks, _heading_ordinals(en_blocks), strict=True):
-        en_groups.setdefault(ordinal, []).append(block)
-    th_groups: dict[int, list[Block]] = {}
-    for block, ordinal in zip(th_blocks, _heading_ordinals(th_blocks), strict=True):
-        th_groups.setdefault(ordinal, []).append(block)
-    pairs: list[Pair] = []
-    unpaired: list[Block] = []
-    # A condensed translation has fewer heading groups; ordinals then stop
-    # corresponding after the first divergence, so only the intro group
-    # (before the first heading) is paired and everything else is unpaired.
-    if len(en_groups) != len(th_groups):
-        en_intro = (
-            en_groups.get(0, []) if not en_blocks or not en_blocks[0].heading else []
-        )
-        th_intro = (
-            th_groups.get(0, []) if not th_blocks or not th_blocks[0].heading else []
-        )
-        pairs.extend(Pair(e, t) for e, t in zip(en_intro, th_intro, strict=False))
-        paired_ids = {id(p.en) for p in pairs} | {id(p.th) for p in pairs}
-        unpaired.extend(b for b in (*en_blocks, *th_blocks) if id(b) not in paired_ids)
-        return tuple(pairs), tuple(unpaired)
-    for ordinal in sorted(set(en_groups) | set(th_groups)):
-        en_group = en_groups.get(ordinal, [])
-        th_group = th_groups.get(ordinal, [])
-        pairs.extend(Pair(e, t) for e, t in zip(en_group, th_group, strict=False))
-        shorter = min(len(en_group), len(th_group))
-        unpaired.extend(en_group[shorter:])
-        unpaired.extend(th_group[shorter:])
-    return tuple(pairs), tuple(unpaired)
-
-
 def judge_parity(
-    client: Client, pairs: Sequence[Pair], max_workers: int = 8
+    client: Client,
+    pairs: Sequence[Pair],
+    align_probabilities: Sequence[float] | None = None,
+    max_workers: int = 8,
 ) -> tuple[ParityJudgment, ...]:
-    questions = parity_questions()
+    """Judge fact parity for each aligned pair.
 
-    def one(pair: Pair) -> ParityJudgment:
+    ``align_probabilities`` carries how confidently each pair was aligned.
+    A low-parity answer on a weakly aligned pair says the blocks do not
+    correspond, not that the translation dropped a fact, so the report
+    must be able to tell the two apart.
+    """
+    questions = parity_questions()
+    probabilities = (
+        list(align_probabilities)
+        if align_probabilities is not None
+        else [1.0] * len(pairs)
+    )
+
+    def one(item: tuple[Pair, float]) -> ParityJudgment:
+        pair, align_p = item
         response = client.ask({"en": pair.en.text, "th": pair.th.text}, questions)
-        return ParityJudgment(pair, float(response["answers"]["parity"]["noul"]))
+        return ParityJudgment(
+            pair, float(response["answers"]["parity"]["noul"]), align_p
+        )
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        return tuple(pool.map(one, pairs))
+        return tuple(pool.map(one, zip(pairs, probabilities, strict=True)))
