@@ -824,3 +824,27 @@ def test_initial_keyboard_lookup_ignores_hidden_cases(
     ).decode()
 
     assert "if (caseEls[i].style.display === 'none') continue;" in rendered
+
+
+def test_applying_a_filter_drops_the_active_case(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Codex P2 on #236: a case active before filtering stayed active after it
+    # was hidden, so `e` marked a hidden case reviewed and `x` expanded it.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN2,R1,AN2,rbc\n",
+        report_csv=_RBC_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    apply_body = rendered.split("function applyFilters()", 1)[1].split(
+        "window.filterMismatches", 1
+    )[0]
+    assert "activeIdx = -1;" in apply_body
+    # Same function scope: the handler state is declared in the script that
+    # defines applyFilters, not in a separate block.
+    assert rendered.count("var activeIdx = -1;") == 1

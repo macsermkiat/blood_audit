@@ -2694,6 +2694,9 @@ LLM: Anthropic Batch classification on structured evidence only.
     });
     var st = document.getElementById('filter-status');
     if (st) st.textContent = hidden > 0 ? hidden + ' cases hidden' : '';
+    /* The active case may just have been hidden: drop it so the next
+       j/k/e/x recomputes from the visible cases (findActiveByScroll). */
+    activeIdx = -1;
   }
   window.filterMismatches = applyFilters;
   window.filterComponent = applyFilters;
