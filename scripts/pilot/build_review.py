@@ -883,35 +883,6 @@ PLATELET_LABEXM = "290078"
 WINDOW_PLATELET_DAYS = 7
 
 
-# Appended only to pages that hold a platelet case. Replaces filterMismatches
-# so the mismatch checkbox and the component select compose instead of
-# overwriting each other's display state.
-_COMPONENT_FILTER_SCRIPT = """<script>
-(function() {
-  function applyFilters() {
-    var cb = document.getElementById('filter-mismatches');
-    var sel = document.getElementById('filter-component');
-    var onlyMismatch = cb && cb.checked;
-    var comp = sel ? sel.value : 'all';
-    var hidden = 0;
-    document.querySelectorAll('.case').forEach(function(sec) {
-      var hide = (onlyMismatch && sec.querySelector('.nav-flag') === null) ||
-                 (comp !== 'all' && sec.getAttribute('data-component') !== comp);
-      sec.style.display = hide ? 'none' : '';
-      if (hide) hidden++;
-      var link = document.querySelector(
-        '#nav-links a[data-case="' + sec.id.replace('case-', '') + '"]');
-      if (link) link.classList.toggle('is-hidden', hide);
-    });
-    var st = document.getElementById('filter-status');
-    if (st) st.textContent = hidden > 0 ? hidden + ' cases hidden' : '';
-  }
-  window.filterMismatches = applyFilters;
-  window.filterComponent = applyFilters;
-})();
-</script>"""
-
-
 def _is_platelet_row(det: dict[str, str]) -> bool:
     return (det.get("component") or "") == "platelet"
 
@@ -2658,23 +2629,30 @@ LLM: Anthropic Batch classification on structured evidence only.
   };
 
   /* ── Filter: mismatches only ── */
-  window.filterMismatches = function(cb) {
-    var cases = document.querySelectorAll('.case');
+  /* One filter pass for both controls, so the mismatch checkbox and the
+     component select (mixed RBC + platelet pages only) compose. The mismatch
+     flag lives on the case's nav link, not inside the case section. */
+  function applyFilters() {
+    var cb = document.getElementById('filter-mismatches');
+    var sel = document.getElementById('filter-component');
+    var onlyMismatch = !!(cb && cb.checked);
+    var comp = sel ? sel.value : 'all';
     var hidden = 0;
-    cases.forEach(function(sec) {
-      var hasMismatch = sec.querySelector('.nav-flag') !== null;
-      var hide = cb.checked && !hasMismatch;
+    document.querySelectorAll('.case').forEach(function(sec) {
+      var link = document.querySelector(
+        '#nav-links a[data-case="' + sec.id.replace('case-', '') + '"]');
+      var hasMismatch = !!(link && link.querySelector('.nav-flag'));
+      var hide = (onlyMismatch && !hasMismatch) ||
+                 (comp !== 'all' && sec.getAttribute('data-component') !== comp);
       sec.style.display = hide ? 'none' : '';
+      if (link) link.classList.toggle('is-hidden', hide);
       if (hide) hidden++;
     });
-    var navLinks = document.querySelectorAll('#nav-links a');
-    navLinks.forEach(function(a) {
-      var hasMismatch = a.querySelector('.nav-flag') !== null;
-      a.classList.toggle('is-hidden', cb.checked && !hasMismatch);
-    });
     var st = document.getElementById('filter-status');
-    if (st) st.textContent = (cb.checked && hidden > 0) ? hidden + ' cases hidden' : '';
-  };
+    if (st) st.textContent = hidden > 0 ? hidden + ' cases hidden' : '';
+  }
+  window.filterMismatches = applyFilters;
+  window.filterComponent = applyFilters;
 
   /* ── Keyboard navigation: j/k/e/f/E/x ── */
   var caseEls = Array.prototype.slice.call(document.querySelectorAll('.case'));
@@ -2744,8 +2722,6 @@ LLM: Anthropic Batch classification on structured evidence only.
   });
 })();
 </script>"""
-    if has_platelet_cases:
-        script += _COMPONENT_FILTER_SCRIPT
     OUT.write_text(head + body + script + foot, encoding="utf-8")
     print(f"wrote {OUT}  ({OUT.stat().st_size // 1024} KB)")
 

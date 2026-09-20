@@ -688,7 +688,9 @@ def test_rbc_only_page_is_unchanged(
     assert "KCMH RBC Order Appropriateness Audit — Human Review" in rendered
     assert "Hb @ anchor" in rendered and "Hb history" in rendered
     assert "<th>Comp</th>" not in rendered
-    assert "filter-component" not in rendered
+    # No component CONTROL on an RBC-only page (the shared filter script may
+    # still name the element id).
+    assert "id='filter-component'" not in rendered
     assert "data-component" not in rendered
 
 
@@ -733,3 +735,26 @@ def test_keyboard_navigation_skips_filtered_out_cases(
 
     assert "caseEls[next].style.display === 'none'" in rendered
     assert "Math.min(activeIdx + 1, caseEls.length - 1)" not in rendered
+
+
+def test_mismatch_filter_reads_the_flag_from_the_nav_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Codex P2 on #236 (and a latent bug on main): the [!] / [!!] mismatch flag
+    # is rendered only inside the nav link, so a filter that looked for it
+    # inside the case section hid EVERY case when "Mismatches only" was ticked.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN2,R1,AN2,rbc\n",
+        report_csv=_RBC_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    assert "sec.querySelector('.nav-flag')" not in rendered
+    assert "link.querySelector('.nav-flag')" in rendered
+    # One implementation serves both controls.
+    assert "window.filterMismatches = applyFilters;" in rendered
+    assert "window.filterComponent = applyFilters;" in rendered
