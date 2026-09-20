@@ -118,6 +118,7 @@ from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import ClassifierInputs
 from bba.deterministic_classifier.rationales import RESERVE_AHEAD_RATIONALES
 from bba.declared_use import (
+    DECLARED_SURGICAL_LABELS,
     DeclaredUse,
     DeclaredUseLabel,
     collapse_usetype,
@@ -1631,18 +1632,22 @@ def main() -> None:
             # reserved-but-uncounted order is not swallowed by it (see the
             # floor-defer note below). \x00AMBIG and a missing count are handled
             # inside evaluate_platelet_reservation, so no special-casing here.
-            # Only a DECLARED pre-op order (surgery / type-screen) is a pre-op
-            # reservation, so only it enters the MSBOS platelet screen — the
-            # same eligibility as the RBC arm and the deterministic leg's
-            # declared-only overlay (user ruling 2026-09-20). A ward order with
-            # reserved units is a transfusion question for the LLM; screening
-            # it would turn every ward order into `no_planned_op` review.
+            # Only an order DECLARED for surgery / type-screen is a pre-op
+            # reservation, so only it enters the MSBOS platelet screen (user
+            # ruling 2026-09-20; the deterministic leg's overlay is likewise
+            # declared-only). A ward order with reserved units is a transfusion
+            # question for the LLM; screening it would turn every ward order
+            # into `no_planned_op` review. Keyed on the declared use itself, not
+            # on the pre-op transfusion exemption, so switching the exemption
+            # off does not switch the screen off. Narrower than the RBC arm by
+            # design: platelets have no reserve-ahead deferral, so an order
+            # with a blank/unjoined USETYPE is not screened.
             platelet_reservation_decision = None
             if (
                 MSBOS_RESERVATION_PILOT_ENABLED
                 and msbos_reference
-                and plt_returns_result is not None
-                and is_msbos_eligible(plt_returns_result)
+                and _declared_use_label_for_classifier(collapsed_usetype)
+                in DECLARED_SURGICAL_LABELS
             ):
                 plt_op_events = _op_events(
                     iptsumoprt,

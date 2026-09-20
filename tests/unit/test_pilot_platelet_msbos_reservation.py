@@ -54,6 +54,7 @@ def _configure_platelet_pilot(
     *,
     planned_code: str,
     usetype_code: str = "2",
+    library_platelet_llm: bool = True,
 ) -> AuditOrder:
     order = AuditOrder(
         audit_id="audit-pilot-platelet-msbos",
@@ -151,7 +152,7 @@ def _configure_platelet_pilot(
         "MSBOS_RESERVATION_ENABLED",
         feature_flags.MSBOS_RESERVATION_ENABLED,
     )
-    monkeypatch.setattr(feature_flags, "PLATELET_LLM_ENABLED", True)
+    monkeypatch.setattr(feature_flags, "PLATELET_LLM_ENABLED", library_platelet_llm)
     monkeypatch.setattr(module, "_build_inputs", lambda: built_inputs)
     monkeypatch.setattr(
         module,
@@ -322,3 +323,69 @@ def test_flag_on_ward_order_skips_reservation_screen_and_stays_llm_bound(
     assert rows[0]["audit_id"] == order.audit_id
     assert rows[0]["review_reason"] == "injection_detected"
     assert calls[0]["model_id"] == "injection-filter"
+
+
+def test_declared_order_is_screened_even_with_the_preop_exemption_off(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The screen keys on the DECLARED USE (surgery / type-screen), not on the
+    # pre-op transfusion exemption: switching the exemption off must not
+    # silently switch the reservation screen off with it.
+    monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", "1")
+    monkeypatch.setenv("BBA_PILOT_DECLARED_USE_PREOP_EXEMPT", "0")
+    module = _load_run_llm_leg("pilot_platelet_msbos_exempt_off")
+    _configure_platelet_pilot(
+        module, monkeypatch, tmp_path / "exempt_off", planned_code="0613"
+    )
+
+    module.main()
+
+    rows, _calls = _artifacts(module)
+    assert len(rows) == 1
+    assert rows[0]["final_classification"] == "PREOP_OVER_RESERVATION"
+
+
+def test_pilot_env_switch_submits_platelets_with_the_library_flag_off(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The sandbox switch must reach main()'s platelet gate: the library flag
+    # stays OFF (no sign-off for the live pipeline) and the order is still
+    # LLM-bound (observable as the injection-filter row, no API call).
+    monkeypatch.setenv("BBA_PILOT_PLATELET_LLM", "1")
+    module = _load_run_llm_leg("pilot_platelet_llm_env_on")
+    _configure_platelet_pilot(
+        module,
+        monkeypatch,
+        tmp_path / "env_on",
+        planned_code="0613",
+        usetype_code="1",
+        library_platelet_llm=False,
+    )
+
+    module.main()
+
+    rows, calls = _artifacts(module)
+    assert len(rows) == len(calls) == 1
+    assert calls[0]["model_id"] == "injection-filter"
+
+
+def test_without_the_switch_no_platelet_order_is_processed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Unset switch + library flag OFF = no platelet work and no API spend.
+    monkeypatch.delenv("BBA_PILOT_PLATELET_LLM", raising=False)
+    module = _load_run_llm_leg("pilot_platelet_llm_env_unset")
+    _configure_platelet_pilot(
+        module,
+        monkeypatch,
+        tmp_path / "env_unset",
+        planned_code="0613",
+        usetype_code="1",
+        library_platelet_llm=False,
+    )
+
+    with pytest.raises(SystemExit):
+        module.main()
+
+    rows, calls = _artifacts(module)
+    assert rows == [] and calls == []
