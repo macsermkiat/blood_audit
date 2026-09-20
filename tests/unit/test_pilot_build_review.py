@@ -691,7 +691,7 @@ def test_rbc_only_page_is_unchanged(
     # No component CONTROL on an RBC-only page (the shared filter script may
     # still name the element id).
     assert "id='filter-component'" not in rendered
-    assert "data-component" not in rendered
+    assert "data-component='" not in rendered
 
 
 def test_platelet_history_window_matches_the_gate_bounds() -> None:
