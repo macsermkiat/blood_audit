@@ -60,7 +60,6 @@ DRAFT, AABB/ICTMG 2025). A SEED pending hematology sign-off (docs plan §7)."""
 PLATELET_PROPHYLAXIS_INDICATION_PREFIXES: tuple[str, ...] = (
     "C8",  # lymphoma
     "C9",  # leukaemia, myeloma, plasma-cell neoplasms
-    "D46",  # myelodysplastic syndromes
     "D611",  # drug-induced aplastic anaemia = chemotherapy marrow suppression
     "Z511",  # chemotherapy session for neoplasm
     "Z948",  # other transplanted organ / tissue status (stem cells)
@@ -69,11 +68,22 @@ PLATELET_PROPHYLAXIS_INDICATION_PREFIXES: tuple[str, ...] = (
 """Dotless ICD-10 prefixes that place an admission in the chemo / HSCT /
 treatment-marrow-failure population the 10k prophylaxis row covers. ``D61.1``
 is deliberately an INDICATION, not an exclusion: in this dataset it codes
-chemotherapy pancytopenia, the exact patient the row protects."""
+chemotherapy pancytopenia, the exact patient the row protects (hematology
+sign-off 2026-09-20, decision 2)."""
+
+PLATELET_PROPHYLAXIS_CONDITIONAL_INDICATION_PREFIXES: tuple[str, ...] = ("D46",)
+"""Dotless ICD-10 prefixes that qualify ONLY with chemotherapy evidence on the
+same admission: a ``Z51.1`` code or ``has_recent_chemo_med``. MDS on
+supportive care alone is chronic marrow failure, where the medicine draft
+(after NICE) gives no prophylactic platelets; MDS on treatment falls under the
+10k row (hematology sign-off 2026-09-20, decision 3)."""
+
+_CHEMO_SESSION_PREFIX: tuple[str, ...] = ("Z511",)
 
 PLATELET_PROPHYLAXIS_EXCLUSION_PREFIXES: tuple[str, ...] = (
     "D693",  # idiopathic thrombocytopenic purpura
     "M311",  # thrombotic microangiopathy / TTP
+    "D593",  # haemolytic-uraemic syndrome (a thrombotic microangiopathy; sign-off decision 5)
     "D758",  # other specified blood disorders (HIT lands here in WHO ICD-10)
     "D610",  # constitutional aplastic anaemia
     "D612",  # aplastic anaemia due to other external agents
@@ -115,17 +125,21 @@ def qualifies_for_prophylaxis_autoclear(inputs: PlateletClassifierInputs) -> boo
     flag WOULD clear before it is switched on.
     """
     count = inputs.platelet_count
+    codes = inputs.diagnosis_codes
+    chemo_evidence = inputs.has_recent_chemo_med or _matches_any(
+        codes, _CHEMO_SESSION_PREFIX
+    )
+    indicated = _matches_any(codes, PLATELET_PROPHYLAXIS_INDICATION_PREFIXES) or (
+        chemo_evidence
+        and _matches_any(codes, PLATELET_PROPHYLAXIS_CONDITIONAL_INDICATION_PREFIXES)
+    )
     return (
         inputs.enable_prophylaxis_autoclear
         and count is not None
         and count < PLATELET_PROPHYLAXIS_THRESHOLD
         and inputs.platelet_freshness == "fresh"
-        and _matches_any(
-            inputs.diagnosis_codes, PLATELET_PROPHYLAXIS_INDICATION_PREFIXES
-        )
-        and not _matches_any(
-            inputs.diagnosis_codes, PLATELET_PROPHYLAXIS_EXCLUSION_PREFIXES
-        )
+        and indicated
+        and not _matches_any(codes, PLATELET_PROPHYLAXIS_EXCLUSION_PREFIXES)
     )
 
 
@@ -188,6 +202,7 @@ def classify_platelet(
 
 
 __all__ = (
+    "PLATELET_PROPHYLAXIS_CONDITIONAL_INDICATION_PREFIXES",
     "PLATELET_PROPHYLAXIS_EXCLUSION_PREFIXES",
     "PLATELET_PROPHYLAXIS_INDICATION_PREFIXES",
     "PLATELET_PROPHYLAXIS_THRESHOLD",

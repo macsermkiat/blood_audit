@@ -95,6 +95,7 @@ from bba.audit_pipeline.replay import (
 )
 from bba.audit_store import AuditStore, AuditStoreConfig
 from bba.cohort_detector import (
+    find_chemo_med,
     CohortAssignment,
     CohortInputs,
     CohortLabel,
@@ -119,7 +120,10 @@ from bba.declared_use import (
     collapse_usetype,
     label_for,
 )
-from bba.feature_flags import RETURNS_LEDGER_ENABLED
+from bba.feature_flags import (
+    PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED,
+    RETURNS_LEDGER_ENABLED,
+)
 from bba.returns_ledger import ReturnsSummary, rows_for_admission, summarize_returns
 from bba.evidence_bundle_builder import (
     DiagnosisRecord,
@@ -221,6 +225,15 @@ DECLARED_USETYPE_PILOT_ENABLED = (
     _declared_env == "1"
     if _declared_env is not None
     else feature_flags.DECLARED_USETYPE_ENABLED
+)
+# Cohort-gated platelet prophylaxis auto-clear: MUST mirror run_pipeline.py so a
+# row the deterministic leg cleared is never re-submitted here. Same env
+# override (BBA_PILOT_PLATELET_AUTOCLEAR "1" on, anything else off).
+_plt_autoclear_env = os.environ.get("BBA_PILOT_PLATELET_AUTOCLEAR")
+PLATELET_AUTOCLEAR_PILOT_ENABLED = (
+    _plt_autoclear_env == "1"
+    if _plt_autoclear_env is not None
+    else PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED
 )
 _msbos_env = os.environ.get("BBA_PILOT_MSBOS_RESERVATION")
 MSBOS_RESERVATION_PILOT_ENABLED = (
@@ -1558,6 +1571,13 @@ def main() -> None:
                 PlateletClassifierInputs(
                     audit_id=order.audit_id,
                     platelet_count=plt_result.value_k_ul,
+                    diagnosis_codes=order.diagnosis_codes,
+                    platelet_freshness=plt_result.freshness,
+                    has_recent_chemo_med=find_chemo_med(
+                        _med_events(med, order.an), order.order_datetime
+                    )
+                    is not None,
+                    enable_prophylaxis_autoclear=PLATELET_AUTOCLEAR_PILOT_ENABLED,
                 )
             )
             # Compute the platelet reservation snapshot BEFORE the floor so a
@@ -2232,6 +2252,17 @@ def main() -> None:
                 PlateletClassifierInputs(
                     audit_id=ctx.order.audit_id,
                     platelet_count=plt_count,
+                    diagnosis_codes=ctx.order.diagnosis_codes,
+                    platelet_freshness=(
+                        ctx.platelet_result.freshness
+                        if ctx.platelet_result is not None
+                        else None
+                    ),
+                    has_recent_chemo_med=find_chemo_med(
+                        _med_events(med, ctx.order.an), ctx.order.order_datetime
+                    )
+                    is not None,
+                    enable_prophylaxis_autoclear=PLATELET_AUTOCLEAR_PILOT_ENABLED,
                 )
             )
             if MSBOS_RESERVATION_PILOT_ENABLED:

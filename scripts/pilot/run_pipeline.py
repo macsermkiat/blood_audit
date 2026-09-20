@@ -31,6 +31,7 @@ from bba.audit_orders import (
     build_audit_orders,
 )
 from bba.cohort_detector import (
+    find_chemo_med,
     CohortAssignment,
     CohortInputs,
     CohortLabel,
@@ -1327,6 +1328,10 @@ def main() -> None:
                         platelet_count=plt_result.value_k_ul,
                         diagnosis_codes=order.diagnosis_codes,
                         platelet_freshness=plt_result.freshness,
+                        has_recent_chemo_med=find_chemo_med(
+                            _build_med_events(med, order.an), order.order_datetime
+                        )
+                        is not None,
                         enable_prophylaxis_autoclear=PLATELET_AUTOCLEAR_PILOT_ENABLED,
                     )
                 )

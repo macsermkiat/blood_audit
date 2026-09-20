@@ -49,7 +49,9 @@ class PlateletClassifierInputs(BaseModel):
       sign-off; set per-row only after QI committee approval.
 
     * ``diagnosis_codes`` are the admission's ICD-10 codes (dotted or dotless,
-      any case) and ``platelet_freshness`` the lookup's freshness bucket. Both
+      any case), ``platelet_freshness`` the lookup's freshness bucket and
+      ``has_recent_chemo_med`` whether a chemotherapy drug was prescribed
+      within the cohort detector's lookback (lets MDS qualify). All three
       are consulted ONLY by the cohort-gated prophylaxis auto-clear
       (``enable_prophylaxis_autoclear``, default ``False``); with the flag off
       they are inert and the gate is byte-identical to v1.
@@ -62,6 +64,7 @@ class PlateletClassifierInputs(BaseModel):
     enable_missing_platelet_defer: bool = False
     diagnosis_codes: tuple[str, ...] = ()
     platelet_freshness: str | None = None
+    has_recent_chemo_med: bool = False
     enable_prophylaxis_autoclear: bool = False
 
 

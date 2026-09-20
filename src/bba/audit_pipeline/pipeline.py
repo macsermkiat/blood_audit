@@ -230,12 +230,22 @@ def run_pipeline(
                     )
                 )
             else:
+                # has_recent_chemo_med stays False here: the library context
+                # carries no medication events, so MDS (D46) qualifies for the
+                # prophylaxis auto-clear only via a Z51.1 code on this path.
                 plt_inputs = PlateletClassifierInputs(
                     audit_id=ctx.order.audit_id,
                     platelet_count=ctx.platelet_result.value_k_ul
                     if ctx.platelet_result is not None
                     else None,
                     enable_missing_platelet_defer=pipeline_config.enable_missing_platelet_defer,
+                    diagnosis_codes=ctx.order.diagnosis_codes,
+                    platelet_freshness=ctx.platelet_result.freshness
+                    if ctx.platelet_result is not None
+                    else None,
+                    enable_prophylaxis_autoclear=(
+                        feature_flags.PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED
+                    ),
                 )
                 platelet_classified.append((ctx, classify_platelet(plt_inputs)))
         else:
@@ -561,6 +571,13 @@ def _deterministic_audit_row(
             platelet_count=context.platelet_result.value_k_ul
             if context.platelet_result is not None
             else None,
+            diagnosis_codes=context.order.diagnosis_codes,
+            platelet_freshness=context.platelet_result.freshness
+            if context.platelet_result is not None
+            else None,
+            enable_prophylaxis_autoclear=(
+                feature_flags.PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED
+            ),
         )
         return _deterministic_platelet_audit_row(
             context=context,

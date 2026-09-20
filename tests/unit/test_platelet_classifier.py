@@ -219,6 +219,7 @@ class TestProphylaxisAutoclear:
         [
             "D693",
             "M311",
+            "D593",
             "D758",
             "D610",
             "D612",
@@ -252,6 +253,30 @@ class TestProphylaxisAutoclear:
             == "NEEDS_REVIEW"
         )
 
+    def test_mds_qualifies_only_with_chemotherapy_evidence(self) -> None:
+        # Sign-off decision 3: MDS on supportive care is chronic marrow failure
+        # (no prophylaxis per NICE / medicine draft); MDS on treatment is the
+        # 10k row. Evidence = Z51.1 on the admission OR a recent chemo drug.
+        assert (
+            classify_platelet(self._in(codes=("D46",))).classification == "NEEDS_REVIEW"
+        )
+        assert (
+            classify_platelet(self._in(codes=("D46", "Z511"))).classification
+            == "APPROPRIATE"
+        )
+        inputs = PlateletClassifierInputs(
+            audit_id="a1",
+            platelet_count=5.0,
+            diagnosis_codes=("D46",),
+            platelet_freshness="fresh",
+            has_recent_chemo_med=True,
+            enable_prophylaxis_autoclear=True,
+        )
+        assert classify_platelet(inputs).classification == "APPROPRIATE"
+        # A recent chemo drug alone, with no indication diagnosis, is not enough.
+        no_dx = inputs.model_copy(update={"diagnosis_codes": ("J150",)})
+        assert classify_platelet(no_dx).classification == "NEEDS_REVIEW"
+
     @pytest.mark.parametrize("codes", [("c92.0",), ("C92.0", "z51.1"), (" C920 ",)])
     def test_code_matching_is_case_and_dot_insensitive(
         self, codes: tuple[str, ...]
@@ -281,29 +306,45 @@ class TestProphylaxisAutoclear:
         fresh=st.sampled_from(["fresh", "stale_24_72h", "stale_3_7d", "missing"]),
         codes=st.lists(
             st.sampled_from(
-                ["C920", "Z511", "D611", "J150", "D693", "M311", "A91", "D613", "T630"]
+                [
+                    "C920",
+                    "Z511",
+                    "D611",
+                    "D46",
+                    "J150",
+                    "D693",
+                    "M311",
+                    "D593",
+                    "A91",
+                    "D613",
+                    "T630",
+                ]
             ),
             max_size=4,
         ),
+        chemo_med=st.booleans(),
     )
     def test_property_appropriate_iff_all_structured_conditions(
-        self, count: float | None, fresh: str, codes: list[str]
+        self, count: float | None, fresh: str, codes: list[str], chemo_med: bool
     ) -> None:
         from bba.platelet_classifier import (
             PLATELET_PROPHYLAXIS_EXCLUSION_PREFIXES,
             PLATELET_PROPHYLAXIS_INDICATION_PREFIXES,
         )
 
-        result = classify_platelet(
-            self._in(count=count, codes=tuple(codes), freshness=fresh)
+        inputs = self._in(count=count, codes=tuple(codes), freshness=fresh).model_copy(
+            update={"has_recent_chemo_med": chemo_med}
         )
+        result = classify_platelet(inputs)
+        chemo_evidence = chemo_med or "Z511" in codes
+        indicated = any(
+            c.startswith(PLATELET_PROPHYLAXIS_INDICATION_PREFIXES) for c in codes
+        ) or (chemo_evidence and "D46" in codes)
         expected = (
             count is not None
             and count < 10.0
             and fresh == "fresh"
-            and any(
-                c.startswith(PLATELET_PROPHYLAXIS_INDICATION_PREFIXES) for c in codes
-            )
+            and indicated
             and not any(
                 c.startswith(PLATELET_PROPHYLAXIS_EXCLUSION_PREFIXES) for c in codes
             )

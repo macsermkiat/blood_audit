@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from bba.platelet_classifier.classifier import (
+    PLATELET_PROPHYLAXIS_CONDITIONAL_INDICATION_PREFIXES,
     PLATELET_PROPHYLAXIS_EXCLUSION_PREFIXES,
     PLATELET_PROPHYLAXIS_INDICATION_PREFIXES,
     PLATELET_PROPHYLAXIS_THRESHOLD,
@@ -23,6 +24,7 @@ from bba.platelet_classifier.models import (
 )
 
 __all__: Sequence[str] = (
+    "PLATELET_PROPHYLAXIS_CONDITIONAL_INDICATION_PREFIXES",
     "PLATELET_PROPHYLAXIS_EXCLUSION_PREFIXES",
     "PLATELET_PROPHYLAXIS_INDICATION_PREFIXES",
     "PLATELET_PROPHYLAXIS_THRESHOLD",
