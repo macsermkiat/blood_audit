@@ -35,49 +35,50 @@ import QiNotSamdBanner from "../../../components/QiNotSamdBanner.astro";
 
 blood_audit reads completed HOSxP exports from the hospital information
 system. The `component_map` intake gate routes each blood-bank order to its
-component family, then the analysis leg compares each audited red blood cell
+component family. The analysis leg then compares each audited red blood cell
 (RBC) order against the 3-tier hemoglobin (Hb) policy and each platelet order
 against the §5.1 count gate, and writes one audit row per audited order to the
 audit store. The RBC classifier checks Lab Hb, ICD-10 diagnoses, ICD-9-CM
 procedures, medications, blood-order patterns, and procedure timing in a fixed
-order. This analysis leg runs today through the pilot scripts and is wired into
+order. Today the analysis leg runs through the pilot scripts; it is wired into
 the CLI in Phase 1.5.
 
-Before any Hb judgment, three default-ON routing arms act on the order.
-Two can terminal it **out of appropriateness scoring**: the **returns
-ledger** (per-unit BDVSTTRANS disposition) and **declared-use USETYPE
-routing** (order-level surgical / type-and-screen intent). The third, the
-**MSBOS pre-op reservation audit**, screens planned-operation
-reservations — its `PREOP_OVER_RESERVATION` finding **still counts
-against the service** (scored on the inappropriate side).
+Before any Hb judgment, three default-ON routing arms act on the order. Two
+of them can terminal the order out of appropriateness scoring: the returns
+ledger (per-unit BDVSTTRANS disposition) and declared-use USETYPE routing
+(order-level surgical or type-and-screen intent). The third, the MSBOS
+pre-op reservation audit, screens planned-operation reservations. Its
+`PREOP_OVER_RESERVATION` finding still counts against the service, on the
+inappropriate side.
 
-The final `final_classification` stored for each transfusion is one of:
+The `final_classification` stored for each transfusion is one of:
 
-- `APPROPRIATE` — the order matched policy.
-- `INAPPROPRIATE` — the order did not match policy.
-- `POTENTIALLY_INAPPROPRIATE` — the deterministic rule flagged the order
+- `APPROPRIATE`: the order matched policy.
+- `INAPPROPRIATE`: the order did not match policy.
+- `POTENTIALLY_INAPPROPRIATE`: the deterministic rule flagged the order
   but did not promote it to LLM review.
-- `NEEDS_REVIEW` — the LLM ran but its answer requires a human reviewer
+- `NEEDS_REVIEW`: the LLM ran but its answer requires a human reviewer
   (uncertain reasoning, failed quote-grounding, or low confidence).
-- `INSUFFICIENT_EVIDENCE` — documented evidence was missing; the row is
-  *not* `INAPPROPRIATE`, by design.
-- `RETURNED_NOT_TRANSFUSED` — every unit was returned un-transfused
-  (returns terminal; **excluded from scoring**).
-- `PERIOP_TRANSFUSION_EXEMPT` — declared surgical / type-and-screen use or
-  peri-op transfusion (returns terminal; **excluded from scoring**).
-- `PREOP_OVER_RESERVATION` — reserved units exceeded the MSBOS
+- `INSUFFICIENT_EVIDENCE`: documented evidence was missing. By design the
+  row is not `INAPPROPRIATE`.
+- `RETURNED_NOT_TRANSFUSED`: every unit was returned un-transfused
+  (returns terminal; excluded from scoring).
+- `PERIOP_TRANSFUSION_EXEMPT`: declared surgical or type-and-screen use, or
+  peri-op transfusion (returns terminal; excluded from scoring).
+- `PREOP_OVER_RESERVATION`: reserved units exceeded the MSBOS
   recommendation for the planned operation (counts as an over-reservation
   finding, not an Hb verdict).
-- `PREOP_RESERVATION_UNCONFIRMED` — reserve-ahead order whose transfusion
+- `PREOP_RESERVATION_UNCONFIRMED`: reserve-ahead order whose transfusion
   could not be confirmed (behind a default-off flag).
 
 Rows that the deterministic classifier routes to the LLM go through six
-fail-closed quote-grounding layers; a failed grounding becomes
-`NEEDS_REVIEW`, never a published result.
+fail-closed quote-grounding layers. A failed grounding is stored as
+`NEEDS_REVIEW`, never published as a result. The deterministic classifier
+stays the authoritative decision layer.
 
 ## Phase 1 status
 
-`bba audit` today wraps the **ingest leg** of the pipeline. It validates the
+`bba audit` today wraps the ingest leg of the pipeline. It validates the
 HOSxP CSV bundle, streams rows through normalization, and records run-state
 markers under `$BBA_DATA_DIR/audit/<run_id>/` and
 `$BBA_DATA_DIR/audit_runs/<run_id>/` with idempotent run-level guarantees.
@@ -88,15 +89,12 @@ comorbidity (heart disease), or unknown context.
 
 The LLM-driven analysis leg (deterministic classifier → evidence bundle
 → de-id → prompt → batch → quote grounding → audit-store write) is
-implemented as separate modules but is **wired in Phase 1.5**. See
+implemented as separate modules and is wired in Phase 1.5. See
 [audit command](/blood_audit/en/operators/audit-command/) for what runs today.
 
-Six fail-closed quote-grounding layers protect every LLM review row from
-hallucination. The deterministic classifier remains the authoritative source.
+## Phase 2 status: platelet auditor (merged)
 
-## Phase 2 status — platelet auditor (merged)
-
-The platelet auditor is **merged** (PR #85). The `component_map` intake gate
+The platelet auditor is merged (PR #85). The `component_map` intake gate
 tells a platelet order from a red-cell one, and the deterministic platelet leg
 (`platelet_lookup` + `platelet_classifier` §5.1 gate) is live. It auto-clears
 nothing: a count ≥ 100 ×10³/µL routes to review, a count below the ceiling

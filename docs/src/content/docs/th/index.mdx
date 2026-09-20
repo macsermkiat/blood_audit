@@ -39,59 +39,60 @@ blood_audit อ่านชุดข้อมูลที่ส่งออก�
 เลือดก่อน จากนั้นส่วน analysis จะเปรียบเทียบคำสั่งให้เลือดแดงเข้มข้น
 (RBC, red blood cell) กับนโยบายฮีโมโกลบิน (Hb) แบบ 3 ชั้น และคำสั่งให้เกล็ดเลือด
 (platelet) กับ §5.1 count gate แล้วเขียนผลออดิท 1 แถวต่อคำสั่งที่ audit
-ลงใน audit store — ปัจจุบันส่วน analysis นี้รันผ่าน pilot scripts และจะเชื่อม
+ลงใน audit store ปัจจุบันส่วน analysis นี้รันผ่าน pilot scripts และจะเชื่อม
 เข้ากับ CLI ใน Phase 1.5
 
 ก่อนการตัดสินด้วย Hb ใด ๆ มี routing arm ที่เปิดโดยค่าเริ่มต้น 3 ทาง
-ทำงานกับคำสั่ง สองทางแรกอาจจบคำสั่ง**ออกจากการคิดคะแนนความเหมาะสม**:
-**returns ledger** (disposition รายยูนิตจาก BDVSTTRANS) และ
-**declared-use USETYPE routing** (เจตนาใช้เพื่อผ่าตัด / type-and-screen
-ระดับคำสั่ง) ส่วนทางที่สาม **MSBOS pre-op reservation audit**
-คัดกรองการจองเลือดสำหรับการผ่าตัดที่วางแผนไว้ — ผลตรวจพบ
-`PREOP_OVER_RESERVATION` **ยังนับเป็นคะแนนของหน่วยงาน**
-(คิดคะแนนอยู่ฝั่ง inappropriate)
+ทำงานกับคำสั่ง สองทางแรกอาจจบคำสั่งออกจากการคิดคะแนนความเหมาะสม คือ
+returns ledger (disposition รายยูนิตจาก BDVSTTRANS) และ
+declared-use USETYPE routing (เจตนาใช้เพื่อผ่าตัด / type-and-screen
+ระดับคำสั่ง) ส่วนทางที่สาม MSBOS pre-op reservation audit
+คัดกรองการจองเลือดสำหรับการผ่าตัดที่วางแผนไว้ ผลตรวจพบ
+`PREOP_OVER_RESERVATION` ยังนับเป็นคะแนนของหน่วยงาน
+โดยคิดคะแนนอยู่ฝั่ง inappropriate
 
 ค่า `final_classification` ที่บันทึกสำหรับแต่ละรายการให้เลือดจะเป็น
 1 ใน 9 ค่า:
 
-- `APPROPRIATE` — คำสั่งสอดคล้องกับนโยบาย
-- `INAPPROPRIATE` — คำสั่งไม่สอดคล้องกับนโยบาย
-- `POTENTIALLY_INAPPROPRIATE` — Hb สูงหรือมีสัญญาณที่ควรตรวจทบทวนต่อ
-- `NEEDS_REVIEW` — มีเหตุผลให้คนทบทวนก่อนสรุปผล
+- `APPROPRIATE`: คำสั่งสอดคล้องกับนโยบาย
+- `INAPPROPRIATE`: คำสั่งไม่สอดคล้องกับนโยบาย
+- `POTENTIALLY_INAPPROPRIATE`: Hb สูงหรือมีสัญญาณที่ควรตรวจทบทวนต่อ
+- `NEEDS_REVIEW`: มีเหตุผลให้คนทบทวนก่อนสรุปผล
   (เหตุผลไม่ชัด, quote-grounding ล้มเหลว, หรือ confidence ต่ำ)
-- `INSUFFICIENT_EVIDENCE` — เอกสารหลักฐานไม่พอ ไม่ใช่ `INAPPROPRIATE`
+- `INSUFFICIENT_EVIDENCE`: เอกสารหลักฐานไม่พอ ไม่ใช่ `INAPPROPRIATE`
   โดยตั้งใจ
-- `RETURNED_NOT_TRANSFUSED` — ทุกยูนิตถูกคืนโดยไม่ได้ให้เลือด
-  (returns terminal; **ถูกตัดออกจากการคิดคะแนน**)
-- `PERIOP_TRANSFUSION_EXEMPT` — ประกาศใช้เพื่อผ่าตัด / type-and-screen
-  หรือให้เลือดช่วง peri-op (returns terminal; **ถูกตัดออกจากการคิดคะแนน**)
-- `PREOP_OVER_RESERVATION` — จองเลือดเกินคำแนะนำ MSBOS สำหรับการผ่าตัด
+- `RETURNED_NOT_TRANSFUSED`: ทุกยูนิตถูกคืนโดยไม่ได้ให้เลือด
+  (returns terminal; ถูกตัดออกจากการคิดคะแนน)
+- `PERIOP_TRANSFUSION_EXEMPT`: ประกาศใช้เพื่อผ่าตัด / type-and-screen
+  หรือให้เลือดช่วง peri-op (returns terminal; ถูกตัดออกจากการคิดคะแนน)
+- `PREOP_OVER_RESERVATION`: จองเลือดเกินคำแนะนำ MSBOS สำหรับการผ่าตัด
   ที่วางแผนไว้ (นับเป็น over-reservation finding ไม่ใช่ Hb verdict)
-- `PREOP_RESERVATION_UNCONFIRMED` — คำสั่งแบบ reserve-ahead ที่ยืนยัน
+- `PREOP_RESERVATION_UNCONFIRMED`: คำสั่งแบบ reserve-ahead ที่ยืนยัน
   การให้เลือดไม่ได้ (อยู่หลัง flag ที่ปิดโดยค่าเริ่มต้น)
 
 แถวที่ตัวจำแนก deterministic ส่งต่อให้ LLM จะต้องผ่าน quote-grounding
 แบบ fail-closed 6 ชั้น หาก grounding ล้มเหลว ระบบจะเก็บผลเป็น
-`NEEDS_REVIEW` ไม่ใช่เผยแพร่ผลตัดสินสุดท้าย
+`NEEDS_REVIEW` ไม่ใช่เผยแพร่ผลตัดสินสุดท้าย ตัวจำแนก deterministic
+ยังคงเป็นชั้นตัดสินหลัก
 
 ## สถานะ Phase 1
 
-ตอนนี้ `bba audit` ทำเฉพาะ **ส่วน ingest** ของ pipeline คือ validate ชุด CSV
+ตอนนี้ `bba audit` ทำเฉพาะส่วน ingest ของ pipeline คือ validate ชุด CSV
 จาก HOSxP, stream rows ผ่าน normalization และบันทึก run-state markers ภายใต้
 `$BBA_DATA_DIR/audit/<run_id>/` และ `$BBA_DATA_DIR/audit_runs/<run_id>/`
 พร้อมกลไก idempotency ระดับ run
 ส่วนการวิเคราะห์ด้วย LLM (deterministic classifier → evidence bundle →
 de-id → prompt → batch → quote grounding → audit-store write)
-มีโมดูลรองรับแล้ว แต่จะ **เชื่อมเข้ากับ CLI ใน Phase 1.5** ดูรายละเอียดที่
+มีโมดูลรองรับแล้ว และจะเชื่อมเข้ากับ CLI ใน Phase 1.5 ดูรายละเอียดที่
 [คำสั่ง audit](/blood_audit/th/operators/audit-command/)
 
-## สถานะ Phase 2 — platelet auditor (merged)
+## สถานะ Phase 2: platelet auditor (merged)
 
-Platelet auditor **merged แล้ว** (PR #85) `component_map` แยกคำสั่งเกล็ดเลือด
+Platelet auditor merged แล้ว (PR #85) `component_map` แยกคำสั่งเกล็ดเลือด
 ออกจากเลือดแดง และส่วน deterministic ของเกล็ดเลือด (`platelet_lookup` +
-`platelet_classifier` §5.1 gate) ใช้งานได้แล้ว โดย **ไม่ auto-clear อะไรเลย**:
+`platelet_classifier` §5.1 gate) ใช้งานได้แล้ว โดยไม่ auto-clear อะไรเลย:
 count ≥ 100 ×10³/µL → review, ต่ำกว่านั้น → ส่งต่อ LLM, ไม่มีค่า →
-`INSUFFICIENT_EVIDENCE`. Platelet LLM leg อยู่หลัง flag `PLATELET_LLM_ENABLED`
+`INSUFFICIENT_EVIDENCE` ส่วน platelet LLM leg อยู่หลัง flag `PLATELET_LLM_ENABLED`
 ที่ปิดโดยค่าเริ่มต้น และ RBC path เหมือนเดิมทุกไบต์
 
 ## 12 ขั้นตอนของ pipeline
