@@ -713,3 +713,23 @@ def test_platelet_history_window_matches_the_gate_bounds() -> None:
     assert module._in_platelet_window(anchor + timedelta(minutes=1), anchor) is False
     assert module._in_platelet_window(None, anchor) is False
     assert module._in_platelet_window(anchor, None) is False
+
+
+def test_keyboard_navigation_skips_filtered_out_cases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Codex P2 on #236: with a filter active (component or mismatches), j/k
+    # stepped through the full case list and scrolled to display:none sections,
+    # so navigation appeared to stall on interleaved pages.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN2,R1,AN2,rbc\n",
+        report_csv=_RBC_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    assert "caseEls[next].style.display === 'none'" in rendered
+    assert "Math.min(activeIdx + 1, caseEls.length - 1)" not in rendered

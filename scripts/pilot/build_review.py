@@ -2709,9 +2709,14 @@ LLM: Anthropic Batch classification on structured evidence only.
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
     if (e.key === 'j' || e.key === 'k') {
       if (activeIdx < 0) activeIdx = findActiveByScroll();
-      activeIdx = e.key === 'j'
-        ? Math.min(activeIdx + 1, caseEls.length - 1)
-        : Math.max(activeIdx - 1, 0);
+      /* Step to the next VISIBLE case: filters hide sections with
+         display:none and scrolling to one of those goes nowhere. */
+      var step = e.key === 'j' ? 1 : -1;
+      var next = activeIdx + step;
+      while (next >= 0 && next < caseEls.length &&
+             caseEls[next].style.display === 'none') next += step;
+      if (next < 0 || next >= caseEls.length) return;
+      activeIdx = next;
       caseEls[activeIdx].scrollIntoView({behavior:'smooth', block:'start'});
     } else if (e.key === 'e') {
       if (activeIdx < 0) activeIdx = findActiveByScroll();
