@@ -1,0 +1,85 @@
+---
+title: Generate the report
+description: Run bba report to produce the committee CSVs, the per-physician files, and the PDF from the audit store.
+---
+
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
+`bba report` builds the monthly audit report from a completed run in the
+audit store. For what the report contains and who each section is for, see
+[Report output](/blood_audit/en/clinical/report-output/).
+
+<AtAGlance
+  items={[
+    { label: "Command", value: "uv run bba report --run-id <id> --format html|pdf|json", tone: "ok" },
+    { label: "Reads", value: "The audit store, scoped to one run_id." },
+    { label: "Needs", value: "BBA_BDVST_CSV and BBA_DCT_CSV for the ward and physician resolvers.", tone: "warn" },
+    { label: "Writes", value: "$BBA_DATA_DIR/reports/<run_id>/" },
+  ]}
+/>
+
+:::caution[Real PHI in the output]
+Every file the command writes ties real orders to real wards and physicians.
+Never commit, email, or share them outside the approved review channel.
+:::
+
+## Run it
+
+```bash
+export BBA_DATA_DIR=/path/to/persistent/data
+export BBA_BDVST_CSV=/path/to/BDVST.csv    # ward + physician attribution
+export BBA_DCT_CSV=/path/to/DCT.csv        # doctor registry
+
+uv run bba report --run-id <run_id> --format pdf
+```
+
+The run must already be complete in the audit store. See
+[audit command](/blood_audit/en/operators/audit-command/) for producing one.
+
+## What it writes
+
+Everything lands under `$BBA_DATA_DIR/reports/<run_id>/`:
+
+- The six committee CSV sections.
+- One `physician_own_view_<physician_id>.csv` per physician in
+  `ReportInputs.physician_ids_for_own_view`. Each file holds exactly one
+  data row, so sending it to that physician leaks no one else's rate.
+- `report_<YYYY-MM-DD>.pdf`, with every section rendered as a table.
+
+## Attribution resolvers
+
+The ward and physician columns are resolved outside the audit store, from
+the two CSV exports named above. `bba report` fails loud when either
+variable is unset rather than emitting a report with blank attribution.
+The chain is an order's `REQNO` to `BDVST.DCTREQ` to the `DCT.csv`
+registry, the same chain
+[doctor ranking](/blood_audit/en/operators/doctor-ranking/) uses.
+
+## Reproducibility fields
+
+Every CSV row and every PDF page carries six identifiers, so a later
+auditor can tie any line back to the code and policy that produced it:
+
+| Field | What it pins |
+| --- | --- |
+| `policy_version` | The transfusion policy the verdict was judged against. |
+| `model_id` | The LLM used for rows that went to review. |
+| `redactor_version` | The de-identification code version. |
+| `redactor_model_sha` | The de-identification model build. |
+| `prompt_hash` | The exact prompt text sent. |
+| `evidence_bundle_hash` | The evidence the verdict was based on. |
+
+## Where this lives in code
+
+- `bba.report_generator.generate_monthly_report(inputs: ReportInputs)`
+  builds the artifacts.
+- `build_report_inputs` sources `ReportInputs` from the audit store.
+- The column-by-column contract is
+  [`docs/report-schema.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/report-schema.md),
+  summarized at [Report schema](/blood_audit/en/reference/report-schema/).
+
+## Next steps
+
+- [Report output](/blood_audit/en/clinical/report-output/): what each section means.
+- [Environment variables](/blood_audit/en/operators/env-vars/): the full variable table.
+- [Troubleshooting](/blood_audit/en/operators/troubleshooting/): common failures.

@@ -5,11 +5,6 @@ description: ผลลัพธ์รายงานที่คณะกรร�
 
 import AtAGlance from "../../../../components/AtAGlance.astro";
 
-หน้านี้อธิบายเป้าหมายของรายงาน คำสั่ง
-`bba report --run-id <id>` เชื่อมแล้ว: ดึง `ReportInputs`
-จาก audit store, ใช้ `BBA_BDVST_CSV` / `BBA_DCT_CSV` สำหรับ attribution
-resolvers และเขียนทุกอย่างไว้ที่ `$BBA_DATA_DIR/reports/<id>/`
-
 รายงานเป็นผลปลายทางสำหรับคณะกรรมการ QI ไม่ใช่ real-time dashboard
 และไม่ใช่ scorecard สำหรับลงโทษรายบุคคล
 
@@ -18,8 +13,8 @@ resolvers และเขียนทุกอย่างไว้ที่ `$B
   items={[
     { label: "ชุด output", value: "CSV 6 ส่วนสำหรับคณะกรรมการ, physician own-view CSV และ PDF" },
     { label: "Privacy", value: "physician own-view แยกหนึ่งไฟล์ต่อหนึ่งแพทย์", tone: "ok" },
-    { label: "ทำซ้ำได้", value: "ทุกแถว/หน้ามี policy, model, redactor, prompt และ evidence hashes" },
-    { label: "สถานะ CLI", value: "bba report --run-id <id> เชื่อมแล้ว: committee CSVs + per-physician CSVs + PDF จาก audit store", tone: "ok" },
+    { label: "ทำซ้ำได้", value: "ทุกแถวและทุกหน้าบันทึก policy, model และหลักฐานที่ใช้ตัดสิน" },
+    { label: "ครอบคลุม", value: "คำสั่งให้เลือดที่เสร็จแล้วหนึ่งเดือน จาก audit run เดียว" },
   ]}
 />
 
@@ -34,23 +29,34 @@ resolvers และเขียนทุกอย่างไว้ที่ `$B
 | `pipeline_health.csv` | IT + QI | ติดตาม failures, NEEDS_REVIEW และ grounding issues |
 | `physician_own_view/*.csv` | แพทย์ผู้ทบทวน | ให้แพทย์ดูเฉพาะรายการของตนเอง |
 
+## คำสั่งที่นับและไม่นับ
+
 คำสั่งที่ `final_classification` เป็น `RETURNED_NOT_TRANSFUSED` หรือ
-`PERIOP_TRANSFUSION_EXEMPT` จะ **ถูกตัดออกจากการคิดคะแนนความเหมาะสม**
-— ไม่ทำให้อัตราของ ward หรือของแพทย์สูงขึ้นหรือเจือจางลง ส่วนแถว
-`PREOP_OVER_RESERVATION` คิดคะแนนอยู่ฝั่ง inappropriate (aggregate
-model นับเป็น over-reservation count ภายใน แต่ยังไม่ออกเป็นคอลัมน์ CSV)
+`PERIOP_TRANSFUSION_EXEMPT` ถูกตัดออกจากการคิดคะแนนความเหมาะสม
+ไม่ทำให้อัตราของ ward หรือของแพทย์สูงขึ้นหรือเจือจางลง เพราะไม่มี
+การให้เลือดที่ถูกตัดสิน ส่วนแถว `PREOP_OVER_RESERVATION`
+คิดคะแนนอยู่ฝั่ง inappropriate
+
+`INSUFFICIENT_EVIDENCE` ต้องไม่ถูกรวมเข้า `INAPPROPRIATE` เพราะเป็น
+คนละความหมาย ข้อมูลไม่พอคือปัญหาเอกสารและหลักฐาน ไม่ใช่การตัดสินว่า
+ให้เลือดไม่เหมาะสม
 
 ## กฎ privacy
 
-Physician own-view ต้องแยกไฟล์ต่อแพทย์ ห้ามรวมเป็นไฟล์เดียวที่ทุกคนเห็นกันหมด
-รายงานสำหรับคณะกรรมการควรเป็น aggregate หรือ de-identified ตามขอบเขตที่กำหนด
+Physician own-view ต้องแยกไฟล์ต่อแพทย์ ห้ามรวมเป็นไฟล์เดียวที่ทุกคน
+เห็นกันหมด แต่ละไฟล์มีข้อมูลแถวเดียว รายงานสำหรับคณะกรรมการควรเป็น
+aggregate หรือ de-identified ตามขอบเขตที่กำหนด
 
-## Classification ที่ต้องรักษาไว้
+## ทำซ้ำได้
 
-`INSUFFICIENT_EVIDENCE` ต้องไม่ถูกรวมเข้า `INAPPROPRIATE` เพราะเป็นคนละความหมาย:
-ข้อมูลไม่พอคือปัญหาเอกสาร/หลักฐาน ไม่ใช่การตัดสินว่าให้เลือดไม่เหมาะสม
+ทุกแถว CSV และทุกหน้า PDF บันทึกว่าใช้ policy เวอร์ชันใด โมเดลใด และ
+หลักฐานชุดใดในการตัดสิน ผู้ตรวจในภายหลังจึงย้อนกลับไปสร้างผลเดิมได้
+จากข้อมูลและ code ชุดเดียวกัน ชื่อฟิลด์ทั้งหมดอยู่ที่
+[สร้างรายงาน](/blood_audit/th/operators/generate-report/)
 
-## Hashes เพื่อ reproducibility
+## วิธีสร้างรายงาน
 
-รายงานต้องบันทึก policy hash, model hash, redactor hash, prompt hash และ
-evidence hash เพื่อให้ย้อนกลับไปอธิบายได้ว่าผลลัพธ์ชุดนั้นเกิดจากกฎและข้อมูลชุดใด
+ใช้คำสั่ง [`bba report`](/blood_audit/th/operators/generate-report/)
+ส่วนสัญญาระดับคอลัมน์อยู่ที่
+[`docs/report-schema.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/report-schema.md)
+สรุปไว้ที่ [Report schema](/blood_audit/th/reference/report-schema/)

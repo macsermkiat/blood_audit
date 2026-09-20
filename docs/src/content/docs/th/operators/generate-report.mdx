@@ -1,0 +1,86 @@
+---
+title: สร้างรายงาน
+description: รัน bba report เพื่อสร้าง CSV สำหรับคณะกรรมการ ไฟล์รายแพทย์ และ PDF จาก audit store
+---
+
+import AtAGlance from "../../../../components/AtAGlance.astro";
+
+`bba report` สร้างรายงานออดิทรายเดือนจาก run ที่เสร็จแล้วใน audit store
+ส่วนเนื้อหาของรายงานและผู้ใช้ของแต่ละส่วน ดูที่
+[ผลลัพธ์รายงาน](/blood_audit/th/clinical/report-output/)
+
+<AtAGlance
+  title="สรุปคำสั่ง"
+  items={[
+    { label: "คำสั่ง", value: "uv run bba report --run-id <id> --format html|pdf|json", tone: "ok" },
+    { label: "อ่านจาก", value: "audit store เฉพาะ run_id ที่ระบุ" },
+    { label: "ต้องตั้ง", value: "BBA_BDVST_CSV และ BBA_DCT_CSV สำหรับ resolver ของ ward และแพทย์", tone: "warn" },
+    { label: "เขียนไปที่", value: "$BBA_DATA_DIR/reports/<run_id>/" },
+  ]}
+/>
+
+:::caution[ผลลัพธ์มี PHI จริง]
+ทุกไฟล์ที่คำสั่งนี้เขียนผูกคำสั่งเลือดจริงเข้ากับ ward และแพทย์จริง
+ห้าม commit, ส่งอีเมล หรือแชร์นอกช่องทางตรวจที่ได้รับอนุมัติ
+:::
+
+## วิธีรัน
+
+```bash
+export BBA_DATA_DIR=/path/to/persistent/data
+export BBA_BDVST_CSV=/path/to/BDVST.csv    # attribution ของ ward และแพทย์
+export BBA_DCT_CSV=/path/to/DCT.csv        # ทะเบียนแพทย์
+
+uv run bba report --run-id <run_id> --format pdf
+```
+
+run นั้นต้องเสร็จอยู่ใน audit store แล้ว ดูวิธีสร้างได้ที่
+[คำสั่ง audit](/blood_audit/th/operators/audit-command/)
+
+## ไฟล์ที่ได้
+
+ทุกอย่างอยู่ใต้ `$BBA_DATA_DIR/reports/<run_id>/`:
+
+- CSV 6 ส่วนสำหรับคณะกรรมการ
+- ไฟล์ `physician_own_view_<physician_id>.csv` หนึ่งไฟล์ต่อแพทย์หนึ่งคน
+  แต่ละไฟล์มีข้อมูลแถวเดียว การส่งไฟล์ให้แพทย์คนนั้นจึงไม่เปิดเผย
+  อัตราของแพทย์คนอื่น
+- `report_<YYYY-MM-DD>.pdf` ที่แสดงทุกส่วนเป็นตาราง
+
+## Resolver ของ attribution
+
+คอลัมน์ ward และแพทย์ resolve จากไฟล์ CSV สองไฟล์ข้างต้น ไม่ได้มาจาก
+audit store `bba report` จะ fail loud เมื่อไม่ได้ตั้งตัวแปรใดตัวแปรหนึ่ง
+แทนที่จะออกรายงานโดยเว้น attribution ว่างไว้ สายการ resolve คือ
+`REQNO` ของคำสั่ง ไปยัง `BDVST.DCTREQ` ไปยังทะเบียน `DCT.csv`
+ซึ่งเป็นสายเดียวกับที่
+[จัดอันดับแพทย์](/blood_audit/th/operators/doctor-ranking/) ใช้
+
+## ฟิลด์สำหรับ reproducibility
+
+ทุกแถว CSV และทุกหน้า PDF มี identifier 6 ตัว เพื่อให้ผู้ตรวจในภายหลัง
+ย้อนกลับไปหา code และ policy ที่สร้างผลนั้นได้:
+
+| ฟิลด์ | ระบุอะไร |
+| --- | --- |
+| `policy_version` | policy การให้เลือดที่ใช้ตัดสิน |
+| `model_id` | LLM ที่ใช้กับแถวที่ส่งทบทวน |
+| `redactor_version` | เวอร์ชัน code ของการ de-identify |
+| `redactor_model_sha` | build ของโมเดล de-identify |
+| `prompt_hash` | ข้อความ prompt ที่ส่งจริง |
+| `evidence_bundle_hash` | หลักฐานที่ใช้ตัดสิน |
+
+## ตำแหน่งใน code
+
+- `bba.report_generator.generate_monthly_report(inputs: ReportInputs)`
+  สร้างไฟล์ผลลัพธ์
+- `build_report_inputs` ดึง `ReportInputs` จาก audit store
+- สัญญาระดับคอลัมน์อยู่ที่
+  [`docs/report-schema.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/report-schema.md)
+  สรุปไว้ที่ [Report schema](/blood_audit/th/reference/report-schema/)
+
+## ขั้นถัดไป
+
+- [ผลลัพธ์รายงาน](/blood_audit/th/clinical/report-output/): ความหมายของแต่ละส่วน
+- [ตัวแปรสภาพแวดล้อม](/blood_audit/th/operators/env-vars/): ตารางตัวแปรทั้งหมด
+- [แก้ปัญหาเบื้องต้น](/blood_audit/th/operators/troubleshooting/): ปัญหาที่พบบ่อย

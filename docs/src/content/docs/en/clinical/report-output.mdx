@@ -5,21 +5,15 @@ description: What the QI committee sees — six CSV sections plus a PDF summary.
 
 import AtAGlance from "../../../../components/AtAGlance.astro";
 
-This page describes the report output. The `bba report --run-id <id>`
-CLI subcommand is wired: it produces these artifacts end to end from the
-audit store (attribution resolvers via `BBA_BDVST_CSV` / `BBA_DCT_CSV`).
-
-The audit pipeline's monthly report schema lives in
-[`docs/report-schema.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/report-schema.md).
-A summary appears below; for the column-by-column contract, see the
-source file.
+The report is the end product the QI committee reads. It is not a live
+dashboard and it is not a scorecard for disciplining individuals.
 
 <AtAGlance
   items={[
     { label: "Output set", value: "Six committee CSV sections, per-physician own-view CSVs, and one PDF." },
     { label: "Privacy", value: "Physician own-view files are split one physician per file.", tone: "ok" },
-    { label: "Reproducible", value: "Every row/page carries policy, model, redactor, prompt, and evidence hashes." },
-    { label: "CLI status", value: "bba report --run-id <id> is wired: committee CSVs + per-physician CSVs + PDF from the audit store.", tone: "ok" },
+    { label: "Reproducible", value: "Every row and page records the policy, model, and evidence behind it." },
+    { label: "Coverage", value: "One month of completed transfusion orders from a single audit run." },
   ]}
 />
 
@@ -32,39 +26,43 @@ source file.
 | `physician_own_view_<physician_id>.csv` | The named physician only | One file per physician. Holds the physician's own absolute numbers plus peer median / p25 / p75 inappropriate-rate quartiles. No other physician's individual rate is in the file. |
 | `indication_distribution.csv` | QI committee | One row per distinct indication code. An order with N indication codes contributes 1 to each. |
 | `cohort_exception.csv` | QI committee | One row per `cohort_applied` (including `default`). Useful for spotting cohorts with unusual inappropriate-rates. |
-| `pipeline_health.csv` | QI committee | Single-row operational summary: classified vs needs-review vs insufficient-evidence counts and rates. Documentation absence is its own bucket — never folded into "inappropriate". |
+| `pipeline_health.csv` | QI committee | Single-row operational summary: classified vs needs-review vs insufficient-evidence counts and rates. Documentation absence is its own bucket, never folded into "inappropriate". |
 | `report_<YYYY-MM-DD>.pdf` | QI committee | Single PDF with all the above sections rendered as tables, plus the reproducibility footer on every page. |
 
+## Which orders are counted
+
 Orders whose `final_classification` is `RETURNED_NOT_TRANSFUSED` or
-`PERIOP_TRANSFUSION_EXEMPT` are **excluded from appropriateness
-scoring** — they never inflate or dilute a ward's or physician's rate.
-`PREOP_OVER_RESERVATION` rows are scored on the inappropriate side (the
-aggregate models also track them as an internal over-reservation count,
-not yet a CSV column).
+`PERIOP_TRANSFUSION_EXEMPT` are excluded from appropriateness scoring.
+They never inflate or dilute a ward's or a physician's rate, because no
+transfusion was judged. `PREOP_OVER_RESERVATION` rows are scored on the
+inappropriate side.
+
+`INSUFFICIENT_EVIDENCE` is never folded into `INAPPROPRIATE`. Missing
+documentation is a records problem, not a finding that the transfusion
+was wrong, and the report keeps the two apart.
 
 ## Per-physician separation by design
 
-`physician_own_view` does **not** ship as a single committee CSV. That
-would expose every physician's own rate to every recipient. Instead the
-generator emits one `physician_own_view_<physician_id>.csv` per physician
-in `ReportInputs.physician_ids_for_own_view`. Each file holds exactly
-one data row. Sending the file to that physician therefore never leaks
-another physician's rate.
+`physician_own_view` does not ship as a single committee CSV. That would
+expose every physician's own rate to every recipient. Instead the
+generator emits one file per physician, each holding exactly one data
+row. Sending the file to that physician therefore never leaks another
+physician's rate.
 
 The committee PDF still renders a physician-own-view table for the
 committee's internal review.
 
-## Reproducibility footer
+## Reproducibility
 
-Every CSV row and every PDF page carry six identifiers:
-`policy_version`, `model_id`, `redactor_version`, `redactor_model_sha`,
-`prompt_hash`, `evidence_bundle_hash`. A six-month-later auditor can
-reproduce any line from the same inputs plus the same code.
+Every CSV row and every PDF page records which policy version, which
+model, and which evidence produced it. An auditor six months later can
+take the same inputs and the same code and reproduce any line in the
+report. The exact field names are listed under
+[Generate the report](/blood_audit/en/operators/generate-report/).
 
-## How this is produced
+## How to produce it
 
-`bba.report_generator.generate_monthly_report(inputs: ReportInputs)`.
-The `bba report --run-id <id>` CLI subcommand is **wired**: it sources
-`ReportInputs` from the audit store, resolves ward/physician attribution
-from `BBA_BDVST_CSV` / `BBA_DCT_CSV`, and writes everything under
-`$BBA_DATA_DIR/reports/<run_id>/`.
+Run [`bba report`](/blood_audit/en/operators/generate-report/). The
+column-by-column contract is
+[`docs/report-schema.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/report-schema.md),
+summarized at [Report schema](/blood_audit/en/reference/report-schema/).
