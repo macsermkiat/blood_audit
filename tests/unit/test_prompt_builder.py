@@ -1784,3 +1784,19 @@ class TestPlateletPromptExclusionOverride:
         assert "or a procedure indication 1–3, grounded in the notes, supports" not in (
             prompt
         )
+
+    def test_hard_signals_follow_the_exclusion_override(self) -> None:
+        # Codex P2 on #235: a procedure clear the override PERMITS (e.g. CVC in
+        # aplastic anemia) must be reportable as procedure_indication=True;
+        # under the old blanket wording it reported no signal and the over-clear
+        # guardrail floored the permitted verdict to NEEDS_REVIEW.
+        from bba.prompt_builder.system_prompt import platelet_system_prompt
+
+        prompt = platelet_system_prompt()
+        assert "AND the EXCLUSION OVERRIDE above does not bar it" in prompt
+        assert (
+            "set each True ONLY when the evidence explicitly grounds the "
+            "indication AND no exclusion population applies" not in prompt
+        )
+        # Prophylaxis at a low count stays barred in every excluded population.
+        assert "within 24 hours), AND no exclusion population applies" in prompt

@@ -301,7 +301,7 @@ _PLATELET_REVIEW_PROMPT: Final[str] = (
     "NEVER return APPROPRIATE on a bare low count alone.\n\n"
     "HARD SIGNALS — report all three booleans in your tool-use response; "
     "set each True ONLY when the evidence explicitly grounds the indication "
-    "AND no exclusion population applies:\n"
+    "AND the EXCLUSION OVERRIDE above does not bar it:\n"
     "  • active_bleeding — documented active, life-threatening, or "
     "clinically significant bleeding.\n"
     "  • procedure_indication — an invasive procedure or surgery within "
