@@ -1100,6 +1100,15 @@ def _render_payload(source: str, payload: dict[str, Any]) -> str:
         code = payload.get("icd10", "")
         name = payload.get("description") or ""
         return f"ICD-10 {code}: {name}".strip()
+    if source == "Lab" and payload.get("test") == "platelet_count":
+        # Platelet counts share the Lab source with Hb (builder
+        # _platelet_payload). The platelet prompt states thresholds per uL, so
+        # render the per-uL figure next to the reported x10^3 value.
+        val = payload.get("value_k_ul")
+        unit = payload.get("unit", "")
+        if val is None:
+            return ""
+        return f"Platelet count {val:g} {unit} ({val * 1000:,.0f} /uL)"
     if source == "Lab":
         ts = payload.get("timestamp", "")
         val = payload.get("value_g_dl", "")
@@ -1118,6 +1127,27 @@ def _render_payload(source: str, payload: dict[str, Any]) -> str:
         drug = payload.get("drug", "")
         return f"Med at {ts}: {drug}"
     return json.dumps(payload, sort_keys=True)
+
+
+def _annotate_platelet_lab(
+    text: str,
+    *,
+    timestamp_utc: datetime | None,
+    anchor_utc: datetime,
+    is_closest: bool,
+) -> str:
+    """Append the count's age (and the trigger marker) to a platelet Lab chunk.
+
+    Platelet analog of the RBC path's Hb flags: the closest pre-order count is
+    the one the threshold rule applies to; older counts are trend context.
+    """
+    flags: list[str] = []
+    if is_closest:
+        flags.append("closest pre-order platelet count")
+    if timestamp_utc is not None:
+        hrs = (anchor_utc - timestamp_utc).total_seconds() / 3600.0
+        flags.append(f"{hrs:.1f}h before order")
+    return f"{text}  [{'; '.join(flags)}]" if flags else text
 
 
 def _incpt_evidence_chunks(
@@ -1692,8 +1722,31 @@ def main() -> None:
                 # persisted by the pipeline library but is out-of-scope here.
                 continue
             plt_chunks: list[EvidenceChunk] = []
+            plt_lab_items = [
+                item
+                for item in bundle.items
+                if item.source == "Lab"
+                and dict(item.payload).get("test") == "platelet_count"
+                and item.timestamp_utc is not None
+            ]
+            closest_plt_id = (
+                max(plt_lab_items, key=lambda it: it.timestamp_utc).id
+                if plt_lab_items
+                else None
+            )
             for item in bundle.items:
                 text = _render_payload(item.source, dict(item.payload))
+                if (
+                    text.strip()
+                    and item.source == "Lab"
+                    and dict(item.payload).get("test") == "platelet_count"
+                ):
+                    text = _annotate_platelet_lab(
+                        text,
+                        timestamp_utc=item.timestamp_utc,
+                        anchor_utc=order.order_datetime,
+                        is_closest=item.id == closest_plt_id,
+                    )
                 if text.strip():
                     plt_chunks.append(
                         EvidenceChunk(
