@@ -1800,3 +1800,16 @@ class TestPlateletPromptExclusionOverride:
         )
         # Prophylaxis at a low count stays barred in every excluded population.
         assert "within 24 hours), AND no exclusion population applies" in prompt
+
+    def test_standing_order_is_not_an_indication(self) -> None:
+        # Real-data run 2026-09-20: post-HSCT orders at 16k / 18k were cleared
+        # APPROPRIATE by citing the ward standing order "if plt < 20,000 give
+        # platelets", and the same orders flipped to NEEDS_REVIEW on another
+        # run. The signed policy threshold is <10,000 /uL (or expected below it
+        # within 24 hours); a local trigger written in the chart is the practice
+        # being audited, not evidence that the practice is indicated.
+        from bba.prompt_builder.system_prompt import platelet_system_prompt
+
+        prompt = platelet_system_prompt()
+        assert "standing order" in prompt
+        assert "is NOT a positive indication" in prompt
