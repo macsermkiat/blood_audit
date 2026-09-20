@@ -53,6 +53,7 @@ def _configure_platelet_pilot(
     root: Path,
     *,
     planned_code: str,
+    usetype_code: str = "2",
 ) -> AuditOrder:
     order = AuditOrder(
         audit_id="audit-pilot-platelet-msbos",
@@ -121,7 +122,7 @@ def _configure_platelet_pilot(
         {},
         {},
         {},
-        {("HN1", "REQ1"): ["2"]},
+        {("HN1", "REQ1"): [usetype_code]},
         None,
         reference,
         reserved,
@@ -284,3 +285,40 @@ def test_flag_on_reserved_but_uncounted_order_reaches_reservation_review(
     assert rows[0]["final_classification"] == "NEEDS_REVIEW"
     assert rows[0]["review_reason"] == "platelet_reservation_review"
     assert calls[0]["request_json"]["reason"] == "missing_pre_op_count"
+
+
+def test_flag_on_ward_order_skips_reservation_screen_and_stays_llm_bound(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # User ruling 2026-09-20: the MSBOS platelet screen judges PRE-OP
+    # reservations, so it applies only to orders declared for surgery /
+    # type-screen (matching the RBC arm and the deterministic leg's
+    # declared-only overlay). A ward order (USETYPE 1) with reserved units and an
+    # operation on file is a transfusion-appropriateness question for the LLM; a
+    # reservation terminal here would silently starve the platelet LLM leg of
+    # every ward order. The injected chunk makes the LLM-bound path observable
+    # without an API call (floored to injection_detected).
+    monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", "1")
+    module = _load_run_llm_leg("pilot_platelet_msbos_ward")
+    order = _configure_platelet_pilot(
+        module,
+        monkeypatch,
+        tmp_path / "ward",
+        planned_code="0613",
+        usetype_code="1",
+    )
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("ward platelet order reached the reservation screen")
+
+    monkeypatch.setattr(module, "evaluate_platelet_reservation", forbidden)
+    monkeypatch.setattr(module, "_persist_platelet_over_reservation_row", forbidden)
+    monkeypatch.setattr(module, "_persist_platelet_reservation_review_row", forbidden)
+
+    module.main()
+
+    rows, calls = _artifacts(module)
+    assert len(rows) == len(calls) == 1
+    assert rows[0]["audit_id"] == order.audit_id
+    assert rows[0]["review_reason"] == "injection_detected"
+    assert calls[0]["model_id"] == "injection-filter"

@@ -1601,8 +1601,19 @@ def main() -> None:
             # reserved-but-uncounted order is not swallowed by it (see the
             # floor-defer note below). \x00AMBIG and a missing count are handled
             # inside evaluate_platelet_reservation, so no special-casing here.
+            # Only a DECLARED pre-op order (surgery / type-screen) is a pre-op
+            # reservation, so only it enters the MSBOS platelet screen — the
+            # same eligibility as the RBC arm and the deterministic leg's
+            # declared-only overlay (user ruling 2026-09-20). A ward order with
+            # reserved units is a transfusion question for the LLM; screening
+            # it would turn every ward order into `no_planned_op` review.
             platelet_reservation_decision = None
-            if MSBOS_RESERVATION_PILOT_ENABLED and msbos_reference:
+            if (
+                MSBOS_RESERVATION_PILOT_ENABLED
+                and msbos_reference
+                and plt_returns_result is not None
+                and is_msbos_eligible(plt_returns_result)
+            ):
                 plt_op_events = _op_events(
                     iptsumoprt,
                     ipddchsumoprt,
