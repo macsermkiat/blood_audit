@@ -42,6 +42,9 @@ Environment variables:
 * ``BBA_PILOT_ONLY_REQNO`` — comma-separated REQNOs; process/submit only
   those cases and MERGE their fresh records into the existing
   ``llm_report.json``. Always pair with a fresh ``BBA_PILOT_RUN_ID``.
+* ``BBA_PILOT_PLATELET_LLM`` — ``1`` submits platelet cases to the LLM
+  (default: the library flag ``PLATELET_LLM_ENABLED``, OFF). Costs one call
+  per deferred platelet order.
 """
 
 from __future__ import annotations
@@ -115,6 +118,7 @@ from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import ClassifierInputs
 from bba.deterministic_classifier.rationales import RESERVE_AHEAD_RATIONALES
 from bba.declared_use import (
+    DECLARED_SURGICAL_LABELS,
     DeclaredUse,
     DeclaredUseLabel,
     collapse_usetype,
@@ -235,6 +239,19 @@ PLATELET_AUTOCLEAR_PILOT_ENABLED = (
     if _plt_autoclear_env is not None
     else PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED
 )
+
+
+# Platelet LLM leg pilot seam. The library flag stays default-OFF (no clinician
+# sign-off for the live pipeline); BBA_PILOT_PLATELET_LLM "1" lets a sandbox run
+# submit platelet cases without editing library source, anything else forces
+# off. Unset follows the library flag, so a plain run never submits platelets.
+# Resolved at call time (not folded into CODE_VERSION), so the library flag is
+# read live rather than frozen at import.
+def _platelet_llm_enabled() -> bool:
+    env = os.environ.get("BBA_PILOT_PLATELET_LLM")
+    return env == "1" if env is not None else feature_flags.PLATELET_LLM_ENABLED
+
+
 _msbos_env = os.environ.get("BBA_PILOT_MSBOS_RESERVATION")
 MSBOS_RESERVATION_PILOT_ENABLED = (
     _msbos_env == "1"
@@ -1084,6 +1101,15 @@ def _render_payload(source: str, payload: dict[str, Any]) -> str:
         code = payload.get("icd10", "")
         name = payload.get("description") or ""
         return f"ICD-10 {code}: {name}".strip()
+    if source == "Lab" and payload.get("test") == "platelet_count":
+        # Platelet counts share the Lab source with Hb (builder
+        # _platelet_payload). The platelet prompt states thresholds per uL, so
+        # render the per-uL figure next to the reported x10^3 value.
+        val = payload.get("value_k_ul")
+        unit = payload.get("unit", "")
+        if val is None:
+            return ""
+        return f"Platelet count {val:g} {unit} ({val * 1000:,.0f} /uL)"
     if source == "Lab":
         ts = payload.get("timestamp", "")
         val = payload.get("value_g_dl", "")
@@ -1102,6 +1128,27 @@ def _render_payload(source: str, payload: dict[str, Any]) -> str:
         drug = payload.get("drug", "")
         return f"Med at {ts}: {drug}"
     return json.dumps(payload, sort_keys=True)
+
+
+def _annotate_platelet_lab(
+    text: str,
+    *,
+    timestamp_utc: datetime | None,
+    anchor_utc: datetime,
+    is_closest: bool,
+) -> str:
+    """Append the count's age (and the trigger marker) to a platelet Lab chunk.
+
+    Platelet analog of the RBC path's Hb flags: the closest pre-order count is
+    the one the threshold rule applies to; older counts are trend context.
+    """
+    flags: list[str] = []
+    if is_closest:
+        flags.append("closest pre-order platelet count")
+    if timestamp_utc is not None:
+        hrs = (anchor_utc - timestamp_utc).total_seconds() / 3600.0
+        flags.append(f"{hrs:.1f}h before order")
+    return f"{text}  [{'; '.join(flags)}]" if flags else text
 
 
 def _incpt_evidence_chunks(
@@ -1404,12 +1451,13 @@ def main() -> None:
             usetype_values_by_hn_reqno.get(((order.hn or "").strip(), order.reqno), [])
         )
         # --- Platelet path (Phase 2, component="platelet") ---
-        # Only active when feature_flags.PLATELET_LLM_ENABLED is True.
+        # Only active when _platelet_llm_enabled() (BBA_PILOT_PLATELET_LLM=1,
+        # else feature_flags.PLATELET_LLM_ENABLED).
         # With the flag off, non-terminal platelet verdicts orphan intentionally
         # (matching the pipeline.py Stage C2 gate); INSUFFICIENT_EVIDENCE rows
         # were already persisted by the deterministic leg.
         if order.component == "platelet":
-            if not feature_flags.PLATELET_LLM_ENABLED:
+            if not _platelet_llm_enabled():
                 continue
             plt_obs = _plt_observations(lab, order.an)
             plt_result = lookup_platelet(
@@ -1584,8 +1632,23 @@ def main() -> None:
             # reserved-but-uncounted order is not swallowed by it (see the
             # floor-defer note below). \x00AMBIG and a missing count are handled
             # inside evaluate_platelet_reservation, so no special-casing here.
+            # Only an order DECLARED for surgery / type-screen is a pre-op
+            # reservation, so only it enters the MSBOS platelet screen (user
+            # ruling 2026-09-20; the deterministic leg's overlay is likewise
+            # declared-only). A ward order with reserved units is a transfusion
+            # question for the LLM; screening it would turn every ward order
+            # into `no_planned_op` review. Keyed on the declared use itself, not
+            # on the pre-op transfusion exemption, so switching the exemption
+            # off does not switch the screen off. Narrower than the RBC arm by
+            # design: platelets have no reserve-ahead deferral, so an order
+            # with a blank/unjoined USETYPE is not screened.
             platelet_reservation_decision = None
-            if MSBOS_RESERVATION_PILOT_ENABLED and msbos_reference:
+            if (
+                MSBOS_RESERVATION_PILOT_ENABLED
+                and msbos_reference
+                and _declared_use_label_for_classifier(collapsed_usetype)
+                in DECLARED_SURGICAL_LABELS
+            ):
                 plt_op_events = _op_events(
                     iptsumoprt,
                     ipddchsumoprt,
@@ -1664,8 +1727,31 @@ def main() -> None:
                 # persisted by the pipeline library but is out-of-scope here.
                 continue
             plt_chunks: list[EvidenceChunk] = []
+            plt_lab_items = [
+                item
+                for item in bundle.items
+                if item.source == "Lab"
+                and dict(item.payload).get("test") == "platelet_count"
+                and item.timestamp_utc is not None
+            ]
+            closest_plt_id = (
+                max(plt_lab_items, key=lambda it: it.timestamp_utc).id
+                if plt_lab_items
+                else None
+            )
             for item in bundle.items:
                 text = _render_payload(item.source, dict(item.payload))
+                if (
+                    text.strip()
+                    and item.source == "Lab"
+                    and dict(item.payload).get("test") == "platelet_count"
+                ):
+                    text = _annotate_platelet_lab(
+                        text,
+                        timestamp_utc=item.timestamp_utc,
+                        anchor_utc=order.order_datetime,
+                        is_closest=item.id == closest_plt_id,
+                    )
                 if text.strip():
                     plt_chunks.append(
                         EvidenceChunk(
