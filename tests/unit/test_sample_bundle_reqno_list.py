@@ -272,3 +272,17 @@ def test_seeded_draw_still_stops_when_n_exceeds_candidates(
     with pytest.raises(SystemExit, match="N=99"):
         _run(monkeypatch, tmp_path, reqno_file=None, n="99")
     assert not (tmp_path / "run").exists()
+
+
+def test_sampler_rbc_set_is_the_audit_gate_allow_list() -> None:
+    """The sampler must sample exactly the orders the pipeline will audit.
+
+    If the two sets drift (as they did before irradiated PRC was added), a
+    cohort that orders the missing product is silently under-sampled while
+    the pipeline would have judged those orders fine.
+    """
+    from bba.audit_orders import RBC_PRODUCTS
+
+    mod = _load_sample_bundle()
+    assert set(mod.RBC) == set(RBC_PRODUCTS)
+    assert {"LDPRCI", "LPRCI"} <= set(mod.RBC)

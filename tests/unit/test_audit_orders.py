@@ -151,7 +151,11 @@ class TestNonRbcProductExclusion:
         assert len(result.excluded) == 1
         assert result.excluded[0].reason == "not_rbc_product"
 
-    @pytest.mark.parametrize("product", ["LPRC", "LDPRC", "SDR"])
+    # Irradiated variants (LDPRCI / LPRCI) are included: hematology patients
+    # receive irradiated PRC routinely and those orders are judged on the same
+    # Hb triggers, so leaving them out under-samples that cohort (~18% of its
+    # RBC orders in the 2025 export).
+    @pytest.mark.parametrize("product", ["LPRC", "LDPRC", "SDR", "LDPRCI", "LPRCI"])
     def test_each_rbc_product_included(
         self, config: AuditOrdersConfig, product: str
     ) -> None:

@@ -3,8 +3,9 @@
 Strategy:
 
 1. Read BDVST + BDVSTDT from ``$BBA_PILOT_RAW_DIR``. Keep orders whose
-   line items contain at least one RBC product (BDTYPE in
-   {LPRC, LDPRC, SDR}), with BDVSTST in {4, 5}, REQTYPE == 'P',
+   line items contain at least one RBC product (the audit gate's
+   ``RBC_PRODUCTS`` allow-list, so the sampler and the pipeline agree on
+   what a red-cell order is), with BDVSTST in {4, 5}, REQTYPE == 'P',
    CANCELDATE NULL, AN non-null.
 2. Random-sample N (HN, REQNO) keys (seed configurable so reruns are
    reproducible), or, when ``BBA_PILOT_REQNO_FILE`` is set, take exactly the
@@ -54,6 +55,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from bba.audit_orders import RBC_PRODUCTS
 from bba.component_map import is_platelet_product
 
 SRC = Path(
@@ -76,7 +78,7 @@ PLATELET_N = int(os.environ.get("BBA_PILOT_PLATELET_SAMPLE_N", "0"))
 PLATELET_SEED = int(os.environ.get("BBA_PILOT_PLATELET_SEED", "20260520"))
 REQNO_FILE = os.environ.get("BBA_PILOT_REQNO_FILE", "").strip()
 
-RBC = {"LPRC", "LDPRC", "SDR"}
+RBC = RBC_PRODUCTS
 ELIGIBLE_STATUS = {"4", "5"}
 
 csv.field_size_limit(sys.maxsize)
