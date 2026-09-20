@@ -604,3 +604,89 @@ def test_msbos_platelet_case_line_maps_every_reason() -> None:
         "PERIOP_TRANSFUSION_EXEMPT",
     )
     assert exempt.endswith("; 1 transfused, 1 returned")
+
+
+# ---------------------------------------------------------------------------
+# Component-aware rendering (platelet orders on the shared review page)
+# ---------------------------------------------------------------------------
+
+_PLT_REPORT = (
+    "reqno,classification,rationale,component,platelet_count_k_ul,"
+    "platelet_freshness,hb_value_g_dl,cohort_label,cohort_threshold\n"
+    "P1,NEEDS_REVIEW,plt_defer_llm,platelet,11.0,fresh,,,\n"
+)
+_RBC_REPORT = (
+    "reqno,classification,rationale,component,platelet_count_k_ul,"
+    "platelet_freshness,hb_value_g_dl,cohort_label,cohort_threshold\n"
+    "R1,APPROPRIATE,hb_lt_7_universal,red_cell,,,6.5,cohort_unknown,7.0\n"
+)
+
+
+def test_platelet_case_shows_the_count_not_the_hb_anchor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A reviewer judging a platelet order needs the trigger count; the Hb value,
+    # Hb lookup anchor and Hb cohort threshold are RBC concepts that read as
+    # missing data ("—", "n/a") on a platelet case.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN1,P1,AN1,platelet\n",
+        report_csv=_PLT_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    assert "Platelet count @ order:" in rendered
+    assert "11,000 /µL" in rendered
+    assert "(fresh)" in rendered
+    assert "Hb @ anchor" not in rendered
+    assert "Hb lookup anchor" not in rendered
+    assert "Platelet count history" in rendered
+    assert "Hb history" not in rendered
+    assert "data-component='platelet'" in rendered
+
+
+def test_page_title_is_component_neutral_when_platelets_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv=("HN,REQNO,AN,component\nHN1,P1,AN1,platelet\nHN2,R1,AN2,rbc\n"),
+        report_csv=_PLT_REPORT + _RBC_REPORT.split("\n", 1)[1],
+        llm_json="[]",
+    ).decode()
+
+    assert "KCMH RBC Order Appropriateness Audit" not in rendered
+    assert "Blood Component Order Appropriateness Audit" in rendered
+    assert "1 RBC, 1 platelet" in rendered
+    # Mixed pages get a component column, a count column and a filter.
+    assert "<th>Comp</th>" in rendered and "<th>Plt (k/µL)</th>" in rendered
+    assert "id='filter-component'" in rendered
+    # The RBC case on the same page keeps its Hb strip.
+    assert "Hb @ anchor" in rendered
+
+
+def test_rbc_only_page_is_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # RBC-only reviews already in clinicians' hands must not change shape.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN2,R1,AN2,rbc\n",
+        report_csv=_RBC_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    assert "KCMH RBC Order Appropriateness Audit — Human Review" in rendered
+    assert "Hb @ anchor" in rendered and "Hb history" in rendered
+    assert "<th>Comp</th>" not in rendered
+    assert "filter-component" not in rendered
+    assert "data-component" not in rendered

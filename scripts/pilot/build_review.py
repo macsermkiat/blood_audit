@@ -865,10 +865,80 @@ def render_table(rows: list[dict[str, Any]], cols: list[str]) -> str:
 
 
 _SUMMARY_DATA_COLS = ["#", "REQNO", "HN", "AN", "Hb", "Cohort", "Threshold", "Returned"]
+# Mixed RBC + platelet pages add the component and the platelet trigger count
+# right after the identifiers; RBC-only pages keep the original columns.
+_SUMMARY_DATA_COLS_MIXED = [
+    "#",
+    "REQNO",
+    "Comp",
+    "HN",
+    "AN",
+    "Hb",
+    "Plt (k/µL)",
+    "Cohort",
+    "Threshold",
+    "Returned",
+]
+PLATELET_LABEXM = "290078"
+WINDOW_PLATELET_DAYS = 7
+
+
+# Appended only to pages that hold a platelet case. Replaces filterMismatches
+# so the mismatch checkbox and the component select compose instead of
+# overwriting each other's display state.
+_COMPONENT_FILTER_SCRIPT = """<script>
+(function() {
+  function applyFilters() {
+    var cb = document.getElementById('filter-mismatches');
+    var sel = document.getElementById('filter-component');
+    var onlyMismatch = cb && cb.checked;
+    var comp = sel ? sel.value : 'all';
+    var hidden = 0;
+    document.querySelectorAll('.case').forEach(function(sec) {
+      var hide = (onlyMismatch && sec.querySelector('.nav-flag') === null) ||
+                 (comp !== 'all' && sec.getAttribute('data-component') !== comp);
+      sec.style.display = hide ? 'none' : '';
+      if (hide) hidden++;
+      var link = document.querySelector(
+        '#nav-links a[data-case="' + sec.id.replace('case-', '') + '"]');
+      if (link) link.classList.toggle('is-hidden', hide);
+    });
+    var st = document.getElementById('filter-status');
+    if (st) st.textContent = hidden > 0 ? hidden + ' cases hidden' : '';
+  }
+  window.filterMismatches = applyFilters;
+  window.filterComponent = applyFilters;
+})();
+</script>"""
+
+
+def _is_platelet_row(det: dict[str, str]) -> bool:
+    return (det.get("component") or "") == "platelet"
+
+
+def _platelet_meta_items(det: dict[str, str]) -> list[str]:
+    """Meta-strip lines for a platelet case, replacing the Hb / cohort lines.
+
+    The trigger count is shown in the reported unit and per µL because the
+    policy thresholds (10,000 / 50,000 / 80,000 /µL) are written per µL.
+    """
+    count_k = _fmt_plt_k(det.get("platelet_count_k_ul"))
+    if count_k:
+        per_ul = f"{float(det['platelet_count_k_ul']) * 1000:,.0f}"
+        count_disp = f"{count_k} ×10³/µL ({per_ul} /µL)"
+    else:
+        count_disp = "—"
+    return [
+        f"<div><b>Platelet count @ order:</b> {esc(count_disp)} "
+        f"({esc(det.get('platelet_freshness') or '—')})</div>",
+    ]
 
 
 def render_summary_table(
-    rows: list[dict[str, Any]], *, show_msbos: bool = False
+    rows: list[dict[str, Any]],
+    *,
+    show_msbos: bool = False,
+    show_component: bool = False,
 ) -> str:
     """Render the case-summary table.
 
@@ -880,15 +950,14 @@ def render_summary_table(
     """
     if not rows:
         return "<p class='empty'>(no rows)</p>"
-    headers = _SUMMARY_DATA_COLS + ["Deterministic", "LLM"]
+    data_cols = _SUMMARY_DATA_COLS_MIXED if show_component else _SUMMARY_DATA_COLS
+    headers = data_cols + ["Deterministic", "LLM"]
     if show_msbos:
         headers.append("MSBOS")
     head = "".join(f"<th>{esc(c)}</th>" for c in headers)
     body_parts: list[str] = []
     for r in rows:
-        data_cells = "".join(
-            f"<td>{esc(r.get(c, ''))}</td>" for c in _SUMMARY_DATA_COLS
-        )
+        data_cells = "".join(f"<td>{esc(r.get(c, ''))}</td>" for c in data_cols)
         verdict_cells = f"<td>{r['_det_html']}</td><td>{r['_llm_html']}</td>"
         if show_msbos:
             verdict_cells += f"<td>{r['_msbos_html']}</td>"
@@ -1117,6 +1186,11 @@ def main() -> None:
     }
     related_bdvstdt_rows = related_bdvstdt or bdvstdt
 
+    # Platelet pieces (component column, filter, neutral title) switch on only
+    # when the page holds a platelet case, so an RBC-only page is unchanged.
+    has_platelet_cases = any(
+        _is_platelet_row(det_by_reqno.get(m["REQNO"], {})) for m in manifest_rows
+    )
     case_html_parts: list[str] = []
     summary_rows: list[dict[str, str]] = []
     case_mismatch_tags: list[str] = []
@@ -1593,6 +1667,8 @@ def main() -> None:
                 "REQNO": reqno,
                 "HN": _short(hn),
                 "AN": _short(an),
+                "Comp": "PLT" if _is_platelet_row(det) else "RBC",
+                "Plt (k/µL)": _fmt_plt_k(det.get("platelet_count_k_ul")) or "—",
                 "Hb": det.get("hb_value_g_dl", "") or "—",
                 "Cohort": det.get("cohort_label", "") or "—",
                 "Threshold": det.get("cohort_threshold", "") or "—",
@@ -1626,6 +1702,7 @@ def main() -> None:
         hb_lookup_reason_disp = det.get("hb_anchor_reason") or "order_datetime"
         if reanchored and hb_lookup_reason_disp == "order_datetime":
             hb_lookup_reason_disp = "issue_reanchor"
+        is_platelet = _is_platelet_row(det)
         meta_items = [
             f"<div><b>HN:</b> <code>{esc(hn)}</code></div>",
             f"<div><b>AN:</b> <code>{esc(an)}</code></div>",
@@ -1643,22 +1720,37 @@ def main() -> None:
             ),
             f"<div><b>Blood return datetime:</b> {esc(returned_blood_dt)}</div>",
             f"<div><b>Products ordered:</b> {esc(det.get('products_ordered') or '—')}</div>",
-            f"<div><b>Hb @ anchor:</b> {esc(det.get('hb_value_g_dl') or '—')} g/dL "
-            f"({esc(det.get('hb_freshness') or '—')}, source {esc(det.get('hb_source') or '—')})</div>",
-            f"<div><b>Hb lookup anchor:</b> "
-            f"{esc(det.get('hb_anchor_datetime_local') or (det.get('evidence_anchor_datetime_local') if reanchored else None) or f'{anchor_date} {anchor_time}'.strip() or '—')} "
-            f"({esc(hb_lookup_reason_disp)})</div>",
-            f"<div><b><abbr title='Patient clinical cohort used to determine the Hb threshold for this order'>Cohort</abbr>:</b> "
-            f"{esc(det.get('cohort_label') or '—')} "
-            f"(threshold {esc(det.get('cohort_threshold') or 'n/a')})</div>",
+            *(
+                _platelet_meta_items(det)
+                if is_platelet
+                else [
+                    f"<div><b>Hb @ anchor:</b> {esc(det.get('hb_value_g_dl') or '—')} g/dL "
+                    f"({esc(det.get('hb_freshness') or '—')}, source {esc(det.get('hb_source') or '—')})</div>",
+                    f"<div><b>Hb lookup anchor:</b> "
+                    f"{esc(det.get('hb_anchor_datetime_local') or (det.get('evidence_anchor_datetime_local') if reanchored else None) or f'{anchor_date} {anchor_time}'.strip() or '—')} "
+                    f"({esc(hb_lookup_reason_disp)})</div>",
+                    f"<div><b><abbr title='Patient clinical cohort used to determine the Hb threshold for this order'>Cohort</abbr>:</b> "
+                    f"{esc(det.get('cohort_label') or '—')} "
+                    f"(threshold {esc(det.get('cohort_threshold') or 'n/a')})</div>",
+                ]
+            ),
         ]
         if upcoming_disp is not None:
             meta_items.append(f"<div><b>Upcoming procedure:</b> {upcoming_disp}</div>")
         meta_items.append(f"<div><b>EBL evidence:</b> {esc(ebl_summary)}</div>")
         parts: list[str] = [
-            f"<section class='case' id='case-{i}'>",
+            (
+                f"<section class='case' id='case-{i}' "
+                f"data-component='{'platelet' if is_platelet else 'rbc'}'>"
+                if has_platelet_cases
+                else f"<section class='case' id='case-{i}'>"
+            ),
             "<div class='case-hd'>",
-            f"<h3>Case {i} — REQNO {esc(reqno)}</h3>",
+            (
+                f"<h3>Case {i} — REQNO {esc(reqno)} · Platelet order</h3>"
+                if is_platelet
+                else f"<h3>Case {i} — REQNO {esc(reqno)}</h3>"
+            ),
             f"<button class='mark-reviewed' data-case='{i}'"
             " onclick='toggleReviewed(this)'>Mark reviewed</button>",
             "</div>",
@@ -1890,14 +1982,44 @@ def main() -> None:
             if hb_anchor_reason and hb_anchor_reason != "order_datetime"
             else ""
         )
-        parts.append(
-            f"<details><summary>Hb history ({len(hb_rows)} rows, "
-            f"7-day pre-anchor window {hb_window_str}{hb_anchor_note})</summary>"
-        )
-        parts.append(
-            render_table(hb_rows, ["datetime", "test", "value", "min", "max", "unit"])
-        )
-        parts.append("</details>")
+        if is_platelet:
+            # Same window the platelet gate and the LLM evidence use: the 7
+            # days before the order, never after it.
+            plt_lo_dt = (
+                anchor_dt - timedelta(days=WINDOW_PLATELET_DAYS) if anchor_dt else None
+            )
+            plt_rows = [
+                _hb_row(r)
+                for r in lab
+                if r.get("AN") == an
+                and (r.get("LABEXM") or "").strip() == PLATELET_LABEXM
+                and plt_lo_dt is not None
+                and (d := parse_hosxp_datetime(r.get("LVSTDATE"), r.get("LVSTTIME")))
+                is not None
+                and plt_lo_dt <= d <= anchor_dt
+            ]
+            plt_rows.sort(key=lambda r: r["datetime"], reverse=True)
+            parts.append(
+                f"<details open><summary>Platelet count history ({len(plt_rows)} "
+                f"rows, {WINDOW_PLATELET_DAYS}-day pre-order window)</summary>"
+            )
+            parts.append(
+                render_table(
+                    plt_rows, ["datetime", "test", "value", "min", "max", "unit"]
+                )
+            )
+            parts.append("</details>")
+        else:
+            parts.append(
+                f"<details><summary>Hb history ({len(hb_rows)} rows, "
+                f"7-day pre-anchor window {hb_window_str}{hb_anchor_note})</summary>"
+            )
+            parts.append(
+                render_table(
+                    hb_rows, ["datetime", "test", "value", "min", "max", "unit"]
+                )
+            )
+            parts.append("</details>")
 
         window_str = (
             f"{notes_lo.isoformat()} … {notes_hi.isoformat()}"
@@ -2062,7 +2184,9 @@ def main() -> None:
         case_html_parts.append("\n".join(parts))
 
     summary_html = render_summary_table(
-        summary_rows, show_msbos=MSBOS_RESERVATION_PILOT_ENABLED
+        summary_rows,
+        show_msbos=MSBOS_RESERVATION_PILOT_ENABLED,
+        show_component=has_platelet_cases,
     )
     if MSBOS_RESERVATION_PILOT_ENABLED:
         returned_counts = msbos_counts["RETURNED_NOT_TRANSFUSED"]
@@ -2334,13 +2458,36 @@ def main() -> None:
         if MSBOS_RESERVATION_PILOT_ENABLED and MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED
         else ""
     )
+    if has_platelet_cases:
+        n_platelet = sum(
+            1
+            for m in manifest_rows
+            if _is_platelet_row(det_by_reqno.get(m["REQNO"], {}))
+        )
+        page_title = "KCMH blood component order appropriateness audit — human review"
+        page_h1 = "KCMH Blood Component Order Appropriateness Audit — Human Review"
+        orders_line = (
+            f"{n_cases} orders ({n_cases - n_platelet} RBC, {n_platelet} platelet)"
+        )
+        component_filter_html = (
+            "\n    <label>Component: <select id='filter-component' "
+            "onchange='filterComponent(this)'>"
+            "<option value='all'>All</option>"
+            "<option value='rbc'>RBC</option>"
+            "<option value='platelet'>Platelet</option></select></label>"
+        )
+    else:
+        page_title = "KCMH RBC order appropriateness audit — human review"
+        page_h1 = "KCMH RBC Order Appropriateness Audit — Human Review"
+        orders_line = f"{n_cases} RBC orders"
+        component_filter_html = ""
     head = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>KCMH RBC order appropriateness audit — human review</title>
+<title>{page_title}</title>
 <style>{css}{returns_pill_css}{msbos_annotation_css}</style></head><body>
-<h1>KCMH RBC Order Appropriateness Audit — Human Review</h1>
-<p>{n_cases} RBC orders. Deterministic: local rule-based verdict.
+<h1>{page_h1}</h1>
+<p>{orders_line}. Deterministic: local rule-based verdict.
 LLM: Anthropic Batch classification on structured evidence only.
 {n_mismatches} verdict mismatches flagged.</p>
 <p class='kbd-hint' id='kbd-hint'>Keyboard: <kbd>j</kbd> next · <kbd>k</kbd> prev · <kbd>e</kbd> mark reviewed · <kbd>f</kbd> filter · <kbd>E</kbd> expand all · <kbd>x</kbd> expand case <button class='kbd-dismiss' onclick='dismissKbdHint()'>Dismiss</button></p>
@@ -2348,7 +2495,7 @@ LLM: Anthropic Batch classification on structured evidence only.
   <div class='nav-controls'>
     <a href='#summary' class='nav-home'>Summary</a>
     <label><input type='checkbox' id='filter-mismatches' onchange='filterMismatches(this)'> Mismatches only</label>
-    <span id='filter-status'></span>
+    <span id='filter-status'></span>{component_filter_html}
     <label>Jump: <input type='number' id='jump-input' min='1' max='{n_cases}' placeholder='#'
       onchange='jumpToCase(this.value)' oninput='if(this.value>={n_cases})this.value={n_cases}'></label>
     <span id='reviewed-counter'>Reviewed: 0 / {n_cases}</span>
@@ -2586,6 +2733,8 @@ LLM: Anthropic Batch classification on structured evidence only.
   });
 })();
 </script>"""
+    if has_platelet_cases:
+        script += _COMPONENT_FILTER_SCRIPT
     OUT.write_text(head + body + script + foot, encoding="utf-8")
     print(f"wrote {OUT}  ({OUT.stat().st_size // 1024} KB)")
 
