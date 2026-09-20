@@ -916,6 +916,15 @@ def _is_platelet_row(det: dict[str, str]) -> bool:
     return (det.get("component") or "") == "platelet"
 
 
+def _in_platelet_window(d: datetime | None, anchor: datetime | None) -> bool:
+    """Whether a platelet draw falls in the gate's window: strictly less than
+    7 days before the order, up to and including the order time (mirrors
+    lookup_platelet and the evidence bundle's _filter_platelet)."""
+    if d is None or anchor is None:
+        return False
+    return d <= anchor and anchor - d < timedelta(days=WINDOW_PLATELET_DAYS)
+
+
 def _platelet_meta_items(det: dict[str, str]) -> list[str]:
     """Meta-strip lines for a platelet case, replacing the Hb / cohort lines.
 
@@ -1985,18 +1994,15 @@ def main() -> None:
         if is_platelet:
             # Same window the platelet gate and the LLM evidence use: the 7
             # days before the order, never after it.
-            plt_lo_dt = (
-                anchor_dt - timedelta(days=WINDOW_PLATELET_DAYS) if anchor_dt else None
-            )
             plt_rows = [
                 _hb_row(r)
                 for r in lab
                 if r.get("AN") == an
                 and (r.get("LABEXM") or "").strip() == PLATELET_LABEXM
-                and plt_lo_dt is not None
-                and (d := parse_hosxp_datetime(r.get("LVSTDATE"), r.get("LVSTTIME")))
-                is not None
-                and plt_lo_dt <= d <= anchor_dt
+                and _in_platelet_window(
+                    parse_hosxp_datetime(r.get("LVSTDATE"), r.get("LVSTTIME")),
+                    anchor_dt,
+                )
             ]
             plt_rows.sort(key=lambda r: r["datetime"], reverse=True)
             parts.append(

@@ -690,3 +690,26 @@ def test_rbc_only_page_is_unchanged(
     assert "<th>Comp</th>" not in rendered
     assert "filter-component" not in rendered
     assert "data-component" not in rendered
+
+
+def test_platelet_history_window_matches_the_gate_bounds() -> None:
+    # lookup_platelet() and the LLM bundle's _filter_platelet() use a STRICT
+    # 7-day lower bound and an inclusive order-time upper bound. The page says
+    # it shows the same window, so a count exactly 7 days old (which the gate
+    # ignores) must not be presented to the reviewer as decision evidence.
+    from datetime import datetime, timedelta
+
+    module = _load_build_review()
+    anchor = datetime(2025, 3, 8, 9, 0, tzinfo=module.TZ_LOCAL)
+
+    assert module._in_platelet_window(anchor, anchor) is True
+    assert (
+        module._in_platelet_window(
+            anchor - timedelta(days=7) + timedelta(minutes=1), anchor
+        )
+        is True
+    )
+    assert module._in_platelet_window(anchor - timedelta(days=7), anchor) is False
+    assert module._in_platelet_window(anchor + timedelta(minutes=1), anchor) is False
+    assert module._in_platelet_window(None, anchor) is False
+    assert module._in_platelet_window(anchor, None) is False
