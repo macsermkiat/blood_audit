@@ -42,6 +42,9 @@ Environment variables:
 * ``BBA_PILOT_ONLY_REQNO`` — comma-separated REQNOs; process/submit only
   those cases and MERGE their fresh records into the existing
   ``llm_report.json``. Always pair with a fresh ``BBA_PILOT_RUN_ID``.
+* ``BBA_PILOT_PLATELET_LLM`` — ``1`` submits platelet cases to the LLM
+  (default: the library flag ``PLATELET_LLM_ENABLED``, OFF). Costs one call
+  per deferred platelet order.
 """
 
 from __future__ import annotations
@@ -235,6 +238,19 @@ PLATELET_AUTOCLEAR_PILOT_ENABLED = (
     if _plt_autoclear_env is not None
     else PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED
 )
+
+
+# Platelet LLM leg pilot seam. The library flag stays default-OFF (no clinician
+# sign-off for the live pipeline); BBA_PILOT_PLATELET_LLM "1" lets a sandbox run
+# submit platelet cases without editing library source, anything else forces
+# off. Unset follows the library flag, so a plain run never submits platelets.
+# Resolved at call time (not folded into CODE_VERSION), so the library flag is
+# read live rather than frozen at import.
+def _platelet_llm_enabled() -> bool:
+    env = os.environ.get("BBA_PILOT_PLATELET_LLM")
+    return env == "1" if env is not None else feature_flags.PLATELET_LLM_ENABLED
+
+
 _msbos_env = os.environ.get("BBA_PILOT_MSBOS_RESERVATION")
 MSBOS_RESERVATION_PILOT_ENABLED = (
     _msbos_env == "1"
@@ -1404,12 +1420,13 @@ def main() -> None:
             usetype_values_by_hn_reqno.get(((order.hn or "").strip(), order.reqno), [])
         )
         # --- Platelet path (Phase 2, component="platelet") ---
-        # Only active when feature_flags.PLATELET_LLM_ENABLED is True.
+        # Only active when _platelet_llm_enabled() (BBA_PILOT_PLATELET_LLM=1,
+        # else feature_flags.PLATELET_LLM_ENABLED).
         # With the flag off, non-terminal platelet verdicts orphan intentionally
         # (matching the pipeline.py Stage C2 gate); INSUFFICIENT_EVIDENCE rows
         # were already persisted by the deterministic leg.
         if order.component == "platelet":
-            if not feature_flags.PLATELET_LLM_ENABLED:
+            if not _platelet_llm_enabled():
                 continue
             plt_obs = _plt_observations(lab, order.an)
             plt_result = lookup_platelet(
