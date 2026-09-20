@@ -8,7 +8,7 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
 The canonical module + concept glossary for `bba.*` lives in
 [`docs/CONTEXT.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/CONTEXT.md)
 in the repository. It is appended to as part of every ralph-loop ticket
-that adds a new public concept — keep it the source of truth.
+that adds a new public concept. Keep it the source of truth.
 
 <AtAGlance
   items={[
@@ -30,26 +30,26 @@ docs site shows the live glossary without divergence risk.
 
 Common concept slugs to search for in the glossary:
 
-- `run_id` — the SHA-256-derived idempotency key.
-- `schema_fingerprint` — what makes `run_id` invariant across identical
+- `run_id`: the SHA-256-derived idempotency key.
+- `schema_fingerprint`: what makes `run_id` invariant across identical
   inputs.
-- `batch_runs` — the state machine for rows routed to the LLM.
-- `audit_log` — the compliance trail for every `bba audit` invocation.
-- `hallucination_suspect` — the queue that catches every grounded-quote
+- `batch_runs`: the state machine for rows routed to the LLM.
+- `audit_log`: the compliance trail for every `bba audit` invocation.
+- `hallucination_suspect`: the queue that catches every grounded-quote
   failure.
-- `parse_warning` — non-fatal ingest issues that surface in the run summary.
-- `idempotent re-run` — the contract that re-running the same input is
+- `parse_warning`: non-fatal ingest issues that surface in the run summary.
+- `idempotent re-run`: the contract that re-running the same input is
   a no-op.
-- `returns_ledger` / `not_transfused` — the BDVSTTRANS per-unit
+- `returns_ledger` / `not_transfused`: the BDVSTTRANS per-unit
   disposition aggregation behind `RETURNED_NOT_TRANSFUSED`.
-- `USETYPE` / `declared_use` — the order-time declared-use signal behind
+- `USETYPE` / `declared_use`: the order-time declared-use signal behind
   `PERIOP_TRANSFUSION_EXEMPT` (`preop_declared_exempt`).
-- `MSBOS` / `preop_reservation` — the pre-op reservation audit behind
+- `MSBOS` / `preop_reservation`: the pre-op reservation audit behind
   `PREOP_OVER_RESERVATION`, including the planned-op picker and the
   OPRTACT→ICD9 bridge.
-- `reservation_annotation` — the MSBOS annotation embedded on
+- `reservation_annotation`: the MSBOS annotation embedded on
   returns-terminal rows (annotation, never a verdict change).
-- `feature_flags` — the runtime flag module; five of the seven flags are
+- `feature_flags`: the runtime flag module; five of the seven flags are
   default-ON.
 
 For the full set, open the glossary on GitHub:

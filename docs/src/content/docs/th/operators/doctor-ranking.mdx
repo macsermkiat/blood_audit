@@ -5,8 +5,8 @@ description: รันฟีเจอร์ attribution เพื่อจัด
 
 import AtAGlance from "../../../../components/AtAGlance.astro";
 
-ฟีเจอร์ attribution (`bba.attribution`) จัดอันดับ **แพทย์ผู้สั่ง 10 อันดับแรก**
-และ **แผนก 10 อันดับแรก** ตามความเหมาะสมของการสั่งใช้เลือด แบ่งเป็นสามกลุ่ม:
+ฟีเจอร์ attribution (`bba.attribution`) จัดอันดับแพทย์ผู้สั่ง 10 อันดับแรก
+และแผนก 10 อันดับแรก ตามความเหมาะสมของการสั่งใช้เลือด แบ่งเป็นสามกลุ่ม:
 เหมาะสม, ไม่เหมาะสม และยังไม่สรุป
 
 <AtAGlance
@@ -20,7 +20,7 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
 />
 
 :::caution[ข้อมูล PHI จริงทั้ง input และ output]
-Input เป็น **ข้อมูลผู้ป่วย/คำสั่งจริงที่เข้ารหัส** และ output มี **PHI จริง** —
+Input เป็นข้อมูลผู้ป่วย/คำสั่งจริงที่เข้ารหัส และ output มี PHI จริง คือ
 ตัวตนแพทย์ผูกกับ verdict ความเหมาะสมจริง ห้าม commit, ส่งอีเมล หรือแชร์
 workbook, ไฟล์ CSV `BDVST`/`DCT` หรือ output CSV/HTML ที่สร้างขึ้น
 นอกช่องทางตรวจที่ได้รับอนุมัติ
@@ -35,7 +35,7 @@ workbook, ไฟล์ CSV `BDVST`/`DCT` หรือ output CSV/HTML ที่�
 
 - `REQNO` ของคำสั่ง → `BDVST.DCTREQ` → ทะเบียนแพทย์ `DCT.csv`
 
-แหล่งที่มาของ verdict **สลับได้** ผ่าน seam ชื่อ `VerdictSource` และเลือกได้
+แหล่งที่มาของ verdict สลับได้ ผ่าน seam ชื่อ `VerdictSource` และเลือกได้
 ตอนรันด้วย `BBA_VERDICT_SOURCE`: ค่าเริ่มต้น `human` จัดอันดับจาก workbook
 การตรวจโดยคน 300 เคส (Sheet1, คอลัมน์ J) ส่วน `pipeline` จัดอันดับจาก verdict
 ของ pipeline เต็มทั้ง cohort ที่อ่านจาก audit store (`BBA_AUDIT_STORE_DIR` +
@@ -44,7 +44,7 @@ terminal ฝั่งคืนเลือด (`RETURNED_NOT_TRANSFUSED` / `PERI
 เป็นกลุ่ม *ไม่นับคะแนน (excluded)* ด้วย และรวม `PREOP_OVER_RESERVATION`
 เข้าฝั่งไม่เหมาะสม โดยนับแยกไว้เป็น `over_reservation_count`
 
-ตัวนี้เป็น **สคริปต์ pilot / integration seam** ไม่ใช่ subcommand ระดับบนของ
+ตัวนี้เป็นสคริปต์ pilot / integration seam ไม่ใช่ subcommand ระดับบนของ
 `bba` และยังถูกนำเสนอผ่าน integration seam ของ `serve-dashboard`
 (attribution resolvers) อีกด้วย
 
@@ -56,7 +56,7 @@ terminal ฝั่งคืนเลือด (`RETURNED_NOT_TRANSFUSED` / `PERI
 uv run python scripts/pilot/rank_doctors.py
 ```
 
-สคริปต์ **fail loud** (exit ไม่เป็นศูนย์) ถ้าไฟล์ input ตัวใดตัวหนึ่งในสามหายไป
+สคริปต์ fail loud (exit ไม่เป็นศูนย์) ถ้าไฟล์ input ตัวใดตัวหนึ่งในสามหายไป
 พร้อมพิมพ์ว่าไฟล์ไหนที่หาย
 
 ### ตัวแปรสภาพแวดล้อม
@@ -94,19 +94,19 @@ open "$BBA_PILOT_WORK_DIR/doctor_rankings.html"
 | `department_ranking.csv` | แผนก 10 อันดับแรก จัดอันดับพร้อมจำนวนต่อกลุ่ม |
 | `doctor_rankings.html` | หน้าเดียวจบสำหรับให้คนตรวจ |
 
-สคริปต์ยังพิมพ์ **สรุปการกระทบยอด (reconciliation summary)** ไปที่ stdout:
+สคริปต์ยังพิมพ์สรุปการกระทบยอด (reconciliation summary) ไปที่ stdout:
 จำนวน verdict ทั้งหมด (พร้อมจำนวนเหมาะสม / ไม่เหมาะสม / ยังไม่สรุป), กลุ่มที่จัดอันดับ,
 ค่า threshold ขั้นต่ำ (minimum-N) และจำนวนแถวตารางของแพทย์/แผนก
 
 ## อยู่ตรงไหนในโค้ด
 
-- `src/bba/attribution/` — module ที่มีเทสต์ (loaders, aggregation, ranking,
+- `src/bba/attribution/`: module ที่มีเทสต์ (loaders, aggregation, ranking,
   writers)
-- `scripts/pilot/rank_doctors.py` — glue บาง ๆ ที่ resolve path ของ input และ
+- `scripts/pilot/rank_doctors.py`: glue บาง ๆ ที่ resolve path ของ input และ
   รายงานสรุปการกระทบยอด
 
 ## ขั้นถัดไป
 
-- [ตัวแปรสภาพแวดล้อม](/blood_audit/th/operators/env-vars/) — ตัวแปรที่ CLI ที่รองรับอ่าน
-- [Integration seams](/blood_audit/th/operators/integration-seams/) — จุดที่ attribution ถูกนำเสนอผ่าน `serve-dashboard`
-- [แก้ปัญหาเบื้องต้น](/blood_audit/th/operators/troubleshooting/) — ปัญหาที่พบบ่อย
+- [ตัวแปรสภาพแวดล้อม](/blood_audit/th/operators/env-vars/): ตัวแปรที่ CLI ที่รองรับอ่าน
+- [Integration seams](/blood_audit/th/operators/integration-seams/): จุดที่ attribution ถูกนำเสนอผ่าน `serve-dashboard`
+- [แก้ปัญหาเบื้องต้น](/blood_audit/th/operators/troubleshooting/): ปัญหาที่พบบ่อย

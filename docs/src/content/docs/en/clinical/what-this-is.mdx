@@ -22,21 +22,21 @@ import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
 blood_audit reviews inpatient adult red blood cell (RBC) and platelet
 transfusions at Chulalongkorn Hospital, after they are complete. It reads
 HOSxP exports from the hospital information system. For each audited
-order it records one of five core classifications — `APPROPRIATE`,
+order it records one of five core classifications (`APPROPRIATE`,
 `INAPPROPRIATE`, `NEEDS_REVIEW`, `INSUFFICIENT_EVIDENCE`, or
-`POTENTIALLY_INAPPROPRIATE` — or one of four routing/reservation
-terminals: `RETURNED_NOT_TRANSFUSED` and `PERIOP_TRANSFUSION_EXEMPT`
-(units returned or declared surgical use; excluded from appropriateness
-scoring), `PREOP_OVER_RESERVATION` (more units reserved than the MSBOS
-recommendation for the planned operation), and
-`PREOP_RESERVATION_UNCONFIRMED` (flag-gated, default-off).
-The appropriateness decision follows the KCMH internal
-guideline PR 17.2 (Procedure Revision 17.2) and the AABB 2023
-(Association for the Advancement of Blood & Biotherapies) standard,
-using a 3-tier hemoglobin (Hb) policy with clinical-context thresholds
-and evidence-gated bypasses. In developer docs these context buckets are
-called "cohorts"; they are per-order audit labels, not permanent patient
-groups.
+`POTENTIALLY_INAPPROPRIATE`) or one of four routing and reservation
+terminals. The terminals are `RETURNED_NOT_TRANSFUSED` and
+`PERIOP_TRANSFUSION_EXEMPT` (units returned or declared surgical use;
+excluded from appropriateness scoring), `PREOP_OVER_RESERVATION` (more
+units reserved than the MSBOS recommendation for the planned operation),
+and `PREOP_RESERVATION_UNCONFIRMED` (flag-gated, default-off).
+
+The appropriateness decision follows the KCMH internal guideline PR 17.2
+(Procedure Revision 17.2) and the AABB 2023 (Association for the
+Advancement of Blood & Biotherapies) standard. It uses a 3-tier hemoglobin
+(Hb) policy with clinical-context thresholds and evidence-gated bypasses.
+In developer docs these context buckets are called "cohorts"; they are
+per-order audit labels, not permanent patient groups.
 
 Rows that the deterministic classifier routes to the LLM go through six
 fail-closed quote-grounding layers. This route includes unclear clinical
@@ -49,17 +49,17 @@ human reviewer can adjudicate.
 
 ## What it is not
 
-- **Not Software as a Medical Device.** Nothing in this codebase influences
-  a transfusion order at the point of care.
-- **Not real-time.** No subscriber to the audit stream emits clinician
-  alerts. No POC dashboard pushes recommendations.
-- **Not a single-physician scorecard.** Per-physician views exist for the
-  reviewing clinician's own audit (own-view layout); they are not a
-  quality scorecard for management review.
+- It is not Software as a Medical Device. Nothing in this codebase
+  influences a transfusion order at the point of care.
+- It is not real-time. No subscriber to the audit stream emits clinician
+  alerts, and no point-of-care dashboard pushes recommendations.
+- It is not a single-physician scorecard. Per-physician views exist so a
+  reviewing clinician can audit their own orders (own-view layout); they
+  are not a quality scorecard for management review.
 
 If anyone asks for real-time CDS hooks, decline. That would move the
-project into SaMD territory and change everything: regulatory scope,
-review processes, deployment risk profile.
+project into SaMD territory and change the regulatory scope, the review
+process, and the deployment risk profile.
 
 ## What it produces
 

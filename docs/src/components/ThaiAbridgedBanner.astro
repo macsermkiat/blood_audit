@@ -1,0 +1,64 @@
+---
+// Override of Starlight's Banner. Keeps the default frontmatter banner and
+// adds a standing note on Thai pages: the Thai docs are a deliberately
+// shorter operator-facing summary, and the English page is authoritative
+// for full detail. Without this, a Thai reader cannot tell that a section
+// was condensed rather than that the detail does not exist.
+const { banner } = Astro.locals.starlightRoute.entry.data;
+const path = Astro.url.pathname;
+const isThai = path.includes("/th/");
+const englishHref = isThai ? path.replace("/th/", "/en/") : path;
+---
+
+{banner && <div class="sl-banner" set:html={banner.content} />}
+
+{
+  isThai && (
+    <aside class="th-abridged" aria-label="ขอบเขตของเอกสารภาษาไทย">
+      <p>
+        เอกสารภาษาไทยเป็น<strong>ฉบับย่อ</strong>สำหรับผู้ใช้งาน
+        บางหัวข้อตัดรายละเอียดเชิงเทคนิคออกโดยตั้งใจ
+        หากต้องการเนื้อหาครบถ้วน ให้ดู
+        <a href={englishHref}>หน้าภาษาอังกฤษ</a>
+        ซึ่งถือเป็นฉบับอ้างอิงหลัก
+      </p>
+    </aside>
+  )
+}
+
+<style>
+  .th-abridged {
+    border-left: 3px solid var(--sl-color-accent);
+    background: var(--sl-color-gray-7, var(--sl-color-bg-nav));
+    padding: 0.625rem 0.875rem;
+    margin: 1rem 0 1.5rem;
+    border-radius: 0 0.25rem 0.25rem 0;
+  }
+  .th-abridged p {
+    margin: 0;
+    font-size: 0.8125rem;
+    line-height: 1.7;
+    color: var(--sl-color-gray-2);
+  }
+  .th-abridged a {
+    color: var(--sl-color-text-accent);
+  }
+</style>
+
+<style>
+  @layer starlight.core {
+    .sl-banner {
+      --__sl-banner-text: var(--sl-color-banner-text, var(--sl-color-text-invert));
+      padding: var(--sl-nav-pad-y) var(--sl-nav-pad-x);
+      background-color: var(--sl-color-banner-bg, var(--sl-color-bg-accent));
+      color: var(--__sl-banner-text);
+      line-height: var(--sl-line-height-headings);
+      text-align: center;
+      text-wrap: balance;
+      box-shadow: var(--sl-shadow-sm);
+    }
+    .sl-banner :global(a) {
+      color: var(--__sl-banner-text);
+    }
+  }
+</style>

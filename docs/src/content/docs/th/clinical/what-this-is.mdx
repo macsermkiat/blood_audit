@@ -24,10 +24,10 @@ blood_audit เป็นระบบออดิทย้อนหลังส�
 (RBC, red blood cell) และเกล็ดเลือด (platelet) ในผู้ป่วยในผู้ใหญ่
 ณ โรงพยาบาลจุฬาฯ ระบบอ่านข้อมูลที่ส่งออกจาก HOSxP
 หลังการให้เลือดเสร็จสิ้นแล้ว และบันทึกผลสำหรับแต่ละคำสั่งที่ audit
-เป็น 1 ใน 5 classification หลัก — `APPROPRIATE`, `INAPPROPRIATE`,
+เป็น 1 ใน 5 classification หลัก (`APPROPRIATE`, `INAPPROPRIATE`,
 `NEEDS_REVIEW`, `INSUFFICIENT_EVIDENCE`, หรือ
-`POTENTIALLY_INAPPROPRIATE` — หรือ 1 ใน 4 terminal
-ด้าน routing/การจองเลือด: `RETURNED_NOT_TRANSFUSED` และ
+`POTENTIALLY_INAPPROPRIATE`) หรือ 1 ใน 4 terminal
+ด้าน routing/การจองเลือด ได้แก่ `RETURNED_NOT_TRANSFUSED` และ
 `PERIOP_TRANSFUSION_EXEMPT` (ทุกยูนิตถูกคืนโดยไม่ได้ให้เลือด
 หรือประกาศใช้เพื่อผ่าตัด; ถูกตัดออกจากการคิดคะแนนความเหมาะสม),
 `PREOP_OVER_RESERVATION` (จองเลือดเกินคำแนะนำ MSBOS
@@ -47,13 +47,13 @@ Hb อยู่ใน gray zone, Hb สูง, หรือมี safety flag �
 `final_classification = NEEDS_REVIEW` พร้อม `review_reason`
 เพื่อให้คนทบทวนต่อ
 
-## สิ่งที่ระบบนี้ **ไม่ใช่**
+## สิ่งที่ระบบนี้ไม่ใช่
 
-- **ไม่ใช่ Software as a Medical Device** ไม่มีอะไรในโค้ดนี้ที่จะมีผลต่อ
+- ไม่ใช่ Software as a Medical Device ไม่มีอะไรในโค้ดนี้ที่จะมีผลต่อ
   คำสั่งให้เลือด ณ จุดดูแล
-- **ไม่ใช่ระบบ real-time** ไม่มี subscriber ที่ส่งสัญญาณเตือนแพทย์
+- ไม่ใช่ระบบ real-time ไม่มี subscriber ที่ส่งสัญญาณเตือนแพทย์
   และไม่มี dashboard ณ จุดดูแลที่ผลักคำแนะนำไปยังผู้รักษา
-- **ไม่ใช่ scorecard รายแพทย์** มี physician own-view เพื่อให้แพทย์
+- ไม่ใช่ scorecard รายแพทย์ มี physician own-view เพื่อให้แพทย์
   เห็นผลออดิทของตนเองเท่านั้น ไม่ใช่คะแนนสำหรับผู้บริหาร
 
 หากมีคำขอให้ทำ real-time CDS hooks ต้องปฏิเสธก่อน เพราะจะเปลี่ยน
