@@ -1695,3 +1695,121 @@ class TestPlateletPromptWithholdPopulations:
             assert "TTP" not in rbc, f"RBC prompt ({mode}) must not mention TTP"
             assert "HIT" not in rbc, f"RBC prompt ({mode}) must not mention HIT"
             assert "ITP" not in rbc, f"RBC prompt ({mode}) must not mention ITP"
+
+
+class TestPlateletPromptTerminalLine:
+    """The platelet prompt must separate "not indicated" from "cannot judge".
+
+    WHY: the first real-data platelet run (2026-09-20) returned
+    INSUFFICIENT_EVIDENCE for orders whose count was on file and far above the
+    prophylaxis threshold (65k, 41k, 18k) with detailed notes documenting no
+    bleeding and no procedure. INSUFFICIENT_EVIDENCE drops out of the
+    inappropriate count, so those orders vanished from the doctor ranking. The
+    RBC prompts already draw this line (_RBC_OUTPUT_RULE); the platelet prompt
+    must draw the same one.
+    """
+
+    def test_adequate_notes_without_indication_are_inappropriate(self) -> None:
+        from bba.prompt_builder.system_prompt import platelet_system_prompt
+
+        prompt = platelet_system_prompt()
+        assert (
+            "adequate notes that document no positive indication are INAPPROPRIATE"
+            in prompt
+        )
+
+    def test_insufficient_evidence_is_reserved_for_thin_notes(self) -> None:
+        from bba.prompt_builder.system_prompt import platelet_system_prompt
+
+        prompt = platelet_system_prompt()
+        assert (
+            "INSUFFICIENT_EVIDENCE ONLY when the notes are genuinely silent" in prompt
+        )
+        # The old closing sentence told the model to answer INSUFFICIENT_EVIDENCE
+        # whenever no indication was written down; it must not survive.
+        assert "If the notes are silent rather than contrary" not in prompt
+
+    def test_documentation_absence_alone_still_never_inappropriate(self) -> None:
+        # Protects clinicians from being flagged for thin charting (CR-C2).
+        from bba.prompt_builder.system_prompt import platelet_system_prompt
+
+        assert (
+            "Documentation absence alone is never INAPPROPRIATE"
+            in platelet_system_prompt()
+        )
+
+
+class TestPlateletPromptExclusionOverride:
+    """An exclusion population overrides the low-count prophylaxis indications.
+
+    WHY: in the same run the model cleared a very severe aplastic anemia order
+    (count 1k, "No active bleeding") as APPROPRIATE by arguing that exclusion D
+    stops applying below 10,000 /uL, while a 5k aplastic anemia order went to
+    NEEDS_REVIEW. The signed policy withholds prophylactic platelets in these
+    populations at ANY count; the prompt must say so and must not let ATG /
+    cyclosporine immunosuppression pass as chemotherapy.
+    """
+
+    def test_exclusion_applies_at_any_count(self) -> None:
+        from bba.prompt_builder.system_prompt import platelet_system_prompt
+
+        prompt = platelet_system_prompt()
+        assert "however low the count" in prompt
+        assert "indications 4 and 5" in prompt
+
+    def test_immunosuppression_is_not_chemotherapy(self) -> None:
+        from bba.prompt_builder.system_prompt import platelet_system_prompt
+
+        prompt = platelet_system_prompt()
+        assert "ATG" in prompt and "is NOT chemotherapy" in prompt
+
+    def test_rbc_prompts_unchanged_by_platelet_terminal_line(self) -> None:
+        # RBC verdicts on file were produced from these prompts.
+        from bba.prompt_builder.system_prompt import system_prompt_for
+
+        for mode in ("HB_7_10_REVIEW",):
+            rbc = system_prompt_for(task_mode=mode, cohort_threshold=7.0)
+            assert "however low the count" not in rbc
+            assert "is NOT chemotherapy" not in rbc
+
+    def test_procedure_does_not_override_a_restrictive_exclusion_line(self) -> None:
+        # Codex P1 on #235: TTP / HIT / snakebite / ITP lines permit transfusion
+        # only for the condition they name (life-threatening bleeding, emergency
+        # surgery for ITP). A routine CVC or LP must not clear those patients —
+        # in TTP and HIT the transfusion is actively harmful.
+        from bba.prompt_builder.system_prompt import platelet_system_prompt
+
+        prompt = platelet_system_prompt()
+        assert "a procedure indication 1–3 does NOT override" in prompt
+        assert "or a procedure indication 1–3, grounded in the notes, supports" not in (
+            prompt
+        )
+
+    def test_hard_signals_follow_the_exclusion_override(self) -> None:
+        # Codex P2 on #235: a procedure clear the override PERMITS (e.g. CVC in
+        # aplastic anemia) must be reportable as procedure_indication=True;
+        # under the old blanket wording it reported no signal and the over-clear
+        # guardrail floored the permitted verdict to NEEDS_REVIEW.
+        from bba.prompt_builder.system_prompt import platelet_system_prompt
+
+        prompt = platelet_system_prompt()
+        assert "AND the EXCLUSION OVERRIDE above does not bar it" in prompt
+        assert (
+            "set each True ONLY when the evidence explicitly grounds the "
+            "indication AND no exclusion population applies" not in prompt
+        )
+        # Prophylaxis at a low count stays barred in every excluded population.
+        assert "within 24 hours), AND no exclusion population applies" in prompt
+
+    def test_standing_order_is_not_an_indication(self) -> None:
+        # Real-data run 2026-09-20: post-HSCT orders at 16k / 18k were cleared
+        # APPROPRIATE by citing the ward standing order "if plt < 20,000 give
+        # platelets", and the same orders flipped to NEEDS_REVIEW on another
+        # run. The signed policy threshold is <10,000 /uL (or expected below it
+        # within 24 hours); a local trigger written in the chart is the practice
+        # being audited, not evidence that the practice is indicated.
+        from bba.prompt_builder.system_prompt import platelet_system_prompt
+
+        prompt = platelet_system_prompt()
+        assert "standing order" in prompt
+        assert "is NOT a positive indication" in prompt
