@@ -33,6 +33,10 @@ MSBOS_PLANNED_OP_PICKER_V2_ENABLED
 DECLARED_USE_PREOP_EXEMPT_ENABLED
     Exempts orders whose declared use is surgery or type-screen from the
     Hb-appropriateness judgment. Default: True.
+PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED
+    Lets the deterministic platelet gate clear a fresh count < 10 on a
+    heme-malignancy / chemo admission with no withhold population. Default: True
+    (hematology sign-off 2026-09-20).
 """
 
 from __future__ import annotations
@@ -45,6 +49,25 @@ PLATELET_LLM_ENABLED: bool = False
 Stage C2 reads this flag to decide whether to route PLATELET_REVIEW orders
 through the LLM client. The flag is defined here and defaulted to False so
 the RBC path is byte-identical regardless of the platelet feature state.
+"""
+
+PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED: bool = True
+"""Enable the cohort-gated platelet prophylaxis auto-clear (default: ON).
+
+Default-ON since the hematology sign-off of 2026-09-20 (sign-off note,
+decisions 1-7: threshold 10 x10^3/uL, D61.1 as indication, MDS only with
+chemotherapy evidence, Z51.1 alone qualifies, exclusion list + D59.3, fresh
+count only, no bleeding check; "rule may be switched on for the pilot": yes).
+Set ``BBA_PILOT_PLATELET_AUTOCLEAR=0`` to force it off for a pilot run.
+
+When True, :func:`bba.platelet_classifier.classify_platelet` may return a
+terminal ``APPROPRIATE`` for a platelet order whose FRESH count is below
+``PLATELET_PROPHYLAXIS_THRESHOLD`` (10 ×10³/µL) on an admission carrying a
+heme-malignancy / chemotherapy / transplant diagnosis and none of the
+policy's withhold populations (ITP, TTP/TMA, HIT, aplastic anaemia, dengue,
+snakebite). This is the medicine policy's first platelet row expressed on
+structured codes only. When False the classifier is byte-identical to v1 and
+auto-clears nothing (CR-C1).
 """
 
 RESERVE_AHEAD_ROUTER_ENABLED: bool = False
@@ -137,6 +160,7 @@ __all__: Sequence[str] = (
     "MSBOS_PLANNED_OP_PICKER_V2_ENABLED",
     "MSBOS_RESERVATION_ENABLED",
     "PLATELET_LLM_ENABLED",
+    "PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED",
     "RESERVE_AHEAD_ROUTER_ENABLED",
     "RETURNS_LEDGER_ENABLED",
 )

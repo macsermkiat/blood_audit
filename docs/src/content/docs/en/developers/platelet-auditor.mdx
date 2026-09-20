@@ -117,14 +117,25 @@ Module: `src/bba/platelet_classifier/`.
 | Missing count, defer flag **ON** | `NEEDS_REVIEW` | `plt_missing_defer_llm` | Defers to the LLM leg. |
 | Missing count, defer flag **OFF** (**default**) | `INSUFFICIENT_EVIDENCE` | `plt_missing` | Terminal, no LLM. |
 | count ≥ 100 | `POTENTIALLY_INAPPROPRIATE` | `plt_ge_100` | Routes to review — **not terminal**. |
-| count < 100 (including < 10) | `NEEDS_REVIEW` | `plt_defer_llm` | Defers to the LLM leg. |
+| count < 10, **fresh** (< 24 h), indication ICD-10 present (C8x/C9x, D61.1, Z51.1, Z94.8, T86.0; D46 only with Z51.1 or a recent chemo drug), no withhold ICD-10 (D69.3, M31.1, D59.3, D75.8, D61.0/2/3/8/9, A90/A91/A97, T63.0), flag `PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED` (default ON since 2026-09-20) | `APPROPRIATE` | `plt_lt_10_heme_prophylaxis` | Terminal. The medicine policy's "chemo / HSCT, no bleeding: 10,000/µL" row on structured codes only. Threshold and both code lists signed off by hematology on 2026-09-20. |
+| count < 100 (including < 10) otherwise | `NEEDS_REVIEW` | `plt_defer_llm` | Defers to the LLM leg. |
 
 The missing-count defer flag mirrors the RBC `enable_missing_hb_positive_evidence`
 opt-in. It is a **SEED pending clinical sign-off**, and is **OFF by default**.
 
-### Safety invariant (CR-C1): the classifier never emits `APPROPRIATE`
+### Safety invariant (CR-C1): the classifier never emits `APPROPRIATE` unconditionally
 
-In v1 the classifier **never emits `APPROPRIATE` or `INAPPROPRIATE`**.
+With the auto-clear flag off (the default) the classifier **never emits
+`APPROPRIATE` or `INAPPROPRIATE`**. With it on, the single `APPROPRIATE` path is
+the cohort-gated prophylaxis clear above: it requires a heme-malignancy,
+chemotherapy or transplant diagnosis code AND the absence of every
+withhold-population code (ITP, TTP/TMA, HUS, HIT, aplastic anaemia other than the
+drug-induced D61.1, dengue, snakebite), so the populations listed below are
+excluded by code rather than by reading notes. The pilot override is
+`BBA_PILOT_PLATELET_AUTOCLEAR` (`1` on, anything else off). The threshold and
+both code lists were signed off by hematology on 2026-09-20 (decisions 1-7 of
+the sign-off note); MDS qualifies only with chemotherapy evidence, and HUS
+D59.3 was added to the exclusions at their request.
 `APPROPRIATE` would be deterministic-final — no LLM, no human — but the
 policies **WITHHOLD platelets at very low counts** for several exclusion
 populations:

@@ -1115,6 +1115,13 @@ def _platelet_gate_result(
             audit_id=context.order.audit_id,
             platelet_count=count,
             enable_missing_platelet_defer=enable_missing_platelet_defer,
+            diagnosis_codes=context.order.diagnosis_codes,
+            platelet_freshness=context.platelet_result.freshness
+            if context.platelet_result is not None
+            else None,
+            enable_prophylaxis_autoclear=(
+                feature_flags.PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED
+            ),
         )
     )
 

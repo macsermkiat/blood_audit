@@ -9,6 +9,10 @@ The clinical contract, not the implementation, is pinned here:
 * §8/CR-M2 — no present-count verdict is ever deterministic-final; every count
   routes onward to the LLM/review. :class:`TestNeverDeterministicFinal`.
 * §5.1 gate boundaries at the review ceiling and the missing-count contract.
+* Cohort-gated prophylaxis auto-clear (flag ``PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED``,
+  2026-09-19): the ONLY ``APPROPRIATE`` path, and only when every structured
+  condition holds. :class:`TestProphylaxisAutoclear`. Every pre-existing test
+  runs with the flag off and still pins v1 behaviour.
 """
 
 from __future__ import annotations
@@ -151,3 +155,199 @@ class TestResultModel:
 
     def test_result_type(self) -> None:
         assert isinstance(classify_platelet(_inputs(100.0)), PlateletClassifierResult)
+
+
+class TestProphylaxisAutoclear:
+    """The medicine policy's "chemo / HSCT, no bleeding: 10,000/µL" row on
+    structured codes only. WHY: hematology orders sit almost entirely below
+    100k, so without this rule every one of them costs an LLM call; but the
+    CR-C1 populations must still never be cleared, so each exclusion code is
+    pinned to block the clear."""
+
+    @staticmethod
+    def _in(
+        count: float | None = 5.0,
+        codes: tuple[str, ...] = ("C920", "Z511"),
+        freshness: str | None = "fresh",
+        *,
+        flag: bool = True,
+    ) -> PlateletClassifierInputs:
+        return PlateletClassifierInputs(
+            audit_id="a1",
+            platelet_count=count,
+            diagnosis_codes=codes,
+            platelet_freshness=freshness,
+            enable_prophylaxis_autoclear=flag,
+        )
+
+    def test_clears_fresh_low_count_on_chemo_admission(self) -> None:
+        result = classify_platelet(self._in())
+        assert result.classification == "APPROPRIATE"
+        assert result.rationale == "plt_lt_10_heme_prophylaxis"
+        assert result.classification in _DETERMINISTIC_FINAL_CLASSIFICATIONS
+
+    def test_flag_off_defers_even_when_every_condition_holds(self) -> None:
+        result = classify_platelet(self._in(flag=False))
+        assert result.classification == "NEEDS_REVIEW"
+        assert result.rationale == "plt_defer_llm"
+
+    @pytest.mark.parametrize("count", [10.0, 10.1, 50.0, 99.9])
+    def test_count_at_or_above_threshold_defers(self, count: float) -> None:
+        assert classify_platelet(self._in(count=count)).classification == "NEEDS_REVIEW"
+
+    @pytest.mark.parametrize(
+        "freshness", ["stale_24_72h", "stale_3_7d", "missing", None]
+    )
+    def test_stale_count_is_never_cleared(self, freshness: str | None) -> None:
+        # A 3-day-old count of 5 says nothing about today's count.
+        assert (
+            classify_platelet(self._in(freshness=freshness)).classification
+            == "NEEDS_REVIEW"
+        )
+
+    def test_no_indication_code_defers(self) -> None:
+        # Low count on a non-heme admission (e.g. pneumonia): indication is
+        # unknown, the LLM must read the notes.
+        assert (
+            classify_platelet(self._in(codes=("J150", "N179"))).classification
+            == "NEEDS_REVIEW"
+        )
+        assert classify_platelet(self._in(codes=())).classification == "NEEDS_REVIEW"
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            "D693",
+            "M311",
+            "D593",
+            "D758",
+            "D610",
+            "D612",
+            "D613",
+            "D618",
+            "D619",
+            "A90",
+            "A91",
+            "A97",
+            "T630",
+        ],
+    )
+    def test_each_withhold_population_blocks_the_clear(self, code: str) -> None:
+        # The CR-C1 failure mode: a heme patient who ALSO carries ITP / TTP /
+        # HIT / aplastic / dengue / snakebite must not be auto-cleared.
+        result = classify_platelet(self._in(codes=("C920", code)))
+        assert result.classification == "NEEDS_REVIEW"
+        assert result.rationale == "plt_defer_llm"
+
+    def test_drug_induced_aplastic_anaemia_is_an_indication_not_an_exclusion(
+        self,
+    ) -> None:
+        # D61.1 codes chemotherapy pancytopenia in this dataset (65 of 71
+        # D61.x admissions in the hematology sandbox). Treating it as
+        # "aplastic anaemia" would withhold exactly where the policy transfuses.
+        assert (
+            classify_platelet(self._in(codes=("D611",))).classification == "APPROPRIATE"
+        )
+        assert (
+            classify_platelet(self._in(codes=("D613",))).classification
+            == "NEEDS_REVIEW"
+        )
+
+    def test_mds_qualifies_only_with_chemotherapy_evidence(self) -> None:
+        # Sign-off decision 3: MDS on supportive care is chronic marrow failure
+        # (no prophylaxis per NICE / medicine draft); MDS on treatment is the
+        # 10k row. Evidence = Z51.1 on the admission OR a recent chemo drug.
+        assert (
+            classify_platelet(self._in(codes=("D46",))).classification == "NEEDS_REVIEW"
+        )
+        assert (
+            classify_platelet(self._in(codes=("D46", "Z511"))).classification
+            == "APPROPRIATE"
+        )
+        inputs = PlateletClassifierInputs(
+            audit_id="a1",
+            platelet_count=5.0,
+            diagnosis_codes=("D46",),
+            platelet_freshness="fresh",
+            has_recent_chemo_med=True,
+            enable_prophylaxis_autoclear=True,
+        )
+        assert classify_platelet(inputs).classification == "APPROPRIATE"
+        # A recent chemo drug alone, with no indication diagnosis, is not enough.
+        no_dx = inputs.model_copy(update={"diagnosis_codes": ("J150",)})
+        assert classify_platelet(no_dx).classification == "NEEDS_REVIEW"
+
+    @pytest.mark.parametrize("codes", [("c92.0",), ("C92.0", "z51.1"), (" C920 ",)])
+    def test_code_matching_is_case_and_dot_insensitive(
+        self, codes: tuple[str, ...]
+    ) -> None:
+        assert classify_platelet(self._in(codes=codes)).classification == "APPROPRIATE"
+
+    def test_never_inappropriate_and_appropriate_only_when_qualifying(self) -> None:
+        from bba.platelet_classifier import qualifies_for_prophylaxis_autoclear
+
+        for inputs in (
+            self._in(),
+            self._in(count=12.0),
+            self._in(codes=("C920", "A91")),
+            self._in(freshness="stale_24_72h"),
+            self._in(flag=False),
+            self._in(count=None),
+            self._in(count=150.0),
+        ):
+            result = classify_platelet(inputs)
+            assert result.classification != "INAPPROPRIATE"
+            assert (
+                result.classification == "APPROPRIATE"
+            ) == qualifies_for_prophylaxis_autoclear(inputs)
+
+    @given(
+        count=st.one_of(st.none(), st.floats(min_value=0.0, max_value=5000.0)),
+        fresh=st.sampled_from(["fresh", "stale_24_72h", "stale_3_7d", "missing"]),
+        codes=st.lists(
+            st.sampled_from(
+                [
+                    "C920",
+                    "Z511",
+                    "D611",
+                    "D46",
+                    "J150",
+                    "D693",
+                    "M311",
+                    "D593",
+                    "A91",
+                    "D613",
+                    "T630",
+                ]
+            ),
+            max_size=4,
+        ),
+        chemo_med=st.booleans(),
+    )
+    def test_property_appropriate_iff_all_structured_conditions(
+        self, count: float | None, fresh: str, codes: list[str], chemo_med: bool
+    ) -> None:
+        from bba.platelet_classifier import (
+            PLATELET_PROPHYLAXIS_EXCLUSION_PREFIXES,
+            PLATELET_PROPHYLAXIS_INDICATION_PREFIXES,
+        )
+
+        inputs = self._in(count=count, codes=tuple(codes), freshness=fresh).model_copy(
+            update={"has_recent_chemo_med": chemo_med}
+        )
+        result = classify_platelet(inputs)
+        chemo_evidence = chemo_med or "Z511" in codes
+        indicated = any(
+            c.startswith(PLATELET_PROPHYLAXIS_INDICATION_PREFIXES) for c in codes
+        ) or (chemo_evidence and "D46" in codes)
+        expected = (
+            count is not None
+            and count < 10.0
+            and fresh == "fresh"
+            and indicated
+            and not any(
+                c.startswith(PLATELET_PROPHYLAXIS_EXCLUSION_PREFIXES) for c in codes
+            )
+        )
+        assert (result.classification == "APPROPRIATE") == expected
+        assert result.classification != "INAPPROPRIATE"
