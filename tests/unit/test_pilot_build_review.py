@@ -824,6 +824,10 @@ def test_initial_keyboard_lookup_ignores_hidden_cases(
     ).decode()
 
     assert "if (caseEls[i].style.display === 'none') continue;" in rendered
+    # With every case filtered out the lookup must not fall back to case 0,
+    # or `e` / `x` would act on a hidden case.
+    assert "return firstVisible;" in rendered
+    assert "firstVisible < 0 ? 0" not in rendered
 
 
 def test_applying_a_filter_drops_the_active_case(

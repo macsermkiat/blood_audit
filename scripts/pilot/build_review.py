@@ -2714,7 +2714,9 @@ LLM: Anthropic Batch classification on structured evidence only.
       var r = caseEls[i].getBoundingClientRect();
       if (r.top <= mid) return i;
     }
-    return firstVisible < 0 ? 0 : firstVisible;
+    /* -1 when every case is filtered out: caseEls[-1] is undefined, so the
+       e / x handlers return early and j / k find no visible target. */
+    return firstVisible;
   }
   /* ── IntersectionObserver scrollspy ── */
   var _activeNavLink = null;
