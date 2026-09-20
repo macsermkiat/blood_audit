@@ -29,6 +29,10 @@ export default defineConfig({
         },
       ],
       customCss: ["./src/styles/custom.css"],
+      components: {
+        // Adds the "Thai pages are abridged, English is authoritative" note.
+        Banner: "./src/components/ThaiAbridgedBanner.astro",
+      },
       sidebar: [
         {
           label: "Operators",
@@ -39,6 +43,7 @@ export default defineConfig({
             { label: "Environment variables", translations: { th: "ตัวแปรสภาพแวดล้อม" }, slug: "operators/env-vars" },
             { label: "First audit run", translations: { th: "รันออดิทครั้งแรก" }, slug: "operators/first-audit-run" },
             { label: "Run the pipeline", translations: { th: "รัน pipeline" }, slug: "operators/run-pipeline" },
+            { label: "Generate the report", translations: { th: "สร้างรายงาน" }, slug: "operators/generate-report" },
             { label: "Doctor & department ranking", translations: { th: "จัดอันดับแพทย์/แผนก" }, slug: "operators/doctor-ranking" },
             { label: "Ingest CSV", translations: { th: "Ingest CSV" }, slug: "operators/ingest-csv" },
             { label: "audit command", translations: { th: "คำสั่ง audit" }, slug: "operators/audit-command" },

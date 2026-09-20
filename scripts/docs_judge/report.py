@@ -100,12 +100,19 @@ def _parity_lines(parity: Sequence[ParityJudgment]) -> list[str]:
     )
     weak = [p for p in low if p.align_probability < CONFIDENT_ALIGN]
     lines = [
-        f"{len(parity)} EN/TH block pairs (Jev-aligned) judged. {len(low)} fall "
-        f"below parity {PARITY_THRESHOLD:.2f}: {len(drift)} on pairs aligned at "
-        f"{CONFIDENT_ALIGN:.2f} or better (real content drift), {len(weak)} on "
-        f"weakly aligned pairs (the blocks probably do not correspond at all).",
+        "The Thai pages are a deliberately abridged operator-facing summary "
+        "(ruling of 2026-09-20); the English page is authoritative for full "
+        "detail, and every Thai page carries a banner saying so. A Thai block "
+        "that states fewer facts than its English counterpart is therefore "
+        "expected coverage information, not a defect.",
         "",
-        "### Content drift on confidently aligned pairs",
+        f"{len(parity)} EN/TH block pairs (Jev-aligned) judged. {len(low)} "
+        f"differ on facts: {len(drift)} on pairs aligned at "
+        f"{CONFIDENT_ALIGN:.2f} or better (the Thai block is abridged), "
+        f"{len(weak)} on weakly aligned pairs (the blocks probably do not "
+        "correspond at all, so read nothing into those).",
+        "",
+        "### Where the Thai text carries fewer facts",
         "",
     ]
     if not drift:

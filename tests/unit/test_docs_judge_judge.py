@@ -182,3 +182,6 @@ def test_report_separates_content_drift_from_weakly_aligned_pairs() -> None:
     assert "english about the returns ledger" in md
     assert "english about hashes and identifiers" not in md
     assert CONFIDENT_ALIGN == 0.8
+    # The abridgement ruling: fewer facts in Thai is coverage data, not a defect.
+    assert "deliberately abridged" in md
+    assert "drift" not in md.lower()
