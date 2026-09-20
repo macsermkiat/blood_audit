@@ -207,12 +207,24 @@ _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
                 "/uL within 24 hours) AND no exclusion population applies."
             ),
         },
+        "intracranial_bleed_indication": {
+            "type": "boolean",
+            "description": (
+                "True iff the evidence grounds an intracranial bleed with the "
+                "count below its threshold: <100,000 /uL when acute, "
+                "acute-on-chronic, growing, or neurosurgery is planned; <50,000 "
+                "/uL when stable and non-operative (including a stable chronic "
+                "SDH). Chronic SDH expansion belongs here, not under "
+                "active_bleeding."
+            ),
+        },
     },
     "required": [
         *_TOOL_INPUT_SCHEMA["required"],
         "active_bleeding",
         "procedure_indication",
         "prophylactic_marrow_failure",
+        "intracranial_bleed_indication",
     ],
 }
 
