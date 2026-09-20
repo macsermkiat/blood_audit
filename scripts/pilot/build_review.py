@@ -883,8 +883,16 @@ PLATELET_LABEXM = "290078"
 WINDOW_PLATELET_DAYS = 7
 
 
-def _is_platelet_row(det: dict[str, str]) -> bool:
-    return (det.get("component") or "") == "platelet"
+def _is_platelet_case(manifest_row: dict[str, str], det: dict[str, str]) -> bool:
+    """Whether a case is a platelet order.
+
+    The sample manifest is authoritative: an order excluded by
+    build_audit_orders gets a sparse report row (reqno / classification /
+    rationale only) with no component. The report field is the fallback for
+    manifests written before the component column existed.
+    """
+    component = (manifest_row.get("component") or det.get("component") or "").strip()
+    return component == "platelet"
 
 
 def _in_platelet_window(d: datetime | None, anchor: datetime | None) -> bool:
@@ -1169,7 +1177,7 @@ def main() -> None:
     # Platelet pieces (component column, filter, neutral title) switch on only
     # when the page holds a platelet case, so an RBC-only page is unchanged.
     has_platelet_cases = any(
-        _is_platelet_row(det_by_reqno.get(m["REQNO"], {})) for m in manifest_rows
+        _is_platelet_case(m, det_by_reqno.get(m["REQNO"], {})) for m in manifest_rows
     )
     case_html_parts: list[str] = []
     summary_rows: list[dict[str, str]] = []
@@ -1647,7 +1655,7 @@ def main() -> None:
                 "REQNO": reqno,
                 "HN": _short(hn),
                 "AN": _short(an),
-                "Comp": "PLT" if _is_platelet_row(det) else "RBC",
+                "Comp": "PLT" if _is_platelet_case(m, det) else "RBC",
                 "Plt (k/µL)": _fmt_plt_k(det.get("platelet_count_k_ul")) or "—",
                 "Hb": det.get("hb_value_g_dl", "") or "—",
                 "Cohort": det.get("cohort_label", "") or "—",
@@ -1682,7 +1690,7 @@ def main() -> None:
         hb_lookup_reason_disp = det.get("hb_anchor_reason") or "order_datetime"
         if reanchored and hb_lookup_reason_disp == "order_datetime":
             hb_lookup_reason_disp = "issue_reanchor"
-        is_platelet = _is_platelet_row(det)
+        is_platelet = _is_platelet_case(m, det)
         meta_items = [
             f"<div><b>HN:</b> <code>{esc(hn)}</code></div>",
             f"<div><b>AN:</b> <code>{esc(an)}</code></div>",
@@ -2439,7 +2447,7 @@ def main() -> None:
         n_platelet = sum(
             1
             for m in manifest_rows
-            if _is_platelet_row(det_by_reqno.get(m["REQNO"], {}))
+            if _is_platelet_case(m, det_by_reqno.get(m["REQNO"], {}))
         )
         page_title = "KCMH blood component order appropriateness audit — human review"
         page_h1 = "KCMH Blood Component Order Appropriateness Audit — Human Review"

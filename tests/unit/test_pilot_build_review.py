@@ -758,3 +758,27 @@ def test_mismatch_filter_reads_the_flag_from_the_nav_link(
     # One implementation serves both controls.
     assert "window.filterMismatches = applyFilters;" in rendered
     assert "window.filterComponent = applyFilters;" in rendered
+
+
+def test_excluded_platelet_order_keeps_its_component_from_the_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Codex P2 on #236: an order excluded by build_audit_orders has a sparse
+    # report row with no component column value. Without the manifest it was
+    # rendered and counted as RBC, so the platelet filter hid it and the page
+    # header miscounted (308 RBC instead of 304 on the hematology sandbox).
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN1,P9,AN1,platelet\n",
+        report_csv=(
+            "reqno,classification,rationale,component\nP9,excluded,hemoglobinopathy,\n"
+        ),
+        llm_json="[]",
+    ).decode()
+
+    assert "data-component='platelet'" in rendered
+    assert "(0 RBC, 1 platelet)" in rendered
+    assert "Platelet count history" in rendered
