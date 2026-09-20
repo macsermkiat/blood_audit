@@ -530,3 +530,64 @@ def test_mixed_order_excluded_from_platelet_stream(
                     f"BDTYPE {bdtype!r} in a sampled platelet order is not a "
                     "platelet product — all-platelet predicate was not enforced"
                 )
+
+
+def _platelet_only_reqnos(raw: Path) -> set[str]:
+    from bba.component_map import is_platelet_product
+
+    by_reqno: dict[str, list[str]] = {}
+    with (raw / "BDVSTDT.csv").open(encoding="utf-8", newline="") as fh:
+        for row in csv.DictReader(fh):
+            by_reqno.setdefault(row["REQNO"], []).append(row["BDTYPE"].strip().upper())
+    return {
+        r for r, bts in by_reqno.items() if bts and all(map(is_platelet_product, bts))
+    }
+
+
+def test_platelet_reqno_file_builds_exactly_the_listed_platelet_orders(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """(f) A doctor-restricted cohort (e.g. hematologists) needs the platelet
+    stream to take an explicit REQNO list like the RBC stream does; a seeded
+    draw cannot be restricted to a set of doctors. The list wins over N/seed and
+    the manifest records ``list`` so the sample is reproducible on any export."""
+    raw = _make_raw_dir(tmp_path / "raw")
+    work = tmp_path / "work"
+    listed = sorted(_platelet_only_reqnos(raw))[:1]
+    assert listed, "fixture must hold a platelet-only order"
+    (tmp_path / "plt.txt").write_text("# hematology\n" + listed[0] + "\n")
+    monkeypatch.setenv("BBA_PILOT_RAW_DIR", str(raw))
+    monkeypatch.setenv("BBA_PILOT_WORK_DIR", str(work))
+    monkeypatch.setenv("BBA_PILOT_SAMPLE_N", "2")
+    monkeypatch.setenv("BBA_PILOT_SAMPLE_SEED", "42")
+    monkeypatch.setenv("BBA_PILOT_PLATELET_SAMPLE_N", "0")
+    monkeypatch.setenv("BBA_PILOT_PLATELET_REQNO_FILE", str(tmp_path / "plt.txt"))
+    mod = _load_sample_bundle()
+    mod.main()
+
+    manifest = _read_manifest(work / "sample_manifest.csv")
+    plt_rows = [r for r in manifest if r.get("component") == "platelet"]
+    assert [r["REQNO"] for r in plt_rows] == listed
+    assert plt_rows[0]["seed"] == "list"
+    rbc_rows = {r["REQNO"] for r in manifest if r.get("component") == "rbc"}
+    assert rbc_rows == _EXPECTED_RBC_REQNOS_SEED42, "the RBC draw must be untouched"
+
+
+def test_platelet_reqno_file_rejects_a_mixed_order(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A REQNO carrying an RBC line is tagged red_cell by the intake gate, so
+    listing it as a platelet order would put it in the wrong stream; the
+    sampler must stop rather than silently drop or misfile it."""
+    raw = _make_raw_dir(tmp_path / "raw")
+    work = tmp_path / "work"
+    (tmp_path / "plt.txt").write_text(_MIXED_REQNO + "\n")
+    monkeypatch.setenv("BBA_PILOT_RAW_DIR", str(raw))
+    monkeypatch.setenv("BBA_PILOT_WORK_DIR", str(work))
+    monkeypatch.setenv("BBA_PILOT_SAMPLE_N", "2")
+    monkeypatch.setenv("BBA_PILOT_SAMPLE_SEED", "42")
+    monkeypatch.setenv("BBA_PILOT_PLATELET_REQNO_FILE", str(tmp_path / "plt.txt"))
+    mod = _load_sample_bundle()
+    with pytest.raises(SystemExit, match="not eligible platelet-only orders"):
+        mod.main()
+    assert not (work / "sample_manifest.csv").exists()

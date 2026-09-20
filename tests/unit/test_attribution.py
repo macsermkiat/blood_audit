@@ -916,8 +916,8 @@ class TestWriteRankingCsv:
             "inappropriate,unresolved,returned_not_transfused,"
             "periop_transfusion_exempt,bucket,"
             "bucket_count,bucket_rate,"
-            "meets_min_orders,mean_hb_g_dl,hb_order_n,"
-            "mean_platelet_k_ul,platelet_order_n"
+            "meets_min_orders,mean_hb_g_dl,hb_order_n,hb_min_g_dl,hb_max_g_dl,"
+            "mean_platelet_k_ul,platelet_order_n,platelet_min_k_ul,platelet_max_k_ul"
         )
         assert lines[1].startswith("1,302389,")
         assert "\r\n" not in text
@@ -938,8 +938,9 @@ class TestWriteRankingCsv:
             == (
                 "rank,group_id,group_name,total_orders,appropriate,inappropriate,"
                 "unresolved,bucket,bucket_count,bucket_rate,meets_min_orders,"
-                "mean_hb_g_dl,hb_order_n,mean_platelet_k_ul,platelet_order_n\n"
-                "1,302389,\u0e1e\u0e0d.\u0e2a***** \u0e27*****,6,2,3,1,inappropriate,3,0.5,true,,0,,0\n"
+                "mean_hb_g_dl,hb_order_n,hb_min_g_dl,hb_max_g_dl,"
+                "mean_platelet_k_ul,platelet_order_n,platelet_min_k_ul,platelet_max_k_ul\n"
+                "1,302389,\u0e1e\u0e0d.\u0e2a***** \u0e27*****,6,2,3,1,inappropriate,3,0.5,true,,0,,,,0,,\n"
             ).encode()
         )
 
@@ -1491,11 +1492,13 @@ class TestMeanHbOutput:
         text = out.read_text(encoding="utf-8")
         lines = text.splitlines()
         assert lines[0].endswith(
-            ",mean_hb_g_dl,hb_order_n,mean_platelet_k_ul,platelet_order_n"
+            ",mean_hb_g_dl,hb_order_n,hb_min_g_dl,hb_max_g_dl,"
+            "mean_platelet_k_ul,platelet_order_n,platelet_min_k_ul,platelet_max_k_ul"
         )
         d1_line = next(line for line in lines[1:] if line.split(",")[1] == "d1")
-        # d1 Hb mean is 9.0 over 2 orders; no platelet orders -> empty, 0.
-        assert d1_line.endswith(",9.0,2,,0")
+        # d1 Hb mean is 9.0 over 2 orders (range 8.0-10.0); no platelet
+        # orders -> empty mean, 0, empty range.
+        assert d1_line.endswith(",9.0,2,8.0,10.0,,0,,")
 
     def test_html_renders_mean_with_n_and_emdash_and_caveat(
         self, tmp_path: Path
@@ -1693,9 +1696,10 @@ class TestMeanPlateletIntegration:
         csv_out = write_ranking_csv(result.doctors.rows, tmp_path / "d.csv").read_text(
             encoding="utf-8"
         )
-        # Every data row ends with empty mean_platelet + platelet_order_n 0.
+        # Every data row ends with empty mean_platelet, platelet_order_n 0 and
+        # an empty platelet range.
         for line in csv_out.splitlines()[1:]:
-            assert line.endswith(",,0")
+            assert line.endswith(",,0,,")
 
     def test_html_renders_platelet_mean_with_n(self, tmp_path: Path) -> None:
         verdicts, reqno_to_doctor, registry, report_rows = _mixed_component_scenario()
@@ -1713,3 +1717,40 @@ class TestMeanPlateletIntegration:
         assert "Mean platelet" in html
         assert "20.0 (n=1)" in html  # d1 platelet
         assert "mean pre-transfusion platelet" in html  # caveat sentence
+
+
+class TestTriggerRange:
+    """Min / max ride with the mean so a reviewer can tell an outlier from a
+    habit (clinician request 2026-09-19): a doctor with mean Hb 7.1 over a
+    6.2–9.8 range is a different conversation from one at 7.0–7.2."""
+
+    def test_range_brackets_the_mean_per_doctor(self) -> None:
+        verdicts, reqno_to_doctor, _registry, order_labs = _mean_hb_scenario()
+        stats = aggregate_doctor_lab_stats(verdicts, reqno_to_doctor, order_labs)
+        assert (stats["d1"].hb_min, stats["d1"].hb_max) == (8.0, 10.0)
+        assert (stats["d2"].hb_min, stats["d2"].hb_max) == (7.0, 7.0)
+        # r4 (returned, Hb 12.0) is non-scorable and must not widen d1's range.
+        assert stats["d1"].hb_max < 12.0
+
+    def test_empty_group_has_no_range(self) -> None:
+        stats = GroupLabStats()
+        assert stats.hb_min is None and stats.hb_max is None
+        assert stats.platelet_min is None and stats.platelet_max is None
+
+    def test_range_cannot_exist_without_a_mean_or_straddle_it(self) -> None:
+        with pytest.raises(ValueError, match="cannot be present without a mean"):
+            GroupLabStats(hb_min=7.0, hb_max=9.0)
+        with pytest.raises(ValueError, match="min <= mean <= max"):
+            GroupLabStats(mean_hb=8.0, hb_order_n=2, hb_min=8.5, hb_max=9.0)
+
+    def test_assembly_threads_range_onto_rows(self) -> None:
+        verdicts, reqno_to_doctor, registry, order_labs = _mean_hb_scenario()
+        result = build_rankings(
+            verdicts=verdicts,
+            reqno_to_doctor=reqno_to_doctor,
+            dct_registry=registry,
+            order_labs=order_labs,
+        )
+        doctors = {row.group_id: row for row in result.doctors.rows}
+        assert (doctors["d1"].hb_min, doctors["d1"].hb_max) == (8.0, 10.0)
+        assert doctors["d1"].platelet_min is None
