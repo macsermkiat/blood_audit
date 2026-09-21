@@ -1121,7 +1121,12 @@ def response_audit_blocker(llm_report: Path, audit: Path) -> str | None:
     old report that finished later) and carries no HIGH finding."""
     if not llm_report.exists():
         return None
-    report_bytes = llm_report.read_bytes()
+    return _audit_blocker_for(llm_report.read_bytes(), llm_report.name, audit)
+
+
+def _audit_blocker_for(
+    report_bytes: bytes, report_name: str, audit: Path
+) -> str | None:
     if not _needs_response_audit(json.loads(report_bytes)):
         return None
     if not audit.exists():
@@ -1134,7 +1139,7 @@ def response_audit_blocker(llm_report: Path, audit: Path) -> str | None:
         )
     if payload.get("report_sha256") != hashlib.sha256(report_bytes).hexdigest():
         return (
-            f"{audit.name} audited a different {llm_report.name}: "
+            f"{audit.name} audited a different {report_name}: "
             "re-run audit_llm_responses.py"
         )
     high = sum(1 for f in payload.get("findings", ()) if f.get("severity") == "HIGH")
@@ -1143,13 +1148,20 @@ def response_audit_blocker(llm_report: Path, audit: Path) -> str | None:
     return None
 
 
-def enforce_response_audit() -> None:
-    blocker = response_audit_blocker(LLM_REPORT, RESPONSE_AUDIT)
+def enforce_response_audit() -> list[dict[str, Any]]:
+    """Gate the page on the response audit and return the report entries that
+    were validated. ``llm_report.json`` is read ONCE: main() renders these
+    entries, so a re-run that lands after the gate cannot reach the page."""
+    if not LLM_REPORT.exists():
+        return []
+    report_bytes = LLM_REPORT.read_bytes()
+    entries: list[dict[str, Any]] = json.loads(report_bytes)
+    blocker = _audit_blocker_for(report_bytes, LLM_REPORT.name, RESPONSE_AUDIT)
     if blocker is None:
-        return
+        return entries
     if os.environ.get("BBA_PILOT_ALLOW_UNAUDITED") == "1":
         print(f"WARNING: building the page anyway ({blocker})", file=sys.stderr)
-        return
+        return entries
     raise SystemExit(
         f"refusing to build review.html: {blocker}. "
         "Set BBA_PILOT_ALLOW_UNAUDITED=1 to build it anyway."
@@ -1157,7 +1169,7 @@ def enforce_response_audit() -> None:
 
 
 def main() -> None:
-    enforce_response_audit()
+    llm_report = enforce_response_audit()
     if not BUNDLE.exists():
         sys.exit(f"bundle not found: {BUNDLE} (run sample_bundle.py first)")
     if not MANIFEST.exists():
@@ -1236,11 +1248,6 @@ def main() -> None:
                 f"MSBOS annotations: {dups}"
             )
 
-    llm_report = (
-        json.loads(LLM_REPORT.read_text(encoding="utf-8"))
-        if LLM_REPORT.exists()
-        else []
-    )
     llm_by_reqno = {r["reqno"]: r for r in llm_report}
 
     manifest_rows = list(csv.DictReader(MANIFEST.open(encoding="utf-8")))
