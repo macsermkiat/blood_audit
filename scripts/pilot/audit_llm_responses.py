@@ -87,7 +87,9 @@ PARSE_FAILURE_REASONS = frozenset(
     }
 )
 # Findings a fresh LLM call can fix; the rest need a code or data fix first.
-RERUN_CODES = frozenset({"parse_failure", "consortium_label_contradiction"})
+RERUN_CODES = frozenset(
+    {"parse_failure", "consortium_label_contradiction", "llm_result_missing"}
+)
 
 # Upper-case only: lower-case "appropriate" is ordinary prose ("appropriate
 # threshold"); the consortium reads conclusions written in plain words.
@@ -257,6 +259,23 @@ def check_record(record: ResponseRecord) -> tuple[Finding, ...]:
     return tuple(out)
 
 
+def missing_result_findings(
+    entries: Sequence[Mapping[str, Any]],
+) -> tuple[Finding, ...]:
+    """Report entries the LLM leg wrote with ``llm_final: null`` (batch row
+    dropped or unparsable): the page shows "LLM verdict missing" for them."""
+    return tuple(
+        Finding(
+            str(e.get("reqno", e.get("audit_id"))),
+            "llm_result_missing",
+            "HIGH",
+            "report entry has no LLM result: re-run this REQNO",
+        )
+        for e in entries
+        if "llm_final" in e and not e.get("llm_final")
+    )
+
+
 def unmatched_report_finding(reqno: str, why: str) -> Finding:
     return Finding(reqno, "response_not_auditable", "HIGH", why)
 
@@ -394,11 +413,8 @@ def _tool_input(response_json: Any) -> dict[str, Any]:
 def load_records(work: Path) -> tuple[tuple[ResponseRecord, ...], tuple[Finding, ...]]:
     """Current LLM records joined to their raw tool payload, plus a finding for
     every report entry that could not be audited (never a silent skip)."""
-    report = {
-        r["audit_id"]: r
-        for r in json.loads((work / "llm_report.json").read_text())
-        if r.get("llm_final")
-    }
+    entries = json.loads((work / "llm_report.json").read_text())
+    report = {r["audit_id"]: r for r in entries if r.get("llm_final")}
     store = AuditStore(
         AuditStoreConfig(root_dir=work / "data" / "audit_store", code_version="audit")
     )
@@ -421,7 +437,7 @@ def load_records(work: Path) -> tuple[tuple[ResponseRecord, ...], tuple[Finding,
             rows[row.audit_id] = row
 
     records: list[ResponseRecord] = []
-    skipped: list[Finding] = []
+    skipped: list[Finding] = [*missing_result_findings(entries)]
     for audit_id, entry in report.items():
         final = entry["llm_final"]
         reqno = str(entry.get("reqno", audit_id))

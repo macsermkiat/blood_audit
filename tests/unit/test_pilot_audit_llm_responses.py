@@ -352,3 +352,24 @@ class TestLoadFindings:
 
     def test_a_missing_response_payload_reads_as_empty(self, audit: ModuleType) -> None:
         assert audit._tool_input(None) == {}
+
+    def test_report_entry_whose_llm_result_is_missing_is_high_and_rerunnable(
+        self, audit: ModuleType
+    ) -> None:
+        # Codex P1 on #241: run_llm_leg writes llm_final: null when a batch row
+        # is dropped or unparsable. Filtering those out let the audit exit 0
+        # while the page showed "LLM verdict missing" for the case.
+        entries = [
+            {"audit_id": "a1", "reqno": "R1", "llm_final": None},
+            {
+                "audit_id": "a2",
+                "reqno": "R2",
+                "llm_final": {"final_classification": "X"},
+            },
+        ]
+        findings = audit.missing_result_findings(entries)
+
+        assert [(f.reqno, f.code, f.severity) for f in findings] == [
+            ("R1", "llm_result_missing", "HIGH")
+        ]
+        assert "llm_result_missing" in audit.RERUN_CODES
