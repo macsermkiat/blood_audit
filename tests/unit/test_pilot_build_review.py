@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -93,6 +94,19 @@ def _render_review_with_rows(
     manifest.write_text(manifest_csv, encoding="utf-8")
     report.write_text(report_csv, encoding="utf-8")
     llm_report.write_text(llm_json, encoding="utf-8")
+    # A clean response audit, as audit_llm_responses.py leaves it (#239 gate).
+    response_audit = root / "llm_response_audit.json"
+    response_audit.write_text(
+        json.dumps(
+            {
+                "judge": "all",
+                "report_sha256": hashlib.sha256(llm_json.encode("utf-8")).hexdigest(),
+                "findings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(module, "RESPONSE_AUDIT", response_audit)
 
     monkeypatch.setattr(module, "WORK", root)
     monkeypatch.setattr(module, "BUNDLE", bundle)
@@ -876,3 +890,197 @@ def test_applying_a_filter_drops_the_active_case(
     # Same function scope: the handler state is declared in the script that
     # defines applyFilters, not in a separate block.
     assert rendered.count("var activeIdx = -1;") == 1
+
+
+# --- Issue #239: the page is not built from unaudited LLM responses ------------
+# A clinician found a self-contradicting answer on case 1 of a rendered page.
+# audit_llm_responses.py catches those, but only if it actually runs: the page
+# builder refuses LLM verdicts that have no clean, full audit OF THIS REPORT.
+
+_LLM_ENTRY = (
+    '[{"reqno": "R1", "audit_id": "a1", "llm_final": '
+    '{"final_classification": "APPROPRIATE", "model": "claude-sonnet-5"}}]'
+)
+
+
+def _audit_json(report_json: str, *, judge: str = "all", findings: str = "[]") -> str:
+    digest = hashlib.sha256(report_json.encode("utf-8")).hexdigest()
+    return (
+        f'{{"judge": "{judge}", "report_sha256": "{digest}", "findings": {findings}}}'
+    )
+
+
+def _gate_paths(
+    tmp_path: Path, llm_json: str, audit_json: str | None
+) -> tuple[Path, Path]:
+    report = tmp_path / "llm_report.json"
+    audit = tmp_path / "llm_response_audit.json"
+    report.write_text(llm_json, encoding="utf-8")
+    if audit_json is not None:
+        audit.write_text(audit_json, encoding="utf-8")
+    return report, audit
+
+
+def test_llm_verdicts_without_an_audit_block_the_page(tmp_path: Path) -> None:
+    module = _load_build_review()
+    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, None)
+
+    blocker = module.response_audit_blocker(report, audit)
+
+    assert blocker is not None
+    assert "audit_llm_responses.py" in blocker
+
+
+def test_high_finding_blocks_the_page(tmp_path: Path) -> None:
+    module = _load_build_review()
+    high = '[{"reqno": "R1", "code": "consortium_label_contradiction", "severity": "HIGH"}]'
+    report, audit = _gate_paths(
+        tmp_path, _LLM_ENTRY, _audit_json(_LLM_ENTRY, findings=high)
+    )
+
+    blocker = module.response_audit_blocker(report, audit)
+
+    assert blocker is not None
+    assert "1 HIGH" in blocker
+
+
+def test_audit_of_a_different_report_does_not_unlock_the_page(tmp_path: Path) -> None:
+    # A re-run merges fresh records into llm_report.json. An audit that read the
+    # OLD report says nothing about them, even if it finished later (an mtime
+    # check would accept it), so the audit is bound to the report's contents.
+    module = _load_build_review()
+    rerun = _LLM_ENTRY.replace("APPROPRIATE", "INAPPROPRIATE")
+    report, audit = _gate_paths(tmp_path, rerun, _audit_json(_LLM_ENTRY))
+
+    blocker = module.response_audit_blocker(report, audit)
+
+    assert blocker is not None
+    assert "different llm_report.json" in blocker
+
+
+def test_clean_full_audit_of_this_report_lets_the_page_build(tmp_path: Path) -> None:
+    module = _load_build_review()
+    medium = '[{"reqno": "R1", "code": "label_before_reasoning", "severity": "MEDIUM"}]'
+    report, audit = _gate_paths(
+        tmp_path, _LLM_ENTRY, _audit_json(_LLM_ENTRY, findings=medium)
+    )
+
+    assert module.response_audit_blocker(report, audit) is None
+
+
+def test_runs_without_model_responses_need_no_audit(tmp_path: Path) -> None:
+    # No LLM leg, or only deterministic rows the LLM leg persists under
+    # llm_final (MSBOS over-reservation, injection filter): nothing to audit,
+    # and those runs rendered before this gate existed.
+    module = _load_build_review()
+    deterministic = (
+        '[{"reqno": "R1", "audit_id": "a1", "llm_final": '
+        '{"final_classification": "PREOP_OVER_RESERVATION", "model": "msbos-reservation"}}]'
+    )
+    for llm_json in ("[]", deterministic):
+        report, audit = _gate_paths(tmp_path, llm_json, None)
+        assert module.response_audit_blocker(report, audit) is None
+    assert module.response_audit_blocker(tmp_path / "absent.json", audit) is None
+
+
+def test_a_missing_llm_result_still_needs_the_audit(tmp_path: Path) -> None:
+    module = _load_build_review()
+    dropped = '[{"reqno": "R1", "audit_id": "a1", "llm_final": null}]'
+    report, audit = _gate_paths(tmp_path, dropped, None)
+
+    assert module.response_audit_blocker(report, audit) is not None
+
+
+def test_main_refuses_to_render_and_the_override_is_explicit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_build_review()
+    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, None)
+    monkeypatch.setattr(module, "LLM_REPORT", report)
+    monkeypatch.setattr(module, "RESPONSE_AUDIT", audit)
+    monkeypatch.delenv("BBA_PILOT_ALLOW_UNAUDITED", raising=False)
+
+    with pytest.raises(SystemExit) as refused:
+        module.enforce_response_audit()
+    assert "BBA_PILOT_ALLOW_UNAUDITED=1" in str(refused.value)
+
+    monkeypatch.setenv("BBA_PILOT_ALLOW_UNAUDITED", "1")
+    module.enforce_response_audit()  # explicit operator override: no exit
+
+
+@pytest.mark.parametrize("weak", ["off", "candidates", None])
+def test_an_audit_without_the_full_consortium_does_not_unlock_the_page(
+    tmp_path: Path, weak: str | None
+) -> None:
+    # Codex P1 on #241: the regex-only checks missed 7 of 13 real
+    # contradictions, so a clean regex-only audit proves little. None = an
+    # audit file from before the judge mode was recorded (a bare list).
+    module = _load_build_review()
+    audit_json = "[]" if weak is None else _audit_json(_LLM_ENTRY, judge=weak)
+    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, audit_json)
+
+    blocker = module.response_audit_blocker(report, audit)
+
+    assert blocker is not None
+    assert "--judge all" in blocker
+
+
+def test_the_page_renders_the_report_the_gate_validated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Local Codex review of #241: the gate read llm_report.json, then main()
+    # read it again later. A re-run landing between the two reads was rendered
+    # without ever being audited. main() now renders what the gate returned.
+    module = _load_build_review()
+    validated = [
+        {
+            "reqno": "R1",
+            "llm_final": {
+                "final_classification": "INAPPROPRIATE",
+                "confidence": 0.9,
+                "model": "claude-sonnet-5",
+                "review_reason": None,
+                "indications": [],
+                "negative_evidence": [],
+                "reasoning_en": "VALIDATED-REPORT-REASONING",
+                "reasoning_th": "x",
+            },
+        }
+    ]
+    monkeypatch.setattr(module, "enforce_response_audit", lambda: validated)
+
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN\nHN1,R1,AN1\n",
+        report_csv="reqno,classification\nR1,NEEDS_REVIEW\n",
+        llm_json=json.dumps(
+            [
+                {
+                    "reqno": "R1",
+                    "llm_final": {
+                        **validated[0]["llm_final"],
+                        "reasoning_en": "UNAUDITED-RERUN",
+                    },
+                }
+            ]
+        ),
+    ).decode()
+
+    assert "VALIDATED-REPORT-REASONING" in rendered
+    assert "UNAUDITED-RERUN" not in rendered
+
+
+def test_the_gate_hands_back_the_entries_it_validated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_build_review()
+    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, _audit_json(_LLM_ENTRY))
+    monkeypatch.setattr(module, "LLM_REPORT", report)
+    monkeypatch.setattr(module, "RESPONSE_AUDIT", audit)
+
+    assert module.enforce_response_audit() == json.loads(_LLM_ENTRY)
+
+    monkeypatch.setattr(module, "LLM_REPORT", tmp_path / "absent.json")
+    assert module.enforce_response_audit() == []

@@ -24,6 +24,7 @@ Environment variables:
 from __future__ import annotations
 
 import csv
+import hashlib
 import html
 import json
 import math
@@ -60,6 +61,7 @@ MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED = (
 )
 BUNDLE = WORK / "bundle"
 LLM_REPORT = WORK / "llm_report.json"
+RESPONSE_AUDIT = WORK / "llm_response_audit.json"
 DET_REPORT = WORK / "report.csv"
 MANIFEST = WORK / "sample_manifest.csv"
 OUT = WORK / "review.html"
@@ -1092,7 +1094,82 @@ def _returned_blood_datetime(rows: list[dict[str, str]]) -> str:
     return min(candidates) if candidates else ""
 
 
+def _needs_response_audit(entries: list[dict[str, Any]]) -> bool:
+    """True iff the report holds a model response, or is missing one it expected.
+
+    ``run_llm_leg.py`` also persists deterministic rows under ``llm_final``
+    (MSBOS over-reservation, injection filter, ...) with a non-Claude ``model``;
+    those carry no LLM response and rendered before this gate existed."""
+    for entry in entries:
+        if "llm_final" not in entry:
+            continue
+        final = entry["llm_final"]
+        if not final or str(final.get("model") or "").startswith("claude"):
+            return True
+    return False
+
+
+def response_audit_blocker(llm_report: Path, audit: Path) -> str | None:
+    """Why the page must not be built from these LLM responses, else ``None``.
+
+    Issue #239: a clinician found a self-contradicting LLM answer on case 1 of a
+    rendered page. ``audit_llm_responses.py`` catches those, so LLM verdicts are
+    rendered only behind a response audit that exists, was judged by the full
+    consortium (the regex-only checks missed 7 of 13 real contradictions), read
+    exactly this ``llm_report.json`` (a re-run merges fresh, unaudited records
+    into it; the digest, unlike an mtime, cannot be satisfied by an audit of the
+    old report that finished later) and carries no HIGH finding."""
+    if not llm_report.exists():
+        return None
+    return _audit_blocker_for(llm_report.read_bytes(), llm_report.name, audit)
+
+
+def _audit_blocker_for(
+    report_bytes: bytes, report_name: str, audit: Path
+) -> str | None:
+    if not _needs_response_audit(json.loads(report_bytes)):
+        return None
+    if not audit.exists():
+        return f"no response audit found ({audit.name}): run audit_llm_responses.py"
+    payload = json.loads(audit.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("judge") != "all":
+        return (
+            f"{audit.name} was not produced with the full consortium: "
+            "run audit_llm_responses.py --judge all"
+        )
+    if payload.get("report_sha256") != hashlib.sha256(report_bytes).hexdigest():
+        return (
+            f"{audit.name} audited a different {report_name}: "
+            "re-run audit_llm_responses.py"
+        )
+    high = sum(1 for f in payload.get("findings", ()) if f.get("severity") == "HIGH")
+    if high:
+        return f"response audit has {high} HIGH finding(s): see {audit.name}"
+    return None
+
+
+def enforce_response_audit() -> list[dict[str, Any]]:
+    """Gate the page on the response audit and return the report entries that
+    were validated. ``llm_report.json`` is read ONCE: main() renders these
+    entries, so a re-run that lands after the gate cannot reach the page."""
+    if not LLM_REPORT.exists():
+        return []
+    report_bytes = LLM_REPORT.read_bytes()
+    entries: list[dict[str, Any]] = json.loads(report_bytes)
+    blocker = _audit_blocker_for(report_bytes, LLM_REPORT.name, RESPONSE_AUDIT)
+    if blocker is None:
+        return entries
+    if os.environ.get("BBA_PILOT_ALLOW_UNAUDITED") == "1":
+        print(f"WARNING: building the page anyway ({blocker})", file=sys.stderr)
+        return entries
+    raise SystemExit(
+        f"refusing to build review.html: {blocker}. "
+        "Set BBA_PILOT_ALLOW_UNAUDITED=1 to build it anyway."
+    )
+
+
 def main() -> None:
+    llm_report = enforce_response_audit()
     if not BUNDLE.exists():
         sys.exit(f"bundle not found: {BUNDLE} (run sample_bundle.py first)")
     if not MANIFEST.exists():
@@ -1171,11 +1248,6 @@ def main() -> None:
                 f"MSBOS annotations: {dups}"
             )
 
-    llm_report = (
-        json.loads(LLM_REPORT.read_text(encoding="utf-8"))
-        if LLM_REPORT.exists()
-        else []
-    )
     llm_by_reqno = {r["reqno"]: r for r in llm_report}
 
     manifest_rows = list(csv.DictReader(MANIFEST.open(encoding="utf-8")))
