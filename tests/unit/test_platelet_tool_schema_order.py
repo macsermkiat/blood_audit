@@ -87,3 +87,16 @@ def test_shared_fields_keep_one_definition_across_schemas() -> None:
         definition = _TOOL_INPUT_SCHEMA["properties"][name]
         assert _PLATELET_TOOL_INPUT_SCHEMA["properties"][name] == definition
         assert _RESERVE_AHEAD_TOOL_INPUT_SCHEMA["properties"][name] == definition
+
+
+@pytest.mark.parametrize("signal", _HARD_SIGNALS)
+def test_hard_signals_say_in_words_that_they_follow_the_reasoning(signal: str) -> None:
+    # Sandbox 2026-09-21 (68042732, 68051598): once the label was pinned last,
+    # the model moved the four booleans to the FRONT, set
+    # prophylactic_marrow_failure true for a chemotherapy patient, then reasoned
+    # that 17,000 /uL is above the 10,000 threshold. Same defect as the label,
+    # same remedy: the field states when it is written.
+    description = _PLATELET_TOOL_INPUT_SCHEMA["properties"][signal]["description"]
+
+    assert "after both reasoning summaries" in description
+    assert "reasoning_summary_en" in description

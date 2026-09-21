@@ -221,10 +221,13 @@ def check_record(record: ResponseRecord) -> tuple[Finding, ...]:
         )
     true_signals = sorted(k for k, v in record.signals.items() if v is True)
     if record.label in ("INAPPROPRIATE", "INSUFFICIENT_EVIDENCE") and true_signals:
+        # MEDIUM, not HIGH: the hard signals are read only by the replay
+        # guardrails that act on an APPROPRIATE label, and are shown nowhere.
         add(
             "signal_contradicts_label",
-            "HIGH",
-            f"label {record.label} with true hard signal(s): {', '.join(true_signals)}",
+            "MEDIUM",
+            f"label {record.label} with true hard signal(s): "
+            f"{', '.join(true_signals)} (no verdict depends on it)",
         )
     cited = [i for i in record.indications if isinstance(i, Mapping)]
     if len(cited) != len(record.indications) or any(
