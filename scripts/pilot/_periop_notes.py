@@ -11,12 +11,55 @@ on what surgery/EBL was documented. Extracted verbatim from the previous
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from bba.ingest.models import ParsedTimeOfDay
 from bba.vitals_extractor import VitalsNote
 
 from _hosxp_dt import _combine, _parse_hosxp_date, _parse_time
+
+
+_END_OF_DAY = ParsedTimeOfDay(hour=23, minute=59, second=59)
+_MAX_ENTRY_LAG = timedelta(days=1)
+
+
+def progress_note_timestamp(progdate_raw: str, firstdate_raw: str) -> datetime | None:
+    """When a doctor progress note became part of the record (UTC).
+
+    ``PROGDATE`` is a date with no time; ``FIRSTDATE`` is when the note was first
+    saved. The loader used to stamp every note at 00:00 of ``PROGDATE``. The
+    evidence bundle keeps progress notes within 24 h of the order, so every
+    previous-day note looked more than 24 h old and was dropped (platelet order
+    68000711: both doctor notes naming an acute SDH, written at 14:09 and 19:19
+    the day before a 10:11 order; 78 of 364 LLM-judged hematology orders).
+
+    * ``FIRSTDATE`` on the clinical date or the day after (96% of real notes,
+      the second case being notes typed the next morning): use it.
+    * Otherwise (back-filled days later, entered before the clinical date,
+      blank or unparseable): the entry time says nothing about the clinical
+      day, so the note sits at the END of ``PROGDATE``, which keeps it visible
+      to a next-day order.
+    """
+    clinical_day = _parse_hosxp_date(progdate_raw)
+    if clinical_day is None:
+        return None
+    entered = _entry_datetime(firstdate_raw)
+    if entered is not None:
+        entry_day, entry_time = entered
+        if timedelta(0) <= entry_day - clinical_day <= _MAX_ENTRY_LAG:
+            return _combine(entry_day, entry_time)
+    return _combine(clinical_day, _END_OF_DAY)
+
+
+def _entry_datetime(raw: str) -> tuple[date, ParsedTimeOfDay] | None:
+    """Split a ``YYYY-MM-DD HH:MM:SS[.mmm]`` cell into its local date and time."""
+    day_part, _, time_part = raw.strip().partition(" ")
+    day = _parse_hosxp_date(day_part)
+    digits = time_part.split(".", 1)[0].replace(":", "")
+    time_of_day = _parse_time(digits) if len(digits) == 6 else None
+    if day is None or time_of_day is None:
+        return None
+    return day, time_of_day
 
 
 def vitals_notes_for(
@@ -48,10 +91,7 @@ def vitals_notes_for(
     for r in progress:
         if r.get("AN") != an:
             continue
-        dt = _combine(
-            _parse_hosxp_date(r.get("PROGDATE") or ""),
-            ParsedTimeOfDay(hour=0, minute=0, second=0),
-        )
+        dt = progress_note_timestamp(r.get("PROGDATE") or "", r.get("FIRSTDATE") or "")
         soap = (
             ("Subjective", (r.get("SUBJECTIVE") or "").strip()),
             ("Objective", (r.get("OBJECTIVE") or "").strip()),
