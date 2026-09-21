@@ -104,6 +104,15 @@ class TestPromptStatesTheRuling:
         assert "is NOT active bleeding" in prompt
         assert "intracranial_bleed_indication" in prompt
 
+    def test_terminal_line_counts_indication_6(self) -> None:
+        # Codex P1 on #238: the closing INAPPROPRIATE rule listed only
+        # indications 4 and 5, so a stable intracranial bleed below 50,000
+        # matched both "INAPPROPRIATE" and indication 6. The guardrail cannot
+        # repair a wrong INAPPROPRIATE, so the prompt must not contradict itself.
+        prompt = platelet_system_prompt()
+        assert "no indication 4, 5 or 6 below its threshold" in prompt
+        assert "no indication 4 or 5 below its threshold" not in prompt
+
     def test_exclusion_above_100k_is_kept(self) -> None:
         assert "intracranial bleed with platelet count >100,000" in (
             platelet_system_prompt()

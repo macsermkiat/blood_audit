@@ -340,7 +340,7 @@ _PLATELET_REVIEW_PROMPT: Final[str] = (
     "terminal line precisely: adequate notes that document no positive "
     "indication are INAPPROPRIATE — the platelet count is on file and the "
     "notes describe the patient's course with no active bleeding, no "
-    "qualifying procedure, and no indication 4 or 5 below its threshold (or an "
+    "qualifying procedure, and no indication 4, 5 or 6 below its threshold (or an "
     "excluded population without its stated condition). Return "
     "INSUFFICIENT_EVIDENCE ONLY when the notes are genuinely silent or too thin "
     "to support any judgment, or no platelet count is on file. Documentation "
