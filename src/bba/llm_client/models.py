@@ -220,6 +220,12 @@ class PlateletLlmClassificationResponse(LlmClassificationResponse):
     prophylactic_marrow_failure: StrictBool
     """Chemo/HSCT/consumptive with count <10k (or expected <10k/24h), no exclusion."""
 
+    # Defaulted (unlike the three above) so responses persisted before the
+    # 2026-09-21 intracranial ruling still parse on replay. New requests always
+    # carry it: the tool schema lists it as required.
+    intracranial_bleed_indication: StrictBool = False
+    """Intracranial bleed below its threshold (acute/growing/operative <100k, stable <50k)."""
+
 
 class StructuredToolInput(BaseModel):
     """The Anthropic tool-use ``input_schema`` mirror.
