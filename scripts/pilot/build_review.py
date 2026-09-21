@@ -1114,11 +1114,11 @@ def response_audit_blocker(llm_report: Path, audit: Path) -> str | None:
 
     Issue #239: a clinician found a self-contradicting LLM answer on case 1 of a
     rendered page. ``audit_llm_responses.py`` catches those, so LLM verdicts are
-    rendered only behind a response audit that exists, was judged by the full
-    consortium (the regex-only checks missed 7 of 13 real contradictions), read
-    exactly this ``llm_report.json`` (a re-run merges fresh, unaudited records
+    rendered only behind a response audit that exists, read exactly this ``llm_report.json`` (a re-run merges fresh, unaudited records
     into it; the digest, unlike an mtime, cannot be satisfied by an audit of the
-    old report that finished later) and carries no HIGH finding."""
+    old report that finished later) and carries no HIGH finding. The gate is the
+    CODE audit; the model consortium is a dev-test review run from Claude Code
+    and the page does not wait for it (user ruling 2026-09-21)."""
     if not llm_report.exists():
         return None
     return _audit_blocker_for(llm_report.read_bytes(), llm_report.name, audit)
@@ -1132,11 +1132,8 @@ def _audit_blocker_for(
     if not audit.exists():
         return f"no response audit found ({audit.name}): run audit_llm_responses.py"
     payload = json.loads(audit.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict) or payload.get("judge") != "all":
-        return (
-            f"{audit.name} was not produced with the full consortium: "
-            "run audit_llm_responses.py --judge all"
-        )
+    if not isinstance(payload, dict):
+        return f"{audit.name} predates the report digest: re-run audit_llm_responses.py"
     if payload.get("report_sha256") != hashlib.sha256(report_bytes).hexdigest():
         return (
             f"{audit.name} audited a different {report_name}: "

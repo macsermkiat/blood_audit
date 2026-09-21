@@ -1008,21 +1008,28 @@ def test_main_refuses_to_render_and_the_override_is_explicit(
     module.enforce_response_audit()  # explicit operator override: no exit
 
 
-@pytest.mark.parametrize("weak", ["off", "candidates", None])
-def test_an_audit_without_the_full_consortium_does_not_unlock_the_page(
-    tmp_path: Path, weak: str | None
+@pytest.mark.parametrize("judge", ["off", "candidates", "all"])
+def test_the_code_check_audit_is_what_unlocks_the_page(
+    tmp_path: Path, judge: str
 ) -> None:
-    # Codex P1 on #241: the regex-only checks missed 7 of 13 real
-    # contradictions, so a clean regex-only audit proves little. None = an
-    # audit file from before the judge mode was recorded (a bare list).
+    # User ruling 2026-09-21: the model consortium is a dev-test review run from
+    # Claude Code, not a production step, so the page does not wait for it. The
+    # gate is the code audit: it exists, it read THIS report, it has no HIGH.
     module = _load_build_review()
-    audit_json = "[]" if weak is None else _audit_json(_LLM_ENTRY, judge=weak)
-    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, audit_json)
+    report, audit = _gate_paths(
+        tmp_path, _LLM_ENTRY, _audit_json(_LLM_ENTRY, judge=judge)
+    )
 
-    blocker = module.response_audit_blocker(report, audit)
+    assert module.response_audit_blocker(report, audit) is None
 
-    assert blocker is not None
-    assert "--judge all" in blocker
+
+def test_an_audit_file_from_before_the_report_digest_does_not_unlock_the_page(
+    tmp_path: Path,
+) -> None:
+    module = _load_build_review()
+    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, "[]")
+
+    assert module.response_audit_blocker(report, audit) is not None
 
 
 def test_the_page_renders_the_report_the_gate_validated(

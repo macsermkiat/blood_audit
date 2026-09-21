@@ -2407,7 +2407,7 @@ production implementation. Lazy-imports `anthropic` from inside
 does not require the SDK extra. Constructor validates
 `ANTHROPIC_API_KEY` at instantiation (empty string treated as
 missing) so a misconfigured deployment fails loud at startup, not
-deep inside the SDK on first call. `MAX_OUTPUT_TOKENS = 4096`
+deep inside the SDK on first call. `MAX_OUTPUT_TOKENS = 8192`
 constant sizes the structured-output budget.
 
 ### Anthropic request builder

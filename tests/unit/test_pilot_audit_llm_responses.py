@@ -67,6 +67,7 @@ def _record(audit: ModuleType, **overrides: object) -> object:
         "reasoning_th": "เกล็ดเลือด 22,000 ไม่มีข้อบ่งชี้ จึงไม่เหมาะสม",
         "indications": (),
         "trigger_value": 22.0,
+        "stop_reason": "tool_use",
     }
     return audit.ResponseRecord(**{**base, **overrides})
 
@@ -432,8 +433,30 @@ def test_the_audit_file_records_how_thoroughly_it_judged(audit: ModuleType) -> N
     }
 
 
-def test_full_judging_is_the_default(audit: ModuleType) -> None:
-    assert audit.build_parser().parse_args([]).judge == "all"
+def test_the_default_run_makes_no_api_call(audit: ModuleType) -> None:
+    # User ruling 2026-09-21: the model consortium is a dev-test review of what
+    # the LLM API returned, run from Claude Code on the subscription. The
+    # pipeline step itself is the code checks and must cost nothing by default.
+    assert audit.build_parser().parse_args([]).judge == "off"
+
+
+def test_an_answer_cut_off_at_the_output_limit_is_high_and_rerunnable(
+    audit: ModuleType,
+) -> None:
+    # Sandbox 2026-09-21: 3 of 107 answers stopped at max_tokens. With the label
+    # written last, a cut-off answer has no classification at all and surfaced
+    # only as a generic schema_mismatch NEEDS_REVIEW.
+    record = _record(
+        audit,
+        label=None,
+        final="NEEDS_REVIEW",
+        review_reason="schema_mismatch",
+        stop_reason="max_tokens",
+    )
+    findings = {f.code: f for f in audit.check_record(record)}
+
+    assert findings["response_truncated"].severity == "HIGH"
+    assert "response_truncated" in audit.RERUN_CODES
 
 
 class TestRegexCandidateAfterJudging:
