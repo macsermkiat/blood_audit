@@ -35,7 +35,12 @@ preflight_declared_usetype.py
 run_llm_leg.py          →  llm_report.json
                         →  data/audit_store/   (Parquet + markers)
 
-build_review.py         →  review.html    (single page for human review)
+audit_llm_responses.py  →  llm_response_audit.{json,csv}
+                        →  llm_response_audit_reqnos.txt
+                                            (checks the LLM RESPONSES; exit 2 on a HIGH finding)
+
+build_review.py         →  review.html    (single page for human review;
+                                            refuses LLM verdicts without a fresh, clean audit)
 ```
 
 ## Environment variables
@@ -78,9 +83,39 @@ export BBA_DB_URL=postgresql://localhost/bba_pilot
 uv run bba ingest "$BBA_PILOT_WORK_DIR/bundle/BDVST.csv"
 
 uv run python scripts/pilot/run_llm_leg.py           # live Anthropic batch
+uv run python scripts/pilot/audit_llm_responses.py --judge all   # audit the responses
 uv run python scripts/pilot/build_review.py          # assemble review.html
 open "$BBA_PILOT_WORK_DIR/review.html"
 ```
+
+## Auditing the LLM responses before the page is built
+
+`audit_llm_responses.py` runs between the LLM leg and `build_review.py`
+(issue #239: a clinician found an answer labelled APPROPRIATE whose own
+reasoning concluded INAPPROPRIATE on case 1 of a rendered page). It changes no
+verdict. Code checks always run; `--judge all` adds a consortium of models
+(default sonnet, haiku, opus; `BBA_AUDIT_JUDGE_MODELS`) that read the conclusion
+out of the English and the Thai summary without seeing the label. Unanimous
+judges certify a label, one dissent is a split for a human, and a judge outage
+is a HIGH finding. `--judge candidates` is cheaper but missed 3 of 13 real
+contradictions on the hematology run. Patient-level text goes only to the
+Anthropic API.
+
+The loop: run the audit; fix the cause; re-run the REQNOs in
+`llm_response_audit_reqnos.txt` under a fresh run id; run the audit again.
+
+```bash
+BBA_PILOT_ONLY_REQNO="$(cat "$BBA_PILOT_WORK_DIR/llm_response_audit_reqnos.txt")" \
+BBA_PILOT_RUN_ID=pilot-mini-audit-fix-1 \
+uv run python scripts/pilot/run_llm_leg.py
+uv run python scripts/pilot/audit_llm_responses.py --judge all
+```
+
+`build_review.py` exits with an error when `llm_report.json` holds LLM records
+and the audit is missing, older than the report, or carries a HIGH finding. To
+build the page anyway (for example to read the flagged cases), set
+`BBA_PILOT_ALLOW_UNAUDITED=1`; the builder prints the reason it would have
+refused.
 
 ## Re-running a single case
 
@@ -94,6 +129,7 @@ BBA_PILOT_ONLY_REQNO=68080335 \
 BBA_PILOT_RUN_ID=pilot-mini-68080335-v2 \
 uv run python scripts/pilot/run_llm_leg.py
 
+uv run python scripts/pilot/audit_llm_responses.py --judge all
 uv run python scripts/pilot/build_review.py
 ```
 

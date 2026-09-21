@@ -60,6 +60,7 @@ MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED = (
 )
 BUNDLE = WORK / "bundle"
 LLM_REPORT = WORK / "llm_report.json"
+RESPONSE_AUDIT = WORK / "llm_response_audit.json"
 DET_REPORT = WORK / "report.csv"
 MANIFEST = WORK / "sample_manifest.csv"
 OUT = WORK / "review.html"
@@ -1085,7 +1086,48 @@ def _returned_blood_datetime(rows: list[dict[str, str]]) -> str:
     return min(candidates) if candidates else ""
 
 
+def response_audit_blocker(llm_report: Path, audit: Path) -> str | None:
+    """Why the page must not be built from these LLM responses, else ``None``.
+
+    Issue #239: a clinician found a self-contradicting LLM answer on case 1 of a
+    rendered page. ``audit_llm_responses.py`` catches those, so LLM verdicts are
+    rendered only behind a response audit that exists, is not older than
+    ``llm_report.json`` (a re-run merges fresh, unaudited records into it) and
+    carries no HIGH finding. A run with no LLM records needs no audit."""
+    if not llm_report.exists():
+        return None
+    entries = json.loads(llm_report.read_text(encoding="utf-8"))
+    if not any("llm_final" in entry for entry in entries):
+        return None
+    if not audit.exists():
+        return f"no response audit found ({audit.name}): run audit_llm_responses.py"
+    if audit.stat().st_mtime < llm_report.stat().st_mtime:
+        return (
+            f"{audit.name} is older than {llm_report.name}: "
+            "re-run audit_llm_responses.py"
+        )
+    findings = json.loads(audit.read_text(encoding="utf-8"))
+    high = sum(1 for f in findings if f.get("severity") == "HIGH")
+    if high:
+        return f"response audit has {high} HIGH finding(s): see {audit.name}"
+    return None
+
+
+def enforce_response_audit() -> None:
+    blocker = response_audit_blocker(LLM_REPORT, RESPONSE_AUDIT)
+    if blocker is None:
+        return
+    if os.environ.get("BBA_PILOT_ALLOW_UNAUDITED") == "1":
+        print(f"WARNING: building the page anyway ({blocker})", file=sys.stderr)
+        return
+    raise SystemExit(
+        f"refusing to build review.html: {blocker}. "
+        "Set BBA_PILOT_ALLOW_UNAUDITED=1 to build it anyway."
+    )
+
+
 def main() -> None:
+    enforce_response_audit()
     if not BUNDLE.exists():
         sys.exit(f"bundle not found: {BUNDLE} (run sample_bundle.py first)")
     if not MANIFEST.exists():

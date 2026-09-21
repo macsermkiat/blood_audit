@@ -93,6 +93,10 @@ def _render_review_with_rows(
     manifest.write_text(manifest_csv, encoding="utf-8")
     report.write_text(report_csv, encoding="utf-8")
     llm_report.write_text(llm_json, encoding="utf-8")
+    # A clean response audit, as audit_llm_responses.py leaves it (#239 gate).
+    response_audit = root / "llm_response_audit.json"
+    response_audit.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(module, "RESPONSE_AUDIT", response_audit)
 
     monkeypatch.setattr(module, "WORK", root)
     monkeypatch.setattr(module, "BUNDLE", bundle)
@@ -852,3 +856,92 @@ def test_applying_a_filter_drops_the_active_case(
     # Same function scope: the handler state is declared in the script that
     # defines applyFilters, not in a separate block.
     assert rendered.count("var activeIdx = -1;") == 1
+
+
+# --- Issue #239: the page is not built from unaudited LLM responses ------------
+# A clinician found a self-contradicting answer on case 1 of a rendered page.
+# audit_llm_responses.py catches those, but only if it actually runs: the page
+# builder refuses LLM verdicts that have no fresh, clean audit behind them.
+
+_LLM_ENTRY = '[{"reqno": "R1", "audit_id": "a1", "llm_final": {"final_classification": "APPROPRIATE"}}]'
+
+
+def _gate_paths(
+    tmp_path: Path, llm_json: str, audit_json: str | None
+) -> tuple[Path, Path]:
+    report = tmp_path / "llm_report.json"
+    audit = tmp_path / "llm_response_audit.json"
+    report.write_text(llm_json, encoding="utf-8")
+    if audit_json is not None:
+        audit.write_text(audit_json, encoding="utf-8")
+    return report, audit
+
+
+def test_llm_verdicts_without_an_audit_block_the_page(tmp_path: Path) -> None:
+    module = _load_build_review()
+    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, None)
+
+    blocker = module.response_audit_blocker(report, audit)
+
+    assert blocker is not None
+    assert "audit_llm_responses.py" in blocker
+
+
+def test_high_finding_blocks_the_page(tmp_path: Path) -> None:
+    module = _load_build_review()
+    high = '[{"reqno": "R1", "code": "consortium_label_contradiction", "severity": "HIGH"}]'
+    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, high)
+
+    blocker = module.response_audit_blocker(report, audit)
+
+    assert blocker is not None
+    assert "1 HIGH" in blocker
+
+
+def test_audit_older_than_the_report_is_stale(tmp_path: Path) -> None:
+    # A re-run merges fresh records into llm_report.json; yesterday's clean
+    # audit says nothing about them.
+    import os
+
+    module = _load_build_review()
+    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, "[]")
+    os.utime(audit, (1_000_000, 1_000_000))
+
+    blocker = module.response_audit_blocker(report, audit)
+
+    assert blocker is not None
+    assert "older" in blocker
+
+
+def test_clean_fresh_audit_lets_the_page_build(tmp_path: Path) -> None:
+    module = _load_build_review()
+    medium = '[{"reqno": "R1", "code": "label_before_reasoning", "severity": "MEDIUM"}]'
+    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, medium)
+
+    assert module.response_audit_blocker(report, audit) is None
+
+
+def test_deterministic_only_run_needs_no_audit(tmp_path: Path) -> None:
+    # No LLM leg, no responses to audit: the RBC-only det workflow is unchanged.
+    module = _load_build_review()
+    report, audit = _gate_paths(tmp_path, "[]", None)
+
+    assert module.response_audit_blocker(report, audit) is None
+    assert module.response_audit_blocker(tmp_path / "absent.json", audit) is None
+
+
+def test_main_refuses_to_render_and_the_override_is_explicit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_build_review()
+    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, None)
+    monkeypatch.setattr(module, "LLM_REPORT", report)
+    monkeypatch.setattr(module, "RESPONSE_AUDIT", audit)
+    monkeypatch.delenv("BBA_PILOT_ALLOW_UNAUDITED", raising=False)
+
+    with pytest.raises(SystemExit) as refused:
+        module.enforce_response_audit()
+    assert "BBA_PILOT_ALLOW_UNAUDITED=1" in str(refused.value)
+
+    monkeypatch.setenv("BBA_PILOT_ALLOW_UNAUDITED", "1")
+    module.enforce_response_audit()  # explicit operator override: no exit
