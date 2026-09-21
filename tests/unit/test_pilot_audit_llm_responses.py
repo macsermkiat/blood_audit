@@ -373,3 +373,53 @@ class TestLoadFindings:
             ("R1", "llm_result_missing", "HIGH")
         ]
         assert "llm_result_missing" in audit.RERUN_CODES
+
+
+class TestJudgeFindings:
+    _EN_OK = ("INAPPROPRIATE", "INAPPROPRIATE", "INAPPROPRIATE")
+
+    def test_thai_summary_is_held_to_the_label_on_its_own(
+        self, audit: ModuleType
+    ) -> None:
+        # Codex P1 on #241: with no English majority the cross-language check
+        # is silent, and the Thai text is what a Thai reviewer reads.
+        record = _record(audit)
+        en = ("NONE_STATED", "NONE_STATED", "INAPPROPRIATE")
+        th = ("APPROPRIATE", "APPROPRIATE", "APPROPRIATE")
+
+        codes = {f.code: f for f in audit.judge_findings(record, en, th)}
+
+        assert codes["consortium_thai_label_contradiction"].severity == "HIGH"
+
+    def test_summaries_that_disagree_with_each_other_are_high(
+        self, audit: ModuleType
+    ) -> None:
+        record = _record(audit)
+        th = ("NEEDS_REVIEW", "NEEDS_REVIEW", "NEEDS_REVIEW")
+
+        codes = {f.code for f in audit.judge_findings(record, self._EN_OK, th)}
+
+        assert "en_th_conclusion_mismatch" in codes
+
+    def test_agreeing_summaries_and_label_are_clean(self, audit: ModuleType) -> None:
+        record = _record(audit)
+        assert audit.judge_findings(record, self._EN_OK, self._EN_OK) == ()
+
+    def test_english_contradiction_is_rerunnable(self, audit: ModuleType) -> None:
+        record = _record(audit, label="APPROPRIATE")
+        findings = audit.judge_findings(record, self._EN_OK, self._EN_OK)
+
+        assert {f.code for f in findings} >= {"consortium_label_contradiction"}
+        assert all(f.code in audit.RERUN_CODES for f in findings)
+
+
+def test_the_audit_file_records_how_thoroughly_it_judged(audit: ModuleType) -> None:
+    # Codex P1 on #241: build_review must be able to tell a full consortium
+    # audit from a regex-only one, which missed 7 of 13 real contradictions.
+    payload = audit.audit_payload("candidates", 5, ())
+
+    assert payload == {"judge": "candidates", "records": 5, "findings": []}
+
+
+def test_full_judging_is_the_default(audit: ModuleType) -> None:
+    assert audit.build_parser().parse_args([]).judge == "all"

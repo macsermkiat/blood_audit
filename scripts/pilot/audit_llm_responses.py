@@ -16,8 +16,9 @@ judge sees one summary only, never the label; code compares the votes with the
 label and the English conclusion with the Thai one. The consortium certifies a
 label only when unanimous; one dissenting judge is a split for a human, never
 outvoted. The regex reading of the conclusion is a CANDIDATE finder: on the
-real run the judges overruled 4 of its 10 hits and found 7 it missed, so use
-``--judge all`` before a page goes to clinicians.
+real run the judges overruled 4 of its 10 hits and found 7 it missed, so
+``--judge all`` is the default and the only mode build_review.py accepts;
+``candidates`` and ``off`` are for iterating without the page.
 
 Patient-level text is sent only to the Anthropic API, the processor the LLM leg
 already uses. Nothing here changes a verdict: it writes a findings file.
@@ -25,7 +26,7 @@ already uses. Nothing here changes a verdict: it writes a findings file.
 Environment variables:
 
 * ``BBA_PILOT_WORK_DIR`` — sandbox directory (default ``/tmp/bba_mini``).
-* ``ANTHROPIC_API_KEY`` — required only with ``--judge``.
+* ``ANTHROPIC_API_KEY`` — required unless ``--judge off``.
 * ``BBA_AUDIT_JUDGE_MODELS`` — comma-separated judge model ids.
 
 Outputs in the work dir: ``llm_response_audit.json``, ``llm_response_audit.csv``
@@ -88,7 +89,13 @@ PARSE_FAILURE_REASONS = frozenset(
 )
 # Findings a fresh LLM call can fix; the rest need a code or data fix first.
 RERUN_CODES = frozenset(
-    {"parse_failure", "consortium_label_contradiction", "llm_result_missing"}
+    {
+        "parse_failure",
+        "consortium_label_contradiction",
+        "consortium_thai_label_contradiction",
+        "en_th_conclusion_mismatch",
+        "llm_result_missing",
+    }
 )
 
 # Upper-case only: lower-case "appropriate" is ordinary prose ("appropriate
@@ -346,6 +353,56 @@ def _judge_one(client: Any, model: str, text: str) -> str:
     return "JUDGE_ERROR"
 
 
+def judge_findings(
+    record: ResponseRecord, en: tuple[str, ...], th: tuple[str, ...]
+) -> tuple[Finding, ...]:
+    """Findings from the judges' votes on one record. Pure; no I/O.
+
+    Each summary is held to the label on its own, then to the other: the Thai
+    text is what a Thai reviewer reads, so it cannot hide behind an English
+    summary the judges could not read a conclusion out of."""
+    out: list[Finding] = []
+    by_language = (
+        ("English", en, "consortium_label_contradiction"),
+        ("Thai", th, "consortium_thai_label_contradiction"),
+    )
+    for language, votes, contradiction_code in by_language:
+        verdict = consortium_verdict(record.label, votes)
+        told = f"label {record.label}; {language} judges read {', '.join(votes)}"
+        if verdict == "contradiction":
+            out.append(Finding(record.reqno, contradiction_code, "HIGH", told, votes))
+        elif verdict == "split":
+            out.append(Finding(record.reqno, "consortium_split", "MEDIUM", told, votes))
+        elif verdict == "unavailable":
+            out.append(
+                Finding(record.reqno, "consortium_unavailable", "HIGH", told, votes)
+            )
+    en_majority, th_majority = _majority(en), _majority(th)
+    if en_majority and th_majority and en_majority != th_majority:
+        out.append(
+            Finding(
+                record.reqno,
+                "en_th_conclusion_mismatch",
+                "HIGH",
+                f"English concludes {en_majority}, Thai concludes {th_majority}",
+                (*en, *th),
+            )
+        )
+    return tuple(out)
+
+
+def audit_payload(
+    judge: str, n_records: int, findings: Sequence[Finding]
+) -> dict[str, Any]:
+    """What ``llm_response_audit.json`` holds. ``judge`` is recorded so
+    build_review.py can tell a full consortium audit from a weaker one."""
+    return {
+        "judge": judge,
+        "records": n_records,
+        "findings": [asdict(f) for f in findings],
+    }
+
+
 def judge_records(
     records: Sequence[ResponseRecord], models: Sequence[str]
 ) -> tuple[Finding, ...]:
@@ -374,32 +431,11 @@ def judge_records(
 
     out: list[Finding] = []
     for index, record in enumerate(records):
-        en, th = tuple(cast[(index, "en")]), tuple(cast[(index, "th")])
-        verdict = consortium_verdict(record.label, en)
-        told = f"label {record.label}; judges read {', '.join(en)}"
-        if verdict == "contradiction":
-            out.append(
-                Finding(
-                    record.reqno, "consortium_label_contradiction", "HIGH", told, en
-                )
+        out.extend(
+            judge_findings(
+                record, tuple(cast[(index, "en")]), tuple(cast[(index, "th")])
             )
-        elif verdict == "split":
-            out.append(Finding(record.reqno, "consortium_split", "MEDIUM", told, en))
-        elif verdict == "unavailable":
-            out.append(
-                Finding(record.reqno, "consortium_unavailable", "HIGH", told, en)
-            )
-        en_majority, th_majority = _majority(en), _majority(th)
-        if en_majority and th_majority and en_majority != th_majority:
-            out.append(
-                Finding(
-                    record.reqno,
-                    "en_th_conclusion_mismatch",
-                    "HIGH",
-                    f"English concludes {en_majority}, Thai concludes {th_majority}",
-                    (*en, *th),
-                )
-            )
+        )
     return tuple(out)
 
 
@@ -480,15 +516,20 @@ def load_records(work: Path) -> tuple[tuple[ResponseRecord, ...], tuple[Finding,
     return tuple(records), tuple(skipped)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     parser.add_argument(
         "--judge",
         choices=("off", "candidates", "all"),
-        default="off",
-        help="consortium judge: off; only records the regex could not settle "
-        "(contradiction candidates + no stated conclusion); or all (recommended)",
+        default="all",
+        help="consortium judge: all (default; the only mode build_review.py "
+        "accepts); only records the regex could not settle; or off",
     )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
 
     records, skipped = load_records(WORK)
@@ -533,7 +574,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     high = sorted({f.reqno for f in findings if f.severity == "HIGH"})
     rerun = sorted({f.reqno for f in findings if f.code in RERUN_CODES})
     (WORK / "llm_response_audit.json").write_text(
-        json.dumps([asdict(f) for f in findings], ensure_ascii=False, indent=1)
+        json.dumps(
+            audit_payload(args.judge, len(records), findings),
+            ensure_ascii=False,
+            indent=1,
+        )
     )
     with (WORK / "llm_response_audit.csv").open("w", newline="") as fh:
         writer = csv.writer(fh)

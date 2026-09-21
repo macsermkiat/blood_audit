@@ -95,7 +95,7 @@ def _render_review_with_rows(
     llm_report.write_text(llm_json, encoding="utf-8")
     # A clean response audit, as audit_llm_responses.py leaves it (#239 gate).
     response_audit = root / "llm_response_audit.json"
-    response_audit.write_text("[]", encoding="utf-8")
+    response_audit.write_text('{"judge": "all", "findings": []}', encoding="utf-8")
     monkeypatch.setattr(module, "RESPONSE_AUDIT", response_audit)
 
     monkeypatch.setattr(module, "WORK", root)
@@ -890,6 +890,9 @@ def test_applying_a_filter_drops_the_active_case(
 _LLM_ENTRY = '[{"reqno": "R1", "audit_id": "a1", "llm_final": {"final_classification": "APPROPRIATE"}}]'
 
 
+_CLEAN_AUDIT = '{"judge": "all", "findings": []}'
+
+
 def _gate_paths(
     tmp_path: Path, llm_json: str, audit_json: str | None
 ) -> tuple[Path, Path]:
@@ -913,7 +916,10 @@ def test_llm_verdicts_without_an_audit_block_the_page(tmp_path: Path) -> None:
 
 def test_high_finding_blocks_the_page(tmp_path: Path) -> None:
     module = _load_build_review()
-    high = '[{"reqno": "R1", "code": "consortium_label_contradiction", "severity": "HIGH"}]'
+    high = (
+        '{"judge": "all", "findings": [{"reqno": "R1", "code": '
+        '"consortium_label_contradiction", "severity": "HIGH"}]}'
+    )
     report, audit = _gate_paths(tmp_path, _LLM_ENTRY, high)
 
     blocker = module.response_audit_blocker(report, audit)
@@ -928,7 +934,7 @@ def test_audit_older_than_the_report_is_stale(tmp_path: Path) -> None:
     import os
 
     module = _load_build_review()
-    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, "[]")
+    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, _CLEAN_AUDIT)
     os.utime(audit, (1_000_000, 1_000_000))
 
     blocker = module.response_audit_blocker(report, audit)
@@ -939,7 +945,10 @@ def test_audit_older_than_the_report_is_stale(tmp_path: Path) -> None:
 
 def test_clean_fresh_audit_lets_the_page_build(tmp_path: Path) -> None:
     module = _load_build_review()
-    medium = '[{"reqno": "R1", "code": "label_before_reasoning", "severity": "MEDIUM"}]'
+    medium = (
+        '{"judge": "all", "findings": [{"reqno": "R1", "code": '
+        '"label_before_reasoning", "severity": "MEDIUM"}]}'
+    )
     report, audit = _gate_paths(tmp_path, _LLM_ENTRY, medium)
 
     assert module.response_audit_blocker(report, audit) is None
@@ -969,3 +978,25 @@ def test_main_refuses_to_render_and_the_override_is_explicit(
 
     monkeypatch.setenv("BBA_PILOT_ALLOW_UNAUDITED", "1")
     module.enforce_response_audit()  # explicit operator override: no exit
+
+
+@pytest.mark.parametrize(
+    "weak",
+    [
+        '{"judge": "off", "findings": []}',
+        '{"judge": "candidates", "findings": []}',
+        "[]",  # an audit file from before the judge mode was recorded
+    ],
+)
+def test_an_audit_without_the_full_consortium_does_not_unlock_the_page(
+    tmp_path: Path, weak: str
+) -> None:
+    # Codex P1 on #241: the regex-only checks missed 7 of 13 real
+    # contradictions, so a clean regex-only audit proves little.
+    module = _load_build_review()
+    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, weak)
+
+    blocker = module.response_audit_blocker(report, audit)
+
+    assert blocker is not None
+    assert "--judge all" in blocker

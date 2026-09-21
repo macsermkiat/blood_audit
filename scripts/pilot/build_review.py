@@ -1099,8 +1099,10 @@ def response_audit_blocker(llm_report: Path, audit: Path) -> str | None:
     Issue #239: a clinician found a self-contradicting LLM answer on case 1 of a
     rendered page. ``audit_llm_responses.py`` catches those, so LLM verdicts are
     rendered only behind a response audit that exists, is not older than
-    ``llm_report.json`` (a re-run merges fresh, unaudited records into it) and
-    carries no HIGH finding. A run with no LLM records needs no audit."""
+    ``llm_report.json`` (a re-run merges fresh, unaudited records into it), was
+    judged by the full consortium (the regex-only checks missed 7 of 13 real
+    contradictions) and carries no HIGH finding. A run with no LLM records
+    needs no audit."""
     if not llm_report.exists():
         return None
     entries = json.loads(llm_report.read_text(encoding="utf-8"))
@@ -1113,8 +1115,13 @@ def response_audit_blocker(llm_report: Path, audit: Path) -> str | None:
             f"{audit.name} is older than {llm_report.name}: "
             "re-run audit_llm_responses.py"
         )
-    findings = json.loads(audit.read_text(encoding="utf-8"))
-    high = sum(1 for f in findings if f.get("severity") == "HIGH")
+    payload = json.loads(audit.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("judge") != "all":
+        return (
+            f"{audit.name} was not produced with the full consortium: "
+            "run audit_llm_responses.py --judge all"
+        )
+    high = sum(1 for f in payload.get("findings", ()) if f.get("severity") == "HIGH")
     if high:
         return f"response audit has {high} HIGH finding(s): see {audit.name}"
     return None
