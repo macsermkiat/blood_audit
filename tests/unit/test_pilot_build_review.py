@@ -1030,3 +1030,64 @@ def test_an_audit_file_from_before_the_report_digest_does_not_unlock_the_page(
     report, audit = _gate_paths(tmp_path, _LLM_ENTRY, "[]")
 
     assert module.response_audit_blocker(report, audit) is not None
+
+
+def test_the_page_renders_the_report_the_gate_validated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Local Codex review of #241: the gate read llm_report.json, then main()
+    # read it again later. A re-run landing between the two reads was rendered
+    # without ever being audited. main() now renders what the gate returned.
+    module = _load_build_review()
+    validated = [
+        {
+            "reqno": "R1",
+            "llm_final": {
+                "final_classification": "INAPPROPRIATE",
+                "confidence": 0.9,
+                "model": "claude-sonnet-5",
+                "review_reason": None,
+                "indications": [],
+                "negative_evidence": [],
+                "reasoning_en": "VALIDATED-REPORT-REASONING",
+                "reasoning_th": "x",
+            },
+        }
+    ]
+    monkeypatch.setattr(module, "enforce_response_audit", lambda: validated)
+
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN\nHN1,R1,AN1\n",
+        report_csv="reqno,classification\nR1,NEEDS_REVIEW\n",
+        llm_json=json.dumps(
+            [
+                {
+                    "reqno": "R1",
+                    "llm_final": {
+                        **validated[0]["llm_final"],
+                        "reasoning_en": "UNAUDITED-RERUN",
+                    },
+                }
+            ]
+        ),
+    ).decode()
+
+    assert "VALIDATED-REPORT-REASONING" in rendered
+    assert "UNAUDITED-RERUN" not in rendered
+
+
+def test_the_gate_hands_back_the_entries_it_validated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_build_review()
+    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, _audit_json(_LLM_ENTRY))
+    monkeypatch.setattr(module, "LLM_REPORT", report)
+    monkeypatch.setattr(module, "RESPONSE_AUDIT", audit)
+
+    assert module.enforce_response_audit() == json.loads(_LLM_ENTRY)
+
+    monkeypatch.setattr(module, "LLM_REPORT", tmp_path / "absent.json")
+    assert module.enforce_response_audit() == []

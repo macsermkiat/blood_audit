@@ -39,6 +39,18 @@ HERE = Path(__file__).resolve().parent
 _EVIDENCE_RE = re.compile(r'<evidence id="(E\d+)"[^>]*>(.*?)</evidence>', re.S)
 
 
+_SAFE_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def safe_name(reqno: str) -> str:
+    """A REQNO becomes a file name, so it must be a bare identifier. Fail loud
+    on anything else (bad ingest data, a hand-edited report) rather than write or
+    read outside the consortium folder."""
+    if not _SAFE_NAME_RE.fullmatch(reqno):
+        raise ValueError(f"REQNO is not a safe file name: {reqno!r}")
+    return reqno
+
+
 def _plain(value: Any) -> Any:
     """Audit-store payloads are read-only mappings; make them JSON-serialisable."""
     if isinstance(value, Mapping):
@@ -130,7 +142,7 @@ def build(reqnos: set[str] | None) -> None:
             continue
         user = _text_blocks(request["messages"][0]["content"])
         citations[row.reqno] = citation_problems(user, answer.get("indications") or ())
-        (OUT / "review" / f"{row.reqno}.review.txt").write_text(
+        (OUT / "review" / f"{safe_name(row.reqno)}.review.txt").write_text(
             "=== SYSTEM INSTRUCTIONS (follow exactly) ===\n"
             + _text_blocks(request.get("system"))
             + "\n\n=== USER MESSAGE ===\n"
@@ -156,7 +168,7 @@ def combine() -> None:
     for reqno in sorted(citations):
         answers: dict[str, Any] = {}
         for reviewer in reviewers:
-            path = OUT / "answers" / reviewer / f"{reqno}.json"
+            path = OUT / "answers" / reviewer / f"{safe_name(reqno)}.json"
             try:
                 answers[reviewer] = json.loads(path.read_text())
             except (OSError, json.JSONDecodeError):

@@ -91,3 +91,17 @@ def test_one_dissenting_reviewer_is_surfaced_not_outvoted(
 
 def test_no_reviews_is_not_a_pass(consortium: ModuleType) -> None:
     assert consortium.consortium_outcome({}) == "no reviews"
+
+
+@pytest.mark.parametrize("reqno", ["../../etc/passwd", "68000711/..", "a b", ""])
+def test_a_reqno_that_is_not_a_bare_identifier_never_becomes_a_path(
+    consortium: ModuleType, reqno: str
+) -> None:
+    # The REQNO names the bundle and the answer files; a value with a slash or
+    # dots from bad ingest data must fail loud, not write outside the folder.
+    with pytest.raises(ValueError):
+        consortium.safe_name(reqno)
+
+
+def test_a_real_reqno_is_a_safe_name(consortium: ModuleType) -> None:
+    assert consortium.safe_name("68000711") == "68000711"
