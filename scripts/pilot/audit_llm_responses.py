@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import re
@@ -391,13 +392,35 @@ def judge_findings(
     return tuple(out)
 
 
+def english_settled(label: str | None, en: Sequence[str]) -> bool:
+    """True iff the judges certified or contradicted the label. A split, or too
+    few stated conclusions, settles nothing."""
+    return consortium_verdict(label, en) in ("consistent", "contradiction")
+
+
+def settle_regex_candidates(
+    findings: Sequence[Finding], settled_reqnos: set[str]
+) -> list[Finding]:
+    """The judges take over a regex candidate only where they settled it;
+    elsewhere the candidate keeps its blocking severity."""
+    return [
+        replace(f, severity="LOW", detail=f.detail + " (regex; see consortium)")
+        if f.code == "label_contradicts_reasoning" and f.reqno in settled_reqnos
+        else f
+        for f in findings
+    ]
+
+
 def audit_payload(
-    judge: str, n_records: int, findings: Sequence[Finding]
+    judge: str, report_sha256: str, n_records: int, findings: Sequence[Finding]
 ) -> dict[str, Any]:
-    """What ``llm_response_audit.json`` holds. ``judge`` is recorded so
-    build_review.py can tell a full consortium audit from a weaker one."""
+    """What ``llm_response_audit.json`` holds. ``judge`` lets build_review.py
+    tell a full consortium audit from a weaker one; ``report_sha256`` binds the
+    audit to the exact ``llm_report.json`` it read, so an audit that finishes
+    after a re-run cannot certify records it never saw."""
     return {
         "judge": judge,
+        "report_sha256": report_sha256,
         "records": n_records,
         "findings": [asdict(f) for f in findings],
     }
@@ -405,7 +428,7 @@ def audit_payload(
 
 def judge_records(
     records: Sequence[ResponseRecord], models: Sequence[str]
-) -> tuple[Finding, ...]:
+) -> tuple[tuple[Finding, ...], set[str]]:
     import anthropic  # lazy: the deterministic audit needs no SDK or key
 
     client = anthropic.Anthropic()
@@ -430,13 +453,15 @@ def judge_records(
         cast.setdefault((index, language), []).append(vote)
 
     out: list[Finding] = []
+    unsettled: set[str] = set()
     for index, record in enumerate(records):
-        out.extend(
-            judge_findings(
-                record, tuple(cast[(index, "en")]), tuple(cast[(index, "th")])
-            )
-        )
-    return tuple(out)
+        en, th = tuple(cast[(index, "en")]), tuple(cast[(index, "th")])
+        out.extend(judge_findings(record, en, th))
+        if not english_settled(record.label, en):
+            unsettled.add(record.reqno)
+    # By REQNO, and conservative: a REQNO shared by two records is settled only
+    # when both are.
+    return tuple(out), {r.reqno for r in records} - unsettled
 
 
 def _tool_input(response_json: Any) -> dict[str, Any]:
@@ -446,10 +471,11 @@ def _tool_input(response_json: Any) -> dict[str, Any]:
     return {}
 
 
-def load_records(work: Path) -> tuple[tuple[ResponseRecord, ...], tuple[Finding, ...]]:
+def load_records(
+    work: Path, entries: Sequence[Mapping[str, Any]]
+) -> tuple[tuple[ResponseRecord, ...], tuple[Finding, ...]]:
     """Current LLM records joined to their raw tool payload, plus a finding for
     every report entry that could not be audited (never a silent skip)."""
-    entries = json.loads((work / "llm_report.json").read_text())
     report = {r["audit_id"]: r for r in entries if r.get("llm_final")}
     store = AuditStore(
         AuditStoreConfig(root_dir=work / "data" / "audit_store", code_version="audit")
@@ -532,7 +558,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    records, skipped = load_records(WORK)
+    # Read once: the digest and the audited records come from the same bytes.
+    report_bytes = (WORK / "llm_report.json").read_bytes()
+    report_sha256 = hashlib.sha256(report_bytes).hexdigest()
+    records, skipped = load_records(WORK, json.loads(report_bytes))
     findings = [*skipped, *(f for r in records for f in check_record(r))]
     if args.judge != "off":
         models = [
@@ -561,21 +590,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             f"consortium: {len(to_judge)} records x 2 summaries x {len(models)} judges"
         )
-        judged = {r.reqno for r in to_judge}
-        # The judges settle what the regex only suspected.
-        findings = [
-            replace(f, severity="LOW", detail=f.detail + " (regex; see consortium)")
-            if f.code == "label_contradicts_reasoning" and f.reqno in judged
-            else f
-            for f in findings
-        ]
-        findings.extend(judge_records(to_judge, models))
+        judge_found, settled = judge_records(to_judge, models)
+        # The judges take over only the regex candidates they settled.
+        findings = [*settle_regex_candidates(findings, settled), *judge_found]
 
     high = sorted({f.reqno for f in findings if f.severity == "HIGH"})
     rerun = sorted({f.reqno for f in findings if f.code in RERUN_CODES})
     (WORK / "llm_response_audit.json").write_text(
         json.dumps(
-            audit_payload(args.judge, len(records), findings),
+            audit_payload(args.judge, report_sha256, len(records), findings),
             ensure_ascii=False,
             indent=1,
         )

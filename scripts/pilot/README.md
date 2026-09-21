@@ -114,8 +114,10 @@ uv run python scripts/pilot/audit_llm_responses.py --judge all
 ```
 
 `build_review.py` exits with an error when `llm_report.json` holds LLM records
-and the audit is missing, older than the report, not produced with
-`--judge all`, or carries a HIGH finding. To
+and the audit is missing, not produced with `--judge all`, read a different
+`llm_report.json` (the audit stores the report's SHA-256, so re-audit after
+every re-run), or carries a HIGH finding. Runs with no model responses
+(deterministic rows only) need no audit. To
 build the page anyway (for example to read the flagged cases), set
 `BBA_PILOT_ALLOW_UNAUDITED=1`; the builder prints the reason it would have
 refused.

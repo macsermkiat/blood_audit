@@ -416,10 +416,43 @@ class TestJudgeFindings:
 def test_the_audit_file_records_how_thoroughly_it_judged(audit: ModuleType) -> None:
     # Codex P1 on #241: build_review must be able to tell a full consortium
     # audit from a regex-only one, which missed 7 of 13 real contradictions.
-    payload = audit.audit_payload("candidates", 5, ())
+    payload = audit.audit_payload("candidates", "abc123", 5, ())
 
-    assert payload == {"judge": "candidates", "records": 5, "findings": []}
+    assert payload == {
+        "judge": "candidates",
+        "report_sha256": "abc123",
+        "records": 5,
+        "findings": [],
+    }
 
 
 def test_full_judging_is_the_default(audit: ModuleType) -> None:
     assert audit.build_parser().parse_args([]).judge == "all"
+
+
+class TestRegexCandidateAfterJudging:
+    def _candidate(self, audit: ModuleType) -> object:
+        return audit.Finding("R1", "label_contradicts_reasoning", "HIGH", "x")
+
+    def test_judges_that_settled_it_take_over(self, audit: ModuleType) -> None:
+        settled = audit.settle_regex_candidates([self._candidate(audit)], {"R1"})
+        assert settled[0].severity == "LOW"
+
+    def test_an_unsettled_candidate_keeps_blocking(self, audit: ModuleType) -> None:
+        # Local Codex review: judges answering INAPPROPRIATE, NONE_STATED,
+        # NONE_STATED (or splitting) settle nothing, yet the candidate was
+        # downgraded and the contradiction reached the page.
+        kept = audit.settle_regex_candidates([self._candidate(audit)], set())
+        assert kept[0].severity == "HIGH"
+
+    def test_only_a_certified_or_contradicted_label_counts_as_settled(
+        self, audit: ModuleType
+    ) -> None:
+        assert audit.english_settled("INAPPROPRIATE", ("INAPPROPRIATE",) * 3)
+        assert audit.english_settled("APPROPRIATE", ("INAPPROPRIATE",) * 3)
+        assert not audit.english_settled(
+            "APPROPRIATE", ("INAPPROPRIATE", "NONE_STATED", "NONE_STATED")
+        )
+        assert not audit.english_settled(
+            "APPROPRIATE", ("APPROPRIATE", "APPROPRIATE", "INAPPROPRIATE")
+        )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -95,7 +96,16 @@ def _render_review_with_rows(
     llm_report.write_text(llm_json, encoding="utf-8")
     # A clean response audit, as audit_llm_responses.py leaves it (#239 gate).
     response_audit = root / "llm_response_audit.json"
-    response_audit.write_text('{"judge": "all", "findings": []}', encoding="utf-8")
+    response_audit.write_text(
+        json.dumps(
+            {
+                "judge": "all",
+                "report_sha256": hashlib.sha256(llm_json.encode("utf-8")).hexdigest(),
+                "findings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setattr(module, "RESPONSE_AUDIT", response_audit)
 
     monkeypatch.setattr(module, "WORK", root)
@@ -885,12 +895,19 @@ def test_applying_a_filter_drops_the_active_case(
 # --- Issue #239: the page is not built from unaudited LLM responses ------------
 # A clinician found a self-contradicting answer on case 1 of a rendered page.
 # audit_llm_responses.py catches those, but only if it actually runs: the page
-# builder refuses LLM verdicts that have no fresh, clean audit behind them.
+# builder refuses LLM verdicts that have no clean, full audit OF THIS REPORT.
 
-_LLM_ENTRY = '[{"reqno": "R1", "audit_id": "a1", "llm_final": {"final_classification": "APPROPRIATE"}}]'
+_LLM_ENTRY = (
+    '[{"reqno": "R1", "audit_id": "a1", "llm_final": '
+    '{"final_classification": "APPROPRIATE", "model": "claude-sonnet-5"}}]'
+)
 
 
-_CLEAN_AUDIT = '{"judge": "all", "findings": []}'
+def _audit_json(report_json: str, *, judge: str = "all", findings: str = "[]") -> str:
+    digest = hashlib.sha256(report_json.encode("utf-8")).hexdigest()
+    return (
+        f'{{"judge": "{judge}", "report_sha256": "{digest}", "findings": {findings}}}'
+    )
 
 
 def _gate_paths(
@@ -916,11 +933,10 @@ def test_llm_verdicts_without_an_audit_block_the_page(tmp_path: Path) -> None:
 
 def test_high_finding_blocks_the_page(tmp_path: Path) -> None:
     module = _load_build_review()
-    high = (
-        '{"judge": "all", "findings": [{"reqno": "R1", "code": '
-        '"consortium_label_contradiction", "severity": "HIGH"}]}'
+    high = '[{"reqno": "R1", "code": "consortium_label_contradiction", "severity": "HIGH"}]'
+    report, audit = _gate_paths(
+        tmp_path, _LLM_ENTRY, _audit_json(_LLM_ENTRY, findings=high)
     )
-    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, high)
 
     blocker = module.response_audit_blocker(report, audit)
 
@@ -928,39 +944,51 @@ def test_high_finding_blocks_the_page(tmp_path: Path) -> None:
     assert "1 HIGH" in blocker
 
 
-def test_audit_older_than_the_report_is_stale(tmp_path: Path) -> None:
-    # A re-run merges fresh records into llm_report.json; yesterday's clean
-    # audit says nothing about them.
-    import os
-
+def test_audit_of_a_different_report_does_not_unlock_the_page(tmp_path: Path) -> None:
+    # A re-run merges fresh records into llm_report.json. An audit that read the
+    # OLD report says nothing about them, even if it finished later (an mtime
+    # check would accept it), so the audit is bound to the report's contents.
     module = _load_build_review()
-    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, _CLEAN_AUDIT)
-    os.utime(audit, (1_000_000, 1_000_000))
+    rerun = _LLM_ENTRY.replace("APPROPRIATE", "INAPPROPRIATE")
+    report, audit = _gate_paths(tmp_path, rerun, _audit_json(_LLM_ENTRY))
 
     blocker = module.response_audit_blocker(report, audit)
 
     assert blocker is not None
-    assert "older" in blocker
+    assert "different llm_report.json" in blocker
 
 
-def test_clean_fresh_audit_lets_the_page_build(tmp_path: Path) -> None:
+def test_clean_full_audit_of_this_report_lets_the_page_build(tmp_path: Path) -> None:
     module = _load_build_review()
-    medium = (
-        '{"judge": "all", "findings": [{"reqno": "R1", "code": '
-        '"label_before_reasoning", "severity": "MEDIUM"}]}'
+    medium = '[{"reqno": "R1", "code": "label_before_reasoning", "severity": "MEDIUM"}]'
+    report, audit = _gate_paths(
+        tmp_path, _LLM_ENTRY, _audit_json(_LLM_ENTRY, findings=medium)
     )
-    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, medium)
 
     assert module.response_audit_blocker(report, audit) is None
 
 
-def test_deterministic_only_run_needs_no_audit(tmp_path: Path) -> None:
-    # No LLM leg, no responses to audit: the RBC-only det workflow is unchanged.
+def test_runs_without_model_responses_need_no_audit(tmp_path: Path) -> None:
+    # No LLM leg, or only deterministic rows the LLM leg persists under
+    # llm_final (MSBOS over-reservation, injection filter): nothing to audit,
+    # and those runs rendered before this gate existed.
     module = _load_build_review()
-    report, audit = _gate_paths(tmp_path, "[]", None)
-
-    assert module.response_audit_blocker(report, audit) is None
+    deterministic = (
+        '[{"reqno": "R1", "audit_id": "a1", "llm_final": '
+        '{"final_classification": "PREOP_OVER_RESERVATION", "model": "msbos-reservation"}}]'
+    )
+    for llm_json in ("[]", deterministic):
+        report, audit = _gate_paths(tmp_path, llm_json, None)
+        assert module.response_audit_blocker(report, audit) is None
     assert module.response_audit_blocker(tmp_path / "absent.json", audit) is None
+
+
+def test_a_missing_llm_result_still_needs_the_audit(tmp_path: Path) -> None:
+    module = _load_build_review()
+    dropped = '[{"reqno": "R1", "audit_id": "a1", "llm_final": null}]'
+    report, audit = _gate_paths(tmp_path, dropped, None)
+
+    assert module.response_audit_blocker(report, audit) is not None
 
 
 def test_main_refuses_to_render_and_the_override_is_explicit(
@@ -980,21 +1008,16 @@ def test_main_refuses_to_render_and_the_override_is_explicit(
     module.enforce_response_audit()  # explicit operator override: no exit
 
 
-@pytest.mark.parametrize(
-    "weak",
-    [
-        '{"judge": "off", "findings": []}',
-        '{"judge": "candidates", "findings": []}',
-        "[]",  # an audit file from before the judge mode was recorded
-    ],
-)
+@pytest.mark.parametrize("weak", ["off", "candidates", None])
 def test_an_audit_without_the_full_consortium_does_not_unlock_the_page(
-    tmp_path: Path, weak: str
+    tmp_path: Path, weak: str | None
 ) -> None:
     # Codex P1 on #241: the regex-only checks missed 7 of 13 real
-    # contradictions, so a clean regex-only audit proves little.
+    # contradictions, so a clean regex-only audit proves little. None = an
+    # audit file from before the judge mode was recorded (a bare list).
     module = _load_build_review()
-    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, weak)
+    audit_json = "[]" if weak is None else _audit_json(_LLM_ENTRY, judge=weak)
+    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, audit_json)
 
     blocker = module.response_audit_blocker(report, audit)
 

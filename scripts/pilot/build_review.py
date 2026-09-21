@@ -24,6 +24,7 @@ Environment variables:
 from __future__ import annotations
 
 import csv
+import hashlib
 import html
 import json
 import math
@@ -1093,33 +1094,48 @@ def _returned_blood_datetime(rows: list[dict[str, str]]) -> str:
     return min(candidates) if candidates else ""
 
 
+def _needs_response_audit(entries: list[dict[str, Any]]) -> bool:
+    """True iff the report holds a model response, or is missing one it expected.
+
+    ``run_llm_leg.py`` also persists deterministic rows under ``llm_final``
+    (MSBOS over-reservation, injection filter, ...) with a non-Claude ``model``;
+    those carry no LLM response and rendered before this gate existed."""
+    for entry in entries:
+        if "llm_final" not in entry:
+            continue
+        final = entry["llm_final"]
+        if not final or str(final.get("model") or "").startswith("claude"):
+            return True
+    return False
+
+
 def response_audit_blocker(llm_report: Path, audit: Path) -> str | None:
     """Why the page must not be built from these LLM responses, else ``None``.
 
     Issue #239: a clinician found a self-contradicting LLM answer on case 1 of a
     rendered page. ``audit_llm_responses.py`` catches those, so LLM verdicts are
-    rendered only behind a response audit that exists, is not older than
-    ``llm_report.json`` (a re-run merges fresh, unaudited records into it), was
-    judged by the full consortium (the regex-only checks missed 7 of 13 real
-    contradictions) and carries no HIGH finding. A run with no LLM records
-    needs no audit."""
+    rendered only behind a response audit that exists, was judged by the full
+    consortium (the regex-only checks missed 7 of 13 real contradictions), read
+    exactly this ``llm_report.json`` (a re-run merges fresh, unaudited records
+    into it; the digest, unlike an mtime, cannot be satisfied by an audit of the
+    old report that finished later) and carries no HIGH finding."""
     if not llm_report.exists():
         return None
-    entries = json.loads(llm_report.read_text(encoding="utf-8"))
-    if not any("llm_final" in entry for entry in entries):
+    report_bytes = llm_report.read_bytes()
+    if not _needs_response_audit(json.loads(report_bytes)):
         return None
     if not audit.exists():
         return f"no response audit found ({audit.name}): run audit_llm_responses.py"
-    if audit.stat().st_mtime < llm_report.stat().st_mtime:
-        return (
-            f"{audit.name} is older than {llm_report.name}: "
-            "re-run audit_llm_responses.py"
-        )
     payload = json.loads(audit.read_text(encoding="utf-8"))
     if not isinstance(payload, dict) or payload.get("judge") != "all":
         return (
             f"{audit.name} was not produced with the full consortium: "
             "run audit_llm_responses.py --judge all"
+        )
+    if payload.get("report_sha256") != hashlib.sha256(report_bytes).hexdigest():
+        return (
+            f"{audit.name} audited a different {llm_report.name}: "
+            "re-run audit_llm_responses.py"
         )
     high = sum(1 for f in payload.get("findings", ()) if f.get("severity") == "HIGH")
     if high:
