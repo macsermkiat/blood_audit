@@ -210,8 +210,7 @@ def check_record(record: ResponseRecord) -> tuple[Finding, ...]:
         )
     order = record.field_order
     if (
-        record.component == "platelet"
-        and "classification" in order
+        "classification" in order
         and "reasoning_summary_en" in order
         and order.index("classification") < order.index("reasoning_summary_en")
     ):

@@ -119,18 +119,40 @@ def build_anthropic_request(
     }
 
 
+# Field order is load-bearing in every schema below (issues #239, #242): a
+# forced tool call is generated in schema order, so ``classification`` comes
+# LAST, after the reasoning and every other judgment. With the label first the
+# model committed to it before reasoning: 22 of 297 real-data platelet answers,
+# and RBC answers 68023033 / 68042514 / 68055542, carried APPROPRIATE while
+# their own reasoning concluded INAPPROPRIATE or NEEDS_REVIEW. The model can
+# still ignore property order, so the field states the rule in words too.
+_LABEL_FIELD: Final[str] = "classification"
+
+
+def _label_property(written_after: str) -> dict[str, Any]:
+    return {
+        "type": "string",
+        "enum": [
+            "APPROPRIATE",
+            "INAPPROPRIATE",
+            "NEEDS_REVIEW",
+            "INSUFFICIENT_EVIDENCE",
+        ],
+        "description": (
+            f"Write this field LAST, after {written_after}. It must be the "
+            "class that reasoning_summary_en concludes: if your reasoning ends "
+            "at INAPPROPRIATE or NEEDS_REVIEW, this field says the same."
+        ),
+    }
+
+
+def _without_label(names: Any) -> list[str]:
+    return [name for name in names if name != _LABEL_FIELD]
+
+
 _TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
     "type": "object",
     "properties": {
-        "classification": {
-            "type": "string",
-            "enum": [
-                "APPROPRIATE",
-                "INAPPROPRIATE",
-                "NEEDS_REVIEW",
-                "INSUFFICIENT_EVIDENCE",
-            ],
-        },
         "indications": {
             "type": "array",
             "items": {
@@ -163,13 +185,14 @@ _TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
                 "gray-zone) in English, as Thai clinicians do."
             ),
         },
+        _LABEL_FIELD: _label_property("both reasoning summaries"),
     },
     "required": [
-        "classification",
         "indications",
         "negative_evidence",
         "reasoning_summary_en",
         "reasoning_summary_th",
+        _LABEL_FIELD,
     ],
 }
 
@@ -177,21 +200,14 @@ _TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
 # parse_platelet_structured_response requires. Without these fields the
 # model never emits them, every platelet response fails SCHEMA_MISMATCH,
 # and the live platelet leg can produce no real verdicts.
-# Used ONLY for PLATELET_REVIEW requests; RBC requests use _TOOL_INPUT_SCHEMA
-# unchanged so the RBC path remains byte-identical.
-#
-# Field order is load-bearing (issue #239): a forced tool call is generated in
-# schema order, so ``classification`` comes LAST, after the reasoning and the
-# hard signals. With the label first, 22 of 297 real-data answers carried
-# APPROPRIATE while their own reasoning concluded INAPPROPRIATE / NEEDS_REVIEW.
-_PLATELET_LABEL_FIELD: Final[str] = "classification"
+# Used ONLY for PLATELET_REVIEW requests. The hard signals sit between the
+# reasoning and the label (see the field-order note above).
 _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
     "type": "object",
     "properties": {
         **{
-            name: definition
-            for name, definition in _TOOL_INPUT_SCHEMA["properties"].items()
-            if name != _PLATELET_LABEL_FIELD
+            name: _TOOL_INPUT_SCHEMA["properties"][name]
+            for name in _without_label(_TOOL_INPUT_SCHEMA["properties"])
         },
         "active_bleeding": {
             "type": "boolean",
@@ -228,27 +244,17 @@ _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
                 "active_bleeding."
             ),
         },
-        _PLATELET_LABEL_FIELD: {
-            **_TOOL_INPUT_SCHEMA["properties"][_PLATELET_LABEL_FIELD],
-            "description": (
-                "Write this field LAST, after both reasoning summaries and the "
-                "four hard-signal booleans. It must be the class that "
-                "reasoning_summary_en concludes: if your reasoning ends at "
-                "INAPPROPRIATE or NEEDS_REVIEW, this field says the same."
-            ),
-        },
+        _LABEL_FIELD: _label_property(
+            "both reasoning summaries and the four hard-signal booleans"
+        ),
     },
     "required": [
-        *(
-            name
-            for name in _TOOL_INPUT_SCHEMA["required"]
-            if name != _PLATELET_LABEL_FIELD
-        ),
+        *_without_label(_TOOL_INPUT_SCHEMA["required"]),
         "active_bleeding",
         "procedure_indication",
         "prophylactic_marrow_failure",
         "intracranial_bleed_indication",
-        _PLATELET_LABEL_FIELD,
+        _LABEL_FIELD,
     ],
 }
 
@@ -256,7 +262,10 @@ _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
 _RESERVE_AHEAD_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
     "type": "object",
     "properties": {
-        **_TOOL_INPUT_SCHEMA["properties"],
+        **{
+            name: _TOOL_INPUT_SCHEMA["properties"][name]
+            for name in _without_label(_TOOL_INPUT_SCHEMA["properties"])
+        },
         "administration_evidence": {
             "type": "array",
             "items": {
@@ -283,12 +292,17 @@ _RESERVE_AHEAD_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
             "type": "string",
             "enum": ["APPROPRIATE", "INAPPROPRIATE", "INSUFFICIENT_EVIDENCE"],
         },
+        _LABEL_FIELD: _label_property(
+            "both reasoning summaries, the administration fields and "
+            "reservation_assessment"
+        ),
     },
     "required": [
-        *_TOOL_INPUT_SCHEMA["required"],
+        *_without_label(_TOOL_INPUT_SCHEMA["required"]),
         "administration_evidence",
         "administration_claimed",
         "reservation_assessment",
+        _LABEL_FIELD,
     ],
 }
 

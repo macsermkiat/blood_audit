@@ -133,26 +133,25 @@ class TestChecks:
             _findings(audit, record)["label_contradicts_reasoning"].severity == "HIGH"
         )
 
-    def test_label_written_before_the_reasoning_is_flagged_on_platelets(
-        self, audit: ModuleType
+    @pytest.mark.parametrize("component", ["platelet", "red_cell"])
+    def test_label_written_before_the_reasoning_is_flagged(
+        self, audit: ModuleType, component: str
     ) -> None:
         # All 13 contradictions the consortium found on the real run were
-        # answers that wrote the label before the reasoning.
+        # answers that wrote the label before the reasoning, 2 of them RBC; every
+        # schema now asks for the label last (#239, #242).
         early = ("classification", *_ORDERED[:-1])
-        assert "label_before_reasoning" in _findings(
-            audit, _record(audit, field_order=early)
-        )
-
-    def test_rbc_label_first_is_by_design(self, audit: ModuleType) -> None:
-        record = _record(
-            audit,
-            component="red_cell",
-            field_order=("classification", "indications", "reasoning_summary_en"),
-            signals={},
-            reasoning_en="Hb 9.2 g/dL, stable. This order is INAPPROPRIATE.",
-            trigger_value=9.2,
-        )
-        assert "label_before_reasoning" not in _findings(audit, record)
+        record = _record(audit, component=component, field_order=early)
+        if component == "red_cell":
+            record = _record(
+                audit,
+                component=component,
+                field_order=early,
+                signals={},
+                reasoning_en="Hb 9.2 g/dL, stable. This order is INAPPROPRIATE.",
+                trigger_value=9.2,
+            )
+        assert "label_before_reasoning" in _findings(audit, record)
 
     def test_withholding_label_with_a_true_hard_signal_is_high(
         self, audit: ModuleType
