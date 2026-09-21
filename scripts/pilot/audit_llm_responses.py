@@ -10,15 +10,20 @@ payload) and reports what is wrong with the RESPONSES. The loop is: run the
 audit, fix the cause, re-run the flagged REQNOs (``BBA_PILOT_ONLY_REQNO``), run
 the audit again; build the page when it is clean.
 
-Checks code can decide run always. Reading the conclusion out of free-text
-reasoning is an extraction task for a CONSORTIUM of models (``--judge``): each
-judge sees one summary only, never the label; code compares the votes with the
-label and the English conclusion with the Thai one. The consortium certifies a
-label only when unanimous; one dissenting judge is a split for a human, never
-outvoted. The regex reading of the conclusion is a CANDIDATE finder: on the
-real run the judges overruled 4 of its 10 hits and found 7 it missed, so
-``--judge all`` is the default and the only mode build_review.py accepts;
-``candidates`` and ``off`` are for iterating without the page.
+The pipeline step is the CODE checks: they run always, cost nothing, and are
+what build_review.py gates on (an audit of exactly this llm_report.json with no
+HIGH finding).
+
+The model consortium is a DEV-TEST review of what the LLM API returned, not a
+production step (user ruling 2026-09-21). It is normally run from a Claude Code
+session on the subscription: reviewers on different models each read the
+evidence the model saw plus its full answer and report soundness, and code
+combines their votes without averaging (see the pilot README). ``--judge`` keeps
+an opt-in API version of the narrow "which class does this summary conclude?"
+consortium for unattended runs; it bills ANTHROPIC_API_KEY (about 2,200 small
+calls for 364 responses). The regex reading of the conclusion is only a
+CANDIDATE finder: on the real run the judges overruled 4 of its 10 hits and
+found 7 it missed.
 
 Patient-level text is sent only to the Anthropic API, the processor the LLM leg
 already uses. Nothing here changes a verdict: it writes a findings file.
@@ -26,7 +31,7 @@ already uses. Nothing here changes a verdict: it writes a findings file.
 Environment variables:
 
 * ``BBA_PILOT_WORK_DIR`` — sandbox directory (default ``/tmp/bba_mini``).
-* ``ANTHROPIC_API_KEY`` — required unless ``--judge off``.
+* ``ANTHROPIC_API_KEY`` — required only with ``--judge candidates|all``.
 * ``BBA_AUDIT_JUDGE_MODELS`` — comma-separated judge model ids.
 
 Outputs in the work dir: ``llm_response_audit.json``, ``llm_response_audit.csv``
@@ -92,6 +97,7 @@ PARSE_FAILURE_REASONS = frozenset(
 RERUN_CODES = frozenset(
     {
         "parse_failure",
+        "response_truncated",
         "consortium_label_contradiction",
         "consortium_thai_label_contradiction",
         "en_th_conclusion_mismatch",
@@ -135,6 +141,7 @@ class ResponseRecord:
     reasoning_th: str
     indications: tuple[Any, ...]
     trigger_value: float | None
+    stop_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +195,14 @@ def check_record(record: ResponseRecord) -> tuple[Finding, ...]:
     def add(code: str, severity: Severity, detail: str) -> None:
         out.append(Finding(record.reqno, code, severity, detail))
 
+    if record.stop_reason == "max_tokens":
+        # The label is written last, so a cut-off answer has no classification.
+        add(
+            "response_truncated",
+            "HIGH",
+            "the answer stopped at the output token limit: re-run this REQNO",
+        )
+        return tuple(out)
     if record.review_reason in PARSE_FAILURE_REASONS:
         add("parse_failure", "HIGH", f"{record.review_reason}: re-run this REQNO")
         return tuple(out)
@@ -547,6 +562,9 @@ def load_records(
                 trigger_value=(
                     row.platelet_value if component == "platelet" else row.hb_value
                 ),
+                stop_reason=(call.response_json or {}).get("stop_reason")
+                if call is not None
+                else None,
             )
         )
     return tuple(records), tuple(skipped)
@@ -557,9 +575,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--judge",
         choices=("off", "candidates", "all"),
-        default="all",
-        help="consortium judge: all (default; the only mode build_review.py "
-        "accepts); only records the regex could not settle; or off",
+        default="off",
+        help="API consortium judge, opt-in and billed to ANTHROPIC_API_KEY: off "
+        "(default, code checks only); only records the regex could not settle; "
+        "or all. The model consortium is a dev-test review and is normally run "
+        "from Claude Code on the subscription instead (see the pilot README)",
     )
     return parser
 

@@ -1008,79 +1008,25 @@ def test_main_refuses_to_render_and_the_override_is_explicit(
     module.enforce_response_audit()  # explicit operator override: no exit
 
 
-@pytest.mark.parametrize("weak", ["off", "candidates", None])
-def test_an_audit_without_the_full_consortium_does_not_unlock_the_page(
-    tmp_path: Path, weak: str | None
+@pytest.mark.parametrize("judge", ["off", "candidates", "all"])
+def test_the_code_check_audit_is_what_unlocks_the_page(
+    tmp_path: Path, judge: str
 ) -> None:
-    # Codex P1 on #241: the regex-only checks missed 7 of 13 real
-    # contradictions, so a clean regex-only audit proves little. None = an
-    # audit file from before the judge mode was recorded (a bare list).
+    # User ruling 2026-09-21: the model consortium is a dev-test review run from
+    # Claude Code, not a production step, so the page does not wait for it. The
+    # gate is the code audit: it exists, it read THIS report, it has no HIGH.
     module = _load_build_review()
-    audit_json = "[]" if weak is None else _audit_json(_LLM_ENTRY, judge=weak)
-    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, audit_json)
+    report, audit = _gate_paths(
+        tmp_path, _LLM_ENTRY, _audit_json(_LLM_ENTRY, judge=judge)
+    )
 
-    blocker = module.response_audit_blocker(report, audit)
-
-    assert blocker is not None
-    assert "--judge all" in blocker
+    assert module.response_audit_blocker(report, audit) is None
 
 
-def test_the_page_renders_the_report_the_gate_validated(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Local Codex review of #241: the gate read llm_report.json, then main()
-    # read it again later. A re-run landing between the two reads was rendered
-    # without ever being audited. main() now renders what the gate returned.
-    module = _load_build_review()
-    validated = [
-        {
-            "reqno": "R1",
-            "llm_final": {
-                "final_classification": "INAPPROPRIATE",
-                "confidence": 0.9,
-                "model": "claude-sonnet-5",
-                "review_reason": None,
-                "indications": [],
-                "negative_evidence": [],
-                "reasoning_en": "VALIDATED-REPORT-REASONING",
-                "reasoning_th": "x",
-            },
-        }
-    ]
-    monkeypatch.setattr(module, "enforce_response_audit", lambda: validated)
-
-    rendered = _render_review_with_rows(
-        module,
-        tmp_path,
-        monkeypatch,
-        manifest_csv="HN,REQNO,AN\nHN1,R1,AN1\n",
-        report_csv="reqno,classification\nR1,NEEDS_REVIEW\n",
-        llm_json=json.dumps(
-            [
-                {
-                    "reqno": "R1",
-                    "llm_final": {
-                        **validated[0]["llm_final"],
-                        "reasoning_en": "UNAUDITED-RERUN",
-                    },
-                }
-            ]
-        ),
-    ).decode()
-
-    assert "VALIDATED-REPORT-REASONING" in rendered
-    assert "UNAUDITED-RERUN" not in rendered
-
-
-def test_the_gate_hands_back_the_entries_it_validated(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_an_audit_file_from_before_the_report_digest_does_not_unlock_the_page(
+    tmp_path: Path,
 ) -> None:
     module = _load_build_review()
-    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, _audit_json(_LLM_ENTRY))
-    monkeypatch.setattr(module, "LLM_REPORT", report)
-    monkeypatch.setattr(module, "RESPONSE_AUDIT", audit)
+    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, "[]")
 
-    assert module.enforce_response_audit() == json.loads(_LLM_ENTRY)
-
-    monkeypatch.setattr(module, "LLM_REPORT", tmp_path / "absent.json")
-    assert module.enforce_response_audit() == []
+    assert module.response_audit_blocker(report, audit) is not None

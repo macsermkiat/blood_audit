@@ -53,8 +53,12 @@ _TOOL_DESCRIPTION: Final[str] = (
     "the supplied evidence. Mandatory tool; no free-form text answers."
 )
 
-MAX_OUTPUT_TOKENS: Final[int] = 4096
+MAX_OUTPUT_TOKENS: Final[int] = 8192
 """Max tokens reserved for the LLM's tool-call output.
+
+Raised from 4096 (2026-09-21): 3 of 107 sandbox answers stopped at the old
+limit, and because every schema asks for ``classification`` LAST a cut-off
+answer carries no label at all (schema_mismatch / NEEDS_REVIEW).
 
 Sized for the structured-output envelope (classification + up to ~5
 indications with verbatim quotes + reasoning summaries in EN + TH).

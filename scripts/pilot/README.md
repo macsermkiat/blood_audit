@@ -83,7 +83,7 @@ export BBA_DB_URL=postgresql://localhost/bba_pilot
 uv run bba ingest "$BBA_PILOT_WORK_DIR/bundle/BDVST.csv"
 
 uv run python scripts/pilot/run_llm_leg.py           # live Anthropic batch
-uv run python scripts/pilot/audit_llm_responses.py --judge all   # audit the responses
+uv run python scripts/pilot/audit_llm_responses.py   # audit the responses (code checks, no API)
 uv run python scripts/pilot/build_review.py          # assemble review.html
 open "$BBA_PILOT_WORK_DIR/review.html"
 ```
@@ -93,34 +93,52 @@ open "$BBA_PILOT_WORK_DIR/review.html"
 `audit_llm_responses.py` runs between the LLM leg and `build_review.py`
 (issue #239: a clinician found an answer labelled APPROPRIATE whose own
 reasoning concluded INAPPROPRIATE on case 1 of a rendered page). It changes no
-verdict. Code checks always run; `--judge all` (the default, and the only mode
-`build_review.py` accepts) adds a consortium of models
-(default sonnet, haiku, opus; `BBA_AUDIT_JUDGE_MODELS`) that read the conclusion
-out of the English and the Thai summary without seeing the label; each summary
-is held to the label on its own and to the other. Unanimous
-judges certify a label, one dissent is a split for a human, and a judge outage
-is a HIGH finding. `--judge candidates` is cheaper but missed 3 of 13 real
-contradictions on the hematology run. Patient-level text goes only to the
-Anthropic API.
+verdict and, by default, makes no API call: it runs the code checks (parse
+failures, answers cut off at the output token limit, label vs the class the
+reasoning appears to conclude, final verdict changed with no recorded reason,
+label written before the reasoning, citations, trigger value, summary language)
+and writes `llm_response_audit.{json,csv}` plus
+`llm_response_audit_reqnos.txt`, the REQNOs a re-run can fix.
 
-The loop: run the audit; fix the cause; re-run the REQNOs in
-`llm_response_audit_reqnos.txt` under a fresh run id; run the audit again.
+The loop: run the audit; fix the cause; re-run those REQNOs under a fresh run
+id; run the audit again.
 
 ```bash
 BBA_PILOT_ONLY_REQNO="$(cat "$BBA_PILOT_WORK_DIR/llm_response_audit_reqnos.txt")" \
 BBA_PILOT_RUN_ID=pilot-mini-audit-fix-1 \
 uv run python scripts/pilot/run_llm_leg.py
-uv run python scripts/pilot/audit_llm_responses.py --judge all
+uv run python scripts/pilot/audit_llm_responses.py
 ```
 
-`build_review.py` exits with an error when `llm_report.json` holds LLM records
-and the audit is missing, not produced with `--judge all`, read a different
-`llm_report.json` (the audit stores the report's SHA-256, so re-audit after
-every re-run), or carries a HIGH finding. Runs with no model responses
-(deterministic rows only) need no audit. To
-build the page anyway (for example to read the flagged cases), set
-`BBA_PILOT_ALLOW_UNAUDITED=1`; the builder prints the reason it would have
-refused.
+`build_review.py` exits with an error when `llm_report.json` holds model
+responses and the audit is missing, read a different `llm_report.json` (the
+audit stores the report's SHA-256, so re-audit after every re-run), or carries a
+HIGH finding. Runs with no model responses need no audit. To build the page
+anyway, set `BBA_PILOT_ALLOW_UNAUDITED=1`; the builder prints the reason it
+would have refused.
+
+### Dev-test consortium (Claude Code, not a pipeline step)
+
+While a prompt, schema or evidence change is being tested, a consortium of
+reviewers checks whether the answers the API returned are sound and correct. It
+is NOT a production step and NOT a gate (user ruling 2026-09-21). It runs from a
+Claude Code session on the subscription, so it makes no Anthropic API call.
+
+```bash
+# 1. review bundles from the audit store: evidence the model saw + its answer
+uv run python scripts/pilot/dev_consortium/consortium.py build --reqno-file reqnos.txt
+# 2. in Claude Code: one subagent per reviewer and batch (e.g. sonnet, opus,
+#    haiku), each told to read dev_consortium/INSTRUCTIONS.md and write
+#    dev_consortium/answers/<reviewer>/<reqno>.json
+# 3. combine: code counts the votes, dissent is shown, nothing is averaged
+uv run python scripts/pilot/dev_consortium/consortium.py combine
+```
+
+The bundles hold the de-identified notes the model saw. Sending them to a
+reviewer outside Anthropic (for example the Codex CLI) is the data owner's
+decision for each run. `audit_llm_responses.py --judge candidates|all` remains
+as an opt-in API version of the narrow "which class does this summary
+conclude?" check for unattended runs; it bills `ANTHROPIC_API_KEY`.
 
 ## Re-running a single case
 
@@ -134,7 +152,7 @@ BBA_PILOT_ONLY_REQNO=68080335 \
 BBA_PILOT_RUN_ID=pilot-mini-68080335-v2 \
 uv run python scripts/pilot/run_llm_leg.py
 
-uv run python scripts/pilot/audit_llm_responses.py --judge all
+uv run python scripts/pilot/audit_llm_responses.py
 uv run python scripts/pilot/build_review.py
 ```
 
