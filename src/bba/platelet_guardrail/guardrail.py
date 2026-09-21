@@ -26,6 +26,7 @@ indication; an ungrounded clear at any level floors to human review.
 from __future__ import annotations
 
 from bba.audit_store import Classification
+from bba.platelet_classifier import PLATELET_PROPHYLAXIS_THRESHOLD
 from bba.platelet_guardrail.models import PlateletHardSignals
 
 PLATELET_OVERCLEAR_REVIEW_REASON = "platelet_llm_overclear_suspect"
@@ -43,6 +44,11 @@ over-clear candidate.  Includes POTENTIALLY_INAPPROPRIATE (plt >= ceiling)
 because transfusing at a normal or high count is almost never appropriate
 and there is no separate high-count prompt path backstop; an ungrounded
 clear at high count must be reviewed just as at low count."""
+
+
+PLATELET_TREND_REVIEW_REASON = "platelet_trend_unsupported"
+"""Typed ``review_reason`` stamped on platelet rows floored by
+:func:`platelet_trend_unsupported` (issue #237)."""
 
 
 def platelet_overclear_suspect(
@@ -64,7 +70,53 @@ def platelet_overclear_suspect(
     return not hard_signals.any_signal()
 
 
+def platelet_trend_unsupported(
+    final_classification: Classification,
+    hard_signals: PlateletHardSignals,
+    trigger_count_k_ul: float | None,
+    projected_24h_k_ul: float | None,
+) -> bool:
+    """True iff an LLM clear rests only on an "expected to fall" claim the count
+    history does not support (issue #237, clinician ruling 2026-09-21).
+
+    At a trigger count of 10,000 /uL or more, the only route to
+    ``prophylactic_marrow_failure`` is indication 5's second arm, "expected to
+    drop below 10,000 /uL within 24 hours". That clause is a straight-line
+    projection through the last two pre-order counts
+    (:func:`bba.platelet_lookup.project_24h`), so code decides it: the model
+    sets the hard signal itself, which is why
+    :func:`platelet_overclear_suspect` cannot catch these.
+
+    Fires only when ``prophylactic_marrow_failure`` is the ONLY true signal; a
+    grounded bleeding / procedure / intracranial indication carries its own
+    higher threshold. A ``None`` projection (fewer than two usable draws) does
+    not support the clause. The pipeline floors a hit to human review, never to
+    ``INAPPROPRIATE`` (never-guess convention).
+    """
+    if final_classification != "APPROPRIATE":
+        return False
+    if not hard_signals.prophylactic_marrow_failure:
+        return False
+    if (
+        hard_signals.active_bleeding
+        or hard_signals.procedure_indication
+        or hard_signals.intracranial_bleed_indication
+    ):
+        return False
+    if (
+        trigger_count_k_ul is None
+        or trigger_count_k_ul < PLATELET_PROPHYLAXIS_THRESHOLD
+    ):
+        return False
+    return (
+        projected_24h_k_ul is None
+        or projected_24h_k_ul >= PLATELET_PROPHYLAXIS_THRESHOLD
+    )
+
+
 __all__ = (
     "PLATELET_OVERCLEAR_REVIEW_REASON",
+    "PLATELET_TREND_REVIEW_REASON",
     "platelet_overclear_suspect",
+    "platelet_trend_unsupported",
 )

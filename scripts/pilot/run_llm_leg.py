@@ -45,6 +45,9 @@ Environment variables:
 * ``BBA_PILOT_PLATELET_LLM`` — ``1`` submits platelet cases to the LLM
   (default: the library flag ``PLATELET_LLM_ENABLED``, OFF). Costs one call
   per deferred platelet order.
+* ``BBA_PILOT_PLATELET_TREND`` — ``1`` renders the projected 24 h platelet
+  count into the evidence and enables the count-trend floor (issue #237;
+  default: the library flag ``PLATELET_TREND_GUARDRAIL_ENABLED``, OFF).
 """
 
 from __future__ import annotations
@@ -155,6 +158,7 @@ from bba.platelet_lookup import (
     PLATELET_LABEXM,
     PlateletObservation,
     lookup_platelet,
+    project_24h,
     parse_platelet_count,
 )
 from bba.preop_reservation import (
@@ -240,6 +244,18 @@ PLATELET_AUTOCLEAR_PILOT_ENABLED = (
     else PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED
 )
 
+# Platelet count-trend floor (issue #237): the projected 24 h count is rendered
+# into the evidence and the replay guardrail floors an unsupported "expected to
+# fall" clear. Same seam shape: BBA_PILOT_PLATELET_TREND "1" on, anything else
+# off, unset follows the library flag (default OFF). Read at import so it can
+# fold into CODE_VERSION below; main() sets the library flag from it.
+_plt_trend_env = os.environ.get("BBA_PILOT_PLATELET_TREND")
+PLATELET_TREND_PILOT_ENABLED = (
+    _plt_trend_env == "1"
+    if _plt_trend_env is not None
+    else feature_flags.PLATELET_TREND_GUARDRAIL_ENABLED
+)
+
 
 # Platelet LLM leg pilot seam. The library flag stays default-OFF (no clinician
 # sign-off for the live pipeline); BBA_PILOT_PLATELET_LLM "1" lets a sandbox run
@@ -313,6 +329,11 @@ if MSBOS_RESERVATION_PILOT_ENABLED and MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED:
 if DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED:
     # +usetypeonly: USETYPE is the sole pre-op router; procedure facts are evidence.
     CODE_VERSION += "+usetypeonly"
+if PLATELET_TREND_PILOT_ENABLED:
+    # +plttrend (#237): the projection line changes the platelet prompt and the
+    # count-trend floor changes verdicts, so a flag-on run needs its own code
+    # identity; flag-off keeps the identity above exactly.
+    CODE_VERSION += "+plttrend"
 TZ_LOCAL = "Asia/Bangkok"
 INCPT_OPERATION_GROUPS = {"110", "111"}
 
@@ -1136,11 +1157,14 @@ def _annotate_platelet_lab(
     timestamp_utc: datetime | None,
     anchor_utc: datetime,
     is_closest: bool,
+    projection_line: str | None = None,
 ) -> str:
     """Append the count's age (and the trigger marker) to a platelet Lab chunk.
 
     Platelet analog of the RBC path's Hb flags: the closest pre-order count is
     the one the threshold rule applies to; older counts are trend context.
+    ``projection_line`` (issue #237) rides on the closest count only, so it is
+    citable under a real bundle id and read next to the trigger count.
     """
     flags: list[str] = []
     if is_closest:
@@ -1148,7 +1172,27 @@ def _annotate_platelet_lab(
     if timestamp_utc is not None:
         hrs = (anchor_utc - timestamp_utc).total_seconds() / 3600.0
         flags.append(f"{hrs:.1f}h before order")
-    return f"{text}  [{'; '.join(flags)}]" if flags else text
+    annotated = f"{text}  [{'; '.join(flags)}]" if flags else text
+    if is_closest and projection_line:
+        return f"{annotated}\n{projection_line}"
+    return annotated
+
+
+def _render_platelet_projection(projected_k_ul: float | None) -> str:
+    """The evidence line for :func:`bba.platelet_lookup.project_24h` (issue #237).
+
+    The replay guardrail decides "expected to drop below 10,000 /uL within 24
+    hours" on this number, so the model is shown the same figure, per uL like
+    the prompt's thresholds. A missing projection is stated, not omitted."""
+    if projected_k_ul is None:
+        return (
+            "Projected platelet count in 24 h: not computable (needs two counts "
+            "6 to 72 h apart in the 7 days before the order)"
+        )
+    return (
+        "Projected platelet count in 24 h (straight line through the last two "
+        f"counts): {projected_k_ul * 1000:,.0f} /uL"
+    )
 
 
 def _incpt_evidence_chunks(
@@ -1402,6 +1446,7 @@ def main() -> None:
     feature_flags.DECLARED_USE_PREOP_EXEMPT_ENABLED = (
         DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED
     )
+    feature_flags.PLATELET_TREND_GUARDRAIL_ENABLED = PLATELET_TREND_PILOT_ENABLED
     if DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED and not DECLARED_USETYPE_PILOT_ENABLED:
         print(
             "WARNING: declared-use pre-op exemption is ON while the declared-use "
@@ -1463,6 +1508,9 @@ def main() -> None:
             plt_result = lookup_platelet(
                 observations=plt_obs,
                 anchor_utc=order.order_datetime,
+            )
+            plt_projected = project_24h(
+                observations=plt_obs, anchor_utc=order.order_datetime
             )
             # The evidence bundle (below) is built for EVERY platelet order,
             # including those with no usable count, so the returns short-circuit
@@ -1751,6 +1799,11 @@ def main() -> None:
                         timestamp_utc=item.timestamp_utc,
                         anchor_utc=order.order_datetime,
                         is_closest=item.id == closest_plt_id,
+                        projection_line=(
+                            _render_platelet_projection(plt_projected)
+                            if PLATELET_TREND_PILOT_ENABLED
+                            else None
+                        ),
                     )
                 if text.strip():
                     plt_chunks.append(
@@ -1770,6 +1823,8 @@ def main() -> None:
                 PipelineRowContext.for_platelet(
                     order=order,
                     platelet_result=plt_result,
+                    platelet_projected_24h_k_ul=plt_projected,
+                    platelet_projection_computed=True,
                     hn_hash=hn_hash,
                     an_hash=an_hash,
                     redactor_version="external-deid-gate-narrative-0.1",

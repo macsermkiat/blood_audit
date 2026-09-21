@@ -37,6 +37,11 @@ PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED
     Lets the deterministic platelet gate clear a fresh count < 10 on a
     heme-malignancy / chemo admission with no withhold population. Default: True
     (hematology sign-off 2026-09-20).
+PLATELET_TREND_GUARDRAIL_ENABLED
+    Floors an LLM platelet clear to review when it rests only on "expected to
+    drop below 10,000 /uL within 24 hours" and the straight-line projection
+    through the last two counts does not support that (issue #237).
+    Default: False.
 """
 
 from __future__ import annotations
@@ -68,6 +73,20 @@ policy's withhold populations (ITP, TTP/TMA, HIT, aplastic anaemia, dengue,
 snakebite). This is the medicine policy's first platelet row expressed on
 structured codes only. When False the classifier is byte-identical to v1 and
 auto-clears nothing (CR-C1).
+"""
+
+PLATELET_TREND_GUARDRAIL_ENABLED: bool = False
+"""Enable the platelet count-trend floor (default: OFF).
+
+Clinician ruling 2026-09-21 (issue #237): "expected to drop below 10,000 /uL
+within 24 hours" means a straight-line projection through the last two
+pre-order counts, extended 24 h past the latest count. When True,
+:func:`bba.platelet_guardrail.platelet_trend_unsupported` floors an LLM
+``APPROPRIATE`` to ``NEEDS_REVIEW`` (``platelet_trend_unsupported``) when the
+only true hard signal is ``prophylactic_marrow_failure``, the trigger count is
+10 x10^3/uL or more, and the projection is missing or not below 10. When False
+replay is byte-identical to before. Set ``BBA_PILOT_PLATELET_TREND=1`` to
+enable it for a pilot run; it stays OFF until the sandbox result is read.
 """
 
 RESERVE_AHEAD_ROUTER_ENABLED: bool = False
@@ -161,6 +180,7 @@ __all__: Sequence[str] = (
     "MSBOS_RESERVATION_ENABLED",
     "PLATELET_LLM_ENABLED",
     "PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED",
+    "PLATELET_TREND_GUARDRAIL_ENABLED",
     "RESERVE_AHEAD_ROUTER_ENABLED",
     "RETURNS_LEDGER_ENABLED",
 )

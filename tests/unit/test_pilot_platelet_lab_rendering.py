@@ -91,3 +91,52 @@ def test_older_count_carries_age_only(llm_leg: ModuleType) -> None:
 
     assert text.endswith("[30.0h before order]")
     assert "closest" not in text
+
+
+# --- Issue #237: the projected 24 h count is shown to the model ---------------
+# The guardrail decides "expected to drop below 10,000 /uL within 24 hours" on a
+# straight-line projection; the model must read the same number, or it keeps
+# arguing a fall the floor will then send to review.
+
+
+def test_projection_line_states_the_per_ul_figure(llm_leg: ModuleType) -> None:
+    line = llm_leg._render_platelet_projection(7.5)
+
+    assert line == (
+        "Projected platelet count in 24 h (straight line through the last two "
+        "counts): 7,500 /uL"
+    )
+
+
+def test_missing_projection_is_stated_not_omitted(llm_leg: ModuleType) -> None:
+    # Silence would let the model supply its own expectation.
+    line = llm_leg._render_platelet_projection(None)
+
+    assert "not computable" in line
+    assert "/uL" not in line.split("not computable")[0]
+
+
+def test_projection_line_rides_on_the_closest_count(llm_leg: ModuleType) -> None:
+    text = llm_leg._annotate_platelet_lab(
+        "Platelet count 14 10^3/uL (14,000 /uL)",
+        timestamp_utc=_ANCHOR - timedelta(hours=3),
+        anchor_utc=_ANCHOR,
+        is_closest=True,
+        projection_line=llm_leg._render_platelet_projection(14.0),
+    )
+
+    first, second = text.split("\n")
+    assert first.endswith("[closest pre-order platelet count; 3.0h before order]")
+    assert second.endswith(": 14,000 /uL")
+
+
+def test_older_count_never_carries_the_projection(llm_leg: ModuleType) -> None:
+    text = llm_leg._annotate_platelet_lab(
+        "Platelet count 25 10^3/uL (25,000 /uL)",
+        timestamp_utc=_ANCHOR - timedelta(hours=30),
+        anchor_utc=_ANCHOR,
+        is_closest=False,
+        projection_line=llm_leg._render_platelet_projection(14.0),
+    )
+
+    assert "Projected" not in text
