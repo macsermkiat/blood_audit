@@ -12,7 +12,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
-from types import MappingProxyType, ModuleType
+from types import MappingProxyType, ModuleType, SimpleNamespace
 
 import pytest
 
@@ -456,3 +456,35 @@ class TestRegexCandidateAfterJudging:
         assert not audit.english_settled(
             "APPROPRIATE", ("APPROPRIATE", "APPROPRIATE", "INAPPROPRIATE")
         )
+
+
+class TestRowIdentity:
+    _FINAL = {
+        "final_classification": "INAPPROPRIATE",
+        "review_reason": None,
+        "reasoning_en": "Count 22,000 /uL, melena. INAPPROPRIATE.",
+        "reasoning_th": "ไม่เหมาะสม",
+    }
+
+    def _row(self, **overrides: object) -> SimpleNamespace:
+        base = {
+            "final_classification": "INAPPROPRIATE",
+            "review_reason": None,
+            "reasoning_summary_en": "Count 22,000 /uL, melena. INAPPROPRIATE.",
+            "reasoning_summary_thai": "ไม่เหมาะสม",
+        }
+        return SimpleNamespace(**{**base, **overrides})
+
+    def test_the_row_that_produced_the_report_entry_matches(
+        self, audit: ModuleType
+    ) -> None:
+        assert audit.row_produced_entry(self._row(), self._FINAL)
+
+    def test_a_later_run_with_the_same_verdict_is_a_different_response(
+        self, audit: ModuleType
+    ) -> None:
+        # Local Codex review of #241: an interrupted re-run persists a newer row
+        # with the same verdict and reason but another payload. Pairing it with
+        # the report's summaries would audit a response nobody will read.
+        rerun = self._row(reasoning_summary_en="Count 22,000 /uL. INAPPROPRIATE.")
+        assert not audit.row_produced_entry(rerun, self._FINAL)

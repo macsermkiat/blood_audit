@@ -471,6 +471,19 @@ def _tool_input(response_json: Any) -> dict[str, Any]:
     return {}
 
 
+def row_produced_entry(row: Any, final: Mapping[str, Any]) -> bool:
+    """True iff this audit-store row is the one the report entry was written
+    from. The report carries no run id, so identity is the verdict, the reason
+    AND both persisted summaries: a later run with the same verdict is a
+    different response with a different payload."""
+    return (
+        row.final_classification == final.get("final_classification")
+        and row.review_reason == final.get("review_reason")
+        and (row.reasoning_summary_en or "") == (final.get("reasoning_en") or "")
+        and (row.reasoning_summary_thai or "") == (final.get("reasoning_th") or "")
+    )
+
+
 def load_records(
     work: Path, entries: Sequence[Mapping[str, Any]]
 ) -> tuple[tuple[ResponseRecord, ...], tuple[Finding, ...]]:
@@ -485,17 +498,12 @@ def load_records(
         key = (call.audit_id, call.run_id)
         if key not in calls or call.request_timestamp > calls[key].request_timestamp:
             calls[key] = call
-    # The store row that produced the report entry: same final verdict and
-    # reason, newest first. A newer row that disagrees with the report would
-    # pair one run's label with another run's reasoning.
+    # The store row that produced the report entry (see row_produced_entry);
+    # an entry with no such row is reported, never paired with another run.
     rows: dict[str, Any] = {}
     for row in sorted(store.read_audit_results(), key=lambda r: r.run_timestamp):
         final = report.get(row.audit_id, {}).get("llm_final")
-        if (
-            final is not None
-            and row.final_classification == final.get("final_classification")
-            and row.review_reason == final.get("review_reason")
-        ):
+        if final is not None and row_produced_entry(row, final):
             rows[row.audit_id] = row
 
     records: list[ResponseRecord] = []
