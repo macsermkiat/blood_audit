@@ -17,6 +17,10 @@ Derived from the Chula DRAFT platelet policy (AABB/ICTMG 2025):
   <80-100k).
 * ``prophylactic_marrow_failure`` — chemo / HSCT / consumptive thrombocytopenia
   with count <10k (or expected <10k within 24h), AND no exclusion population.
+* ``intracranial_bleed_indication`` — intracranial bleed below its threshold
+  (clinician ruling 2026-09-21): acute / acute-on-chronic / growing / operative
+  <100k, stable non-operative (incl. stable chronic SDH) <50k. Kept separate
+  from ``active_bleeding`` because chronic SDH expansion is not active bleeding.
 
 Deliberately NOT a blanket ``count < 10`` exemption (§8/CR-C2): a plt<10
 dengue-no-bleed / TTP / HIT / ITP / aplastic-no-bleed patient is exactly the
@@ -46,6 +50,7 @@ class PlateletHardSignals(BaseModel):
     active_bleeding: bool = False
     procedure_indication: bool = False
     prophylactic_marrow_failure: bool = False
+    intracranial_bleed_indication: bool = False
 
     def any_signal(self) -> bool:
         """True iff at least one positive platelet indication is grounded."""
@@ -53,6 +58,7 @@ class PlateletHardSignals(BaseModel):
             self.active_bleeding
             or self.procedure_indication
             or self.prophylactic_marrow_failure
+            or self.intracranial_bleed_indication
         )
 
 
