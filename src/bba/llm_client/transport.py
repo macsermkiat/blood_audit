@@ -179,10 +179,20 @@ _TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
 # and the live platelet leg can produce no real verdicts.
 # Used ONLY for PLATELET_REVIEW requests; RBC requests use _TOOL_INPUT_SCHEMA
 # unchanged so the RBC path remains byte-identical.
+#
+# Field order is load-bearing (issue #239): a forced tool call is generated in
+# schema order, so ``classification`` comes LAST, after the reasoning and the
+# hard signals. With the label first, 22 of 297 real-data answers carried
+# APPROPRIATE while their own reasoning concluded INAPPROPRIATE / NEEDS_REVIEW.
+_PLATELET_LABEL_FIELD: Final[str] = "classification"
 _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
     "type": "object",
     "properties": {
-        **_TOOL_INPUT_SCHEMA["properties"],
+        **{
+            name: definition
+            for name, definition in _TOOL_INPUT_SCHEMA["properties"].items()
+            if name != _PLATELET_LABEL_FIELD
+        },
         "active_bleeding": {
             "type": "boolean",
             "description": (
@@ -218,13 +228,27 @@ _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
                 "active_bleeding."
             ),
         },
+        _PLATELET_LABEL_FIELD: {
+            **_TOOL_INPUT_SCHEMA["properties"][_PLATELET_LABEL_FIELD],
+            "description": (
+                "Write this field LAST, after both reasoning summaries and the "
+                "four hard-signal booleans. It must be the class that "
+                "reasoning_summary_en concludes: if your reasoning ends at "
+                "INAPPROPRIATE or NEEDS_REVIEW, this field says the same."
+            ),
+        },
     },
     "required": [
-        *_TOOL_INPUT_SCHEMA["required"],
+        *(
+            name
+            for name in _TOOL_INPUT_SCHEMA["required"]
+            if name != _PLATELET_LABEL_FIELD
+        ),
         "active_bleeding",
         "procedure_indication",
         "prophylactic_marrow_failure",
         "intracranial_bleed_indication",
+        _PLATELET_LABEL_FIELD,
     ],
 }
 
