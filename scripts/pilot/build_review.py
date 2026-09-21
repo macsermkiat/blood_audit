@@ -239,6 +239,13 @@ _REVIEW_REASON_LABELS: dict[str, str] = {
         "Platelet-leg over-clear floored to NEEDS_REVIEW (platelet "
         "guardrail; the RBC assert path does not apply to platelets)"
     ),
+    "platelet_trend_unsupported": (
+        "Platelet clear floored to NEEDS_REVIEW: the count was 10,000 /uL or "
+        "more and the clear rested only on 'expected to drop below 10,000 /uL "
+        "within 24 hours', but the straight-line projection through the last "
+        "two pre-order counts is 10,000 /uL or more, or fewer than two counts "
+        "were on file (clinician ruling 2026-09-21)"
+    ),
     "malformed_json": "Parse failure — the response was not valid JSON",
     "schema_mismatch": (
         "Parse failure — the tool payload did not match the expected schema"
@@ -2619,6 +2626,7 @@ LLM: Anthropic Batch classification on structured evidence only.
 {msbos_glossary_html}{picker_glossary_html}<dt>hallucination_suspect</dt><dd>Quote verifier rejected every attempt — the cited quotes did not ground in the evidence bundle.</dd>
 <dt>empty_reasoning</dt><dd>Final verdict carried empty reasoning — floored to NEEDS_REVIEW (a verdict with no rationale is never asserted).</dd>
 <dt>platelet_llm_overclear_suspect</dt><dd>Platelet-leg over-clear floored to NEEDS_REVIEW (platelet guardrail; the RBC assert path does not apply to platelets).</dd>
+<dt>platelet_trend_unsupported</dt><dd>{esc(_REVIEW_REASON_LABELS["platelet_trend_unsupported"])}.</dd>
 <dt>malformed_json</dt><dd>Parse failure — the response was not valid JSON.</dd>
 <dt>schema_mismatch</dt><dd>Parse failure — the tool payload did not match the expected schema.</dd>
 <dt>classification_out_of_set</dt><dd>Parse failure — the classification label is outside the allowed vocabulary.</dd>

@@ -23,16 +23,26 @@ from bba.platelet_lookup.parse import (
     MIN_PLATELET,
     parse_platelet_count,
 )
+from bba.platelet_lookup.projection import (
+    MAX_DRAW_GAP,
+    MIN_DRAW_GAP,
+    PROJECTION_HORIZON,
+    project_24h,
+)
 
 __all__: Sequence[str] = (
+    "MAX_DRAW_GAP",
     "MAX_PLATELET",
+    "MIN_DRAW_GAP",
     "MIN_PLATELET",
     "PLATELET_LABEXM",
     "PLATELET_UNIT",
+    "PROJECTION_HORIZON",
     "PlateletFreshness",
     "PlateletLookupResult",
     "PlateletObservation",
     "PlateletSource",
     "lookup_platelet",
     "parse_platelet_count",
+    "project_24h",
 )

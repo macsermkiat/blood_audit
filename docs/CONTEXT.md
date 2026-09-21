@@ -3566,3 +3566,32 @@ condemned) and stamps `PLATELET_OVERCLEAR_REVIEW_REASON =
 separately. Pure and side-effect-free — a replay-stable mirror of
 `bba.audit_pipeline.replay.llm_overclear_suspect`. `PlateletHardSignals` carries
 the structured grounded signals and their `any_signal()` test.
+
+### platelet_trend_unsupported
+
+Issue #237, clinician ruling 2026-09-21: the policy clause "expected to drop
+below 10,000 /uL within 24 hours" means a straight-line projection only.
+`bba.platelet_lookup.project_24h(observations, anchor_utc) → float | None` takes
+the last two counts in the strict 7-day pre-order window and extends the line
+24 h past the LATEST COUNT (not past the order). `None` when fewer than two
+draws, or when the two draws are more than 72 h or less than 6 h apart (the
+6 h minimum is a SEED pending a hematology ruling); rows sharing a timestamp
+are one draw (highest `item_no` wins); a line below zero is reported as 0.
+
+`bba.platelet_guardrail.platelet_trend_unsupported(final, hard_signals,
+trigger_count, projected_24h) → bool`. True iff the LLM returned `APPROPRIATE`,
+`prophylactic_marrow_failure` is the ONLY true hard signal, the trigger count is
+10 ×10³/µL or more, and the projection is `None` or 10 or more. The model sets
+that hard signal itself, so `platelet_overclear_suspect` cannot catch these. On
+a hit replay floors the row to `NEEDS_REVIEW` with
+`PLATELET_TREND_REVIEW_REASON = "platelet_trend_unsupported"` (never
+`INAPPROPRIATE`). The projection reaches replay on
+`PipelineRowContext.platelet_projected_24h_k_ul` together with
+`platelet_projection_computed` (the floor is inert on a context whose builder
+never ran the projection), and the pilot leg renders the
+same number under the closest pre-order count. Gated by
+`feature_flags.PLATELET_TREND_GUARDRAIL_ENABLED` (default OFF; pilot seam
+`BBA_PILOT_PLATELET_TREND=1`, code identity `+plttrend`).
+
+A post-HSCT ward standing order "transfuse below 20,000" is NOT an indication
+(same ruling); the platelet prompt already says so (LOCAL TRIGGERS, #235).
