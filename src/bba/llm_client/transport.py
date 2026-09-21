@@ -196,6 +196,15 @@ _TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
     ],
 }
 
+_SIGNAL_ORDER_RULE: Final[str] = (
+    " Write this boolean after both reasoning summaries; it must agree with "
+    "what reasoning_summary_en concludes about this indication."
+)
+"""Appended to every platelet hard-signal description. Once the label was
+pinned last (#239) the model moved the four booleans to the FRONT and set
+prophylactic_marrow_failure true before reasoning that the count was above the
+threshold (68042732, 68051598): the same commit-before-reasoning defect."""
+
 # Platelet-specific extension: adds the three hard-signal booleans that
 # parse_platelet_structured_response requires. Without these fields the
 # model never emits them, every platelet response fails SCHEMA_MISMATCH,
@@ -212,36 +221,48 @@ _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
         "active_bleeding": {
             "type": "boolean",
             "description": (
-                "True iff the evidence explicitly grounds documented active, "
-                "life-threatening, or clinically significant bleeding AND no "
-                "exclusion population applies. Set False for bare low count alone."
+                (
+                    "True iff the evidence explicitly grounds documented active, "
+                    "life-threatening, or clinically significant bleeding AND no "
+                    "exclusion population applies. Set False for bare low count alone."
+                )
+                + _SIGNAL_ORDER_RULE
             ),
         },
         "procedure_indication": {
             "type": "boolean",
             "description": (
-                "True iff the evidence grounds an invasive procedure or surgery "
-                "within the audit window whose policy threshold the count sits "
-                "below (LP <50-80k /uL, CVC <50k /uL, major surgery <80-100k /uL)."
+                (
+                    "True iff the evidence grounds an invasive procedure or surgery "
+                    "within the audit window whose policy threshold the count sits "
+                    "below (LP <50-80k /uL, CVC <50k /uL, major surgery <80-100k /uL)."
+                )
+                + _SIGNAL_ORDER_RULE
             ),
         },
         "prophylactic_marrow_failure": {
             "type": "boolean",
             "description": (
-                "True iff the evidence grounds chemo/HSCT/consumptive "
-                "thrombocytopenia with count <10,000 /uL (or expected <10,000 "
-                "/uL within 24 hours) AND no exclusion population applies."
+                (
+                    "True iff the evidence grounds chemo/HSCT/consumptive "
+                    "thrombocytopenia with count <10,000 /uL (or expected <10,000 "
+                    "/uL within 24 hours) AND no exclusion population applies."
+                )
+                + _SIGNAL_ORDER_RULE
             ),
         },
         "intracranial_bleed_indication": {
             "type": "boolean",
             "description": (
-                "True iff the evidence grounds an intracranial bleed with the "
-                "count below its threshold: <100,000 /uL when acute, "
-                "acute-on-chronic, growing, or neurosurgery is planned; <50,000 "
-                "/uL when stable and non-operative (including a stable chronic "
-                "SDH). Chronic SDH expansion belongs here, not under "
-                "active_bleeding."
+                (
+                    "True iff the evidence grounds an intracranial bleed with the "
+                    "count below its threshold: <100,000 /uL when acute, "
+                    "acute-on-chronic, growing, or neurosurgery is planned; <50,000 "
+                    "/uL when stable and non-operative (including a stable chronic "
+                    "SDH). Chronic SDH expansion belongs here, not under "
+                    "active_bleeding."
+                )
+                + _SIGNAL_ORDER_RULE
             ),
         },
         _LABEL_FIELD: _label_property(

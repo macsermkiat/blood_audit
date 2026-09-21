@@ -153,12 +153,19 @@ class TestChecks:
             )
         assert "label_before_reasoning" in _findings(audit, record)
 
-    def test_withholding_label_with_a_true_hard_signal_is_high(
+    def test_withholding_label_with_a_true_hard_signal_is_flagged_not_blocking(
         self, audit: ModuleType
     ) -> None:
         # A true signal says an indication is met; INAPPROPRIATE says none is.
+        # It is a real inconsistency (68051598 did it three runs in a row, the
+        # model writing the booleans before its reasoning), but the signals are
+        # read only by the guardrails that act on an APPROPRIATE label and are
+        # shown nowhere, so no verdict depends on it: it must not block the page.
         record = _record(audit, signals={**_NO_SIGNALS, "active_bleeding": True})
-        assert _findings(audit, record)["signal_contradicts_label"].severity == "HIGH"
+        finding = _findings(audit, record)["signal_contradicts_label"]
+
+        assert finding.severity == "MEDIUM"
+        assert "no verdict depends on it" in finding.detail
 
     def test_a_string_false_is_not_a_true_signal(self, audit: ModuleType) -> None:
         record = _record(audit, signals={**_NO_SIGNALS, "active_bleeding": "false"})
