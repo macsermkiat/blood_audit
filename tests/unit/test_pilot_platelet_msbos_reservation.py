@@ -389,3 +389,37 @@ def test_without_the_switch_no_platelet_order_is_processed(
 
     rows, calls = _artifacts(module)
     assert rows == [] and calls == []
+
+
+def test_pilot_hands_the_projected_count_to_the_replay_context(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Issue #237: the count-trend floor reads the projection off the row
+    # context. If main() stops passing it, the floor goes inert (or floors every
+    # clear) with no other test noticing, so pin the hand-off here, where the
+    # main() harness lives.
+    monkeypatch.setenv("BBA_PILOT_PLATELET_LLM", "1")
+    module = _load_run_llm_leg("pilot_platelet_trend_handoff")
+    _configure_platelet_pilot(
+        module,
+        monkeypatch,
+        tmp_path / "trend_handoff",
+        planned_code="0613",
+        usetype_code="1",
+        library_platelet_llm=False,
+    )
+    monkeypatch.setattr(module, "project_24h", lambda **_kwargs: 7.5)
+    captured: list[dict[str, object]] = []
+    real_for_platelet = module.PipelineRowContext.for_platelet
+
+    def _capture(**kwargs: object) -> object:
+        captured.append(kwargs)
+        return real_for_platelet(**kwargs)
+
+    monkeypatch.setattr(module.PipelineRowContext, "for_platelet", _capture)
+
+    module.main()
+
+    assert len(captured) == 1
+    assert captured[0]["platelet_projected_24h_k_ul"] == 7.5
+    assert captured[0]["platelet_projection_computed"] is True

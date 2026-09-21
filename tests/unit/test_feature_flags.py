@@ -27,6 +27,8 @@ def test_existing_flags_still_default_off() -> None:
     # These flags remain default-off; guard against an accidental flip.
     assert feature_flags.PLATELET_LLM_ENABLED is False
     assert feature_flags.RESERVE_AHEAD_ROUTER_ENABLED is False
+    # Issue #237: the count-trend floor stays off until the sandbox result is read.
+    assert feature_flags.PLATELET_TREND_GUARDRAIL_ENABLED is False
 
 
 def test_declared_usetype_is_default_on_after_golive() -> None:

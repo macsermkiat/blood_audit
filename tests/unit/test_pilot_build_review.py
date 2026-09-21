@@ -808,6 +808,30 @@ def test_platelet_page_explains_platelet_codes_and_verdicts(
     assert "indication judged by the LLM" in rendered
 
 
+def test_platelet_page_explains_the_count_trend_review_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Issue #237: a reviewer who opens a row floored by the count-trend
+    # guardrail must learn WHY it is in their queue (the projection did not
+    # support "expected below 10,000"), not read a bare slug.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN1,P1,AN1,platelet\n",
+        report_csv=_PLT_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    assert (
+        "straight-line projection"
+        in module._REVIEW_REASON_LABELS["platelet_trend_unsupported"]
+    )
+    assert rendered.count("<dt>platelet_trend_unsupported</dt>") == 1
+    assert rendered.count("<dt>platelet_llm_overclear_suspect</dt>") == 1
+
+
 def test_initial_keyboard_lookup_ignores_hidden_cases(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

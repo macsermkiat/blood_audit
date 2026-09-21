@@ -226,6 +226,15 @@ class PipelineRowContext(BaseModel):
     # Platelet lookup result (Phase 2, platelet path only). None on RBC contexts.
     platelet_result: PlateletLookupResult | None = None
 
+    # Straight-line 24 h projection through the last two pre-order counts
+    # (:func:`bba.platelet_lookup.project_24h`, issue #237). None when no
+    # usable pair of draws exists. ``platelet_projection_computed`` says the
+    # caller actually ran the projection: the count-trend floor reads None as
+    # "not supported" only then, so a context builder that predates #237 leaves
+    # the floor inert instead of sending every such clear to review.
+    platelet_projected_24h_k_ul: float | None = None
+    platelet_projection_computed: bool = False
+
     # MTP-window suppression flag (Phase 2, B4). A platelet unit co-ordered
     # inside an active MTP window is suppressed: no AuditRow is emitted.
     platelet_mtp_suppressed: bool = False
@@ -236,6 +245,8 @@ class PipelineRowContext(BaseModel):
         *,
         order: "AuditOrder",
         platelet_result: "PlateletLookupResult | None",
+        platelet_projected_24h_k_ul: float | None = None,
+        platelet_projection_computed: bool = False,
         hn_hash: str,
         an_hash: str,
         prior_rbc_units_24h: int = 0,
@@ -312,6 +323,8 @@ class PipelineRowContext(BaseModel):
             declared_use=declared_use,
             component="platelet",
             platelet_result=platelet_result,
+            platelet_projected_24h_k_ul=platelet_projected_24h_k_ul,
+            platelet_projection_computed=platelet_projection_computed,
             platelet_mtp_suppressed=platelet_mtp_suppressed,
             platelet_reservation_decision=platelet_reservation_decision,
             enable_missing_hb_positive_evidence=enable_missing_hb_positive_evidence,

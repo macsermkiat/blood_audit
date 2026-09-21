@@ -67,7 +67,9 @@ from bba.platelet_classifier import (
 )
 from bba.platelet_guardrail import (
     PLATELET_OVERCLEAR_REVIEW_REASON,
+    PLATELET_TREND_REVIEW_REASON,
     platelet_overclear_suspect,
+    platelet_trend_unsupported,
 )
 from bba.platelet_guardrail.models import PlateletHardSignals
 from bba.preop_reservation.platelet_evaluate import REVIEW_REASONS
@@ -1275,6 +1277,34 @@ def _platelet_overclear_guardrail(
     return None
 
 
+def _platelet_trend_guardrail(
+    verdict: _Verdict, ctx: _GuardrailContext, /
+) -> _Verdict | None:
+    # Issue #237: the model sets prophylactic_marrow_failure itself, so the
+    # over-clear guardrail above cannot catch an "expected to fall" clear on a
+    # flat or rising count; the projected count on the row context can.
+    if not (
+        feature_flags.PLATELET_TREND_GUARDRAIL_ENABLED
+        and ctx.row.component == "platelet"
+        and ctx.row.platelet_projection_computed
+        and ctx.platelet_hard_signals is not None
+    ):
+        return None
+    trigger_count = (
+        ctx.row.platelet_result.value_k_ul
+        if ctx.row.platelet_result is not None
+        else None
+    )
+    if platelet_trend_unsupported(
+        verdict.final_classification,
+        ctx.platelet_hard_signals,
+        trigger_count,
+        ctx.row.platelet_projected_24h_k_ul,
+    ):
+        return _Verdict("NEEDS_REVIEW", PLATELET_TREND_REVIEW_REASON)
+    return None
+
+
 def _empty_reasoning_overlay(
     verdict: _Verdict, ctx: _GuardrailContext, /
 ) -> _Verdict | None:
@@ -1292,6 +1322,7 @@ _PRIMARY_GUARDRAILS: Final[tuple[_Guardrail, ...]] = (
     _rbc_overclear_guardrail,
     _native_review_guardrail,
     _platelet_overclear_guardrail,
+    _platelet_trend_guardrail,
 )
 
 _POST_TERMINAL_OVERLAYS: Final[tuple[_Guardrail, ...]] = (_empty_reasoning_overlay,)
