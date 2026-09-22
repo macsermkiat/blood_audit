@@ -102,6 +102,15 @@ class TestConcludedClassFallback:
         text = "This is INAPPROPRIATE; an APPROPRIATE classification is not supported."
         assert concluded_class(text) == "INAPPROPRIATE"
 
+    def test_negating_the_alternative_keeps_the_affirmative(self) -> None:
+        # Codex round 2: "and not INAPPROPRIATE" negates the other class, not
+        # this one; returning None here bypassed the guardrail.
+        assert (
+            concluded_class("This is APPROPRIATE and not INAPPROPRIATE.")
+            == "APPROPRIATE"
+        )
+        assert concluded_class("APPROPRIATE, not INAPPROPRIATE.") == "APPROPRIATE"
+
     def test_class_used_as_an_adjective_of_a_rejected_noun(self) -> None:
         text = "No APPROPRIATE indication exists, so the order is INAPPROPRIATE."
         assert concluded_class(text) == "INAPPROPRIATE"

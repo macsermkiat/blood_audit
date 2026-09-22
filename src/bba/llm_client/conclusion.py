@@ -51,10 +51,13 @@ _CHAIN_RE = re.compile(
     r"\s*(?:,|/|\bor\b|\bnor\b|,\s*or\b)\s*" + _FILLER, re.IGNORECASE
 )
 # A class named as an adjective of a rejected noun, or followed by a negation
-# in the same clause ("an APPROPRIATE classification is not supported", "No
-# APPROPRIATE indication exists"), is not the conclusion either.
+# in its OWN predicate ("an APPROPRIATE classification is not supported", "No
+# APPROPRIATE indication exists"), is not the conclusion either. A negation
+# after a conjunction ("APPROPRIATE and not INAPPROPRIATE") belongs to the
+# next class, so the filler may not cross a conjunction.
 _POST_NEGATION_RE = re.compile(
-    r"^\s*(?:[a-z][a-z-]*\s+){0,3}(?:is|was|would be|remains|cannot be|can not be)?\s*"
+    r"^\s*(?:(?!\b(?:and|but|or|nor|rather|instead)\b)[a-z][a-z-]*\s+){0,3}"
+    r"(?:is|was|would be|remains|cannot be|can not be)?\s*"
     r"(?:not\b|n't\b|never\b|unsupported\b|unjustified\b)",
     re.IGNORECASE,
 )
