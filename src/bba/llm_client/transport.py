@@ -251,7 +251,9 @@ _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
                 (
                     "True iff the evidence grounds chemo/HSCT/consumptive "
                     "thrombocytopenia with count <10,000 /uL (or expected <10,000 "
-                    "/uL within 24 hours) AND no exclusion population applies."
+                    "/uL within 24 hours), or aplastic anaemia on active therapy "
+                    "below its indication 8 threshold, AND no exclusion population "
+                    "applies."
                 )
                 + _SIGNAL_ORDER_RULE
             ),

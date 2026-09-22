@@ -113,7 +113,7 @@ class TestPromptStatesTheRuling:
         # Widened to 4–7 with the 2026-09-22 rulings (active bleeding became
         # indication 7); the point stands: the terminal line must name every
         # non-procedure indication so it cannot contradict one of them.
-        assert "no indication 4–7 below its threshold" in prompt
+        assert "no indication 4–8 below its threshold" in prompt
         assert "no indication 4 or 5 below its threshold" not in prompt
         assert "no indication 4, 5 or 6 below its threshold" not in prompt
 

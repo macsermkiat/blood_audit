@@ -16,7 +16,10 @@ Derived from the Chula DRAFT platelet policy (AABB/ICTMG 2025):
   policy threshold the count sits below (LP <50-80k; CVC, thoracocentesis,
   arthrocentesis, dental extraction <50k; major surgery <80-100k).
 * ``prophylactic_marrow_failure`` — chemo / HSCT / consumptive thrombocytopenia
-  with count <10k (or expected <10k within 24h), AND no exclusion population.
+  with count <10k (or expected <10k within 24h), or aplastic anaemia on active
+  therapy below its indication 8 threshold (<10k; <20k during ATG or with
+  sepsis; BSH aplastic anaemia guideline, clinician ruling 2026-09-23), AND no
+  exclusion population.
 * ``intracranial_bleed_indication`` — intracranial bleed below its threshold
   (clinician ruling 2026-09-21): acute / acute-on-chronic / growing / operative
   <100k, stable non-operative (incl. stable chronic SDH) <50k. Kept separate
