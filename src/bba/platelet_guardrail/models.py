@@ -24,6 +24,12 @@ Derived from the Chula DRAFT platelet policy (AABB/ICTMG 2025):
   (clinician ruling 2026-09-21): acute / acute-on-chronic / growing / operative
   <100k, stable non-operative (incl. stable chronic SDH) <50k. Kept separate
   from ``active_bleeding`` because chronic SDH expansion is not active bleeding.
+* ``aplastic_active_therapy_indication`` — indication 8 (clinician ruling
+  2026-09-23): aplastic anaemia on active therapy (ATG, cyclosporine,
+  eltrombopag, transplant work-up) below <10k, or <20k during the ATG course or
+  with sepsis. Its own signal so the count-trend floor, which reads only
+  ``prophylactic_marrow_failure``, does not send a valid ATG clear at 10-20k to
+  review.
 
 Deliberately NOT a blanket ``count < 10`` exemption (§8/CR-C2): a plt<10
 dengue-no-bleed / TTP / HIT / ITP / aplastic-no-bleed patient is exactly the
@@ -54,6 +60,7 @@ class PlateletHardSignals(BaseModel):
     procedure_indication: bool = False
     prophylactic_marrow_failure: bool = False
     intracranial_bleed_indication: bool = False
+    aplastic_active_therapy_indication: bool = False
 
     def any_signal(self) -> bool:
         """True iff at least one positive platelet indication is grounded."""
@@ -62,6 +69,7 @@ class PlateletHardSignals(BaseModel):
             or self.procedure_indication
             or self.prophylactic_marrow_failure
             or self.intracranial_bleed_indication
+            or self.aplastic_active_therapy_indication
         )
 
 

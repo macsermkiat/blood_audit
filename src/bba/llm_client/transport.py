@@ -272,6 +272,21 @@ _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
                 + _SIGNAL_ORDER_RULE
             ),
         },
+        "aplastic_active_therapy_indication": {
+            "type": "boolean",
+            "description": (
+                (
+                    "True iff the notes document aplastic anaemia on active therapy "
+                    "aimed at reversing the thrombocytopenia (ATG, cyclosporine, "
+                    "eltrombopag, transplant work-up) with the count below its "
+                    "indication 8 threshold: <10,000 /uL (or expected <10,000 /uL "
+                    "within 24 hours), or <20,000 /uL during the ATG course or with "
+                    "sepsis. Chronic, stable or untreated aplastic anaemia is an "
+                    "exclusion population, not this signal."
+                )
+                + _SIGNAL_ORDER_RULE
+            ),
+        },
         _LABEL_FIELD: _label_property(
             "both reasoning summaries and the four hard-signal booleans"
         ),
@@ -282,6 +297,7 @@ _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
         "procedure_indication",
         "prophylactic_marrow_failure",
         "intracranial_bleed_indication",
+        "aplastic_active_therapy_indication",
         _LABEL_FIELD,
     ],
 }

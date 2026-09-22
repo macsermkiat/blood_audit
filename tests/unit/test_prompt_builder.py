@@ -1809,12 +1809,9 @@ class TestPlateletPromptExclusionOverride:
             "indication AND no exclusion population applies" not in prompt
         )
         # Prophylaxis at a low count stays barred in every excluded population
-        # (the clause now also names aplastic anaemia on active therapy, which
-        # is indication 8 rather than an excluded population).
-        assert (
-            "below its indication 8 threshold, AND no exclusion population applies"
-            in prompt
-        )
+        # (aplastic anaemia on active therapy is indication 8 with its own
+        # signal, not an excluded population).
+        assert "within 24 hours), AND no exclusion population applies" in prompt
 
     def test_standing_order_is_not_an_indication(self) -> None:
         # Real-data run 2026-09-20: post-HSCT orders at 16k / 18k were cleared
