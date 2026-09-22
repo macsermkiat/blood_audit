@@ -1587,12 +1587,12 @@ class TestRbcPromptHashGolden:
     # Re-pinned for #150: a declared order-time USETYPE alone cannot establish
     # PERIOPERATIVE. Blessed by
     # test_declared_use_does_not_satisfy_perioperative_indication.
-    # Re-pinned for the 2026-09-22 clinician rulings: SUB_THRESHOLD_HB is the
-    # LOWEST Hb in the 24 hours before the order (not the closest value), and
-    # an ICD-10 code alone never grounds an indication. Blessed by
+    # Re-pinned for the 2026-09-22 clinician rulings (PR #248): an ICD-10 code
+    # alone never grounds an indication. The 24-hour-minimum SUB_THRESHOLD_HB
+    # ruling is deferred until the replay guardrail can check it. Blessed by
     # tests/unit/test_prompt_rulings_2026_09_22.py.
     RBC_HB_7_10_75_EMPTY_EVIDENCE = (
-        "a467114e464f6dcbeb9b005f8e61c9918b5a7796d3a7a4460585443d22d71ad0"
+        "de78d1292d20198cd78c9d4aad3dd80ca2f9e36df18b4dd04c9c73f05fca6d57"
     )
     # Re-pinned for #93 boundary alignment: dispatch routes Hb >= 10.0 to this
     # template (engine ``hb_ge_10``), so its prose states the inclusive
@@ -1603,13 +1603,8 @@ class TestRbcPromptHashGolden:
     # ACTIVE_BLEEDING rule edit as the gray-zone golden above.
     # Re-pinned for the melena ruling — same shared ACTIVE_BLEEDING rule edit.
     # Re-pinned for #150 — same shared declared-use carve-out as above.
-    # Re-pinned for the 2026-09-22 rulings — same shared SUB_THRESHOLD_HB and
-    # ICD-code edits as the gray-zone golden above.
-    # Re-pinned again for PR #248 review: the override template no longer says
-    # SUB_THRESHOLD_HB "cannot apply here", since the 24-hour minimum can sit
-    # below the floor while the routing Hb is >= 10.
     RBC_HB_GT_10_75_EMPTY_EVIDENCE = (
-        "383225820bc2e80078661c46a8cdf9764bc0d7d0aa97ec8b379ea782cc156306"
+        "609f6524ad6be4735a61424ed1ba74759fc4c14bce6e0c9224592d35965bf39e"
     )
 
     def test_hb_7_10_review_cohort_7_5_hash_is_pinned(self) -> None:
