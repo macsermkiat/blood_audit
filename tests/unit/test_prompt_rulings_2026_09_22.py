@@ -105,3 +105,50 @@ class TestNoContradictionsAfterTheRulings:
             r"Reserve NEEDS_REVIEW for[^.]*procedure the list above does not name",
             prompt,
         )
+
+
+class TestProjectionLineGroundsTheExpectedDrop:
+    """Issue #237 wording. The clinician ruled (2026-09-21) that "expected to
+    drop below 10,000 /uL within 24 hours" means a straight-line projection
+    through the last two counts, and the pilot renders that projection into the
+    evidence. The consortium found the model reading that line inconsistently:
+    trusted when it pointed to INAPPROPRIATE, dismissed as "a mechanical
+    extrapolation" when it pointed to APPROPRIATE (68046137: projection 6,767,
+    verdict NEEDS_REVIEW), or accepted and then a further "explicit clinical
+    note" demanded (68064992). The prompt never said the line is the trend."""
+
+    def test_the_projection_line_is_named_as_the_count_trend(self) -> None:
+        prompt = _platelet()
+        assert "Projected platelet count in 24 h" in prompt
+        assert re.search(
+            r"Projected platelet count in 24 h[^.]*\bis\b[^.]*count trend", prompt
+        )
+
+    def test_below_ten_thousand_meets_the_clause_without_a_further_note(self) -> None:
+        prompt = _platelet()
+        assert re.search(
+            r"below 10,000[^.]*clause is met[^.]*(no|without)[^.]*(further|additional)[^.]*note",
+            prompt,
+            re.IGNORECASE,
+        )
+
+    def test_at_or_above_ten_thousand_or_not_computable_does_not_meet_it(self) -> None:
+        prompt = _platelet()
+        assert re.search(
+            r"(at or above|>=) ?10,000[^.]*not computable[^.]*not met",
+            prompt,
+            re.IGNORECASE,
+        ) or re.search(
+            r"not computable[^.]*(at or above|>=) ?10,000[^.]*not met",
+            prompt,
+            re.IGNORECASE,
+        )
+
+    def test_model_may_not_substitute_its_own_trend_reading(self) -> None:
+        prompt = _platelet()
+        assert re.search(
+            r"do not (dismiss|discount|override) (it|the projection)",
+            prompt,
+            re.IGNORECASE,
+        )
+        assert "standing order" in prompt
