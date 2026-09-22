@@ -1587,8 +1587,12 @@ class TestRbcPromptHashGolden:
     # Re-pinned for #150: a declared order-time USETYPE alone cannot establish
     # PERIOPERATIVE. Blessed by
     # test_declared_use_does_not_satisfy_perioperative_indication.
+    # Re-pinned for the 2026-09-22 clinician rulings (PR #248): an ICD-10 code
+    # alone never grounds an indication. The 24-hour-minimum SUB_THRESHOLD_HB
+    # ruling is deferred until the replay guardrail can check it. Blessed by
+    # tests/unit/test_prompt_rulings_2026_09_22.py.
     RBC_HB_7_10_75_EMPTY_EVIDENCE = (
-        "fd9c9ed8265a020d01be556f146ead93b0a0bde76639b5676a1b733f596e3da0"
+        "de78d1292d20198cd78c9d4aad3dd80ca2f9e36df18b4dd04c9c73f05fca6d57"
     )
     # Re-pinned for #93 boundary alignment: dispatch routes Hb >= 10.0 to this
     # template (engine ``hb_ge_10``), so its prose states the inclusive
