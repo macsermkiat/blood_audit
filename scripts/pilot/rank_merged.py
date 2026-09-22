@@ -43,11 +43,16 @@ BDVST_CSV = Path(
 )
 DCT_CSV = Path(os.environ.get("BBA_DCT_CSV", str(_BLOODBANK / "raw" / "DCT.csv")))
 COMPONENTS = ("red_cell", "platelet")
+# Deterministic verdicts the LLM leg is dispatched from; every other verdict is
+# a deterministic terminal.
+ROUTED_TO_LLM = frozenset({"NEEDS_REVIEW", "POTENTIALLY_INAPPROPRIATE"})
 
 
 def merged_verdicts(work: Path, component: str) -> Mapping[str, str]:
-    """Final verdict per REQNO for one component: the LLM leg's where it ran,
-    else the deterministic leg's. Excluded orders are left out."""
+    """Final verdict per REQNO for one component: the LLM leg's where the
+    deterministic leg routed the order to it, else the deterministic leg's.
+    Excluded orders are left out. An LLM verdict for an order the report does
+    not know is an error, never a silent drop."""
     with (work / "report.csv").open(encoding="utf-8") as f:
         det = {r["reqno"]: r for r in csv.DictReader(f)}
     llm = {
@@ -55,12 +60,25 @@ def merged_verdicts(work: Path, component: str) -> Mapping[str, str]:
         for r in json.loads((work / "llm_report.json").read_text(encoding="utf-8"))
         if r.get("llm_final")
     }
+    missing = sorted(set(llm) - set(det))
+    if missing:
+        raise ValueError(
+            f"{work / 'llm_report.json'} holds LLM verdicts for orders absent from "
+            f"{work / 'report.csv'} (stale report?): {missing[:10]}"
+        )
     out: dict[str, str] = {}
     for reqno, row in det.items():
         row_component = (row.get("component") or "red_cell").strip() or "red_cell"
         if row_component != component or row["classification"] == "excluded":
             continue
-        out[reqno] = llm.get(reqno, row["classification"])
+        # Only a verdict the deterministic leg ROUTED onward can be replaced by
+        # the LLM leg's; a deterministic terminal (auto-clear, return, periop
+        # exemption, MSBOS over-reservation) stands even if a stale LLM row
+        # exists for the same REQNO.
+        replaceable = row["classification"] in ROUTED_TO_LLM
+        out[reqno] = (
+            llm[reqno] if replaceable and reqno in llm else row["classification"]
+        )
     return out
 
 

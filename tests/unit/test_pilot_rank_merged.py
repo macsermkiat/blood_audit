@@ -36,7 +36,8 @@ def _work(tmp_path: Path) -> Path:
         "R2,NEEDS_REVIEW,red_cell\n"  # routed to the LLM
         "R3,NEEDS_REVIEW,platelet\n"  # routed to the LLM
         "R4,excluded,red_cell\n"  # out of scope
-        "R5,RETURNED_NOT_TRANSFUSED,platelet\n",
+        "R5,RETURNED_NOT_TRANSFUSED,platelet\n"
+        "R6,PERIOP_TRANSFUSION_EXEMPT,red_cell\n",
         encoding="utf-8",
     )
     (tmp_path / "llm_report.json").write_text(
@@ -44,6 +45,10 @@ def _work(tmp_path: Path) -> Path:
             [
                 {"reqno": "R2", "llm_final": {"final_classification": "INAPPROPRIATE"}},
                 {"reqno": "R3", "llm_final": {"final_classification": "APPROPRIATE"}},
+                # A stale LLM row for an order the deterministic leg finalised
+                # (Codex on the PR): the terminal wins, the row is ignored.
+                {"reqno": "R5", "llm_final": {"final_classification": "INAPPROPRIATE"}},
+                {"reqno": "R6", "llm_final": {"final_classification": "INAPPROPRIATE"}},
                 {"reqno": "R9", "llm_final": None},
             ]
         ),
@@ -58,6 +63,7 @@ def test_llm_final_replaces_the_deterministic_routing_verdict(
     assert rank.merged_verdicts(_work(tmp_path), "red_cell") == {
         "R1": "APPROPRIATE",
         "R2": "INAPPROPRIATE",
+        "R6": "PERIOP_TRANSFUSION_EXEMPT",
     }
 
 
@@ -77,3 +83,20 @@ def test_components_never_mix(rank: ModuleType, tmp_path: Path) -> None:
     assert not set(rank.merged_verdicts(work, "red_cell")) & set(
         rank.merged_verdicts(work, "platelet")
     )
+
+
+def test_an_llm_verdict_for_an_order_missing_from_the_report_fails_loud(
+    rank: ModuleType, tmp_path: Path
+) -> None:
+    # Codex on the PR: iterating the deterministic keys would silently drop an
+    # LLM-judged order that a stale report.csv omits, and the ranking would
+    # look complete.
+    work = _work(tmp_path)
+    (work / "llm_report.json").write_text(
+        json.dumps(
+            [{"reqno": "R99", "llm_final": {"final_classification": "INAPPROPRIATE"}}]
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="R99"):
+        rank.merged_verdicts(work, "red_cell")
