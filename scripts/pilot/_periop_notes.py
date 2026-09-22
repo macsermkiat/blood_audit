@@ -115,15 +115,14 @@ def vitals_notes_for(
             _parse_hosxp_date(r.get("PROGRESSDATE") or ""),
             _parse_time(r.get("PROGRESSTIME") or ""),
         )
-        text = " ".join(
-            filter(
-                None,
-                [
-                    (r.get("ACTION") or "").strip(),
-                    (r.get("RESPONSE") or "").strip(),
-                ],
-            )
+        # Labelled like the SOAP join above so the builder's
+        # ``focus_indication_hit`` can rank on the observed Response segment
+        # and ignore the templated Action care plan.
+        columns = (
+            ("Action", (r.get("ACTION") or "").strip()),
+            ("Response", (r.get("RESPONSE") or "").strip()),
         )
+        text = "\n".join(f"{label}: {value}" for label, value in columns if value)
         if dt is None or not text:
             continue
         out.append(

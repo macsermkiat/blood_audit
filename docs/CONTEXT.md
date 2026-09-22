@@ -136,7 +136,12 @@ all enforced by `bba.evidence_bundle_builder.builder`:
 * `Periop` — **pinned, no time window** (same pinned/exempt contract as Hemodynamic)
 * `Diagnosis` — **AN-scoped** (no time window; full ICD-10 list for the encounter)
 * `IPDADMPROGRESS` — `±24h`, cap 8 closest entries (closest-by-abs-offset)
-* `IPDNRFOCUSDT` — `±24h`, cap 10 entries via 5-before / 5-after closest-first
+* `IPDNRFOCUSDT` — `±24h`, cap 10 entries via 5-before / 5-after; within each
+  side, notes whose labelled `Response:` segment records an observed
+  indication (`ranking.focus_indication_hit`: bleeding, pallor, Hb/Hct with
+  a value, shock, melena...; negated and `เช่น` example-list matches excluded)
+  rank first, then closest-first. Measured 2026-09-22: 72.7% of IPD orders
+  overflow the cap and closest-first alone kept 33.6% of indication notes
 * `MED` — `[-72h, +24h]` (asymmetric: drug history + post-order administration)
 * `Lab` (Hb history) — `[-7d, anchor]` strict at lower bound (matches
   `bba.hb_lookup`'s `< _LOOKBACK` so a 7-d-old Hb is invisible to the bundle
@@ -161,7 +166,9 @@ Outer order = the literal source order in
 MED.csv source). Inner order within each source is tuned for **truncation safety**
 so cap-pressure tail-drop discards the least-relevant item first:
 
-* `IPDADMPROGRESS` / `Vitals` / `IPDNRFOCUSDT` — closest-to-anchor first
+* `IPDADMPROGRESS` / `Vitals` — closest-to-anchor first
+* `IPDNRFOCUSDT` — indication hits first, then closest-to-anchor (see the
+  window bullet above)
 * `Lab` (Hb) — HEMATOLOGY before POCT (PRD §3 source preference, regardless
   of recency); within source: newest-first; corrected (max `item_no`) before
   stale for same-(source, timestamp) ties
