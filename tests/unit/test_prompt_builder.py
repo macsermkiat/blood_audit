@@ -1605,8 +1605,11 @@ class TestRbcPromptHashGolden:
     # Re-pinned for #150 — same shared declared-use carve-out as above.
     # Re-pinned for the 2026-09-22 rulings — same shared SUB_THRESHOLD_HB and
     # ICD-code edits as the gray-zone golden above.
+    # Re-pinned again for PR #248 review: the override template no longer says
+    # SUB_THRESHOLD_HB "cannot apply here", since the 24-hour minimum can sit
+    # below the floor while the routing Hb is >= 10.
     RBC_HB_GT_10_75_EMPTY_EVIDENCE = (
-        "be877677113653d16af322f73cb997dda3fd15882229a549f9d642fe7a312e51"
+        "383225820bc2e80078661c46a8cdf9764bc0d7d0aa97ec8b379ea782cc156306"
     )
 
     def test_hb_7_10_review_cohort_7_5_hash_is_pinned(self) -> None:

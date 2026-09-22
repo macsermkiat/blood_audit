@@ -187,9 +187,10 @@ _HB_GT_10_OVERRIDE_TEMPLATE: Final[str] = (
     "for this patient: {cohort_threshold} g/dL (deterministic input — do not "
     "re-derive). At Hb 10 g/dL or above, transfusion is APPROPRIATE only when "
     "the ±24-hour clinical notes positively document at least one Tier-1 "
-    "override (HARD) indication from the vocabulary below. SUB_THRESHOLD_HB "
-    "cannot apply here — the Hb is at or above 10 g/dL, well above the "
-    "{cohort_threshold} g/dL floor.\n\n"
+    "override (HARD) indication from the vocabulary below. The routing Hb is "
+    "at or above 10 g/dL, but SUB_THRESHOLD_HB is defined on the lowest Hb in "
+    "the 24 hours before the order: if that lowest value is strictly below "
+    "the {cohort_threshold} g/dL floor, SUB_THRESHOLD_HB applies here too.\n\n"
     + _RBC_INDICATION_VOCABULARY
     + "\n"
     + _RBC_ACTIVE_BLEEDING_RULE
@@ -366,7 +367,8 @@ _PLATELET_REVIEW_PROMPT: Final[str] = (
     "to support any judgment, or no platelet count is on file. Documentation "
     "absence alone is never INAPPROPRIATE, but adequate notes describing no "
     "positive indication ARE. Reserve NEEDS_REVIEW for adequate evidence that "
-    "genuinely conflicts; do not use it to avoid the INAPPROPRIATE line."
+    "genuinely conflicts, and for an invasive procedure the list above does not "
+    "name (indication 2); do not use it to avoid the INAPPROPRIATE line."
 )
 
 

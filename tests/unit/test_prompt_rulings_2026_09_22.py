@@ -99,3 +99,23 @@ class TestRbcSubThresholdUsesTheTwentyFourHourMinimum:
 
     def test_platelet_prompt_is_not_touched_by_the_rbc_rule(self) -> None:
         assert "lowest Hb" not in _platelet()
+
+
+class TestNoContradictionsAfterTheRulings:
+    def test_high_hb_override_prompt_does_not_forbid_the_24h_minimum(self) -> None:
+        # Codex on PR #248: Hb 6.8 twelve hours before the order, latest 10.2:
+        # routing sends it to the override prompt, which still said
+        # SUB_THRESHOLD_HB "cannot apply here".
+        prompt = system_prompt_for(task_mode="HB_GT_10_OVERRIDE", cohort_threshold=7.0)
+        assert "cannot apply here" not in prompt
+        assert re.search(r"lowest Hb[^.]*24 hours before the order", prompt)
+
+    def test_terminal_line_allows_review_for_an_unlisted_procedure(self) -> None:
+        # Codex on PR #248: indication 2 sends an unlisted procedure to
+        # NEEDS_REVIEW, but the closing rule reserved NEEDS_REVIEW for
+        # conflicting evidence only.
+        prompt = _platelet()
+        assert re.search(
+            r"Reserve NEEDS_REVIEW for[^.]*procedure the list above does not name",
+            prompt,
+        )
