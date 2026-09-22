@@ -1052,8 +1052,8 @@ def _grounded_true_subthreshold_indication(
     context: PipelineRowContext,
 ) -> bool:
     """True iff a grounded SUB_THRESHOLD_HB citation at the shared
-    prose-trust bar is also structurally TRUE (hb strictly below the cohort
-    floor).
+    prose-trust bar is also structurally TRUE (the closest Hb, or the lowest
+    Hb in the 24 h before the order, strictly below the cohort floor).
 
     WHY (Codex PR #97 round 3): the prompt defines SUB_THRESHOLD_HB as HARD,
     but :func:`_has_structured_hard_signal` only exempts the universal
@@ -1067,7 +1067,18 @@ def _grounded_true_subthreshold_indication(
     fails it and keeps the assert. Never auto-clears — the deterministic
     leg flagged the value as unreliable for a reason.
     """
-    hb = context.hb_result.value_g_dl
+    # Issue #249: the prompt defines SUB_THRESHOLD_HB on the lowest Hb in the
+    # 24 h before the order, so the structural check reads that minimum too;
+    # a lookup that did not compute it falls back to the closest value.
+    closest = context.hb_result.value_g_dl
+    lowest = context.hb_result.min_24h_g_dl
+    hb = (
+        closest
+        if lowest is None
+        else lowest
+        if closest is None
+        else min(closest, lowest)
+    )
     threshold = context.cohort_assignment.threshold
     if hb is None or threshold is None or hb >= threshold:
         return False

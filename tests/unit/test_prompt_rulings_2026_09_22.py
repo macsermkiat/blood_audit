@@ -87,16 +87,12 @@ class TestIcdCodesAloneNeverGround:
         )
 
 
-class TestRbcSubThresholdIsUnchangedForNow:
-    def test_order_time_hb_definition_stands_until_the_guardrail_agrees(self) -> None:
-        # Ruling 6 (lowest Hb in the 24 h before the order) is deferred: the RBC
-        # over-clear guardrail (replay._grounded_true_subthreshold_indication)
-        # checks SUB_THRESHOLD_HB against the closest Hb and the context carries
-        # no 24 h minimum, so the prompt must not promise what replay reverses.
-        # Tracked in issue #249.
-        prompt = _rbc()
-        assert "order-time Hb" in prompt
-        assert "lowest Hb" not in prompt
+class TestRbcSubThresholdRulingLandedWithTheGuardrail:
+    def test_the_24h_minimum_rule_is_in_the_prompt(self) -> None:
+        # Ruling 6 was deferred from PR #248 and shipped with the replay
+        # guardrail change in #249; the full contract is pinned in
+        # tests/unit/test_hb_min_24h.py.
+        assert "order-time Hb" not in _rbc()
 
 
 class TestNoContradictionsAfterTheRulings:

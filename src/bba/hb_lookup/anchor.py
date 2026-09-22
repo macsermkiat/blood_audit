@@ -52,6 +52,7 @@ def resolve_hb_with_fallback(
     observations: Sequence[HbObservation],
     order_datetime: datetime,
     candidates: Sequence[AnchorCandidate],
+    not_before_utc: datetime | None = None,
 ) -> tuple[HbLookupResult, str, str]:
     """Resolve the most-recent Hb, falling back through ``candidates``.
 
@@ -66,14 +67,22 @@ def resolve_hb_with_fallback(
     order-time hit (and for all-miss) ``anchor_display`` is ``""`` and
     ``anchor_reason`` is ``"order_datetime"``.
     """
-    primary = lookup_hb(observations=observations, anchor_utc=order_datetime)
+    primary = lookup_hb(
+        observations=observations,
+        anchor_utc=order_datetime,
+        not_before_utc=not_before_utc,
+    )
     if primary.value_g_dl is not None:
         return primary, "", "order_datetime"
 
     for candidate in candidates:
         if candidate.anchor_utc < order_datetime:
             continue
-        fallback = lookup_hb(observations=observations, anchor_utc=candidate.anchor_utc)
+        fallback = lookup_hb(
+            observations=observations,
+            anchor_utc=candidate.anchor_utc,
+            not_before_utc=not_before_utc,
+        )
         if fallback.value_g_dl is not None:
             return fallback, candidate.display, candidate.reason
 

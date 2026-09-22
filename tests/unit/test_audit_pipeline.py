@@ -3231,6 +3231,40 @@ class TestLlmOverclearGuardrail:
         assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
         assert row.needs_human_review is True
 
+    def test_grounded_24h_minimum_below_floor_floors_to_review(
+        self, tmp_path: object
+    ) -> None:
+        # Issue #249: closest Hb 8.1 (at the 8.0 floor) but 7.9 twelve hours
+        # earlier. The prompt defines SUB_THRESHOLD_HB on the 24 h minimum, so
+        # a citation of the 7.9 is structurally TRUE; asserting INAPPROPRIATE
+        # against it would reverse the clinician's ruling.
+        ctx = _row_context(
+            audit_id="audit-oc-min24",
+            classification="NEEDS_REVIEW",
+            hb_value=8.1,
+            cohort_threshold=8.0,
+            evidence_text="Lab: Hb 7.9 g/dL twelve hours before the order",
+        )
+        ctx = ctx.model_copy(
+            update={"hb_result": ctx.hb_result.model_copy(update={"min_24h_g_dl": 7.9})}
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "SUB_THRESHOLD_HB",
+                    "quote": "Hb 7.9 g/dL twelve hours before the order",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+            reasoning_en="lowest Hb in the 24 h before the order is below the floor",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+
     def test_structurally_false_subthreshold_claim_still_asserts(
         self, tmp_path: object
     ) -> None:

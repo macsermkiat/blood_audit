@@ -1588,11 +1588,14 @@ class TestRbcPromptHashGolden:
     # PERIOPERATIVE. Blessed by
     # test_declared_use_does_not_satisfy_perioperative_indication.
     # Re-pinned for the 2026-09-22 clinician rulings (PR #248): an ICD-10 code
-    # alone never grounds an indication. The 24-hour-minimum SUB_THRESHOLD_HB
-    # ruling is deferred until the replay guardrail can check it. Blessed by
+    # alone never grounds an indication. Blessed by
     # tests/unit/test_prompt_rulings_2026_09_22.py.
+    # Re-pinned for #249: SUB_THRESHOLD_HB is the lowest Hb in the 24 hours
+    # before the order, from the most recent transfusion in the window onward.
+    # Blessed by tests/unit/test_hb_min_24h.py together with the replay
+    # guardrail change.
     RBC_HB_7_10_75_EMPTY_EVIDENCE = (
-        "de78d1292d20198cd78c9d4aad3dd80ca2f9e36df18b4dd04c9c73f05fca6d57"
+        "451b5d52b0704a72318fb20bb91c51c2b29cefb325c07ee4c5a302724a7a6814"
     )
     # Re-pinned for #93 boundary alignment: dispatch routes Hb >= 10.0 to this
     # template (engine ``hb_ge_10``), so its prose states the inclusive
@@ -1603,8 +1606,11 @@ class TestRbcPromptHashGolden:
     # ACTIVE_BLEEDING rule edit as the gray-zone golden above.
     # Re-pinned for the melena ruling — same shared ACTIVE_BLEEDING rule edit.
     # Re-pinned for #150 — same shared declared-use carve-out as above.
+    # Re-pinned for #249: the override template no longer says SUB_THRESHOLD_HB
+    # "cannot apply here"; the 24 h minimum can sit below the floor while the
+    # routing Hb is >= 10.
     RBC_HB_GT_10_75_EMPTY_EVIDENCE = (
-        "609f6524ad6be4735a61424ed1ba74759fc4c14bce6e0c9224592d35965bf39e"
+        "848d6c8130253785ecfd5ca3dcba476400fe73a32bf3ff69b67f00bdcba8d0a4"
     )
 
     def test_hb_7_10_review_cohort_7_5_hash_is_pinned(self) -> None:

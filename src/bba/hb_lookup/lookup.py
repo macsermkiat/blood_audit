@@ -33,6 +33,7 @@ from bba.hb_lookup.models import (
 )
 
 _LOOKBACK = timedelta(days=7)
+_MIN_WINDOW = timedelta(hours=24)
 _FRESH = timedelta(hours=24)
 _STALE_24_72 = timedelta(hours=72)
 _LOW_HB_REVIEW_THRESHOLD = 8.0
@@ -50,11 +51,16 @@ def lookup_hb(
     *,
     observations: Sequence[HbObservation],
     anchor_utc: datetime,
+    not_before_utc: datetime | None = None,
 ) -> HbLookupResult:
     """Return the most-recent Hb at or before ``anchor_utc`` with freshness + delta.
 
     ``observations`` must be the Hb observations for a single patient
     (caller filters by HN). ``anchor_utc`` must be tz-aware UTC.
+
+    ``not_before_utc`` bounds the 24 h minimum (``min_24h_g_dl``): pass the
+    datetime of the last transfusion inside the window so a low that the
+    transfusion already corrected does not count (issue #249).
 
     Order of ``observations`` is unimportant — the function sorts
     internally. When no observation lies in the 7-day lookback at or
@@ -80,7 +86,30 @@ def lookup_hb(
         delta_hb_bypass=bypass,
         delta_hb_windows=windows,
         needs_review_single_low_hb=needs_review,
+        min_24h_g_dl=_min_24h(before_anchor, anchor_utc, not_before_utc),
     )
+
+
+def _min_24h(
+    before_anchor: Sequence[HbObservation],
+    anchor_utc: datetime,
+    not_before_utc: datetime | None,
+) -> float | None:
+    """Lowest Hb in the 24 h before the anchor, from ``not_before_utc`` onward.
+
+    Same HEMATOLOGY-preferred source rule as :func:`_select_current`, so the
+    minimum and the current value are read from the same instrument."""
+    window = [
+        o
+        for o in before_anchor
+        if anchor_utc - o.datetime_utc <= _MIN_WINDOW
+        and (not_before_utc is None or o.datetime_utc >= not_before_utc)
+    ]
+    if not window:
+        return None
+    hematology = [o for o in window if o.source == "HEMATOLOGY"]
+    pool: Sequence[HbObservation] = hematology if hematology else window
+    return min(o.value_g_dl for o in pool)
 
 
 def _select_current(in_lookback: Sequence[HbObservation]) -> HbObservation:

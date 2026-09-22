@@ -87,6 +87,11 @@ class HbLookupResult(BaseModel):
     * ``needs_review_single_low_hb`` is ``True`` only when the most-recent Hb
       is < 8 g/dL and no prior observation exists in the 24h-window before it
       — i.e., we have a worrying value but no trend to interpret it against.
+    * ``min_24h_g_dl`` is the lowest Hb in the 24 h before the anchor (issue
+      #249; clinician ruling 2026-09-22): the value SUB_THRESHOLD_HB is judged
+      on in the LLM prompt and the replay guardrail. ``None`` when the result
+      is missing or the lookup did not compute it; the deterministic gate
+      never reads it.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -98,3 +103,4 @@ class HbLookupResult(BaseModel):
     delta_hb_bypass: bool
     delta_hb_windows: tuple[DeltaHbWindow, ...]
     needs_review_single_low_hb: bool
+    min_24h_g_dl: float | None = None
