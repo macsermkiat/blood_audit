@@ -695,6 +695,21 @@ def _hash(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()[:32]
 
 
+def _last_rbc_order_before(
+    rbc_orders_by_an: dict[str, list[datetime]], an: str, order_utc: datetime
+) -> datetime | None:
+    """The most recent RBC order for this admission inside the 24 h before
+    ``order_utc``, or None. Bounds the 24 h minimum Hb (issue #249): a low that
+    an earlier transfusion already corrected must not make a later order
+    sub-threshold. An order is the best transfusion timestamp this leg has."""
+    earlier = [
+        t
+        for t in rbc_orders_by_an.get(an, ())
+        if t < order_utc and order_utc - t <= timedelta(hours=24)
+    ]
+    return max(earlier) if earlier else None
+
+
 def _hb_observations(lab: list[dict[str, str]], an: str) -> list[HbObservation]:
     obs: list[HbObservation] = []
     for i, r in enumerate(lab):
@@ -1483,6 +1498,10 @@ def main() -> None:
     # PipelineRowContext model so the schema is untouched; consumed only when
     # emitting the JSON report below.
     anchor_by_id: dict[str, EvidenceAnchor] = {}
+    rbc_orders_by_an: dict[str, list[datetime]] = {}
+    for o in fr.included:
+        if o.component != "platelet":
+            rbc_orders_by_an.setdefault(o.an, []).append(o.order_datetime)
 
     for order in fr.included:
         if ONLY_REQNOS and order.reqno not in ONLY_REQNOS:
@@ -1867,6 +1886,9 @@ def main() -> None:
             observations=hb_obs,
             order_datetime=ev_anchor,
             candidates=candidates_by_reqno.get(order.reqno, []),
+            not_before_utc=_last_rbc_order_before(
+                rbc_orders_by_an, order.an, ev_anchor
+            ),
         )
         # When the resolver anchored on a post-anchor draw (the fallback
         # ladder), that draw is the Hb that routed this case to the LLM. Carry

@@ -94,9 +94,13 @@ _RBC_INDICATION_VOCABULARY: Final[str] = (
     "does NOT satisfy PERIOPERATIVE; an actual operative event must be "
     "documented.\n"
     "  • MTP — massive-transfusion-protocol activation;\n"
-    "  • SUB_THRESHOLD_HB — the order-time Hb is strictly below the cohort floor "
-    "of {cohort_threshold} g/dL. An Hb exactly at {cohort_threshold} g/dL is AT "
-    "the floor and is NOT sub-threshold.\n"
+    "  • SUB_THRESHOLD_HB — the lowest Hb in the 24 hours before the order is "
+    "strictly below the cohort floor of {cohort_threshold} g/dL. The lowest "
+    "value in that window decides, not the value closest to the order, but "
+    "count only values from the most recent transfusion in the window onward: "
+    "a low that a transfusion has already corrected does not qualify. An Hb "
+    "exactly at {cohort_threshold} g/dL is AT the floor and is NOT "
+    "sub-threshold.\n"
 )
 
 
@@ -163,8 +167,9 @@ _HB_7_10_REVIEW_TEMPLATE: Final[str] = (
     "floor, transfusion is APPROPRIATE only when the ±24-hour clinical notes "
     "positively document at least one HARD indication from the vocabulary "
     "below. An Hb exactly at {cohort_threshold} g/dL is AT the floor, NOT "
-    "sub-threshold; SUB_THRESHOLD_HB applies only when the order-time Hb is "
-    "strictly below {cohort_threshold} g/dL.\n"
+    "sub-threshold; SUB_THRESHOLD_HB applies only when the lowest Hb in the "
+    "24 hours before the order (from the most recent transfusion in that "
+    "window onward) is strictly below {cohort_threshold} g/dL.\n"
     "An ICD-10 code alone never grounds an indication: a code may record an "
     "old or a future diagnosis, so the condition must be documented in a note, "
     "a lab result or an imaging report within the window.\n\n"
@@ -185,9 +190,11 @@ _HB_GT_10_OVERRIDE_TEMPLATE: Final[str] = (
     "for this patient: {cohort_threshold} g/dL (deterministic input — do not "
     "re-derive). At Hb 10 g/dL or above, transfusion is APPROPRIATE only when "
     "the ±24-hour clinical notes positively document at least one Tier-1 "
-    "override (HARD) indication from the vocabulary below. SUB_THRESHOLD_HB "
-    "cannot apply here — the Hb is at or above 10 g/dL, well above the "
-    "{cohort_threshold} g/dL floor.\n\n"
+    "override (HARD) indication from the vocabulary below. The routing Hb is "
+    "at or above 10 g/dL, but SUB_THRESHOLD_HB is judged on the lowest Hb in "
+    "the 24 hours before the order (from the most recent transfusion in that "
+    "window onward): if that lowest value is strictly below the "
+    "{cohort_threshold} g/dL floor, SUB_THRESHOLD_HB applies here too.\n\n"
     + _RBC_INDICATION_VOCABULARY
     + "\n"
     + _RBC_ACTIVE_BLEEDING_RULE
