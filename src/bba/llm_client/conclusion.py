@@ -51,14 +51,21 @@ _CHAIN_RE = re.compile(
     r"\s*(?:,|/|\bor\b|\bnor\b|,\s*or\b)\s*" + _FILLER, re.IGNORECASE
 )
 # A class named as an adjective of a rejected noun, or followed by a negation
-# in its OWN predicate ("an APPROPRIATE classification is not supported", "No
+# in its OWN clause ("an APPROPRIATE classification is not supported", "No
 # APPROPRIATE indication exists"), is not the conclusion either. A negation
-# after a conjunction ("APPROPRIATE and not INAPPROPRIATE") belongs to the
-# next class, so the filler may not cross a conjunction.
+# in a later clause or after another class mention ("APPROPRIATE and not
+# INAPPROPRIATE", "APPROPRIATE because INAPPROPRIATE is not supported")
+# belongs to that other class.
 _POST_NEGATION_RE = re.compile(
-    r"^\s*(?:(?!\b(?:and|but|or|nor|rather|instead)\b)[a-z][a-z-]*\s+){0,3}"
-    r"(?:is|was|would be|remains|cannot be|can not be)?\s*"
+    r"^\s*(?:[a-z][a-z-]*\s+){0,3}(?:is|was|would be|remains|cannot be|can not be)?\s*"
     r"(?:not\b|n't\b|never\b|unsupported\b|unjustified\b)",
+    re.IGNORECASE,
+)
+# The window in which a negation can belong to the class just matched ends at
+# the next class mention or at any clause boundary.
+_CLAUSE_END_RE = re.compile(
+    r"[.;:,]|\b(?:and|but|or|nor|because|since|while|whereas|although|though|"
+    r"rather|instead|so|as)\b",
     re.IGNORECASE,
 )
 _PRE_NEGATION_RE = re.compile(r"\bno\s+$", re.IGNORECASE)
@@ -81,7 +88,13 @@ def concluded_class(reasoning: str) -> str | None:
     previous_rejected = False
     for match in _CLASS_RE.finditer(reasoning):
         between = reasoning[previous_end : match.start()]
-        after = reasoning[match.end() :].split(".", 1)[0]
+        after = reasoning[match.end() :]
+        next_class = _CLASS_RE.search(after)
+        if next_class is not None:
+            after = after[: next_class.start()]
+        clause_end = _CLAUSE_END_RE.search(after)
+        if clause_end is not None:
+            after = after[: clause_end.start()]
         rejected = (
             bool(_CUE_RE.search(between))
             or bool(_PRE_NEGATION_RE.search(between))

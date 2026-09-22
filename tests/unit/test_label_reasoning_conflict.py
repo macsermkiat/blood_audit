@@ -110,6 +110,18 @@ class TestConcludedClassFallback:
             == "APPROPRIATE"
         )
         assert concluded_class("APPROPRIATE, not INAPPROPRIATE.") == "APPROPRIATE"
+        # Codex round 3: any clause boundary or the next class mention ends the
+        # window in which a negation can belong to this class.
+        assert (
+            concluded_class(
+                "This is APPROPRIATE because INAPPROPRIATE is not supported."
+            )
+            == "APPROPRIATE"
+        )
+        assert (
+            concluded_class("This is APPROPRIATE, while INAPPROPRIATE is not.")
+            == "APPROPRIATE"
+        )
 
     def test_class_used_as_an_adjective_of_a_rejected_noun(self) -> None:
         text = "No APPROPRIATE indication exists, so the order is INAPPROPRIATE."
