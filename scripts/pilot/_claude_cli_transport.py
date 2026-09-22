@@ -10,9 +10,12 @@ untouched:
 * ``submit_batch_only`` creates ``<batch_root>/<batch_id>/`` with a manifest
   and returns the id (no model call yet).
 * ``fetch_batch_results`` runs every request whose ``<audit_id>.json`` is not
-  on disk yet, ``workers`` at a time, then assembles all of them. A crash or
-  Ctrl+C resumes with ``BBA_PILOT_BATCH_ID=<batch_id>``, exactly like the
-  batch path.
+  on disk yet, ``workers`` at a time, then assembles all of them. Only
+  successful answers are checkpointed; a failed case is returned as an error
+  envelope for this run and asked again on resume. A crash, Ctrl+C or a
+  subscription session limit resumes with ``BBA_PILOT_BATCH_ID=<batch_id>``
+  under a fresh ``BBA_PILOT_RUN_ID``, exactly like the batch path. Once the
+  CLI reports the session limit the rest of the batch fails fast.
 
 Each call is ``claude -p --model M --tools "" --json-schema <tool input
 schema> --system-prompt <system blocks>`` with the user blocks on stdin. The
@@ -28,7 +31,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
+import threading
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -144,8 +149,20 @@ def _envelope_from_cli(model: str, outcome: CliOutcome) -> dict[str, Any]:
     }
 
 
-def _is_transient(envelope: dict[str, Any]) -> bool:
+def _is_error(envelope: dict[str, Any]) -> bool:
     return envelope.get("stop_reason") == "cli_error"
+
+
+# The claude.ai subscription meters a rolling session; once the CLI reports
+# the limit every further call fails the same way until the reset time, so
+# retrying or asking the next case only burns wall clock.
+_QUOTA_PATTERN = re.compile(r"session limit|usage limit|rate limit", re.IGNORECASE)
+
+
+def _is_quota_exhausted(envelope: dict[str, Any]) -> bool:
+    return _is_error(envelope) and bool(
+        _QUOTA_PATTERN.search(envelope.get("_cli_error") or "")
+    )
 
 
 class ClaudeCliTransport:
@@ -163,6 +180,10 @@ class ClaudeCliTransport:
         self._runner = runner or _subprocess_runner
         self._retries = retries
         self._retry_delay_s = retry_delay_s
+        # Set by the first worker that sees the subscription limit; the rest
+        # of the batch then fails fast with the same message.
+        self._quota_error: str | None = None
+        self._quota_lock = threading.Lock()
 
     def submit_batch_only(
         self,
@@ -201,9 +222,22 @@ class ClaudeCliTransport:
             f"{len(pending)} to ask ({self._workers} workers)"
         )
         with ThreadPoolExecutor(max_workers=self._workers) as pool:
-            list(pool.map(lambda r: self._run_one(batch_dir, model, r), pending))
+            failed = dict(
+                pool.map(
+                    lambda r: (r.audit_id, self._run_one(batch_dir, model, r)), pending
+                )
+            )
 
-        results = tuple(self._load_result(batch_dir, model, r) for r in requests)
+        results = tuple(
+            failed[r.audit_id]
+            if failed.get(r.audit_id) is not None
+            else self._load_result(batch_dir, model, r)
+            for r in requests
+        )
+        if self._quota_error:
+            print(
+                f"  claude-cli: stopped early, subscription limit: {self._quota_error}"
+            )
         return RawBatchResponse(batch_id=batch_id, results=results)
 
     def submit_batch(
@@ -229,19 +263,36 @@ class ClaudeCliTransport:
 
     def _run_one(
         self, batch_dir: Path, model: str, request: BatchSubmissionRequest
-    ) -> None:
+    ) -> BatchSubmissionResult | None:
+        """Ask the CLI for one case.
+
+        A successful answer is checkpointed to disk and ``None`` is returned
+        (the caller reads it back). A failure is returned in memory as an
+        error-envelope result and NOT written, so a resume asks again.
+        """
         payload = build_anthropic_request(
             request, model=model, prompt_cache_enabled=False
         )
-        argv, stdin = build_cli_argv(model=model, payload=payload)
         started = datetime.now(UTC)
         t0 = time.monotonic()
-        envelope = _envelope_from_cli(model, self._runner(argv, stdin))
-        attempt = 0
-        while _is_transient(envelope) and attempt < self._retries:
-            attempt += 1
-            time.sleep(self._retry_delay_s)
+        if self._quota_error:
+            envelope = _error_envelope(model, self._quota_error, None)
+            attempt = 0
+        else:
+            argv, stdin = build_cli_argv(model=model, payload=payload)
             envelope = _envelope_from_cli(model, self._runner(argv, stdin))
+            attempt = 0
+            while (
+                _is_error(envelope)
+                and not _is_quota_exhausted(envelope)
+                and attempt < self._retries
+            ):
+                attempt += 1
+                time.sleep(self._retry_delay_s)
+                envelope = _envelope_from_cli(model, self._runner(argv, stdin))
+            if _is_quota_exhausted(envelope):
+                with self._quota_lock:
+                    self._quota_error = envelope["_cli_error"]
         latency_ms = int((time.monotonic() - t0) * 1000)
         record = {
             "response": envelope,
@@ -250,16 +301,26 @@ class ClaudeCliTransport:
             "latency_ms": latency_ms,
             "attempts": attempt + 1,
         }
+        print(
+            f"    {request.audit_id}: {envelope.get('stop_reason')} in {latency_ms / 1000:.0f}s"
+        )
+        if _is_error(envelope):
+            return self._result_from_record(model, request, record)
         tmp = self._result_path(batch_dir, request).with_suffix(".json.tmp")
         tmp.write_text(json.dumps(record, ensure_ascii=False))
         tmp.replace(self._result_path(batch_dir, request))
-        status = envelope.get("stop_reason")
-        print(f"    {request.audit_id}: {status} in {latency_ms / 1000:.0f}s")
+        return None
 
     def _load_result(
         self, batch_dir: Path, model: str, request: BatchSubmissionRequest
     ) -> BatchSubmissionResult:
         record = json.loads(self._result_path(batch_dir, request).read_text())
+        return self._result_from_record(model, request, record)
+
+    @staticmethod
+    def _result_from_record(
+        model: str, request: BatchSubmissionRequest, record: dict[str, Any]
+    ) -> BatchSubmissionResult:
         return BatchSubmissionResult(
             custom_id=request.audit_id,
             model_id=model,

@@ -276,3 +276,81 @@ class TestFetchResults:
         assert list(result.raw_response_json["_cli_models_used"]) == [
             "claude-haiku-4-5-20251001"
         ]
+
+
+class TestFailureIsNotCheckpointed:
+    def test_error_envelope_is_not_written_so_a_resume_re_asks(
+        self, tmp_path: Path
+    ) -> None:
+        # First process: the CLI fails. Second process (BBA_PILOT_BATCH_ID
+        # resume): the same case must be asked again, not read back as done.
+        outcomes = iter(
+            [
+                CliOutcome(
+                    stdout=json.dumps({"is_error": True, "result": "API Error: 500"}),
+                    stderr="",
+                    returncode=0,
+                ),
+                _cli_success({"classification": "APPROPRIATE"}),
+            ]
+        )
+        runner = lambda argv, stdin: next(outcomes)  # noqa: E731
+        req = _request("a1")
+        first = ClaudeCliTransport(
+            batch_root=tmp_path, workers=1, runner=runner, retries=0
+        )
+        batch_id = first.submit_batch_only(
+            model=MODEL, requests=[req], prompt_cache_enabled=True
+        )
+        (r1,) = first.fetch_batch_results(
+            batch_id, model=MODEL, requests=[req], prompt_cache_enabled=True
+        ).results
+        assert r1.raw_response_json["stop_reason"] == "cli_error"
+        assert not (tmp_path / batch_id / "a1.json").exists()
+
+        second = ClaudeCliTransport(
+            batch_root=tmp_path, workers=1, runner=runner, retries=0
+        )
+        (r2,) = second.fetch_batch_results(
+            batch_id, model=MODEL, requests=[req], prompt_cache_enabled=True
+        ).results
+        assert r2.raw_response_json["stop_reason"] == "tool_use"
+
+    def test_session_limit_fails_the_rest_of_the_batch_without_calling(
+        self, tmp_path: Path
+    ) -> None:
+        calls: list[str] = []
+
+        def runner(argv: list[str], stdin: str) -> CliOutcome:
+            calls.append(stdin)
+            return CliOutcome(
+                stdout=json.dumps(
+                    {
+                        "is_error": True,
+                        "result": "You've hit your session limit · resets 11:30am",
+                    }
+                ),
+                stderr="",
+                returncode=0,
+            )
+
+        reqs = [_request(f"a{i}") for i in range(5)]
+        transport = ClaudeCliTransport(
+            batch_root=tmp_path, workers=1, runner=runner, retries=2, retry_delay_s=0
+        )
+        batch_id = transport.submit_batch_only(
+            model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        response = transport.fetch_batch_results(
+            batch_id, model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        # One call revealed the limit; no retries and no further cases asked.
+        assert len(calls) == 1
+        assert all(
+            r.raw_response_json["stop_reason"] == "cli_error" for r in response.results
+        )
+        assert all(
+            "session limit" in r.raw_response_json["_cli_error"]
+            for r in response.results
+        )
+        assert not any((tmp_path / batch_id).glob("a*.json"))
