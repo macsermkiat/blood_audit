@@ -23,6 +23,16 @@ Source quirks handled:
     key is formed -- otherwise 6.02 -> "602" would collide with the code 60.2
   * two Ortho rows where Excel mis-parsed a typed "1-2" unit range into a date
 
+A supplement CSV (default: the vendored ``OPBloodLimit_supplement.csv`` beside
+the package copy of the exploded file) adds surgeon-confirmed ICD-9 codes to
+EXISTING operation rows -- codes the hospital workbook does not list but a
+surgeon has mapped to one of its operations. Each supplement row names the
+target operation (``sheet``, ``procedure_group``, ``operation``) and must agree
+with that row's MSBOS token (and, for G/M rows, its units); a row that matches
+no operation, or disagrees, aborts the build. A blank ``procedure_group`` means
+"every group listing this operation", allowed only when they all share one
+recommendation. The workbook itself is never edited.
+
 Operations with no ICD-9 code in the source are KEPT in the exploded file with
 blank code columns (they cannot be matched by code -- the arm must match them by
 operation description). ``ICD9CM.csv`` coverage is reported for information only
@@ -39,6 +49,7 @@ import datetime
 import sys
 from collections import defaultdict
 from pathlib import Path
+from typing import cast
 
 import openpyxl
 
@@ -63,6 +74,15 @@ HEADER_OPS = {"OPERATION", "หัตถการ"}  # English + the extra Sx Th
 # (The former "4.73" -> "04.73" fix -- a dropped leading zero -- is now handled
 # generally by fmt_icd's leading-zero canonicalisation, so it is not special-cased.)
 ICD_CORRECTIONS = {"06.40": "06.4"}
+
+DEFAULT_SUPPLEMENT = (
+    Path(__file__).resolve().parents[1]
+    / "src"
+    / "bba"
+    / "preop_reservation"
+    / "data"
+    / "OPBloodLimit_supplement.csv"
+)
 
 GROUPED_COLS = [
     "specialty",
@@ -179,6 +199,84 @@ def parse(src: Path, applied: dict[str, int]) -> list[dict[str, object]]:
                 }
             )
     return ops
+
+
+SUPPLEMENT_REQUIRED = frozenset(
+    {"sheet", "procedure_group", "operation", "icd9_code", "msbos", "recommended_units"}
+)
+
+
+class SupplementError(ValueError):
+    """A supplement row cannot be applied; the build must not silently continue."""
+
+
+def load_supplement(path: Path) -> list[dict[str, str]]:
+    with path.open(encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        missing = SUPPLEMENT_REQUIRED.difference(reader.fieldnames or ())
+        if missing:
+            raise SupplementError(
+                f"{path.name}: missing columns {', '.join(sorted(missing))}"
+            )
+        return [{k: (v or "").strip() for k, v in row.items()} for row in reader]
+
+
+def _supplement_targets(
+    ops: list[dict[str, object]], row: dict[str, str], where: str
+) -> list[int]:
+    """Indices of the operation rows a supplement row applies to (fail loud)."""
+    hits = [
+        i
+        for i, o in enumerate(ops)
+        if o["sheet"] == row["sheet"]
+        and o["operation"] == row["operation"]
+        and (
+            not row["procedure_group"] or o["procedure_group"] == row["procedure_group"]
+        )
+    ]
+    if not hits:
+        raise SupplementError(f"{where}: no operation matches {row!r}")
+    if len(hits) > 1 and row["procedure_group"]:
+        raise SupplementError(f"{where}: operation is not unique: {row!r}")
+    recs = {(ops[i]["msbos"], ops[i]["recommended_units"]) for i in hits}
+    if len(recs) > 1:
+        raise SupplementError(
+            f"{where}: matched groups disagree on (msbos, units) {sorted(recs)}: {row!r}"
+        )
+    msbos, units = recs.pop()
+    if norm_msbos(row["msbos"]) != msbos:
+        raise SupplementError(
+            f"{where}: msbos {row['msbos']!r} disagrees with reference {msbos!r}: {row!r}"
+        )
+    # T/S units are meaningless and ignored by the loader; every other token
+    # must agree on units so the supplement cannot quietly change a tariff.
+    if msbos != "T/S" and row["recommended_units"] != units:
+        raise SupplementError(
+            f"{where}: units {row['recommended_units']!r} disagree with "
+            f"reference {units!r}: {row!r}"
+        )
+    return hits
+
+
+def apply_supplement(
+    ops: list[dict[str, object]], rows: list[dict[str, str]]
+) -> tuple[list[dict[str, object]], int]:
+    """Return a new ops list with the supplement codes added, plus the count added."""
+    codes = [list(cast(list[str], o["codes"])) for o in ops]
+    added = 0
+    for n, row in enumerate(rows, start=2):
+        where = f"supplement row {n}"
+        code = fmt_icd(row["icd9_code"])
+        if not code:
+            raise SupplementError(f"{where}: blank icd9_code")
+        for i in _supplement_targets(ops, row, where):
+            if code in codes[i]:
+                raise SupplementError(
+                    f"{where}: {code} already listed on {ops[i]['operation']!r}"
+                )
+            codes[i].append(code)
+            added += 1
+    return [{**o, "codes": c} for o, c in zip(ops, codes, strict=True)], added
 
 
 def write_grouped(ops: list[dict[str, object]], out: Path) -> None:
@@ -312,6 +410,14 @@ def main() -> None:
         default=None,
         help="Where to write the CSVs (default: same as --raw-dir).",
     )
+    ap.add_argument(
+        "--supplement",
+        type=Path,
+        default=DEFAULT_SUPPLEMENT,
+        help="Surgeon-confirmed code additions applied to existing operation rows "
+        "(default: the vendored OPBloodLimit_supplement.csv). Pass a missing "
+        "path to build without it.",
+    )
     args = ap.parse_args()
 
     raw_dir: Path = args.raw_dir
@@ -324,6 +430,15 @@ def main() -> None:
 
     applied: dict[str, int] = {}
     ops = parse(src, applied)
+    if args.supplement.is_file():
+        try:
+            ops, added = apply_supplement(ops, load_supplement(args.supplement))
+        except SupplementError as exc:
+            sys.stderr.write(f"ERROR: {exc}\n")
+            sys.exit(1)
+        print(f"[supplement] {args.supplement}: {added} codes added", file=sys.stderr)
+    else:
+        print(f"[supplement] none ({args.supplement} not found)", file=sys.stderr)
     write_grouped(ops, out_dir / "OPBloodLimit.csv")
     exploded = build_exploded(ops)
     write_exploded(exploded, out_dir / "OPBloodLimit_by_icd9.csv")
