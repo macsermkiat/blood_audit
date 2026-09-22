@@ -61,7 +61,9 @@ build_review.py         →  review.html    (single page for human review;
 | `BBA_PREFLIGHT_OUT` | `$BBA_PILOT_WORK_DIR/preflight_declared_usetype.json` | Output path for the declared-USETYPE preflight JSON artifact |
 | `BBA_PILOT_ONLY_REQNO` | _(unset)_ | Comma-separated REQNOs: `run_llm_leg.py` processes/submits only those cases and MERGES the fresh records into the existing `llm_report.json` (other cases keep their records). Always pair with a fresh `BBA_PILOT_RUN_ID` — the store is idempotent on `(run_id, audit_id)`, so a reused run id keeps the stale row |
 | `BBA_PILOT_BATCH_MAX_WAIT` | `86400` | Seconds to wait for the Anthropic batch (default = the 24h batch SLA) |
-| `ANTHROPIC_API_KEY` | _(required)_ | Anthropic credentials |
+| `BBA_PILOT_TRANSPORT` | `anthropic-batch` | `claude-cli` runs the LLM leg through the local `claude` CLI on the claude.ai subscription, one `claude -p --json-schema` call per case, answers checkpointed under `$BBA_PILOT_WORK_DIR/cli_batches/<batch_id>/` (resume with `BBA_PILOT_BATCH_ID`). For A/B runs that should not spend API credit; NOT the production path, rows carry `_transport: claude-cli`. No `ANTHROPIC_API_KEY` needed |
+| `BBA_PILOT_CLI_WORKERS` | `3` | Concurrent `claude -p` processes when `BBA_PILOT_TRANSPORT=claude-cli` |
+| `ANTHROPIC_API_KEY` | _(required for `anthropic-batch`)_ | Anthropic credentials |
 | `BBA_DATA_DIR` | _(required for `bba ingest`)_ | Where ingest writes Parquet + markers |
 | `BBA_DB_URL` | _(required for `bba ingest`)_ | DB URL — placeholder is fine for ingest-only |
 

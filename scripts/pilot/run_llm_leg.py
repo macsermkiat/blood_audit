@@ -183,6 +183,7 @@ from bba.vitals_extractor import PeriopSummary, extract_vitals
 
 from _anchor_candidates import build_anchor_candidates
 from _bdvsttrans_source import load_bdvsttrans_rows
+from _claude_cli_transport import ClaudeCliTransport
 from _hosxp_dt import _combine, _parse_hosxp_date, _parse_time
 from _periop_notes import vitals_notes_for
 
@@ -191,6 +192,12 @@ BUNDLE = WORK / "bundle"
 AUDIT_STORE_ROOT = WORK / "data" / "audit_store"
 RUN_ID = os.environ.get("BBA_PILOT_RUN_ID", "pilot-mini")
 MODEL_ID = os.environ.get("BBA_PILOT_LLM_MODEL", "claude-sonnet-5")
+# ``anthropic-batch`` (default) submits an Anthropic Message Batch with
+# ANTHROPIC_API_KEY. ``claude-cli`` asks the local ``claude`` CLI on the
+# claude.ai subscription, one call per case, for A/B runs that should not
+# spend API credit (see _claude_cli_transport.py; rows carry ``_transport``).
+TRANSPORT = os.environ.get("BBA_PILOT_TRANSPORT", "anthropic-batch")
+CLI_WORKERS = int(os.environ.get("BBA_PILOT_CLI_WORKERS", "3"))
 # Single-case iteration knob: comma-separated REQNOs. When set, only the
 # matching orders are processed/submitted, and the fresh records are MERGED
 # into the existing llm_report.json (all other cases keep their records)
@@ -1416,8 +1423,12 @@ def _build_inputs():
 
 
 def main() -> None:
+    if TRANSPORT not in ("anthropic-batch", "claude-cli"):
+        sys.exit(
+            f"BBA_PILOT_TRANSPORT must be anthropic-batch or claude-cli, got {TRANSPORT!r}"
+        )
     api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
+    if TRANSPORT == "anthropic-batch" and not api_key:
         sys.exit("ANTHROPIC_API_KEY not set")
     if not BUNDLE.exists():
         sys.exit(f"bundle not found: {BUNDLE} (run sample_bundle.py first)")
@@ -2724,14 +2735,24 @@ def main() -> None:
     if not submissions:
         print("  no clean submissions remaining after the injection filter")
     else:
-        transport = RealAnthropicTransport(
-            api_key=api_key,
-            poll_interval_seconds=20.0,
-            # Anthropic batches have a 24h SLA; the old 1h cap gave up while
-            # the batch was still processing. Env-overridable for a shorter
-            # wait when iterating locally.
-            max_wait_seconds=float(os.environ.get("BBA_PILOT_BATCH_MAX_WAIT", "86400")),
-        )
+        transport: Any
+        if TRANSPORT == "claude-cli":
+            print(f"\nTransport: claude-cli (subscription, {CLI_WORKERS} workers)")
+            transport = ClaudeCliTransport(
+                batch_root=WORK / "cli_batches", workers=CLI_WORKERS
+            )
+        else:
+            assert api_key is not None
+            transport = RealAnthropicTransport(
+                api_key=api_key,
+                poll_interval_seconds=20.0,
+                # Anthropic batches have a 24h SLA; the old 1h cap gave up while
+                # the batch was still processing. Env-overridable for a shorter
+                # wait when iterating locally.
+                max_wait_seconds=float(
+                    os.environ.get("BBA_PILOT_BATCH_MAX_WAIT", "86400")
+                ),
+            )
         t0 = time.time()
         # Resume path: if BBA_PILOT_BATCH_ID is set, re-attach to an already-
         # submitted batch instead of creating a new one. The deterministic
