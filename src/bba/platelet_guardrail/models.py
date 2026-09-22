@@ -13,8 +13,8 @@ Derived from the Chula DRAFT platelet policy (AABB/ICTMG 2025):
 * ``active_bleeding`` — documented active / life-threatening / clinically
   significant bleeding. The strongest indication for a low-count transfusion.
 * ``procedure_indication`` — an invasive procedure or surgery in-window whose
-  policy threshold the count sits below (LP <50-80k, CVC <50k, major surgery
-  <80-100k).
+  policy threshold the count sits below (LP <50-80k; CVC, thoracocentesis,
+  arthrocentesis, dental extraction <50k; major surgery <80-100k).
 * ``prophylactic_marrow_failure`` — chemo / HSCT / consumptive thrombocytopenia
   with count <10k (or expected <10k within 24h), AND no exclusion population.
 * ``intracranial_bleed_indication`` — intracranial bleed below its threshold

@@ -1587,8 +1587,12 @@ class TestRbcPromptHashGolden:
     # Re-pinned for #150: a declared order-time USETYPE alone cannot establish
     # PERIOPERATIVE. Blessed by
     # test_declared_use_does_not_satisfy_perioperative_indication.
+    # Re-pinned for the 2026-09-22 clinician rulings: SUB_THRESHOLD_HB is the
+    # LOWEST Hb in the 24 hours before the order (not the closest value), and
+    # an ICD-10 code alone never grounds an indication. Blessed by
+    # tests/unit/test_prompt_rulings_2026_09_22.py.
     RBC_HB_7_10_75_EMPTY_EVIDENCE = (
-        "fd9c9ed8265a020d01be556f146ead93b0a0bde76639b5676a1b733f596e3da0"
+        "a467114e464f6dcbeb9b005f8e61c9918b5a7796d3a7a4460585443d22d71ad0"
     )
     # Re-pinned for #93 boundary alignment: dispatch routes Hb >= 10.0 to this
     # template (engine ``hb_ge_10``), so its prose states the inclusive
@@ -1599,8 +1603,10 @@ class TestRbcPromptHashGolden:
     # ACTIVE_BLEEDING rule edit as the gray-zone golden above.
     # Re-pinned for the melena ruling — same shared ACTIVE_BLEEDING rule edit.
     # Re-pinned for #150 — same shared declared-use carve-out as above.
+    # Re-pinned for the 2026-09-22 rulings — same shared SUB_THRESHOLD_HB and
+    # ICD-code edits as the gray-zone golden above.
     RBC_HB_GT_10_75_EMPTY_EVIDENCE = (
-        "609f6524ad6be4735a61424ed1ba74759fc4c14bce6e0c9224592d35965bf39e"
+        "be877677113653d16af322f73cb997dda3fd15882229a549f9d642fe7a312e51"
     )
 
     def test_hb_7_10_review_cohort_7_5_hash_is_pinned(self) -> None:

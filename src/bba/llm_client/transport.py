@@ -239,7 +239,8 @@ _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
                 (
                     "True iff the evidence grounds an invasive procedure or surgery "
                     "within the audit window whose policy threshold the count sits "
-                    "below (LP <50-80k /uL, CVC <50k /uL, major surgery <80-100k /uL)."
+                    "below (LP <50-80k /uL; CVC, thoracocentesis, arthrocentesis, "
+                    "dental extraction <50k /uL; major surgery <80-100k /uL)."
                 )
                 + _SIGNAL_ORDER_RULE
             ),
