@@ -126,6 +126,78 @@ def parse_soap_sections(text: str) -> Mapping[SOAPSection, str]:
     return {k: "\n".join(lines).strip() for k, lines in sections.items()}
 
 
+FOCUS_INDICATION_TERMS: tuple[str, ...] = (
+    r"เลือดออก",
+    r"ซีด",
+    r"เลือดจาง",
+    r"ถ่ายดำ",
+    r"อาเจียนเป็นเลือด",
+    r"ความดันต่ำ",
+    r"\bhb\s*[=:]?\s*\d",
+    r"\bhct\s*[=:]?\s*\d",
+    r"bleed",
+    r"melena",
+    r"hematemesis",
+    r"hypotens",
+    r"bp\s*drop",
+    r"\bshock",
+    r"anemi",
+)
+"""Observed-indication vocabulary for IPDNRFOCUSDT salience.
+
+Measured 2026-09-22 over all 39,749 IPD orders: 72.7% exceed the 5+5 cap and
+closest-first kept only 33.6% of the pre-order notes matching this list; on
+8.1% of orders it kept none. Ranking hits first keeps 91.8% and leaves 3.0%
+of orders with more than five hits on the pre-order side.
+
+``hb``/``hct`` require a following number: a bare mention ("follow Hb") is a
+plan, a value ("Hb 6.8") is an observation. Bare ``prc``/``ให้เลือด`` were
+dropped for the same reason (administration, not indication)."""
+
+_FOCUS_INDICATION_PATTERN = re.compile("|".join(FOCUS_INDICATION_TERMS), re.IGNORECASE)
+
+# A match preceded, within the same clause, by a negation or an example-list
+# marker is a non-finding ("no bleed", "ไม่มีเลือดออก", "no sign of septic
+# shock") or a templated surveillance list ("sign of shock เช่น ...") —
+# neither is an observation. The look-behind stops at a clause separator so
+# "no pain, bleeding at wound" still counts the bleeding.
+_NEGATION_LOOKBEHIND_CHARS = 24
+_NEGATION_PATTERN = re.compile(
+    r"(\bno\b|\bnot\b|ไม่|without|\bneg|\bnil\b|\bnad\b|เช่น)", re.IGNORECASE
+)
+_CLAUSE_SEPARATOR_PATTERN = re.compile(r"[,;/\n]|\bbut\b|แต่", re.IGNORECASE)
+
+
+def _is_negated(segment: str, start: int) -> bool:
+    window = segment[max(0, start - _NEGATION_LOOKBEHIND_CHARS) : start]
+    separators = list(_CLAUSE_SEPARATOR_PATTERN.finditer(window))
+    clause = window[separators[-1].end() :] if separators else window
+    return _NEGATION_PATTERN.search(clause) is not None
+
+
+# The pilot joins the HOSxP columns as "Action: ...\nResponse: ..." (mirroring
+# the labelled SOAP join for IPDADMPROGRESS). ACTION is templated care-plan
+# text ("Observe signs bleeding เช่น แผลผ่าตัด") that matches on nearly every
+# surgical patient, so only the Response segment is scanned when the label
+# is present.
+_RESPONSE_SEGMENT_PATTERN = re.compile(r"(?:^|\n)Response:(?P<body>.*)\Z", re.DOTALL)
+
+
+def focus_indication_hit(text: str) -> bool:
+    """True when the note records an OBSERVED transfusion indication.
+
+    Scans the ``Response:`` segment when the text is labelled, else the whole
+    text. A vocabulary match is discarded when a negation / example marker
+    precedes it in the same clause (see :func:`_is_negated`).
+    """
+    segment_match = _RESPONSE_SEGMENT_PATTERN.search(text)
+    segment = segment_match.group("body") if segment_match else text
+    return any(
+        not _is_negated(segment, m.start())
+        for m in _FOCUS_INDICATION_PATTERN.finditer(segment)
+    )
+
+
 def split_focus_notes_5_5(
     *,
     notes: Sequence[FocusNote],
@@ -135,22 +207,23 @@ def split_focus_notes_5_5(
 ) -> tuple[FocusNote, ...]:
     """Return up to ``cap_before`` + ``cap_after`` notes around ``anchor``.
 
-    Selection rule (PRD §7 + issue #16 AC):
+    Selection rule (PRD §7 + issue #16 AC, salience tier added 2026-09-22):
 
     1. Partition into ``before = timestamp <= anchor`` and ``after =
        timestamp > anchor``. An at-anchor note belongs to ``before``: at-
        anchor is the latest possible "what was true at decision time" data
        point, so attaching it to the post-order side would silently demote it.
-    2. Sort ``before`` by descending timestamp (closest-to-anchor first); take
-       the first ``cap_before``.
-    3. Sort ``after`` by ascending timestamp (closest-to-anchor first); take
-       the first ``cap_after``.
-    4. Concatenate ``before + after`` — the returned tuple's order is
+    2. Within each side, notes with an observed indication
+       (:func:`focus_indication_hit`) rank ahead of the rest; within a tier,
+       closest-to-anchor first (``before`` by descending timestamp, ``after``
+       by ascending). Take the first ``cap_before`` / ``cap_after``.
+    3. Concatenate ``before + after`` — the returned tuple's order is
        deterministic across input shuffles, which is what makes the
        stable-IDs AC hold downstream.
 
     No padding when fewer notes are available; when only 3 ``before`` exist,
     3 are returned (the cap is a ceiling, not a target)."""
+
     # Sort key includes ``n.text`` so the order is TOTAL — without the
     # tiebreak, two focus notes charted at the same minute would retain
     # caller order (Python's stable sort), leaking input shuffle into the
@@ -161,14 +234,17 @@ def split_focus_notes_5_5(
     # NFC-normalize the text tiebreak so NFD vs NFC variants of the same
     # text sort identically — without this, the bundle hash would leak
     # the input encoding even though canonical_serialize unifies it.
+    def _tier(n: FocusNote) -> int:
+        return 0 if focus_indication_hit(n.text) else 1
+
     before = sorted(
         (n for n in notes if n.timestamp <= anchor),
-        key=lambda n: (n.timestamp, unicodedata.normalize("NFC", n.text)),
+        key=lambda n: (-_tier(n), n.timestamp, unicodedata.normalize("NFC", n.text)),
         reverse=True,
     )[:cap_before]
     after = sorted(
         (n for n in notes if n.timestamp > anchor),
-        key=lambda n: (n.timestamp, unicodedata.normalize("NFC", n.text)),
+        key=lambda n: (_tier(n), n.timestamp, unicodedata.normalize("NFC", n.text)),
     )[:cap_after]
     return tuple(before) + tuple(after)
 
@@ -214,7 +290,9 @@ def truncate_to_char_cap(
 
 
 __all__ = (
+    "FOCUS_INDICATION_TERMS",
     "SECTION_PRIORITY",
+    "focus_indication_hit",
     "parse_soap_sections",
     "split_focus_notes_5_5",
     "truncate_to_char_cap",
