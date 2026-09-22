@@ -58,6 +58,22 @@ class TestClosingSentence:
     def test_unknown_class_is_none(self) -> None:
         assert closing_classification("Final classification: MAYBE") is None
 
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "**Final Classification: appropriate.**",
+            "**Final Classification**: appropriate.",
+            "Final classification: **APPROPRIATE**",
+            "Final classification - APPROPRIATE",
+            "Final classification: APPROPRIATE (indication 6).",
+        ],
+    )
+    def test_markdown_and_layout_variants_are_read(self, text: str) -> None:
+        # Codex on the PR: a bold or lowercase closing line returned None, so
+        # a NEEDS_REVIEW label with APPROPRIATE reasoning fell through to the
+        # native-review guardrail, which asserts INAPPROPRIATE.
+        assert closing_classification(text) == "APPROPRIATE"
+
 
 class TestConcludedClassFallback:
     # The regex reader from the pilot audit, now in the library so old stored
@@ -79,6 +95,16 @@ class TestConcludedClassFallback:
 
     def test_no_class_named_is_none(self) -> None:
         assert concluded_class("The count was 8,000 /uL on chemotherapy.") is None
+
+    def test_postposed_negation_does_not_become_the_conclusion(self) -> None:
+        # Codex on the PR: "an APPROPRIATE classification is not supported"
+        # names the class before the negation.
+        text = "This is INAPPROPRIATE; an APPROPRIATE classification is not supported."
+        assert concluded_class(text) == "INAPPROPRIATE"
+
+    def test_class_used_as_an_adjective_of_a_rejected_noun(self) -> None:
+        text = "No APPROPRIATE indication exists, so the order is INAPPROPRIATE."
+        assert concluded_class(text) == "INAPPROPRIATE"
 
 
 class TestPromptAsksForTheSentence:

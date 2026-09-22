@@ -25,8 +25,12 @@ CLASSES: tuple[str, ...] = (
     "NEEDS_REVIEW",
     "APPROPRIATE",
 )
+# Tolerates markdown emphasis, "Final Classification", a dash or colon, and a
+# trailing parenthetical: the line is model output, not a parser's.
 _CLOSING_RE = re.compile(
-    r"final classification\s*:\s*\**\s*([A-Za-z_ ]+?)\s*\**\s*[.!]?\s*$", re.IGNORECASE
+    r"final classification\**\s*[:\-\u2013]\s*\**\s*([A-Za-z_ ]+?)\s*\**"
+    r"(?:\s*\([^)]*\))?\s*\.?\s*\**\s*[.!]?\s*$",
+    re.IGNORECASE,
 )
 # Upper-case only: lower-case "appropriate" is ordinary prose.
 _CLASS_RE = re.compile(
@@ -46,6 +50,15 @@ _CUE_RE = re.compile(
 _CHAIN_RE = re.compile(
     r"\s*(?:,|/|\bor\b|\bnor\b|,\s*or\b)\s*" + _FILLER, re.IGNORECASE
 )
+# A class named as an adjective of a rejected noun, or followed by a negation
+# in the same clause ("an APPROPRIATE classification is not supported", "No
+# APPROPRIATE indication exists"), is not the conclusion either.
+_POST_NEGATION_RE = re.compile(
+    r"^\s*(?:[a-z][a-z-]*\s+){0,3}(?:is|was|would be|remains|cannot be|can not be)?\s*"
+    r"(?:not\b|n't\b|never\b|unsupported\b|unjustified\b)",
+    re.IGNORECASE,
+)
+_PRE_NEGATION_RE = re.compile(r"\bno\s+$", re.IGNORECASE)
 
 
 def closing_classification(reasoning: str) -> str | None:
@@ -65,8 +78,12 @@ def concluded_class(reasoning: str) -> str | None:
     previous_rejected = False
     for match in _CLASS_RE.finditer(reasoning):
         between = reasoning[previous_end : match.start()]
-        rejected = bool(_CUE_RE.search(between)) or (
-            previous_rejected and _CHAIN_RE.fullmatch(between) is not None
+        after = reasoning[match.end() :].split(".", 1)[0]
+        rejected = (
+            bool(_CUE_RE.search(between))
+            or bool(_PRE_NEGATION_RE.search(between))
+            or bool(_POST_NEGATION_RE.match(after))
+            or (previous_rejected and _CHAIN_RE.fullmatch(between) is not None)
         )
         if not rejected:
             concluded = match.group(1).replace(" ", "_")
