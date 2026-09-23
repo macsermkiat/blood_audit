@@ -360,8 +360,10 @@ min_24h_g_dl` carries that minimum, computed by
 `bba.hb_lookup.lookup._min_24h` with the same HEMATOLOGY-preferred source rule
 the current value uses (applied within the 24 h window, so a POCT minimum is
 used only when no HEMATOLOGY value lies in that window). `lookup_hb` takes an optional `not_before_utc`: the
-window's lower bound moves up to the last transfusion inside it, so a low value
-a transfusion already corrected does not count. `None` when no observation
+window's lower bound moves up to that timestamp. The pilot passes the latest
+preceding RBC order inside the window, the closest thing it has to a
+transfusion time, so a low value an earlier order already addressed does not
+count. `None` when no observation
 falls in the window. The RBC prompt (`system_prompt.py`) states the same rule
 for `SUB_THRESHOLD_HB` in both gray-zone and high-Hb-override task modes.
 

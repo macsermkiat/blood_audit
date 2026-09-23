@@ -33,10 +33,11 @@ To rank the output of a pilot run (Path A in
 `BBA_VERDICT_SOURCE=pipeline`.
 
 `rank_doctors.py` with `BBA_VERDICT_SOURCE=pipeline` reads the audit store,
-which holds only the LLM-leg rows and the MSBOS over-reservation rows. Every
-order the deterministic leg finalized outright (an auto-clear, a return, a
-peri-op exemption) never reaches the audit store, so a pipeline-source
-ranking's denominators miss those verdicts.
+which holds the LLM-leg rows plus the deterministic MSBOS reservation rows
+(over-reservation and reservation-review). Every order the deterministic leg
+finalized outright as an auto-clear, a return or a peri-op exemption never
+reaches the audit store, so a pipeline-source ranking's denominators miss
+those verdicts.
 
 `rank_merged.py` merges `report.csv` (the deterministic leg's final verdicts)
 with `llm_report.json` (the LLM leg's final verdicts). The LLM verdict replaces
@@ -74,8 +75,9 @@ With the pipeline source, scorecards also carry the returns terminals
 *excluded* bucket and fold `PREOP_OVER_RESERVATION` into the
 inappropriate side while counting it separately as
 `over_reservation_count`. To rank a pilot run's output, use
-`rank_merged.py` above instead of the pipeline source: the audit store
-the pipeline source reads holds LLM-leg rows only.
+`rank_merged.py` above instead of the pipeline source: the audit store the
+pipeline source reads never receives the deterministic clears, returns and
+peri-op exemptions.
 
 This is a pilot script / integration seam, not a top-level `bba`
 subcommand. It is also surfaced through the `serve-dashboard` integration seam
