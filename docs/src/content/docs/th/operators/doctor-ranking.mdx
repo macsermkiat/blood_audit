@@ -26,7 +26,31 @@ workbook, ไฟล์ CSV `BDVST`/`DCT` หรือ output CSV/HTML ที่�
 นอกช่องทางตรวจที่ได้รับอนุมัติ
 :::
 
-## คืออะไร
+## จัดอันดับผลลัพธ์ pilot: ใช้ rank_merged.py
+
+ถ้าจะจัดอันดับผลลัพธ์จากการรัน pilot (เส้นทาง A ใน
+[รัน pipeline](/blood_audit/th/operators/run-pipeline/)) ให้ใช้
+`scripts/pilot/rank_merged.py` แทน `rank_doctors.py` ที่ตั้ง
+`BBA_VERDICT_SOURCE=pipeline`
+
+เพราะแหล่ง `pipeline` อ่านจาก audit store ซึ่งมีแต่แถวของ LLM leg กับแถว
+MSBOS over-reservation คำสั่งที่ deterministic leg ตัดสินจบไปเลย (auto-clear,
+คืนเลือด, ยกเว้น peri-op) จะไม่เข้า audit store เลย ทำให้ตัวหารของการจัดอันดับ
+แบบ pipeline ขาดหายไป
+
+`rank_merged.py` รวม `report.csv` (verdict ของ deterministic leg) กับ
+`llm_report.json` (verdict ของ LLM leg) โดย verdict จาก LLM จะแทนที่เฉพาะ
+คำสั่งที่ deterministic leg ส่งต่อไป (`NEEDS_REVIEW` หรือ
+`POTENTIALLY_INAPPROPRIATE`) ส่วน verdict ที่จบแล้วยังคงเดิม รันทีละ
+component เพราะคอลัมน์ trigger (mean/min/max) เป็น Hb สำหรับ red cell
+และ platelet count สำหรับ platelet:
+
+```bash
+uv run python scripts/pilot/rank_merged.py red_cell
+uv run python scripts/pilot/rank_merged.py platelet
+```
+
+## rank_doctors.py คืออะไร
 
 `bba.attribution` (Feature 2, PR #82) จัดอันดับแพทย์ผู้สั่งและแผนก 10 อันดับแรก
 ตามความเหมาะสมของการสั่งใช้เลือด แบ่งเป็นสามกลุ่ม: เหมาะสม, ไม่เหมาะสม และยังไม่สรุป
@@ -43,6 +67,9 @@ workbook, ไฟล์ CSV `BDVST`/`DCT` หรือ output CSV/HTML ที่�
 terminal ฝั่งคืนเลือด (`RETURNED_NOT_TRANSFUSED` / `PERIOP_TRANSFUSION_EXEMPT`)
 เป็นกลุ่ม *ไม่นับคะแนน (excluded)* ด้วย และรวม `PREOP_OVER_RESERVATION`
 เข้าฝั่งไม่เหมาะสม โดยนับแยกไว้เป็น `over_reservation_count`
+
+จะจัดอันดับผลลัพธ์ของ pilot ให้ใช้ `rank_merged.py` ด้านบนแทนแหล่ง pipeline
+เพราะ audit store ที่แหล่ง pipeline อ่าน มีแต่แถวของ LLM leg
 
 ตัวนี้เป็นสคริปต์ pilot / integration seam ไม่ใช่ subcommand ระดับบนของ
 `bba` และยังถูกนำเสนอผ่าน integration seam ของ `serve-dashboard`
@@ -104,6 +131,9 @@ open "$BBA_PILOT_WORK_DIR/doctor_rankings.html"
   writers)
 - `scripts/pilot/rank_doctors.py`: glue บาง ๆ ที่ resolve path ของ input และ
   รายงานสรุปการกระทบยอด
+- `scripts/pilot/rank_merged.py`: รวม `report.csv` กับ `llm_report.json`
+  เป็น verdict เดียวต่อคำสั่งต่อ component แล้วเรียก ranking/writer ของ
+  `bba.attribution` ตัวเดียวกัน
 
 ## ขั้นถัดไป
 

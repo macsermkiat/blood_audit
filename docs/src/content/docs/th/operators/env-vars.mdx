@@ -71,6 +71,15 @@ kill-switch ของ flag สำหรับฟีเจอร์ที่ defa
 [จัดอันดับแพทย์และแผนก](/blood_audit/th/operators/doctor-ranking/)
 ส่วนตารางด้านบนครอบคลุมเฉพาะ CLI ที่รองรับเท่านั้น
 
+มีตัวแปร pilot เพิ่มอีก 3 ตัว มาพร้อม response-audit gate และ
+count-trend guardrail ของ platelet:
+
+| ตัวแปร | ค่าเริ่มต้น | ใช้ทำอะไร |
+| --- | --- | --- |
+| `BBA_PILOT_PLATELET_TREND` | `0` (ปิด) | ตั้งเป็น `1` เพื่อแสดงเส้น projected platelet count 24 ชม. ใน evidence ของ LLM และเปิด count-trend guardrail (`PLATELET_TREND_GUARDRAIL_ENABLED`, issue #237) |
+| `BBA_PILOT_ALLOW_UNAUDITED` | ไม่ตั้งค่า | ตั้งเป็น `1` เพื่อให้ `build_review.py` render คำตอบ LLM ได้ แม้ยังไม่มี response audit ที่ตรงกัน หรือ audit นั้นมี HIGH finding |
+| `BBA_AUDIT_JUDGE_MODELS` | `claude-sonnet-5,claude-haiku-4-5-20251001,claude-opus-5` | รายชื่อ judge model (คั่นด้วย comma) สำหรับ `audit_llm_responses.py --judge candidates\|all` ซึ่งเป็นตัวเลือกเสริมที่เรียก API และคิดเงิน |
+
 ## ตรวจสอบ
 
 ```bash

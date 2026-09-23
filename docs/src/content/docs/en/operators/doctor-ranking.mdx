@@ -25,11 +25,41 @@ commit, email, or share the workbook, the `BDVST`/`DCT` CSVs, or the generated
 CSV/HTML outputs outside the approved review channel.
 :::
 
-## What it is
+## Ranking a pilot run: use rank_merged.py
 
-`bba.attribution` (Feature 2, PR #82) ranks the top-10 ordering doctors and
-departments by blood-order appropriateness, in three buckets: Appropriate,
-Inappropriate, and Unresolved.
+To rank the output of a pilot run (Path A in
+[Run the pipeline](/blood_audit/en/operators/run-pipeline/)), use
+`scripts/pilot/rank_merged.py`, not `rank_doctors.py` with
+`BBA_VERDICT_SOURCE=pipeline`.
+
+`rank_doctors.py` with `BBA_VERDICT_SOURCE=pipeline` reads the audit store,
+which holds the LLM-leg rows plus the deterministic MSBOS reservation rows
+(over-reservation and reservation-review). Every order the deterministic leg
+finalized outright as an auto-clear, a return or a peri-op exemption never
+reaches the audit store, so a pipeline-source ranking's denominators miss
+those verdicts.
+
+`rank_merged.py` merges `report.csv` (the deterministic leg's final verdicts)
+with `llm_report.json` (the LLM leg's final verdicts). The LLM verdict replaces
+the deterministic one only for orders the deterministic leg routed onward
+(`NEEDS_REVIEW` or `POTENTIALLY_INAPPROPRIATE`); every deterministic terminal
+stands even if a stale LLM row exists for the same order. An LLM verdict for a
+`REQNO` the report does not know raises an error rather than dropping silently.
+
+Run it once per component, because the mean/min/max trigger columns are Hb for
+red cells and platelet count for platelets:
+
+```bash
+uv run python scripts/pilot/rank_merged.py red_cell
+uv run python scripts/pilot/rank_merged.py platelet
+```
+
+Each run writes `<component>_doctor_ranking.csv`,
+`<component>_department_ranking.csv`, and `<component>_doctor_rankings.html`
+to `$BBA_PILOT_WORK_DIR`, reading the same `BBA_BDVST_CSV` / `BBA_DCT_CSV`
+environment variables as `rank_doctors.py` below.
+
+## What rank_doctors.py is
 
 The attribution chain resolves an order back to a doctor:
 
@@ -44,7 +74,10 @@ With the pipeline source, scorecards also carry the returns terminals
 (`RETURNED_NOT_TRANSFUSED` / `PERIOP_TRANSFUSION_EXEMPT`) as an
 *excluded* bucket and fold `PREOP_OVER_RESERVATION` into the
 inappropriate side while counting it separately as
-`over_reservation_count`.
+`over_reservation_count`. To rank a pilot run's output, use
+`rank_merged.py` above instead of the pipeline source: the audit store the
+pipeline source reads never receives the deterministic clears, returns and
+peri-op exemptions.
 
 This is a pilot script / integration seam, not a top-level `bba`
 subcommand. It is also surfaced through the `serve-dashboard` integration seam
@@ -106,6 +139,9 @@ minimum-N threshold, and the number of doctor/department table rows.
   writers).
 - `scripts/pilot/rank_doctors.py`: thin glue that resolves the input paths and
   reports the reconciliation summary.
+- `scripts/pilot/rank_merged.py`: merges `report.csv` and `llm_report.json`
+  into one verdict per order per component, then calls the same
+  `bba.attribution` ranking and writers.
 
 ## Next steps
 

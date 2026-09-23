@@ -67,13 +67,21 @@ includes platelet orders is not audited end-to-end until the flag is enabled.
 export ANTHROPIC_API_KEY=sk-ant-...          # the LLM leg
 export BBA_PILOT_WORK_DIR=/tmp/bba_mini      # all outputs land here
 
-uv run python scripts/pilot/sample_bundle.py   # 1. sample ~10 cases
-uv run python scripts/pilot/run_pipeline.py    # 2. deterministic verdicts  → report.csv
-uv run python scripts/pilot/run_llm_leg.py     # 3. live Anthropic batch     → llm_report.json
-uv run python scripts/pilot/build_review.py    # 4. assemble review          → review.html
+uv run python scripts/pilot/sample_bundle.py         # 1. sample ~10 cases
+uv run python scripts/pilot/run_pipeline.py          # 2. deterministic verdicts  → report.csv
+uv run python scripts/pilot/run_llm_leg.py           # 3. live Anthropic batch     → llm_report.json
+uv run python scripts/pilot/audit_llm_responses.py   # 4. audit the responses (code checks, no API) → llm_response_audit.json
+uv run python scripts/pilot/build_review.py          # 5. assemble review          → review.html
 
 open "$BBA_PILOT_WORK_DIR/review.html"
 ```
+
+Step 5 refuses to render model responses without a response audit that matches
+`llm_report.json` (by its SHA-256) and carries no HIGH finding; set
+`BBA_PILOT_ALLOW_UNAUDITED=1` to build the page anyway. See
+[`scripts/pilot/README.md`](scripts/pilot/README.md) for the fix-and-rerun
+loop and the separate dev-test consortium (Claude Code subagents reviewing
+response soundness; not a pipeline step, not a gate).
 
 Step 2's `report.csv` now also carries the default-ON overlay columns: returns-ledger
 disposition (`RETURNED_NOT_TRANSFUSED` / `PERIOP_TRANSFUSION_EXEMPT` terminals),
@@ -115,6 +123,24 @@ Ranks the top-10 ordering doctors and departments by blood-order appropriateness
 in three buckets (appropriate / inappropriate / unresolved). Thin glue over
 `bba.attribution`. Full guide:
 [docs site → Operators → Doctor and department ranking](docs/src/content/docs/en/operators/doctor-ranking.mdx).
+
+To rank a pilot run's own output (Path A above), use `rank_merged.py`, one
+component at a time. It merges `report.csv`'s deterministic verdicts with
+`llm_report.json`'s LLM verdicts, replacing only the deterministic rows that
+were routed onward (`NEEDS_REVIEW` / `POTENTIALLY_INAPPROPRIATE`):
+
+```bash
+export BBA_PILOT_WORK_DIR=/tmp/bba_mini
+uv run python scripts/pilot/rank_merged.py red_cell
+uv run python scripts/pilot/rank_merged.py platelet
+```
+
+`rank_doctors.py` ranks against the 300-case human-review workbook (the
+default `BBA_VERDICT_SOURCE=human`) or the audit store
+(`BBA_VERDICT_SOURCE=pipeline`). The audit store holds the LLM-leg rows and the
+deterministic MSBOS reservation rows only, so a `pipeline`-source ranking's
+denominators miss the deterministic clears, returns and peri-op exemptions.
+Use `rank_merged.py` above to rank a pilot run instead:
 
 ```bash
 export BBA_REVIEW_XLSX="$HOME/Downloads/Review การใช้เลือด.xlsx"  # verdict source (300-case review)
@@ -576,8 +602,10 @@ Runtime flags live in `src/bba/feature_flags.py` (plain module constants; the pi
 | `DECLARED_USE_PREOP_EXEMPT_ENABLED` | **ON** | `BBA_PILOT_DECLARED_USE_PREOP_EXEMPT=0` |
 | `MSBOS_RESERVATION_ENABLED` | **ON** | `BBA_PILOT_MSBOS_RESERVATION=0` |
 | `MSBOS_PLANNED_OP_PICKER_V2_ENABLED` | **ON** (needs the MSBOS flag) | `BBA_PILOT_MSBOS_PLANNED_OP_PICKER_V2` |
+| `PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED` | **ON** (hematology sign-off 2026-09-20) | `BBA_PILOT_PLATELET_AUTOCLEAR=0` |
 | `PLATELET_LLM_ENABLED` | off | — |
 | `RESERVE_AHEAD_ROUTER_ENABLED` | off (pending #109 gate) | `BBA_PILOT_RESERVE_AHEAD_ROUTER` |
+| `PLATELET_TREND_GUARDRAIL_ENABLED` | off (issue #237) | `BBA_PILOT_PLATELET_TREND=1` |
 
 The active combination is encoded in the pilot store code-version token, currently
 `pilot-mini+returns+declared+msbos5+opbound2+usetypeonly` with all defaults.

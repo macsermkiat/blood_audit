@@ -1,6 +1,6 @@
 ---
 title: Policy summary
-description: Paraphrased summary of the 3-tier Hb policy applied by the audit. Authoritative text lives in the internal KCMH documents.
+description: Paraphrased summary of the 3-tier Hb policy and the platelet policy applied by the audit. Authoritative text lives in the internal KCMH documents.
 ---
 
 import AlgorithmDecisionFlow from "../../../../components/AlgorithmDecisionFlow.astro";
@@ -93,6 +93,66 @@ to review instead of auto-flagging.
 Orders without a documented pre-transfusion Hb are **not** classified as
 appropriate or inappropriate. They are retained as `INSUFFICIENT_EVIDENCE`
 so the QI committee can see the documentation gap.
+
+## The 24 h minimum Hb
+
+Where the rule above refers to a sub-threshold Hb, it means the LOWEST Hb in
+the 24 hours before the order, counted from the most recent transfusion in
+that window onward, not the value closest to the order time. A low value a
+transfusion already corrected does not count. An Hb exactly at the cohort
+floor is AT the floor, not below it.
+
+## Platelet policy (Chula DRAFT, AABB/ICTMG 2025)
+
+Platelet orders are judged against a separate policy with eight positive
+indications and nine exclusion populations. As with the RBC rule, in the LLM
+review an ICD-10 code alone never grounds an indication or an exclusion: the
+condition must be documented in a note, a lab result, or an imaging report.
+The deterministic prophylaxis auto-clear is the one exception by design: it
+reads diagnosis codes only, under the hematology sign-off of 2026-09-20.
+
+**Positive indications** (transfusion is appropriate only when the count is
+below the stated threshold AND the indication is grounded in the notes):
+
+1. Lumbar puncture: count < 50,000/µL (medicine or obstetrics) or
+   < 80,000/µL (surgery or orthopaedics).
+2. CVC insertion, thoracocentesis, arthrocentesis, or dental extraction:
+   count < 50,000/µL. Bone marrow aspiration or biopsy grounds nothing at any
+   count. An invasive procedure not on this list routes to `NEEDS_REVIEW`
+   rather than a threshold of the reviewer's choosing.
+3. Major non-neuraxial surgery, planned or performed within the previous
+   24 h: count < 80,000/µL, or < 100,000/µL for a high-bleeding-risk patient
+   or procedure.
+4. Consumptive thrombocytopenia / DIC without active bleeding: count
+   < 10,000/µL.
+5. Chemotherapy or HSCT without active bleeding: count < 10,000/µL, or
+   projected to fall below 10,000/µL within 24 h (a straight-line
+   projection through the last two pre-order counts, computed by code, not
+   a standing order's own trigger level).
+6. Intracranial bleed (SDH, EDH, SAH, intracerebral): count < 100,000/µL
+   while acute, acute-on-chronic, growing, or with neurosurgery planned;
+   count < 50,000/µL when stable and non-operative, including a stable
+   chronic SDH. An acute or acute-on-chronic bleed **stays acute for 7
+   days** from the note or imaging that documents it; after 7 days the
+   stable rule applies unless new imaging or a documented change shows
+   growth or a new bleed.
+7. Clinically significant active bleeding: count < 50,000/µL.
+8. Aplastic anaemia on active therapy aimed at reversing the
+   thrombocytopenia (ATG, cyclosporine, eltrombopag, or transplant
+   work-up): count < 10,000/µL, or projected to fall below that within
+   24 h; < 20,000/µL during the ATG course or with sepsis.
+
+**Exclusion populations** (never appropriate to clear at a low count without
+a separately-grounded positive indication): cardiac surgery / cardiopulmonary
+bypass with no thrombocytopenia or severe bleeding; a head/intracranial
+bleed with count > 100,000/µL; dengue fever without active bleeding; aplastic
+anaemia that is chronic, stable, or not under active therapy, without active
+bleeding (a patient on active therapy is indication 8, not this line);
+snakebite without a life-threatening bleed; TTP; HIT; ITP; and chronic marrow
+failure (e.g. myelodysplastic syndrome) not otherwise listed. For TTP, HIT,
+and ITP, platelet transfusion can be actively harmful, so only the condition
+named on that population's own line clears it; a procedure indication never
+does.
 
 ## Why paraphrased here
 

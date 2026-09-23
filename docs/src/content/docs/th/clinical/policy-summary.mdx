@@ -1,6 +1,6 @@
 ---
 title: สรุป policy
-description: สรุปเชิงปฏิบัติของนโยบาย 3-tier Hb ที่ระบบใช้ โดยเอกสารภายในยังเป็นแหล่งอ้างอิงหลัก
+description: สรุปเชิงปฏิบัติของนโยบาย 3-tier Hb และ policy ของ platelet ที่ระบบใช้ โดยเอกสารภายในยังเป็นแหล่งอ้างอิงหลัก
 ---
 
 import AlgorithmDecisionFlow from "../../../../components/AlgorithmDecisionFlow.astro";
@@ -92,6 +92,38 @@ resolve ไม่ได้, code ที่กำกวม และ count ที
 คำสั่งที่ไม่มี Hb ก่อนให้เลือด **ไม่ถูกตัดสินว่าเหมาะสมหรือไม่เหมาะสม**
 แต่จะถูกเก็บเป็น `INSUFFICIENT_EVIDENCE` เพื่อให้คณะกรรมการ QI เห็นช่องว่าง
 ของหลักฐานเอกสาร
+
+## Hb ต่ำสุดในรอบ 24 ชม.
+
+เมื่อกฎด้านบนอ้างถึง Hb ที่ต่ำกว่าเกณฑ์ ให้หมายถึงค่า Hb ที่**ต่ำที่สุด**
+ในรอบ 24 ชั่วโมงก่อนสั่ง (นับจากการให้เลือดครั้งล่าสุดในช่วงนั้นเป็นต้นไป)
+ไม่ใช่ค่าที่ใกล้เวลาสั่งที่สุด ค่าต่ำที่การให้เลือดแก้ไขไปแล้วจะไม่นับ
+และ Hb ที่เท่ากับเกณฑ์พอดียังถือว่าอยู่ที่เกณฑ์ ไม่ใช่ต่ำกว่า
+
+## Policy ของ platelet (Chula DRAFT, AABB/ICTMG 2025)
+
+คำสั่ง platelet ถูกตัดสินด้วย policy แยกต่างหาก มี 8 positive indications
+กับ exclusion population 9 กลุ่ม เหมือนกฎ RBC คือในขั้น LLM โค้ด ICD-10 เพียงอย่างเดียว
+ไม่เคย ground indication หรือ exclusion ได้เลย ต้องมี note, ผลแล็บ หรือผล
+imaging รองรับด้วยเสมอ
+
+Indication สรุปย่อ: LP, CVC/thoracocentesis/arthrocentesis/ถอนฟัน, ผ่าตัด
+ใหญ่ในช่วง 24 ชม., DIC ไม่มี bleeding, chemo/HSCT ไม่มี bleeding (count
+< 10,000 หรือคาดว่าจะลดต่ำกว่านั้นใน 24 ชม. ซึ่งตัดสินจากเส้น projection
+ไม่ใช่ standing order), intracranial bleed (เกณฑ์ต่างกันตาม acute/stable
+โดย**เลือดออกเฉียบพลันนับเป็น acute ต่อไปอีก 7 วัน**หลังวันที่มี note หรือ
+imaging ยืนยัน), active bleeding ที่มีนัยสำคัญทางคลินิก และ indication 8
+ใหม่ล่าสุดคือ aplastic anaemia ที่กำลัง active therapy อยู่ (ATG,
+cyclosporine, eltrombopag หรือเตรียม transplant): count < 10,000 หรือ
+< 20,000 ระหว่างคอร์ส ATG หรือมี sepsis
+
+Exclusion population (ห้าม clear ที่ count ต่ำโดยไม่มี indication แยก
+ground) ได้แก่ cardiac surgery, head/intracranial bleed ที่ count > 100,000,
+dengue ไม่มี bleeding, aplastic anaemia แบบ chronic/stable/ไม่ได้ active
+therapy (ผู้ป่วยที่ active therapy คือ indication 8 ไม่ใช่ข้อนี้),
+snakebite ไม่มี bleeding ที่เป็นอันตรายถึงชีวิต, TTP, HIT, ITP และ chronic
+marrow failure อื่น ๆ สำหรับ TTP/HIT/ITP มีเพียงเงื่อนไขบนบรรทัดของ
+population นั้นเท่านั้นที่ clear ได้ ไม่ใช่ procedure indication
 
 ## ทำไมจึง paraphrase
 

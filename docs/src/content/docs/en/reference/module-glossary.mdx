@@ -49,8 +49,20 @@ Common concept slugs to search for in the glossary:
   OPRTACT→ICD9 bridge.
 - `reservation_annotation`: the MSBOS annotation embedded on
   returns-terminal rows (annotation, never a verdict change).
-- `feature_flags`: the runtime flag module; five of the seven flags are
+- `feature_flags`: the runtime flag module; 6 of the 9 flags are
   default-ON.
+- `platelet_lookup.projection` / `project_24h`: the straight-line platelet
+  count projection behind indication 5's "expected to drop below 10,000 /uL
+  within 24 hours" and the `platelet_trend_unsupported` guardrail.
+- `llm_client.conclusion` / `reasoning_conclusion`: reads the class a
+  response's own reasoning concludes, for the `label_reasoning_conflict`
+  guardrail.
+- `audit_llm_responses`: the pilot step (code checks, no API call by
+  default) that gates `build_review.py` on a clean response audit.
+- `dev_consortium`: the Claude Code dev-test reviewer tool for pilot
+  responses, not a pipeline step and not a gate.
+- `rank_merged`: ranks a pilot run's merged deterministic + LLM verdicts,
+  one component (`red_cell` or `platelet`) at a time.
 
 For the full set, open the glossary on GitHub:
 [`docs/CONTEXT.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/CONTEXT.md).

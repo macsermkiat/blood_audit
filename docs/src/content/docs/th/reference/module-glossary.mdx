@@ -36,8 +36,17 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
   OPRTACT→ICD9 bridge
 - `reservation_annotation`: MSBOS annotation ที่ฝังบนแถว returns-terminal
   (เป็น annotation เท่านั้น ไม่เปลี่ยน verdict)
-- `feature_flags`: module ของ runtime flag; flag 5 จาก 7 ตัวเปิดโดย
+- `feature_flags`: module ของ runtime flag; flag 6 จาก 9 ตัวเปิดโดย
   ค่าเริ่มต้น
+- `platelet_lookup.projection` / `project_24h`: เส้น projection ของ
+  platelet count ที่อยู่เบื้องหลัง indication 5 และ
+  `platelet_trend_unsupported` guardrail
+- `llm_client.conclusion` / `reasoning_conclusion`: อ่านว่า reasoning ของ
+  คำตอบสรุปเป็น class ไหน สำหรับ `label_reasoning_conflict` guardrail
+- `audit_llm_responses` / `rank_merged`: pilot step ที่ตรวจคำตอบ LLM ก่อน
+  render และสคริปต์จัดอันดับจาก verdict ที่รวมแล้ว (ดู
+  [รัน pipeline](/blood_audit/th/operators/run-pipeline/) และ
+  [จัดอันดับแพทย์และแผนก](/blood_audit/th/operators/doctor-ranking/))
 
 ## Module สำคัญ
 
