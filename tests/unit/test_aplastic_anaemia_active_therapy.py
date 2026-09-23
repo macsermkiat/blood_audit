@@ -84,11 +84,21 @@ class TestHardSignalCoversIt:
         text = _prompt().split("prophylactic_marrow_failure", 1)[1][:400]
         assert "indication 8" in text or "aplastic" in text.lower()
 
-    def test_schema_description_matches(self) -> None:
-        desc = _PLATELET_TOOL_INPUT_SCHEMA["properties"]["prophylactic_marrow_failure"][
-            "description"
-        ]
-        assert "aplastic" in desc.lower()
+    def test_marrow_failure_signal_text_excludes_aplastic_anaemia(self) -> None:
+        # Codex on the docs PR: after the fifth signal was added, the schema
+        # text still told the model to set prophylactic_marrow_failure for
+        # aplastic anaemia on active therapy, which the trend floor reads alone.
+        marrow = _PLATELET_TOOL_INPUT_SCHEMA["properties"][
+            "prophylactic_marrow_failure"
+        ]["description"]
+        fifth = _PLATELET_TOOL_INPUT_SCHEMA["properties"][
+            "aplastic_active_therapy_indication"
+        ]["description"]
+        assert "indication 8" in fifth
+        # The only mention of aplastic anaemia in the marrow-failure text is
+        # the sentence that sends it to the fifth signal.
+        assert marrow.count("plastic") == 1
+        assert "belongs under aplastic_active_therapy_indication, not here" in marrow
 
     def test_guardrail_docstring_matches(self) -> None:
         assert (
