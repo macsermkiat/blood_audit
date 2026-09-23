@@ -616,6 +616,44 @@ def fmt_dt(date_raw: Any, time_raw: Any) -> str:
     return d or t or ""
 
 
+def focus_note_sort_key(r: dict[str, str]) -> tuple[str, str]:
+    """Chronological key for IPDNRFOCUSDT rows. fmt_time zero-pads the
+    int-typed PROGRESSTIME, so "23300" (02:33) sorts before "165400" (16:54)."""
+    return (
+        (r.get("PROGRESSDATE") or "").split(" ")[0],
+        fmt_time(r.get("PROGRESSTIME")),
+    )
+
+
+def progress_note_sort_key(r: dict[str, str]) -> tuple[str, str, str, str]:
+    """Chronological key for IPDADMPROGRESS rows. PROGDATE has no time, so
+    same-day notes order by PROGNO, HOSxP's per-day note sequence, then entry
+    timestamp (FIRSTDATE). PROGNO leads because FIRSTDATE may be blank on
+    some rows, and a blank would sort before every timed note."""
+    return (
+        (r.get("PROGDATE") or "").split(" ")[0],
+        (r.get("PROGNO") or "").strip().zfill(6),
+        (r.get("FIRSTDATE") or "").strip(),
+        (r.get("ITEMNO") or "").strip().zfill(6),
+    )
+
+
+def progress_note_key(r: dict[str, str]) -> tuple[str, str, str]:
+    """Identity of one IPDADMPROGRESS note. ITEMNO is 1 on every exported row;
+    PROGNO numbers the notes within a day."""
+    return (
+        (r.get("PROGDATE") or ""),
+        (r.get("ITEMNO") or ""),
+        (r.get("PROGNO") or ""),
+    )
+
+
+def progress_note_when(r: dict[str, str]) -> str:
+    d = (r.get("PROGDATE") or "").split(" ")[0]
+    entered = (r.get("FIRSTDATE") or "").strip().split(".")[0]
+    return f"{d} (entered {entered})" if entered else d
+
+
 def fmt_reqtype(code: Any) -> str:
     c = str(code or "").strip()
     if not c:
@@ -1588,9 +1626,9 @@ def main() -> None:
                 }
             )
 
-        # Progress notes: first N of AN + window. Dedup by (date, item).
+        # Progress notes: first N of AN + window. Dedup by (date, item, progno).
         an_progress = [r for r in progress if r.get("AN") == an]
-        an_progress.sort(key=lambda r: r.get("PROGDATE") or "")
+        an_progress.sort(key=progress_note_sort_key)
         first_n = an_progress[:PROGRESS_FIRST_N]
         near_anchor = [
             r
@@ -1602,15 +1640,15 @@ def main() -> None:
             for r in an_progress
             if _in_periop_notes_window(parse_hosxp_date(r.get("PROGDATE")))
         ]
-        seen: set[tuple[str, str]] = set()
+        seen: set[tuple[str, str, str]] = set()
         prog_notes: list[dict[str, str]] = []
         for r in first_n + near_anchor:
-            key = ((r.get("PROGDATE") or ""), (r.get("ITEMNO") or ""))
+            key = progress_note_key(r)
             if key in seen:
                 continue
             seen.add(key)
             prog_notes.append(r)
-        prog_notes.sort(key=lambda r: r.get("PROGDATE") or "")
+        prog_notes.sort(key=progress_note_sort_key)
 
         focus_notes = [
             r
@@ -1618,18 +1656,14 @@ def main() -> None:
             if r.get("AN") == an
             and _in_notes_window(parse_hosxp_date(r.get("PROGRESSDATE")))
         ]
-        focus_notes.sort(
-            key=lambda r: (r.get("PROGRESSDATE") or "", r.get("PROGRESSTIME") or "")
-        )
+        focus_notes.sort(key=focus_note_sort_key)
         periop_focus_notes = [
             r
             for r in focus
             if r.get("AN") == an
             and _in_periop_notes_window(parse_hosxp_date(r.get("PROGRESSDATE")))
         ]
-        periop_focus_notes.sort(
-            key=lambda r: (r.get("PROGRESSDATE") or "", r.get("PROGRESSTIME") or "")
-        )
+        periop_focus_notes.sort(key=focus_note_sort_key)
 
         periop_evidence: list[dict[str, str]] = []
         seen_periop: set[tuple[str, str, str, str]] = set()
@@ -2188,7 +2222,7 @@ def main() -> None:
         )
         if prog_notes:
             for n in prog_notes:
-                d = (n.get("PROGDATE") or "").split(" ")[0]
+                d = progress_note_when(n)
                 itemno = n.get("ITEMNO") or ""
                 progno = n.get("PROGNO") or ""
                 progdesc = (n.get("PROGDESC") or "").strip()
