@@ -1161,9 +1161,21 @@ def test_same_day_progress_notes_sort_by_entry_time() -> None:
     # PROGDATE carries no time (always 00:00), so notes written on one day
     # keep export order unless the entry timestamp breaks the tie.
     module = _load_build_review()
-    evening = {"PROGDATE": "2024-04-02 00:00:00.000", "FIRSTDATE": "2024-04-02 20:17:30.000", "ITEMNO": "1"}
-    morning = {"PROGDATE": "2024-04-02 00:00:00.000", "FIRSTDATE": "2024-04-02 08:05:00.000", "ITEMNO": "2"}
-    day_before = {"PROGDATE": "2024-04-01 00:00:00.000", "FIRSTDATE": "2024-04-03 09:00:00.000", "ITEMNO": "1"}
+    evening = {
+        "PROGDATE": "2024-04-02 00:00:00.000",
+        "FIRSTDATE": "2024-04-02 20:17:30.000",
+        "ITEMNO": "1",
+    }
+    morning = {
+        "PROGDATE": "2024-04-02 00:00:00.000",
+        "FIRSTDATE": "2024-04-02 08:05:00.000",
+        "ITEMNO": "2",
+    }
+    day_before = {
+        "PROGDATE": "2024-04-01 00:00:00.000",
+        "FIRSTDATE": "2024-04-03 09:00:00.000",
+        "ITEMNO": "1",
+    }
 
     ordered = sorted([evening, morning, day_before], key=module.progress_note_sort_key)
 
