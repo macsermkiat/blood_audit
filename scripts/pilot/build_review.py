@@ -240,6 +240,12 @@ _REVIEW_REASON_LABELS: dict[str, str] = {
         "Platelet-leg over-clear floored to NEEDS_REVIEW (platelet "
         "guardrail; the RBC assert path does not apply to platelets)"
     ),
+    "label_reasoning_conflict": (
+        "Floored to NEEDS_REVIEW: the model's classification contradicts the "
+        "class its own reasoning concludes (the closing 'Final classification' "
+        "sentence, or the stated conclusion in older answers). Neither is "
+        "trusted; a human decides"
+    ),
     "platelet_trend_unsupported": (
         "Platelet clear floored to NEEDS_REVIEW: the count was 10,000 /uL or "
         "more and the clear rested only on 'expected to drop below 10,000 /uL "
@@ -2654,6 +2660,7 @@ LLM: Anthropic Batch classification on structured evidence only.
 <dt>empty_reasoning</dt><dd>Final verdict carried empty reasoning — floored to NEEDS_REVIEW (a verdict with no rationale is never asserted).</dd>
 <dt>platelet_llm_overclear_suspect</dt><dd>Platelet-leg over-clear floored to NEEDS_REVIEW (platelet guardrail; the RBC assert path does not apply to platelets).</dd>
 <dt>platelet_trend_unsupported</dt><dd>{esc(_REVIEW_REASON_LABELS["platelet_trend_unsupported"])}.</dd>
+<dt>label_reasoning_conflict</dt><dd>{esc(_REVIEW_REASON_LABELS["label_reasoning_conflict"])}.</dd>
 <dt>malformed_json</dt><dd>Parse failure — the response was not valid JSON.</dd>
 <dt>schema_mismatch</dt><dd>Parse failure — the tool payload did not match the expected schema.</dd>
 <dt>classification_out_of_set</dt><dd>Parse failure — the classification label is outside the allowed vocabulary.</dd>

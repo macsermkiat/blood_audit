@@ -57,6 +57,7 @@ from typing import Any, Literal
 
 from bba.audit_store import AuditStore
 from bba.audit_store.models import AuditStoreConfig
+from bba.llm_client.conclusion import concluded_class, reasoning_conclusion
 
 WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
 DEFAULT_JUDGE_MODELS = "claude-sonnet-5,claude-haiku-4-5-20251001,claude-opus-5"
@@ -100,30 +101,12 @@ RERUN_CODES = frozenset(
         "response_truncated",
         "consortium_label_contradiction",
         "consortium_thai_label_contradiction",
+        "label_reasoning_conflict",
         "en_th_conclusion_mismatch",
         "llm_result_missing",
     }
 )
 
-# Upper-case only: lower-case "appropriate" is ordinary prose ("appropriate
-# threshold"); the consortium reads conclusions written in plain words.
-_CLASS_RE = re.compile(
-    r"\b(" + "|".join(c.replace("_", "[ _]") for c in CLASSES) + r")\b"
-)
-# A class is REJECTED when a cue sits right before it ("not X", "rather than a
-# clean X") or when it continues a rejected list ("X or Y", "X, nor Y"). Only
-# the mention is rejected, never the rest of the sentence: in "not APPROPRIATE
-# but INAPPROPRIATE" the correction is the conclusion.
-_FILLER = r"(?:[a-z][a-z-]*\s+){0,3}"
-_CUE_RE = re.compile(
-    r"(?:\brather than|\binstead of|\bas opposed to|\bnot|\bnor|\bnever)\s+"
-    + _FILLER
-    + r"$",
-    re.IGNORECASE,
-)
-_CHAIN_RE = re.compile(
-    r"\s*(?:,|/|\bor\b|\bnor\b|,\s*or\b)\s*" + _FILLER, re.IGNORECASE
-)
 _THAI_RE = re.compile("[฀-๿]")
 _TAG_RE = re.compile(r"</?[a-z_]+\s*/?>", re.IGNORECASE)
 
@@ -151,22 +134,6 @@ class Finding:
     severity: Severity
     detail: str
     judge_votes: tuple[str, ...] = ()
-
-
-def concluded_class(reasoning: str) -> str | None:
-    """The last class the reasoning names without rejecting it, else ``None``."""
-    concluded: str | None = None
-    previous_end = 0
-    previous_rejected = False
-    for match in _CLASS_RE.finditer(reasoning):
-        between = reasoning[previous_end : match.start()]
-        rejected = bool(_CUE_RE.search(between)) or (
-            previous_rejected and _CHAIN_RE.fullmatch(between) is not None
-        )
-        if not rejected:
-            concluded = match.group(1).replace(" ", "_")
-        previous_end, previous_rejected = match.end(), rejected
-    return concluded
 
 
 def _thai_share(text: str) -> float:
@@ -210,13 +177,22 @@ def check_record(record: ResponseRecord) -> tuple[Finding, ...]:
         add("label_missing", "HIGH", "tool payload carries no classification")
         return tuple(out)
 
-    concluded = concluded_class(record.reasoning_en)
-    if concluded and concluded != record.label:
+    if record.review_reason == "label_reasoning_conflict":
+        # Replay already caught it and sent the row to review with the reason
+        # shown on the page; a fresh call may resolve it.
         add(
-            "label_contradicts_reasoning",
-            "HIGH",
-            f"label {record.label}, reasoning appears to conclude {concluded}",
+            "label_reasoning_conflict",
+            "MEDIUM",
+            f"label {record.label}; replay floored the row to review",
         )
+    else:
+        concluded = reasoning_conclusion(record.reasoning_en)
+        if concluded and concluded != record.label:
+            add(
+                "label_contradicts_reasoning",
+                "HIGH",
+                f"label {record.label}, reasoning appears to conclude {concluded}",
+            )
     if record.final != record.label and record.review_reason is None:
         add(
             "final_differs_without_reason",

@@ -71,7 +71,10 @@ _BASE_PREAMBLE: Final[str] = (
     "terms and acronyms (Hb, ACS, MTP, EBL, peri-operative, gray-zone, NPO, "
     "SBP, HR) in English, as Thai clinicians do. Do NOT mix the two languages "
     "in one field, do NOT put the Thai text inside reasoning_summary_en, and "
-    "do NOT emit any XML or tool-call tags inside either summary."
+    "do NOT emit any XML or tool-call tags inside either summary. End "
+    "reasoning_summary_en with exactly one closing sentence of the form "
+    "'Final classification: X', where X is the class you put in the "
+    "classification field; the two must match."
 )
 
 
@@ -370,7 +373,9 @@ _PLATELET_REVIEW_PROMPT: Final[str] = (
     "terms (LP, CVC, HSCT, DIC, plt, MTP) in English, as Thai clinicians do. "
     "Do NOT mix the two languages in one field, do NOT put Thai text inside "
     "reasoning_summary_en, and do NOT emit any XML or tool-call tags inside "
-    "either summary.\n\n"
+    "either summary. End reasoning_summary_en with exactly one closing "
+    "sentence of the form 'Final classification: X', where X is the class you "
+    "put in the classification field; the two must match.\n\n"
     "Return exactly one of APPROPRIATE / INAPPROPRIATE / "
     "INSUFFICIENT_EVIDENCE / NEEDS_REVIEW with verbatim citations. When you "
     "return APPROPRIATE, cite the positive indication verbatim. Draw the "
