@@ -115,9 +115,44 @@ def platelet_trend_unsupported(
     )
 
 
+PLATELET_SPECIALIST_TARGET_REVIEW_REASON = "platelet_specialist_target"
+"""Typed ``review_reason`` stamped on platelet rows moved to review by
+:func:`platelet_specialist_target_review` (ruling 2026-09-23, REQNO 68012561)."""
+
+
+def platelet_specialist_target_review(
+    final_classification: Classification,
+    hard_signals: PlateletHardSignals,
+    trigger_count_k_ul: float | None,
+) -> bool:
+    """True iff an INAPPROPRIATE order followed a consultant's higher target.
+
+    Ruling 2026-09-23 (REQNO 68012561: hemoptysis at 89,000 /uL, chest team
+    "keep plt 100,000"): the order fails policy, but the ordering doctor acted
+    on a specialist's documented advice, so the audit must not flag them as
+    inappropriate. The target counts only when documented before the order
+    (user decision 2026-09-23); the evidence ends at the order anchor, so later
+    advice never reaches the model. In 68012561 the advice first appears 32 h
+    after the order, so that case stays INAPPROPRIATE. The model reports the
+    target it read; code does the
+    comparison. Fires only when the trigger count sits below that target. A
+    count at or above it means the order went beyond the advice, and a missing
+    count leaves nothing to compare. The pipeline moves a hit to human review,
+    never to ``APPROPRIATE``.
+    """
+    if final_classification != "INAPPROPRIATE":
+        return False
+    target = hard_signals.specialist_target_per_ul
+    if target is None or trigger_count_k_ul is None:
+        return False
+    return trigger_count_k_ul * 1000 < target
+
+
 __all__ = (
     "PLATELET_OVERCLEAR_REVIEW_REASON",
+    "PLATELET_SPECIALIST_TARGET_REVIEW_REASON",
     "PLATELET_TREND_REVIEW_REASON",
     "platelet_overclear_suspect",
+    "platelet_specialist_target_review",
     "platelet_trend_unsupported",
 )

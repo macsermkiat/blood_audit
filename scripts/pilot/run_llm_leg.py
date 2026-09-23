@@ -48,6 +48,10 @@ Environment variables:
 * ``BBA_PILOT_PLATELET_TREND`` — ``1`` renders the projected 24 h platelet
   count into the evidence and enables the count-trend floor (issue #237;
   default: the library flag ``PLATELET_TREND_GUARDRAIL_ENABLED``, OFF).
+* ``BBA_PILOT_PLATELET_SPECIALIST_TARGET`` — ``1`` moves a platelet
+  INAPPROPRIATE to review when the count is below a target a consulting
+  specialist documented (ruling 2026-09-23; default: the library flag
+  ``PLATELET_SPECIALIST_TARGET_GUARDRAIL_ENABLED``, OFF).
 """
 
 from __future__ import annotations
@@ -263,6 +267,16 @@ PLATELET_TREND_PILOT_ENABLED = (
     else feature_flags.PLATELET_TREND_GUARDRAIL_ENABLED
 )
 
+# Platelet specialist-target review floor (ruling 2026-09-23). Same seam shape:
+# BBA_PILOT_PLATELET_SPECIALIST_TARGET "1" on, anything else off, unset follows
+# the library flag (default OFF).
+_plt_specialist_env = os.environ.get("BBA_PILOT_PLATELET_SPECIALIST_TARGET")
+PLATELET_SPECIALIST_TARGET_PILOT_ENABLED = (
+    _plt_specialist_env == "1"
+    if _plt_specialist_env is not None
+    else feature_flags.PLATELET_SPECIALIST_TARGET_GUARDRAIL_ENABLED
+)
+
 
 # Platelet LLM leg pilot seam. The library flag stays default-OFF (no clinician
 # sign-off for the live pipeline); BBA_PILOT_PLATELET_LLM "1" lets a sandbox run
@@ -341,6 +355,10 @@ if PLATELET_TREND_PILOT_ENABLED:
     # count-trend floor changes verdicts, so a flag-on run needs its own code
     # identity; flag-off keeps the identity above exactly.
     CODE_VERSION += "+plttrend"
+if PLATELET_SPECIALIST_TARGET_PILOT_ENABLED:
+    # +pltspecialist: the floor changes verdicts, so a flag-on run needs its
+    # own code identity; flag-off keeps the identity above exactly.
+    CODE_VERSION += "+pltspecialist"
 TZ_LOCAL = "Asia/Bangkok"
 INCPT_OPERATION_GROUPS = {"110", "111"}
 
@@ -1473,6 +1491,9 @@ def main() -> None:
         DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED
     )
     feature_flags.PLATELET_TREND_GUARDRAIL_ENABLED = PLATELET_TREND_PILOT_ENABLED
+    feature_flags.PLATELET_SPECIALIST_TARGET_GUARDRAIL_ENABLED = (
+        PLATELET_SPECIALIST_TARGET_PILOT_ENABLED
+    )
     if DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED and not DECLARED_USETYPE_PILOT_ENABLED:
         print(
             "WARNING: declared-use pre-op exemption is ON while the declared-use "

@@ -287,8 +287,21 @@ _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
                 + _SIGNAL_ORDER_RULE
             ),
         },
+        "specialist_platelet_target_per_ul": {
+            "type": ["integer", "null"],
+            "description": (
+                "The platelet target in /uL that a consulting specialist team "
+                "documented for this patient before the order (e.g. 'chest keep "
+                "plt 100,000' -> 100000), or null when none is documented. A ward "
+                "standing order or unit protocol is not a specialist target. This "
+                "is not an indication: it does not change your verdict. Write it "
+                "after both reasoning summaries; it must match the specialist "
+                "advice quoted in reasoning_summary_en."
+            ),
+        },
         _LABEL_FIELD: _label_property(
-            "both reasoning summaries and the four hard-signal booleans"
+            "both reasoning summaries, the five hard-signal booleans and the "
+            "specialist target"
         ),
     },
     "required": [
@@ -298,6 +311,7 @@ _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
         "prophylactic_marrow_failure",
         "intracranial_bleed_indication",
         "aplastic_active_therapy_indication",
+        "specialist_platelet_target_per_ul",
         _LABEL_FIELD,
     ],
 }

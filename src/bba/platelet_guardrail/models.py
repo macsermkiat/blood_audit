@@ -62,6 +62,13 @@ class PlateletHardSignals(BaseModel):
     intracranial_bleed_indication: bool = False
     aplastic_active_therapy_indication: bool = False
 
+    specialist_target_per_ul: int | None = None
+    """A platelet target a consulting specialist documented for this patient
+    (e.g. "chest keep plt 100,000" -> 100000), or ``None``. NOT a positive
+    indication and deliberately left out of :meth:`any_signal`: it only feeds
+    :func:`bba.platelet_guardrail.platelet_specialist_target_review`, which can
+    move an INAPPROPRIATE to review but never clears an order."""
+
     def any_signal(self) -> bool:
         """True iff at least one positive platelet indication is grounded."""
         return (

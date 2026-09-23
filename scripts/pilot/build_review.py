@@ -253,6 +253,12 @@ _REVIEW_REASON_LABELS: dict[str, str] = {
         "two pre-order counts is 10,000 /uL or more, or fewer than two counts "
         "were on file (clinician ruling 2026-09-21)"
     ),
+    "platelet_specialist_target": (
+        "Platelet order moved from INAPPROPRIATE to NEEDS_REVIEW: it fails the "
+        "policy thresholds, but the count was below a platelet target a "
+        "consulting specialist documented, so the ordering doctor is not "
+        "flagged (ruling 2026-09-23)"
+    ),
     "malformed_json": "Parse failure — the response was not valid JSON",
     "schema_mismatch": (
         "Parse failure — the tool payload did not match the expected schema"
@@ -510,20 +516,9 @@ def _msbos_platelet_case_line(det: dict[str, str], det_class: str) -> str:
     else:
         text = ""
 
-    has_returns_summary = any(
-        (det.get(key) or "").strip()
-        for key in (
-            "returns_disposition",
-            "returns_units_total",
-            "returns_units_transfused",
-            "returns_units_returned",
-        )
-    )
-    if det_class == "PERIOP_TRANSFUSION_EXEMPT" and has_returns_summary:
-        text += (
-            f"; {esc(det.get('returns_units_transfused', ''))} transfused, "
-            f"{esc(det.get('returns_units_returned', ''))} returned"
-        )
+    units_returned = _returns_units_text(det)
+    if det_class == "PERIOP_TRANSFUSION_EXEMPT" and units_returned:
+        text += f"; {esc(units_returned)}"
     return text + _msbos_pick_detail(det)
 
 
@@ -589,20 +584,9 @@ def _msbos_case_line(det: dict[str, str], det_class: str) -> str:
     else:
         text = ""
 
-    has_returns_summary = any(
-        (det.get(key) or "").strip()
-        for key in (
-            "returns_disposition",
-            "returns_units_total",
-            "returns_units_transfused",
-            "returns_units_returned",
-        )
-    )
-    if det_class == "PERIOP_TRANSFUSION_EXEMPT" and has_returns_summary:
-        text += (
-            f"; {esc(det.get('returns_units_transfused', ''))} transfused, "
-            f"{esc(det.get('returns_units_returned', ''))} returned"
-        )
+    units_returned = _returns_units_text(det)
+    if det_class == "PERIOP_TRANSFUSION_EXEMPT" and units_returned:
+        text += f"; {esc(units_returned)}"
     return text + _msbos_pick_detail(det)
 
 
@@ -1098,6 +1082,30 @@ def _returned_blood_datetime(rows: list[dict[str, str]]) -> str:
         if returned_at:
             candidates.append(returned_at)
     return min(candidates) if candidates else ""
+
+
+def _returns_units_text(det: dict[str, str]) -> str:
+    """Returned units out of the total ("1 of 6 units returned"), or "".
+
+    The ledger never records status 5 (transfused), so ``returns_units_transfused``
+    is always 0; returned out of total is what the ledger actually knows."""
+    returned = (det.get("returns_units_returned") or "").strip()
+    total = (det.get("returns_units_total") or "").strip()
+    if not (returned and total):
+        return ""
+    return f"{returned} of {total} units returned"
+
+
+def _returned_display(det: dict[str, str], trans_rows: list[dict[str, str]]) -> str:
+    """Earliest return time plus the returned-unit count, so one returned bag
+    on a multi-bag order does not read as the whole order returned."""
+    returned_at = det.get("returned_blood_datetime_local") or _returned_blood_datetime(
+        trans_rows
+    )
+    if not returned_at:
+        return "—"
+    units = _returns_units_text(det)
+    return f"{returned_at} ({units})" if units else returned_at
 
 
 def _needs_response_audit(entries: list[dict[str, Any]]) -> bool:
@@ -1747,9 +1755,7 @@ def main() -> None:
                 "Hb": det.get("hb_value_g_dl", "") or "—",
                 "Cohort": det.get("cohort_label", "") or "—",
                 "Threshold": det.get("cohort_threshold", "") or "—",
-                "Returned": det.get("returned_blood_datetime_local")
-                or _returned_blood_datetime(trans_rows)
-                or "—",
+                "Returned": _returned_display(det, trans_rows),
                 "_det_html": det_pill,
                 "_llm_html": llm_cell,
                 "_msbos_html": _msbos_summary_pill(det),
@@ -1765,11 +1771,7 @@ def main() -> None:
         )
 
         # ----- Section assembly -----
-        returned_blood_dt = (
-            det.get("returned_blood_datetime_local")
-            or _returned_blood_datetime(trans_rows)
-            or "—"
-        )
+        returned_blood_dt = _returned_display(det, trans_rows)
         upcoming_disp = fmt_upcoming_procedure(det.get("upcoming_procedure_hours"))
         # The deterministic gate resolves Hb backward, so its reason stays
         # "order_datetime" even on re-anchored orders; relabel it to match the
@@ -2661,6 +2663,7 @@ LLM: Anthropic Batch classification on structured evidence only.
 <dt>platelet_llm_overclear_suspect</dt><dd>Platelet-leg over-clear floored to NEEDS_REVIEW (platelet guardrail; the RBC assert path does not apply to platelets).</dd>
 <dt>platelet_trend_unsupported</dt><dd>{esc(_REVIEW_REASON_LABELS["platelet_trend_unsupported"])}.</dd>
 <dt>label_reasoning_conflict</dt><dd>{esc(_REVIEW_REASON_LABELS["label_reasoning_conflict"])}.</dd>
+<dt>platelet_specialist_target</dt><dd>{esc(_REVIEW_REASON_LABELS["platelet_specialist_target"])}.</dd>
 <dt>malformed_json</dt><dd>Parse failure — the response was not valid JSON.</dd>
 <dt>schema_mismatch</dt><dd>Parse failure — the tool payload did not match the expected schema.</dd>
 <dt>classification_out_of_set</dt><dd>Parse failure — the classification label is outside the allowed vocabulary.</dd>

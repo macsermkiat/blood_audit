@@ -27,6 +27,7 @@ _HARD_SIGNALS = (
     "prophylactic_marrow_failure",
     "intracranial_bleed_indication",
     "aplastic_active_therapy_indication",
+    "specialist_platelet_target_per_ul",
 )
 _RESERVE_FIELDS = (
     "administration_evidence",
