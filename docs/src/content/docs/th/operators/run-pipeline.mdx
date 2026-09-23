@@ -60,7 +60,10 @@ uv run python scripts/pilot/run_pipeline.py
 # ขั้น 3 — Anthropic batch จริง (de-id → prompt → ground → calibrate) → llm_report.json
 uv run python scripts/pilot/run_llm_leg.py
 
-# ขั้น 4 — ประกอบหน้า review หน้าเดียว → review.html
+# ขั้น 4: ตรวจคำตอบของ LLM (เช็กด้วยโค้ดล้วน ไม่เรียก API) → llm_response_audit.json
+uv run python scripts/pilot/audit_llm_responses.py
+
+# ขั้น 5: ประกอบหน้า review หน้าเดียว → review.html
 uv run python scripts/pilot/build_review.py
 
 open "$BBA_PILOT_WORK_DIR/review.html"
@@ -73,7 +76,19 @@ open "$BBA_PILOT_WORK_DIR/review.html"
 | 1 | `sample_bundle.py` | `bundle/` (CSV ที่สุ่ม) + `sample_manifest.csv` |
 | 2 | `run_pipeline.py` | `report.csv` (verdict deterministic ต่อเคส) |
 | 3 | `run_llm_leg.py` | `llm_report.json` + `data/audit_store/` |
-| 4 | `build_review.py` | `review.html` (หน้าเดียวสำหรับคนตรวจ) |
+| 4 | `audit_llm_responses.py` | `llm_response_audit.json` / `.csv` + `llm_response_audit_reqnos.txt` |
+| 5 | `build_review.py` | `review.html` (หน้าเดียวสำหรับคนตรวจ) |
+
+ขั้น 4 เช็กคำตอบที่ LLM ส่งกลับมา (parse ไม่ผ่าน, คำตอบถูกตัดที่ output
+token limit, label กับข้อสรุปใน reasoning ไม่ตรงกัน, verdict เปลี่ยนโดยไม่มี
+เหตุผลบันทึกไว้ ฯลฯ) โดยไม่แก้ verdict ใด ๆ เขียนแค่ finding เท่านั้น
+
+ขั้น 5 จะปฏิเสธไม่ render คำตอบ LLM ถ้ายังไม่มี response audit ที่ตรงกับ
+`llm_report.json` (เทียบด้วย SHA-256) และต้องไม่มี HIGH finding ด้วย ตั้ง
+`BBA_PILOT_ALLOW_UNAUDITED=1` เพื่อ build หน้าต่อไปได้ทั้งที่ยังไม่ผ่าน ดู
+[`scripts/pilot/README.md`](https://github.com/macsermkiat/blood_audit/blob/main/scripts/pilot/README.md)
+สำหรับ loop แก้-แล้ว-รันซ้ำ และ dev-test consortium (ให้ Claude Code
+subagent ช่วยตรวจความสมเหตุสมผลของคำตอบ ไม่ใช่ pipeline step และไม่ใช่ gate)
 
 `report.csv` จากขั้น 2 ยังมีคอลัมน์ overlay ที่ default-ON ด้วย:
 สถานะจาก returns ledger (`RETURNED_NOT_TRANSFUSED` /

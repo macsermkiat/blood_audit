@@ -61,7 +61,10 @@ uv run python scripts/pilot/run_pipeline.py
 # Step 3 — live Anthropic batch (de-id → prompt → ground → calibrate) → llm_report.json
 uv run python scripts/pilot/run_llm_leg.py
 
-# Step 4 — assemble the single-page human review → review.html
+# Step 4: audit the LLM responses (code checks only, no API call) → llm_response_audit.json
+uv run python scripts/pilot/audit_llm_responses.py
+
+# Step 5: assemble the single-page human review → review.html
 uv run python scripts/pilot/build_review.py
 
 open "$BBA_PILOT_WORK_DIR/review.html"
@@ -74,7 +77,19 @@ What each step produces:
 | 1 | `sample_bundle.py` | `bundle/` (sampled CSVs) + `sample_manifest.csv` |
 | 2 | `run_pipeline.py` | `report.csv` (per-case deterministic verdict) |
 | 3 | `run_llm_leg.py` | `llm_report.json` + `data/audit_store/` |
-| 4 | `build_review.py` | `review.html` (one page for human review) |
+| 4 | `audit_llm_responses.py` | `llm_response_audit.json` / `.csv` + `llm_response_audit_reqnos.txt` |
+| 5 | `build_review.py` | `review.html` (one page for human review) |
+
+Step 4 checks the RESPONSES the LLM leg got back (parse failures, an answer cut
+off at the output token limit, a label that contradicts its own reasoning, a
+verdict changed with no recorded reason, and more); it changes no verdict, it
+only writes findings. Step 5 refuses to render model responses unless a
+response audit exists for exactly this `llm_report.json` (matched by its
+SHA-256) and carries no HIGH finding; set `BBA_PILOT_ALLOW_UNAUDITED=1` to
+build the page anyway. See
+[`scripts/pilot/README.md`](https://github.com/macsermkiat/blood_audit/blob/main/scripts/pilot/README.md)
+for the fix-and-rerun loop and the separate dev-test consortium (a Claude Code
+review of response soundness, not a pipeline step and not a gate).
 
 Step 2's `report.csv` also carries the default-ON overlay columns:
 returns-ledger disposition (`RETURNED_NOT_TRANSFUSED` /

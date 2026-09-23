@@ -158,6 +158,39 @@ over-clear guardrail สำหรับขา LLM ของ platelet จะ floo
 ไม่มี ground และ enforce response schema แบบ end-to-end เพื่อให้ LLM ไม่สามารถ
 over-clear คำสั่ง platelet ได้โดยไม่มี hard-signal evidence ที่ grounded
 
+### hard signal 5 ตัว
+
+prompt ของ platelet ให้โมเดลรายงาน boolean 5 ตัว ตัวละหนึ่ง indication
+ตั้งเป็น true ได้เฉพาะเมื่อ evidence ground จริงและไม่ถูก exclusion population
+บล็อกไว้: `active_bleeding`, `procedure_indication`,
+`prophylactic_marrow_failure`, `intracranial_bleed_indication` และตัวใหม่
+`aplastic_active_therapy_indication` คือ indication 8 (aplastic anaemia ที่
+active therapy อยู่ เช่น ATG, cyclosporine, eltrombopag หรือเตรียม
+transplant) แยกออกมาจาก `prophylactic_marrow_failure` เพื่อไม่ให้ทับกัน
+
+### Count-trend floor
+
+`platelet_trend_unsupported` จับ case ที่ signal ด้านบนจับไม่ได้:
+เงื่อนไข "คาดว่าจะลดต่ำกว่า 10,000/µL ภายใน 24 ชม." ของ indication 5
+เป็นการ project เส้นตรงผ่าน count ก่อนสั่ง 2 ค่าล่าสุด
+(`platelet_lookup.projection.project_24h`) ซึ่งโค้ดเป็นคนตัดสิน ไม่ใช่โมเดล
+แต่โมเดลเป็นคนตั้ง `prophylactic_marrow_failure` เอง เมื่อ signal นี้เป็น
+signal จริงตัวเดียว, trigger count ≥ 10 ×10³/µL และ projection หายไปหรือ
+ไม่ต่ำกว่า 10 แถวนั้นจะ floor เป็น `NEEDS_REVIEW`
+(`PLATELET_TREND_REVIEW_REASON = "platelet_trend_unsupported"`) ไม่มีทาง
+เป็น `INAPPROPRIATE` gate ด้วย `feature_flags.PLATELET_TREND_GUARDRAIL_ENABLED`
+(ปิดเป็นค่าเริ่มต้น; pilot override `BBA_PILOT_PLATELET_TREND=1`)
+
+### Label ขัดกับ reasoning
+
+guardrail ตัวนี้ใช้ร่วมกับเส้นทาง RBC ไม่ใช่เฉพาะ platelet:
+`bba.llm_client.conclusion.reasoning_conclusion` อ่านว่า reasoning ของคำตอบ
+สรุปว่าอะไร (ประโยคปิดท้าย "Final classification: X" ที่ prompt ทุกตัวขอไว้
+หรือ fallback reader สำหรับคำตอบเก่า) แล้ว floor แถวนั้นเป็น
+`NEEDS_REVIEW` (`label_reasoning_conflict`) ก่อน guardrail ตัวอื่นทุกตัว
+เมื่อไรที่ข้อสรุปใน reasoning ไม่ตรงกับ `classification` เมื่อสองอย่างขัดกัน
+ก็ไม่เชื่อทั้ง label และ reasoning อีกต่อไป
+
 ## Feature flag และสถานะ
 
 ขา LLM ของ platelet (prompt `PLATELET_REVIEW`, over-clear guardrail และ
@@ -183,5 +216,10 @@ byte ไม่ว่าจะเปิด feature platelet หรือไม่
   `parse_platelet_count`, `PlateletObservation`)
 - `src/bba/platelet_classifier/`: gate §5.1 (`classify_platelet`,
   `PLATELET_REVIEW_CEILING`)
-- `src/bba/platelet_guardrail/`: over-clear guardrail ของขา LLM
+- `src/bba/platelet_guardrail/`: over-clear guardrail และ count-trend
+  guardrail ของขา LLM
+- `src/bba/platelet_lookup/projection.py`: `project_24h` เส้น projection
+  ที่ count-trend guardrail ใช้เทียบ
+- `src/bba/llm_client/conclusion.py`: อ่านว่า reasoning สรุปเป็น class ไหน
+  สำหรับ guardrail label ขัด reasoning (ใช้ร่วมกับ RBC)
 - glossary หลักคือ `docs/CONTEXT.md` (Phase 2 sections)

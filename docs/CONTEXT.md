@@ -352,6 +352,19 @@ lowest-in-window — hindsight bias is a deliberate non-feature.
 The unit of output: chosen `HbObservation`, its `freshness`, `source`, and the
 list of `DeltaHbWindow` evaluations. `bba.hb_lookup.models.HbLookupResult`.
 
+### min_24h_g_dl (24 h minimum Hb)
+
+Issue #249: `SUB_THRESHOLD_HB` is judged on the LOWEST Hb in the 24 hours
+before the order, not the value closest to the order. `HbLookupResult.
+min_24h_g_dl` carries that minimum, computed by
+`bba.hb_lookup.lookup._min_24h` from the same HEMATOLOGY-preferred source rule
+as the chosen current value, so the minimum and the current reading never come
+from different instruments. `lookup_hb` takes an optional `not_before_utc`: the
+window's lower bound moves up to the last transfusion inside it, so a low value
+a transfusion already corrected does not count. `None` when no observation
+falls in the window. The RBC prompt (`system_prompt.py`) states the same rule
+for `SUB_THRESHOLD_HB` in both gray-zone and high-Hb-override task modes.
+
 ### AnchorCandidate
 
 A fallback Hb anchor with display text and provenance for the review page.
@@ -2952,6 +2965,24 @@ UNQUANTIFIED bleeding with a falling gray-zone Hb currently lands as a
 guardrail-asserted `INAPPROPRIATE` with no human-review flag; flooring
 that pattern to `NEEDS_REVIEW` instead is a one-line change in the
 assert path once ruled.
+
+### label_reasoning_conflict guardrail
+
+A 2026-09-22 rerun found 6 of 364 answers where `classification` contradicted
+the class the model's own `reasoning_summary_en` concluded (five had written
+the label last, so schema field order does not prevent it). `bba.llm_client.
+conclusion.reasoning_conclusion(reasoning)` reads what a summary concludes:
+first the closing "Final classification: X" sentence the prompt now asks every
+task mode for (`closing_classification`, binding when present), else a
+fallback reader that returns the last class the text names without rejecting
+it (`concluded_class`, a candidate reader, not a proof; the model consortium
+overruled 4 of its 10 hits on the real run). `bba.audit_pipeline.replay.
+_label_reasoning_conflict_guardrail` runs FIRST among the primary guardrails,
+before any label-reading guardrail: when the reasoning's conclusion disagrees
+with `classification`, the row floors to `NEEDS_REVIEW` with
+`LABEL_REASONING_CONFLICT_REVIEW_REASON = "label_reasoning_conflict"` and no
+later guardrail may assert on the label. A self-contradicting answer is
+evidence for neither class.
 
 ### Deferred review (post-merge)
 

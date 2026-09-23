@@ -171,6 +171,53 @@ The over-clear guardrail for the platelet LLM leg floors ungrounded
 high-count clears and enforces the response schema end-to-end, so the LLM
 cannot over-clear a platelet order without grounded hard-signal evidence.
 
+### Five hard signals
+
+The platelet prompt asks the model to report five booleans, one per grounded
+policy line, each true only when the evidence grounds it and no exclusion
+population bars it:
+
+- `active_bleeding`
+- `procedure_indication`
+- `prophylactic_marrow_failure`
+- `intracranial_bleed_indication`
+- `aplastic_active_therapy_indication`: indication 8, aplastic anaemia on
+  active therapy (ATG, cyclosporine, eltrombopag, or transplant work-up)
+  documented in the notes, with the count below indication 8's own
+  threshold. Added so indication 8 has its own signal instead of being
+  folded into `prophylactic_marrow_failure`.
+
+`platelet_overclear_suspect(final, rule, hard_signals)` floors an LLM
+`APPROPRIATE` to `NEEDS_REVIEW` (`PLATELET_OVERCLEAR_REVIEW_REASON =
+"platelet_llm_overclear_suspect"`) when the deterministic gate withheld the
+clear and none of the five signals is true.
+
+### Count-trend floor
+
+`platelet_trend_unsupported` catches a clear the signal check above cannot
+reach: indication 5's "expected to drop below 10,000 /uL within 24 hours"
+clause is a straight-line projection through the last two pre-order counts
+(`bba.platelet_lookup.projection.project_24h`), decided by code rather than
+the model. The model still sets `prophylactic_marrow_failure` itself, so
+an ungrounded "expected to fall" clear on a flat or rising count is invisible
+to the signal check. When `prophylactic_marrow_failure` is the ONLY true
+signal, the trigger count is 10 ×10³/µL or more, and the projection is
+missing or not below 10, the row floors to `NEEDS_REVIEW`
+(`PLATELET_TREND_REVIEW_REASON = "platelet_trend_unsupported"`, never
+`INAPPROPRIATE`). Gated by `feature_flags.PLATELET_TREND_GUARDRAIL_ENABLED`
+(default OFF; pilot override `BBA_PILOT_PLATELET_TREND=1`).
+
+### Label vs. reasoning conflict
+
+Shared with the RBC path, not platelet-specific: `bba.llm_client.conclusion.
+reasoning_conclusion` reads what a response's own `reasoning_summary_en`
+concludes (the closing "Final classification: X" sentence every prompt now
+asks for, or a fallback reader for older responses), and the replay guardrail
+floors the row to `NEEDS_REVIEW` (`label_reasoning_conflict`) BEFORE any other
+guardrail runs, whenever the reasoning's conclusion disagrees with
+`classification`. Neither the label nor the reasoning is trusted once they
+disagree; a self-contradicting answer is evidence for neither class.
+
 ## Feature flag and status
 
 The platelet LLM leg (a `PLATELET_REVIEW` prompt, the over-clear guardrail,
@@ -198,5 +245,10 @@ byte-identical whether or not the platelet feature is on.
   `parse_platelet_count`, `PlateletObservation`).
 - `src/bba/platelet_classifier/`: the §5.1 gate (`classify_platelet`,
   `PLATELET_REVIEW_CEILING`).
-- `src/bba/platelet_guardrail/`: the over-clear guardrail for the LLM leg.
+- `src/bba/platelet_guardrail/`: the over-clear and count-trend guardrails for
+  the LLM leg.
+- `src/bba/platelet_lookup/projection.py`: `project_24h`, the straight-line
+  count projection the trend floor checks against.
+- `src/bba/llm_client/conclusion.py`: reads the class a reasoning summary
+  concludes, for the label vs. reasoning conflict guardrail (shared with RBC).
 - The canonical glossary is `docs/CONTEXT.md` (Phase 2 sections).

@@ -103,6 +103,27 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
   seam สำหรับ reserve-ahead / declared-exempt routing; และรวม guardrails
   ของ `_build_audit_row` เป็น ordered list
 
+## สิ่งที่เพิ่มล่าสุด (2026-09-21 ถึง 2026-09-23)
+
+- Count-trend floor ของ platelet (issue #237): floor การ clear ของ LLM ที่
+  อ้าง "คาดว่าจะลดต่ำกว่า 10,000/µL ใน 24 ชม." โดยไม่มีเส้น projection
+  รองรับ ไปเป็น `NEEDS_REVIEW` (ปิดเป็นค่าเริ่มต้น)
+- pilot step ใหม่ `audit_llm_responses.py` ตรวจคำตอบของ LLM ด้วยโค้ดล้วน
+  (ไม่เรียก API) ก่อน `build_review.py`; ตัว build จะปฏิเสธ render คำตอบ
+  ที่ยังไม่ผ่าน audit หรือมี HIGH finding
+- dev-test consortium (`scripts/pilot/dev_consortium`) ให้ Claude Code
+  subagent ช่วยตรวจความสมเหตุสมผลของคำตอบ ไม่ใช่ pipeline step ไม่ใช่ gate
+- `SUB_THRESHOLD_HB` ตัดสินจาก Hb ที่ต่ำที่สุดในรอบ 24 ชม. ก่อนสั่ง
+  ไม่ใช่ค่าที่ใกล้เวลาสั่งที่สุด (issue #249)
+- prompt ทุกตัวขอให้ reasoning ปิดท้ายด้วย "Final classification: X";
+  คำตอบที่ label ขัดกับข้อสรุปใน reasoning จะ floor เป็น `NEEDS_REVIEW`
+  (`label_reasoning_conflict`)
+- `rank_merged.py`: จัดอันดับแพทย์/แผนกจาก verdict ที่รวม deterministic
+  กับ LLM แล้ว ทีละ component (`red_cell` หรือ `platelet`)
+- Platelet indication 8 ใหม่: aplastic anaemia ที่ active therapy อยู่
+  แยกจาก exclusion D เดิม พร้อม hard signal ตัวที่ห้า
+  `aplastic_active_therapy_indication`
+
 ## ยังไม่ใช่ระบบ production ที่เชื่อมใช้งานจริง
 
 ยังไม่รวมการเชื่อม integration-seam subcommands ที่เหลืออีก 3 คำสั่ง

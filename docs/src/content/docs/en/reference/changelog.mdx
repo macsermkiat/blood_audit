@@ -117,6 +117,58 @@ will live at
   derived seam for reserve-ahead / declared-exempt routing; and
   `_build_audit_row` guardrails folded into an ordered list.
 
+## What shipped 2026-09-21 to 2026-09-23
+
+- **2026-09-21.** Platelet count-trend floor (PR #240, issue #237).
+  `platelet_guardrail.platelet_trend_unsupported` floors an LLM clear that
+  rests only on an ungrounded "expected to drop below 10,000 /µL" claim to
+  `NEEDS_REVIEW`, checked against a straight-line projection through the last
+  two pre-order counts. Behind the default-off
+  `PLATELET_TREND_GUARDRAIL_ENABLED` flag.
+- **2026-09-21.** Platelet label after the reasoning + LLM response audit
+  step (PR #241, issue #239). The platelet schema now asks for the label
+  after the reasoning. New pilot step `audit_llm_responses.py` runs between
+  the LLM leg and `build_review.py` (parse failures, truncated answers,
+  label vs. reasoning, citations, and more); it changes no verdict.
+- **2026-09-21.** RBC and reserve-ahead schemas ask for the label after the
+  reasoning too (PR #243, issue #242), matching the platelet schema's field
+  order.
+- **2026-09-21.** Hard signals state that they follow the reasoning; a
+  harmless signal finding no longer blocks the review page (PR #244).
+- **2026-09-21.** Doctor progress notes stamped with their entry time, not
+  midnight (PR #246). A note entered on the clinical date or the day after
+  keeps its real entry time; otherwise it sits at the end of the clinical
+  day so a next-day order can still see it.
+- **2026-09-21.** The dev-test consortium is a Claude Code tool, not a
+  pipeline step (PR #247). Reviewers are Claude Code subagents reading
+  `dev_consortium/INSTRUCTIONS.md`; it makes no Anthropic API call and is
+  never a gate. Also catches responses truncated at the output token limit.
+- **2026-09-22.** Six clinician rulings on gaps the dev-test consortium
+  found (PR #248), folded into the platelet and RBC prompts.
+- **2026-09-22.** `SUB_THRESHOLD_HB` is the lowest Hb in the 24 hours
+  before the order (PR #250, issue #249), not the value closest to the
+  order. `hb_lookup.min_24h_g_dl`, bounded so a low value an in-window
+  transfusion already corrected does not count.
+- **2026-09-22.** The projected 24 h count line is the count trend for
+  indication 5 (PR #251, issue #237). The platelet prompt's COUNT TREND
+  paragraph names the projection line as the deciding evidence for
+  "expected to drop below 10,000 /µL within 24 hours."
+- **2026-09-22.** Nurse focus notes (`IPDNRFOCUSDT`) ranked by observed
+  indication before the 5+5 evidence cap; a `claude-cli` transport added for
+  subscription-backed A/B pilot runs that should not spend API credit
+  (PR #252).
+- **2026-09-23.** An answer whose label contradicts its own reasoning
+  floors to review (PR #253). `bba.llm_client.conclusion` reads what a
+  response's reasoning concludes; the new `label_reasoning_conflict`
+  guardrail runs before every other label-reading guardrail.
+- **2026-09-23.** `rank_merged.py`: doctor / department ranking from a
+  pilot run's merged deterministic + LLM verdicts, one component
+  (`red_cell` or `platelet`) at a time (PR #254).
+- **2026-09-23.** Aplastic anaemia on active therapy is platelet
+  indication 8, not exclusion D (PR #255). A fifth hard signal,
+  `aplastic_active_therapy_indication`, keeps it separate from
+  `prophylactic_marrow_failure`.
+
 ## What is explicitly out of scope for now
 
 - Wiring of the three remaining integration-seam subcommands

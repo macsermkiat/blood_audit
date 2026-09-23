@@ -81,6 +81,15 @@ the flag kill-switches for the default-ON features
 [Doctor & department ranking](/blood_audit/en/operators/doctor-ranking/);
 the table above covers the supported CLI only.
 
+Three more pilot-only variables, added with the response-audit gate and the
+platelet count-trend guardrail:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `BBA_PILOT_PLATELET_TREND` | `0` (off) | Set to `1` to render the projected 24 h platelet count line in the LLM evidence and enable the count-trend floor (`PLATELET_TREND_GUARDRAIL_ENABLED`, issue #237). |
+| `BBA_PILOT_ALLOW_UNAUDITED` | unset | Set to `1` to let `build_review.py` render LLM responses that have no matching response audit, or whose audit carries a HIGH finding. The builder prints the reason it would otherwise have refused. |
+| `BBA_AUDIT_JUDGE_MODELS` | `claude-sonnet-5,claude-haiku-4-5-20251001,claude-opus-5` | Comma-separated judge model ids for `audit_llm_responses.py --judge candidates\|all`, the opt-in API version of the label-vs-reasoning check. Bills `ANTHROPIC_API_KEY`. |
+
 ## Verify
 
 ```bash
