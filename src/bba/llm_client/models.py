@@ -226,6 +226,11 @@ class PlateletLlmClassificationResponse(LlmClassificationResponse):
     intracranial_bleed_indication: StrictBool = False
     """Intracranial bleed below its threshold (acute/growing/operative <100k, stable <50k)."""
 
+    # Defaulted for the same reason: responses persisted before the 2026-09-23
+    # aplastic anaemia ruling carry four signals.
+    aplastic_active_therapy_indication: StrictBool = False
+    """Aplastic anaemia on active therapy below its indication 8 threshold (<10k; <20k during ATG or with sepsis)."""
+
 
 class StructuredToolInput(BaseModel):
     """The Anthropic tool-use ``input_schema`` mirror.

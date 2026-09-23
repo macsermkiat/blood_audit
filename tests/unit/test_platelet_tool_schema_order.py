@@ -26,6 +26,7 @@ _HARD_SIGNALS = (
     "procedure_indication",
     "prophylactic_marrow_failure",
     "intracranial_bleed_indication",
+    "aplastic_active_therapy_indication",
 )
 _RESERVE_FIELDS = (
     "administration_evidence",

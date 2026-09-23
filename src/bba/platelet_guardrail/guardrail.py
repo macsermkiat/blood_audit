@@ -101,6 +101,7 @@ def platelet_trend_unsupported(
         hard_signals.active_bleeding
         or hard_signals.procedure_indication
         or hard_signals.intracranial_bleed_indication
+        or hard_signals.aplastic_active_therapy_indication
     ):
         return False
     if (

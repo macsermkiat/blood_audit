@@ -1812,7 +1812,9 @@ class TestPlateletPromptExclusionOverride:
             "set each True ONLY when the evidence explicitly grounds the "
             "indication AND no exclusion population applies" not in prompt
         )
-        # Prophylaxis at a low count stays barred in every excluded population.
+        # Prophylaxis at a low count stays barred in every excluded population
+        # (aplastic anaemia on active therapy is indication 8 with its own
+        # signal, not an excluded population).
         assert "within 24 hours), AND no exclusion population applies" in prompt
 
     def test_standing_order_is_not_an_indication(self) -> None:
