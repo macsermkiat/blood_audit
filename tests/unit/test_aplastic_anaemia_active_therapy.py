@@ -97,8 +97,9 @@ class TestHardSignalCoversIt:
         assert "indication 8" in fifth
         # The only mention of aplastic anaemia in the marrow-failure text is
         # the sentence that sends it to the fifth signal.
-        assert marrow.count("plastic") == 1
+        assert marrow.count("Aplastic anaemia on active therapy") == 1
         assert "belongs under aplastic_active_therapy_indication, not here" in marrow
+        assert "or aplastic anaemia" not in marrow
 
     def test_guardrail_docstring_matches(self) -> None:
         assert (
