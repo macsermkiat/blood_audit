@@ -324,7 +324,7 @@ def test_msbos_flag_on_renders_summary_cases_counts_glossary_and_css(
             "msbos_resolved_icd9,msbos_reference_hash,msbos_plt_category,"
             "msbos_plt_count_k_ul,msbos_plt_over_above_per_ul,"
             "msbos_plt_clinician_signed,returns_units_transfused,"
-            "returns_units_returned\n"
+            "returns_units_returned,returns_units_total\n"
             "R1,RETURNED_NOT_TRANSFUSED,red_cell,3,G/M,2,over_gm_excess,True,"
             "0139,hash,,,,,,\n"
             "R2,RETURNED_NOT_TRANSFUSED,red_cell,1,G/M,2,within_recommendation,"
@@ -335,7 +335,7 @@ def test_msbos_flag_on_renders_summary_cases_counts_glossary_and_css(
             "R5,RETURNED_NOT_TRANSFUSED,red_cell,0,,0,reservation_lookup_miss,"
             "False,,hash,,,,,,\n"
             "R6,PERIOP_TRANSFUSION_EXEMPT,red_cell,2,G/M,2,"
-            "within_recommendation,False,0139,hash,,,,,1,1\n"
+            "within_recommendation,False,0139,hash,,,,,0,1,2\n"
         ),
         llm_json="[]",
         msbos_enabled=True,
@@ -351,7 +351,11 @@ def test_msbos_flag_on_renders_summary_cases_counts_glossary_and_css(
     assert "MSBOS reservation: Reserved 3; MSBOS tariff G/M 2" in rendered
     assert "<span class='cls cls-msbos-warn'>unlinked</span>" in rendered
     assert "Reservation detail lines not linked (unlinked)" in rendered
-    assert "Reserved 2; MSBOS tariff G/M 2; 1 transfused, 1 returned" in rendered
+    # The ledger never records status 5 (transfused), so the page states
+    # returned units out of the total instead of a transfused count that is
+    # always 0 (review of platelet case 68012561, 2026-09-23).
+    assert "Reserved 2; MSBOS tariff G/M 2; 1 of 2 units returned" in rendered
+    assert " transfused, " not in rendered
     assert "<span class='cls cls-msbos-warn'>PLT 120 > 100</span>" in rendered
     assert (
         "Reserved 2u platelets; pre-op count 120k/uL > neuraxial cutoff 100k/uL"
@@ -466,12 +470,13 @@ def test_msbos_case_line_maps_every_reachable_reason() -> None:
     exempt = module._msbos_case_line(
         _returns_det(
             "over_gm_excess",
-            returns_units_transfused="1",
+            returns_units_transfused="0",
             returns_units_returned="2",
+            returns_units_total="3",
         ),
         "PERIOP_TRANSFUSION_EXEMPT",
     )
-    assert exempt == "Reserved 3; MSBOS tariff G/M 2; 1 transfused, 2 returned"
+    assert exempt == "Reserved 3; MSBOS tariff G/M 2; 2 of 3 units returned"
 
 
 def _platelet_returns_det(reason: str, **extra: str) -> dict[str, str]:
@@ -612,12 +617,13 @@ def test_msbos_platelet_case_line_maps_every_reason() -> None:
     exempt = module._msbos_case_line(
         _platelet_returns_det(
             "within_neuraxial",
-            returns_units_transfused="1",
+            returns_units_transfused="0",
             returns_units_returned="1",
+            returns_units_total="2",
         ),
         "PERIOP_TRANSFUSION_EXEMPT",
     )
-    assert exempt.endswith("; 1 transfused, 1 returned")
+    assert exempt.endswith("; 1 of 2 units returned")
 
 
 # ---------------------------------------------------------------------------
@@ -1091,3 +1097,28 @@ def test_the_gate_hands_back_the_entries_it_validated(
 
     monkeypatch.setattr(module, "LLM_REPORT", tmp_path / "absent.json")
     assert module.enforce_response_audit() == []
+
+
+def test_returned_cell_states_units_returned_out_of_units_issued() -> None:
+    # Case 68012561: one bag came back at 10:05, then five more were issued and
+    # given. A bare return time read as "this order was returned".
+    module = _load_build_review()
+    det = {
+        "returned_blood_datetime_local": "2025-02-26 10:05:24",
+        "returns_units_returned": "1",
+        "returns_units_total": "6",
+    }
+
+    assert (
+        module._returned_display(det, [])
+        == "2025-02-26 10:05:24 (1 of 6 units returned)"
+    )
+
+
+def test_returned_cell_without_ledger_counts_keeps_the_time_alone() -> None:
+    module = _load_build_review()
+    det = {"returned_blood_datetime_local": "2025-02-26 10:05:24"}
+
+    assert module._returned_display(det, []) == "2025-02-26 10:05:24"
+    assert module._returned_display({}, []) == "—"
+
