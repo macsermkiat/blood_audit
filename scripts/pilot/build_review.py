@@ -627,11 +627,13 @@ def focus_note_sort_key(r: dict[str, str]) -> tuple[str, str]:
 
 def progress_note_sort_key(r: dict[str, str]) -> tuple[str, str, str, str]:
     """Chronological key for IPDADMPROGRESS rows. PROGDATE has no time, so
-    same-day notes order by entry timestamp (FIRSTDATE), then PROGNO."""
+    same-day notes order by PROGNO, HOSxP's per-day note sequence, then entry
+    timestamp (FIRSTDATE). PROGNO leads because FIRSTDATE may be blank on
+    some rows, and a blank would sort before every timed note."""
     return (
         (r.get("PROGDATE") or "").split(" ")[0],
-        (r.get("FIRSTDATE") or "").strip(),
         (r.get("PROGNO") or "").strip().zfill(6),
+        (r.get("FIRSTDATE") or "").strip(),
         (r.get("ITEMNO") or "").strip().zfill(6),
     )
 

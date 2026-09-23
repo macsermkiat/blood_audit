@@ -1157,9 +1157,9 @@ def test_nursing_notes_sort_by_clock_time_not_by_the_raw_digits() -> None:
     assert ordered == [night, afternoon, next_day]
 
 
-def test_same_day_progress_notes_sort_by_entry_time() -> None:
-    # PROGDATE carries no time (always 00:00), so notes written on one day
-    # keep export order unless the entry timestamp breaks the tie.
+def test_same_day_progress_notes_without_note_number_sort_by_entry_time() -> None:
+    # PROGDATE carries no time (always 00:00); when PROGNO cannot order the
+    # day, the entry timestamp does, instead of export order.
     module = _load_build_review()
     evening = {
         "PROGDATE": "2024-04-02 00:00:00.000",
@@ -1182,10 +1182,9 @@ def test_same_day_progress_notes_sort_by_entry_time() -> None:
     assert ordered == [day_before, morning, evening]
 
 
-def test_progress_notes_without_entry_time_fall_back_to_note_number() -> None:
-    # FIRSTDATE is not a required ingest column; without it PROGNO (the
-    # per-day note number) orders the day numerically, so note 10 does not
-    # land before note 2.
+def test_same_day_progress_notes_sort_by_note_number() -> None:
+    # PROGNO is HOSxP's per-day note sequence; it orders the day numerically,
+    # so note 10 does not land before note 2.
     module = _load_build_review()
     note_10 = {"PROGDATE": "2024-04-02 00:00:00.000", "ITEMNO": "1", "PROGNO": "10"}
     note_2 = {"PROGDATE": "2024-04-02 00:00:00.000", "ITEMNO": "1", "PROGNO": "2"}
@@ -1219,3 +1218,17 @@ def test_progress_note_header_shows_when_the_note_was_entered() -> None:
 
     assert with_entry == "2024-04-02 (entered 2024-04-02 16:18:16)"
     assert without_entry == "2024-04-02"
+
+
+def test_a_note_missing_its_entry_time_keeps_its_note_number_place() -> None:
+    # FIRSTDATE is not a required ingest column and can be blank on one row
+    # only. A blank sorted before every timestamp, so the day's last note
+    # jumped to the top (Codex review on #259).
+    module = _load_build_review()
+    day = "2024-04-02 00:00:00.000"
+    timed = {"PROGDATE": day, "PROGNO": "2", "FIRSTDATE": "2024-04-02 08:05:00.000"}
+    untimed = {"PROGDATE": day, "PROGNO": "10", "FIRSTDATE": ""}
+
+    ordered = sorted([untimed, timed], key=module.progress_note_sort_key)
+
+    assert ordered == [timed, untimed]
