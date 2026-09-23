@@ -42,6 +42,10 @@ PLATELET_TREND_GUARDRAIL_ENABLED
     drop below 10,000 /uL within 24 hours" and the straight-line projection
     through the last two counts does not support that (issue #237).
     Default: False.
+PLATELET_SPECIALIST_TARGET_GUARDRAIL_ENABLED
+    Moves an LLM platelet INAPPROPRIATE to review when the trigger count sits
+    below a platelet target a consulting specialist documented (ruling
+    2026-09-23). Default: False.
 """
 
 from __future__ import annotations
@@ -86,6 +90,21 @@ pre-order counts, extended 24 h past the latest count. When True,
 only true hard signal is ``prophylactic_marrow_failure``, the trigger count is
 10 x10^3/uL or more, and the projection is missing or not below 10. When False
 replay is byte-identical to before. Set ``BBA_PILOT_PLATELET_TREND=1`` to
+enable it for a pilot run; it stays OFF until the sandbox result is read.
+"""
+
+PLATELET_SPECIALIST_TARGET_GUARDRAIL_ENABLED: bool = False
+"""Enable the platelet specialist-target review floor (default: OFF).
+
+Ruling 2026-09-23 (REQNO 68012561: hemoptysis at 89,000 /uL, chest team "keep
+plt 100,000"): an order that fails policy but follows a consulting specialist's
+documented target must not flag the ordering doctor as inappropriate. The target
+must be documented before the order (user decision 2026-09-23): in 68012561 the
+advice first appears 32 h after the order, so that case stays INAPPROPRIATE. When True,
+:func:`bba.platelet_guardrail.platelet_specialist_target_review` moves an LLM
+``INAPPROPRIATE`` to ``NEEDS_REVIEW`` (``platelet_specialist_target``) when the
+trigger count is below the target the model reported. When False replay is
+byte-identical to before. Set ``BBA_PILOT_PLATELET_SPECIALIST_TARGET=1`` to
 enable it for a pilot run; it stays OFF until the sandbox result is read.
 """
 
@@ -180,6 +199,7 @@ __all__: Sequence[str] = (
     "MSBOS_RESERVATION_ENABLED",
     "PLATELET_LLM_ENABLED",
     "PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED",
+    "PLATELET_SPECIALIST_TARGET_GUARDRAIL_ENABLED",
     "PLATELET_TREND_GUARDRAIL_ENABLED",
     "RESERVE_AHEAD_ROUTER_ENABLED",
     "RETURNS_LEDGER_ENABLED",

@@ -67,8 +67,10 @@ from bba.platelet_classifier import (
 )
 from bba.platelet_guardrail import (
     PLATELET_OVERCLEAR_REVIEW_REASON,
+    PLATELET_SPECIALIST_TARGET_REVIEW_REASON,
     PLATELET_TREND_REVIEW_REASON,
     platelet_overclear_suspect,
+    platelet_specialist_target_review,
     platelet_trend_unsupported,
 )
 from bba.llm_client.conclusion import reasoning_conclusion
@@ -1335,6 +1337,29 @@ def _platelet_trend_guardrail(
     return None
 
 
+def _platelet_specialist_target_guardrail(
+    verdict: _Verdict, ctx: _GuardrailContext, /
+) -> _Verdict | None:
+    # Ruling 2026-09-23: an order that followed a consultant's documented
+    # higher target goes to review, so the ordering doctor is not flagged.
+    if not (
+        feature_flags.PLATELET_SPECIALIST_TARGET_GUARDRAIL_ENABLED
+        and ctx.row.component == "platelet"
+        and ctx.platelet_hard_signals is not None
+    ):
+        return None
+    trigger_count = (
+        ctx.row.platelet_result.value_k_ul
+        if ctx.row.platelet_result is not None
+        else None
+    )
+    if platelet_specialist_target_review(
+        verdict.final_classification, ctx.platelet_hard_signals, trigger_count
+    ):
+        return _Verdict("NEEDS_REVIEW", PLATELET_SPECIALIST_TARGET_REVIEW_REASON)
+    return None
+
+
 def _empty_reasoning_overlay(
     verdict: _Verdict, ctx: _GuardrailContext, /
 ) -> _Verdict | None:
@@ -1356,6 +1381,7 @@ _PRIMARY_GUARDRAILS: Final[tuple[_Guardrail, ...]] = (
     _native_review_guardrail,
     _platelet_overclear_guardrail,
     _platelet_trend_guardrail,
+    _platelet_specialist_target_guardrail,
 )
 
 _POST_TERMINAL_OVERLAYS: Final[tuple[_Guardrail, ...]] = (_empty_reasoning_overlay,)

@@ -1122,3 +1122,21 @@ def test_returned_cell_without_ledger_counts_keeps_the_time_alone() -> None:
     assert module._returned_display(det, []) == "2025-02-26 10:05:24"
     assert module._returned_display({}, []) == "—"
 
+
+def test_platelet_page_explains_the_specialist_target_review_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Ruling 2026-09-23: the reviewer must see that the order failed policy but
+    # followed a consultant's documented target, not a bare slug.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN1,P1,AN1,platelet\n",
+        report_csv=_PLT_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    assert "specialist" in module._REVIEW_REASON_LABELS["platelet_specialist_target"]
+    assert rendered.count("<dt>platelet_specialist_target</dt>") == 1

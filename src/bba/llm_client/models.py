@@ -36,6 +36,7 @@ from pydantic import (
     ConfigDict,
     Field,
     StrictBool,
+    StrictInt,
     field_validator,
     model_validator,
 )
@@ -230,6 +231,10 @@ class PlateletLlmClassificationResponse(LlmClassificationResponse):
     # aplastic anaemia ruling carry four signals.
     aplastic_active_therapy_indication: StrictBool = False
     """Aplastic anaemia on active therapy below its indication 8 threshold (<10k; <20k during ATG or with sepsis)."""
+    # Defaulted for the same replay reason (ruling 2026-09-23); the tool schema
+    # lists it as required. StrictInt so a string "100000" fails closed.
+    specialist_platelet_target_per_ul: StrictInt | None = None
+    """Platelet target (/uL) a consulting specialist documented, or None."""
 
 
 class StructuredToolInput(BaseModel):

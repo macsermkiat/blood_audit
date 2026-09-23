@@ -253,6 +253,12 @@ _REVIEW_REASON_LABELS: dict[str, str] = {
         "two pre-order counts is 10,000 /uL or more, or fewer than two counts "
         "were on file (clinician ruling 2026-09-21)"
     ),
+    "platelet_specialist_target": (
+        "Platelet order moved from INAPPROPRIATE to NEEDS_REVIEW: it fails the "
+        "policy thresholds, but the count was below a platelet target a "
+        "consulting specialist documented, so the ordering doctor is not "
+        "flagged (ruling 2026-09-23)"
+    ),
     "malformed_json": "Parse failure — the response was not valid JSON",
     "schema_mismatch": (
         "Parse failure — the tool payload did not match the expected schema"
@@ -2657,6 +2663,7 @@ LLM: Anthropic Batch classification on structured evidence only.
 <dt>platelet_llm_overclear_suspect</dt><dd>Platelet-leg over-clear floored to NEEDS_REVIEW (platelet guardrail; the RBC assert path does not apply to platelets).</dd>
 <dt>platelet_trend_unsupported</dt><dd>{esc(_REVIEW_REASON_LABELS["platelet_trend_unsupported"])}.</dd>
 <dt>label_reasoning_conflict</dt><dd>{esc(_REVIEW_REASON_LABELS["label_reasoning_conflict"])}.</dd>
+<dt>platelet_specialist_target</dt><dd>{esc(_REVIEW_REASON_LABELS["platelet_specialist_target"])}.</dd>
 <dt>malformed_json</dt><dd>Parse failure — the response was not valid JSON.</dd>
 <dt>schema_mismatch</dt><dd>Parse failure — the tool payload did not match the expected schema.</dd>
 <dt>classification_out_of_set</dt><dd>Parse failure — the classification label is outside the allowed vocabulary.</dd>
