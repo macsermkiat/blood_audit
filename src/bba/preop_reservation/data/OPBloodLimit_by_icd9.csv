@@ -609,3 +609,44 @@
 ,,Orthopedics,Ortho,Pediatric,"Ext, no tourniquet",G/M,Group and Match (crossmatch),1
 ,,Orthopedics,Ortho,Pediatric,Extremity with tourniquet,T/S,Type and Screen,1
 ,,Orthopedics,Ortho,Pediatric,Hip and spine,G/M,Group and Match (crossmatch),2
+51.23,5123,General Surgery,Sx,,Laparoscopic cholecystectomy,none,No blood preparation,
+85.21,8521,General Surgery,Sx,,Local excision of lesion of breast,none,No blood preparation,
+02.05,0205,General Surgery,Sx,,Insertion of skull plate,none,No blood preparation,
+02.12,0212,General Surgery,Sx,,Other repair of cerebral meninges,G/M,Group and Match (crossmatch),1
+54.59,5459,General Surgery,Sx,,Other lysis of peritoneal adhesions,none,No blood preparation,
+83.63,8363,Orthopedics,Ortho,,Rotator cuff repair,none,No blood preparation,
+81.62,8162,Orthopedics,Ortho,,Fusion or refussion of 2-3 vertebrae,G/M,Group and Match (crossmatch),1
+40.23,4023,General Surgery,Sx,,Excision of axillary lymph node,none,No blood preparation,
+49.46,4946,General Surgery,Sx,,Excision of hemorrhoids,none,No blood preparation,
+81.83,8183,Orthopedics,Ortho,,Other repair of shoulder,none,No blood preparation,
+54.51,5451,General Surgery,Sx,,Laparoscopic lysis of peritoneal adhesions,none,No blood preparation,
+47.09,4709,General Surgery,Sx,,Other appendectomy,none,No blood preparation,
+56.0,560,General Surgery,Sx,,Transurethral removal of obstruction from ureter and renal pelvis,none,No blood preparation,
+80.6,806,Orthopedics,Ortho,,Excision of semilunar cartilage of knee,none,No blood preparation,
+85.41,8541,General Surgery,Sx,,Unilateral simple mastectomy,none,No blood preparation,
+40.53,4053,General Surgery,Sx,,Radical excision of iliac lymph nodes,none,No blood preparation,
+46.03,4603,General Surgery,Sx,,Exteriorization of large intestine,none,No blood preparation,
+81.45,8145,Orthopedics,Ortho,,Other repair of the cruciate ligaments,none,No blood preparation,
+26.31,2631,ENT (Otolaryngology),ENT,,Partial sealoadenectomy,none,No blood preparation,
+85.22,8522,General Surgery,Sx,,Resection of quadrant of breast,none,No blood preparation,
+68.23,6823,Obstetrics & Gynecology,OB-Gyn,,Endometrial ablation,none,No blood preparation,
+49.11,4911,General Surgery,Sx,,Anal fistulotomy,none,No blood preparation,
+53.04,5304,General Surgery,Sx,,Repair of indirect inguinal hernia with graft or prosthesis,none,No blood preparation,
+49.12,4912,General Surgery,Sx,,Anal fistulectomy,none,No blood preparation,
+81.47,8147,Orthopedics,Ortho,,Other repair of knee,none,No blood preparation,
+40.11,4011,General Surgery,Sx,,Biopsy of lymphatic structures,none,No blood preparation,
+02.34,0234,General Surgery,Sx,,Ventricular shunt to abdominal cavity and organs,none,No blood preparation,
+80.26,8026,Orthopedics,Ortho,,"Arthroscopy, knee",none,No blood preparation,
+81.65,8165,Orthopedics,Ortho,,Vertebroplasty,G/M,Group and Match (crossmatch),1
+80.21,8021,Orthopedics,Ortho,,"Arthroscopy, shoulder",none,No blood preparation,
+86.4,864,General Surgery,Sx,,Radical excision of skin lesion,none,No blood preparation,
+55.4,554,General Surgery,Sx,,Partial nephrectomy,G/M,Group and Match (crossmatch),2
+40.29,4029,General Surgery,Sx,,Simple excision of other lymphatic structure,none,No blood preparation,
+47.01,4701,General Surgery,Sx,,Laparoscopic appendectomy,none,No blood preparation,
+01.31,0131,General Surgery,Sx,,Incision of cerebral meninges,G/M,Group and Match (crossmatch),1
+46.01,4601,General Surgery,Sx,,Exteriorization of small intestine,none,No blood preparation,
+85.33,8533,General Surgery,Sx,,Unilateral subcutaneous mammectomy with synchronous implant,none,No blood preparation,
+46.52,4652,General Surgery,Sx,,Closure of stoma of large intestine,none,No blood preparation,
+17.12,1712,General Surgery,Sx,,Laparoscopic repair of indirect inguinal hernia with graft or prosthesis,none,No blood preparation,
+69.09,6909,Obstetrics & Gynecology,OB-Gyn,,Other dilation and curettage,none,No blood preparation,
+84.11,8411,Orthopedics,Ortho,,Amputation of toe,none,No blood preparation,
