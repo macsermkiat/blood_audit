@@ -455,7 +455,9 @@ def test_packaged_bridge_smoke() -> None:
     }
     # 18, not 17: the category leading-zero fix restored 0302 (P0204,
     # "Reopening of laminectomy site"), which now resolves in the MSBOS ref.
-    assert len(msbos_hits) == 18
+    # 22, not 18: the surgeon's MSBOS shortlist rulings (2026-09-23) added
+    # 0131, 0212, 554 (partial nephrectomy) and 8411 (amputation of toe).
+    assert len(msbos_hits) == 22
 
 
 def test_packaged_bridge_first_choice_spot_checks() -> None:

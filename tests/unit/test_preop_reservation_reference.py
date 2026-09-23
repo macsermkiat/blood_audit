@@ -224,3 +224,37 @@ def test_group_index_does_not_change_rbc_reference_identity_repr_or_resolution()
         == second.resolve("1234")
         == MsbosRow(msbos="G/M", recommended_units=2)
     )
+
+
+# Surgeon rulings returned on the top-50 MSBOS shortlist (2026-09-23): OR codes
+# the hospital schedule did not cover. A ruled code must now yield a verdict; a
+# code the surgeon left blank must stay unmatched rather than default to "none".
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("5123", MsbosRow(msbos="none", recommended_units=0)),  # lap cholecystectomy
+        ("0212", MsbosRow(msbos="G/M", recommended_units=1)),
+        ("8162", MsbosRow(msbos="G/M", recommended_units=1)),
+        ("8165", MsbosRow(msbos="G/M", recommended_units=1)),
+        ("0131", MsbosRow(msbos="G/M", recommended_units=1)),
+        ("554", MsbosRow(msbos="G/M", recommended_units=2)),  # partial nephrectomy
+        ("8411", MsbosRow(msbos="none", recommended_units=0)),
+    ],
+)
+def test_shortlist_ruled_code_resolves_to_surgeon_ruling(
+    code: str, expected: MsbosRow
+) -> None:
+    assert load_msbos_reference().resolve(code) == expected
+
+
+@pytest.mark.parametrize(
+    "code", ["2161", "8543", "2169", "4562", "5122", "4021", "0722", "1733", "3403"]
+)
+def test_shortlist_code_left_blank_by_surgeon_stays_unmatched(code: str) -> None:
+    assert load_msbos_reference().resolve(code) is None
+
+
+def test_shortlist_rulings_carry_no_procedure_group() -> None:
+    # procedure_group drives the signed platelet-category thresholds; the surgeon
+    # ruled on blood preparation only, so the platelet arm must see no group.
+    assert load_msbos_reference().groups_for("0212") == ()
