@@ -1140,3 +1140,70 @@ def test_platelet_page_explains_the_specialist_target_review_reason(
 
     assert "specialist" in module._REVIEW_REASON_LABELS["platelet_specialist_target"]
     assert rendered.count("<dt>platelet_specialist_target</dt>") == 1
+
+
+def test_nursing_notes_sort_by_clock_time_not_by_the_raw_digits() -> None:
+    # HOSxP drops leading zeros from PROGRESSTIME, so 02:33 arrives as "23300"
+    # and 16:54 as "165400". A text sort puts 16:54 first; a reviewer reading
+    # the shift sequence around the order needs the night note before the
+    # afternoon one.
+    module = _load_build_review()
+    afternoon = {"PROGRESSDATE": "2025-01-02 00:00:00.000", "PROGRESSTIME": "165400"}
+    night = {"PROGRESSDATE": "2025-01-02 00:00:00.000", "PROGRESSTIME": "23300"}
+    next_day = {"PROGRESSDATE": "2025-01-03 00:00:00.000", "PROGRESSTIME": "5"}
+
+    ordered = sorted([next_day, afternoon, night], key=module.focus_note_sort_key)
+
+    assert ordered == [night, afternoon, next_day]
+
+
+def test_same_day_progress_notes_sort_by_entry_time() -> None:
+    # PROGDATE carries no time (always 00:00), so notes written on one day
+    # keep export order unless the entry timestamp breaks the tie.
+    module = _load_build_review()
+    evening = {"PROGDATE": "2024-04-02 00:00:00.000", "FIRSTDATE": "2024-04-02 20:17:30.000", "ITEMNO": "1"}
+    morning = {"PROGDATE": "2024-04-02 00:00:00.000", "FIRSTDATE": "2024-04-02 08:05:00.000", "ITEMNO": "2"}
+    day_before = {"PROGDATE": "2024-04-01 00:00:00.000", "FIRSTDATE": "2024-04-03 09:00:00.000", "ITEMNO": "1"}
+
+    ordered = sorted([evening, morning, day_before], key=module.progress_note_sort_key)
+
+    assert ordered == [day_before, morning, evening]
+
+
+def test_progress_notes_without_entry_time_fall_back_to_note_number() -> None:
+    # FIRSTDATE is not a required ingest column; without it PROGNO (the
+    # per-day note number) orders the day numerically, so note 10 does not
+    # land before note 2.
+    module = _load_build_review()
+    note_10 = {"PROGDATE": "2024-04-02 00:00:00.000", "ITEMNO": "1", "PROGNO": "10"}
+    note_2 = {"PROGDATE": "2024-04-02 00:00:00.000", "ITEMNO": "1", "PROGNO": "2"}
+
+    ordered = sorted([note_10, note_2], key=module.progress_note_sort_key)
+
+    assert ordered == [note_2, note_10]
+
+
+def test_every_progress_note_of_a_day_survives_dedup() -> None:
+    # HOSxP exports ITEMNO=1 on every progress row; the notes of one day differ
+    # only by PROGNO. Deduping on (date, ITEMNO) showed the reviewer one note
+    # per day while the LLM saw all of them.
+    module = _load_build_review()
+    day = "2024-07-26 00:00:00.000"
+    morning = {"PROGDATE": day, "ITEMNO": "1", "PROGNO": "1"}
+    evening = {"PROGDATE": day, "ITEMNO": "1", "PROGNO": "3"}
+
+    assert module.progress_note_key(morning) != module.progress_note_key(evening)
+    # The same row reached twice (first-N of AN and the window) is one note.
+    assert module.progress_note_key(morning) == module.progress_note_key(dict(morning))
+
+
+def test_progress_note_header_shows_when_the_note_was_entered() -> None:
+    module = _load_build_review()
+
+    with_entry = module.progress_note_when(
+        {"PROGDATE": "2024-04-02 00:00:00.000", "FIRSTDATE": "2024-04-02 16:18:16.000"}
+    )
+    without_entry = module.progress_note_when({"PROGDATE": "2024-04-02 00:00:00.000"})
+
+    assert with_entry == "2024-04-02 (entered 2024-04-02 16:18:16)"
+    assert without_entry == "2024-04-02"
