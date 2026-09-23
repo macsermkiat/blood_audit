@@ -33,10 +33,10 @@ To rank the output of a pilot run (Path A in
 `BBA_VERDICT_SOURCE=pipeline`.
 
 `rank_doctors.py` with `BBA_VERDICT_SOURCE=pipeline` reads the audit store,
-which holds LLM-leg rows only. Every order the deterministic leg finalized
-outright (an auto-clear, a return, a peri-op exemption, an MSBOS
-over-reservation) never reaches the audit store, so a pipeline-source
-ranking's denominators miss every deterministic verdict.
+which holds only the LLM-leg rows and the MSBOS over-reservation rows. Every
+order the deterministic leg finalized outright (an auto-clear, a return, a
+peri-op exemption) never reaches the audit store, so a pipeline-source
+ranking's denominators miss those verdicts.
 
 `rank_merged.py` merges `report.csv` (the deterministic leg's final verdicts)
 with `llm_report.json` (the LLM leg's final verdicts). The LLM verdict replaces

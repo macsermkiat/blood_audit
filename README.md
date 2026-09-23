@@ -137,8 +137,9 @@ uv run python scripts/pilot/rank_merged.py platelet
 
 `rank_doctors.py` ranks against the 300-case human-review workbook (the
 default `BBA_VERDICT_SOURCE=human`) or the audit store
-(`BBA_VERDICT_SOURCE=pipeline`). The audit store holds LLM-leg rows only, so a
-`pipeline`-source ranking's denominators miss every deterministic verdict.
+(`BBA_VERDICT_SOURCE=pipeline`). The audit store holds LLM-leg rows and MSBOS
+over-reservation rows only, so a `pipeline`-source ranking's denominators miss
+the deterministic clears, returns and exemptions.
 Use `rank_merged.py` above to rank a pilot run instead:
 
 ```bash

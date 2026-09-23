@@ -213,8 +213,9 @@ Shared with the RBC path, not platelet-specific: `bba.llm_client.conclusion.
 reasoning_conclusion` reads what a response's own `reasoning_summary_en`
 concludes (the closing "Final classification: X" sentence every prompt now
 asks for, or a fallback reader for older responses), and the replay guardrail
-floors the row to `NEEDS_REVIEW` (`label_reasoning_conflict`) BEFORE any other
-guardrail runs, whenever the reasoning's conclusion disagrees with
+floors the row to `NEEDS_REVIEW` (`label_reasoning_conflict`) before any
+guardrail that reads the label (only the reserve-ahead terminal runs ahead of
+it), whenever the reasoning's conclusion disagrees with
 `classification`. Neither the label nor the reasoning is trusted once they
 disagree; a self-contradicting answer is evidence for neither class.
 

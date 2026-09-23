@@ -33,10 +33,10 @@ workbook, ไฟล์ CSV `BDVST`/`DCT` หรือ output CSV/HTML ที่�
 `scripts/pilot/rank_merged.py` แทน `rank_doctors.py` ที่ตั้ง
 `BBA_VERDICT_SOURCE=pipeline`
 
-เพราะแหล่ง `pipeline` อ่านจาก audit store ซึ่งมีแต่แถวของ LLM leg คำสั่งที่
-deterministic leg ตัดสินจบไปเลย (auto-clear, คืนเลือด, ยกเว้น peri-op,
-MSBOS over-reservation) จะไม่เข้า audit store เลย ทำให้ตัวหารของการจัดอันดับ
-แบบ pipeline ขาดหายไปเยอะ
+เพราะแหล่ง `pipeline` อ่านจาก audit store ซึ่งมีแต่แถวของ LLM leg กับแถว
+MSBOS over-reservation คำสั่งที่ deterministic leg ตัดสินจบไปเลย (auto-clear,
+คืนเลือด, ยกเว้น peri-op) จะไม่เข้า audit store เลย ทำให้ตัวหารของการจัดอันดับ
+แบบ pipeline ขาดหายไป
 
 `rank_merged.py` รวม `report.csv` (verdict ของ deterministic leg) กับ
 `llm_report.json` (verdict ของ LLM leg) โดย verdict จาก LLM จะแทนที่เฉพาะ
