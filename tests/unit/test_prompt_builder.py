@@ -1594,8 +1594,11 @@ class TestRbcPromptHashGolden:
     # before the order, from the most recent transfusion in the window onward.
     # Blessed by tests/unit/test_hb_min_24h.py together with the replay
     # guardrail change.
+    # Re-pinned for the label/reasoning-conflict guardrail: the shared preamble
+    # now asks for the closing sentence "Final classification: X". Blessed by
+    # tests/unit/test_label_reasoning_conflict.py.
     RBC_HB_7_10_75_EMPTY_EVIDENCE = (
-        "451b5d52b0704a72318fb20bb91c51c2b29cefb325c07ee4c5a302724a7a6814"
+        "21294344a88851c968feae5084254d5ece3c9c15f9a15c99ec213fad37e9d98e"
     )
     # Re-pinned for #93 boundary alignment: dispatch routes Hb >= 10.0 to this
     # template (engine ``hb_ge_10``), so its prose states the inclusive
@@ -1609,8 +1612,9 @@ class TestRbcPromptHashGolden:
     # Re-pinned for #249: the override template no longer says SUB_THRESHOLD_HB
     # "cannot apply here"; the 24 h minimum can sit below the floor while the
     # routing Hb is >= 10.
+    # Re-pinned for the closing-sentence rule, same shared preamble edit.
     RBC_HB_GT_10_75_EMPTY_EVIDENCE = (
-        "848d6c8130253785ecfd5ca3dcba476400fe73a32bf3ff69b67f00bdcba8d0a4"
+        "bcb41df81907dda4de0f5a9a62e40fb8768f025cfa7c02f62d27de5c89edc272"
     )
 
     def test_hb_7_10_review_cohort_7_5_hash_is_pinned(self) -> None:

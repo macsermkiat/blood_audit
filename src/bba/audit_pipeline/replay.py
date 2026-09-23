@@ -71,6 +71,7 @@ from bba.platelet_guardrail import (
     platelet_overclear_suspect,
     platelet_trend_unsupported,
 )
+from bba.llm_client.conclusion import reasoning_conclusion
 from bba.platelet_guardrail.models import PlateletHardSignals
 from bba.preop_reservation.platelet_evaluate import REVIEW_REASONS
 from bba.quote_grounder.layers import (
@@ -1182,6 +1183,24 @@ class _Guardrail(Protocol):
     ) -> _Verdict | None: ...
 
 
+LABEL_REASONING_CONFLICT_REVIEW_REASON = "label_reasoning_conflict"
+"""Typed ``review_reason`` for an answer whose ``classification`` contradicts
+the class its own ``reasoning_summary_en`` concludes (2026-09-22 rerun: 6 of
+364, five of them with the label written last). Neither the label nor the
+reasoning is trusted: the row goes to a human. Never asserted, never cleared."""
+
+
+def _label_reasoning_conflict_guardrail(
+    verdict: _Verdict, ctx: _GuardrailContext, /
+) -> _Verdict | None:
+    if verdict.review_reason is not None:
+        return None  # a parse failure already sent the row to review
+    concluded = reasoning_conclusion(ctx.summary_en)
+    if concluded is None or concluded == verdict.final_classification:
+        return None
+    return _Verdict("NEEDS_REVIEW", LABEL_REASONING_CONFLICT_REVIEW_REASON)
+
+
 def _reserve_ahead_guardrail(
     verdict: _Verdict, ctx: _GuardrailContext, /
 ) -> _Verdict | None:
@@ -1329,6 +1348,9 @@ def _empty_reasoning_overlay(
 
 _PRIMARY_GUARDRAILS: Final[tuple[_Guardrail, ...]] = (
     _reserve_ahead_guardrail,
+    # Before every label-reading guardrail: a self-contradicting answer is
+    # evidence for neither class, so nothing below may assert on its label.
+    _label_reasoning_conflict_guardrail,
     _periop_contradiction_guardrail,
     _rbc_overclear_guardrail,
     _native_review_guardrail,
