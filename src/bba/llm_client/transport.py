@@ -238,9 +238,10 @@ _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
             "description": (
                 (
                     "True iff the evidence grounds an invasive procedure or surgery "
-                    "within the audit window whose policy threshold the count sits "
-                    "below (LP <50-80k /uL; CVC, thoracocentesis, arthrocentesis, "
-                    "dental extraction <50k /uL; major surgery <80-100k /uL)."
+                    "within the audit window whose policy threshold the count "
+                    "meets (LP <=50-80k /uL; CVC, thoracocentesis, "
+                    "arthrocentesis, dental extraction <=50k /uL; major surgery "
+                    "<=80k /uL (<100k /uL high risk))."
                 )
                 + _SIGNAL_ORDER_RULE
             ),
@@ -250,8 +251,9 @@ _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
             "description": (
                 (
                     "True iff the evidence grounds chemo/HSCT/consumptive "
-                    "thrombocytopenia with count <10,000 /uL (or expected <10,000 "
-                    "/uL within 24 hours) AND no exclusion population applies. "
+                    "thrombocytopenia with count <=10,000 /uL (or expected to fall "
+                    "to 10,000 /uL or below within 24 hours) AND no exclusion "
+                    "population applies. "
                     "Aplastic anaemia on active therapy belongs under "
                     "aplastic_active_therapy_indication, not here."
                 )
@@ -263,10 +265,10 @@ _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
             "description": (
                 (
                     "True iff the evidence grounds an intracranial bleed with the "
-                    "count below its threshold: <100,000 /uL when acute, "
-                    "acute-on-chronic, growing, or neurosurgery is planned; <50,000 "
-                    "/uL when stable and non-operative (including a stable chronic "
-                    "SDH). Chronic SDH expansion belongs here, not under "
+                    "count meeting its threshold: <100,000 /uL when acute, "
+                    "acute-on-chronic, growing, or neurosurgery is planned; "
+                    "<=50,000 /uL when stable and non-operative (including a "
+                    "stable chronic SDH). Chronic SDH expansion belongs here, not under "
                     "active_bleeding."
                 )
                 + _SIGNAL_ORDER_RULE
@@ -278,10 +280,10 @@ _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
                 (
                     "True iff the notes document aplastic anaemia on active therapy "
                     "aimed at reversing the thrombocytopenia (ATG, cyclosporine, "
-                    "eltrombopag, transplant work-up) with the count below its "
-                    "indication 8 threshold: <10,000 /uL (or expected <10,000 /uL "
-                    "within 24 hours), or <20,000 /uL during the ATG course or with "
-                    "sepsis. Chronic, stable or untreated aplastic anaemia is an "
+                    "eltrombopag, transplant work-up) with the count at or below "
+                    "its indication 8 threshold: <=10,000 /uL (or expected to fall "
+                    "to 10,000 /uL or below within 24 hours), or <=20,000 /uL "
+                    "during the ATG course or with sepsis. Chronic, stable or untreated aplastic anaemia is an "
                     "exclusion population, not this signal."
                 )
                 + _SIGNAL_ORDER_RULE

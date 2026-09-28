@@ -366,6 +366,8 @@ transfusion time, so a low value an earlier order already addressed does not
 count. `None` when no observation
 falls in the window. The RBC prompt (`system_prompt.py`) states the same rule
 for `SUB_THRESHOLD_HB` in both gray-zone and high-Hb-override task modes.
+Sub-threshold means AT OR BELOW the cohort floor: an Hb exactly at the floor
+qualifies (owner ruling 2026-09-27, review case REQNO 68004713).
 
 ### AnchorCandidate
 
@@ -718,16 +720,27 @@ hard-peri-op-evidence positive-evidence pre-pass (`APPROPRIATE` on an
 Hb-independent signal);
 with the pre-pass flag on but no hard evidence → `NEEDS_REVIEW` (defer to
 LLM), with the flag off → `INSUFFICIENT_EVIDENCE` (see "Missing-Hb
-positive-evidence pre-check"); (2) Hb < 7.0 →
+positive-evidence pre-check"); (2) Hb ≤ 7.0 →
 `APPROPRIATE`/`NONE`; (3) cohort `MTP` → `APPROPRIATE`/`MTP`;
 (4) cohort `UNKNOWN` → `NEEDS_REVIEW`; (5) delta-Hb fired →
 `APPROPRIATE`/`DELTA_HB`; (6) non-threshold cohort →
-`NEEDS_REVIEW`; (7) hemodilution (Hb < threshold ∧ ≥ 2 L crystalloid)
+`NEEDS_REVIEW`; (7) hemodilution (Hb ≤ threshold ∧ ≥ 2 L crystalloid)
 → `NEEDS_REVIEW`/`HEMODILUTION_FLAGGED`; (8)
-single-low-Hb-no-trend (Hb < threshold ∧ `needs_review_single_low_hb`)
-→ `NEEDS_REVIEW`/`NONE`; (9) plain Hb-tier: `< threshold` →
-`APPROPRIATE`, `[threshold, 10)` → `NEEDS_REVIEW`, `≥ 10` →
+single-low-Hb-no-trend (Hb ≤ threshold ∧ `needs_review_single_low_hb`)
+→ `NEEDS_REVIEW`/`NONE`; (9) plain Hb-tier: `≤ threshold` →
+`APPROPRIATE`, `(threshold, 10)` → `NEEDS_REVIEW`, `≥ 10` →
 `POTENTIALLY_INAPPROPRIATE`.
+
+Inclusive indication thresholds (owner ruling 2026-09-27, triggered by review
+case REQNO 68004713: Hb 7.0 at the default 7.0 floor was routed to the gray
+zone and the LLM called it INAPPROPRIATE): a value exactly AT an indication
+threshold qualifies — the universal Hb 7.0 rule, every cohort floor, and every
+platelet indication cutoff except 100,000 /uL (high-risk surgery, acute
+intracranial bleed), which stays strict `<100,000` (follow-up ruling
+2026-09-28). Routing gates (`HB_GT_10_THRESHOLD`,
+`PLATELET_REVIEW_CEILING`) are unchanged. Rationale slugs keep their historical
+`lt` names (`hb_lt_7_universal`, `hb_lt_threshold`,
+`plt_lt_10_heme_prophylaxis`) for persisted-data compatibility.
 
 With `DECLARED_USE_PREOP_EXEMPT_ENABLED=False`, the legacy procedure routing is
 restored byte-for-byte: missing-Hb and Hb-present proximity ≤6 h can produce
@@ -758,7 +771,7 @@ Literal across `audit_store`, `deterministic_classifier`,
 ### Cohort UNKNOWN routing
 
 `label=UNKNOWN`, `threshold=None` → `NEEDS_REVIEW`/`NONE` when Hb is
-≥ 7.0. Hb < 7.0 now stops earlier as `APPROPRIATE`. For the remaining
+> 7.0. Hb ≤ 7.0 now stops earlier as `APPROPRIATE`. For the remaining
 UNKNOWN cases, the classifier refuses to silently default to
 `DEFAULT_THRESHOLD=7.0` when procedure data was missing upstream. Hb
 missing still wins over UNKNOWN — no current Hb means no anchor for any
@@ -766,19 +779,19 @@ interpretation. `TestCohortUnknownRoutesToNeedsReview`.
 
 ### Non-threshold cohort fallthrough
 
-After the global Hb < 7.0 rule and bypass chain, a `threshold=None`
-cohort surviving the earlier steps (in practice, Hb ≥ 7.0
+After the global Hb ≤ 7.0 rule and bypass chain, a `threshold=None`
+cohort surviving the earlier steps (in practice, Hb > 7.0
 `HEME_MALIGNANCY_ACTIVE` — `MTP` and `UNKNOWN` exited earlier) routes
 to `NEEDS_REVIEW`/`NONE` with
 `rationale="cohort_non_threshold"`. The T2-supportive heme cohort
 is not Hb-tier-driven; the LLM stage handles its context
-interpretation for Hb ≥ 7.0. Hb < 7.0 is globally `APPROPRIATE`
+interpretation for Hb > 7.0. Hb ≤ 7.0 is globally `APPROPRIATE`
 before this cohort branch.
 
 ### Hemodilution carve-out
 
-After the global Hb < 7.0 rule, inside the remaining sub-threshold branch
-(Hb < `cohort_threshold`), if
+After the global Hb ≤ 7.0 rule, inside the remaining sub-threshold branch
+(Hb ≤ `cohort_threshold`), if
 `crystalloid_liters_prior_4h ≥ 2.0` (Round 1 B5), classification is
 `NEEDS_REVIEW` with `bypass_reason=HEMODILUTION_FLAGGED` instead of
 auto-APPROPRIATE. Scoped to the would-be auto-APPROPRIATE branch
@@ -787,9 +800,10 @@ on the classifier module as `HEMODILUTION_CRYSTALLOID_LITERS = 2.0`.
 
 ### Single-low-Hb-no-trend carve-out
 
-After the global Hb < 7.0 rule and the hemodilution check, if
+After the global Hb ≤ 7.0 rule and the hemodilution check, if
 `hb_result.needs_review_single_low_hb` is set (upstream contract:
-isolated Hb < 8 g/dL with no prior 24 h observation), classification is
+isolated Hb ≤ 8 g/dL with no prior 24 h observation; inclusive since the
+2026-09-27 ruling so an at-floor 8.0 gets the same check as 7.9), classification is
 `NEEDS_REVIEW`/`NONE` with
 `rationale="single_low_hb_no_trend"`. PR #52 Codex P1: a lone
 unconfirmed low value cannot be treated as confirmed anemia. The
@@ -3609,8 +3623,9 @@ the structured grounded signals and their `any_signal()` test.
 
 ### platelet_trend_unsupported
 
-Issue #237, clinician ruling 2026-09-21: the policy clause "expected to drop
-below 10,000 /uL within 24 hours" means a straight-line projection only.
+Issue #237, clinician ruling 2026-09-21: the policy clause "expected to fall
+to 10,000 /uL or below within 24 hours" (inclusive per owner ruling 2026-09-27)
+means a straight-line projection only.
 `bba.platelet_lookup.project_24h(observations, anchor_utc) → float | None` takes
 the last two counts in the strict 7-day pre-order window and extends the line
 24 h past the LATEST COUNT (not past the order). `None` when fewer than two
@@ -3621,7 +3636,7 @@ are one draw (highest `item_no` wins); a line below zero is reported as 0.
 `bba.platelet_guardrail.platelet_trend_unsupported(final, hard_signals,
 trigger_count, projected_24h) → bool`. True iff the LLM returned `APPROPRIATE`,
 `prophylactic_marrow_failure` is the ONLY true hard signal, the trigger count is
-10 ×10³/µL or more, and the projection is `None` or 10 or more. The model sets
+above 10 ×10³/µL, and the projection is `None` or above 10. The model sets
 that hard signal itself, so `platelet_overclear_suspect` cannot catch these. On
 a hit replay floors the row to `NEEDS_REVIEW` with
 `PLATELET_TREND_REVIEW_REASON = "platelet_trend_unsupported"` (never

@@ -19,7 +19,7 @@ Precedence (top wins):
    snakebite-no-bleed), then applies the policy threshold.
 
 3a. (flag ``PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED`` / per-row
-   ``enable_prophylaxis_autoclear``) FRESH count <
+   ``enable_prophylaxis_autoclear``) FRESH count ≤
    :data:`PLATELET_PROPHYLAXIS_THRESHOLD` on an admission whose ICD-10 codes
    match :data:`PLATELET_PROPHYLAXIS_INDICATION_PREFIXES` and match NONE of
    :data:`PLATELET_PROPHYLAXIS_EXCLUSION_PREFIXES` → ``APPROPRIATE``
@@ -35,7 +35,7 @@ deterministic-final class — no LLM, no human. But the policies WITHHOLD
 platelets at very low counts for the exclusion populations above (for TTP/HIT,
 transfusion is actively harmful). In a dengue-endemic dataset a
 ``plt < 10 → APPROPRIATE`` auto-clear would systematically false-clear
-inappropriate transfusions, so it was removed. Unlike Hb < 7 (≈no
+inappropriate transfusions, so it was removed. Unlike Hb <= 7 (≈no
 contraindication population), a low platelet count has 6+ named exclusions.
 
 Out of this pure gate's scope (handled at dispatch, docs plan §5.3 stage 4):
@@ -53,9 +53,10 @@ from bba.platelet_classifier.models import (
 )
 
 PLATELET_PROPHYLAXIS_THRESHOLD: float = 10.0
-"""Count (×10³/µL) below which prophylactic platelets are indicated for a
-chemotherapy / stem-cell-transplant patient without bleeding (Chula medicine
-DRAFT, AABB/ICTMG 2025). A SEED pending hematology sign-off (docs plan §7)."""
+"""Count (×10³/µL) at or below which prophylactic platelets are indicated for
+a chemotherapy / stem-cell-transplant patient without bleeding (Chula medicine
+DRAFT, AABB/ICTMG 2025). Inclusive: a count of exactly 10 qualifies (owner
+ruling 2026-09-27). A SEED pending hematology sign-off (docs plan §7)."""
 
 PLATELET_PROPHYLAXIS_INDICATION_PREFIXES: tuple[str, ...] = (
     "C8",  # lymphoma
@@ -136,7 +137,7 @@ def qualifies_for_prophylaxis_autoclear(inputs: PlateletClassifierInputs) -> boo
     return (
         inputs.enable_prophylaxis_autoclear
         and count is not None
-        and count < PLATELET_PROPHYLAXIS_THRESHOLD
+        and count <= PLATELET_PROPHYLAXIS_THRESHOLD
         and inputs.platelet_freshness == "fresh"
         and indicated
         and not _matches_any(codes, PLATELET_PROPHYLAXIS_EXCLUSION_PREFIXES)

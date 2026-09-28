@@ -563,7 +563,7 @@ def periop_contradiction(
 # classification. The prompt teaches the same clear-cut policy; this guardrail
 # is the deterministic net for when the model clears anyway.
 #
-# "Hard signal" is deterministic-only (B1): a genuinely low Hb (< 7.0), a hard
+# "Hard signal" is deterministic-only (B1): a genuinely low Hb (<= 7.0), a hard
 # peri-op signal, an MTP cohort, or hemodynamic instability. Bleeding /
 # symptomatic anaemia prose remains untrusted except for the one committee-
 # accepted exemption: an ACTIVE_BLEEDING indication with its own confidence
@@ -661,7 +661,8 @@ def _has_structured_hard_signal(context: PipelineRowContext) -> bool:
     """True iff ``context`` carries a deterministic hard signal that justifies
     an LLM APPROPRIATE in the gray zone (B1 exemption set).
 
-    Any one of: a genuinely low Hb (< 7.0 g/dL), an MTP cohort, or a
+    Any one of: a genuinely low Hb (<= 7.0 g/dL; inclusive per owner ruling
+    2026-09-27, case 68004713), an MTP cohort, or a
     windowed peri-op signal (:func:`_has_windowed_periop_exemption` — an
     intra-op transfusion / major EBL in both modes, or, only in legacy flag-OFF
     mode, a ``surgical_context`` with a completed op within
@@ -678,7 +679,7 @@ def _has_structured_hard_signal(context: PipelineRowContext) -> bool:
     the instability precondition of :func:`_qualified_hemodynamic_floor`,
     where the ruling's qualifiers decide floor-vs-assert."""
     hb = context.hb_result.value_g_dl
-    if hb is not None and hb < UNIVERSAL_LOW_HB_APPROPRIATE_THRESHOLD:
+    if hb is not None and hb <= UNIVERSAL_LOW_HB_APPROPRIATE_THRESHOLD:
         return True
     if context.cohort_assignment.label == CohortLabel.MTP:
         return True
@@ -1056,16 +1057,17 @@ def _grounded_true_subthreshold_indication(
 ) -> bool:
     """True iff a grounded SUB_THRESHOLD_HB citation at the shared
     prose-trust bar is also structurally TRUE (the closest Hb, or the lowest
-    Hb in the 24 h before the order, strictly below the cohort floor).
+    Hb in the 24 h before the order, at or below the cohort floor; the floor
+    itself qualifies per owner ruling 2026-09-27, case 68004713).
 
     WHY (Codex PR #97 round 3): the prompt defines SUB_THRESHOLD_HB as HARD,
     but :func:`_has_structured_hard_signal` only exempts the universal
-    Hb < 7.0. A row whose Hb sits below its own cohort floor can still be
+    Hb <= 7.0. A row whose Hb sits at or below its own cohort floor can still be
     LLM-routed when the deterministic leg withheld the value as unreliable
     (hemodilution flag, single low Hb with no trend) — asserting
     ``INAPPROPRIATE`` against a prompt-compliant clear there would contradict
     the prompt's own contract, so the caller floors it to a human instead.
-    The structural cross-check is the gate: an at/above-floor Hb mislabeled
+    The structural cross-check is the gate: an above-floor Hb mislabeled
     "sub-threshold" (the motivating over-clear class, spec #89 story 6)
     fails it and keeps the assert. Never auto-clears — the deterministic
     leg flagged the value as unreliable for a reason.
@@ -1083,7 +1085,7 @@ def _grounded_true_subthreshold_indication(
         else min(closest, lowest)
     )
     threshold = context.cohort_assignment.threshold
-    if hb is None or threshold is None or hb >= threshold:
+    if hb is None or threshold is None or hb > threshold:
         return False
     return _cited_at_prose_trust(grounded_indications, _SUBTHRESHOLD_HARD_CODES)
 

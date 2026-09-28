@@ -34,12 +34,12 @@ DECLARED_USE_PREOP_EXEMPT_ENABLED
     Exempts orders whose declared use is surgery or type-screen from the
     Hb-appropriateness judgment. Default: True.
 PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED
-    Lets the deterministic platelet gate clear a fresh count < 10 on a
+    Lets the deterministic platelet gate clear a fresh count <= 10 on a
     heme-malignancy / chemo admission with no withhold population. Default: True
     (hematology sign-off 2026-09-20).
 PLATELET_TREND_GUARDRAIL_ENABLED
     Floors an LLM platelet clear to review when it rests only on "expected to
-    drop below 10,000 /uL within 24 hours" and the straight-line projection
+    fall to 10,000 /uL or below within 24 hours" and the straight-line projection
     through the last two counts does not support that (issue #237).
     Default: False.
 PLATELET_SPECIALIST_TARGET_GUARDRAIL_ENABLED
@@ -70,8 +70,9 @@ count only, no bleeding check; "rule may be switched on for the pilot": yes).
 Set ``BBA_PILOT_PLATELET_AUTOCLEAR=0`` to force it off for a pilot run.
 
 When True, :func:`bba.platelet_classifier.classify_platelet` may return a
-terminal ``APPROPRIATE`` for a platelet order whose FRESH count is below
-``PLATELET_PROPHYLAXIS_THRESHOLD`` (10 ×10³/µL) on an admission carrying a
+terminal ``APPROPRIATE`` for a platelet order whose FRESH count is at or below
+``PLATELET_PROPHYLAXIS_THRESHOLD`` (10 ×10³/µL; inclusive per owner ruling
+2026-09-27) on an admission carrying a
 heme-malignancy / chemotherapy / transplant diagnosis and none of the
 policy's withhold populations (ITP, TTP/TMA, HIT, aplastic anaemia, dengue,
 snakebite). This is the medicine policy's first platelet row expressed on
@@ -82,13 +83,13 @@ auto-clears nothing (CR-C1).
 PLATELET_TREND_GUARDRAIL_ENABLED: bool = False
 """Enable the platelet count-trend floor (default: OFF).
 
-Clinician ruling 2026-09-21 (issue #237): "expected to drop below 10,000 /uL
-within 24 hours" means a straight-line projection through the last two
+Clinician ruling 2026-09-21 (issue #237): "expected to fall to 10,000 /uL or
+below within 24 hours" (inclusive per owner ruling 2026-09-27) means a straight-line projection through the last two
 pre-order counts, extended 24 h past the latest count. When True,
 :func:`bba.platelet_guardrail.platelet_trend_unsupported` floors an LLM
 ``APPROPRIATE`` to ``NEEDS_REVIEW`` (``platelet_trend_unsupported``) when the
 only true hard signal is ``prophylactic_marrow_failure``, the trigger count is
-10 x10^3/uL or more, and the projection is missing or not below 10. When False
+above 10 x10^3/uL, and the projection is missing or above 10. When False
 replay is byte-identical to before. Set ``BBA_PILOT_PLATELET_TREND=1`` to
 enable it for a pilot run; it stays OFF until the sandbox result is read.
 """

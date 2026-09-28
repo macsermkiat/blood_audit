@@ -85,7 +85,7 @@ class HbLookupResult(BaseModel):
       genuinely immutable.
     * ``delta_hb_bypass`` is ``True`` iff at least one window is triggered.
     * ``needs_review_single_low_hb`` is ``True`` only when the most-recent Hb
-      is < 8 g/dL and no prior observation exists in the 24h-window before it
+      is <= 8 g/dL and no prior observation exists in the 24h-window before it
       — i.e., we have a worrying value but no trend to interpret it against.
     * ``min_24h_g_dl`` is the lowest Hb in the 24 h before the anchor (issue
       #249; clinician ruling 2026-09-22): the value SUB_THRESHOLD_HB is judged

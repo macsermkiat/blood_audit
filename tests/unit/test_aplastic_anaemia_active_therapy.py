@@ -45,7 +45,7 @@ class TestIndicationEight:
     def test_active_therapy_is_a_numbered_indication_at_ten_thousand(self) -> None:
         prompt = _prompt()
         assert re.search(
-            r"8\. Aplastic an(a)?emia on active therapy[^.]*<10,000",
+            r"8\. Aplastic an(a)?emia on active therapy[^.]*≤10,000",
             prompt,
             re.IGNORECASE,
         )
@@ -57,7 +57,7 @@ class TestIndicationEight:
 
     def test_twenty_thousand_during_atg_or_sepsis(self) -> None:
         text = _prompt().split("8. Aplastic", 1)[1][:900]
-        assert re.search(r"ATG course[^.]*<20,000|<20,000[^.]*ATG course", text)
+        assert re.search(r"ATG course[^.]*≤20,000|≤20,000[^.]*ATG course", text)
         assert "sepsis" in text.lower()
 
 
@@ -81,7 +81,9 @@ class TestHardSignalCoversIt:
     def test_prompt_hard_signal_definition_names_indication_eight(self) -> None:
         # Without this the over-clear guardrail would floor every such clear:
         # a clear needs at least one true hard signal.
-        text = _prompt().split("prophylactic_marrow_failure", 1)[1][:400]
+        # Window widened 400 -> 600 when the 2026-09-27 inclusive-threshold
+        # ruling lengthened the marrow-failure and intracranial signal lines.
+        text = _prompt().split("prophylactic_marrow_failure", 1)[1][:600]
         assert "indication 8" in text or "aplastic" in text.lower()
 
     def test_marrow_failure_signal_text_excludes_aplastic_anaemia(self) -> None:
@@ -113,7 +115,7 @@ class TestHardSignalCoversIt:
 
 
 def test_terminal_line_counts_indication_eight() -> None:
-    assert "no indication 4–8 below its threshold" in _prompt()
+    assert "no indication 4–8 at or below its threshold" in _prompt()
 
 
 # --- Fifth hard signal (Codex on the PR) -------------------------------------

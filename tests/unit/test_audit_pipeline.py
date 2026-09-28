@@ -74,6 +74,8 @@ from bba.audit_pipeline.replay import (
     _administration_claimed_from_result,
     _administration_evidence_from_result,
     _classification_from_result,
+    _grounded_true_subthreshold_indication,
+    _has_structured_hard_signal,
     _has_windowed_periop_exemption,
     _reservation_assessment_from_result,
     llm_overclear_suspect,
@@ -370,8 +372,9 @@ def _row_context(
     that classifier output matches the requested classification.
     """
     # Drive the classifier output via Hb tier:
-    # * APPROPRIATE — Hb strictly below cohort threshold (default 7.0)
-    # * POTENTIALLY_INAPPROPRIATE — Hb in the [threshold, 10) tier
+    # * APPROPRIATE — Hb at or below cohort threshold (default 7.0; the
+    #   floor itself qualifies per owner ruling 2026-09-27)
+    # * POTENTIALLY_INAPPROPRIATE — Hb in the (threshold, 10) tier
     # * INAPPROPRIATE — the deterministic engine never emits this, so
     #   the LLM-path simulation is responsible (the classifier returns
     #   POTENTIALLY_INAPPROPRIATE for Hb >= 10 and the cassette
@@ -383,7 +386,7 @@ def _row_context(
     threshold = cohort_threshold if cohort_threshold is not None else 7.0
     if classification == "APPROPRIATE":
         hb = hb_value if hb_value is not None else max(1.0, threshold - 1.0)
-        if hb >= threshold:
+        if hb > threshold:
             hb = max(1.0, threshold - 1.0)
         freshness = hb_freshness
     elif classification == "INSUFFICIENT_EVIDENCE":
@@ -398,7 +401,7 @@ def _row_context(
         freshness = hb_freshness
     else:  # POTENTIALLY_INAPPROPRIATE / NEEDS_REVIEW
         hb = hb_value if hb_value is not None else max(threshold, 7.5)
-        if hb < threshold:
+        if hb <= threshold:
             hb = threshold + 0.5
         freshness = hb_freshness
     order = AuditOrder(
@@ -3191,7 +3194,7 @@ class TestLlmOverclearGuardrail:
             classification="NEEDS_REVIEW",
             hb_value=threshold + 0.5,
             cohort_threshold=threshold,
-            evidence_text="Lab: Hb 7.6 g/dL this morning, no prior value",
+            evidence_text=f"Lab: Hb {hb} g/dL this morning, no prior value",
         )
         return ctx.model_copy(
             update={
@@ -3230,6 +3233,31 @@ class TestLlmOverclearGuardrail:
         assert row.final_classification == "NEEDS_REVIEW"
         assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
         assert row.needs_human_review is True
+
+    def test_grounded_at_floor_subthreshold_overclear_floors_to_review(
+        self, tmp_path: object
+    ) -> None:
+        # Owner ruling 2026-09-27 (case 68004713): an Hb exactly AT the cohort
+        # floor is sub-threshold. A grounded SUB_THRESHOLD_HB citation on an
+        # isolated 8.0 against the 8.0 floor is structurally TRUE, so it must
+        # floor to a human rather than be asserted INAPPROPRIATE.
+        ctx = self._single_low_hb_ctx("audit-oc-atfloor", hb=8.0, threshold=8.0)
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "SUB_THRESHOLD_HB",
+                    "quote": "Hb 8.0 g/dL this morning",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+            reasoning_en="single Hb at the 8.0 cohort floor",
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "NEEDS_REVIEW"
+        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
 
     def test_grounded_24h_minimum_below_floor_floors_to_review(
         self, tmp_path: object
@@ -5608,3 +5636,53 @@ class TestEmptyReasoningGuardrail:
             LLM_NATIVE_REVIEW_ASSERT_REASON,
         }
         assert len(reasons) == 6
+
+
+# =============================================================================
+# Inclusive indication thresholds (owner ruling 2026-09-27, case 68004713)
+# =============================================================================
+
+
+class TestInclusiveThresholdReplayHelpers:
+    """WHY: case 68004713 (Hb 7.0 at the default 7.0 floor) was routed to the
+    gray zone and the LLM called it INAPPROPRIATE. The owner ruled that a value
+    exactly AT an indication threshold qualifies, so the replay guardrail's
+    structural checks must treat the boundary value as sub-threshold too, or
+    they would assert INAPPROPRIATE against an order the rule now clears."""
+
+    _SUBTHRESHOLD_CITATION: tuple[dict[str, object], ...] = (
+        {"code": "SUB_THRESHOLD_HB", "quote": "Hb", "confidence": 0.9},
+    )
+
+    @staticmethod
+    def _ctx(hb: float, threshold: float) -> PipelineRowContext:
+        ctx = _row_context(
+            audit_id="audit-inclusive",
+            classification="NEEDS_REVIEW",
+            cohort_threshold=threshold,
+        )
+        return ctx.model_copy(
+            update={"hb_result": ctx.hb_result.model_copy(update={"value_g_dl": hb})}
+        )
+
+    def test_hb_exactly_7_is_a_structured_hard_signal(self) -> None:
+        assert _has_structured_hard_signal(self._ctx(7.0, 7.0)) is True
+
+    def test_hb_just_above_7_is_not_a_structured_hard_signal(self) -> None:
+        assert _has_structured_hard_signal(self._ctx(7.1, 7.0)) is False
+
+    def test_hb_at_floor_is_structurally_subthreshold(self) -> None:
+        assert (
+            _grounded_true_subthreshold_indication(
+                self._SUBTHRESHOLD_CITATION, self._ctx(8.0, 8.0)
+            )
+            is True
+        )
+
+    def test_hb_just_above_floor_is_not_structurally_subthreshold(self) -> None:
+        assert (
+            _grounded_true_subthreshold_indication(
+                self._SUBTHRESHOLD_CITATION, self._ctx(8.1, 8.0)
+            )
+            is False
+        )

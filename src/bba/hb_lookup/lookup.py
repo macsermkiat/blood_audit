@@ -16,7 +16,7 @@ Per PRD §3 and Round 2 E3:
   conservative bleed signal. Any window triggering sets
   ``delta_hb_bypass = True`` for the deterministic classifier.
 * ``needs_review_single_low_hb`` fires when the chosen current Hb is
-  < 8 g/dL and no prior observation sits in the 24h window before it —
+  <= 8 g/dL and no prior observation sits in the 24h window before it —
   an isolated low value with no trend to interpret it against.
 """
 
@@ -197,8 +197,13 @@ def _single_low_hb(
     current: HbObservation,
     all_priors: Sequence[HbObservation],
 ) -> bool:
-    """True iff current is < 8 g/dL and no prior sits in its 24h window."""
-    if current.value_g_dl >= _LOW_HB_REVIEW_THRESHOLD:
+    """True iff current is <= 8 g/dL and no prior sits in its 24h window.
+
+    Inclusive at 8.0 since owner ruling 2026-09-27 (case 68004713): an Hb
+    exactly at an 8.0 cohort floor now qualifies as sub-threshold and would
+    auto-clear, so it needs the same isolated-value safety check as 7.9.
+    """
+    if current.value_g_dl > _LOW_HB_REVIEW_THRESHOLD:
         return False
     twenty_four_hours = timedelta(hours=24)
     has_prior_in_24h = any(

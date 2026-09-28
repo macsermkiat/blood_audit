@@ -1512,17 +1512,22 @@ class TestRbcClearCutPromptSemantics:
             "silent notes, drawing the precise line against INAPPROPRIATE"
         )
 
-    def test_at_floor_hb_is_not_sub_threshold(self) -> None:
-        # HB_7_10 only: an Hb exactly at the floor is AT the floor, not
-        # sub-threshold. The over-clear pile included Hb 7.0/7.1 mislabeled
-        # "sub-threshold" against a 7.0 floor — SUB_THRESHOLD_HB must be
-        # defined as strictly below the injected floor.
+    def test_at_floor_hb_is_sub_threshold(self) -> None:
+        # Owner ruling 2026-09-27 (case 68004713: Hb 7.0 at the default 7.0
+        # floor was routed to the gray zone and called INAPPROPRIATE): a value
+        # exactly AT the floor qualifies. SUB_THRESHOLD_HB must be defined as
+        # at or below the injected floor, and the old "AT the floor is NOT
+        # sub-threshold" sentence must be gone, or the model keeps condemning
+        # orders the deterministic rule now clears. Hb just above the floor
+        # (7.1 at 7.0) is still not sub-threshold.
         prompt = system_prompt_for(task_mode="HB_7_10_REVIEW", cohort_threshold=7.5)
-        assert "strictly below" in prompt.lower(), (
-            "HB_7_10 prompt must define SUB_THRESHOLD_HB as strictly below the "
-            "floor so an at-floor Hb is not mislabeled sub-threshold"
-        )
-        assert "7.5" in prompt, "the floor value must be injected verbatim"
+        assert "at or below the cohort floor of 7.5 g/dL" in prompt
+        assert "exactly at 7.5 g/dL qualifies" in prompt
+        assert "is NOT sub-threshold" not in prompt
+        assert "NOT sub-threshold" not in prompt
+        assert "strictly below" not in prompt.lower().split("active_bleeding rule")[0]
+        assert "Absent EVERY hard indication, an Hb above 7.5 g/dL" in prompt
+        assert "at or above 7.5" not in prompt
 
     def test_gt_10_override_states_inclusive_boundary(self) -> None:
         # GT_10 only: dispatch routes Hb >= 10.0 to this template (the
@@ -1597,8 +1602,13 @@ class TestRbcPromptHashGolden:
     # Re-pinned for the label/reasoning-conflict guardrail: the shared preamble
     # now asks for the closing sentence "Final classification: X". Blessed by
     # tests/unit/test_label_reasoning_conflict.py.
+    # Re-pinned for the 2026-09-27 owner ruling (case 68004713): an Hb exactly
+    # at the cohort floor is sub-threshold ("at or below"), and the restrictive
+    # rule starts ABOVE the floor. Blessed by
+    # tests/unit/test_prompt_rulings_2026_09_27.py and
+    # test_at_floor_hb_is_sub_threshold.
     RBC_HB_7_10_75_EMPTY_EVIDENCE = (
-        "21294344a88851c968feae5084254d5ece3c9c15f9a15c99ec213fad37e9d98e"
+        "fa3b81bea806c6d6271436eba588aec9b2f314a1669f95aca830f493cf0fb8be"
     )
     # Re-pinned for #93 boundary alignment: dispatch routes Hb >= 10.0 to this
     # template (engine ``hb_ge_10``), so its prose states the inclusive
@@ -1613,8 +1623,12 @@ class TestRbcPromptHashGolden:
     # "cannot apply here"; the 24 h minimum can sit below the floor while the
     # routing Hb is >= 10.
     # Re-pinned for the closing-sentence rule, same shared preamble edit.
+    # Re-pinned for the 2026-09-27 inclusive-floor ruling: the shared
+    # SUB_THRESHOLD_HB definition and this template's 24 h-minimum sentence
+    # now read "at or below" the floor. Blessed by
+    # tests/unit/test_prompt_rulings_2026_09_27.py.
     RBC_HB_GT_10_75_EMPTY_EVIDENCE = (
-        "bcb41df81907dda4de0f5a9a62e40fb8768f025cfa7c02f62d27de5c89edc272"
+        "49d8eacc797dae81c3b79ea931a4fd97497c3c963d14125cc8cf1eaae155fbdc"
     )
 
     def test_hb_7_10_review_cohort_7_5_hash_is_pinned(self) -> None:

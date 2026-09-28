@@ -1221,7 +1221,7 @@ def _annotate_platelet_lab(
 def _render_platelet_projection(projected_k_ul: float | None) -> str:
     """The evidence line for :func:`bba.platelet_lookup.project_24h` (issue #237).
 
-    The replay guardrail decides "expected to drop below 10,000 /uL within 24
+    The replay guardrail decides "expected to fall to 10,000 /uL or below within 24
     hours" on this number, so the model is shown the same figure, per uL like
     the prompt's thresholds. A missing projection is stated, not omitted."""
     if projected_k_ul is None:

@@ -3,7 +3,7 @@
 Clinician ruling 2026-09-21 (issue #237): the clause means a STRAIGHT-LINE
 projection only. Take the last two platelet counts before the order and extend
 the line 24 h past the latest count; the clause holds iff the projected value
-is below 10,000 /uL. On the first real-data run the model cleared 19 orders on
+is at or below 10,000 /uL (inclusive since owner ruling 2026-09-27). On the first real-data run the model cleared 19 orders on
 this clause while the count was flat or rising, so code computes the number and
 the guardrail floors a clear the number does not support.
 """
@@ -139,8 +139,14 @@ class TestTrendGuardrail:
     def test_flat_count_clear_on_the_clause_alone_is_floored(self) -> None:
         assert platelet_trend_unsupported("APPROPRIATE", _MARROW_ONLY, 14.0, 14.0)
 
-    def test_projection_at_the_threshold_is_not_below_it(self) -> None:
-        assert platelet_trend_unsupported("APPROPRIATE", _MARROW_ONLY, 14.0, 10.0)
+    def test_projection_at_the_threshold_meets_the_clause(self) -> None:
+        # Owner ruling 2026-09-27 (triggered by case 68004713): a value
+        # exactly AT an indication threshold qualifies, so a projection of
+        # exactly 10,000 /uL satisfies "expected to fall to 10,000 or below".
+        assert not platelet_trend_unsupported("APPROPRIATE", _MARROW_ONLY, 14.0, 10.0)
+
+    def test_projection_just_above_the_threshold_is_floored(self) -> None:
+        assert platelet_trend_unsupported("APPROPRIATE", _MARROW_ONLY, 14.0, 10.1)
 
     def test_missing_projection_is_floored_not_guessed(self) -> None:
         # Never-guess: with fewer than two draws nothing supports "expected to
@@ -151,8 +157,19 @@ class TestTrendGuardrail:
         assert not platelet_trend_unsupported("APPROPRIATE", _MARROW_ONLY, 14.0, 6.0)
 
     def test_count_below_10_needs_no_projection(self) -> None:
-        # Indication 5's first arm (count < 10,000) stands on the count itself.
+        # Indication 5's first arm (count <= 10,000) stands on the count itself.
         assert not platelet_trend_unsupported("APPROPRIATE", _MARROW_ONLY, 9.0, None)
+
+    def test_count_exactly_10_needs_no_projection(self) -> None:
+        # Owner ruling 2026-09-27: a trigger count of exactly 10,000 /uL meets
+        # the first arm itself, so the projection guard must not fire.
+        assert not platelet_trend_unsupported("APPROPRIATE", _MARROW_ONLY, 10.0, None)
+
+    def test_count_just_above_10_without_projection_is_floored(self) -> None:
+        assert platelet_trend_unsupported("APPROPRIATE", _MARROW_ONLY, 10.5, None)
+
+    def test_count_above_10_with_projection_at_10_stands(self) -> None:
+        assert not platelet_trend_unsupported("APPROPRIATE", _MARROW_ONLY, 10.5, 10.0)
 
     @pytest.mark.parametrize(
         "signals",

@@ -41,7 +41,7 @@ class TestActiveBleedingIsANumberedIndication:
         # model had to invent the count at which bleeding qualifies.
         prompt = _platelet()
         assert re.search(
-            r"7\. .*active bleeding.*<50,000", prompt, re.IGNORECASE | re.DOTALL
+            r"7\. .*active bleeding.*≤50,000", prompt, re.IGNORECASE | re.DOTALL
         )
 
 
@@ -125,21 +125,21 @@ class TestProjectionLineGroundsTheExpectedDrop:
         )
 
     def test_below_ten_thousand_meets_the_clause_without_a_further_note(self) -> None:
+        # Inclusive since owner ruling 2026-09-27: "10,000 /μL or below".
         prompt = _platelet()
         assert re.search(
-            r"below 10,000[^.]*clause is met[^.]*(no|without)[^.]*(further|additional)[^.]*note",
+            r"10,000\s/μL or below[^.]*clause is met[^.]*(no|without)[^.]*(further|additional)[^.]*note",
             prompt,
             re.IGNORECASE,
         )
 
-    def test_at_or_above_ten_thousand_or_not_computable_does_not_meet_it(self) -> None:
+    def test_above_ten_thousand_or_not_computable_does_not_meet_it(self) -> None:
+        # Owner ruling 2026-09-27: a projection of exactly 10,000 /μL now meets
+        # the clause, so only a projection ABOVE 10,000 fails it.
         prompt = _platelet()
+        assert "at or above 10,000" not in prompt
         assert re.search(
-            r"(at or above|>=) ?10,000[^.]*not computable[^.]*not met",
-            prompt,
-            re.IGNORECASE,
-        ) or re.search(
-            r"not computable[^.]*(at or above|>=) ?10,000[^.]*not met",
+            r"is above 10,000[^.]*not computable[^.]*not met",
             prompt,
             re.IGNORECASE,
         )
