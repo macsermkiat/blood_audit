@@ -60,7 +60,7 @@ from bba.audit_store.models import AuditStoreConfig
 from bba.llm_client.conclusion import concluded_class, reasoning_conclusion
 
 WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
-DEFAULT_JUDGE_MODELS = "claude-sonnet-5,claude-haiku-4-5-20251001,claude-opus-5"
+DEFAULT_JUDGE_MODELS = "claude-sonnet-5-5,claude-haiku-4-5-20251001,claude-opus-5-5"
 JUDGE_WORKERS = 8
 JUDGE_MAX_TOKENS = 200
 MIN_STATED_VOTES = 2

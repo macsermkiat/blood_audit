@@ -375,7 +375,7 @@ def test_replay_dispatches_declared_preop_by_router_flag(
         results=(
             BatchSubmissionResult(
                 custom_id=ctx.order.audit_id,
-                model_id="claude-sonnet-5",
+                model_id="claude-sonnet-5-5",
                 raw_response_json={
                     "content": [
                         {

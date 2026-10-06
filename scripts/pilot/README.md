@@ -54,7 +54,7 @@ build_review.py         →  review.html    (single page for human review;
 | `BBA_PILOT_REQNO_FILE` | _(unset)_ | Text file with one REQNO per line (blank lines and lines starting with `#` are ignored). `sample_bundle.py` builds the bundle from exactly those RBC orders instead of a seeded draw, and ignores `BBA_PILOT_SAMPLE_N` / `BBA_PILOT_SAMPLE_SEED`. Stops without writing anything if a REQNO is missing, is not an eligible RBC order, matches more than one (HN, AN), or is listed twice. Use a fresh `BBA_PILOT_WORK_DIR`: a failed run leaves an earlier run's files in place. Use it to rebuild a reviewed sample: a seed reproduces a sample only on the exact BDVST snapshot it was drawn from |
 | `BBA_PILOT_PLATELET_REQNO_FILE` | _(unset)_ | Same format as `BBA_PILOT_REQNO_FILE`, for platelet-ONLY orders: `sample_bundle.py` builds the platelet stream from exactly those orders and ignores `BBA_PILOT_PLATELET_SAMPLE_N` / `BBA_PILOT_PLATELET_SEED` (manifest seed = `list`). Stops without writing if a REQNO is not an eligible platelet-only order (a mixed RBC+platelet REQNO is rejected). Lets a doctor-restricted cohort carry its platelet orders |
 | `BBA_PILOT_ICD10_CSV` | `../Bloodbank/data/raw/ICD10.csv` | ICD-10 master dictionary |
-| `BBA_PILOT_LLM_MODEL` | `claude-sonnet-5` | Anthropic model id |
+| `BBA_PILOT_LLM_MODEL` | `claude-sonnet-5-5` | Anthropic model id |
 | `BBA_PILOT_RUN_ID` | `pilot-mini` | run_id stamped on audit_store rows |
 | `BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE` | `false` | Opt-in to the missing-Hb MTP / peri-procedural auto-APPROPRIATE pre-check (SEED — set `1`/`true` only after clinical sign-off) |
 | `BBA_PILOT_DECLARED_USETYPE` | `0` (off) | When set to `1`, threads BDVSTDT.USETYPE declared intent into both pilot legs and appends `declared_use_code` / `declared_use_label` to `report.csv` |
@@ -210,7 +210,7 @@ validation step (M8 milestone).
 
 - **Model-id bypass.** `run_llm_leg.py` calls `AnthropicBatchTransport`
   directly instead of through `LlmClientConfig`. The model ids pinned in
-  `src/bba/llm_client/models.py` (`claude-sonnet-5`, `claude-opus-4-8`)
+  `src/bba/llm_client/models.py` (`claude-sonnet-5-5`, `claude-opus-5-5`)
   are bare aliases the live Anthropic API accepts, so the echoed
   model_id validates against `ALLOWED_MODELS` natively — no runtime
   allow-set patch is needed.

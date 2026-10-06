@@ -25,7 +25,7 @@ sub-threshold Hb that fell outside the 24h primary window.
 This script intentionally bypasses :class:`LlmClientConfig` and passes
 the model id directly to the transport. The production allow-set
 (``ALLOWED_MODELS``) is pinned to the bare aliases the live API returns
-(``claude-sonnet-5`` / ``claude-opus-4-8``), so the echoed model_id
+(``claude-sonnet-5-5`` / ``claude-opus-5-5``), so the echoed model_id
 validates natively at row construction — no runtime allow-set patch is
 needed here.
 
@@ -35,7 +35,7 @@ Environment variables:
   ``sample_bundle.py`` (default: ``/tmp/bba_mini``).
 * ``ANTHROPIC_API_KEY`` — required.
 * ``BBA_PILOT_LLM_MODEL`` — model id to use (default:
-  ``claude-sonnet-5``).
+  ``claude-sonnet-5-5``).
 * ``BBA_PILOT_RUN_ID`` — run id suffix for the audit_store (default:
   ``pilot-mini``). Bump to force re-run; the store is idempotent on
   (run_id, audit_id).
@@ -195,7 +195,7 @@ WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
 BUNDLE = WORK / "bundle"
 AUDIT_STORE_ROOT = WORK / "data" / "audit_store"
 RUN_ID = os.environ.get("BBA_PILOT_RUN_ID", "pilot-mini")
-MODEL_ID = os.environ.get("BBA_PILOT_LLM_MODEL", "claude-sonnet-5")
+MODEL_ID = os.environ.get("BBA_PILOT_LLM_MODEL", "claude-sonnet-5-5")
 # ``anthropic-batch`` (default) submits an Anthropic Message Batch with
 # ANTHROPIC_API_KEY. ``claude-cli`` asks the local ``claude`` CLI on the
 # claude.ai subscription, one call per case, for A/B runs that should not

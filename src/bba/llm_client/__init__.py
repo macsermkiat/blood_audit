@@ -3,7 +3,7 @@
 See issue #22 for acceptance criteria. PRD §13 (Implementation Decisions)
 defines the contract:
 
-* Snapshot-pinned model IDs (Sonnet 4.6, Opus 4.7) — drift is detected
+* Snapshot-pinned model IDs (Sonnet 5.5, Opus 5.5) — drift is detected
   by quarterly golden-set re-run.
 * ``custom_id == audit_id`` assertion on every Batch API result — never
   positional zip. Mismatch aborts the batch with an explicit error.
@@ -13,7 +13,7 @@ defines the contract:
   malformed output -> :class:`ParseOutcome.parse_failure = True` and
   routes to ``NEEDS_REVIEW`` with the ``parse_failure`` flag.
 * Retry policy: up to 2 Sonnet attempts; further failures escalate to
-  Opus 4.7. If Opus still fails (parse / grounding), the row routes to
+  Opus 5.5. If Opus still fails (parse / grounding), the row routes to
   ``NEEDS_REVIEW``.
 * Sonnet/Opus classification-disagreement detection: when both succeed
   with different classifications, route to ``NEEDS_REVIEW`` with the

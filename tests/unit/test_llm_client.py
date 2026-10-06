@@ -343,11 +343,11 @@ class TestPinnedModelId:
         # Change-detector: the primary model is pinned to a specific bare
         # alias. Bumping it must be an explicit edit to the constant (not
         # a transparent SDK upgrade) followed by a golden-set re-run.
-        assert SONNET_MODEL_ID == "claude-sonnet-5"
+        assert SONNET_MODEL_ID == "claude-sonnet-5-5"
         assert "sonnet" in SONNET_MODEL_ID
 
     def test_opus_model_id_is_expected_alias(self) -> None:
-        assert OPUS_MODEL_ID == "claude-opus-4-8"
+        assert OPUS_MODEL_ID == "claude-opus-5-5"
         assert "opus" in OPUS_MODEL_ID
 
     def test_unpinned_model_rejected_by_config(self) -> None:
@@ -637,7 +637,7 @@ class TestMalformedJsonFailClosed:
 # =============================================================================
 # AC ④ — Retry → escalation test
 #
-# WHY: PRD §13 "Retry → Sonnet (≤ 2x) → escalate to Opus 4.7".
+# WHY: PRD §13 "Retry → Sonnet (≤ 2x) → escalate to Opus 5.5".
 # Cost + latency vs. recovery tradeoff: a single Sonnet failure can
 # be transient (rate-limit, content filter); two failures probably
 # aren't, and Opus is reserved for those.

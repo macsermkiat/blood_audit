@@ -1,6 +1,6 @@
-"""Retry → Sonnet → Opus 4.7 escalation orchestration.
+"""Retry → Sonnet → Opus 5.5 escalation orchestration.
 
-PRD §13: "Retry → Sonnet (≤ 2x) → escalate to Opus 4.7". The escalation
+PRD §13: "Retry → Sonnet (≤ 2x) → escalate to Opus 5.5". The escalation
 policy is purely a function of :class:`ParseOutcome`:
 
 * Parseable Sonnet result on attempt 1 → no retry, no Opus call.

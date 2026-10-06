@@ -905,7 +905,7 @@ def test_applying_a_filter_drops_the_active_case(
 
 _LLM_ENTRY = (
     '[{"reqno": "R1", "audit_id": "a1", "llm_final": '
-    '{"final_classification": "APPROPRIATE", "model": "claude-sonnet-5"}}]'
+    '{"final_classification": "APPROPRIATE", "model": "claude-sonnet-5-5"}}]'
 )
 
 
@@ -1051,7 +1051,7 @@ def test_the_page_renders_the_report_the_gate_validated(
             "llm_final": {
                 "final_classification": "INAPPROPRIATE",
                 "confidence": 0.9,
-                "model": "claude-sonnet-5",
+                "model": "claude-sonnet-5-5",
                 "review_reason": None,
                 "indications": [],
                 "negative_evidence": [],

@@ -501,7 +501,7 @@ def test_apply_batch_results_platelet_row_sets_component(tmp_path):
     ctx = _platelet_ctx("audit-plt-009", platelet_count=75.0)
     result_item = BatchSubmissionResult(
         custom_id="audit-plt-009",
-        model_id="claude-sonnet-5",
+        model_id="claude-sonnet-5-5",
         raw_response_json={
             "content": [
                 {

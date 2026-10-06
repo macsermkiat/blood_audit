@@ -40,7 +40,7 @@ from bba.prompt_builder import (  # noqa: E402
     compute_prompt_hash,
 )
 
-MODEL = "claude-opus-4-8"
+MODEL = "claude-opus-5-5"
 
 
 def _request(audit_id: str) -> BatchSubmissionRequest:

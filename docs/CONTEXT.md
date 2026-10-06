@@ -2305,7 +2305,7 @@ reader does not re-litigate:
 ### Allow-set-pinned model ID
 
 The two model IDs the client may invoke are bare aliases
-(`claude-sonnet-5`, `claude-opus-4-8`) — Claude Sonnet 5 and Opus 4.8
+(`claude-sonnet-5-5`, `claude-opus-5-5`) — Claude Sonnet 5.5 and Opus 5.5
 ship without dated snapshots, so the alias is the canonical ID. They
 live behind `SONNET_MODEL_ID` and `OPUS_MODEL_ID` in
 `bba.llm_client.models`; the runtime allowlist is
@@ -2363,7 +2363,7 @@ forge an inconsistent `ParseOutcome`.
 
 `bba.llm_client.escalation.run_with_escalation` runs one audit row
 through up to `MAX_SONNET_ATTEMPTS = 2` Sonnet calls, then escalates
-to Opus 4.7 iff every Sonnet attempt produced `parse_failure=True`.
+to Opus 5.5 iff every Sonnet attempt produced `parse_failure=True`.
 PRD §13 cap of two Sonnet retries is structural: `LlmClientConfig`'s
 `max_sonnet_attempts` field is bounded `ge=2, le=MAX_SONNET_ATTEMPTS`.
 The policy is pure-control-flow over `ParseOutcome`; the HTTP
