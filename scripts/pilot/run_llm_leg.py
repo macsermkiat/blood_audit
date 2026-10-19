@@ -78,6 +78,7 @@ from bba.audit_pipeline import PipelineRowContext
 from bba.audit_pipeline.pipeline import (
     _persist_bridge_gate_review_row,
     _persist_injection_flagged_row,
+    _persist_privacy_flagged_row,
     _persist_operation_unresolved_row,
     _persist_over_reservation_row,
     _persist_platelet_bridge_gate_review_row,
@@ -181,6 +182,11 @@ from bba.preop_reservation.planned_op import (
 )
 from bba.ingest.date_parser import parse_kcmh_english_date
 from bba.ingest.models import ParsedTimeOfDay
+from bba.deid_redactor.admission import (
+    PrivacyAdmissionError,
+    PrivacyAdmissionPolicy,
+    load_privacy_artifacts,
+)
 from bba.llm_client import AnthropicBatchTransport, BatchSubmissionRequest
 from bba.prompt_builder import EvidenceChunk, PromptBuildRequest, build_prompt
 from bba.vitals_extractor import PeriopSummary, extract_vitals
@@ -638,21 +644,11 @@ csv.field_size_limit(sys.maxsize)
 
 # ============================================================
 # Live transport wrapper.
-#
-# The audit_pipeline orchestrator carries a cost guard that rejects
-# isinstance(transport, AnthropicBatchTransport) — useful for tests
-# but blocks live use too. Production callers compose the live
-# transport via a Protocol-compliant wrapper that is NOT a subclass.
 # ============================================================
 
 
 class RealAnthropicTransport:
-    """Production transport — delegates to AnthropicBatchTransport via composition.
-
-    The audit_pipeline.cost_guard's isinstance() check on
-    AnthropicBatchTransport blocks the test path; production callers use
-    a Protocol-compliant wrapper. This wrapper is exactly that.
-    """
+    """Pilot adapter for the library's authenticated live transport."""
 
     def __init__(
         self,
@@ -660,9 +656,13 @@ class RealAnthropicTransport:
         api_key: str,
         poll_interval_seconds: float = 30.0,
         max_wait_seconds: float = 3600.0,
+        privacy_policy: PrivacyAdmissionPolicy | None = None,
+        manifest_root: Path | None = None,
     ) -> None:
         self._inner = AnthropicBatchTransport(
             api_key=api_key,
+            privacy_policy=privacy_policy,
+            manifest_root=manifest_root,
             poll_interval_seconds=poll_interval_seconds,
             max_wait_seconds=max_wait_seconds,
         )
@@ -1461,8 +1461,6 @@ def main() -> None:
             f"BBA_PILOT_TRANSPORT must be anthropic-batch or claude-cli, got {TRANSPORT!r}"
         )
     api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if TRANSPORT == "anthropic-batch" and not api_key:
-        sys.exit("ANTHROPIC_API_KEY not set")
     if not BUNDLE.exists():
         sys.exit(f"bundle not found: {BUNDLE} (run sample_bundle.py first)")
 
@@ -1878,8 +1876,8 @@ def main() -> None:
                     platelet_projection_computed=True,
                     hn_hash=hn_hash,
                     an_hash=an_hash,
-                    redactor_version="external-deid-gate-narrative-0.1",
-                    redactor_model_sha="0" * 64,
+                    redactor_version="not-applied",
+                    redactor_model_sha="unavailable",
                     policy_version="KCMH-PR17.2 / AABB-2023 (pilot)",
                     prompt_hash="0" * 64,
                     evidence_bundle_hash=bundle.bundle_hash,
@@ -2385,8 +2383,8 @@ def main() -> None:
                 an_hash=an_hash,
                 prior_rbc_units_24h=0,
                 prior_rbc_units_7d=0,
-                redactor_version="external-deid-gate-narrative-0.1",
-                redactor_model_sha="0" * 64,
+                redactor_version="not-applied",
+                redactor_model_sha="unavailable",
                 policy_version="KCMH-PR17.2 / AABB-2023 (pilot)",
                 prompt_hash="0" * 64,
                 evidence_bundle_hash=bundle.bundle_hash,
@@ -2690,6 +2688,31 @@ def main() -> None:
                 )
         sys.exit("nothing to submit")
 
+    privacy_policy_path = os.environ.get("BBA_PRIVACY_POLICY")
+    privacy_artifacts_path = os.environ.get("BBA_PRIVACY_ARTIFACTS")
+    privacy_policy = (
+        PrivacyAdmissionPolicy.from_file(Path(privacy_policy_path))
+        if privacy_policy_path
+        else None
+    )
+    privacy_artifacts = (
+        load_privacy_artifacts(Path(privacy_artifacts_path))
+        if privacy_artifacts_path
+        else {}
+    )
+    llm_contexts = [
+        ctx.model_copy(
+            update={
+                "evidence_chunks": privacy_artifacts[
+                    ctx.order.audit_id
+                ].evidence_chunks,
+            }
+        )
+        if ctx.order.audit_id in privacy_artifacts
+        else ctx
+        for ctx in llm_contexts
+    ]
+
     submissions: list[BatchSubmissionRequest] = []
     # Codex round-5 P2 (security): honor injection routing in the pilot leg. A
     # prompt whose scanner raised route_to_needs_review must NEVER be submitted
@@ -2775,19 +2798,57 @@ def main() -> None:
             f"{len(injection_flagged)}"
         )
 
+    private_submissions: list[BatchSubmissionRequest] = []
+    context_by_id = {ctx.order.audit_id: ctx for ctx in llm_contexts}
+    for submission in submissions:
+        artifact = privacy_artifacts.get(submission.audit_id)
+        try:
+            if privacy_policy is None or artifact is None:
+                raise PrivacyAdmissionError("missing trusted redaction admission")
+            submission = submission.model_copy(
+                update={"privacy_attestation": artifact.attestation}
+            )
+            privacy_policy.verify(submission)
+        except PrivacyAdmissionError:
+            _persist_privacy_flagged_row(
+                context_by_id[submission.audit_id],
+                classifier_result=classifier_results.get(submission.audit_id),
+                audit_store=audit_store,
+                run_id=RUN_ID,
+            )
+        else:
+            context_by_id[submission.audit_id] = context_by_id[
+                submission.audit_id
+            ].model_copy(
+                update={
+                    "prompt_hash": submission.prompt.prompt_hash,
+                    "redactor_version": artifact.attestation.redactor_version.version,
+                    "redactor_model_sha": artifact.attestation.redactor_version.model_sha,
+                    "evidence_bundle_hash": artifact.attestation.redaction_hash,
+                }
+            )
+            private_submissions.append(submission)
+    submissions = private_submissions
+    llm_contexts = [context_by_id[ctx.order.audit_id] for ctx in llm_contexts]
+
     if not submissions:
-        print("  no clean submissions remaining after the injection filter")
+        print("  no submissions passed privacy and injection admission")
     else:
         transport: Any
         if TRANSPORT == "claude-cli":
             print(f"\nTransport: claude-cli (subscription, {CLI_WORKERS} workers)")
             transport = ClaudeCliTransport(
-                batch_root=WORK / "cli_batches", workers=CLI_WORKERS
+                batch_root=WORK / "cli_batches",
+                workers=CLI_WORKERS,
+                privacy_policy=privacy_policy,
             )
         else:
-            assert api_key is not None
+            if not api_key:
+                sys.exit("ANTHROPIC_API_KEY not set")
             transport = RealAnthropicTransport(
                 api_key=api_key,
+                privacy_policy=privacy_policy,
+                manifest_root=WORK / "api_request_manifests",
                 poll_interval_seconds=20.0,
                 # Anthropic batches have a 24h SLA; the old 1h cap gave up while
                 # the batch was still processing. Env-overridable for a shorter
@@ -2798,11 +2859,8 @@ def main() -> None:
             )
         t0 = time.time()
         # Resume path: if BBA_PILOT_BATCH_ID is set, re-attach to an already-
-        # submitted batch instead of creating a new one. The deterministic
-        # context build above is reproducible, so ``submissions`` matches the
-        # original submission set and fetch_batch_results can rebuild each
-        # result's request_json. Use this after a Ctrl+C during polling so the
-        # in-flight batch is not abandoned and re-billed.
+        # submitted batch instead of creating a new one. The transport checks
+        # the exact stored manifest before fetching any response.
         resume_batch_id = os.environ.get("BBA_PILOT_BATCH_ID")
         if resume_batch_id:
             batch_id = resume_batch_id

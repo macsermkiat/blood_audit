@@ -41,6 +41,7 @@ from bba.audit_orders import AuditOrder
 from bba.audit_store.models import Component, SafeId, UTCDatetime
 from bba.cohort_detector import CohortAssignment
 from bba.declared_use import DeclaredUseLabel
+from bba.deid_redactor.admission import PrivacyAttestation
 from bba.hb_lookup import HbLookupResult
 from bba.platelet_lookup.models import PlateletLookupResult
 from bba.preop_reservation import PlateletReservationDecision, ReservationDecision
@@ -183,6 +184,7 @@ class PipelineRowContext(BaseModel):
     evidence_bundle_hash: str = Field(min_length=1)
 
     evidence_chunks: tuple[EvidenceChunk, ...] = ()
+    privacy_attestation: PrivacyAttestation | None = None
 
     # Deterministic peri-op signal carried through from
     # :class:`bba.evidence_bundle_builder.EvidenceBundle.periop_summary`
@@ -349,6 +351,7 @@ class AuditPipelineConfig(BaseModel):
 
     db_url: str = Field(min_length=1)
     code_version: str = Field(min_length=1)
+    allow_live_api: bool = False
     max_batch_size: int = Field(default=100, ge=1, le=10_000)
     poll_interval_seconds: float = Field(default=30.0, gt=0.0)
 

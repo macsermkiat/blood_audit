@@ -25,7 +25,9 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+
+from bba.audit_store import Classification
 
 
 ActionKind = Literal[
@@ -121,7 +123,37 @@ def _validate_nonempty(value: str) -> str:
 NonEmptyStr = Annotated[str, AfterValidator(_validate_nonempty)]
 
 
-class ReviewActionInput(BaseModel):
+class ReviewIdentity(BaseModel):
+    """Complete immutable row identity for evidence-bound decisions."""
+
+    model_config = ConfigDict(frozen=True)
+
+    run_id: SafeId | None = None
+    code_version: NonEmptyStr | None = None
+    row_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    expected_revision: int | None = Field(default=None, ge=0)
+    submission_id: SafeId | None = None
+    override_classification: Classification | None = None
+
+    @model_validator(mode="after")
+    def _complete_identity(self) -> ReviewIdentity:
+        identity = (
+            self.run_id,
+            self.code_version,
+            self.row_hash,
+            self.expected_revision,
+            self.submission_id,
+        )
+        if any(value is not None for value in identity) and any(
+            value is None for value in identity
+        ):
+            raise ValueError(
+                "bound decisions require run_id, code_version, row_hash, expected_revision and submission_id"
+            )
+        return self
+
+
+class ReviewActionInput(ReviewIdentity):
     """Input to :meth:`ReviewActionsStore.record_action`.
 
     No ``action_id`` / ``created_at`` — those are DB-assigned at INSERT time.
@@ -158,6 +190,14 @@ class ReviewActionInput(BaseModel):
                 "ReviewActionInput.override_reason is required when "
                 "action='override'; a bare dissent is not auditable"
             )
+        if (
+            self.run_id is not None
+            and self.action == "override"
+            and self.override_classification is None
+        ):
+            raise ValueError("bound overrides require a replacement classification")
+        if self.action != "override" and self.override_classification is not None:
+            raise ValueError("replacement classification is only valid for overrides")
         if self.action != "override" and self.override_reason is not None:
             raise ValueError(
                 f"ReviewActionInput.override_reason is only valid when "
@@ -166,7 +206,7 @@ class ReviewActionInput(BaseModel):
         return self
 
 
-class ReviewAction(BaseModel):
+class ReviewAction(ReviewIdentity):
     """A persisted reviewer decision.
 
     Append-only — once written, immutable. ``action_id`` is the DB-assigned

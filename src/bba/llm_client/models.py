@@ -48,6 +48,7 @@ from bba.audit_store.models import (
     SafeId,
     UTCDatetime,
 )
+from bba.deid_redactor.admission import PrivacyAttestation
 from bba.platelet_guardrail.models import PlateletHardSignals
 from bba.prompt_builder.models import PromptBuildResult, TaskMode
 
@@ -323,6 +324,7 @@ class BatchSubmissionRequest(BaseModel):
     run_id: SafeId
     task_mode: TaskMode
     prompt: PromptBuildResult
+    privacy_attestation: PrivacyAttestation | None = None
 
 
 class BatchSubmissionResult(BaseModel):

@@ -18,12 +18,14 @@ inject lambdas.
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Callable, Sequence
 from datetime import date, datetime
 from pathlib import Path
 
 from bba.audit_store import AuditRow, AuditStore
 from bba.audit_store.models import Classification as AuditClassification
+from bba.classifications import RETURNS_TERMINALS
 from bba.report_generator.aggregate import REPORT_TZ
 from bba.report_generator.exceptions import (
     EmptyInputError,
@@ -35,6 +37,7 @@ from bba.report_generator.models import (
     MonthlyReportRow,
     ReportFooter,
     ReportInputs,
+    ReportRowProvenance,
 )
 
 
@@ -99,9 +102,7 @@ def default_indication_codes_extractor(row: AuditRow) -> tuple[str, ...]:
     return tuple(codes)
 
 
-_EXCLUDED_NONSCORABLE: frozenset[str] = frozenset(
-    {"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"}
-)
+_EXCLUDED_NONSCORABLE = RETURNS_TERMINALS
 """Returns-ledger terminal classifications excluded from the report before
 projection (spec #119). Non-scorable — mirrors their exclusion from attribution
 rates; the default projector fails loud on them so they must be dropped upstream.
@@ -260,6 +261,21 @@ def build_report_inputs(
         footer=footer,
         output_dir=output_dir,
         physician_ids_for_own_view=physician_ids,
+        provenance=tuple(
+            ReportRowProvenance(
+                audit_id=row.audit_id,
+                run_id=row.run_id,
+                code_version_slug=slug,
+                model_id=row.model_id,
+                policy_version=row.policy_version,
+                prompt_hash=row.prompt_hash,
+                evidence_bundle_hash=row.evidence_bundle_hash,
+                redactor_version=row.redactor_version,
+                redactor_model_sha=row.redactor_model_sha,
+            )
+            for row, slug in sorted(records, key=lambda record: record[0].audit_id)
+            if row.component == "red_cell"
+        ),
     )
 
 
@@ -270,25 +286,10 @@ def build_report_inputs(
 
 _FOOTER_EQUALITY_FIELDS: tuple[str, ...] = (
     "policy_version",
-    "model_id",
     "redactor_version",
     "redactor_model_sha",
-    "prompt_hash",
 )
-"""Footer fields that MUST agree across every audit row in the run.
-
-These are the truly run-level reproducibility stamps: the deterministic
-classifier's policy version, the LLM model ID, the redactor version /
-model SHA, and the system-prompt hash. :class:`PipelineRowContext`
-documents them as "pinned per run".
-
-:attr:`AuditRow.evidence_bundle_hash` is deliberately omitted: it is a
-**per-row** value (each row's evidence bundle has its own SHA — see
-:class:`bba.evidence_bundle_builder.builder.EvidenceBundle`), so
-asserting cross-row equality would fail every multi-row run. The
-:class:`ReportFooter` field of the same name is derived via
-:func:`_aggregate_evidence_bundle_hash` instead.
-"""
+"""Policy and redactor identity must agree within a report run."""
 
 
 def _assert_single_code_version(
@@ -324,21 +325,19 @@ def _assert_single_code_version(
 
 
 def _reconstruct_footer(rows: Sequence[AuditRow]) -> ReportFooter:
-    """Build the :class:`ReportFooter` from the run's audit rows.
-
-    The five :data:`_FOOTER_EQUALITY_FIELDS` are required to be identical
-    across every row (a single run produces a single reproducibility
-    stamp); disagreement raises :class:`MixedRunMetadataError`.
-
-    The footer's ``evidence_bundle_hash`` field is derived from the
-    per-row hashes via :func:`_aggregate_evidence_bundle_hash` rather
-    than equality-checked, because each audit row carries its own
-    bundle-specific SHA by design (Codex review on PR #71).
-    """
-    pivot = rows[0]
-    expected = {field: getattr(pivot, field) for field in _FOOTER_EQUALITY_FIELDS}
-    for row in rows[1:]:
-        for field, value in expected.items():
+    """Summarize row provenance while enforcing policy and redactor identity."""
+    applied = tuple(
+        row
+        for row in rows
+        if (row.redactor_version, row.redactor_model_sha)
+        != ("not-applied", "unavailable")
+    )
+    expected: dict[str, str] = {}
+    for field in _FOOTER_EQUALITY_FIELDS:
+        checked = rows if field == "policy_version" else applied or rows
+        pivot = checked[0]
+        value = getattr(pivot, field)
+        for row in checked[1:]:
             actual = getattr(row, field)
             if actual != value:
                 raise MixedRunMetadataError(
@@ -348,6 +347,25 @@ def _reconstruct_footer(rows: Sequence[AuditRow]) -> ReportFooter:
                     "a single run must produce a single reproducibility "
                     "footer — investigate the audit_store contents"
                 )
+        values = sorted({getattr(row, field) for row in rows})
+        expected[field] = (
+            values[0] if len(values) == 1 else json.dumps(values, separators=(",", ":"))
+        )
+    models = sorted({row.model_id for row in rows})
+    expected["model_id"] = (
+        models[0] if len(models) == 1 else json.dumps(models, separators=(",", ":"))
+    )
+    prompts = {row.prompt_hash for row in rows}
+    expected["prompt_hash"] = (
+        next(iter(prompts))
+        if len(prompts) == 1
+        else hashlib.sha256(
+            json.dumps(
+                sorted((row.audit_id, row.prompt_hash) for row in rows),
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+    )
     expected["evidence_bundle_hash"] = _aggregate_evidence_bundle_hash(rows)
     try:
         return ReportFooter(**expected)

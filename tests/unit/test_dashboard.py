@@ -146,6 +146,9 @@ class _InMemoryReviewActionsStore(ReviewActionsStore):
         self._fake_phi_logs.append(log)
         return log
 
+    def list_actions(self, *, audit_id=None, reviewer_id=None):
+        return ()
+
     @contextmanager
     def access_phi(self, access: PhiAccessInput) -> Iterator[PhiAccessLog]:
         # Mirror the parent's contract: log row is committed BEFORE the
@@ -1207,10 +1210,9 @@ class TestRouteSmoke:
         response = client.get("/queue")
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
-        # Tailwind + HTMX must be present in the rendered queue view
-        # (FastAPI + HTMX + Tailwind is the PRD §17 acceptance shape).
-        assert "tailwindcss" in response.text
-        assert "htmx.org" in response.text
+        # Review pages must load only the bundled local assets.
+        assert "/static/dashboard.css" in response.text
+        assert "/static/dashboard.js" in response.text
 
     def test_get_queue_htmx_request_returns_table_fragment(self, client: Any) -> None:
         """HTMX swap target is ``#queue-table`` with ``outerHTML``. An
@@ -1226,12 +1228,12 @@ class TestRouteSmoke:
 
     def test_get_queue_plain_browser_returns_full_document(self, client: Any) -> None:
         """Plain browser navigation (no HX-Request header) gets the full
-        page with nav chrome, Tailwind, and HTMX script tag."""
+        page with navigation and local assets."""
         response = client.get("/queue")
         assert response.status_code == 200
         assert "<html" in response.text
-        assert "tailwindcss" in response.text
-        assert "htmx.org" in response.text
+        assert "/static/dashboard.css" in response.text
+        assert "/static/dashboard.js" in response.text
 
     def test_get_queue_accepts_sort_query_params(
         self, client: Any, audit_store: AuditStore
@@ -1264,12 +1266,16 @@ class TestRouteSmoke:
         assert response.status_code == 200
 
     def test_post_break_glass_returns_200(self, client: Any) -> None:
-        # HTMX submits form-encoded bodies; the route accepts a Form
-        # field rather than JSON so the dashboard's UI works without a
-        # client-side JSON shim.
+        import re
+
+        page = client.get("/case/audit-001")
+        token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
         response = client.post(
             "/case/audit-001/break-glass",
-            data={"justification": "Clinical review per attending"},
+            data={
+                "justification": "Clinical review per attending",
+                "csrf_token": token,
+            },
         )
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
@@ -1355,7 +1361,7 @@ class TestRouteSmoke:
                 assert response.status_code == 200
                 # The override resolved successfully — page rendered
                 # without the 401 fallback path.
-                assert "tailwindcss" in response.text
+                assert "/static/dashboard.css" in response.text
         finally:
             app.dependency_overrides.clear()
 
@@ -1487,17 +1493,13 @@ class TestPlateletRowsExcludedFromDashboard:
             "platelet row must not be counted in RBC pipeline health total"
         )
 
-    def test_queue_excludes_platelet_rows(
+    def test_queue_includes_platelet_rows(
         self,
         context_in_care_team: RouteContext,
         audit_store: AuditStore,
         tmp_path: Path,
     ) -> None:
-        """The NEEDS_REVIEW queue must not surface platelet rows.
-
-        Both the RBC and platelet rows carry needs_human_review=True, but
-        only the RBC row belongs in the RBC queue.
-        """
+        """The review queue exposes both components without mixing their labs."""
         from bba.audit_store import AuditStoreConfig
         from bba.dashboard import DashboardConfig
 
@@ -1523,6 +1525,6 @@ class TestPlateletRowsExcludedFromDashboard:
         audit_ids = {it.audit_id for it in items}
 
         assert "audit-rbc2" in audit_ids
-        assert "audit-plt2" not in audit_ids, (
-            "platelet row must not appear in the RBC NEEDS_REVIEW queue"
+        assert "audit-plt2" in audit_ids, (
+            "platelet cases requiring review must have a visible adjudication route"
         )

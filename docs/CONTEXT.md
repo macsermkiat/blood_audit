@@ -3278,41 +3278,17 @@ otherwise leave the patient's given+family name in the operator log.
 `bba.cli.phi_scrubber.PHI_REGEXES` re-exports this tuple unchanged so
 the redactor and the traceback scrubber cannot drift.
 
-### Phase 1 ingest leg
+### Supported application composition
 
-The Phase 1 deliverable for `bba audit`: call
-`bba.ingest.ingest(IngestConfig(...))` against `input_csv.parent` and
-record one `phase1_ingest_<table>` row marker per validated HOSxP
-table from `IngestResult.tables_written`. The LLM-driven analysis leg
-(deterministic classifier → evidence bundle → de-id → prompt → batch
-submit → quote ground → calibrate → audit_store write) requires a
-context-builder composition over `audit_orders` /
-`deterministic_classifier` / `evidence_bundle_builder` /
-`deid_redactor` / `prompt_builder` that `bba.audit_pipeline`'s contract
-explicitly delegates to its caller. When that orchestration facade
-lands, the `_run_audit_pipeline` seam delegates to it.
+`bba.application` composes normalized HOSxP exports into `PipelineRowContext` inputs for the existing `run_pipeline`. The adapters join orders, diagnoses, lab results, notes, medications, procedures, returns, declared use, and MSBOS reservations through the current public modules and feature flags. No classification engine is duplicated.
 
-### Zero-table guard
+The default local configuration commits deterministic classifications and local `NEEDS_REVIEW` for model-bound cases without privacy approval. The application never sends raw narrative. Explicit cassette or live configuration admits exact redacted artifacts through an operator-controlled `PrivacyAdmissionPolicy`. Admitted model work uses Postgres batch checkpoints. Live mode requires explicit `allow_live_api` and remains prohibited in tests.
 
-The defensive check in `_run_audit_pipeline` that raises `CliError` if
-`IngestResult.tables_written` is empty. Real ingest raises
-`IncompleteInputError` before returning an empty tuple, but the guard
-remains so a future ingest revision cannot silently mark a run
-complete with zero row markers — keeping `run_complete=True` and
-`run_count==0` an impossible state.
+`_run_audit_pipeline` records markers only for committed AuditRows. It cannot declare ingestion-only work complete. The application creates an owner-readable patient-identity HMAC key in the data directory and records the source path for `--run-id` recovery. An explicit application JSON configuration contributes to the CLI run identity.
 
-### Integration-contract CliError
+The report command renders the selected HTML, JSON, or PDF format. Evaluation requires a reviewed-label CSV. Sentinel cadence dispatch requires explicit baseline and current runs, code versions, and immutable audit-ID membership. Dashboard serving requires a valid signed reviewer session, an HTTPS public origin, a dedicated authentication secret, and an unprivileged Postgres review role. The CLI has no anonymous reviewer fallback.
 
-The pattern used by the four subcommands (`evaluate`, `report`,
-`serve-dashboard`, `sentinel`) whose underlying module does not yet
-expose a single-call facade matching the CLI's flag surface. Each
-body validates inputs via Pydantic, emits a structured `<sub>.start`
-log, and raises `CliError` naming the integration seam (e.g.
-`bba.cli.main.bba_evaluate`) and the underlying module's currently
-exposed primitives. The error is not a TODO — it's the CLI's
-"fail loud at the integration boundary" contract from PRD §20, and is
-the regression guard that keeps the subcommands' bodies thin until
-the underlying facades land.
+The detailed operator contract is in [production-cli.md](production-cli.md). The synthetic local and cassette CLI journeys are in `tests/unit/test_application.py` and `tests/unit/test_application_cassette.py`.
 
 ### Excepthook + faulthandler sidecar
 

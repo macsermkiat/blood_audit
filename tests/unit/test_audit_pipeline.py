@@ -59,6 +59,7 @@ from hypothesis import strategies as st
 from bba.audit_orders import AuditOrder
 from bba.audit_store import AuditRow, LlmCall
 from bba.audit_store.models import Classification
+from bba.audit_pipeline.manifest import context_hash
 from bba.audit_pipeline.replay import (
     ADMINISTRATION_CONTRADICTION_REVIEW_REASON,
     EMPTY_REASONING_REVIEW_REASON,
@@ -312,6 +313,8 @@ def _orphan_llm_call(ctx: PipelineRowContext, *, run_id: str) -> LlmCall:
     contract the real writer uses)."""
     return LlmCall(
         call_id=f"call-{ctx.order.audit_id}-orphan",
+        attempt_index=0,
+        context_hash=context_hash(ctx),
         audit_id=ctx.order.audit_id,
         run_id=run_id,
         model_id=SONNET_MODEL_ID,
@@ -1479,6 +1482,23 @@ class TestSigtermMidBatchResume:
             )
         )
 
+        from bba.audit_pipeline.manifest import persist_manifest
+        from bba.audit_pipeline.resume import _rebuild_submission_requests
+
+        staged = batch_run_store.get("batch-poll")
+        persist_manifest(
+            run=staged,
+            audit_store=audit_store,
+            contexts=(ctx,),
+            requests=_rebuild_submission_requests(
+                run=staged,
+                contexts={ctx.order.audit_id: ctx},
+                audit_ids=staged.audit_ids,
+            ),
+            llm_config=_llm_config(),
+            enable_missing_platelet_defer=False,
+        )
+
         # Resume reconciler: must poll Anthropic, write audit_row,
         # transition batch_run to COMPLETE — no failed audit_ids.
         report = resume_on_startup(
@@ -2063,6 +2083,7 @@ def _apply_single_row(
         audit_store=audit_store,
         run_id="run-periop",
         contexts={ctx.order.audit_id: ctx},
+        verifier=lambda *_: True,
     )
     rows = audit_store.read_audit_results(run_id="run-periop")
     assert len(rows) == 1
@@ -2105,7 +2126,7 @@ class TestReserveAheadGate:
         import hashlib
 
         assert hashlib.sha256(row.model_dump_json().encode()).hexdigest() == (
-            "77ca731682d441a07c5fbf2752d59913c3e6d84a32d200096be501e212869209"
+            "1444c8f31d8ceb6503e8b30f62ca511505aa00dd3938a511a023326d72026926"
         )
 
     def test_no_administration_is_terminal_unconfirmed_and_persists_assessment(

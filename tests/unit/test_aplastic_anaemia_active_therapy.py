@@ -21,6 +21,7 @@ import bba.feature_flags as feature_flags
 import pytest
 
 from bba.audit_orders import AuditOrder
+from bba.prompt_builder import EvidenceChunk
 from bba.audit_pipeline import PipelineRowContext, apply_batch_results
 from bba.audit_store import AuditStore
 from bba.audit_store.models import AuditStoreConfig
@@ -208,6 +209,13 @@ def _ctx(count: float, projected: float | None) -> PipelineRowContext:
         policy_version="kcmh-pr17.2-2024",
         prompt_hash="ph",
         evidence_bundle_hash="bh",
+        evidence_chunks=(
+            EvidenceChunk(
+                evidence_id="E4",
+                source="Note",
+                text="ATG day 3, plt 15,000 with active therapy",
+            ),
+        ),
     )
 
 
@@ -216,7 +224,7 @@ def _response(*, classification: str, extra_signal: bool | None) -> RawBatchResp
         "indications": [
             {
                 "code": "8",
-                "quote": "ATG day 3, plt 15,000",
+                "quote": "ATG day 3, plt 15,000 with active therapy",
                 "source_id": "E4",
                 "confidence": 0.9,
             }

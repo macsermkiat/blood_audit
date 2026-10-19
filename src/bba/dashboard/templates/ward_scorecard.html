@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Ward {{ scorecard.ward_id }} · bba.dashboard{% endblock %}
 {% block content %}
+<p>Scope is red cell only. Platelet cases requiring review are in the review queue.</p>
 <section class="max-w-2xl">
   <h1 class="text-2xl font-semibold mb-4">Ward scorecard · {{ scorecard.ward_id }}</h1>
   <div class="bg-white border border-slate-200 rounded p-4">

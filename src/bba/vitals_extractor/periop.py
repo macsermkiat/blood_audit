@@ -34,6 +34,7 @@ from collections.abc import Sequence
 
 from bba.vitals_extractor.components import BLOOD_COMPONENT
 from bba.vitals_extractor.models import (
+    PeriopCategory,
     PeriopFinding,
     PeriopSummary,
     VitalsNote,
@@ -120,9 +121,11 @@ def scan_periop(notes: Sequence[VitalsNote]) -> PeriopSummary:
     )
 
 
-def _finding(category: str, note: VitalsNote, start: int, end: int) -> PeriopFinding:
+def _finding(
+    category: PeriopCategory, note: VitalsNote, start: int, end: int
+) -> PeriopFinding:
     return PeriopFinding(
-        category=category,  # type: ignore[arg-type]  # narrowed by call sites
+        category=category,
         snippet=_snippet(note.text, start, end),
         at=note.timestamp,
         source=note.source,

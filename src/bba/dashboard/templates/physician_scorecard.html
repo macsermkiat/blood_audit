@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Physician {{ scorecard.physician_id }} · bba.dashboard{% endblock %}
 {% block content %}
+<p>Scope is red cell only. Platelet cases requiring review are in the review queue.</p>
 <section class="max-w-2xl">
   <h1 class="text-2xl font-semibold mb-4">Physician scorecard · {{ scorecard.physician_id }}</h1>
   <p class="text-sm text-slate-500 mb-4">Own-view only.</p>

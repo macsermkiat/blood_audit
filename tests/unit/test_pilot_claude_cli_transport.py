@@ -160,9 +160,7 @@ class TestFetchResults:
                 returncode=0,
             )
 
-        transport = ClaudeCliTransport(
-            batch_root=tmp_path, workers=1, runner=runner, retries=0
-        )
+        transport = ClaudeCliTransport(batch_root=tmp_path, workers=1, runner=runner)
         req = _request("a1")
         batch_id = transport.submit_batch_only(
             model=MODEL, requests=[req], prompt_cache_enabled=True
@@ -182,9 +180,7 @@ class TestFetchResults:
         def runner(argv: list[str], stdin: str) -> CliOutcome:
             return CliOutcome(stdout="not json", stderr="boom", returncode=1)
 
-        transport = ClaudeCliTransport(
-            batch_root=tmp_path, workers=1, runner=runner, retries=0
-        )
+        transport = ClaudeCliTransport(batch_root=tmp_path, workers=1, runner=runner)
         req = _request("a1")
         batch_id = transport.submit_batch_only(
             model=MODEL, requests=[req], prompt_cache_enabled=True
@@ -195,7 +191,7 @@ class TestFetchResults:
         assert result.raw_response_json["stop_reason"] == "cli_error"
         assert "boom" in result.raw_response_json["_cli_error"]
 
-    def test_transient_error_is_retried(self, tmp_path: Path) -> None:
+    def test_remote_error_is_not_automatically_retried(self, tmp_path: Path) -> None:
         attempts = {"n": 0}
 
         def runner(argv: list[str], stdin: str) -> CliOutcome:
@@ -208,9 +204,7 @@ class TestFetchResults:
                 )
             return _cli_success({"classification": "APPROPRIATE"})
 
-        transport = ClaudeCliTransport(
-            batch_root=tmp_path, workers=1, runner=runner, retries=1, retry_delay_s=0
-        )
+        transport = ClaudeCliTransport(batch_root=tmp_path, workers=1, runner=runner)
         req = _request("a1")
         batch_id = transport.submit_batch_only(
             model=MODEL, requests=[req], prompt_cache_enabled=True
@@ -218,8 +212,8 @@ class TestFetchResults:
         (result,) = transport.fetch_batch_results(
             batch_id, model=MODEL, requests=[req], prompt_cache_enabled=True
         ).results
-        assert attempts["n"] == 2
-        assert result.raw_response_json["stop_reason"] == "tool_use"
+        assert attempts["n"] == 1
+        assert result.raw_response_json["stop_reason"] == "cli_error"
 
     def test_results_already_on_disk_are_not_re_asked(self, tmp_path: Path) -> None:
         asked: list[str] = []
@@ -233,9 +227,7 @@ class TestFetchResults:
         batch_id = first.submit_batch_only(
             model=MODEL, requests=reqs, prompt_cache_enabled=True
         )
-        first.fetch_batch_results(
-            batch_id, model=MODEL, requests=reqs[:1], prompt_cache_enabled=True
-        )
+        first._run_one(tmp_path / batch_id, MODEL, reqs[0])
         assert len(asked) == 1
 
         # A resumed process (BBA_PILOT_BATCH_ID) asks only for the missing one.
@@ -278,12 +270,10 @@ class TestFetchResults:
         ]
 
 
-class TestFailureIsNotCheckpointed:
-    def test_error_envelope_is_not_written_so_a_resume_re_asks(
+class TestUncertainFailure:
+    def test_error_envelope_requires_reconciliation_before_resume(
         self, tmp_path: Path
     ) -> None:
-        # First process: the CLI fails. Second process (BBA_PILOT_BATCH_ID
-        # resume): the same case must be asked again, not read back as done.
         outcomes = iter(
             [
                 CliOutcome(
@@ -296,9 +286,7 @@ class TestFailureIsNotCheckpointed:
         )
         runner = lambda argv, stdin: next(outcomes)  # noqa: E731
         req = _request("a1")
-        first = ClaudeCliTransport(
-            batch_root=tmp_path, workers=1, runner=runner, retries=0
-        )
+        first = ClaudeCliTransport(batch_root=tmp_path, workers=1, runner=runner)
         batch_id = first.submit_batch_only(
             model=MODEL, requests=[req], prompt_cache_enabled=True
         )
@@ -308,13 +296,12 @@ class TestFailureIsNotCheckpointed:
         assert r1.raw_response_json["stop_reason"] == "cli_error"
         assert not (tmp_path / batch_id / "a1.json").exists()
 
-        second = ClaudeCliTransport(
-            batch_root=tmp_path, workers=1, runner=runner, retries=0
-        )
-        (r2,) = second.fetch_batch_results(
-            batch_id, model=MODEL, requests=[req], prompt_cache_enabled=True
-        ).results
-        assert r2.raw_response_json["stop_reason"] == "tool_use"
+        second = ClaudeCliTransport(batch_root=tmp_path, workers=1, runner=runner)
+        with pytest.raises(ValueError, match="uncertain"):
+            second.fetch_batch_results(
+                batch_id, model=MODEL, requests=[req], prompt_cache_enabled=True
+            )
+        assert (tmp_path / batch_id / "a1.inflight").exists()
 
     def test_session_limit_fails_the_rest_of_the_batch_without_calling(
         self, tmp_path: Path
@@ -335,9 +322,7 @@ class TestFailureIsNotCheckpointed:
             )
 
         reqs = [_request(f"a{i}") for i in range(5)]
-        transport = ClaudeCliTransport(
-            batch_root=tmp_path, workers=1, runner=runner, retries=2, retry_delay_s=0
-        )
+        transport = ClaudeCliTransport(batch_root=tmp_path, workers=1, runner=runner)
         batch_id = transport.submit_batch_only(
             model=MODEL, requests=reqs, prompt_cache_enabled=True
         )
@@ -354,3 +339,45 @@ class TestFailureIsNotCheckpointed:
             for r in response.results
         )
         assert not any((tmp_path / batch_id).glob("a*.json"))
+
+
+@pytest.mark.parametrize("change", ["model", "evidence", "membership", "run"])
+def test_cached_fetch_rejects_exact_request_drift(tmp_path: Path, change: str) -> None:
+    calls = []
+
+    def runner(argv, stdin):
+        calls.append(stdin)
+        return _cli_success({"classification": "APPROPRIATE"})
+
+    transport = ClaudeCliTransport(batch_root=tmp_path, workers=1, runner=runner)
+    req = _request("a1")
+    batch = transport.submit_batch_only(
+        model=MODEL, requests=[req], prompt_cache_enabled=False
+    )
+    transport.fetch_batch_results(
+        batch, model=MODEL, requests=[req], prompt_cache_enabled=False
+    )
+    model = "claude-sonnet-5-5" if change == "model" else MODEL
+    if change == "evidence":
+        req = req.model_copy(
+            update={
+                "prompt": req.prompt.model_copy(
+                    update={
+                        "blocks": req.prompt.blocks[:-1]
+                        + (
+                            req.prompt.blocks[-1].model_copy(
+                                update={"text": "Changed evidence"}
+                            ),
+                        )
+                    }
+                )
+            }
+        )
+    if change == "run":
+        req = req.model_copy(update={"run_id": "changed-run"})
+    requests = [req, _request("a2")] if change == "membership" else [req]
+    with pytest.raises(ValueError, match="manifest"):
+        transport.fetch_batch_results(
+            batch, model=model, requests=requests, prompt_cache_enabled=False
+        )
+    assert len(calls) == 1

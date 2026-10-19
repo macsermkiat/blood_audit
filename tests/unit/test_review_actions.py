@@ -87,25 +87,6 @@ def config(tmp_path: Path) -> ReviewActionsConfig:
     )
 
 
-@pytest.fixture(scope="session")
-def _postgres_container() -> Iterator[object]:
-    """Session-scoped Postgres container via testcontainers-python.
-
-    Skipped automatically when testcontainers, the docker python client,
-    or the Docker daemon itself is unavailable — the suite reports a skip
-    rather than a spurious ERROR (mirrors test_audit_pipeline_postgres).
-    """
-    pytest.importorskip("testcontainers.postgres")
-    pytest.importorskip("docker")
-    try:
-        from testcontainers.postgres import PostgresContainer
-
-        with PostgresContainer("postgres:16-alpine") as pg:
-            yield pg
-    except Exception as exc:  # pragma: no cover - environment-dependent
-        pytest.skip(f"Postgres testcontainer unavailable: {exc}")
-
-
 _TEST_ROLES_TO_DROP: tuple[str, ...] = (
     "review_actions_app",
     "writer_role",
@@ -1585,3 +1566,102 @@ class TestStoreLifecycle:
 # WHY and exercises a single contract. The Postgres-required tests are
 # clustered so the live container is spun up only once per pytest session.
 # =============================================================================
+
+
+class TestEvidenceBoundDecisions:
+    """Concurrent reviewers cannot silently replace a decision on seen evidence."""
+
+    @staticmethod
+    def bound(**updates: object) -> ReviewActionInput:
+        return ReviewActionInput.model_validate(
+            {
+                "audit_id": "audit-bound",
+                "reviewer_id": "reviewer-a",
+                "action": "agree",
+                "run_id": "run-bound",
+                "code_version": "v1",
+                "row_hash": "a" * 64,
+                "expected_revision": 0,
+                "submission_id": "submit-a",
+                **updates,
+            }
+        )
+
+    def test_persisted_identity_and_idempotent_retry(
+        self, migrated_store: ReviewActionsStore
+    ) -> None:
+        action = self.bound()
+        first = migrated_store.record_action(action)
+        assert migrated_store.record_action(action) == first
+        (persisted,) = migrated_store.list_actions(audit_id="audit-bound")
+        assert persisted.run_id == "run-bound" and persisted.row_hash == "a" * 64
+        assert persisted.expected_revision == 0 and persisted.code_version == "v1"
+
+    def test_stale_revision_and_reused_submission_are_conflicts(
+        self, migrated_store: ReviewActionsStore
+    ) -> None:
+        from bba.review_actions import ReviewConflictError
+
+        first = migrated_store.record_action(self.bound())
+        with pytest.raises(ReviewConflictError):
+            migrated_store.record_action(self.bound(submission_id="submit-b"))
+        with pytest.raises(ReviewConflictError):
+            migrated_store.record_action(self.bound(action="escalate"))
+        latest = migrated_store.record_action(
+            self.bound(
+                action="override",
+                override_reason="Review of cited evidence",
+                override_classification="INAPPROPRIATE",
+                expected_revision=first.action_id,
+                submission_id="submit-c",
+            )
+        )
+        assert latest.override_classification == "INAPPROPRIATE"
+        assert len(migrated_store.list_actions(audit_id="audit-bound")) == 2
+
+    def test_concurrent_reviewers_have_exactly_one_winner(
+        self, migrated_store: ReviewActionsStore
+    ) -> None:
+        from bba.review_actions import ReviewConflictError
+
+        barrier = threading.Barrier(5)
+
+        def attempt(index: int) -> bool:
+            barrier.wait(timeout=10)
+            try:
+                migrated_store.record_action(
+                    self.bound(
+                        reviewer_id=f"reviewer-{index}", submission_id=f"submit-{index}"
+                    )
+                )
+                return True
+            except ReviewConflictError:
+                return False
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+            outcomes = tuple(pool.map(attempt, range(5)))
+        assert sum(outcomes) == 1
+        assert len(migrated_store.list_actions(audit_id="audit-bound")) == 1
+
+    def test_concurrent_retries_append_once(
+        self, migrated_store: ReviewActionsStore
+    ) -> None:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+            results = tuple(
+                pool.map(lambda _: migrated_store.record_action(self.bound()), range(5))
+            )
+        assert len({result.action_id for result in results}) == 1
+        assert len(migrated_store.list_actions(audit_id="audit-bound")) == 1
+
+    @pytest.mark.parametrize(
+        "updates", [{"run_id": "run-2"}, {"code_version": "v2"}, {"row_hash": "b" * 64}]
+    )
+    def test_new_evidence_identity_does_not_inherit_prior_revision(
+        self, migrated_store: ReviewActionsStore, updates: dict[str, object]
+    ) -> None:
+        migrated_store.record_action(self.bound())
+        newer = migrated_store.record_action(
+            self.bound(**{**updates, "submission_id": "submit-new"})
+        )
+        assert newer.expected_revision == 0
+        assert len(migrated_store.list_actions(audit_id="audit-bound")) == 2

@@ -1741,6 +1741,7 @@ class TestAnthropicBatchEntryErrorHandling:
         monkeypatch: pytest.MonkeyPatch,
         result_type: str,
         expected_parse_reason: ParseFailureReason,
+        tmp_path: Path,
     ) -> None:
         # Stand up a fake `anthropic` SDK that the lazy import inside
         # AnthropicBatchTransport.submit_batch picks up. The fake
@@ -1750,7 +1751,10 @@ class TestAnthropicBatchEntryErrorHandling:
         )
         monkeypatch.setitem(__import__("sys").modules, "anthropic", fake_module)
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-xxx")
-        transport = AnthropicBatchTransport(poll_interval_seconds=0.0)
+        transport = AnthropicBatchTransport(
+            poll_interval_seconds=0.0, manifest_root=tmp_path
+        )
+        monkeypatch.setattr(transport, "_admit", lambda _: None)
         response = transport.submit_batch(
             model=SONNET_MODEL_ID,
             requests=[_request(audit_id="a1")],
@@ -1806,7 +1810,9 @@ def _build_fake_anthropic_sdk(*, entries: list[_FakeBatchEntry]) -> Any:
             return entries
 
     class _Anthropic:
-        def __init__(self, *, api_key: str, default_headers: dict[str, str]) -> None:
+        def __init__(
+            self, *, api_key: str, default_headers: dict[str, str], max_retries: int
+        ) -> None:
             self.messages = SimpleNamespace(batches=_BatchesNamespace())
 
     return SimpleNamespace(Anthropic=_Anthropic)

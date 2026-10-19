@@ -151,6 +151,9 @@ class HemodynamicSummary(BaseModel):
         return self.map_nadir is None and not self.vasopressors
 
 
+PeriopCategory = Literal["surgery", "blood_loss", "intraop_transfusion"]
+
+
 class PeriopFinding(BaseModel):
     """One peri-operative fact from the window scan (Case 107 / REQNO 68074627).
 
@@ -162,7 +165,7 @@ class PeriopFinding(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    category: Literal["surgery", "blood_loss", "intraop_transfusion"]
+    category: PeriopCategory
     snippet: str
     at: AwareDatetime
     source: Literal["IPDADMPROGRESS", "IPDNRFOCUSDT"]
@@ -208,6 +211,9 @@ class PeriopSummary(BaseModel):
         )
 
 
+AdministrationCategory = Literal["gave_blood", "unit_count", "post_transfusion"]
+
+
 class AdministrationFinding(BaseModel):
     """One affirmative administration fact from the window scan (issue #107).
 
@@ -219,7 +225,7 @@ class AdministrationFinding(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    category: Literal["gave_blood", "unit_count", "post_transfusion"]
+    category: AdministrationCategory
     snippet: str
     at: AwareDatetime
     source: Literal["IPDADMPROGRESS", "IPDNRFOCUSDT"]

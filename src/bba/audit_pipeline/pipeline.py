@@ -29,11 +29,17 @@ HIGH #5).
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from bba.audit_pipeline.cost_guard import assert_test_safe_transport
+from bba.audit_pipeline.exceptions import ResumeReconciliationError
+from bba.audit_pipeline.manifest import (
+    load_manifest,
+    persist_manifest,
+    persist_run_contexts,
+)
 from bba.audit_pipeline.models import (
     AuditPipelineConfig,
     BatchRun,
@@ -51,6 +57,8 @@ from bba.audit_pipeline.state_machine import transition
 from bba.audit_pipeline.store import BatchRunStore
 from bba.audit_store import AuditRow, AuditStore, LlmCall
 from bba.cohort_detector import CohortLabel
+from bba.classifications import RETURNS_TERMINALS as _RETURNS_TERMINAL_CLASSIFICATIONS
+from bba.deid_redactor.admission import PrivacyAdmissionError
 from bba.deterministic_classifier import (
     BypassReason,
     ClassifierInputs,
@@ -97,9 +105,6 @@ _DETERMINISTIC_FINAL_CLASSIFICATIONS = frozenset(
 # path. Kept separate from :data:`_DETERMINISTIC_FINAL_CLASSIFICATIONS` so only
 # these two returns terminals (never APPROPRIATE / INAPPROPRIATE) divert away
 # from ``classify_platelet``.
-_RETURNS_TERMINAL_CLASSIFICATIONS = frozenset(
-    {"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"}
-)
 
 # Single source of truth in the deterministic_classifier package (candidate 4).
 _RESERVE_AHEAD_RATIONALES = RESERVE_AHEAD_RATIONALES
@@ -158,15 +163,15 @@ def run_pipeline(
     pipeline_config: AuditPipelineConfig,
     run_id: str,
     verifier: Verifier = default_verifier,
+    admission_verifier: Callable[[BatchSubmissionRequest], None] | None = None,
 ) -> PipelineRunResult:
     """Run the full pipeline over ``contexts``, checkpointing through
     ``batch_run_store``.
 
     Steps per batch:
 
-    1. Cost-guard: refuse a live Anthropic transport (user constraint
-       #10). Tests inject a CassetteTransport; production injects
-       AnthropicBatchTransport via a wrapping non-test caller.
+    1. Require explicit live configuration outside tests. Tests always
+       inject an offline transport.
     2. Partition contexts into deterministic-final vs LLM-required
        buckets via :attr:`PipelineRowContext.classifier_result`.
     3. For deterministic-final rows: build the AuditRow directly from
@@ -191,7 +196,11 @@ def run_pipeline(
             orphan_audit_ids=(),
         )
 
-    assert_test_safe_transport(transport)
+    if pipeline_config.code_version != audit_store.config.code_version:
+        raise ValueError("pipeline and audit store code versions must match")
+    if len({ctx.order.audit_id for ctx in contexts}) != len(contexts):
+        raise ValueError("duplicate audit IDs in pipeline input")
+    assert_test_safe_transport(transport, allow_live_api=pipeline_config.allow_live_api)
 
     persisted: list[str] = []
     touched: list[str] = []
@@ -256,6 +265,43 @@ def run_pipeline(
             else:
                 llm_required.append((ctx, result))
 
+    prompt_bound_contexts = [ctx for ctx, _ in llm_required]
+    if feature_flags.PLATELET_LLM_ENABLED:
+        prompt_bound_contexts.extend(
+            ctx
+            for ctx, result in platelet_classified
+            if result.classification in _PLATELET_LLM_CLASSIFICATIONS
+        )
+    normalized = _normalize_llm_contexts(
+        [
+            ctx
+            for ctx in prompt_bound_contexts
+            if ctx.evidence_chunks or admission_verifier is None
+        ],
+        run_id=run_id,
+        classifier_results={ctx.order.audit_id: result for ctx, result in llm_required},
+    )
+    normalized_by_id = {ctx.order.audit_id: ctx for ctx in normalized}
+    contexts = tuple(normalized_by_id.get(ctx.order.audit_id, ctx) for ctx in contexts)
+    active_contexts = [
+        normalized_by_id.get(ctx.order.audit_id, ctx) for ctx in active_contexts
+    ]
+    llm_required = [
+        (normalized_by_id.get(ctx.order.audit_id, ctx), result)
+        for ctx, result in llm_required
+    ]
+    platelet_classified = [
+        (normalized_by_id.get(ctx.order.audit_id, ctx), result)
+        for ctx, result in platelet_classified
+    ]
+    persist_run_contexts(
+        audit_store=audit_store,
+        run_id=run_id,
+        contexts=contexts,
+        admission_required=admission_verifier is not None,
+        pipeline_config=pipeline_config,
+    )
+
     for ctx, result in deterministic_final:
         if _persist_deterministic_row(
             ctx,
@@ -298,6 +344,7 @@ def run_pipeline(
             llm_config=llm_config,
             pipeline_config=pipeline_config,
             verifier=verifier,
+            admission_verifier=admission_verifier,
             enable_missing_platelet_defer=False,
             persisted=persisted,
             touched=touched,
@@ -328,11 +375,30 @@ def run_pipeline(
                 llm_config=llm_config,
                 pipeline_config=pipeline_config,
                 verifier=verifier,
+                admission_verifier=admission_verifier,
                 enable_missing_platelet_defer=pipeline_config.enable_missing_platelet_defer,
                 persisted=persisted,
                 touched=touched,
             )
 
+    committed_ids = {
+        row.audit_id
+        for row in audit_store.read_audit_results(
+            run_id=run_id, code_version=pipeline_config.code_version
+        )
+    }
+    persisted = list(
+        dict.fromkeys(
+            [
+                *persisted,
+                *(
+                    c.order.audit_id
+                    for c in active_contexts
+                    if c.order.audit_id in committed_ids
+                ),
+            ]
+        )
+    )
     orphans = _detect_orphans(
         expected_audit_ids=tuple(c.order.audit_id for c in active_contexts),
         persisted=tuple(persisted),
@@ -356,6 +422,7 @@ def process_audit_order(
     pipeline_config: AuditPipelineConfig,
     run_id: str,
     verifier: Verifier = default_verifier,
+    admission_verifier: Callable[[BatchSubmissionRequest], None] | None = None,
 ) -> PipelineRunResult:
     """Run the pipeline for a single :class:`PipelineRowContext`.
 
@@ -372,6 +439,7 @@ def process_audit_order(
         pipeline_config=pipeline_config,
         run_id=run_id,
         verifier=verifier,
+        admission_verifier=admission_verifier,
     )
 
 
@@ -386,6 +454,7 @@ def _run_batch_chunk(
     llm_config: LlmClientConfig,
     pipeline_config: AuditPipelineConfig,
     verifier: Verifier,
+    admission_verifier: Callable[[BatchSubmissionRequest], None] | None,
     enable_missing_platelet_defer: bool,
     persisted: list[str],
     touched: list[str],
@@ -408,6 +477,18 @@ def _run_batch_chunk(
     # Codex P1 (security): build submission requests FIRST so injection-flagged
     # contexts are routed to NEEDS_REVIEW before a BatchRun is created.  A
     # BatchRun only covers the clean (non-injection) contexts.
+    if admission_verifier is not None:
+        for context in chunk_contexts:
+            if not context.evidence_chunks:
+                _persist_privacy_flagged_row(
+                    context,
+                    classifier_result=classifier_results.get(context.order.audit_id),
+                    audit_store=audit_store,
+                    run_id=run_id,
+                    enable_missing_platelet_defer=enable_missing_platelet_defer,
+                )
+                persisted.append(context.order.audit_id)
+        chunk_contexts = [ctx for ctx in chunk_contexts if ctx.evidence_chunks]
     injection_sink: list[PipelineRowContext] = []
     requests = _build_submission_requests(
         chunk_contexts,
@@ -426,16 +507,36 @@ def _run_batch_chunk(
         )
         persisted.append(inj_ctx.order.audit_id)
 
+    if admission_verifier is not None:
+        context_by_id = {c.order.audit_id: c for c in chunk_contexts}
+        admitted = []
+        for request in requests:
+            try:
+                admission_verifier(request)
+            except PrivacyAdmissionError:
+                _persist_privacy_flagged_row(
+                    context_by_id[request.audit_id],
+                    classifier_result=classifier_results.get(request.audit_id),
+                    audit_store=audit_store,
+                    run_id=run_id,
+                    enable_missing_platelet_defer=enable_missing_platelet_defer,
+                )
+                persisted.append(request.audit_id)
+            else:
+                admitted.append(request)
+        requests = admitted
+
     if not requests:
-        # All contexts in this chunk were injection-flagged; no Anthropic batch
-        # is needed.  The rows were persisted above as NEEDS_REVIEW.
+        # All contexts in this chunk were rejected before submission.
         return
 
     # Remaining contexts are clean: compute the batch from clean contexts only.
     clean_audit_ids = frozenset(r.audit_id for r in requests)
     clean_contexts = [c for c in chunk_contexts if c.order.audit_id in clean_audit_ids]
 
-    batch_id = _batch_id_for(run_id, clean_contexts)
+    batch_id = _batch_id_for(
+        run_id + "|" + pipeline_config.code_version, clean_contexts
+    )
     now = _now_utc()
     pending = BatchRun(
         batch_id=batch_id,
@@ -444,6 +545,67 @@ def _run_batch_chunk(
         code_version=pipeline_config.code_version,
         audit_ids=tuple(c.order.audit_id for c in clean_contexts),
         updated_at=now,
+    )
+    existing_runs = [
+        r
+        for r in batch_run_store.list_all()
+        if r.run_id == run_id
+        and r.code_version == pipeline_config.code_version
+        and set(r.audit_ids) & clean_audit_ids
+    ]
+    if existing_runs:
+        if len(existing_runs) != 1 or existing_runs[0].audit_ids != pending.audit_ids:
+            raise ResumeReconciliationError("batch membership changed during rerun")
+        existing = existing_runs[0]
+        load_manifest(
+            run=existing,
+            audit_store=audit_store,
+            contexts={c.order.audit_id: c for c in clean_contexts},
+            llm_config=llm_config,
+            enable_missing_platelet_defer=enable_missing_platelet_defer,
+        )
+        persist_manifest(
+            run=existing,
+            audit_store=audit_store,
+            contexts=clean_contexts,
+            requests=requests,
+            llm_config=llm_config,
+            enable_missing_platelet_defer=enable_missing_platelet_defer,
+        )
+        if existing.state in {BatchRunState.PENDING, BatchRunState.FAILED}:
+            raise ResumeReconciliationError(
+                "remote submission status is uncertain; operator reconciliation required"
+            )
+        if existing.state is not BatchRunState.COMPLETE:
+            from bba.audit_pipeline.resume import resume_on_startup
+
+            resume_on_startup(
+                batch_run_store=batch_run_store,
+                audit_store=audit_store,
+                contexts={c.order.audit_id: c for c in clean_contexts},
+                transport=transport,
+                llm_config=llm_config,
+                pipeline_config=pipeline_config,
+                verifier=verifier,
+                batch_ids=(existing.batch_id,),
+            )
+        committed = {
+            r.audit_id
+            for r in audit_store.read_audit_results(
+                run_id=run_id, code_version=pipeline_config.code_version
+            )
+        }
+        if not clean_audit_ids <= committed:
+            raise ResumeReconciliationError("batch recovery has unresolved audit rows")
+        persisted.extend(r.audit_id for r in requests)
+        return
+    persist_manifest(
+        run=pending,
+        audit_store=audit_store,
+        contexts=clean_contexts,
+        requests=requests,
+        llm_config=llm_config,
+        enable_missing_platelet_defer=enable_missing_platelet_defer,
     )
     batch_run_store.create(pending)
     touched.append(batch_id)
@@ -485,12 +647,26 @@ def _run_batch_chunk(
     )
     persisted.extend(write_summary.audit_ids_persisted)
 
+    committed = {
+        r.audit_id
+        for r in audit_store.read_audit_results(
+            run_id=run_id, code_version=pipeline_config.code_version
+        )
+    }
     completed = transition(
         submitted,
-        to_state=BatchRunState.COMPLETE,
+        to_state=BatchRunState.COMPLETE
+        if clean_audit_ids <= committed
+        else BatchRunState.PARTIAL,
         now=_now_utc(),
     )
     batch_run_store.update(completed)
+
+
+def _without_redactor_claim(context: PipelineRowContext) -> PipelineRowContext:
+    return context.model_copy(
+        update={"redactor_version": "not-applied", "redactor_model_sha": "unavailable"}
+    )
 
 
 def _persist_deterministic_row(
@@ -507,6 +683,7 @@ def _persist_deterministic_row(
     """
     from bba.audit_pipeline.replay import _audit_row_for_needs_review
 
+    context = _without_redactor_claim(context)
     row: AuditRow
     classifier = classifier_result
     if classifier.classification == "NEEDS_REVIEW":
@@ -868,6 +1045,7 @@ def _persist_deterministic_platelet_row(
 
     Returns True iff a new row was committed.
     """
+    context = _without_redactor_claim(context)
     row = _deterministic_platelet_audit_row(
         context=context,
         classifier_result=classifier_result,
@@ -913,6 +1091,7 @@ def _persist_injection_flagged_row(
     """
     from bba.audit_pipeline.replay import _audit_row_for_needs_review
 
+    context = _without_redactor_claim(context)
     deterministic_result = classifier_result or ClassifierResult(
         classification="INSUFFICIENT_EVIDENCE",
         rationale="injection_detected",
@@ -961,6 +1140,56 @@ def _persist_injection_flagged_row(
     audit_store.write(row, [marker_call])
 
 
+def _persist_privacy_flagged_row(
+    context: PipelineRowContext,
+    *,
+    classifier_result: ClassifierResult | None,
+    audit_store: AuditStore,
+    run_id: str,
+    reason: str = "privacy_admission_failed",
+    enable_missing_platelet_defer: bool = False,
+) -> None:
+    """Keep evidence rejected by the privacy boundary in the review queue."""
+    from bba.audit_pipeline.replay import _audit_row_for_needs_review
+
+    context = _without_redactor_claim(context)
+    result = classifier_result or classify(_classifier_inputs_for(context))
+    row = _audit_row_for_needs_review(
+        run_id=run_id,
+        context=context,
+        classifier_result=result,
+        review_reason=reason,
+        verifier_pass=False,
+        verifier_retries=0,
+        enable_missing_platelet_defer=enable_missing_platelet_defer,
+        model_id="privacy-filter",
+        reasoning_en="Evidence failed privacy admission; review required.",
+        reasoning_th="",
+        indications=(),
+        negative_evidence=(),
+        confidence=0.0,
+        escalated=False,
+    )
+    fingerprint = hashlib.sha256(
+        f"{run_id}|{context.order.audit_id}|{reason}".encode()
+    ).hexdigest()[:16]
+    marker = LlmCall(
+        call_id=f"call-privacy-{fingerprint}",
+        audit_id=context.order.audit_id,
+        run_id=run_id,
+        model_id="privacy-filter",
+        anthropic_version="n/a",
+        prompt_cache_id=None,
+        request_json={"reason": reason},
+        response_json={"classification": "NEEDS_REVIEW", "review_reason": reason},
+        request_timestamp=context.order.order_datetime,
+        latency_ms=0,
+        extended_thinking_blocks=None,
+        cold_storage_uri=None,
+    )
+    audit_store.write(row, (marker,))
+
+
 def _persist_over_reservation_row(
     context: PipelineRowContext,
     *,
@@ -974,6 +1203,7 @@ def _persist_over_reservation_row(
         _audit_row_for_over_reservation,
     )
 
+    context = _without_redactor_claim(context)
     row = _audit_row_for_over_reservation(
         run_id=run_id,
         context=context,
@@ -1426,12 +1656,38 @@ def rbc_task_mode(
     return "HB_7_10_REVIEW"
 
 
+def _normalize_llm_contexts(
+    contexts: Sequence[PipelineRowContext],
+    *,
+    run_id: str,
+    classifier_results: Mapping[str, ClassifierResult] | None = None,
+) -> tuple[PipelineRowContext, ...]:
+    normalized: list[PipelineRowContext] = []
+    resolved = (
+        classifier_results
+        if classifier_results is not None
+        else {
+            ctx.order.audit_id: classify(_classifier_inputs_for(ctx))
+            for ctx in contexts
+            if ctx.component != "platelet"
+        }
+    )
+    _build_submission_requests(
+        contexts,
+        run_id=run_id,
+        classifier_results=resolved,
+        normalized_contexts=normalized,
+    )
+    return tuple(normalized)
+
+
 def _build_submission_requests(
     chunk: Sequence[PipelineRowContext],
     *,
     run_id: str,
     classifier_results: Mapping[str, ClassifierResult] | None = None,
     injection_sink: list[PipelineRowContext] | None = None,
+    normalized_contexts: list[PipelineRowContext] | None = None,
 ) -> list[BatchSubmissionRequest]:
     """Build :class:`BatchSubmissionRequest` objects for ``chunk``.
 
@@ -1505,6 +1761,10 @@ def _build_submission_requests(
                 )
             )
 
+        context = context.model_copy(update={"prompt_hash": prompt.prompt_hash})
+        if normalized_contexts is not None:
+            normalized_contexts.append(context)
+
         # Codex P1 (security): prompt builder flagged injection in the evidence
         # chunks.  Route this context to NEEDS_REVIEW without submitting to
         # Anthropic — a poisoned chunk must never reach the model.
@@ -1519,6 +1779,7 @@ def _build_submission_requests(
                 run_id=run_id,
                 task_mode=task_mode,
                 prompt=prompt,
+                privacy_attestation=context.privacy_attestation,
             )
         )
     return out

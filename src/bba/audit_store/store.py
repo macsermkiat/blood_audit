@@ -37,6 +37,8 @@ ignores), and run_id-scoped reads use a metadata-only column scan.
 from __future__ import annotations
 
 import hashlib
+import io
+import json
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 
@@ -44,6 +46,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from bba.audit_store.exceptions import TransactionalOrderingError
+from bba.secure_files import (
+    private_atomic_path,
+    private_directory,
+    read_private_bytes,
+    unlink_private,
+    write_private_bytes,
+)
 from bba.audit_store.models import (
     AuditRow,
     AuditStoreConfig,
@@ -81,6 +90,7 @@ class AuditStore:
         does not match ``row``.
         """
         if self._is_already_committed(row.audit_id, row.run_id):
+            self._call_checkpoint_path(row.audit_id, row.run_id).unlink(missing_ok=True)
             return WriteResult(
                 audit_id=row.audit_id,
                 run_id=row.run_id,
@@ -295,9 +305,60 @@ class AuditStore:
         underscore signals that production code MUST go through :meth:`write`,
         which orders the phases correctly.
         """
-        self._calls_dir.mkdir(parents=True, exist_ok=True)
+        private_directory(self._calls_dir)
+        groups: dict[tuple[str, str], list[LlmCall]] = {}
         for call in calls:
+            groups.setdefault((call.audit_id, call.run_id), []).append(call)
+        for (audit_id, run_id), group in groups.items():
+            path = self._call_checkpoint_path(audit_id, run_id)
+            payload = json.dumps(
+                [json.loads(c.model_dump_json()) for c in group],
+                sort_keys=True,
+                ensure_ascii=False,
+            )
+            if path.exists():
+                if read_private_bytes(path).decode("utf-8") != payload:
+                    raise ValueError(
+                        f"immutable attempt checkpoint for {audit_id!r} differs"
+                    )
+            else:
+                write_private_bytes(path, payload.encode("utf-8"))
+        for call in calls:
+            path = (
+                self._calls_dir
+                / f"call_{_hash_id(call.call_id)}_{self._code_version_slug}.parquet"
+            )
+            if path.exists():
+                existing = LlmCall.model_validate_json(
+                    _read_single_record(path)["payload"]
+                )
+                if existing != call:
+                    raise ValueError(
+                        f"immutable LLM call {call.call_id!r} differs from persisted provenance"
+                    )
+                continue
             self._persist_call_record(call)
+
+    def _call_checkpoint_path(self, audit_id: str, run_id: str) -> Path:
+        return (
+            self.config.root_dir
+            / "_call_checkpoints"
+            / f"{_hash_id(audit_id)}_{_hash_id(run_id)}_{self._code_version_slug}.json"
+        )
+
+    def read_call_checkpoint(self, audit_id: str, run_id: str) -> tuple[LlmCall, ...]:
+        """Read the complete attempt set staged before individual call writes."""
+        path = self._call_checkpoint_path(audit_id, run_id)
+        if not path.exists():
+            return ()
+        calls = tuple(
+            LlmCall.model_validate(c) for c in json.loads(read_private_bytes(path))
+        )
+        if not calls or any(
+            c.audit_id != audit_id or c.run_id != run_id for c in calls
+        ):
+            raise ValueError("invalid attempt checkpoint identity")
+        return calls
 
     def _persist_audit_result(self, row: AuditRow) -> None:
         """Phase 2 (parquet + commit marker): atomically append ``row`` and
@@ -308,6 +369,9 @@ class AuditStore:
         """
         self._persist_audit_parquet_only(row)
         self._mark_complete(row.audit_id, row.run_id)
+        checkpoint = self._call_checkpoint_path(row.audit_id, row.run_id)
+        if checkpoint.exists():
+            unlink_private(checkpoint)
 
     def _persist_audit_parquet_only(self, row: AuditRow) -> None:
         """Phase 2a only: write the audit parquet WITHOUT the commit marker.
@@ -324,7 +388,7 @@ class AuditStore:
         :meth:`reconcile` and :meth:`validate_invariants` can pair audit
         rows with their version-matching calls.
         """
-        self._audit_dir.mkdir(parents=True, exist_ok=True)
+        private_directory(self._audit_dir)
         path = self._audit_parquet_path(row.audit_id, row.run_id)
         _write_single_record(
             path,
@@ -354,7 +418,7 @@ class AuditStore:
             if code_version_slug is not None
             else self._code_version_slug
         )
-        self._calls_dir.mkdir(parents=True, exist_ok=True)
+        private_directory(self._calls_dir)
         path = self._calls_dir / f"call_{_hash_id(call.call_id)}_{slug}.parquet"
         _write_single_record(
             path,
@@ -388,11 +452,12 @@ class AuditStore:
         underscore prefix and ``.complete`` extension), so the two files
         are paired 1:1 and the marker contents need only signal "ok".
         """
-        self._markers_dir.mkdir(parents=True, exist_ok=True)
         target = self._marker_path(audit_id, run_id)
-        tmp = target.with_suffix(target.suffix + ".tmp")
-        tmp.write_text("ok\n", encoding="utf-8")
-        tmp.replace(target)
+        try:
+            write_private_bytes(target, b"ok\n")
+        except FileExistsError:
+            if read_private_bytes(target) != b"ok\n":
+                raise ValueError("audit commit marker has unexpected content")
 
     def _is_already_committed(self, audit_id: str, run_id: str) -> bool:
         """True iff a commit marker for this exact
@@ -496,13 +561,12 @@ def _write_single_record(path: Path, data: dict[str, str]) -> None:
     would later try to open.
     """
     table = pa.table({k: [v] for k, v in data.items()})
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    pq.write_table(table, tmp)  # type: ignore[no-untyped-call]
-    tmp.replace(path)
+    with private_atomic_path(path, replace=True) as temporary:
+        pq.write_table(table, temporary)  # type: ignore[no-untyped-call]
 
 
 def _read_single_record(path: Path) -> dict[str, str]:
-    table = pq.read_table(path)  # type: ignore[no-untyped-call]
+    table = pq.read_table(io.BytesIO(read_private_bytes(path)))  # type: ignore[no-untyped-call]
     record = table.to_pylist()[0]
     return {k: str(v) for k, v in record.items()}
 
