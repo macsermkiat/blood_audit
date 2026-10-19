@@ -1,68 +1,66 @@
 ---
 title: Module glossary
-description: The full module + concept glossary lives in docs/CONTEXT.md, which is the canonical term bank.
+description: Current module responsibilities and terms used in the audit pipeline.
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
+[`docs/CONTEXT.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/CONTEXT.md) describes current contracts in more detail. This glossary follows the Python modules under `src/bba`.
 
-The canonical module + concept glossary for `bba.*` lives in
-[`docs/CONTEXT.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/CONTEXT.md)
-in the repository. It is appended to as part of every ralph-loop ticket
-that adds a new public concept. Keep it the source of truth.
+## Application and source data
 
-<AtAGlance
-  items={[
-    { label: "Canonical file", value: "docs/CONTEXT.md in GitHub." },
-    { label: "Use for", value: "Module terms, invariants, public contracts, and review notes." },
-    { label: "Update rule", value: "Append when a public concept changes.", tone: "warn" },
-    { label: "This page", value: "Navigation aid, not a duplicate copy." },
-  ]}
-/>
+| Module | Responsibility |
+| --- | --- |
+| `bba.cli` | Operator commands and command-line configuration. |
+| `bba.application` | Compose the source adapter, contexts, audit execution, deferred work, and reporting operations. |
+| `bba.application.source_snapshot` | Seal and verify the source snapshot used by a run. |
+| `bba.ingest` | Validate exported CSVs, normalise declared fields, and record ingest completion. |
+| `bba.audit_orders` | Construct auditable order identities and order timestamps. |
+| `bba.component_map` | Assign a blood-component family before component-specific rules. |
 
-## Why we link out
+The ingest schema registry contains 13 canonical tables. They are `BDVST`, `BDVSTDT`, `BDVSTST`, `BDVSTTRANS`, `BDTYPE`, `Diagnosis`, `Lab`, `Med`, `IPDADMPROGRESS`, `IPDNRFOCUSDT`, `IPTSUMOPRT`, `INCPT_OPRTACT`, and `ICD9CM`. Dictionary exports such as `DCT.csv` used for attribution are additional inputs, not another canonical ingest table.
 
-`CONTEXT.md` is large (~3600 lines) and is updated as part of the dev
-workflow. Mirroring it into MDX would force a manual sync step that
-inevitably drifts. Linking to the GitHub-rendered version guarantees the
-docs site shows the live glossary without divergence risk.
+## Classification and evidence
 
-## Quick navigation
+| Module | Responsibility |
+| --- | --- |
+| `bba.hb_lookup` | Select the pre-order Hb, freshness, delta-Hb windows, and bounded 24-hour minimum. |
+| `bba.cohort_detector` | Assign an RBC clinical-context label and numeric threshold where applicable. |
+| `bba.deterministic_classifier` | Apply RBC routing, Hb rules, bypasses, and review flags. |
+| `bba.platelet_lookup` and `bba.platelet_classifier` | Select platelet counts and apply the deterministic platelet gate. |
+| `bba.returns_ledger` and `bba.declared_use` | Interpret unit dispositions and declared order use. |
+| `bba.preop_reservation` | Compare reservation amounts with procedure-specific reference limits. |
+| `bba.evidence_bundle_builder` | Assemble evidence for an audit order. |
+| `bba.deid_redactor` | Redact evidence and represent privacy-check outcomes. |
+| `bba.deid_redactor.admission` | Verify signed redaction attestations before LLM submission. |
+| `bba.prompt_builder` | Construct the task-specific request and evidence envelope. |
+| `bba.llm_client` | Submit approved requests and retain request-bound responses and attempts. |
+| `bba.quote_grounder` | Check response quotations against the supplied evidence. |
+| `bba.platelet_guardrail` | Apply platelet-specific floors and structured-signal checks. |
+| `bba.audit_pipeline` | Dispatch, resume, and finalise component results. |
 
-Common concept slugs to search for in the glossary:
+## Stored results and review
 
-- `run_id`: the SHA-256-derived idempotency key.
-- `schema_fingerprint`: what makes `run_id` invariant across identical
-  inputs.
-- `batch_runs`: the state machine for rows routed to the LLM.
-- `audit_log`: the compliance trail for every `bba audit` invocation.
-- `hallucination_suspect`: the queue that catches every grounded-quote
-  failure.
-- `parse_warning`: non-fatal ingest issues that surface in the run summary.
-- `idempotent re-run`: the contract that re-running the same input is
-  a no-op.
-- `returns_ledger` / `not_transfused`: the BDVSTTRANS per-unit
-  disposition aggregation behind `RETURNED_NOT_TRANSFUSED`.
-- `USETYPE` / `declared_use`: the order-time declared-use signal behind
-  `PERIOP_TRANSFUSION_EXEMPT` (`preop_declared_exempt`).
-- `MSBOS` / `preop_reservation`: the pre-op reservation audit behind
-  `PREOP_OVER_RESERVATION`, including the planned-op picker and the
-  OPRTACT→ICD9 bridge.
-- `reservation_annotation`: the MSBOS annotation embedded on
-  returns-terminal rows (annotation, never a verdict change).
-- `feature_flags`: the runtime flag module; 6 of the 9 flags are
-  default-ON.
-- `platelet_lookup.projection` / `project_24h`: the straight-line platelet
-  count projection behind indication 5's "expected to drop below 10,000 /uL
-  within 24 hours" and the `platelet_trend_unsupported` guardrail.
-- `llm_client.conclusion` / `reasoning_conclusion`: reads the class a
-  response's own reasoning concludes, for the `label_reasoning_conflict`
-  guardrail.
-- `audit_llm_responses`: the pilot step (code checks, no API call by
-  default) that gates `build_review.py` on a clean response audit.
-- `dev_consortium`: the Claude Code dev-test reviewer tool for pilot
-  responses, not a pipeline step and not a gate.
-- `rank_merged`: ranks a pilot run's merged deterministic + LLM verdicts,
-  one component (`red_cell` or `platelet`) at a time.
+| Module | Responsibility |
+| --- | --- |
+| `bba.audit_store` | Persist versioned audit results and run records. |
+| `bba.review_actions` | Persist reviewer actions and access history. |
+| `bba.dashboard.auth` | Validate signed reviewer sessions and session-bound CSRF tokens. |
+| `bba.dashboard.adjudication` | Bind decisions to the exact run, code version, row hash, and revision. |
+| `bba.report_generator` | Build RBC aggregates, physician files, PDF, and per-row provenance. |
+| `bba.attribution` | Resolve ordering-physician and department attribution. |
+| `bba.eval_harness` and `bba.monitoring` | Compare stored results with reviewed labels and monitor drift. |
 
-For the full set, open the glossary on GitHub:
-[`docs/CONTEXT.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/CONTEXT.md).
+## Terms
+
+- `audit_id` identifies the audited order.
+- `run_id` identifies a run from its source, schema, and code identity. Application runs also bind their configuration and sealed source manifest.
+- `AuditRow` holds an order's immutable stored result and provenance.
+- `rule_classification` is the deterministic result. `final_classification` is the stored pipeline result.
+- `needs_human_review` is a review flag independent of the final classification.
+- `LLM_REVIEW` describes routing. It is not a stored classification.
+- `hallucination_suspect` is a review reason for evidence-grounding failures, not a claim that every model error is detectable.
+- `reservation_annotation` records reservation findings on an otherwise excluded row without changing its verdict.
+- `PrivacyAttestation` binds approved redacted evidence to the exact prompt and policy. The issuer retains the Ed25519 private key. The application verifies with the public key.
+- `project_24h` calculates the straight-line platelet count projection from the last two usable counts.
+- `reasoning_conclusion` reads the conclusion in a model response for the label-reasoning conflict check.
+
+Runtime defaults live in `src/bba/feature_flags.py`. Pilot environment overrides apply only where the pilot scripts read them. A flag declaration does not mean that every command exposes an override.

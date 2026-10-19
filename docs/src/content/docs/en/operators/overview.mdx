@@ -1,78 +1,37 @@
 ---
 title: Operator overview
-description: What blood_audit is, what you need to run it, and what success looks like.
+description: Choose a local audit, configure model review, and prepare committee outputs.
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
-import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
+Run `bba audit` to turn a HOSxP export into committed classifications for retrospective quality improvement. Start with [Install](/blood_audit/en/operators/install/) and [First audit run](/blood_audit/en/operators/first-audit-run/).
 
-<QiNotSamdBanner variant="compact" />
+The local mode needs Python, uv, a complete export, and private persistent storage. It commits deterministic results without a model API key or Postgres. Cases that need model evidence remain `NEEDS_REVIEW` with `privacy_admission_failed`.
 
-<AtAGlance
-  items={[
-    { label: "Operator role", value: "Install, configure env vars, run ingest/audit, hand off the dataset." },
-    { label: "Required today", value: "Python/uv, BBA_DATA_DIR, writable storage, HOSxP export bundle.", tone: "ok" },
-    { label: "Phase 1.5", value: "Postgres and Anthropic Batch API are needed when classification is wired." },
-    { label: "Safety", value: "No live clinician alerts; all PHI leaves only after de-identification.", tone: "warn" },
-  ]}
-/>
+## Choose the next task
 
-## Who this section is for
+| Task | Guide |
+| --- | --- |
+| Check the export's file and column shape | [Ingest CSV](/blood_audit/en/operators/ingest-csv/) |
+| Audit an export or resume a run | [audit command](/blood_audit/en/operators/audit-command/) |
+| Configure signed evidence for model review | [Environment variables](/blood_audit/en/operators/env-vars/) |
+| Generate HTML, JSON, or monthly PDF outputs | [Generate the report](/blood_audit/en/operators/generate-report/) |
+| Configure authenticated review and run comparisons | [Deployment integrations](/blood_audit/en/operators/integration-seams/) |
+| Reproduce the research pilot | [Run the pipeline](/blood_audit/en/operators/run-pipeline/) |
 
-You are operating blood_audit on behalf of KCMH IT. Your operator job has
-four steps:
+## Prepare the export and storage
 
-1. Install the package.
-2. Configure three environment variables.
-3. Run `bba audit --input ...`; use `bba ingest` first only when you want a
-   separate validation preflight.
-4. Hand the audit dataset to the QI (Quality Improvement) committee.
+Stage the 13 canonical CSVs together. The exporter must apply the approved adult cohort filter because the bundle has no age column. See the [input table reference](/blood_audit/en/operators/ingest-csv/#expected-tables).
 
-The other four subcommands — `evaluate`, `report`, `serve-dashboard`,
-`sentinel` — are wired up later by deployment teams. See
-[Integration seams](/blood_audit/en/operators/integration-seams/) if you
-want to know why they fail today.
+Use a service account and access-controlled persistent storage for `BBA_DATA_DIR`. Back up its `identity.key` with the audit records. The key keeps patient and admission pseudonyms stable. Treat source snapshots, reports, and logs as clinical records under the approved retention policy.
 
-## What you need before starting
+## Add model review when approved
 
-For Phase 1 today:
+Cassette and live model modes require an application configuration, a privacy trust policy, signed evidence artifacts, and a migrated Postgres checkpoint store. Live mode also requires the optional provider dependency, an API key, and explicit `allow_live_api` approval in configuration.
 
-- **Python 3.13+** with [uv](https://github.com/astral-sh/uv) ≥ 0.9.24.
-- **Persistent data directory** writable by the service user (run-state markers).
-- **HOSxP export bundle** — see [Ingest CSV](/blood_audit/en/operators/ingest-csv/)
-  for the expected table set.
+A separate approved local redaction service owns the model and private signing key. The audit application receives the public verification key and signed evidence. The CLI does not install a redactor or configure hospital identity services. See [Deployment integrations](/blood_audit/en/operators/integration-seams/).
 
-For Phase 1.5 analysis/reporting:
+The application supports retrospective review. It does not notify treating clinicians or establish clinical validity by running successfully.
 
-- **PostgreSQL 14+** for `batch_runs` and review-action state. The DSN must
-  use the `+psycopg` driver suffix (psycopg3, not psycopg2).
-- **Anthropic API key** with Batch API enabled.
+## Platelet route limit
 
-## What a successful run produces
-
-1. `bba ingest <csv>` validates the bundle, computes a content hash, and
-   writes an ingest completion marker under `$BBA_DATA_DIR/ingest/v1/`.
-2. `bba audit --input <csv>` currently validates/drains the same bundle under
-   `$BBA_DATA_DIR/audit/<run_id>/` and appends run-state/compliance markers.
-   In Phase 1.5 it also writes one classified `AuditRow` per audited order.
-3. Re-running the same input is a no-op unless you pass `--force`
-   (run-level idempotency — see [Pitfall 13](/blood_audit/en/operators/troubleshooting/#run-level-idempotency)).
-
-## What to expect
-
-- The deterministic classifier handles rows first. `NEEDS_REVIEW` and
-  `POTENTIALLY_INAPPROPRIATE` rows go to the LLM route in Phase 1.5 and
-  may take minutes to complete.
-- Hard exclusions filter out non-RBC products, age < 15, and out-of-scope
-  ICD-10 conditions. Orders without pre-transfusion Hb are retained as
-  `INSUFFICIENT_EVIDENCE`.
-- Three default-ON routing arms can terminal an order before the Hb
-  policy: returned-un-transfused orders (`RETURNED_NOT_TRANSFUSED`) and
-  declared surgical / type-and-screen orders (`PERIOP_TRANSFUSION_EXEMPT`)
-  are excluded from scoring, and MSBOS over-reservation surfaces as
-  `PREOP_OVER_RESERVATION`.
-- All PHI is de-identified before any data leaves the audit container.
-
-## Next steps
-
-Continue to [Install](/blood_audit/en/operators/install/).
+`PLATELET_LLM_ENABLED` is false in the repository configuration. If a bundle contains platelet orders that require the disabled review route, the application rejects the uncommitted work and does not mark the run complete. A local audit is not a guarantee that every platelet order can complete. Confirm the approved deployment route before selecting a platelet cohort.

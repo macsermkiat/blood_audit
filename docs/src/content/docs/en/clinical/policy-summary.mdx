@@ -1,161 +1,80 @@
 ---
 title: Policy summary
-description: Paraphrased summary of the 3-tier Hb policy and the platelet policy applied by the audit. Authoritative text lives in the internal KCMH documents.
+description: Implemented RBC and platelet audit rules, boundaries, and review paths.
 ---
 
 import AlgorithmDecisionFlow from "../../../../components/AlgorithmDecisionFlow.astro";
-import AtAGlance from "../../../../components/AtAGlance.astro";
 import HbTierMatrix from "../../../../components/HbTierMatrix.astro";
 
-:::caution
-The text below is a **paraphrased operational summary**. The authoritative
-clinical policy is KCMH PR 17.2 and the internal 3-tier Hb specification
-(`policy/policy.md` in the internal Bloodbank policy bundle). Always
-defer to those documents in case of conflict.
-:::
+This page describes the rules implemented in the repository. It paraphrases the KCMH internal policy bundle, including PR 17.2 and the three-tier Hb specification. It is not a bedside transfusion guideline. A conflict between the implementation and an approved institutional policy needs clinical review before deployment.
 
-<AtAGlance
-  items={[
-    { label: "Plain rule", value: "Hb < 7.0 g/dL is APPROPRIATE before cohort-specific review routes." },
-    { label: "Checked data", value: "Lab Hb, ICD-10, ICD-9-CM procedures, MED, blood-order pattern." },
-    { label: "Vitals", value: "Supporting evidence only; never a standalone bypass.", tone: "warn" },
-    { label: "Review route", value: "Unknown or non-threshold contexts become NEEDS_REVIEW only when Hb is ≥ 7.0.", tone: "ok" },
-  ]}
-/>
-
-## Source documents (internal)
-
-- KCMH PR 17.2 — institutional RBC transfusion guideline.
-- AABB 2023 — international restrictive-transfusion guidance.
-- KCMH internal 3-tier Hb specification (`policy/policy.md`).
-
-## The 3-tier rule
+## RBC thresholds
 
 <HbTierMatrix />
 
-## Decision flow
+The classifier uses these cohort thresholds in g/dL. Threshold comparisons are inclusive.
+
+| Cohort label | Threshold | Context |
+| --- | --- | --- |
+| `default` | 7.0 | No higher-threshold cohort applies. |
+| `esrd_epo` | 7.0 | EPO-managed renal anaemia alone does not raise the threshold. |
+| `cardiac_surgery` | 7.5 | Qualifying cardiac procedure. |
+| `ortho_surgery` | 8.0 | Qualifying orthopaedic operation, without requiring cardiac history. |
+| `cardiopulmonary_comorbidity` | 8.0 | Qualifying heart-disease diagnoses. The stored name remains, but lung disease alone does not trigger it. |
+
+`ortho_cardiac` is a deprecated label retained for historical records. The detector emits `ortho_surgery` for the current orthopaedic rule. `mtp`, `heme_malignancy_active`, and `cohort_unknown` have no numeric threshold. The classifier interprets their labels as well as their thresholds.
+
+## Order-level exclusions and reservations
+
+Before ordinary Hb classification, the default routing can identify these results:
+
+- `RETURNED_NOT_TRANSFUSED` records an order whose units were all returned without transfusion.
+- `PERIOP_TRANSFUSION_EXEMPT` records declared surgical use or type-and-screen. `BDVSTDT.USETYPE` codes `2` and `3` supply these declarations.
+
+Both results are excluded from appropriateness scoring. An exemption does not assert that a transfusion was clinically indicated.
+
+The separate MSBOS reservation screen compares reserved units with the planned operation's reference limit. An excess can produce `PREOP_OVER_RESERVATION`. Missing or ambiguous procedure evidence routes to review. The platelet reservation screen has its own procedure-specific count limits. These are reservation rules, distinct from the platelet transfusion indications below. An excluded order can retain a `reservation_annotation` without changing its classification.
+
+## RBC decision order
 
 <AlgorithmDecisionFlow />
 
-## Bypass and review paths
+This flow starts after order-level routing and shows the default Hb-present path. Missing Hb ordinarily produces `INSUFFICIENT_EVIDENCE`. An optional missing-Hb positive-evidence mode can apply Hb-independent evidence or defer to LLM review. That mode is not the default.
 
-The plain Hb tier is not the first check. Two order-level routing exits
-run before any Hb reasoning (both default-ON):
+The universal `Hb ≤ 7.0` rule runs before MTP and unknown-cohort checks. MTP then clears the remaining matching orders. Unknown context at `Hb > 7.0` routes to review before the later bypasses.
 
-- **All units returned un-transfused** (per the BDVSTTRANS unit ledger)
-  → `RETURNED_NOT_TRANSFUSED`. No transfusion occurred; the order is
-  excluded from appropriateness scoring (it remains visible as
-  crossmatch-to-transfusion waste).
-- **Declared surgical use / type-and-screen** (`BDVSTDT.USETYPE` code
-  `2` → `surgery` or `3` → `type_screen`) → `PERIOP_TRANSFUSION_EXEMPT`.
-  The clinician's declared use is authoritative; peri-op transfusions are
-  not judged against the ward Hb policy. Also excluded from scoring.
+A delta-Hb bypass requires a drop of at least 1.5 g/dL within 6 hours, 2.0 within 12 hours, or 2.5 within 24 hours. At higher cohort thresholds, crystalloid of at least 2 L in the prior 4 hours or an isolated low Hb without a prior trend can send a would-be clear to review. These checks do not undo the earlier universal rule. Vital signs alone do not create a deterministic bypass.
 
-After excluding missing Hb, the algorithm applies the global low-Hb rule
-and then looks for other high-precedence evidence:
+When the declared-use exemption is disabled, the legacy path can clear an order with a procedure in the preceding 6 hours. An upcoming procedure within 72 hours, or a surgical declaration, instead defers an above-threshold order to the LLM. An upcoming procedure does not automatically establish a transfusion indication.
 
-- **Hb < 7.0 g/dL** → deterministic `APPROPRIATE` before cohort routing.
-- **MTP clinical context** → deterministic `APPROPRIATE`.
-- **Delta-Hb trigger** → deterministic `APPROPRIATE` when the Hb drop meets:
-  - ≥ 1.5 g/dL drop within 6 hours
-  - ≥ 2.0 g/dL drop within 12 hours
-  - ≥ 2.5 g/dL drop within 24 hours
-- **Hemodilution or isolated low Hb without trend** → `NEEDS_REVIEW` only
-  after the Hb < 7.0 rule has already had first chance to classify.
-- **Unknown or non-threshold clinical context** → `NEEDS_REVIEW` when
-  Hb is ≥ 7.0.
+## Hb evidence and audit population
 
-Legacy mode only (when the declared-use flag is forced off): a
-peri-procedural anchor ≤ 6h before the order auto-clears, and a pre-op
-crossmatch ≤ 72h before an upcoming operation **defers to the LLM**
-rather than auto-clearing — a reservation is not an indication.
+The deterministic classifier uses the selected pre-order Hb from the seven-day lookup, with source and freshness metadata. The LLM's `SUB_THRESHOLD_HB` evidence uses the lowest Hb in the previous 24 hours, bounded by the latest transfusion in that window. These are separate values and must not be described as interchangeable.
 
-Vital-sign abnormalities alone (low BP, tachycardia) do not trigger the
-bypass.
+The intended population is adult inpatients. The deployment must supply the approved adult cohort rather than assume that every export has already been filtered. Product routing separates RBC from platelets and other components.
 
-## Pre-op reservation screening (MSBOS)
+## Platelet indications
 
-Separately from the transfusion verdict, orders reserved for a planned
-operation are screened against the MSBOS / OPBloodLimit reference
-(default-ON). Reserving more units than the recommendation for the
-planned procedure surfaces as `PREOP_OVER_RESERVATION`; the platelet leg
-compares the pre-op platelet count against clinician-signed cutoffs
-(MNS 80, neuraxial 100, cardiac-CPB 100, ×10³/µL). The screen never
-guesses: unresolved procedures, ambiguous codes, and missing counts route
-to review instead of auto-flagging.
+The platelet path follows the Chula draft policy represented in `prompt_builder/system_prompt.py` and `platelet_guardrail/models.py`. The 10,000, 20,000, 50,000, and 80,000/µL boundaries are inclusive. The 100,000/µL indication boundaries are strict.
 
-## Exclusions and insufficient evidence
+| Grounded indication | Count condition |
+| --- | --- |
+| Lumbar puncture | ≤ 50,000/µL in medicine or obstetrics, ≤ 80,000/µL in surgery or orthopaedics. |
+| CVC insertion, thoracocentesis, arthrocentesis, or dental extraction | ≤ 50,000/µL. Bone marrow aspiration or biopsy does not qualify under this rule. |
+| Major non-neuraxial surgery, planned or performed in the preceding 24 hours | ≤ 80,000/µL, or < 100,000/µL with high bleeding risk. |
+| Consumptive thrombocytopenia or DIC without active bleeding | ≤ 10,000/µL. |
+| Chemotherapy or HSCT without active bleeding | ≤ 10,000/µL, or a supported projection to ≤ 10,000/µL within 24 hours. |
+| Acute, acute-on-chronic, growing, or operative intracranial bleed | < 100,000/µL. The acute window lasts seven days from the documenting note or imaging. |
+| Stable, non-operative intracranial bleed | ≤ 50,000/µL. |
+| Clinically significant active bleeding | ≤ 50,000/µL. |
+| Aplastic anaemia on active therapy | ≤ 10,000/µL or a supported projection to that level within 24 hours. During ATG or with sepsis, ≤ 20,000/µL. |
 
-- Pediatric patients (age < 15) — different policy applies.
-- Products other than the RBC allow-list (LPRC, LDPRC, SDR and the irradiated LDPRCI, LPRCI).
-- ICD-10 conditions that take the patient out of scope per PR 17.2.
+The count projection is calculated from the last two usable pre-order counts. A standing order's target is not a count trend.
 
-Orders without a documented pre-transfusion Hb are **not** classified as
-appropriate or inappropriate. They are retained as `INSUFFICIENT_EVIDENCE`
-so the QI committee can see the documentation gap.
+The prompt also names exclusion populations, including dengue without bleeding, TTP, HIT, ITP, snakebite without qualifying bleeding, and chronic marrow failure without a qualifying treatment context. A low count alone does not clear these cases. The condition-specific exceptions must be checked against the full policy.
 
-## The 24 h minimum Hb
+In LLM review, a diagnosis code alone does not ground an indication or exclusion. The deterministic prophylaxis rule is a deliberate exception. When enabled, it can clear a fresh count ≤ 10,000/µL with qualifying haematology, chemotherapy, or transplant codes and no matching exclusion code. Some codes require separate chemotherapy evidence. This rule is enabled by default. Platelet LLM review remains disabled by default, which can leave an audit incomplete as described in [What this is](/blood_audit/en/clinical/what-this-is/).
 
-Where the rule above refers to a sub-threshold Hb, it means the LOWEST Hb in
-the 24 hours before the order, counted from the most recent transfusion in
-that window onward, not the value closest to the order time. A low value a
-transfusion already corrected does not count. An Hb exactly at the cohort
-floor is AT the floor, not below it.
+## Policy authority and validation
 
-## Platelet policy (Chula DRAFT, AABB/ICTMG 2025)
-
-Platelet orders are judged against a separate policy with eight positive
-indications and nine exclusion populations. As with the RBC rule, in the LLM
-review an ICD-10 code alone never grounds an indication or an exclusion: the
-condition must be documented in a note, a lab result, or an imaging report.
-The deterministic prophylaxis auto-clear is the one exception by design: it
-reads diagnosis codes only, under the hematology sign-off of 2026-09-20.
-
-**Positive indications** (transfusion is appropriate only when the count is
-below the stated threshold AND the indication is grounded in the notes):
-
-1. Lumbar puncture: count < 50,000/µL (medicine or obstetrics) or
-   < 80,000/µL (surgery or orthopaedics).
-2. CVC insertion, thoracocentesis, arthrocentesis, or dental extraction:
-   count < 50,000/µL. Bone marrow aspiration or biopsy grounds nothing at any
-   count. An invasive procedure not on this list routes to `NEEDS_REVIEW`
-   rather than a threshold of the reviewer's choosing.
-3. Major non-neuraxial surgery, planned or performed within the previous
-   24 h: count < 80,000/µL, or < 100,000/µL for a high-bleeding-risk patient
-   or procedure.
-4. Consumptive thrombocytopenia / DIC without active bleeding: count
-   < 10,000/µL.
-5. Chemotherapy or HSCT without active bleeding: count < 10,000/µL, or
-   projected to fall below 10,000/µL within 24 h (a straight-line
-   projection through the last two pre-order counts, computed by code, not
-   a standing order's own trigger level).
-6. Intracranial bleed (SDH, EDH, SAH, intracerebral): count < 100,000/µL
-   while acute, acute-on-chronic, growing, or with neurosurgery planned;
-   count < 50,000/µL when stable and non-operative, including a stable
-   chronic SDH. An acute or acute-on-chronic bleed **stays acute for 7
-   days** from the note or imaging that documents it; after 7 days the
-   stable rule applies unless new imaging or a documented change shows
-   growth or a new bleed.
-7. Clinically significant active bleeding: count < 50,000/µL.
-8. Aplastic anaemia on active therapy aimed at reversing the
-   thrombocytopenia (ATG, cyclosporine, eltrombopag, or transplant
-   work-up): count < 10,000/µL, or projected to fall below that within
-   24 h; < 20,000/µL during the ATG course or with sepsis.
-
-**Exclusion populations** (never appropriate to clear at a low count without
-a separately-grounded positive indication): cardiac surgery / cardiopulmonary
-bypass with no thrombocytopenia or severe bleeding; a head/intracranial
-bleed with count > 100,000/µL; dengue fever without active bleeding; aplastic
-anaemia that is chronic, stable, or not under active therapy, without active
-bleeding (a patient on active therapy is indication 8, not this line);
-snakebite without a life-threatening bleed; TTP; HIT; ITP; and chronic marrow
-failure (e.g. myelodysplastic syndrome) not otherwise listed. For TTP, HIT,
-and ITP, platelet transfusion can be actively harmful, so only the condition
-named on that population's own line clears it; a procedure indication never
-does.
-
-## Why paraphrased here
-
-PR 17.2 is an internal hospital document. To respect institutional
-authorship, this public site paraphrases the operational rule rather than
-republishing the source. The audit code reflects the authoritative spec.
+The hospital's approved policy and clinical review govern use of these findings. This source comparison verifies what the software implements. It does not validate the medical policy, model accuracy, or a production deployment.

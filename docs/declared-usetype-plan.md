@@ -1,5 +1,7 @@
 # Declared USETYPE surgical-intent plan
 
+> Historical design record. Dates, rollout states, and proposed behavior below describe the original work and may be superseded. Use [current module contracts](CONTEXT.md) and the [operator guide](production-cli.md) for current behavior.
+
 **Status:** LIVE (default-ON since 2026-07-15) — `DECLARED_USETYPE_ENABLED`
 defaults to `True` and both pilot legs default to it; set
 `BBA_PILOT_DECLARED_USETYPE=0` to force a run off. Go-live evidence: a

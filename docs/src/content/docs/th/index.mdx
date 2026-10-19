@@ -1,11 +1,11 @@
 ---
 title: blood_audit
-description: ระบบออดิทย้อนหลังการให้เลือดของโรงพยาบาลจุฬาฯ — เลือดแดงเข้มข้น (RBC, Phase 1) และเกล็ดเลือด (platelet, Phase 2) เทียบกับ PR 17.2 และ AABB 2023
+description: ระบบตรวจสอบย้อนหลังคำสั่งให้เลือดแดงเข้มข้นและเกล็ดเลือดในผู้ป่วยในผู้ใหญ่ของโรงพยาบาลจุฬาลงกรณ์ เพื่อพัฒนาคุณภาพการดูแล
 template: splash
 hero:
-  tagline: ระบบออดิทย้อนหลังการให้เลือดแดงเข้มข้น (Phase 1) และเกล็ดเลือด (Phase 2) ในผู้ป่วยในผู้ใหญ่ ณ KCMH เทียบกับ PR 17.2 และ AABB 2023
+  tagline: ทบทวนคำสั่งให้เลือดที่ผ่านมา พร้อมหลักฐาน ผลการจำแนก และประวัติการตรวจสอบ
   actions:
-    - text: ติดตั้งและรันออดิทครั้งแรก
+    - text: ติดตั้งและเริ่มตรวจสอบ
       link: /blood_audit/th/operators/install/
       icon: right-arrow
       variant: primary
@@ -16,125 +16,67 @@ hero:
 ---
 
 import AudienceTiles from "../../../components/AudienceTiles.astro";
-import AtAGlance from "../../../components/AtAGlance.astro";
-import PipelineDiagram from "../../../components/PipelineDiagram.astro";
 import QiNotSamdBanner from "../../../components/QiNotSamdBanner.astro";
 
-<QiNotSamdBanner />
+<QiNotSamdBanner variant="compact" />
 
-<AtAGlance
-  title="สรุปสั้น"
-  items={[
-    { label: "ขอบเขต", value: "ออดิทย้อนหลังเพื่อ QI เท่านั้น ไม่ใช่ระบบแจ้งเตือน ณ จุดดูแล", tone: "warn" },
-    { label: "ข้อมูลเข้า", value: "ชุด CSV จาก HOSxP ครอบคลุมคำสั่งเลือด, Lab, ICD, procedure, MED และ note" },
-    { label: "กฎหลัก", value: "RBC: ตัวจำแนก 3-tier Hb แบบ deterministic พร้อมบริบททางคลินิกและ bypass ที่ต้องมีหลักฐาน. Platelet: §5.1 count gate (ไม่ auto-clear อะไรเลย)" },
-    { label: "ผลลัพธ์ตอนนี้", value: "bba audit ตรวจ CSV, normalize rows และบันทึก run markers; ส่วน analysis + AuditRow รันผ่าน pilot scripts (CLI จะเชื่อมใน Phase 1.5)" },
-  ]}
-/>
-
-## blood_audit ทำอะไร
-
-blood_audit อ่านชุดข้อมูลที่ส่งออกจาก HOSxP หลังเหตุการณ์ให้เลือด
-เสร็จสิ้นแล้ว โดย `component_map` จะแยกคำสั่งแต่ละรายการตามประเภทส่วนประกอบ
-เลือดก่อน จากนั้นส่วน analysis จะเปรียบเทียบคำสั่งให้เลือดแดงเข้มข้น
-(RBC, red blood cell) กับนโยบายฮีโมโกลบิน (Hb) แบบ 3 ชั้น และคำสั่งให้เกล็ดเลือด
-(platelet) กับ §5.1 count gate แล้วเขียนผลออดิท 1 แถวต่อคำสั่งที่ audit
-ลงใน audit store ปัจจุบันส่วน analysis นี้รันผ่าน pilot scripts และจะเชื่อม
-เข้ากับ CLI ใน Phase 1.5
-
-ก่อนการตัดสินด้วย Hb ใด ๆ มี routing arm ที่เปิดโดยค่าเริ่มต้น 3 ทาง
-ทำงานกับคำสั่ง สองทางแรกอาจจบคำสั่งออกจากการคิดคะแนนความเหมาะสม คือ
-returns ledger (disposition รายยูนิตจาก BDVSTTRANS) และ
-declared-use USETYPE routing (เจตนาใช้เพื่อผ่าตัด / type-and-screen
-ระดับคำสั่ง) ส่วนทางที่สาม MSBOS pre-op reservation audit
-คัดกรองการจองเลือดสำหรับการผ่าตัดที่วางแผนไว้ ผลตรวจพบ
-`PREOP_OVER_RESERVATION` ยังนับเป็นคะแนนของหน่วยงาน
-โดยคิดคะแนนอยู่ฝั่ง inappropriate
-
-ค่า `final_classification` ที่บันทึกสำหรับแต่ละรายการให้เลือดจะเป็น
-1 ใน 9 ค่า:
-
-- `APPROPRIATE`: คำสั่งสอดคล้องกับนโยบาย
-- `INAPPROPRIATE`: คำสั่งไม่สอดคล้องกับนโยบาย
-- `POTENTIALLY_INAPPROPRIATE`: Hb สูงหรือมีสัญญาณที่ควรตรวจทบทวนต่อ
-- `NEEDS_REVIEW`: มีเหตุผลให้คนทบทวนก่อนสรุปผล
-  (เหตุผลไม่ชัด, quote-grounding ล้มเหลว, หรือ confidence ต่ำ)
-- `INSUFFICIENT_EVIDENCE`: เอกสารหลักฐานไม่พอ ไม่ใช่ `INAPPROPRIATE`
-  โดยตั้งใจ
-- `RETURNED_NOT_TRANSFUSED`: ทุกยูนิตถูกคืนโดยไม่ได้ให้เลือด
-  (returns terminal; ถูกตัดออกจากการคิดคะแนน)
-- `PERIOP_TRANSFUSION_EXEMPT`: ประกาศใช้เพื่อผ่าตัด / type-and-screen
-  หรือให้เลือดช่วง peri-op (returns terminal; ถูกตัดออกจากการคิดคะแนน)
-- `PREOP_OVER_RESERVATION`: จองเลือดเกินคำแนะนำ MSBOS สำหรับการผ่าตัด
-  ที่วางแผนไว้ (นับเป็น over-reservation finding ไม่ใช่ Hb verdict)
-- `PREOP_RESERVATION_UNCONFIRMED`: คำสั่งแบบ reserve-ahead ที่ยืนยัน
-  การให้เลือดไม่ได้ (อยู่หลัง flag ที่ปิดโดยค่าเริ่มต้น)
-
-แถวที่ตัวจำแนก deterministic ส่งต่อให้ LLM จะต้องผ่าน quote-grounding
-แบบ fail-closed 6 ชั้น หาก grounding ล้มเหลว ระบบจะเก็บผลเป็น
-`NEEDS_REVIEW` ไม่ใช่เผยแพร่ผลตัดสินสุดท้าย ตัวจำแนก deterministic
-ยังคงเป็นชั้นตัดสินหลัก
-
-## สถานะ Phase 1
-
-ตอนนี้ `bba audit` ทำเฉพาะส่วน ingest ของ pipeline คือ validate ชุด CSV
-จาก HOSxP, stream rows ผ่าน normalization และบันทึก run-state markers ภายใต้
-`$BBA_DATA_DIR/audit/<run_id>/` และ `$BBA_DATA_DIR/audit_runs/<run_id>/`
-พร้อมกลไก idempotency ระดับ run
-ส่วนการวิเคราะห์ด้วย LLM (deterministic classifier → evidence bundle →
-de-id → prompt → batch → quote grounding → audit-store write)
-มีโมดูลรองรับแล้ว และจะเชื่อมเข้ากับ CLI ใน Phase 1.5 ดูรายละเอียดที่
-[คำสั่ง audit](/blood_audit/th/operators/audit-command/)
-
-## สถานะ Phase 2: platelet auditor (merged)
-
-Platelet auditor merged แล้ว (PR #85) `component_map` แยกคำสั่งเกล็ดเลือด
-ออกจากเลือดแดง และส่วน deterministic ของเกล็ดเลือด (`platelet_lookup` +
-`platelet_classifier` §5.1 gate) ใช้งานได้แล้ว โดยไม่ auto-clear อะไรเลย:
-count ≥ 100 ×10³/µL → review, ต่ำกว่านั้น → ส่งต่อ LLM, ไม่มีค่า →
-`INSUFFICIENT_EVIDENCE` ส่วน platelet LLM leg อยู่หลัง flag `PLATELET_LLM_ENABLED`
-ที่ปิดโดยค่าเริ่มต้น และ RBC path เหมือนเดิมทุกไบต์
-
-## 12 ขั้นตอนของ pipeline
-
-12 ขั้นตอนหลักด้านล่างคือ analysis leg ของ RBC/platelet ส่วน overlay arm
-ที่เปิดโดยค่าเริ่มต้น 3 ทาง (returns ledger, declared-use routing,
-MSBOS reservation) อยู่ด้านหน้า pipeline นี้ และอาจจบคำสั่งก่อนที่ขั้นตอน
-Hb/count จะได้รัน
-
-<PipelineDiagram />
-
-## ขั้นถัดไป
+## เลือกคู่มือตามหน้าที่
 
 <AudienceTiles
   tiles={[
     {
       label: "ผู้ดูแลระบบ",
-      audience: "KCMH IT",
-      description:
-        "ติดตั้งแพ็กเกจ ตั้งค่า environment variables รัน bba ingest และ bba audit แล้วส่งชุดข้อมูลออดิทให้คณะกรรมการ QI",
+      audience: "ทีมไอทีและผู้จัดเตรียมข้อมูล",
+      description: "ติดตั้งระบบ จัดเตรียมชุดข้อมูล ตั้งค่าการเข้าถึง และสร้างรายงาน",
       primaryHref: "/blood_audit/th/operators/install/",
       primaryText: "ติดตั้ง",
       secondaryHref: "/blood_audit/th/operators/first-audit-run/",
-      secondaryText: "รันออดิทครั้งแรก",
+      secondaryText: "เริ่มตรวจสอบครั้งแรก",
     },
     {
       label: "นักพัฒนา",
-      audience: "ผู้ดูแล src/bba/",
-      description:
-        "สถาปัตยกรรม 12 ขั้นตอน, ตัวจำแนก 3-tier Hb แบบ deterministic และ quote-grounding 6 ชั้นแบบ fail-closed",
+      audience: "ผู้ดูแลโค้ดและการทดสอบ",
+      description: "ตรวจสอบลำดับการประมวลผล ขอบเขตของแต่ละโมดูล และเงื่อนไขความถูกต้อง",
       primaryHref: "/blood_audit/th/developers/architecture/",
       primaryText: "สถาปัตยกรรม",
-      secondaryHref: "/blood_audit/th/reference/module-glossary/",
-      secondaryText: "Module glossary",
+      secondaryHref: "/blood_audit/th/developers/testing/",
+      secondaryText: "การทดสอบ",
     },
     {
-      label: "ทางคลินิก",
-      audience: "คณะกรรมการ QI",
-      description:
-        "ขอบเขตของการออดิทย้อนหลัง ค่า classification ทั้ง 9 แบบ และรายงานสำหรับ QI โดยย้ำว่าไม่ใช่ Software as a Medical Device",
+      label: "ผู้ทบทวนทางคลินิก",
+      audience: "คณะกรรมการพัฒนาคุณภาพ",
+      description: "ทำความเข้าใจขอบเขต กฎที่ใช้จำแนก และวิธีอ่านผลรายงาน",
       primaryHref: "/blood_audit/th/clinical/what-this-is/",
-      primaryText: "นี่คืออะไร",
+      primaryText: "ขอบเขตการใช้งาน",
+      secondaryHref: "/blood_audit/th/clinical/policy-summary/",
+      secondaryText: "กฎการจำแนก",
     },
   ]}
 />
+
+## จากข้อมูลส่งออกสู่การทบทวน
+
+ระบบอ่านชุดข้อมูลจาก HOSxP ที่ส่งออกหลังการดูแล และตรวจสอบคำสั่งให้เลือดแดงเข้มข้น
+กับเกล็ดเลือดตามกฎที่กำหนดไว้ในโค้ด ผลแต่ละรายการเก็บหลักฐานและข้อมูลรุ่นของกฎ
+หรือโมเดลที่ใช้ไว้ด้วย
+
+1. เตรียมชุด CSV ตามรูปแบบที่กำหนด แล้วใช้คำสั่ง `bba audit`
+2. เปิดผลที่บันทึกแล้วและรายการที่ยังต้องทบทวนในแดชบอร์ดที่ตรวจสอบตัวตนผู้ใช้
+3. สร้างรายงานสำหรับคณะกรรมการ หรือเปรียบเทียบผลระหว่างรอบการตรวจสอบ
+
+โหมดเริ่มต้นประมวลผลในเครื่องโดยไม่เรียกโมเดลภายนอก รายการเลือดแดงที่ยังสรุปไม่ได้
+จะบันทึกให้ทบทวนด้านความเป็นส่วนตัว การเรียกโมเดลต้องมีหลักฐานที่ลงนามโดยบริการ
+ลบข้อมูลระบุตัวตนที่ได้รับอนุมัติ และฐานข้อมูลสำหรับติดตามการประมวลผล
+เส้นทางเรียกโมเดลของเกล็ดเลือดปิดไว้โดยค่าเริ่มต้น รายการที่ยังไม่ได้บันทึกผลอาจทำให้
+รอบการตรวจสอบไม่สำเร็จ ดูเงื่อนไขใน[คู่มือเริ่มต้น](/blood_audit/th/operators/first-audit-run/)
+
+รายการคืนเลือด เจตนาการใช้เลือด และการจองก่อนผ่าตัดอาจได้รับการจัดเส้นทางก่อนตรวจค่า Hb
+หรือเกล็ดเลือด ผลที่ยกเว้นจากการคิดคะแนน การจองเกิน และหลักฐานไม่เพียงพอมีความหมายต่างกัน
+อ่าน[สรุปกฎ](/blood_audit/th/clinical/policy-summary/) ก่อนตีความรายงาน
+
+## ขอบเขตการใช้งาน
+
+ระบบนี้ใช้ตรวจสอบย้อนหลังเพื่อพัฒนาคุณภาพในผู้ป่วยในผู้ใหญ่ของโรงพยาบาลจุฬาลงกรณ์
+ไม่ใช้อนุมัติคำสั่งให้เลือด ณ จุดดูแล การทดสอบซอฟต์แวร์ยืนยันพฤติกรรมตามโค้ด
+ส่วนความถูกต้องทางคลินิก คุณภาพการลบข้อมูลระบุตัวตน และการควบคุมระบบที่ติดตั้งจริง
+ต้องมีหลักฐานการประเมินแยกกัน

@@ -1,96 +1,51 @@
 ---
 title: คำสั่ง audit
-description: flag ของ bba audit, input ที่อ่าน และสัญญา idempotency
+description: อาร์กิวเมนต์ การบันทึกผล การรันซ้ำ และการกู้คืนงานของ bba audit
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
-import CliCommandCard from "../../../../components/CliCommandCard.astro";
+`bba audit` ตรวจชุดข้อมูล HOSxP ประกอบคำสั่งเลือด และบันทึกผลการจัดประเภท คำสั่งอ่านไฟล์ส่งออกและเขียนผลในเครื่อง โดยไม่แก้ฐานข้อมูล HOSxP
 
-:::caution[ขอบเขต Phase 1]
-ใน Phase 1, `bba audit` ครอบเฉพาะ **ส่วน ingest** ของ pipeline
-โดย validate ชุด CSV จาก HOSxP, stream rows ผ่าน normalization ภายใต้
-`$BBA_DATA_DIR/audit/<run_id>/` และบันทึก completion/run-state markers สำหรับ
-idempotency ส่วน LLM analysis (deterministic classifier → evidence bundle
-→ de-id → prompt → batch → quote grounding → audit-store write)
-มีโมดูลรองรับแล้ว แต่จะเชื่อมเข้ากับ CLI ใน Phase 1.5 ดังนั้นคำสั่งนี้
-ยังไม่สร้าง classification rows ใน Phase 1
-:::
+```sh
+uv run bba audit --input /srv/bba/export/BDVST.csv
+uv run bba audit --run-id RUN_ID
+```
 
-<AtAGlance
-  title="สรุปคำสั่ง"
-  items={[
-    { label: "อ่าน", value: "path ของ CSV ภายใน HOSxP export bundle" },
-    { label: "เขียนตอนนี้", value: "run-state markers หลังตรวจ schema และ normalize rows สำเร็จ", tone: "ok" },
-    { label: "เขียนภายหลัง", value: "AuditRows, LlmCalls และ batch_runs ใน Phase 1.5" },
-    { label: "กรณีที่คำสั่งจะหยุดทำงาน", value: "env var หาย, schema drift หรือ bundle ไม่ครบ จะ fail loud", tone: "warn" },
-  ]}
-/>
+## อาร์กิวเมนต์
 
-<CliCommandCard
-  command="bba audit"
-  summary="Phase 1: validate และ drain ชุดข้อมูล HOSxP ด้วย run-level idempotency. Phase 1.5: เพิ่มการ classify และเขียน audit rows."
-  flags={[
-    { name: "--input INPUT_CSV", description: "path ของ CSV ใน HOSxP bundle ที่ต้องการ ingest" },
-    { name: "--run-id RUN_ID", description: "กลับไปผูกกับ run_id ที่เคย complete แล้ว; จะ no-op ยกเว้นใช้ --force" },
-    { name: "--force", description: "ข้าม idempotency ระดับ run และเขียน audit_log พร้อม idempotency_override=true" },
-  ]}
-  envVars={["BBA_DATA_DIR"]}
-  exitCodes={[
-    { code: 0, meaning: "ingest เสร็จและ mark run complete แล้ว หรือ no-op เพราะ run_id complete อยู่แล้ว" },
-    { code: 1, meaning: "CliError เช่น env var หาย หรือ ingest validation ไม่ผ่าน" },
-  ]}
-  example={`uv run bba audit --input /var/data/exports/PHI_xxx_001.csv`}
-/>
+| ตัวเลือก | การทำงาน |
+| --- | --- |
+| `--input PATH` | พาธ `BDVST.csv` ที่อยู่กับ CSV มาตรฐานอื่น คำนวณ run identity จากชุดข้อมูล schema รุ่นโค้ด และไฟล์ตั้งค่าแอปที่ระบุ |
+| `--run-id ID` | เลือกรอบที่มีบันทึกไว้ ทำงานที่ค้างต่อจาก source snapshot เมื่อการตั้งค่ายังตรงกัน หากเสร็จแล้วจะไม่ทำซ้ำ เว้นแต่ใช้ `--force` |
+| `--force` | ข้ามการตรวจว่ารอบเสร็จแล้ว และเพิ่มรายการ `audit_log` ที่มี `idempotency_override=true` ผลที่บันทึกแล้วกับ request manifest ยังคงแก้ทับไม่ได้ |
 
-อีก 4 subcommands คือ `evaluate`, `report`, `serve-dashboard` และ
-`sentinel` เป็น [integration seams](/blood_audit/th/operators/integration-seams/)
-ที่ตั้งใจให้ fail loud จนกว่าจะเชื่อม deployment จริง
+ต้องเลือก `--input` หรือ `--run-id` อย่างใดอย่างหนึ่ง รอบที่ใช้ run ID เดียวกันใช้ lock เดียวกัน ส่วนคนละ run ID ทำงานพร้อมกันได้
 
-## ใช้ `--input` หรือ `--run-id` เมื่อไร
+## การตั้งค่าและผลลัพธ์
 
-- `--input INPUT_CSV` — ใช้เมื่อรันครั้งแรกกับ bundle นี้ ระบบจะคำนวณ
-  `run_id` จาก input hash + schema fingerprint + code version แล้ว ingest
-  และ mark run complete
-- `--run-id RUN_ID` — ใช้กลับไปอ้างถึง run ที่ complete แล้ว หากไม่ใส่
-  `--force` จะเป็น no-op เพราะ run นั้นสมบูรณ์อยู่แล้ว
+ต้องมี `BBA_DATA_DIR` หากไม่ระบุ `BBA_APPLICATION_CONFIG` จะใช้โหมด local และ policy version `repository-policy` ระบบบันทึกผลจากกฎ ส่วนกรณีที่ต้องใช้โมเดลจะเป็น `NEEDS_REVIEW` พร้อม `privacy_admission_failed` โดยไม่เรียกโมเดล
 
-## `--force` ต้องมี audit trail
+ไฟล์ตั้งค่า JSON ที่ระบุจะมีส่วนใน run identity เลือก transport ได้เป็น `local`, `cassette` หรือ `live` การส่งให้โมเดลต้องมีหลักฐานที่ผ่านการตรวจลายมือชื่อและ Postgres สำหรับ checkpoint ดู [ตัวแปรแวดล้อม](/blood_audit/th/operators/env-vars/)
 
-เมื่อใช้ `--force` คำสั่งจะเขียน `audit_log` พร้อม
-`idempotency_override=true` เพื่อบอกว่ามีการบังคับรันซ้ำ ห้ามแก้ไฟล์
-run-state โดยตรงเพื่อเลี่ยงกลไกนี้ เพราะจะทำให้ audit trail ไม่ครบ
+completion marker จะเกิดหลังบันทึก ID ของ `AuditRow` แล้ว ตารางที่นำเข้าไม่นับเป็นผลการตรวจ หากไม่มีกลุ่มข้อมูลที่เข้าเกณฑ์ คำสั่งจะหยุด คำสั่งเกล็ดเลือดที่ถูกระงับในช่วง MTP จะไม่มี audit row ตามการออกแบบ
 
-## Idempotency ระดับ run
+`PLATELET_LLM_ENABLED` ใน repository เป็น false หากยังมีงานเกล็ดเลือดที่ต้องเข้าเส้นทางทบทวนซึ่งปิดอยู่ แอปจะไม่บันทึกว่ารอบเสร็จแล้ว
 
-ถ้ามี CLI สอง process เรียก run เดียวกันพร้อมกัน ระบบจะ serialize ผ่าน
-`store.acquire_run_lock` จึงไม่สามารถ ingest run เดียวกันซ้ำพร้อมกันได้
-แต่ audit คนละ input สามารถรันคู่ขนานได้
+## Run identity และหลักฐานที่เก็บ
 
-## Phase 1.5 แบบย่อ
+เนื้อหา CSV มาตรฐานทั้งหมด schema fingerprint และรุ่น package ใช้กำหนด identity พื้นฐาน ไฟล์ตั้งค่าแอปที่ระบุจะมีส่วนเพิ่มใน audit identity ด้วย การเปลี่ยน CSV ไฟล์รองจึงอาจสร้าง run ID ใหม่
 
-เมื่อเชื่อม LLM analysis แล้ว คำสั่งนี้จะ:
+ก่อนจัดประเภท แอปคัดลอกข้อมูลเป็น source snapshot ที่แก้ไม่ได้ ไฟล์และ manifest ใช้ mode 0400 ภายในไดเรกทอรีของเจ้าของที่ใช้ mode 0500 ระบบตรวจ identity ของข้อมูล schema การตั้งค่า และรุ่นโค้ดก่อนใช้ snapshot การแก้ไฟล์โดยผู้ส่งออกจึงไม่เปลี่ยนข้อมูลของรอบที่กำลังทำงาน
 
-- สร้าง evidence bundle, de-identify และส่งแถวที่ต้อง review ไปยัง
-  Anthropic Batch API
-- ตรวจคำตอบ LLM ทุกแถวด้วย quote-grounding แบบ fail-closed 6 ชั้น
-- เขียน `AuditRow` 1 แถวต่อคำสั่งให้เลือด พร้อม `rule_classification`
-  และ `final_classification`
-  โดย `final_classification` รวม terminal ฝั่ง routing/reservation ด้วย
-  (`RETURNED_NOT_TRANSFUSED`, `PERIOP_TRANSFUSION_EXEMPT`,
-  `PREOP_OVER_RESERVATION` และ `PREOP_RESERVATION_UNCONFIRMED`
-  ที่มี flag ควบคุม) ส่วนแถวที่คืนเลือด / peri-op-exempt ซึ่งมีการจองเลือด
-  ก่อนผ่าตัด MSBOS `reservation_annotation` จะถูกฝังใน
-  `LlmCall.response_json` ของ deterministic marker call ที่คู่กัน —
-  `AuditRow` เองไม่มี field `reservation_annotation`
-  (เป็น annotation เท่านั้น ไม่เปลี่ยน verdict)
+แถวผลการตรวจ calls request manifests และ analysis artifacts ทั่วไปใช้ไฟล์และไดเรกทอรีที่ให้สิทธิ์เฉพาะเจ้าของ แอปปฏิเสธพื้นที่เดิมที่เปิดสิทธิ์กว้างเกินไปหรือใช้ final symlink สำรอง `identity.key` source bindings snapshot และผลที่บันทึกแล้วตามนโยบายเดียวกัน
 
-สถานะ batch จะเก็บใน `batch_runs` ต่อคำสั่งให้เลือด
-(`pending` → `submitted` → `partial` → `complete`; `failed` เป็น terminal)
-ถ้าระบบล่มกลางทาง การรันครั้งถัดไปจะ resume ได้
+## ทำงานที่ขัดจังหวะต่อ
 
-## ขอบเขตความปลอดภัย
+ใช้ `--run-id` และไฟล์ตั้งค่าเดิม snapshot ที่เก็บไว้ช่วยให้ทำต่อได้แม้ไฟล์ส่งออกต้นฉบับถูกนำออกแล้ว
 
-- อ่านเฉพาะ HOSxP export และเขียนผลภายใต้ `$BBA_DATA_DIR/audit/<run_id>/`
-  ไม่แก้ตาราง HOSxP ต้นทาง
-- ทำงานย้อนหลังและเงียบเสมอ ไม่มี real-time alert ไปยังแพทย์
-- `run_id` ที่ complete แล้วจะไม่ถูกเขียนทับแบบเงียบ ๆ
+batch ที่ยืนยันการส่งแล้วกู้คืนจาก identity และลำดับ calls ที่บันทึกไว้ได้ หากไม่ทราบแน่ชัดว่าผู้ให้บริการรับคำขอหรือไม่ ผู้ดูแลต้องตรวจสอบผลก่อน ระบบไม่ส่งคำขอที่ไม่ทราบผลซ้ำโดยอัตโนมัติ เก็บ checkpoint ไว้ระหว่างตรวจสอบ
+
+## ตรวจด้วยนโยบายหรือหลักฐานใหม่
+
+ใช้ `policy_version` ที่อนุมัติใหม่ใน `BBA_APPLICATION_CONFIG` และเตรียมหลักฐานที่ลงลายมือชื่อสำหรับ run identity ใหม่นั้น เก็บเนื้อหา cassette ให้คงที่ตลอดรอบ
+
+การเพิ่มไฟล์อนุมัติหลังรอบ local เสร็จไม่เปลี่ยนผลเดิม `--force` ไม่ได้อนุญาตให้เขียนทับ classification request manifest หรือผลการตรวจสิทธิ์ส่งหลักฐานที่เสร็จแล้ว

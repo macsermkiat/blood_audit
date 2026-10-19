@@ -1,11 +1,11 @@
 ---
 title: blood_audit
-description: KCMH transfusion audit pipeline — post-hoc quality-improvement audit of RBC (Phase 1) and platelet (Phase 2) orders against PR 17.2 + AABB 2023.
+description: Retrospective quality-improvement audits of adult inpatient red-cell and platelet orders at KCMH.
 template: splash
 hero:
-  tagline: Post-hoc audit of inpatient adult RBC (Phase 1) and platelet (Phase 2) transfusions at KCMH against PR 17.2 + AABB 2023.
+  tagline: Review completed transfusion orders with their evidence, classifications, and audit history.
   actions:
-    - text: Install & first audit run
+    - text: Install and run an audit
       link: /blood_audit/en/operators/install/
       icon: right-arrow
       variant: primary
@@ -16,101 +16,43 @@ hero:
 ---
 
 import AudienceTiles from "../../../components/AudienceTiles.astro";
-import AtAGlance from "../../../components/AtAGlance.astro";
-import PipelineDiagram from "../../../components/PipelineDiagram.astro";
 import QiNotSamdBanner from "../../../components/QiNotSamdBanner.astro";
 
-<QiNotSamdBanner />
+<QiNotSamdBanner variant="compact" />
 
-<AtAGlance
-  items={[
-    { label: "Scope", value: "Retrospective QI audit only; no point-of-care alerts.", tone: "warn" },
-    { label: "Input", value: "HOSxP CSV bundle with transfusion, lab, diagnosis, procedure, medication, and note tables." },
-    { label: "Core rule", value: "RBC: deterministic 3-tier Hb classifier with clinical-context thresholds and evidence-gated bypasses. Platelet: §5.1 count gate (auto-clears nothing)." },
-    { label: "Output", value: "bba audit validates/drains CSV rows and records run markers; the analysis leg + AuditRows run via the pilot scripts (CLI wiring in Phase 1.5)." },
-  ]}
-/>
-
-## What blood_audit does
-
-blood_audit reads completed HOSxP exports from the hospital information
-system. The `component_map` intake gate routes each blood-bank order to its
-component family. The analysis leg then compares each audited red blood cell
-(RBC) order against the 3-tier hemoglobin (Hb) policy and each platelet order
-against the §5.1 count gate, and writes one audit row per audited order to the
-audit store. The RBC classifier checks Lab Hb, ICD-10 diagnoses, ICD-9-CM
-procedures, medications, blood-order patterns, and procedure timing in a fixed
-order. Today the analysis leg runs through the pilot scripts; it is wired into
-the CLI in Phase 1.5.
-
-Before any Hb judgment, three default-ON routing arms act on the order. Two
-of them can terminal the order out of appropriateness scoring: the returns
-ledger (per-unit BDVSTTRANS disposition) and declared-use USETYPE routing
-(order-level surgical or type-and-screen intent). The third, the MSBOS
-pre-op reservation audit, screens planned-operation reservations. Its
-`PREOP_OVER_RESERVATION` finding still counts against the service, on the
-inappropriate side.
-
-The `final_classification` stored for each transfusion is one of:
-
-- `APPROPRIATE`: the order matched policy.
-- `INAPPROPRIATE`: the order did not match policy.
-- `POTENTIALLY_INAPPROPRIATE`: the deterministic rule flagged the order
-  but did not promote it to LLM review.
-- `NEEDS_REVIEW`: the LLM ran but its answer requires a human reviewer
-  (uncertain reasoning, failed quote-grounding, or low confidence).
-- `INSUFFICIENT_EVIDENCE`: documented evidence was missing. By design the
-  row is not `INAPPROPRIATE`.
-- `RETURNED_NOT_TRANSFUSED`: every unit was returned un-transfused
-  (returns terminal; excluded from scoring).
-- `PERIOP_TRANSFUSION_EXEMPT`: declared surgical or type-and-screen use, or
-  peri-op transfusion (returns terminal; excluded from scoring).
-- `PREOP_OVER_RESERVATION`: reserved units exceeded the MSBOS
-  recommendation for the planned operation (counts as an over-reservation
-  finding, not an Hb verdict).
-- `PREOP_RESERVATION_UNCONFIRMED`: reserve-ahead order whose transfusion
-  could not be confirmed (behind a default-off flag).
-
-Rows that the deterministic classifier routes to the LLM go through six
-fail-closed quote-grounding layers. A failed grounding is stored as
-`NEEDS_REVIEW`, never published as a result. The deterministic classifier
-stays the authoritative decision layer.
-
-## Phase 1 status
-
-`bba audit` today wraps the ingest leg of the pipeline. It validates the
-HOSxP CSV bundle, streams rows through normalization, and records run-state
-markers under `$BBA_DATA_DIR/audit/<run_id>/` and
-`$BBA_DATA_DIR/audit_runs/<run_id>/` with idempotent run-level guarantees.
-In these docs, a "cohort" means the clinical-context bucket for one audit
-row, such as default, cardiac surgery, orthopedic surgery, ESRD with
-dialysis-medication evidence, MTP, active heme malignancy, cardiopulmonary
-comorbidity (heart disease), or unknown context.
-
-The LLM-driven analysis leg (deterministic classifier → evidence bundle
-→ de-id → prompt → batch → quote grounding → audit-store write) is
-implemented as separate modules and is wired in Phase 1.5. See
-[audit command](/blood_audit/en/operators/audit-command/) for what runs today.
-
-## Phase 2 status: platelet auditor (merged)
-
-The platelet auditor is merged (PR #85). The `component_map` intake gate
-tells a platelet order from a red-cell one, and the deterministic platelet leg
-(`platelet_lookup` + `platelet_classifier` §5.1 gate) is live. It auto-clears
-nothing: a count ≥ 100 ×10³/µL routes to review, a count below the ceiling
-defers to the LLM, and a missing count returns `INSUFFICIENT_EVIDENCE`. The
-platelet LLM leg sits behind the default-off `PLATELET_LLM_ENABLED` flag, and
-the RBC path is byte-identical throughout.
-
-## The 12 pipeline stages
-
-The 12-stage core below is the RBC/platelet analysis leg. The three
-default-ON overlay arms (returns ledger, declared-use routing, MSBOS
-reservation) sit in front of it and can terminal an order before the
-Hb/count stages run.
-
-<PipelineDiagram />
-
-## Where to go next
+## Choose your guide
 
 <AudienceTiles />
+
+## From export to review
+
+The application reads a completed HOSxP export and evaluates eligible red-cell
+and platelet orders against the repository's policy implementation. It keeps
+the supporting evidence and the policy and model provenance with each result.
+
+1. Prepare the canonical CSV bundle and run `bba audit`.
+2. Review committed results and unresolved cases in the authenticated dashboard.
+3. Generate committee reports or compare committed runs for quality improvement.
+
+The default local mode makes no model calls. Eligible unresolved red-cell
+cases become local privacy review. Model execution requires signed evidence
+from an approved local redaction authority and durable database checkpoints.
+The platelet model route is separately disabled by default; unresolved platelet
+work can prevent completion until that route is configured. The
+[first-run guide](/blood_audit/en/operators/first-audit-run/) explains these limits.
+
+Returns, declared use, and preoperative reservation checks can route an order
+before the Hb or platelet rules. Routing exemptions, over-reservation findings,
+and missing evidence have different meanings and denominators. Use the
+[clinical policy summary](/blood_audit/en/clinical/policy-summary/) to interpret them.
+
+## Scope and evidence
+
+This is retrospective quality-improvement software for adult inpatients at
+King Chulalongkorn Memorial Hospital. It does not authorize orders at the
+point of care. Tests verify implemented software behavior; clinical validation,
+approved de-identification, and deployment controls require separate evidence.
+
+The [architecture guide](/blood_audit/en/developers/architecture/) shows the
+processing stages. The [report guide](/blood_audit/en/clinical/report-output/)
+explains the stored results and report limits.

@@ -1,50 +1,32 @@
 ---
 title: Quote grounding 6 ชั้น
-description: ชั้นป้องกัน hallucination ระหว่างคำตอบ LLM กับ audit row ที่เผยแพร่
+description: การตรวจข้อความอ้างอิง เหตุผลแรกที่ไม่ผ่าน และขอบเขตของ grounding
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
 import QuoteGroundingLayers from "../../../../components/QuoteGroundingLayers.astro";
 
-เมื่อ deterministic classifier ส่งแถวไปยัง LLM review, LLM จะสร้างเหตุผล
-ทางคลินิกพร้อม quote จาก de-identified evidence bundle ทุก quote ต้องผ่าน
-mandatory checks 6 ชั้นแบบ fail-closed ส่วน medical-NLI เป็นชั้นที่ 7
-ซึ่งเปิดใช้เฉพาะ deployment ที่ตั้งค่าไว้
-
-<AtAGlance
-  title="สรุป grounding"
-  items={[
-    { label: "Input", value: "LLM citation + evidence_id + de-identified evidence bundle" },
-    { label: "Mandatory", value: "quote checks 6 ชั้นต้องรันทุกครั้ง", tone: "ok" },
-    { label: "Optional", value: "Medical-NLI รันเมื่อ deployment ส่ง NLI gate เข้ามา" },
-    { label: "Failure", value: "mandatory layer ใด fail จะเป็น NEEDS_REVIEW / hallucination_suspect", tone: "warn" },
-  ]}
-/>
+`bba.quote_grounder.verify_citation` ตรวจข้อความอ้างอิงจากโมเดลกับหลักฐานที่ปกปิดแล้ว โดยปฏิเสธ quote ว่างก่อน จากนั้นตรวจตามลำดับจนพบข้อแรกที่ไม่ผ่าน citation ที่ผ่านต้องผ่านการตรวจที่เกี่ยวข้องทุกข้อ
 
 <QuoteGroundingLayers />
 
-## Fail-closed หมายถึงอะไร
+## ผลการตรวจ
 
-ถ้า mandatory layer ใดตอบ false ระบบจะเก็บ
-`final_classification = NEEDS_REVIEW` และ `review_reason =
-"hallucination_suspect"` แถวนั้นจะไม่ถูก downgrade, retry ด้วยกฎที่อ่อนลง
-หรือยอมรับเป็น `APPROPRIATE` / `INAPPROPRIATE` แบบเงียบ ๆ
+verifier คืนเหตุผลแรกที่ไม่ผ่าน source ID ที่ไม่มีหรือซ้ำให้ `CITED_ID_NOT_FOUND` การเทียบข้อความใช้ Unicode NFC และขอบเขตคำ การนับความซ้ำใช้ขอบเขตคำแบบเดียวกัน
 
-`hallucination_suspect` เป็นค่าใน `review_reason` ไม่ใช่ classification
-จริง ค่า classification ที่เก็บได้คือ `APPROPRIATE`, `INAPPROPRIATE`,
-`NEEDS_REVIEW`, `INSUFFICIENT_EVIDENCE` และ `POTENTIALLY_INAPPROPRIATE`
-บวก routing/reservation terminals `PREOP_RESERVATION_UNCONFIRMED`,
-`PREOP_OVER_RESERVATION`, `RETURNED_NOT_TRANSFUSED` และ
-`PERIOP_TRANSFUSION_EXEMPT` — ดู [Audit store](/blood_audit/th/developers/audit-store/)
+การตรวจตัวเลขเปรียบเทียบชุด analyte, value และ unit ที่รองรับ หากโมเดลให้ `lab_tuple` ต้องตรงกับค่าที่แยกจาก quote เอง การตรวจนี้ไม่ได้ตรวจตัวเลขทุกชนิดหรือพิสูจน์ว่าข้อสรุปทางคลินิกถูกต้อง
 
-## Medical-NLI เป็น optional
+pipeline ตรวจแต่ละครั้งกับหลักฐานที่ปกปิดแล้วของแถวนั้น และเลือกครั้งล่าสุดที่ผ่าน หากไม่มีครั้งใดผ่าน จะบันทึก `final_classification = NEEDS_REVIEW` พร้อม `review_reason = "hallucination_suspect"` เหตุผลนี้ไม่ใช่ค่าการจำแนก ดู [Audit store](/blood_audit/th/developers/audit-store/)
 
-`bba.quote_grounder.verify_citation(..., nli_gate=None)` ไม่รัน NLI โดย default
-จะประเมินชั้น medical-NLI เฉพาะเมื่อ caller ส่ง `NLIEntailmentGate` เข้ามา
+การกู้คืนใช้ verifier จริงตัวเดียวกัน คำตอบใน cache ไม่ข้าม grounding และคำขอที่เปลี่ยนไม่ใช้คำตอบเก่าต่อได้เพียงเพราะ audit ID เหมือนเดิม
 
-## สิ่งที่ห้ามทำ
+## การตรวจ NLI เพิ่มเติม
 
-- ห้าม mock หรือ short-circuit grounding layer ใน test
-- ห้ามเพิ่ม flag เพื่อ skip grounding
-- ห้ามลด minimum quote length 25 characters
-- ห้ามแทน medical-NLI ด้วย string check ธรรมดา
+`verify_citation(..., nli_gate=None)` ไม่เรียก NLI ผู้เรียกสามารถส่ง `NLIEntailmentGate` เพื่อตรวจ entailment เพิ่ม แอปพลิเคชันปกติไม่ได้ส่ง gate นี้
+
+gate รับ source ที่ normalize แล้วเป็น premise และ quote ที่ normalize แล้วเป็น hypothesis จึงไม่ได้ตรวจทุกประโยคใน reasoning summary ด้วยตัวมันเอง grounding ยืนยันที่มาของข้อความอ้างอิง ส่วนการตรวจทางคลินิกและการพิจารณาของผู้ทบทวนยังจำเป็น
+
+## ทดสอบขอบเขต
+
+ใช้ verifier จริงกับตัวอย่างสังเคราะห์ที่จงใจท้าทายการตรวจ ครอบคลุม ID ที่ไม่มี, source ID ซ้ำ, quote สั้น, ขอบเขตคำที่เลื่อน, ข้อความซ้ำ และ lab tuple ที่ขัดกัน ค่าปกติคือ `MIN_QUOTE_LENGTH = 25` พารามิเตอร์ `min_length` รองรับการทดลองประเมิน ไม่ใช่เหตุผลให้ลดข้อกำหนดของแอปพลิเคชัน
+
+ลำดับตรวจอยู่ใน `src/bba/quote_grounder/verifier.py` และฟังก์ชันแต่ละข้ออยู่ใน `src/bba/quote_grounder/layers.py`

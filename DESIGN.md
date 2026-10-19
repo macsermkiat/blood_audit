@@ -1,16 +1,11 @@
-# DESIGN — blood_audit docs
+# Documentation design
 
-Locked decisions for the Astro Starlight documentation site at
+Visual reference for the Astro Starlight documentation site at
 <https://macsermkiat.github.io/blood_audit/>. Companion to `PRODUCT.md`.
 
 ## Color
 
-Restrained color strategy. Tinted neutrals carry the surface; one accent role
-is reserved for evidence (active states, critical pills, the QI scope banner).
-Pills carry tier semantics and never compete with the accent for the eye.
-
-Hue base: 28 (warm red). Neutrals are tinted toward that hue at chroma 0.005
-to 0.01 so the page never reads as cold white.
+Use warm neutral backgrounds and a red accent for active states and the scope notice. Classification labels combine text with muted colors. Hue base is 28; neutral chroma ranges from 0.005 to 0.01. Keep the existing token values below when editing layout.
 
 ### Light theme
 
@@ -42,14 +37,13 @@ to 0.01 so the page never reads as cold white.
 
 ### Pill palette
 
-Pills are evidence, not decoration. Chroma is deliberately low so they read
-as labels, not buttons. Same role colors in both themes; lightness inverts.
+Status pills are text labels, not buttons. Keep their colors muted and retain the classification text in both themes.
 
 | Pill | Light bg / fg | Dark bg / fg | Use |
 | --- | --- | --- | --- |
 | `ok` | `oklch(94% 0.04 150)` / `oklch(34% 0.12 150)` | `oklch(28% 0.05 150)` / `oklch(86% 0.10 150)` | `APPROPRIATE`, `auto-classify` |
-| `warn` | `oklch(94% 0.05 70)` / `oklch(40% 0.14 70)` | `oklch(28% 0.06 70)` / `oklch(88% 0.10 70)` | `NEEDS_REVIEW`, Phase 1.5, opt-in, `LLM review`, integration seam |
-| `err` | `oklch(94% 0.05 28)` / `oklch(38% 0.16 28)` | `oklch(28% 0.06 28)` / `oklch(88% 0.10 28)` | `POTENTIALLY_INAPPROPRIATE`, required (Phase 1) |
+| `warn` | `oklch(94% 0.05 70)` / `oklch(40% 0.14 70)` | `oklch(28% 0.06 70)` / `oklch(88% 0.10 70)` | `NEEDS_REVIEW`, opt-in, model review, deployment prerequisite |
+| `err` | `oklch(94% 0.05 28)` / `oklch(38% 0.16 28)` | `oklch(28% 0.06 28)` / `oklch(88% 0.10 28)` | `POTENTIALLY_INAPPROPRIATE`, required input |
 
 ## Typography
 
@@ -90,80 +84,43 @@ Ratio 1.250 (major third). Base 16px. Cap body line length at 70ch.
 
 ## Layout
 
-Starlight's three-column layout is kept (sidebar, content, table of contents).
-Component-level spacing is rhythmic, not uniform.
+Keep Starlight's sidebar, content column, and table of contents. The landing page places audience links immediately after the short scope notice. Processing diagrams belong in the architecture guide.
 
-- Container max-width for content: 75ch (Starlight default holds).
-- Vertical rhythm: `space-y` of 1.5rem between component blocks, 0.75rem
-  inside cards. No same-spacing everywhere.
-- Cards are used only when the affordance is genuinely needed
-  (`CliCommandCard`, `IntegrationSeamCard`, `EnvVarChecklist` rows). No
-  nested cards. No card-grid of identical icon+heading+text.
-- The `PipelineDiagram` is a grid of 12 stages but is grouped visually into
-  the **ingest leg** (stages 1 to 5, Phase 1 today) and the **analysis leg**
-  (stages 6 to 12, wired in Phase 1.5), with a subtle leg boundary. The
-  index numbers carry the visual rhythm. This breaks the identical-card-grid
-  ban via grouping plus index prominence.
+Task pages start with prerequisites and commands. Reference pages use tables where readers need to compare fields or rules. A summary must add information rather than repeat the introduction. Long paths and identifiers must wrap or scroll within their own container without widening the page.
+
+Thai content uses the same navigation and layout. Its English-reference notice stays short. Check narrow English and Thai views separately because wrapping differs.
 
 ## Components
 
-Seven shipped Astro components under `docs/src/components/`. All are semantic
-shells with typed props. After polish they share these contracts:
+Shared components live in `docs/src/components/`. Reuse them when they clarify the content. Their text must describe current behavior.
 
-| Component | Role | Polish target |
-| --- | --- | --- |
-| `QiNotSamdBanner` | Above-the-fold scope statement | Stronger presence on landing, calmer presence on inner pages via `variant="compact"` |
-| `PipelineDiagram` | 12-stage architectural map | Grouped into 2 legs, ordinal index prominent, subtle reveal-on-scroll |
-| `CliCommandCard` | CLI invocation reference | Code-first layout, terminal-style example block, semantic sections, monospace command treated as primary label |
-| `EnvVarChecklist` | 3 env vars with phase pills | Compact rows, phase pill aligned right, code example block tight |
-| `HbTierMatrix` | 3-tier Hb policy table | Tier number column, rule-output pill, routing pill, note paragraph kept |
-| `IntegrationSeamCard` | Warning callout for 4 by-design CLI errors | Replace `border-left` side-stripe with full hairline border + soft warn tint + warn pill |
-| `QuoteGroundingLayers` | 7-layer stack, layer 7 dashed | Ordered stack with leading index, layer 7 marked dashed + opt-in pill |
+| Component | Contract |
+| --- | --- |
+| `AudienceTiles` | Direct links for operators, developers, and clinical reviewers |
+| `QiNotSamdBanner` | Retrospective quality-improvement scope, with a compact inner-page variant |
+| `PipelineDiagram` | Processing stages and boundaries without obsolete implementation-status labels |
+| `EnvVarChecklist` | Settings grouped by the task that needs them; no credential values in checks |
+| `HbTierMatrix` | Inclusive implemented boundaries, routing, and preceding-rule caveats |
+| `AlgorithmDecisionFlow` | Ordered current rules with separate legacy flag-off conditions |
+| `QuoteGroundingLayers` | Implemented checks, stopping behavior, and verification limits |
+| `ThaiAbridgedBanner` | Concise link to the matching full English reference |
 
 ## Motion
 
-Allowed and subtle. Disabled when `prefers-reduced-motion: reduce`.
+Disable motion when `prefers-reduced-motion: reduce`. Scope and processing components can reveal with opacity from 0 to 1 and vertical translation from 0.5rem to 0 over 180ms. Use `cubic-bezier(0.22, 1, 0.36, 1)`. Required instructions must remain readable.
 
-- **Reveal-on-scroll**: opacity 0 → 1 plus translate-y 0.5rem → 0. Duration
-  180ms. Easing `cubic-bezier(0.22, 1, 0.36, 1)` (ease-out-quart). Used on
-  the landing page only, on `QiNotSamdBanner`, `PipelineDiagram`, and the
-  three audience entries.
-- **Hover transitions**: border-color and background-color only. Duration
-  120ms. Same easing. No transform. Used on `CliCommandCard`,
-  `EnvVarChecklist` rows, audience entry tiles.
-- **Focus rings**: 2px outline in accent color, offset 2px. No animation.
-- **Animations on layout properties**: forbidden. Don't animate width,
-  height, margin, padding, top, left, right, bottom.
+Hover transitions on environment rows and audience links use 120ms with the same easing. Keep them limited to color and border or background color. Focus uses an unanimated 2px accent outline with a 2px offset. Do not animate layout properties such as width, height, margin, padding, or position.
 
-## Absolute bans (project-specific)
+## Accessibility and constraints
 
-In addition to the impeccable shared bans:
+Use visible keyboard focus, semantic headings, and descriptive links. Convey classification with text as well as color. Check text contrast against WCAG AA when changing tokens; token tables alone do not prove rendered contrast.
 
-- **Side-stripe borders.** The existing `.ba-card--warning` uses
-  `border-left: 4px solid` and must be rewritten with a full 1px border in
-  the warn pill hue plus a soft warn background tint.
-- **Gradient text or gradient backgrounds.** None.
-- **Glassmorphism.** None.
-- **Hero metric template.** No "98% appropriate, 12 wards audited" big-number
-  hero. We are a QI tool, not a vanity dashboard.
-- **Identical card grids.** The pipeline diagram uses grouping plus ordinal
-  indices to escape this; nothing else uses a card grid.
-- **Modals.** None.
-
-## Accessibility
-
-- WCAG AA contrast on every text-on-background pair (verified for the OKLCH
-  values above).
-- All interactive elements reachable by keyboard. Focus visible.
-- `aria-label` on each component's outer landmark element (already in place).
-- Pills use semantic text plus background color; never color alone conveys
-  meaning.
-- `prefers-reduced-motion` honored.
+Honor `prefers-reduced-motion`. Keep instructional content readable when JavaScript is unavailable. Avoid gradients, glass effects, urgent alert styling, decorative metrics, nested cards, and modals in the documentation.
 
 ## Tooling
 
 - Astro 5 + Starlight 0.34.
-- Tailwind 4 via `@astrojs/tailwindcss` Vite plugin (scoped to `docs/`).
+- Tailwind 4 via the `@tailwindcss/vite` plugin (scoped to `docs/`).
   Tailwind utilities carry layout and composition; CSS variables in
   `custom.css` carry tokens.
 - `@fontsource/noto-sans-thai` for self-hosted Thai font (subsets: `thai`,

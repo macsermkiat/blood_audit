@@ -1,120 +1,46 @@
 ---
 title: Pipeline stages
-description: What each of the 12 stages reads, writes, and guarantees.
+description: The processing sequence, persistence boundaries, and interrupted-batch recovery.
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
 import PipelineDiagram from "../../../../components/PipelineDiagram.astro";
+
+`bba.application.audit_bundle` assembles the inputs for `bba.audit_pipeline.run_pipeline`. The diagram groups the main RBC processing steps. Platelet orders use their own lookup, classifier, and response guardrails.
 
 <PipelineDiagram />
 
-<AtAGlance
-  items={[
-    { label: "Stage 1", value: "Ingest runs from the CLI today.", tone: "ok" },
-    { label: "Stages 2-12", value: "Implemented as modules; CLI orchestration lands in Phase 1.5.", tone: "warn" },
-    { label: "Data handoff", value: "Each stage produces typed Pydantic objects or persisted store rows." },
-    { label: "Failure mode", value: "Validation, de-id, grounding, and persistence all fail loud." },
-  ]}
-/>
+## Prepare local evidence
 
-:::note[What runs today via `bba audit`]
-In Phase 1, `bba audit` wraps **stage 1 only** (ingest). Stages 2–12 are
-implemented as standalone modules with their own tests, but the
-orchestration glue in `bba.audit_pipeline.run_pipeline` is wired through
-the CLI in Phase 1.5. The descriptions below cover what each module
-does; the CLI-level scope is documented on
-[audit command](/blood_audit/en/operators/audit-command/).
-:::
+1. Seal the canonical CSV bundle in a private source snapshot. Verify its input hash, schema, code version, and configuration before classification.
+2. Validate and normalize the export with `bba.ingest`.
+3. Select eligible orders with `bba.audit_orders`. The exporter must supply the adult cohort because the canonical export has no age column.
+4. Use the component-specific lab lookup, vitals extractor, and cohort detector to assemble pre-order clinical context. Issue time remains an evidence anchor, not proof that a transfusion occurred.
+5. Attach returns-ledger disposition, declared use, and MSBOS reservation context where available.
 
-## Stage-by-stage
+## Apply deterministic rules
 
-### 1. `bba.ingest`
+The pipeline calls the RBC or platelet classifier on each active context. It persists deterministic-final results without sending a model request. MTP-suppressed platelet co-orders intentionally emit no independent audit row.
 
-Reads the HOSxP CSV bundle. Validates against the published schema,
-computes `input_csv_hash`, streams rows through normalization, and writes
-the run completion marker. Idempotent on the file content.
+RBC `NEEDS_REVIEW` and `POTENTIALLY_INAPPROPRIATE` results proceed to the model admission boundary. Platelet review routing also requires `PLATELET_LLM_ENABLED`. See [Hb rules](/blood_audit/en/developers/three-tier-hb/) and [Platelet auditor](/blood_audit/en/developers/platelet-auditor/).
 
-### 2. `bba.audit_orders`
+## Admit and submit a model request
 
-Filters the ingested orders down to auditable RBC and platelet
-transfusion orders (the `component_map` intake gate routes each order to
-its component family). Hard exclusions: age < 15, out-of-scope products
-(anything outside LPRC, LDPRC, SDR, LDPRCI, LPRCI), ICD-10 gates. Resolves the per-order anchor
-datetime.
+`bba.evidence_bundle_builder` assembles local evidence. An approved local issuer redacts it and signs approval for the exact prompt, audit ID, and run ID. The application verifies that approval using the issuer's public Ed25519 key. See [De-identification](/blood_audit/en/developers/deid/).
 
-### 3. `bba.hb_lookup`
+The prompt builder formats the approved evidence. Before submission, immutable manifests record the request content and the context required for recovery. Admitted model runs use Postgres checkpoints. The live transport disables automatic SDK retries. An uncertain remote outcome requires reconciliation rather than another automatic submission.
 
-For each surviving order, finds the most recent pre-transfusion Hb result
-in the Lab table within a 7-day lookback, prefers HEMATOLOGY over POCT,
-and computes delta-Hb windows for acute-blood-loss evidence.
+In local mode, or when privacy admission fails, model-bound RBC rows commit as `NEEDS_REVIEW` with `privacy_admission_failed`. Raw notes do not enter transport or persisted model calls.
 
-### 4. `bba.vitals_extractor`
+## Verify and commit
 
-Extracts BP, HR, urine output, and temperature from MED + progress notes
-around the anchor datetime. Outputs structured vitals records.
+The response path validates structured output, verifies citations against the redacted evidence, and applies component-specific guardrails. It preserves ordered attempts and selects the latest attempt that passes verification. If none passes, the row becomes `NEEDS_REVIEW` with `hallucination_suspect`.
 
-### 5. `bba.cohort_detector`
+`bba.audit_store` writes calls before the result row and writes the commit marker last. Read APIs expose committed results. The application records CLI completion only when eligible, nonsuppressed work is committed. Ingested rows do not count as audited results.
 
-Assigns the order to a deterministic cohort such as default,
-cardiac-surgery, ortho-surgery, ESRD-EPO, cardiopulmonary-comorbidity
-(heart disease), MTP, active heme malignancy, or unknown. The cohort drives
-the Hb threshold or review route in the deterministic classifier.
+## Recover an interrupted batch
 
-### 6. `bba.deterministic_classifier`
+The batch store tracks `pending`, `submitted`, `partial`, `complete`, and `failed` states. `resume_on_startup` checks the recorded code version and matching context, policy, and request identity before reconstructing results.
 
-The 3-tier engine. See [3-tier Hb classifier](/blood_audit/en/developers/three-tier-hb/)
-for the full rule. Three default-ON overlay arms act at this stage:
-the returns ledger (`bba.returns_ledger`) can terminal the order as
-`RETURNED_NOT_TRANSFUSED`, declared-use USETYPE routing
-(`bba.declared_use`) as `PERIOP_TRANSFUSION_EXEMPT`, and the MSBOS
-reservation audit (`bba.preop_reservation`) can surface
-`PREOP_OVER_RESERVATION` for planned-operation over-reservation.
+A submitted or partial batch can recover from persisted calls or poll its recorded remote batch ID. Cached responses pass through the real verifier again. Missing or changed manifests block recovery. A pending batch with uncertain submission status requires operator reconciliation and is marked failed. Recovery does not guarantee that every interrupted run can finish without intervention.
 
-### 7. `bba.evidence_bundle_builder`
-
-Builds the unredacted evidence bundle for the LLM context window: lab
-values, vitals, anchor notes, medications, cohort evidence, ICD codes,
-and procedure timing.
-
-### 8. `bba.deid_redactor`
-
-De-identifies the bundle. Installs a PHI-scrubbing `sys.excepthook` so any
-uncaught exception cannot leak PHI to logs. Reuses
-`bba.deid_redactor.PHI_REGEXES` — never duplicate that pattern set.
-
-### 9. `bba.prompt_builder`
-
-Renders the few-shot + clinical-history system message. Stable across runs
-for prompt-caching effectiveness.
-
-### 10. `bba.llm_client`
-
-Submits the Batch API request. Sonnet → Opus escalation; prompt caching
-on; structured-output schema validation. Resumable: on restart, re-queries
-`batch_runs` rows in `pending` / `submitted` / `partial` states.
-
-### 11. `bba.quote_grounder`
-
-Runs the [6 fail-closed grounding layers](/blood_audit/en/developers/quote-grounding/).
-Failures set `final_classification = NEEDS_REVIEW` with `review_reason =
-"hallucination_suspect"`. Grounding never silently passes.
-
-### 12. `bba.audit_store`
-
-Persists one `AuditRow` per audited order (and one `LlmCall` per
-Anthropic call) immutably to Parquet. Datetimes are tz-aware UTC at the
-model boundary; nested JSON fields are deeply frozen. See
-[Audit store](/blood_audit/en/developers/audit-store/) for the
-classification literals and the Phase 1 vs 1.5 split.
-
-## State machine for LLM-route rows
-
-Each row routed to the LLM carries a `batch_runs` state:
-
-```text
-pending → submitted → partial → complete
-                              ↘ failed
-```
-
-A crashed process is resumable from any non-terminal state without manual
-intervention. `failed` is terminal and requires investigation.
+See [Audit store](/blood_audit/en/developers/audit-store/) for committed identity and [Audit command](/blood_audit/en/operators/audit-command/) for CLI usage.

@@ -1,140 +1,52 @@
 ---
 title: Run the pipeline
-description: Two ways to run blood_audit — the simple pilot smoke test and the supported production CLI.
+description: Choose the supported audit command or reproduce the separate research pilot.
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
+Use the supported CLI for a canonical HOSxP audit. The research pilot is a separate script workflow with its own configuration and review artifacts.
 
-There are two ways to run the audit, depending on what you need:
+## Run the supported application
 
-<AtAGlance
-  items={[
-    { label: "Path A — Pilot", value: "Watch the whole pipeline run on a tiny sample and produce an HTML for human review." },
-    { label: "Path B — Production", value: "Run the supported bba CLI against a full HOSxP export.", tone: "ok" },
-    { label: "Prereq", value: "Python ≥ 3.13, uv, and an ANTHROPIC_API_KEY for the LLM leg." },
-  ]}
-/>
+`PLATELET_LLM_ENABLED` is false in the repository configuration. If a bundle contains platelet orders that require the disabled review route, the application rejects the uncommitted work and does not mark the run complete. A local audit is not a guarantee that every platelet order can complete. Confirm the approved deployment route before selecting a platelet cohort.
 
-:::caution[Real PHI]
-Both paths read clinical data. Any file the pilot writes under
-`$BBA_PILOT_WORK_DIR` (sampled bundle, `review.html`, audit store) contains
-real PHI. Never commit, email, or share it outside the approved review
-channel.
-:::
+```sh
+export BBA_DATA_DIR=/srv/bba/data
+uv run bba audit --input /srv/bba/export/BDVST.csv
+```
 
-## Path A: simple pilot run (smoke test)
+This commits deterministic results and local review decisions without Postgres or model credentials. [First audit run](/blood_audit/en/operators/first-audit-run/) covers the bundle and expected output. [Environment variables](/blood_audit/en/operators/env-vars/) covers admitted cassette and live model modes.
 
-The fastest way to see the full audit run end-to-end. It samples ~10 cases
-from an encrypted HOSxP bundle and walks them through four pilot scripts,
-ending in a single self-contained `review.html` for a clinician.
+For reports, evaluation, monitoring, or authenticated adjudication, use [Generate the report](/blood_audit/en/operators/generate-report/) and [Deployment integrations](/blood_audit/en/operators/integration-seams/).
 
-These scripts live outside the `bba` package on purpose: they are
-deployment-shaped glue (a worked example of how the modules compose), not a
-supported entry point. See
-[`scripts/pilot/README.md`](https://github.com/macsermkiat/blood_audit/blob/main/scripts/pilot/README.md)
-for the full contract and tuning knobs.
+## Reproduce a research pilot
 
-```bash
-# One-time, from the repo root:
-uv sync
+The pilot scripts sample a component-specific bundle, run a deterministic pass, optionally submit structured model evidence, audit responses, and build a review page. Their settings and output layout differ from the supported application's signed-admission configuration.
 
-# Required for the LLM leg; all pilot outputs land in the work dir:
-export ANTHROPIC_API_KEY=sk-ant-...
-export BBA_PILOT_WORK_DIR=/tmp/bba_mini
+Use an approved host and private work directory. The scripts can read hospital exports by default. Confirm each input path before running them. Keep inputs, workbooks, and outputs out of the repository.
 
-# Optional overrides:
-#   BBA_BDVSTTRANS_CSV=...                    returns-ledger export override
-#                                             (defaults to the canonical
-#                                             data/encrypted BDVSTTRANS)
-#   BBA_PILOT_MSBOS_RESERVATION=0             force the MSBOS arm off
-#   BBA_PILOT_DECLARED_USETYPE=0              force declared-USETYPE off
-#   BBA_PILOT_DECLARED_USE_PREOP_EXEMPT=0     restore legacy pre-op routing
-#   BBA_PILOT_MSBOS_PLANNED_OP_PICKER_V2=0    force picker v2 off
-# (all four features are default-ON)
+The [pilot README](https://github.com/macsermkiat/blood_audit/blob/main/scripts/pilot/README.md) is the script reference. Set its `BBA_PILOT_*` and input variables before using this sequence.
 
-# Step 1 — sample ~10 cases from the encrypted bundle → bundle/ + manifest
+```sh
 uv run python scripts/pilot/sample_bundle.py
-
-# Step 2 — deterministic classifier verdicts → report.csv
 uv run python scripts/pilot/run_pipeline.py
+```
 
-# Step 3 — live Anthropic batch (de-id → prompt → ground → calibrate) → llm_report.json
-uv run python scripts/pilot/run_llm_leg.py
+These commands produce the sampled `bundle/`, `sample_manifest.csv`, and deterministic `report.csv` in the configured work directory. The deterministic report also contains the enabled returns, declared-use, and MSBOS reservation outputs.
 
-# Step 4: audit the LLM responses (code checks only, no API call) → llm_response_audit.json
+The following model step can incur provider charges. Obtain approval and install the live dependency before invoking it.
+
+```sh
+uv run --extra live python scripts/pilot/run_llm_leg.py
 uv run python scripts/pilot/audit_llm_responses.py
-
-# Step 5: assemble the single-page human review → review.html
 uv run python scripts/pilot/build_review.py
-
-open "$BBA_PILOT_WORK_DIR/review.html"
 ```
 
-What each step produces:
+The model step writes `llm_report.json` and audit-store artifacts. The response audit checks parsing, truncation, reasoning-label consistency, and unexplained verdict changes. It writes findings without changing classifications. Its default code checks make no model call. Opt-in judge modes can call the provider.
 
-| Step | Script | Output |
-|------|--------|--------|
-| 1 | `sample_bundle.py` | `bundle/` (sampled CSVs) + `sample_manifest.csv` |
-| 2 | `run_pipeline.py` | `report.csv` (per-case deterministic verdict) |
-| 3 | `run_llm_leg.py` | `llm_report.json` + `data/audit_store/` |
-| 4 | `audit_llm_responses.py` | `llm_response_audit.json` / `.csv` + `llm_response_audit_reqnos.txt` |
-| 5 | `build_review.py` | `review.html` (one page for human review) |
+The review builder requires a response audit for the exact report SHA-256 and rejects HIGH findings. `BBA_PILOT_ALLOW_UNAUDITED=1` bypasses that gate and must not be treated as a reviewed result. Keep the gate enabled for the normal workflow.
 
-Step 4 checks the RESPONSES the LLM leg got back (parse failures, an answer cut
-off at the output token limit, a label that contradicts its own reasoning, a
-verdict changed with no recorded reason, and more); it changes no verdict, it
-only writes findings. Step 5 refuses to render model responses unless a
-response audit exists for exactly this `llm_report.json` (matched by its
-SHA-256) and carries no HIGH finding; set `BBA_PILOT_ALLOW_UNAUDITED=1` to
-build the page anyway. See
-[`scripts/pilot/README.md`](https://github.com/macsermkiat/blood_audit/blob/main/scripts/pilot/README.md)
-for the fix-and-rerun loop and the separate dev-test consortium (a Claude Code
-review of response soundness, not a pipeline step and not a gate).
+The pilot model step sends structured evidence such as diagnosis codes, laboratory values, medications, and locally extracted vital-sign numbers. It does not send raw progress or focus-note text. That scope does not establish approval to export the structured evidence.
 
-Step 2's `report.csv` also carries the default-ON overlay columns:
-returns-ledger disposition (`RETURNED_NOT_TRANSFUSED` /
-`PERIOP_TRANSFUSION_EXEMPT`), declared-use USETYPE routing, and MSBOS
-reservation verdicts (`PREOP_OVER_RESERVATION` + reservation reasons,
-with picker-v2 provenance).
+## Rank pilot results
 
-:::note[What the LLM does and doesn't see]
-The pilot does not send free-text progress / focus notes to the API.
-That bundle has not been through de-identification. Only structured signals
-go out: ICD-10 diagnoses, Hb history, CBC values, meds, and vital-sign
-*numbers* extracted locally via regex. The narrative never leaves the machine.
-:::
-
-## Path B: production run (supported CLI)
-
-Runs the wired `bba` CLI against a full 13-file HOSxP export.
-
-```bash
-export BBA_DATA_DIR=/path/to/persistent/data   # run-state today (Parquet + DuckDB planned)
-export BBA_DB_URL=postgresql://user@host/db     # audit-store + dashboard
-export ANTHROPIC_API_KEY=sk-ant-...             # LLM review leg
-
-# 1. Ingest the HOSxP CSV bundle: validate + normalize, write the run completion marker under $BBA_DATA_DIR
-uv run bba ingest /path/to/hosxp_bundle/BDVST.csv
-
-# 2. Run the audit ingest leg (validate + normalize, write the run completion marker; idempotent per run_id)
-#    Marker-only today: DuckDB + Parquet payload writers are the intended next storage. The analysis leg
-#    (classifier + LLM review + quote grounding) is wired into the CLI in Phase 1.5.
-uv run bba audit --input /path/to/hosxp_bundle/BDVST.csv
-```
-
-`bba audit` is run-level idempotent: re-running on the same input + same
-code version is a no-op. Pass `--force` to override (writes a compliance row to
-`audit_log`). For the per-flag contract see
-[First audit run](/blood_audit/en/operators/first-audit-run/) and
-[audit command](/blood_audit/en/operators/audit-command/).
-
-## Which one should I run?
-
-- To demo the pipeline or sanity-check a change end-to-end, use Path A.
-- To audit a real export for the QI committee, use Path B.
-
-## Next steps
-
-- [Environment variables](/blood_audit/en/operators/env-vars/): every variable the CLI reads.
-- [Ingest CSV](/blood_audit/en/operators/ingest-csv/): the expected 13-file bundle shape.
-- [Troubleshooting](/blood_audit/en/operators/troubleshooting/): common failures.
+Use `scripts/pilot/rank_merged.py` to combine deterministic and model results for pilot ranking. See [Doctor and department ranking](/blood_audit/en/operators/doctor-ranking/) for the denominator rules and required inputs.

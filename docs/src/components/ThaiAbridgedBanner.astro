@@ -1,9 +1,4 @@
 ---
-// Override of Starlight's Banner. Keeps the default frontmatter banner and
-// adds a standing note on Thai pages: the Thai docs are a deliberately
-// shorter operator-facing summary, and the English page is authoritative
-// for full detail. Without this, a Thai reader cannot tell that a section
-// was condensed rather than that the detail does not exist.
 const { banner } = Astro.locals.starlightRoute.entry.data;
 const path = Astro.url.pathname;
 const isThai = path.includes("/th/");
@@ -16,11 +11,8 @@ const englishHref = isThai ? path.replace("/th/", "/en/") : path;
   isThai && (
     <aside class="th-abridged" aria-label="ขอบเขตของเอกสารภาษาไทย">
       <p>
-        เอกสารภาษาไทยเป็น<strong>ฉบับย่อ</strong>สำหรับผู้ใช้งาน
-        บางหัวข้อตัดรายละเอียดเชิงเทคนิคออกโดยตั้งใจ
-        หากต้องการเนื้อหาครบถ้วน ให้ดู
+        บางหัวข้อภาษาไทยย่อรายละเอียดไว้ ดูฉบับอ้างอิงเต็มที่
         <a href={englishHref}>หน้าภาษาอังกฤษ</a>
-        ซึ่งถือเป็นฉบับอ้างอิงหลัก
       </p>
     </aside>
   )
@@ -28,11 +20,10 @@ const englishHref = isThai ? path.replace("/th/", "/en/") : path;
 
 <style>
   .th-abridged {
-    border-left: 3px solid var(--sl-color-accent);
     background: var(--sl-color-gray-7, var(--sl-color-bg-nav));
-    padding: 0.625rem 0.875rem;
-    margin: 1rem 0 1.5rem;
-    border-radius: 0 0.25rem 0.25rem 0;
+    padding: 0.5rem 0.875rem;
+    margin: 0;
+    border-bottom: 1px solid var(--sl-color-gray-5);
   }
   .th-abridged p {
     margin: 0;

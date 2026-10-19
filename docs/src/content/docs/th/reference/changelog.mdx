@@ -1,19 +1,15 @@
 ---
 title: บันทึกการเปลี่ยนแปลง
-description: สถานะ release — Phase 1 (RBC) feature-complete และ Phase 2 (platelet auditor) merged แล้ว
+description: สถานะโค้ดปัจจุบันและบันทึกหมุดหมายการพัฒนาในอดีต
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
+## สถานะโค้ดปัจจุบัน
 
-<AtAGlance
-  title="สรุป release"
-  items={[
-    { label: "Current version", value: "0.1.0 ใน pyproject.toml (30 modules ภายใต้ bba.*)", tone: "ok" },
-    { label: "Release notes", value: "หลัง tag แล้ว GitHub Releases จะเป็นแหล่งอ้างอิงหลัก" },
-    { label: "2026-07 wave", value: "Returns ledger, declared-use USETYPE routing และ MSBOS reservation audit merged ครบแล้ว และเปิดโดยค่าเริ่มต้น" },
-    { label: "ยังไม่รวม", value: "pilot validation, production wiring และ Phase B re-encryption", tone: "warn" },
-  ]}
-/>
+เวอร์ชันใน `pyproject.toml` คือ `0.1.0` คำสั่ง audit, evaluate, serve-dashboard, report และ sentinel มี implementation เชื่อมกับแอปพลิเคชันแล้ว CLI ไม่ได้หยุดเพียงการนำเข้าข้อมูล ผู้ติดตั้งยังต้องจัดการ configuration การตรวจความเป็นส่วนตัว สิทธิ์ฐานข้อมูล และระบบยืนยันตัวตนของ dashboard
+
+โค้ดปัจจุบันมีเกณฑ์ RBC และเกล็ดเลือดที่รวมค่าขอบเขตตามเงื่อนไข การใช้คำตอบซ้ำเฉพาะคำขอที่ตรงกัน ประวัติการส่งโมเดลที่ทำงานต่อได้ การยืนยันการปกปิดด้วยลายเซ็น สำเนาต้นทางที่ปิดแก้ไข และการตัดสินของคนที่ผูกกับเวอร์ชัน ดู [ติดตั้ง](/blood_audit/th/operators/install/) และ [คำศัพท์และโมดูล](/blood_audit/th/reference/module-glossary/) สำหรับการใช้งานปัจจุบัน
+
+รายการด้านล่างเป็นบันทึกหมุดหมายตามสถานะในเวลานั้น ข้อความเรื่องคำสั่งที่ยังไม่เชื่อม flag เกณฑ์ และแผน release จึงเป็นประวัติ ไม่ใช่คำแนะนำติดตั้งปัจจุบัน ดูการเผยแพร่และ tag ที่ [GitHub Releases](https://github.com/macsermkiat/blood_audit/releases)
 
 ## 0.1.0
 
@@ -124,9 +120,6 @@ import AtAGlance from "../../../../components/AtAGlance.astro";
   แยกจาก exclusion D เดิม พร้อม hard signal ตัวที่ห้า
   `aplastic_active_therapy_indication`
 
-## ยังไม่ใช่ระบบ production ที่เชื่อมใช้งานจริง
+## งานค้างที่บันทึกหลังหมุดหมายเดือนกันยายน
 
-ยังไม่รวมการเชื่อม integration-seam subcommands ที่เหลืออีก 3 คำสั่ง
-(`evaluate`, `serve-dashboard`, `sentinel`), platelet LLM leg ใน
-production (ปิดด้วย flag จนกว่าจะมี clinician sign-off), pilot validation
-หรือ re-encryption workflow ของ Phase B
+ในเวลานั้น `evaluate`, `serve-dashboard` และ `sentinel` ยังไม่เชื่อมกับแอปพลิเคชัน ปัจจุบันคำสั่งเหล่านี้มี implementation แล้ว ส่วน platelet LLM leg ใน production, pilot validation และ re-encryption workflow ของ Phase B เป็นรายการที่บันทึกไว้ในหมุดหมายนั้น

@@ -1,60 +1,48 @@
 ---
 title: สถาปัตยกรรม
-description: ภาพรวมสถาปัตยกรรมของ blood_audit และขอบเขตของแต่ละ package
+description: จุดเริ่มต้นของแอปพลิเคชัน ขอบเขตโมดูล และข้อมูลผลตรวจที่จัดเก็บ
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
 import PipelineDiagram from "../../../../components/PipelineDiagram.astro";
 
-<AtAGlance
-  title="สรุปสถาปัตยกรรม"
-  items={[
-    { label: "โครงสร้าง", value: "30 modules, 12 happy-path stages (RBC), deterministic-first; intake แยกเป็น RBC (Phase 1) และ platelet (Phase 2) legs; overlay arms returns/declared-use/MSBOS เปิดเป็น default-ON" },
-    { label: "ขอบเขต", value: "มีเพียง bba.audit_pipeline ที่ orchestrate ข้าม stage" },
-    { label: "Phase 1 CLI", value: "bba audit เชื่อม ingest ก่อน; analysis modules จะ wire ใน Phase 1.5", tone: "warn" },
-    { label: "Safety invariant", value: "ไม่มี real-time output; de-id ก่อน LLM; quote grounding fail-closed", tone: "ok" },
-  ]}
-/>
+`bba audit` ตรวจ export มาตรฐานจาก HOSxP และเขียนผลตรวจจริง `bba.application` เชื่อม CLI เข้ากับการประกอบบริบท การตรวจสิทธิ์ส่งข้อมูล และ `bba.audit_pipeline.run_pipeline` โดยใช้กฎ deterministic ก่อนพิจารณาส่งคำขอถึงโมเดล
 
 <PipelineDiagram />
 
-## แนวคิดหลัก
-
-ระบบแยกเป็น stage ชัดเจน แต่ละ stage รับข้อมูล typed object หรือข้อมูลที่ตรวจสอบแล้ว
-จาก stage ก่อนหน้า แล้วส่งต่อผลลัพธ์ที่ตรวจสอบได้ จุดที่รวมหลาย stage เข้าด้วยกัน
-ควรอยู่ใน `bba.audit_pipeline` เท่านั้น เพื่อให้ boundary ของโมดูลอื่นยังเล็ก
-และทดสอบได้ง่าย
-
-Intake แยกที่ `bba.component_map`: คำสั่งเลือดแดงเข้ากับ RBC path 12 stage
-(Phase 1) ส่วนคำสั่งเกล็ดเลือดเข้ากับ platelet leg (Phase 2 — merged, PR #85)
-โดย RBC path เหมือนเดิมทุกไบต์ไม่ว่าจะเปิดฟีเจอร์เกล็ดเลือดหรือไม่
-
-## กลุ่ม package สำคัญ
-
-รายชื่อเต็ม 30 modules อยู่ใน [Module glossary](/blood_audit/th/reference/module-glossary/)
-(อ้างอิงจาก `docs/CONTEXT.md`) ตารางนี้แสดงเฉพาะ package หลัก:
+## ขอบเขตของ package
 
 | Package | หน้าที่ |
 | --- | --- |
-| `bba.ingest` | ตรวจ CSV schema, hash input, normalize rows และเขียน completion marker |
-| `bba.audit_orders` | แปลงคำสั่งเลือดให้เป็น audit anchor ต่อ order; รับคำสั่งเกล็ดเลือดแยกจากสถิติ RBC |
-| `bba.component_map` | intake gate: แยก component family (RED_CELL, PLATELET, FFP, CRYO, WHOLE_BLOOD, UNKNOWN) และ fork RBC/platelet legs |
-| `bba.hb_lookup` | หา Hb ก่อนให้เลือดและ prior Hb trend |
-| `bba.cohort_detector` | assign clinical-context cohort เช่น default, cardiac surgery, ortho-surgery, ESRD-EPO, cardiopulmonary-comorbidity (heart disease), MTP, unknown |
-| `bba.deterministic_classifier` | ใช้กฎ 3-tier Hb และ bypass/review rules; ปล่อย routing terminals `RETURNED_NOT_TRANSFUSED` / `PERIOP_TRANSFUSION_EXEMPT` ได้ด้วย และไม่ปล่อย `INAPPROPRIATE` เอง (LLM-only) |
-| `bba.evidence_bundle_builder` | รวมหลักฐานสำหรับแถวที่ต้องเข้า LLM route |
-| `bba.deid_redactor` | de-identify bundle ก่อนออกจาก container |
-| `bba.quote_grounder` | ตรวจ citation ของ LLM แบบ fail-closed |
-| `bba.audit_store` | เขียน AuditRow, LlmCall และ batch/run state |
-| `bba.platelet_classifier` | §5.1 platelet gate; ไม่ auto-clear อะไรเลย (≥ 100 → review, &lt; 100 → defer-LLM, ไม่มีค่า → `INSUFFICIENT_EVIDENCE`) |
-| `bba.attribution` | จัดอันดับแพทย์/แผนก 10 อันดับตามความเหมาะสม (`BDVST.DCTREQ` → `DCT.csv`) |
-| `bba.returns_ledger` | รวม disposition ต่อ unit จาก BDVSTTRANS → `not_transfused` / `transfused` / `inconclusive`; ป้อน returns terminals เปิดเป็น default-ON |
-| `bba.declared_use` | ตีความ `BDVSTDT.USETYPE` ตอนสั่ง (declared surgical / type-and-screen intent); เป็น pre-op router เดียวใน default mode เปิดเป็น default-ON |
-| `bba.preop_reservation` | ประเมิน MSBOS reservation: reference loader, planned-op picker v2, OPRTACT→ICD9 bridge, RBC + platelet legs และ reason vocabulary (`reason_presentation`) เปิดเป็น default-ON |
-| `bba.feature_flags` | โมดูล runtime flag (7 flags; pilot legs ใช้ env override `BBA_PILOT_*`) |
+| `bba.cli` | อ่านคำสั่งและการตั้งค่า จัดการเครื่องหมายจบงาน และติดตั้งการป้องกันข้อมูลใน exception log |
+| `bba.application` | เก็บ snapshot ต้นฉบับ ประกอบบริบททางคลินิก ตั้งค่า transport และเชื่อมรายงาน การประเมิน การติดตาม และการทบทวน |
+| `bba.ingest` | ตรวจและปรับข้อมูล CSV มาตรฐาน |
+| `bba.audit_orders` | เลือกคำสั่งที่เข้าเกณฑ์ และแยกคำสั่ง RBC ออกจากเกล็ดเลือด |
+| `bba.hb_lookup`, `bba.platelet_lookup` | เลือกผลแล็บและแนวโน้มก่อนเวลาสั่ง |
+| `bba.vitals_extractor`, `bba.cohort_detector` | ดึงบริบททางคลินิกเชิงโครงสร้าง |
+| `bba.deterministic_classifier`, `bba.platelet_classifier` | ใช้กฎของส่วนประกอบเลือดแต่ละชนิด |
+| `bba.returns_ledger`, `bba.declared_use`, `bba.preop_reservation` | ตีความสถานะเลือดรายยูนิต วัตถุประสงค์ที่ระบุ และการจองตาม MSBOS |
+| `bba.evidence_bundle_builder`, `bba.deid_redactor`, `bba.prompt_builder` | รวมหลักฐานและกำหนดให้ผ่านการปกปิดข้อมูลที่อนุมัติก่อนส่งโมเดล |
+| `bba.llm_client`, `bba.quote_grounder`, `bba.platelet_guardrail` | ส่งคำขอ ตรวจข้อความอ้างอิง และใช้กฎตรวจคำตอบ |
+| `bba.audit_pipeline` | จำแนก แบ่งชุด ส่ง ตรวจคำตอบ บันทึก และกู้คืน batch ที่ขาดช่วง |
+| `bba.audit_store` | เก็บผลตรวจ การเรียกโมเดลตามลำดับ และ commit marker |
+| `bba.dashboard`, `bba.review_actions` | ตรวจตัวตนและบันทึกผลทบทวนพร้อมตรวจ revision |
+| `bba.report_generator`, `bba.attribution` | สร้างรายงานที่ระบุแพทย์และที่มาของผลแต่ละแถว |
+| `bba.eval_harness`, `bba.monitoring` | เทียบผลกับป้ายกำกับที่ทบทวนแล้วและผลตรวจซ้ำที่บันทึกแล้ว |
 
-## เส้นทาง failure
+`bba.component_map` มีตัวจำแนกชื่อผลิตภัณฑ์เป็นหกกลุ่มด้วย แต่ตัวสร้างคำสั่ง HOSxP ใช้รายการรหัสผลิตภัณฑ์สำหรับ RBC และเกล็ดเลือด ไม่ควรสมมติว่าผู้เรียกทุกตัวใช้ตัวจำแนกชื่อ
 
-Validation, de-identification, quote grounding และ persistence ต้อง fail loud
-ห้าม silently pass เพราะ output ของระบบนี้ถูกใช้ในการออดิท QI หากไม่แน่ใจ
-ให้ส่ง `NEEDS_REVIEW` แทนการ auto-classify
+## ข้อมูลและเงื่อนไขการกู้คืน
+
+แอปพลิเคชันเก็บไฟล์ CSV เป็น snapshot ก่อนประกอบบริบท และตรวจเทียบกับ source identity, schema, code version และการตั้งค่า การแก้ export ภายหลังจึงไม่เปลี่ยน snapshot ที่กำลังประมวลผล
+
+ผลที่กฎตัดสินจบได้จะบันทึกโดยไม่เรียกโมเดล แถว RBC ที่เหลือต้องผ่านการอนุมัติข้อมูลด้วยลายเซ็น หากไม่มีการอนุมัติ ระบบบันทึกให้ทบทวนภายใน ส่วนเกล็ดเลือดมี flag เปิดเส้นทางโมเดลแยกต่างหาก ถ้า flag ทำให้งานที่เข้าเกณฑ์ยังไม่บันทึก แอปพลิเคชันจะล้มเหลวโดยไม่เขียนเครื่องหมายจบงาน
+
+manifest ที่แก้ทับไม่ได้ผูกลำดับ audit ID, หลักฐาน, prompt, การตั้งค่าโมเดล และบริบทนโยบายเข้าด้วยกัน การกู้คืนปฏิเสธข้อมูลที่เปลี่ยนและเรียก verifier จริงก่อนสร้างผลใหม่ หากไม่แน่ใจว่าส่งคำขอไปแล้วหรือไม่ ต้องตรวจสอบกับผู้ให้บริการก่อนส่งซ้ำ
+
+ผลที่จบแล้วใช้คีย์ `(audit_id, run_id, code_version)` การใช้ `--force` ข้ามทางลัดของ CLI และบันทึกเหตุผลการฝืนรัน แต่ไม่เขียนทับผลหรือ manifest ดู [Audit store](/blood_audit/th/developers/audit-store/)
+
+## สิ่งที่การติดตั้งต้องจัดหา
+
+การตรวจ deterministic ในเครื่องไม่ต้องมีข้อมูลรับรองโมเดลหรือ Postgres การรันโมเดลด้วย cassette หรือบริการจริงใช้ฐานข้อมูล Postgres ที่ผ่าน migration แล้ว ส่วน dashboard ต้องมี review store, ตัวเชื่อมระบบยืนยันตัวตนที่เชื่อถือได้ และ HTTPS reverse proxy
+
+แอปพลิเคชันไม่ได้รวม backend ปกปิดข้อมูลที่โรงพยาบาลอนุมัติหรือบริการออกตัวตนผู้ใช้ ดู [การเชื่อมแอปพลิเคชัน](/blood_audit/th/operators/integration-seams/) และ [ขั้นตอนประมวลผล](/blood_audit/th/developers/pipeline-stages/)

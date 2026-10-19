@@ -1,29 +1,32 @@
 ---
-title: การ contribute
-description: แนวทางทำงานกับ branch, PR และเอกสารของ blood_audit
+title: แนวทางร่วมพัฒนา
+description: การแก้ไขเฉพาะจุด การตรวจสอบ และการทบทวนงาน
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
+อ่าน exports, ผู้เรียก, test และเอกสารของโมดูลที่เกี่ยวข้องก่อนแก้ไข จำกัดการเปลี่ยนให้อยู่ในงาน และรักษางานอื่นที่มีอยู่ใน checkout
 
-<AtAGlance
-  title="สรุป workflow"
-  items={[
-    { label: "Branch", value: "ใช้ prefix เช่น feat/, fix/, docs/, chore/, test/, ci/" },
-    { label: "Merge", value: "ใช้ gh pr merge --merge และเก็บ merge commits", tone: "ok" },
-    { label: "Docs", value: "update docs/CONTEXT.md เมื่อ public concept เปลี่ยน" },
-    { label: "Review", value: "รัน Codex review ก่อนปิดงาน", tone: "warn" },
-  ]}
-/>
+## สร้าง branch
 
-## หลักการแก้ code
+ใช้ชื่อสื่อความหมายภายใต้ `feat/`, `fix/`, `refactor/`, `docs/`, `chore/`, `perf/`, `test/` หรือ `ci/` ถ้าทำงานขนาน ให้แยก worktree:
 
-- ทำให้เล็กและตรงประเด็น
-- ใช้ pattern เดิมของ repo ก่อนสร้าง abstraction ใหม่
-- ถ้าแตะ behavior ให้เพิ่มหรือปรับ test ตามความเสี่ยง
-- ห้าม log PHI จริง และห้ามใส่ PHI จริงใน fixture, issue หรือเอกสาร
+```bash
+git worktree add ../blood_audit-topic -b docs/topic main
+```
 
-## เอกสาร
+worktree แยกไฟล์และสถานะ branch คำสั่ง `git worktree prune` ล้าง metadata ที่หมดอายุ ไม่ได้ลบ directory งานที่ยังใช้อยู่
 
-เมื่อ concept ที่ผู้ใช้หรือ operator ต้องรู้เปลี่ยน ให้ update เอกสารคู่กัน
-ทั้ง docs site และ `docs/CONTEXT.md` เพื่อให้ repo มี single source สำหรับ
-handoff ระยะยาว
+## ตรวจการเปลี่ยนแปลง
+
+ถ้าเปลี่ยนพฤติกรรม ให้เขียน test ที่ล้มเหลวก่อน แล้วแก้เท่าที่จำเป็น ทดสอบเหตุผลของพฤติกรรม รวมถึงค่าขอบเขตที่เปลี่ยนผลตรวจ ใช้ข้อมูลสังเคราะห์สำหรับบริบททางคลินิก
+
+รันชุดที่ต้องผ่านใน [การทดสอบ](/blood_audit/th/developers/testing/) รวม database integration เมื่อแก้ batch checkpoint หรือ review action ระบุสิ่งที่ข้ามและสิ่งที่ยังตรวจไม่ได้ให้ชัด ส่วนเอกสารให้ build เว็บไซต์และตรวจหน้าและลิงก์ที่แก้
+
+แก้สัญญาสาธารณะปัจจุบันใน `docs/CONTEXT.md` และหน้าผู้ดูแล นักพัฒนา หรือผู้ทบทวนทางคลินิกที่เกี่ยวข้อง แยกประวัติการพัฒนาที่มีวันที่ออกจากคำแนะนำปัจจุบัน
+
+## Commit และ review
+
+ใช้ conventional commit เช่น `fix: reject changed recovery evidence` หรือ `docs: correct model admission setup` ให้แต่ละ commit มีเรื่องเดียว และทำตามข้อกำหนด branch protection กับ review ของ repository
+
+repository ใช้ merge commit ผ่าน `gh pr merge --merge` ตรวจผลที่ต้องผ่านและให้ผู้ทบทวนอิสระตรวจงานก่อน merge build ที่ผ่านไม่ได้ยืนยันความถูกต้องทางคลินิกหรือความพร้อมของการติดตั้ง
+
+`scripts/ralph_ticket.sh` รองรับ workflow งานแบบ ticket และสร้างขั้นตอนทดสอบก่อนพัฒนากับ review ใช้เมื่อทำงานตาม workflow นั้น การอ่านหรือทดสอบโมดูลไม่จำเป็นต้องใช้ script นี้

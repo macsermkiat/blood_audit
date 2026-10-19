@@ -1,61 +1,66 @@
 ---
-title: Glossary ของ modules
-description: คำศัพท์และ module สำคัญของ blood_audit พร้อมจุดอ้างอิง
+title: คำศัพท์และโมดูล
+description: หน้าที่โมดูลปัจจุบันและคำที่ใช้ในระบบ audit
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
+[`docs/CONTEXT.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/CONTEXT.md) อธิบายข้อตกลงของโมดูลโดยละเอียด หน้านี้อ้างอิง Python ใน `src/bba`
 
-หน้านี้เป็นแผนที่นำทางแบบย่อ ไม่ได้แทน `docs/CONTEXT.md` ซึ่งเป็นไฟล์
-อ้างอิงหลักสำหรับรายละเอียดระยะยาว
+## แอปพลิเคชันและข้อมูลต้นทาง
 
-<AtAGlance
-  title="สรุปสั้น"
-  items={[
-    { label: "ไฟล์อ้างอิงหลัก", value: "docs/CONTEXT.md ใน GitHub" },
-    { label: "ใช้เพื่อ", value: "ดู module terms, invariants, public contracts และ review notes" },
-    { label: "กฎ update", value: "append เมื่อ public concept เปลี่ยน", tone: "warn" },
-    { label: "หน้านี้", value: "เป็น navigation aid ไม่ใช่ duplicate copy" },
-  ]}
-/>
+| โมดูล | หน้าที่ |
+| --- | --- |
+| `bba.cli` | คำสั่งและการตั้งค่าสำหรับผู้ดูแล |
+| `bba.application` | เชื่อมข้อมูลต้นทาง บริบท คำสั่ง audit งานที่รอผล และการสร้างรายงาน |
+| `bba.application.source_snapshot` | เก็บสำเนาต้นทางแบบปิดแก้ไขและตรวจความตรงกันของ run |
+| `bba.ingest` | ตรวจ CSV ปรับรูปแบบฟิลด์ที่กำหนด และบันทึกการนำเข้าที่เสร็จแล้ว |
+| `bba.audit_orders` | สร้างรหัสคำสั่งที่ audit และเวลาสั่ง |
+| `bba.component_map` | แยกส่วนประกอบเลือดก่อนใช้กฎเฉพาะประเภท |
+
+ทะเบียน ingest มีตารางหลัก 13 ตาราง คือ `BDVST`, `BDVSTDT`, `BDVSTST`, `BDVSTTRANS`, `BDTYPE`, `Diagnosis`, `Lab`, `Med`, `IPDADMPROGRESS`, `IPDNRFOCUSDT`, `IPTSUMOPRT`, `INCPT_OPRTACT` และ `ICD9CM` ไฟล์พจนานุกรมเพิ่มเติม เช่น `DCT.csv` สำหรับระบุแพทย์ ไม่ได้นับเป็นตารางหลักอีกตาราง
+
+## การจำแนกและหลักฐาน
+
+| โมดูล | หน้าที่ |
+| --- | --- |
+| `bba.hb_lookup` | เลือก Hb ก่อนสั่ง อายุผล แนวโน้มการลด และค่าต่ำสุด 24 ชั่วโมงที่จำกัดช่วงแล้ว |
+| `bba.cohort_detector` | ระบุบริบท RBC และเกณฑ์ตัวเลขหากมี |
+| `bba.deterministic_classifier` | ใช้กฎ RBC การยกเว้น และเงื่อนไขส่งทบทวน |
+| `bba.platelet_lookup`, `bba.platelet_classifier` | เลือกจำนวนเกล็ดเลือดและใช้กฎเริ่มต้น |
+| `bba.returns_ledger`, `bba.declared_use` | อ่านสถานะรายยูนิตและการประกาศใช้เลือด |
+| `bba.preop_reservation` | เทียบจำนวนที่จองกับเกณฑ์เฉพาะหัตถการ |
+| `bba.evidence_bundle_builder` | รวมหลักฐานของแต่ละคำสั่ง |
+| `bba.deid_redactor` | ปกปิดข้อมูลระบุตัวบุคคลและบันทึกผลตรวจ |
+| `bba.deid_redactor.admission` | ตรวจลายเซ็นยืนยันการปกปิดก่อนส่ง LLM |
+| `bba.prompt_builder` | สร้างคำขอและหลักฐานตามประเภทงาน |
+| `bba.llm_client` | ส่งคำขอที่ผ่านการอนุมัติและเก็บคำตอบพร้อมประวัติการส่ง |
+| `bba.quote_grounder` | ตรวจข้อความอ้างอิงกับหลักฐานที่ส่งให้โมเดล |
+| `bba.platelet_guardrail` | ตรวจเงื่อนไขและสัญญาณข้อบ่งชี้เฉพาะเกล็ดเลือด |
+| `bba.audit_pipeline` | จัดเส้นทาง ทำงานต่อจากจุดค้าง และสรุปผลแต่ละส่วนประกอบ |
+
+## ผลที่เก็บและการทบทวน
+
+| โมดูล | หน้าที่ |
+| --- | --- |
+| `bba.audit_store` | เก็บผลพร้อมเวอร์ชันและข้อมูล run |
+| `bba.review_actions` | เก็บการตัดสินและประวัติการเข้าถึง |
+| `bba.dashboard.auth` | ตรวจ session ที่ลงนามและ CSRF token ที่ผูกกับ session |
+| `bba.dashboard.adjudication` | ผูกการตัดสินกับ run, code version, row hash และ revision ที่ตรงกัน |
+| `bba.report_generator` | สร้างผลรวม RBC ไฟล์รายแพทย์ PDF และข้อมูลที่มารายแถว |
+| `bba.attribution` | ระบุแพทย์ผู้สั่งและแผนก |
+| `bba.eval_harness`, `bba.monitoring` | เทียบผลกับการทบทวนและติดตามการเปลี่ยนแปลง |
 
 ## คำสำคัญ
 
-- `AuditRow`: แถวผลลัพธ์หนึ่งรายการต่อคำสั่งให้เลือดที่ audit
-- `final_classification`: classification ที่เก็บและใช้ในรายงาน
-- `rule_classification`: ผลจาก deterministic classifier ก่อน LLM/finalization
-- `LLM_REVIEW`: label สำหรับ routing ภายใน ไม่ใช่ classification ที่เก็บ
-- `hallucination_suspect`: `review_reason` สำหรับ quote-grounding failure
-- `run_id`: hash จาก input + schema + code version เพื่อ idempotency
-- `SafeId`: placeholder ที่ใช้แทน PHI เช่น `PHI_xxx_001`
-- `returns_ledger` / `not_transfused`: การรวม disposition รายยูนิตจาก
-  BDVSTTRANS ที่อยู่เบื้องหลัง `RETURNED_NOT_TRANSFUSED`
-- `USETYPE` / `declared_use`: สัญญาณ declared-use ณ เวลาสั่ง ที่อยู่
-  เบื้องหลัง `PERIOP_TRANSFUSION_EXEMPT` (`preop_declared_exempt`)
-- `MSBOS` / `preop_reservation`: pre-op reservation audit ที่อยู่เบื้องหลัง
-  `PREOP_OVER_RESERVATION` รวมถึง planned-op picker และ
-  OPRTACT→ICD9 bridge
-- `reservation_annotation`: MSBOS annotation ที่ฝังบนแถว returns-terminal
-  (เป็น annotation เท่านั้น ไม่เปลี่ยน verdict)
-- `feature_flags`: module ของ runtime flag; flag 6 จาก 9 ตัวเปิดโดย
-  ค่าเริ่มต้น
-- `platelet_lookup.projection` / `project_24h`: เส้น projection ของ
-  platelet count ที่อยู่เบื้องหลัง indication 5 และ
-  `platelet_trend_unsupported` guardrail
-- `llm_client.conclusion` / `reasoning_conclusion`: อ่านว่า reasoning ของ
-  คำตอบสรุปเป็น class ไหน สำหรับ `label_reasoning_conflict` guardrail
-- `audit_llm_responses` / `rank_merged`: pilot step ที่ตรวจคำตอบ LLM ก่อน
-  render และสคริปต์จัดอันดับจาก verdict ที่รวมแล้ว (ดู
-  [รัน pipeline](/blood_audit/th/operators/run-pipeline/) และ
-  [จัดอันดับแพทย์และแผนก](/blood_audit/th/operators/doctor-ranking/))
+- `audit_id` ระบุคำสั่งที่ audit
+- `run_id` ระบุชุดงานจากข้อมูลต้นทาง schema และ code แอปพลิเคชันผูกการตั้งค่าและ manifest ของสำเนาต้นทางด้วย
+- `AuditRow` คือผลรายคำสั่งพร้อมข้อมูลที่มา ซึ่งไม่แก้ทับหลังบันทึก
+- `rule_classification` คือผลจากกฎ ส่วน `final_classification` คือผล pipeline ที่เก็บไว้
+- `needs_human_review` เป็น flag แยกจาก classification
+- `LLM_REVIEW` เป็นเส้นทาง ไม่ใช่ classification ที่เก็บ
+- `hallucination_suspect` เป็นเหตุผลให้ทบทวนเมื่อการตรวจหลักฐานไม่ผ่าน ไม่ได้หมายความว่าระบบตรวจพบความผิดพลาดของโมเดลได้ทั้งหมด
+- `reservation_annotation` บันทึกผลตรวจการจองบนแถวที่ยกเว้น โดยไม่เปลี่ยนผลเดิม
+- `PrivacyAttestation` ผูกหลักฐานที่ปกปิดแล้วกับ prompt และ policy ที่ตรงกัน ผู้ลงนามเก็บ private key ของ Ed25519 ส่วนแอปพลิเคชันตรวจด้วย public key
+- `project_24h` คำนวณแนวโน้มจำนวนเกล็ดเลือดจากผลที่ใช้ได้สองครั้งล่าสุด
+- `reasoning_conclusion` อ่านข้อสรุปในเหตุผลของโมเดลเพื่อตรวจว่าขัดกับ label หรือไม่
 
-## Module สำคัญ
-
-| Module | หน้าที่ |
-| --- | --- |
-| `bba.ingest` | อ่าน HOSxP CSV, ตรวจ schema, normalize rows และเขียน completion marker ใน Phase 1 |
-| `bba.hb_lookup` | หา Hb ก่อนให้เลือดและ prior Hb trend |
-| `bba.cohort_detector` | กำหนด cohort หรือบริบททางคลินิกของคำสั่ง |
-| `bba.deterministic_classifier` | กฎ 3-tier Hb, bypass และ review flags |
-| `bba.deid_redactor` | de-identify evidence bundle |
-| `bba.quote_grounder` | ตรวจ quote ของ LLM แบบ fail-closed |
-| `bba.audit_store` | persistence, idempotency และ audit trail |
+ค่า flag เริ่มต้นอยู่ใน `src/bba/feature_flags.py` ตัวแปรแวดล้อมของ pilot มีผลเฉพาะสคริปต์ที่อ่านค่านั้น การมี flag ไม่ได้หมายความว่าทุกคำสั่งเปิดให้ปรับค่าได้

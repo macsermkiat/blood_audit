@@ -1,95 +1,80 @@
 ---
-title: ตัวแปรสภาพแวดล้อม
-description: ตัวแปรสภาพแวดล้อมที่ blood_audit ต้องใช้ก่อนเริ่มรันออดิท
+title: ตัวแปรแวดล้อม
+description: การตั้งค่าสำหรับ local audit โมเดล รายงาน และหน้าทบทวนที่ยืนยันตัวตน
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
 import EnvVarChecklist from "../../../../components/EnvVarChecklist.astro";
 
-blood_audit ตรวจ environment variables ตั้งแต่เริ่มโปรแกรม หากค่าหายหรือ
-รูปแบบไม่ถูกต้อง จะ fail fast ด้วย `CliError` และไม่ทำงานต่อแบบเงียบ ๆ
-
-<AtAGlance
-  title="สรุป env vars"
-  items={[
-    { label: "จำเป็นใน Phase 1", value: "BBA_DATA_DIR เพียงตัวเดียว", tone: "ok" },
-    { label: "จำเป็นใน Phase 1.5", value: "BBA_DB_URL และ ANTHROPIC_API_KEY เมื่อเชื่อมส่วน analysis" },
-    { label: "ข้อมูลลับ", value: "ห้าม paste ANTHROPIC_API_KEY ลง issue, screenshot หรือ log", tone: "warn" },
-    { label: "Postgres", value: "ต้องใช้ postgresql+psycopg:// ไม่ใช่ postgresql:// แบบเปล่า" },
-  ]}
-/>
+ตัวแปรที่ต้องใช้ขึ้นอยู่กับคำสั่งและ transport โหมด local ต้องมี `BBA_DATA_DIR` ส่วนการส่งข้อมูลให้โมเดลและหน้าทบทวนต้องตั้งค่าเพิ่ม
 
 <EnvVarChecklist />
 
-## รายละเอียดที่สำคัญ
+## Local audit
 
-### `BBA_DATA_DIR`
+`BBA_DATA_DIR` ต้องเป็นพาธแบบ absolute ที่เขียนได้และใช้เก็บข้อมูลถาวร มี run state source snapshot `identity.key` audit rows calls รายงาน และผลวิเคราะห์ เก็บไว้นอก repository ในพื้นที่ที่จำกัดสิทธิ์
 
-ต้องเป็น **absolute path** ไดเรกทอรีต้องมีอยู่จริง และ service user
-ต้องเขียนได้ ฟังก์ชัน `_resolve_data_dir()` ใน `src/bba/cli/main.py`
-จะตรวจเงื่อนไขนี้ ใช้เก็บข้อมูล:
+`BBA_APPLICATION_CONFIG` ระบุพาธไฟล์ JSON ที่ตรวจด้วย `bba.application.config.ApplicationConfig` หากมี field ที่ไม่รู้จัก ระบบจะปฏิเสธ ค่าเริ่มต้นคือ `transport: "local"` และ `policy_version: "repository-policy"`
 
-- run markers ของ ingest และ audit ใน Phase 1
-- Parquet audit rows ใน Phase 1.5 เมื่อเปิดใช้ storage wiring
-- completion markers สำหรับ idempotency
+## Model review
 
-### `BBA_DB_URL`
+ไฟล์ตั้งค่าสำหรับ cassette แบบออฟไลน์มีรูปแบบดังนี้
 
-Postgres DSN ต้องใช้ driver suffix `+psycopg` เสมอ เพราะ SQLAlchemy
-จะ route `postgresql://` แบบไม่มี suffix ไปยัง psycopg2 ซึ่ง **ไม่ใช่** driver
-ที่โปรเจกต์นี้ใช้ มีตัวแปลงมาตรฐานที่
-`bba.review_actions.models.ReviewActionsConfig.sqlalchemy_dsn`
-
-ตัวอย่าง:
-
-```text
-postgresql+psycopg://bba_user@db.internal:5432/blood_audit
+```json
+{
+  "policy_version": "your-approved-policy-version",
+  "transport": "cassette",
+  "cassette": "/srv/bba/cassettes/approved-synthetic.json"
+}
 ```
 
-### `ANTHROPIC_API_KEY`
+กำหนด `BBA_APPLICATION_CONFIG` ให้ชี้ไปยังไฟล์นี้ หากใช้ live ให้ตั้ง `transport: "live"` ตัด `cassette` ออก และตั้ง `allow_live_api` เป็น `true` ติดตั้ง [dependency สำหรับ live](/blood_audit/th/operators/install/#ติดตั้ง-dependency-สำหรับ-live) แล้วส่ง `ANTHROPIC_API_KEY` ผ่านระบบจัดเก็บ secret ของ deployment การเรียก live อาจมีค่าใช้จ่าย
 
-จำเป็นก่อนที่ `bba audit` จะเรียก Batch API ได้ ส่วน cost guard ที่
-`src/bba/audit_pipeline/cost_guard.py` จะปฏิเสธ live API access ระหว่างเทสต์
-เพื่อป้องกันการส่ง batch โดยไม่ตั้งใจระหว่างพัฒนา
+ทั้งสองโหมดต้องใช้ข้อมูลอนุมัติดังนี้
 
-### `BBA_BDVST_CSV` / `BBA_DCT_CSV` (สำหรับ `bba report`)
+| ตัวแปร | เนื้อหาที่ต้องมี |
+| --- | --- |
+| `BBA_PRIVACY_POLICY` | JSON ที่มี `key_id`, `public_key_file` และ `approved_redactor` โดย redactor ระบุ `version`, SHA-256 `model_sha` ที่ไม่เป็นศูนย์ และ `gazetteer_version` |
+| `BBA_PRIVACY_ARTIFACTS` | JSON object ที่ใช้ audit ID เป็น key แต่ละค่าคือ `PrivacyArtifact` ที่มี `evidence_chunks` ซึ่งลบข้อมูลแล้วและ `attestation` ที่ลงลายมือชื่อ |
+| `BBA_DB_URL` | Postgres สำหรับ checkpoint ที่ทำ migration และกำหนดสิทธิ์แล้ว ใช้ `postgresql://user@host/database` |
 
-คำสั่ง `bba report` ที่เชื่อมแล้วต้องใช้สองตัวแปรนี้สำหรับ
-ward/physician attribution resolvers (`_get_ward_resolver` /
-`_get_physician_resolver` ใน `src/bba/cli/main.py`) — ถ้าไม่ตั้งจะ
-fail loud ด้วย `CliError`
+ไฟล์ public key เก็บ Ed25519 verification key ขนาด 32 ไบต์ บริการลบข้อมูลในเครื่องที่ได้รับอนุมัติเตรียมหลักฐานด้วย `RedactionAuthority.prepare` บริการนั้นถือ private signing key โมเดลที่อนุมัติ และ k-anonymity gate เก็บ private key แยกจากแอปตรวจเลือด
 
-## ตัวแปรเฉพาะ pilot
+attestation ผูกกับ prompt audit ID run ID รุ่น redactor และผลตรวจความเป็นส่วนตัวที่ผ่านแล้ว ต้องเตรียมด้วยชุดข้อมูล รุ่น package และไฟล์ตั้งค่าเดียวกับที่ใช้รัน หากข้อมูลอนุมัติหายไปหรือไม่ผ่าน กรณีนั้นจะอยู่ให้คนทบทวนในเครื่อง การยืนยันจากผู้เรียกหรือ digest เพียงอย่างเดียวไม่อนุญาตให้ส่งข้อมูล
 
-ส่วน pilot (เส้นทาง A / เส้นทาง C) อ่านตัวแปร `BBA_PILOT_*` ชุดที่กว้างกว่า
-รวมถึง `BBA_BDVSTTRANS_CSV` (override ไฟล์ส่งออก returns ledger) และ
-kill-switch ของ flag สำหรับฟีเจอร์ที่ default-ON
-(`BBA_PILOT_MSBOS_RESERVATION=0`, `BBA_PILOT_DECLARED_USETYPE=0`,
-`BBA_PILOT_DECLARED_USE_PREOP_EXEMPT=0`,
-`BBA_PILOT_MSBOS_PLANNED_OP_PICKER_V2=0`) ตัวแปรเหล่านี้มีเอกสารอยู่ที่
-[รัน pipeline](/blood_audit/th/operators/run-pipeline/) และ
-[จัดอันดับแพทย์และแผนก](/blood_audit/th/operators/doctor-ranking/)
-ส่วนตารางด้านบนครอบคลุมเฉพาะ CLI ที่รองรับเท่านั้น
+ค่า `enable_missing_hb_positive_evidence` และ `enable_missing_platelet_defer` เริ่มต้นเป็น `false` เปิดใช้เฉพาะเมื่ออยู่ในนโยบายที่อนุมัติ
 
-มีตัวแปร pilot เพิ่มอีก 3 ตัว มาพร้อม response-audit gate และ
-count-trend guardrail ของ platelet:
+checkpoint store ใช้ DSN แบบ `postgresql://` ผ่าน psycopg ส่วน review adapter แปลง DSN ให้ SQLAlchemy ภายใน จึงไม่ใช้ `postgresql+psycopg://` กับตัวแปรร่วมนี้
 
-| ตัวแปร | ค่าเริ่มต้น | ใช้ทำอะไร |
-| --- | --- | --- |
-| `BBA_PILOT_PLATELET_TREND` | `0` (ปิด) | ตั้งเป็น `1` เพื่อแสดงเส้น projected platelet count 24 ชม. ใน evidence ของ LLM และเปิด count-trend guardrail (`PLATELET_TREND_GUARDRAIL_ENABLED`, issue #237) |
-| `BBA_PILOT_ALLOW_UNAUDITED` | ไม่ตั้งค่า | ตั้งเป็น `1` เพื่อให้ `build_review.py` render คำตอบ LLM ได้ แม้ยังไม่มี response audit ที่ตรงกัน หรือ audit นั้นมี HIGH finding |
-| `BBA_AUDIT_JUDGE_MODELS` | `claude-sonnet-5,claude-haiku-4-5-20251001,claude-opus-5` | รายชื่อ judge model (คั่นด้วย comma) สำหรับ `audit_llm_responses.py --judge candidates\|all` ซึ่งเป็นตัวเลือกเสริมที่เรียก API และคิดเงิน |
+## ข้อมูลแพทย์สำหรับรายงานและหน้าทบทวน
 
-## ตรวจสอบ
+`BBA_BDVST_CSV` ชี้ไปยัง BDVST ที่ตรงกับรอบและมี `REQNO` กับ `DCTREQ` ส่วน `BBA_DCT_CSV` ชี้ทะเบียนแพทย์ ทั้ง `bba report` และ `bba serve-dashboard` ต้องใช้สองตัวนี้ `DCTREQ` ใช้ระบุแพทย์ ส่วนแผนกของแพทย์ใช้จัดกลุ่ม ward ในรายงาน
 
-```bash
-env | grep -E '^(BBA_DATA_DIR|BBA_DB_URL|ANTHROPIC_API_KEY|BBA_BDVST_CSV|BBA_DCT_CSV)='
+## การยืนยันตัวตนหน้าทบทวน
+
+`BBA_DASHBOARD_AUTH_SECRET` ต้องยาวอย่างน้อย 32 ไบต์ UTF-8 identity adapter และ dashboard ใช้ secret เดียวกันเพื่อลงลายมือชื่อและตรวจ session ส่วน `BBA_DASHBOARD_PUBLIC_ORIGIN` ต้องเป็น HTTPS origin ที่ผู้ใช้เข้าจากภายนอก
+
+CLI ฟังที่ loopback หลัง HTTPS proxy และไม่ได้ออกตัวตน reviewer ให้ ดู [เปิดหน้าทบทวนที่ยืนยันตัวตนแล้ว](/blood_audit/th/operators/integration-seams/#serve-authenticated-review)
+
+## ตรวจว่าตั้งค่าแล้วโดยไม่แสดงค่า
+
+คำสั่งนี้แสดงเฉพาะชื่อตัวแปรกับสถานะ รวมถึงตัวแปรที่อาจมีรหัสผ่านหรือ token
+
+```sh
+uv run python - <<'PYTHON'
+import os
+names = (
+    "BBA_DATA_DIR", "BBA_APPLICATION_CONFIG", "BBA_PRIVACY_POLICY",
+    "BBA_PRIVACY_ARTIFACTS", "BBA_DB_URL", "ANTHROPIC_API_KEY",
+    "BBA_BDVST_CSV", "BBA_DCT_CSV", "BBA_DASHBOARD_AUTH_SECRET",
+    "BBA_DASHBOARD_PUBLIC_ORIGIN",
+)
+for name in names:
+    print(f"{name}: {'set' if os.environ.get(name) else 'unset'}")
+PYTHON
 ```
 
-ควรเห็นค่าที่จำเป็นครบตาม phase ที่ใช้งาน (ครบทั้งห้าตัวสำหรับ
-deployment เต็มที่รัน `bba report`) ห้าม log ค่า
-`ANTHROPIC_API_KEY`; ลบออกก่อนแชร์ output จาก terminal เสมอ
+โหมด local ไม่ต้องตั้งตัวแปรเสริมทุกตัว การมีค่าอยู่ไม่ได้ยืนยันว่าตั้งค่าถูกต้อง อย่าใส่ credentials ใน transcript ภาพหน้าจอ หรือ issue
 
-## ขั้นถัดไป
+## การตั้งค่า pilot
 
-รัน [ออดิทครั้งแรก](/blood_audit/th/operators/first-audit-run/)
+สคริปต์วิจัยใช้ `BBA_PILOT_*` และ feature switches แยกจากแอปที่รองรับ ดู [รัน pipeline](/blood_audit/th/operators/run-pipeline/) และ [pilot README](https://github.com/macsermkiat/blood_audit/blob/main/scripts/pilot/README.md) สำหรับค่าของแต่ละสคริปต์

@@ -1,86 +1,30 @@
 ---
 title: What this is
-description: A post-hoc audit pipeline for KCMH RBC transfusions. Not point-of-care CDS.
+description: Retrospective transfusion audit for quality review at KCMH.
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
 import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
 
-<QiNotSamdBanner />
+blood_audit reviews adult inpatient red blood cell (RBC) and platelet orders from HOSxP exports at Chulalongkorn Hospital. It combines laboratory results, diagnoses, procedures, medication records, and clinical notes. The audit records a result and its evidence for later quality improvement review.
 
-<AtAGlance
-  items={[
-    { label: "Audience", value: "QI committee, blood bank, and hospital IT." },
-    { label: "Timing", value: "After transfusion is complete; no bedside decision support.", tone: "warn" },
-    { label: "Evidence", value: "HOSxP orders, Lab Hb, ICD codes, procedures, meds, and notes." },
-    { label: "Human review", value: "Unclear or failed-grounding rows stay in NEEDS_REVIEW.", tone: "ok" },
-  ]}
-/>
+<QiNotSamdBanner variant="compact" />
 
-## In one paragraph
+## How an order is reviewed
 
-blood_audit reviews inpatient adult red blood cell (RBC) and platelet
-transfusions at Chulalongkorn Hospital, after they are complete. It reads
-HOSxP exports from the hospital information system. For each audited
-order it records one of five core classifications (`APPROPRIATE`,
-`INAPPROPRIATE`, `NEEDS_REVIEW`, `INSUFFICIENT_EVIDENCE`, or
-`POTENTIALLY_INAPPROPRIATE`) or one of four routing and reservation
-terminals. The terminals are `RETURNED_NOT_TRANSFUSED` and
-`PERIOP_TRANSFUSION_EXEMPT` (units returned or declared surgical use;
-excluded from appropriateness scoring), `PREOP_OVER_RESERVATION` (more
-units reserved than the MSBOS recommendation for the planned operation),
-and `PREOP_RESERVATION_UNCONFIRMED` (flag-gated, default-off).
+The deterministic classifier applies the configured policy first. Some orders finish at this stage. Orders that need interpretation can continue to an LLM, subject to privacy admission and evidence checks. A cohort is a per-order clinical-context label used to select an RBC threshold. It is not a permanent patient group.
 
-The appropriateness decision follows the KCMH internal guideline PR 17.2
-(Procedure Revision 17.2) and the AABB 2023 (Association for the
-Advancement of Blood & Biotherapies) standard. It uses a 3-tier hemoglobin
-(Hb) policy with clinical-context thresholds and evidence-gated bypasses.
-In developer docs these context buckets are called "cohorts"; they are
-per-order audit labels, not permanent patient groups.
+The core classifications are `APPROPRIATE`, `INAPPROPRIATE`, `NEEDS_REVIEW`, `INSUFFICIENT_EVIDENCE`, and `POTENTIALLY_INAPPROPRIATE`. Routing results also identify returned units, perioperative exemptions, and reservation findings. [Policy summary](/blood_audit/en/clinical/policy-summary/) describes these rules and their limits.
 
-Rows that the deterministic classifier routes to the LLM go through six
-fail-closed quote-grounding layers. This route includes unclear clinical
-contexts, gray-zone Hb rows, high-Hb rows, and safety-flag rows that should
-not be auto-classified from the Hb number alone.
-"LLM_REVIEW" is a routing concept inside the pipeline; it is not a
-stored classification. A failed grounding becomes
-`final_classification = NEEDS_REVIEW` with `review_reason` set, so a
-human reviewer can adjudicate.
+Platelet LLM review is disabled by default. With that path disabled, the pipeline omits unresolved platelet rows. The application checks for missing results and rejects an incomplete audit rather than treating those orders as reviewed. A deployment must resolve this configuration before using a cohort that includes such orders.
 
-## What it is not
+## Evidence checks and human decisions
 
-- It is not Software as a Medical Device. Nothing in this codebase
-  influences a transfusion order at the point of care.
-- It is not real-time. No subscriber to the audit stream emits clinician
-  alerts, and no point-of-care dashboard pushes recommendations.
-- It is not a single-physician scorecard. Per-physician views exist so a
-  reviewing clinician can audit their own orders (own-view layout); they
-  are not a quality scorecard for management review.
+The LLM path checks quoted evidence and applies guardrails before storing a result. A grounding failure retains the case for review, commonly with `review_reason = "hallucination_suspect"`. These checks reduce specific failure modes. They do not establish clinical accuracy or replace clinician validation.
 
-If anyone asks for real-time CDS hooks, decline. That would move the
-project into SaMD territory and change the regulatory scope, the review
-process, and the deployment risk profile.
+The reviewer dashboard shows committed RBC and platelet cases whose classification or review flag requires human review. Reviewers can agree, override with a reason, or escalate. The dashboard keeps decision history tied to the exact audit row and version. It requires a trusted identity adapter for deployed authentication.
 
-## What it produces
+## Outputs and scope
 
-A monthly audit dataset for the QI committee. From this dataset, six
-report sections are derived:
+The monthly report contains RBC aggregates and separate physician own-view files. Platelet rows do not enter RBC rates. [Report output](/blood_audit/en/clinical/report-output/) explains the files and scoring exclusions.
 
-- Hospital-trend summary.
-- Ward-scorecard.
-- Physician own-view (per reviewer).
-- Indication breakdown.
-- Cohort breakdown.
-- Health-state breakdown.
-
-The report schema lives in [`docs/report-schema.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/report-schema.md)
-and is summarized at [Report output](/blood_audit/en/clinical/report-output/).
-
-## Anti-hallucination guarantees
-
-For rows that the deterministic classifier routes to LLM review, the
-LLM's clinical reasoning is gated by
-[six fail-closed quote-grounding layers](/blood_audit/en/developers/quote-grounding/).
-A failed grounding stores `final_classification = NEEDS_REVIEW` with
-`review_reason = "hallucination_suspect"`; it is not published as an
-`APPROPRIATE` or `INAPPROPRIATE` result.
+The application supports retrospective quality improvement. It does not authorize bedside transfusions or send real-time treatment alerts. Deployment, clinical validation, and institutional approval are separate from the presence of implemented software checks.

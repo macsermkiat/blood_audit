@@ -1,225 +1,57 @@
 ---
-title: ตัวตรวจ platelet (Phase 2)
-description: ขา deterministic ของ platelet ที่ fork ตั้งแต่ intake ไม่ auto-clear อะไรเลย และ gate ขา LLM ไว้หลัง flag ที่ปิดเป็นค่าเริ่มต้น
+title: การตรวจเกล็ดเลือด
+description: การรับคำสั่ง กฎป้องกันในกลุ่มเฉพาะ และการตรวจคำตอบโมเดล
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
+คำสั่งเกล็ดเลือดใช้ตัวค้นผลแล็บและตัวจำแนกแยกจาก RBC ผลตรวจมี `component="platelet"` รายงานและหน้าทบทวนเก็บชนิดส่วนประกอบเลือดไว้ เพื่อไม่ให้ผลเกล็ดเลือดปนในสถิติของ RBC
 
-ตัวตรวจ platelet ของ Phase 2 merged แล้ว (PR #85) โดยใช้รูปแบบ
-pipeline เดียวกับเส้นทาง RBC (Phase 1) แต่ fork ตั้งแต่ intake: คำสั่ง
-blood-bank ทุกรายการจะถูก route ไปยัง component family ก่อน และมีเฉพาะคำสั่ง
-platelet เท่านั้นที่จะไปถึง platelet gate ขา deterministic live แล้ว
-ส่วนขา LLM ของ platelet อยู่หลัง flag ที่ปิดเป็นค่าเริ่มต้น
-`feature_flags.PLATELET_LLM_ENABLED`
+## การรับคำสั่งและค้นผลแล็บ
 
-<AtAGlance
-  title="สรุปตรรกะ"
-  items={[
-    { label: "จุด fork", value: "intake — ทุกคำสั่งถูก route ไปยัง ComponentFamily ก่อนที่ auditor ใด ๆ จะทำงาน" },
-    { label: "ขา deterministic", value: "live แล้ว ไม่ auto-clear อะไรเลย: count >= 100 ส่งทบทวน, ที่เหลือ defer ไปขา LLM", tone: "ok" },
-    { label: "ขา LLM", value: "อยู่หลัง feature_flags.PLATELET_LLM_ENABLED ที่ปิดเป็นค่าเริ่มต้น", tone: "warn" },
-    { label: "เส้นทาง RBC", value: "เหมือนเดิมทุก byte ไม่ว่าจะเปิด feature platelet หรือไม่", tone: "ok" },
-  ]}
-/>
+ตัวสร้างคำสั่ง HOSxP รับคำสั่งที่มีผลิตภัณฑ์ RBC เป็น `red_cell` หรือคำสั่งที่เป็นผลิตภัณฑ์เกล็ดเลือดทั้งหมดเป็น `platelet` ผลิตภัณฑ์ที่ไม่รองรับและคำสั่งผสมที่ไม่มี RBC ถูกตัดออก `bba.component_map` มีตัวจำแนกชื่อหกกลุ่มแยกต่างหาก แต่ไม่ใช่ตัวคัดคำสั่งขณะรันนี้
 
-## เส้นทาง platelet สัมพันธ์กับเส้นทาง RBC อย่างไร
+`bba.platelet_lookup` อ่าน hematology `LABEXM = "290078"` หน่วย ×10³/µL ไม่มี POCT สำรอง `parse_platelet_count` รับค่าที่มี comma และค่าขอบเขต เช่น `<2` ส่วนค่าที่หาย ไม่ใช่ตัวเลข ไม่เป็นจำนวนจำกัด หรืออยู่นอกช่วงให้ `None` โมเดล `PlateletObservation` เก็บเวลา UTC ที่มี timezone และ lab `item_no` สำหรับตัดสินเมื่อเวลาเท่ากัน
 
-ตัวตรวจ platelet ไม่ได้เขียนเส้นทาง RBC ใหม่ แต่ยืมรูปแบบ pipeline ของ RBC มา
-(intake, value layer, deterministic gate และขา LLM พร้อม over-clear guardrail)
-แล้ว fork ทันทีที่คำสั่งเข้ามา เส้นทาง RBC (Phase 1) เหมือนเดิมทุก byte
-ไม่ว่าจะเปิด feature platelet หรือไม่ การเปิด platelet เป็นการเพิ่ม branch
-ใหม่ และไม่แตะ branch ของ red-cell เดิม
+เกล็ดเลือดที่สั่งร่วมในช่วง MTP ถูกระงับเป็นหน่วยตรวจแยกตั้งแต่ต้น ยังคงใช้เป็นสัญญาณ MTP โดยไม่สร้างผลตรวจซ้ำอีกแถว
 
-component family ถูกแยกออกจากกัน สถิติของ platelet ไม่ปะปนกับ report ของ
-RBC หรือ dashboard คำสั่ง platelet ถูกรับเข้าเป็น audit unit ของตัวเองด้วย
-`component="platelet"` และอยู่นอกตัวเลขของ red-cell
+## กฎ deterministic
 
-## `component_map`: intake gate
+`classify_platelet` ตรวจตามลำดับ:
 
-Module: `src/bba/component_map/`
+| เงื่อนไข | ผล | เหตุผล |
+| --- | --- | --- |
+| ไม่มีผลแล็บและปิดตัวเลือก defer | `INSUFFICIENT_EVIDENCE` | `plt_missing` |
+| ไม่มีผลแล็บและเปิดตัวเลือก defer | `NEEDS_REVIEW` | `plt_missing_defer_llm` |
+| ค่า ≥ 100 ×10³/µL | `POTENTIALLY_INAPPROPRIATE` | `plt_ge_100` |
+| ค่า ≤ 10 ×10³/µL, สด, มีข้อบ่งชี้, ไม่มีรหัสกลุ่มยกเว้น และเปิด prophylaxis auto-clear | `APPROPRIATE` | `plt_lt_10_heme_prophylaxis` |
+| มีค่ากรณีอื่น | `NEEDS_REVIEW` | `plt_defer_llm` |
 
-`component_map` เป็น `ComponentFamily` classifier แบบ 6 ค่า ได้แก่ `RED_CELL`,
-`PLATELET`, `FFP`, `CRYO`, `WHOLE_BLOOD` หรือ `UNKNOWN`
+เกณฑ์ prophylaxis รวมค่าเท่ากับ 10 ด้วย ชื่อเหตุผลเดิม `plt_lt_10_heme_prophylaxis` ไม่ได้เปลี่ยนเครื่องหมายเปรียบเทียบ ต้องมี freshness เป็น `fresh` หรือเก่าน้อยกว่า 24 ชั่วโมง
 
-- `classify_component(product_name)` เป็น keyword classifier ที่ทำงานบน
-  column `NAME` ของ dictionary BDTYPE ซึ่งเป็น source of truth และรองรับ
-  product code ใหม่: variant แบบ irradiated, filtered และ pooled จะ resolve
-  ไปยัง family เดียวกัน
-- `PLATELET_PRODUCTS` เป็น allow-list 8 code:
-  `LDPPC`, `LDPPCI`, `SDPFI`, `SDPF`, `SDPPI`, `LPPC`, `PC`, `LDPC`
-- มีเฉพาะ `RED_CELL` (Phase 1) และ `PLATELET` (Phase 2) เท่านั้นที่มี auditor
+รหัสวินิจฉัยที่เข้าเกณฑ์มี prefix `C8`, `C9`, `D61.1`, `Z51.1`, `Z94.8` และ `T86.0` ส่วน `D46` ต้องมี `Z51.1` หรือหลักฐานยาเคมีบำบัดล่าสุดเพิ่มด้วย pipeline ของ library ไม่ส่งข้อมูลยาให้ gate นี้ ดังนั้นเส้นทาง D46 จึงต้องมี `Z51.1`
 
-live pilot intake (`build_audit_orders`) ยังไม่ route ผ่าน classifier 6 ค่า
-โดยตรง มันรับคำสั่งที่มี RBC product อย่างน้อยหนึ่งตัว (→ `red_cell`) หรือเป็น
-platelet product ทั้งหมด (→ `platelet`) และ exclude ที่เหลือทั้งหมด (FFP อย่างเดียว,
-cryo อย่างเดียว, whole-blood อย่างเดียว, unknown หรือว่าง) ด้วยเหตุผลเดียวคือ
-`not_rbc_product` ส่วน `classify_component` NAME classifier และเหตุผล exclude
-แยกตาม family จะถูก wire ใน phase ถัดไป ตอนนี้ allow-list membership check เป็นตัว
-คุม gate
+รหัสยกเว้นครอบคลุม ITP, TTP/TMA, HUS, HIT, aplastic anemia บางกลุ่ม, dengue และพิษงู รายการ normalized ที่แน่นอนอยู่ใน `src/bba/platelet_classifier/classifier.py` ถ้าพบรหัสยกเว้นจะไม่ผ่านกฎ prophylaxis เชิงโครงสร้างนี้ และต้องส่งต่อ ค่าเกล็ดเลือดต่ำอย่างเดียวไม่พอ
 
-### ทำไมต้องรู้จัก family ที่ไม่มี auditor
+`PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED` เปิดเป็นค่าปกติของ pipeline ตัวจำแนกรับการเปิดผ่าน `PlateletClassifierInputs` จึงยังเป็น pure function การปิดตัวเลือกนี้นำทาง auto-clear เพียงทางนี้ออก กฎ deterministic ไม่ให้ผล `INAPPROPRIATE`
 
-การรู้จัก `FFP` / `CRYO` / `WHOLE_BLOOD` เป็นความตั้งใจ คำสั่งที่ audit
-ทำอะไรไม่ได้ควรถูก exclude ด้วยเหตุผลที่ระบุ ไม่ใช่ถูกดูดเข้า family ที่
-ไม่ได้เป็นของมันแบบเงียบ ๆ ส่วน `UNKNOWN` สงวนไว้สำหรับชื่อที่ classifier
-ไม่รู้จักจริง ๆ เพื่อให้ product ที่ label ผิดหรือเป็นของใหม่ปรากฏเป็น `UNKNOWN`
-แทนที่จะถูกยัดเข้า family
+## เส้นทางโมเดลและการจบงาน
 
-### ปริมาณที่จ่ายจริงต่อ family
+`PLATELET_LLM_ENABLED` ปิดเป็นค่าปกติ ผลเกล็ดเลือดที่กฎตัดสินจบได้บันทึกโดยไม่ต้องใช้เส้นทางนี้ ส่วนที่เหลือต้องเปิดเส้นทางโมเดลและผ่านการอนุมัติข้อมูลก่อนส่ง
 
-feed `BDVSTDT` ดิบ ตรวจสอบเมื่อ 2026-07-08:
+เมื่อปิดเส้นทาง แถวเกล็ดเลือดที่ยังตัดสินไม่ได้ไม่ถูก commit `audit_bundle` ตรวจพบ orphan ID และล้มเหลวโดยไม่เขียนเครื่องหมายจบงาน การ ingest ผ่านหรือมีผล RBC บางส่วนจึงไม่ได้แปลว่าการตรวจหลายชนิดเลือดจบครบแล้ว
 
-| Component family | ปริมาณที่จ่าย |
-| --- | --- |
-| `red_cell` | 23,867 |
-| `platelet` | 8,193 |
-| `ffp` | 5,350 |
-| `cryo` | 2,335 |
-| `whole_blood` | 4 |
+เมื่อเปิด pipeline ส่งเกล็ดเลือดเป็น batch แยกหลัง RBC ถ้าไม่ผ่านการอนุมัติข้อมูล จะทบทวนในเครื่องแทนส่งบันทึกดิบ ผลเกล็ดเลือดที่ commit แล้วแต่ยังต้องทบทวนปรากฏในคิวร่วมกับผล RBC ที่ยังต้องทบทวน
 
-## `platelet_lookup`: value layer
+## กฎตรวจคำตอบ
 
-Module: `src/bba/platelet_lookup/`
+คำตอบเกล็ดเลือดระบุสัญญาณที่มีหลักฐานรองรับสำหรับเลือดออก หัตถการ การป้องกันในภาวะไขกระดูกล้มเหลว เลือดออกในกะโหลก และ aplastic anemia ระหว่างรักษา `platelet_overclear_suspect` เปลี่ยน model `APPROPRIATE` ที่ไม่มีสัญญาณรองรับเป็น `NEEDS_REVIEW` พร้อม `platelet_llm_overclear_suspect`
 
-นี่คือคู่ขนานของ Hb lookup สำหรับ platelet: แปลง lab row ดิบให้เป็น platelet
-count ที่ validate แล้วหนึ่งค่า
+ข้อบ่งชี้ใน prompt ใช้ขอบเขต ≤10, ≤20, ≤50 และ ≤80 ×10³/µL แบบรวมค่าเท่ากับตามแต่ละข้อ ส่วนข้อยกเว้นเป้าหมายสูงด้านผ่าตัดหรือเลือดออกในกะโหลกยังใช้ `count < 100` อย่างเคร่งครัด เกณฑ์เฉพาะข้อเหล่านี้ไม่ได้ทำให้กฎ deterministic อนุมัติทุกคนที่ต่ำกว่าเกณฑ์
 
-- `PLATELET_LABEXM = "290078"` ("Platelets Counts", `LABGRP` 29 HEMATOLOGY,
-  หน่วย ×10³/µL, reference range 150 ถึง 450) platelet count เป็น
-  HEMATOLOGY-only ในชุดข้อมูลนี้ และไม่มี POCT fallback ต่างจาก Hb
-- `parse_platelet_count(raw)` รองรับ:
-  - หลักพันที่คั่นด้วย comma (เช่น `"1,117"`),
-  - ค่า censored ซ้าย/ขวา `"<N"` / `">N"` map ไปยังขอบเขต `N` โดย `"<2"` เป็น
-    ค่าวัดที่ต่ำวิกฤตจริง ไม่ใช่ค่า missing,
-  - sentinel `"--"` / ว่าง / ไม่ใช่ตัวเลข → `None`,
-  - ค่า out-of-range (นอก `[1.0, 3000.0]` ×10³/µL) และ `nan` / `inf` → `None`
-    โดย failed loud ในฐานะ error ของการ transcribe / หน่วย ไม่ใช่ coerce
-- `PlateletObservation` เป็น count เดี่ยวที่ frozen และ validate แล้ว มี
-  `value_k_ul`, `datetime_utc` แบบ tz-aware UTC, `source` เป็น `HEMATOLOGY`
-  และ `item_no` ที่เป็น tie-breaker เมื่อ observation สองรายการมี datetime
-  เท่ากัน
+กฎเพิ่มเติมสองตัวปิดเป็นค่าปกติ:
 
-## `platelet_classifier`: gate §5.1
+- `PLATELET_TREND_GUARDRAIL_ENABLED` ต้องมี projection รองรับว่าจะลดถึง ≤10 ภายใน 24 ชั่วโมง เมื่อการคาดว่าจะลดเป็นสัญญาณบวกเพียงข้อเดียว `project_24h` คำนวณจากผลก่อนสั่งสองครั้งล่าสุด
+- `PLATELET_SPECIALIST_TARGET_GUARDRAIL_ENABLED` อาจเปลี่ยน `INAPPROPRIATE` ให้ทบทวนเมื่อมีเป้าหมายจากผู้เชี่ยวชาญที่เข้าเงื่อนไข เป้าหมายนี้ไม่ใช่ข้อบ่งชี้บวกตามนโยบายด้วยตัวเอง
 
-Module: `src/bba/platelet_classifier/`
+กฎร่วม `label_reasoning_conflict` ส่งคำตอบที่ป้ายกำกับขัดกับเหตุผลให้ทบทวนเช่นกัน การตรวจ quote ยังทำงานตามปกติ กฎเหล่านี้จำกัดคำตอบโมเดล แต่ไม่ได้ยืนยันความถูกต้องทางคลินิก
 
-`classify_platelet(inputs)` mirror ตัวจำแนก deterministic ของ RBC แต่ไม่
-auto-clear อะไรเลย review ceiling คือ `PLATELET_REVIEW_CEILING = 100.0`
-(×10³/µL)
-
-### Precedence (ข้อบนชนะ)
-
-| เงื่อนไข count | ผล | reason code | routing |
-| --- | --- | --- | --- |
-| count missing, defer flag **ON** | `NEEDS_REVIEW` | `plt_missing_defer_llm` | defer ไปขา LLM |
-| count missing, defer flag **OFF** (**ค่าเริ่มต้น**) | `INSUFFICIENT_EVIDENCE` | `plt_missing` | terminal ไม่เรียก LLM |
-| count ≥ 100 | `POTENTIALLY_INAPPROPRIATE` | `plt_ge_100` | ส่งทบทวน — **ไม่ terminal** |
-| count < 100 (รวม < 10) | `NEEDS_REVIEW` | `plt_defer_llm` | defer ไปขา LLM |
-
-missing-count defer flag นี้ mirror opt-in ของ RBC
-`enable_missing_hb_positive_evidence` เป็น SEED ที่รอ clinical sign-off
-และปิด (OFF) เป็นค่าเริ่มต้น
-
-### Safety invariant (CR-C1): classifier ไม่เคยให้ `APPROPRIATE`
-
-ใน v1 classifier ไม่เคยให้ `APPROPRIATE` หรือ `INAPPROPRIATE`
-`APPROPRIATE` จะเป็น deterministic-final (ไม่มี LLM ไม่มีคน) แต่ policy
-withhold platelet ที่ count ต่ำมาก สำหรับหลาย exclusion population:
-
-- dengue ที่ไม่มี bleeding,
-- TTP,
-- HIT,
-- ITP,
-- aplastic anemia ที่ไม่มี bleeding,
-- snakebite ที่ไม่มี bleeding
-
-สำหรับ TTP และ HIT การให้เลือดเป็นอันตรายจริง เพราะลำพัง count ต่ำไม่
-สามารถแยก population เหล่านี้ออกจากคำสั่งที่ appropriate จริง ๆ ได้ ดังนั้น
-ทุก count ที่มีอยู่จะถูก route ต่อไป ไม่มี verdict ของ count ที่มีอยู่
-รายการใดเป็น deterministic-final ข้อนี้ถูก pin ไว้ด้วย Hypothesis property
-test (CR-M2)
-
-การ auto-clear ตรงนี้จะเป็นความล้มเหลวด้านความปลอดภัยของผู้ป่วย
-count ของ platelet ที่ต่ำคือสถานการณ์ที่ reflex ผิด (ให้เลือด)
-สามารถทำอันตรายต่อผู้ป่วยได้พอดี ชั้น deterministic จึงปฏิเสธที่จะตัดสินเองลำพัง
-
-### MTP-window suppression ไม่อยู่ใน gate นี้
-
-MTP-window suppression ไม่ได้อยู่ใน single-order gate นี้โดยตั้งใจ unit
-ของ platelet ที่ co-order ภายใน massive-transfusion-protocol window ที่ active
-จะถูก suppress ในฐานะ audit unit อิสระที่ DISPATCH ส่วน MTP co-order ยังเป็น
-signal และไม่เคยกลายเป็น audit row ที่สอง
-
-## `platelet_guardrail`: over-clear guardrail
-
-Module: `src/bba/platelet_guardrail/`
-
-over-clear guardrail สำหรับขา LLM ของ platelet จะ floor การ clear count สูงที่
-ไม่มี ground และ enforce response schema แบบ end-to-end เพื่อให้ LLM ไม่สามารถ
-over-clear คำสั่ง platelet ได้โดยไม่มี hard-signal evidence ที่ grounded
-
-### hard signal 5 ตัว
-
-prompt ของ platelet ให้โมเดลรายงาน boolean 5 ตัว ตัวละหนึ่ง indication
-ตั้งเป็น true ได้เฉพาะเมื่อ evidence ground จริงและไม่ถูก exclusion population
-บล็อกไว้: `active_bleeding`, `procedure_indication`,
-`prophylactic_marrow_failure`, `intracranial_bleed_indication` และตัวใหม่
-`aplastic_active_therapy_indication` คือ indication 8 (aplastic anaemia ที่
-active therapy อยู่ เช่น ATG, cyclosporine, eltrombopag หรือเตรียม
-transplant) แยกออกมาจาก `prophylactic_marrow_failure` เพื่อไม่ให้ทับกัน
-
-### Count-trend floor
-
-`platelet_trend_unsupported` จับ case ที่ signal ด้านบนจับไม่ได้:
-เงื่อนไข "คาดว่าจะลดต่ำกว่า 10,000/µL ภายใน 24 ชม." ของ indication 5
-เป็นการ project เส้นตรงผ่าน count ก่อนสั่ง 2 ค่าล่าสุด
-(`platelet_lookup.projection.project_24h`) ซึ่งโค้ดเป็นคนตัดสิน ไม่ใช่โมเดล
-แต่โมเดลเป็นคนตั้ง `prophylactic_marrow_failure` เอง เมื่อ signal นี้เป็น
-signal จริงตัวเดียว, trigger count ≥ 10 ×10³/µL และ projection หายไปหรือ
-ไม่ต่ำกว่า 10 แถวนั้นจะ floor เป็น `NEEDS_REVIEW`
-(`PLATELET_TREND_REVIEW_REASON = "platelet_trend_unsupported"`) ไม่มีทาง
-เป็น `INAPPROPRIATE` gate ด้วย `feature_flags.PLATELET_TREND_GUARDRAIL_ENABLED`
-(ปิดเป็นค่าเริ่มต้น; pilot override `BBA_PILOT_PLATELET_TREND=1`)
-
-### Label ขัดกับ reasoning
-
-guardrail ตัวนี้ใช้ร่วมกับเส้นทาง RBC ไม่ใช่เฉพาะ platelet:
-`bba.llm_client.conclusion.reasoning_conclusion` อ่านว่า reasoning ของคำตอบ
-สรุปว่าอะไร (ประโยคปิดท้าย "Final classification: X" ที่ prompt ทุกตัวขอไว้
-หรือ fallback reader สำหรับคำตอบเก่า) แล้ว floor แถวนั้นเป็น
-`NEEDS_REVIEW` (`label_reasoning_conflict`) ก่อน guardrail ตัวอื่นทุกตัว
-เมื่อไรที่ข้อสรุปใน reasoning ไม่ตรงกับ `classification` เมื่อสองอย่างขัดกัน
-ก็ไม่เชื่อทั้ง label และ reasoning อีกต่อไป
-
-## Feature flag และสถานะ
-
-ขา LLM ของ platelet (prompt `PLATELET_REVIEW`, over-clear guardrail และ
-grounded hard signals) ถูก gate ไว้หลัง `feature_flags.PLATELET_LLM_ENABLED`
-ที่ปิดเป็นค่าเริ่มต้น
-
-เมื่อ flag OFF คำสั่ง platelet จะถูก classify ด้วย deterministic gate เท่านั้น
-ซึ่งไม่ auto-clear อะไรเลย และเขียนเป็น audit row เพียงผลเดียว คือ
-count ไม่มีค่า ซึ่ง persist เป็น `INSUFFICIENT_EVIDENCE` แบบ deterministic-final
-
-คำสั่งที่มี count ทั้ง `count ≥ 100` (`POTENTIALLY_INAPPROPRIATE`) และ
-`count < 100` (`NEEDS_REVIEW`) ถูก classify แต่ไม่ถูกเขียน เพราะ route ต่อไป
-ขา LLM ของ platelet ดังนั้นเมื่อ flag ปิด row เหล่านี้จะถูกข้าม (orphan)
-ไม่ได้ถูกทบทวน และจะถูก audit ก็ต่อเมื่อเปิด `PLATELET_LLM_ENABLED` แล้วเท่านั้น
-
-ขา deterministic validate บนข้อมูลจริงแล้ว เส้นทาง RBC (Phase 1) เหมือนเดิมทุก
-byte ไม่ว่าจะเปิด feature platelet หรือไม่
-
-## ตำแหน่งใน code
-
-- `src/bba/component_map/`: intake gate และการ route `ComponentFamily`
-- `src/bba/platelet_lookup/`: value layer (`PLATELET_LABEXM`,
-  `parse_platelet_count`, `PlateletObservation`)
-- `src/bba/platelet_classifier/`: gate §5.1 (`classify_platelet`,
-  `PLATELET_REVIEW_CEILING`)
-- `src/bba/platelet_guardrail/`: over-clear guardrail และ count-trend
-  guardrail ของขา LLM
-- `src/bba/platelet_lookup/projection.py`: `project_24h` เส้น projection
-  ที่ count-trend guardrail ใช้เทียบ
-- `src/bba/llm_client/conclusion.py`: อ่านว่า reasoning สรุปเป็น class ไหน
-  สำหรับ guardrail label ขัด reasoning (ใช้ร่วมกับ RBC)
-- glossary หลักคือ `docs/CONTEXT.md` (Phase 2 sections)
+ดู `src/bba/platelet_classifier/`, `src/bba/platelet_guardrail/` และ `src/bba/audit_pipeline/replay.py` ส่วนข้อความ prompt อยู่ใน `src/bba/prompt_builder/`

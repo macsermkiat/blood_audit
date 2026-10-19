@@ -1,5 +1,7 @@
 # Administration confirmation for reserve-ahead blood orders
 
+> Historical design record. Dates, rollout states, and proposed behavior below describe the original work and may be superseded. Use [current module contracts](CONTEXT.md) and the [operator guide](production-cli.md) for current behavior.
+
 **Status:** IMPLEMENTED — specification #105 Phase 5, tickets #106–#110.
 **Scope:** Pilot enablement and operator handoff. The production/live feature
 flag remains default-off.
