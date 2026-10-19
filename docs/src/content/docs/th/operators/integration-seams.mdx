@@ -1,51 +1,53 @@
 ---
-title: จุดเชื่อมต่อระบบ
-description: คำสั่งที่มีโมดูลรองรับแล้ว แต่ยังรอการเชื่อม deployment จริง
+title: การเชื่อมต่อระบบ
+description: เตรียมผลทบทวน เปรียบเทียบแต่ละรอบ และเปิดหน้าทบทวนที่ยืนยันตัวตน
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
-import IntegrationSeamCard from "../../../../components/IntegrationSeamCard.astro";
+`evaluate`, `report`, `sentinel` และ `serve-dashboard` ใช้งานได้ผ่าน CLI แต่ละคำสั่งต้องมีข้อมูลผลทบทวน รอบที่บันทึกแล้ว สิทธิ์ฐานข้อมูล หรือตัวตน reviewer ตามงาน
 
-<AtAGlance
-  title="สรุปสั้น"
-  items={[
-    { label: "รูปแบบ", value: "มีโมดูลภายในแล้ว แต่ยังไม่ได้เชื่อมคำสั่ง CLI เข้ากับระบบใช้งานจริง" },
-    { label: "เหตุผล", value: "ต้องรอ auth, PHI lookup, scheduler หรือ store wiring เฉพาะ deployment", tone: "warn" },
-    { label: "สิ่งที่ operator ทำ", value: "มอง CliError เป็น hand-off ที่คาดไว้จนถึง Phase 1.5" },
-    { label: "ห้ามทำ", value: "ห้ามใส่ fake default แค่เพื่อให้คำสั่งผ่าน", tone: "err" },
-  ]}
-/>
+## ประเมินเทียบผลที่คนทบทวน
 
-Integration seam คือจุดที่โค้ดภายในพร้อมแล้ว แต่การเรียกจาก CLI ยังต้องรอ
-ส่วนเชื่อมกับระบบจริงของ deployment เช่น database, scheduler, policy store
-หรือ key management จึงตั้งใจให้ fail loud แทนการทำงานด้วยค่า default ปลอม
+สร้าง CSV แบบ UTF-8 โดยมี header เป็น `audit_id,classification` เท่านั้น ID ทุกตัวต้องมีในรอบและรุ่นโค้ดที่เลือก ระบบปฏิเสธ ID ซ้ำ label ที่ไม่รู้จัก ไฟล์ label ว่าง และกรณีที่จับคู่ไม่ได้
 
-(`bba report` เคยเป็น seam ตัวที่สี่ ตอนนี้ **เชื่อมแล้ว** — ใช้ render
-CSV สำหรับคณะกรรมการ, CSV รายแพทย์ และ PDF จาก audit store โดย resolve
-attribution ของ ward/แพทย์จาก `BBA_BDVST_CSV` / `BBA_DCT_CSV`)
+```sh
+uv run bba evaluate --run-id RUN_ID --labels /srv/bba/reviewed.csv
+```
 
-<IntegrationSeamCard
-  command="bba evaluate"
-  phase="Phase 1.5"
-  rationale="ต้องรู้ gold-standard cohort และ validation set ของ deployment ก่อนจึงจะประเมินได้อย่างมีความหมาย"
-/>
+ใช้ `--code-version VERSION` เพื่อเลือกรุ่นเก่า คำสั่งแสดงพาธ JSON ที่บันทึกไว้ มีตัวชี้วัดความสอดคล้อง จำนวนกรณีที่ทบทวนแล้วและยังไม่ทบทวน พร้อม digest ของข้อมูล ระบบไม่สร้าง reference label ให้กรณีที่ยังไม่มีผลจากคน
 
-<IntegrationSeamCard
-  command="bba serve-dashboard"
-  phase="Phase 1.5+"
-  rationale="ต้องเชื่อม auth, role-based access และ PHI boundary ก่อนเปิด dashboard"
-/>
+## เปรียบเทียบรอบที่บันทึกแล้ว
 
-<IntegrationSeamCard
-  command="bba sentinel"
-  phase="Phase 1.5+"
-  rationale="ต้องเชื่อม scheduler, alert policy และ audit store จริงก่อนเฝ้าระวัง batch/run state"
-/>
+สร้าง monitoring JSON ที่มี `baseline_run`, `current_run`, `baseline_code_version`, `current_code_version` และ `sentinel` โดย object `sentinel` ใช้รูปแบบ `bba.monitoring.SentinelManifest` ที่มี `size`, `seed`, `audit_ids` และ `built_at` พร้อม timezone
 
-## สิ่งที่ไม่ควรแก้
+sentinel ID ต้องไม่ซ้ำและต้องมีในทั้งสองรอบ baseline กับ current ต้องต่างกันที่ run ID หรือรุ่นโค้ด
 
-- อย่า swallow `CliError` เพื่อให้คำสั่งดูเหมือนสำเร็จ
-- อย่าเพิ่ม mock database หรือ fake API key ใน production path
-- อย่าทำ dashboard ที่อ่าน PHI โดยไม่ผ่าน auth และ de-identification boundary
+```sh
+uv run bba sentinel --weekly --manifest /srv/bba/monitoring-runs.json
+uv run bba sentinel --quarterly --manifest /srv/bba/monitoring-runs.json
+```
 
-หากต้องการทดสอบ ให้เขียน test fixture แยกจาก production CLI path แทน
+weekly เปรียบเทียบ classification แบบจับคู่ ส่วน quarterly เปรียบเทียบ classification และข้อบ่งชี้ที่อ้าง เลือกครั้งละหนึ่ง cadence คำสั่งใช้ผล re-audit ที่บันทึกไว้แล้วและแสดงพาธ JSON ผู้ดูแล deployment เป็นผู้จัดตารางและส่งต่อผลแจ้งเตือน
+
+<h2 id="serve-authenticated-review">เปิดหน้าทบทวนที่ยืนยันตัวตนแล้ว</h2>
+
+ใช้ migration ของ review actions ที่ตรงกับรุ่น และบัญชีฐานข้อมูล reviewer ที่ไม่มีสิทธิ์เกินจำเป็น review store ตรวจ migration และ privileges ก่อนทำงาน เก็บ source checkout ไว้เพราะ standalone wheel ไม่มีโครงการ Alembic ที่ root
+
+ตั้ง `BBA_DB_URL`, `BBA_DASHBOARD_AUTH_SECRET` และ `BBA_DASHBOARD_PUBLIC_ORIGIN` รวมทั้ง `BBA_BDVST_CSV` และ `BBA_DCT_CSV` สำหรับระบุแพทย์ secret ต้องยาวอย่างน้อย 32 ไบต์ UTF-8 และ public origin ต้องเป็น HTTPS origin ที่ผู้ใช้เข้าจากภายนอก
+
+```sh
+uv run bba serve-dashboard --port 8000 --run-id RUN_ID --code-version VERSION
+```
+
+CLI ฟังที่ `127.0.0.1` จึงต้องวางหลัง HTTPS reverse proxy identity adapter ที่เชื่อถือได้ยืนยัน reviewer แล้วเรียก `bba.dashboard.auth.sign_session` โดยใช้ `Reviewer` ที่ตรวจแล้ว secret ร่วม และเวลาหมดอายุไม่เกินหนึ่งชั่วโมง
+
+adapter ตั้ง cookie `bba_session` พร้อม `Secure`, `HttpOnly`, `SameSite=Strict` และ `Path=/` คำขอที่ไม่มี signed session ที่ใช้ได้จะได้ HTTP 401 แบบฟอร์มตัดสินผลใช้ CSRF token ที่ผูกกับ session และ revision ที่คาดไว้เพื่อปฏิเสธการแก้จากหน้าที่ล้าสมัย
+
+หน้าสรุปของ dashboard ใช้ผลเม็ดเลือดแดง ส่วนคิวทบทวนรวมกรณีเกล็ดเลือดที่บันทึกแล้วได้
+
+CLI ไม่ได้ออกตัวตนและไม่รับตัวตน reviewer จากฟอร์ม การเปิดดู PHI ที่ยังไม่ลบข้อมูลไม่พร้อมใช้ใน CLI ชุดนี้ หากจำเป็น deployment ต้องส่ง authorized resolver ผ่าน app factory
+
+## เตรียมสิทธิ์ส่งหลักฐานให้โมเดลแยกต่างหาก
+
+โหมดโมเดลต้องใช้บริการลบข้อมูลในเครื่องที่อนุมัติและหลักฐานที่ลงลายมือชื่อ Ed25519 แอปตรวจ public key และการผูกหลักฐานกับคำขอ โดยไม่ถือ private signing key ดู [การตั้งค่าโมเดล](/blood_audit/th/operators/env-vars/#model-review)
+
+หากไม่แน่ชัดว่าผู้ให้บริการรับคำขอหรือไม่ ผู้ดูแลต้องตรวจผลก่อน เก็บ batch checkpoint และอย่าใช้การรันซ้ำเป็นการส่งคำขอใหม่โดยไม่ทราบผลเดิม

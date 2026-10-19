@@ -1,93 +1,67 @@
 ---
 title: Report schema
-description: The column-by-column report contract lives in docs/report-schema.md; key shape summarized here.
+description: Report files, stored labels, and per-row provenance.
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
+The report generator's reference schema is [`docs/report-schema.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/report-schema.md). The current builder and writers define the emitted output. This page summarises their contract.
 
-The authoritative report schema lives in
-[`docs/report-schema.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/report-schema.md).
-This page is a navigation aid.
+## Output layout
 
-<AtAGlance
-  items={[
-    { label: "Canonical file", value: "docs/report-schema.md." },
-    { label: "Sections", value: "Hospital, ward, indication, cohort, pipeline health, physician own-view." },
-    { label: "Privacy", value: "Physician own-view is split per physician.", tone: "ok" },
-    { label: "Classification rule", value: "INSUFFICIENT_EVIDENCE is never folded into INAPPROPRIATE.", tone: "warn" },
-  ]}
-/>
-
-## Section files
-
-```
-<output_dir>/
-  hospital_trend.csv                          # committee
-  ward_scorecard.csv                          # committee
-  indication_distribution.csv                 # committee
-  cohort_exception.csv                        # committee
-  pipeline_health.csv                         # committee
-  physician_own_view_<physician_id>.csv       # one file per requested physician
-  report_<YYYY-MM-DD>.pdf                     # committee PDF
+```text
+$BBA_DATA_DIR/reports/<run_id>/
+  hospital_trend.csv
+  ward_scorecard.csv
+  indication_distribution.csv
+  cohort_exception.csv
+  pipeline_health.csv
+  physician_own_view_<physician_id>.csv
+  report_<YYYY-MM-DD>.pdf
+  provenance.json
 ```
 
-The PDF filename embeds the first-of-month date
-(e.g. `report_2026-05-01.pdf`).
+`bba report --run-id <id>` reads committed audit rows. Ward and physician attribution use `BBA_BDVST_CSV` and `BBA_DCT_CSV`. The builder selects `component = "red_cell"` before aggregation. A platelet-only run cannot produce an RBC report.
 
-## Stored classifications (used by every section)
+## Stored classifications and projection
 
-The `final_classification` column comes from the audit store and is one
-of nine literals:
+The audit store accepts nine `final_classification` values.
 
-- `APPROPRIATE`
-- `INAPPROPRIATE`
-- `NEEDS_REVIEW`
-- `INSUFFICIENT_EVIDENCE`
-- `POTENTIALLY_INAPPROPRIATE` *(rule-only; not used by every report
-  section)*
-- `PREOP_OVER_RESERVATION` *(MSBOS over-reservation; scored as
-  `INAPPROPRIATE` in the report aggregates)*
-- `PREOP_RESERVATION_UNCONFIRMED` *(flag-gated, default-off)*
-- `RETURNED_NOT_TRANSFUSED` *(returns terminal; **excluded from
-  scoring**)*
-- `PERIOP_TRANSFUSION_EXEMPT` *(returns / declared-use terminal;
-  **excluded from scoring**)*
-
-The `hospital_trend`, `ward_scorecard`, and `cohort_exception` aggregate
-models additionally track an `over_reservation_count` field; the CSV
-writer does not serialize it as a column yet, so the emitted CSV headers
-are unchanged.
-
-`LLM_REVIEW` is a routing concept inside the deterministic classifier;
-it is not a stored value. Failed quote-grounding becomes
-`final_classification = NEEDS_REVIEW` with `review_reason` set.
-
-`INSUFFICIENT_EVIDENCE` is **never** folded into `INAPPROPRIATE` — PRD
-contract: "documentation absence ≠ inappropriate". The
-`pipeline_health` section keeps these counts in separate buckets.
-
-## Reproducibility footer (every row, every PDF page)
-
-| Column | Meaning |
+| Stored value | Report treatment |
 | --- | --- |
-| `policy_version` | KCMH PR-17.x policy revision driving the deterministic classifier. |
-| `model_id` | Snapshot-pinned Anthropic model ID. |
-| `redactor_version` | Version of `macsermkiat/thai-medical-deid`. |
-| `redactor_model_sha` | SHA of the redactor's HuggingFace model checkpoint. |
-| `prompt_hash` | SHA of the system prompt + few-shot bundle. |
-| `evidence_bundle_hash` | SHA of the canonical evidence-bundle schema. |
+| `APPROPRIATE` | Appropriate count. |
+| `INAPPROPRIATE` | Inappropriate count. |
+| `NEEDS_REVIEW` | Review count. |
+| `INSUFFICIENT_EVIDENCE` | Separate documentation-evidence count. |
+| `PREOP_OVER_RESERVATION` | Projected to inappropriate. |
+| `RETURNED_NOT_TRANSFUSED` | Excluded from scoring. |
+| `PERIOP_TRANSFUSION_EXEMPT` | Excluded from scoring. |
+| `POTENTIALLY_INAPPROPRIATE` | Requires an explicit projector. |
+| `PREOP_RESERVATION_UNCONFIRMED` | Requires an explicit projector. |
 
-## Month bucketing
+`LLM_REVIEW` names a route, not a stored classification. Failed grounding records a review result and reason. `over_reservation_count` exists on the hospital, ward, and cohort aggregate models but is not a separate CSV column.
 
-`ReportInputs.month` is a `date` pinned to the first of the month. The
-filter window is `[month_local_start, next_month_local_start)`
-interpreted in Asia/Bangkok. An order at 23:00 Bangkok on the 31st
-belongs to its local month, not to the UTC-month it happens to fall in.
+## Run summary fields
 
-## How this is produced
+The CSV writer adds these fields to each data row, including the synthetic row for an empty section. The PDF repeats the summary on each page.
 
-`bba.report_generator.generate_monthly_report(inputs: ReportInputs)`. The
-CLI wrapper (`bba report --run-id <id>`) is **wired**: it sources
-`ReportInputs` from the audit store, resolves ward/physician attribution
-from `BBA_BDVST_CSV` / `BBA_DCT_CSV`, and writes the committee CSVs,
-per-physician CSVs, and PDF under `$BBA_DATA_DIR/reports/<run_id>/`.
+| Field | Meaning |
+| --- | --- |
+| `policy_version` | Policy identifier shared by the run's RBC rows. |
+| `model_id` | One model identifier or a sorted JSON list when models differ. Deterministic rows use `deterministic`. |
+| `redactor_version` | Redactor version, with `not-applied` included when applicable. |
+| `redactor_model_sha` | Redactor checkpoint identifier, or `unavailable` when no redactor ran. |
+| `prompt_hash` | Shared prompt hash, or a digest of sorted audit-ID and prompt-hash pairs for mixed prompts. |
+| `evidence_bundle_hash` | Digest of sorted audit-ID and row-specific evidence-hash pairs. |
+
+The builder validates code version, policy, local month, and applied-redactor identity before excluding non-scorable RBC rows. Model or prompt differences are represented in the summary and per-row provenance rather than attributed to a single model.
+
+## Per-row provenance
+
+`provenance.json` contains `audit_id`, `run_id`, `code_version_slug`, `model_id`, `policy_version`, `prompt_hash`, `evidence_bundle_hash`, `redactor_version`, and `redactor_model_sha` for every RBC source row, including excluded rows. Aggregate CSV rows contain the summary fields above, not each underlying order's complete provenance.
+
+## Month and rates
+
+`ReportInputs.month` is the first day of the month. The interval is half-open, from the local month start to the next local month start in Asia/Bangkok. Stored timestamps are UTC.
+
+The inappropriate rate is `inappropriate / total_orders`, after component filtering, exclusions, and classification projection. The indication shares can sum above one because one order can have several indication codes. Physician peer quartiles use all physicians represented in the report month, even when only a subset of own-view files is requested.
+
+[Report output](/blood_audit/en/clinical/report-output/) explains audiences and access limits. [Generate the report](/blood_audit/en/operators/generate-report/) describes the command.

@@ -1,42 +1,45 @@
 ---
 title: De-identification
-description: การลบและแทน PHI ก่อนส่ง evidence bundle ออกจาก audit container
+description: การปกปิดข้อมูลในเครื่อง การรับรองด้วยลายเซ็น และการดูแลข้อมูลผู้ป่วย
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
+`bba.deid_redactor` ปกปิดข้อมูลในบันทึกทางคลินิกก่อนนำไปสร้างคำขอถึงโมเดล แอปพลิเคชันรับเฉพาะหลักฐานที่ผู้รับรองที่เชื่อถือได้อนุมัติแล้ว การเปลี่ยนเลขประจำตัวหรือคำนวณค่าแฮชอย่างเดียวไม่ถือเป็นการอนุมัติให้ส่งข้อมูล
 
-De-identification เป็น safety boundary สำคัญก่อน LLM route ข้อมูลที่ยังไม่
-redact ต้องอยู่ภายใน audit container เท่านั้น
+## ขอบเขตของการปกปิดข้อมูล
 
-<AtAGlance
-  title="สรุป de-id"
-  items={[
-    { label: "Input", value: "evidence bundle ที่ยังไม่ redact ภายใน audit container" },
-    { label: "Output", value: "redacted bundle พร้อม review flags เมื่อ confidence ต่ำ" },
-    { label: "Protected fields", value: "HN, AN, REQNO, ชื่อ, DOB, dates และอายุ ≥90", tone: "ok" },
-    { label: "Log safety", value: "sys.excepthook scrub traceback ที่มีรูปแบบ PHI", tone: "warn" },
-  ]}
-/>
+`redact_bundle` รับ `RedactionRequest`, `RedactorBackend` และ `KAnonymityGate` ตัวห่อหุ้มแทนชื่อด้วยบทบาท เช่น `[PATIENT]`, `[ATTENDING]` และ `[NURSE]` แปลงช่วงวันที่ที่รองรับเป็นจำนวนวันเทียบกับวันรับไว้รักษา และจำกัดอายุในข้อมูลเชิงโครงสร้างไว้ที่ 89 ปี จากนั้นตรวจว่าการแทนข้อความทำให้ความหมายเสียไปหรือไม่
 
-## หลักการ
+การตรวจ k-anonymity ต้องได้กลุ่มอย่างน้อยห้ารายจากชุดข้อมูล ward, ICD-3char, age band, sex และ admission month หากการตรวจความเป็นส่วนตัวไม่ผ่านหรือข้อความสูญเสียความหมาย ต้องส่งให้ทบทวนภายใน
 
-ระบบแทน identifier ด้วย SafeId เช่น `PHI_xxx_001` เพื่อให้ยัง trace หลักฐาน
-ภายใน run ได้โดยไม่เปิดเผยข้อมูลจริง หาก redactor ไม่มั่นใจ ต้องส่งแถวไป
-review แทนการปล่อยข้อมูลออก
+ผู้ดูแลการติดตั้งต้องจัดหา backend และไฟล์โมเดลที่อนุมัติเอง repository นี้ไม่ได้ให้บริการปกปิดข้อมูลที่พร้อมใช้และผ่านการรับรองทางคลินิกแล้ว ห้ามใช้ backend ที่ปล่อยข้อความผ่านโดยไม่แก้ไขกับข้อมูลโรงพยาบาล
 
-## ข้อมูลที่ต้องป้องกัน
+## การอนุมัติด้วยลายเซ็น
 
-- HN, AN, REQNO และ identifiers ของ encounter/order
-- ชื่อ นามสกุล DOB และวันที่ที่ระบุตัวตนได้
-- อายุ ≥ 90 ปี เพราะถือว่า re-identification risk สูง
-- ข้อความ free-text ใน note ที่อาจมีชื่อหรือเลขประจำตัว
+บริการในเครื่องที่เชื่อถือได้สร้าง `RedactionAuthority` ด้วย backend, ไฟล์โมเดล, privacy gate และ private Ed25519 signing key ของตนเอง `RedactionAuthority.prepare` ส่งออก `PrivacyArtifact` ซึ่งมีหลักฐานที่ปกปิดแล้วและคำรับรอง
 
-วันที่จริงใน note จะไม่ถูกส่งออกตรง ๆ ระบบจะแทนด้วยเวลาสัมพัทธ์ เช่น
-จำนวนวันก่อนหรือหลัง anchor ของ encounter เพื่อให้ LLM ยังเห็นลำดับเหตุการณ์
-ทางคลินิกได้ โดยไม่เห็นวันที่ปฏิทินจริงที่อาจระบุตัวผู้ป่วยได้
+แอปพลิเคชันได้รับไฟล์หลักฐานและ public verification key เท่านั้น ห้ามให้ private signing key แก่แอปพลิเคชัน `PrivacyAdmissionPolicy.verify` ตรวจลายเซ็นและผูกการอนุมัติกับ:
 
-## Logging
+- เนื้อหา prompt และ task mode ที่ตรงกันทุกส่วน
+- audit ID และ run ID
+- รุ่น redactor, model SHA-256 ที่ไม่ใช่ศูนย์ และรุ่น gazetteer ที่อนุมัติ
+- ผลตรวจ k-anonymity และการรักษาความหมายที่ผ่านแล้ว
 
-ห้าม log bundle ที่ยังไม่ redact และห้ามใส่ PHI จริงใน error message
-ระบบมี excepthook ช่วย scrub traceback แต่ developer ยังต้องออกแบบ log
-ให้ปลอดภัยตั้งแต่ต้น
+หลักฐานต้องตรงกับบันทึกที่ปกปิดแล้วตามลำดับ และ evidence ID ต้องไม่ซ้ำ ผู้รับรองไม่ยอมรับ few-shot examples ที่ยังไม่ได้อนุมัติ ผลตรวจ prompt หรือความเป็นส่วนตัวอาจกำหนดให้ทบทวนภายในต่อไป
+
+ตั้ง `BBA_PRIVACY_POLICY` ให้ชี้ไปยัง JSON ของนโยบายความเชื่อถือ และตั้ง `BBA_PRIVACY_ARTIFACTS` ให้ชี้ไปยังแผนที่หลักฐานที่ใช้ audit ID เป็นคีย์ ดูการตั้งค่าแอปพลิเคชันใน [ตัวแปรสภาพแวดล้อม](/blood_audit/th/operators/env-vars/)
+
+ถ้าการอนุมัติไม่ผ่าน แถวที่ต้องใช้โมเดลจะเป็น `NEEDS_REVIEW` พร้อมเหตุผล `privacy_admission_failed` โดยไม่ส่งบันทึกดิบ ผลที่บันทึกเสร็จแล้วแก้ทับไม่ได้ หากต้องประเมินใหม่หลังได้รับอนุมัติ ให้ใช้รุ่นนโยบายที่อนุมัติใหม่และ run identity ใหม่
+
+## บันทึกข้อผิดพลาด
+
+CLI เรียก `bba.cli.phi_scrubber.install_excepthook` ก่อนเริ่มคำสั่งย่อย การ import `bba.deid_redactor` ไม่ได้ติดตั้ง hook ให้ทั้ง process
+
+hook เก็บชนิดข้อผิดพลาดและตำแหน่งในโค้ด แต่ไม่แสดงข้อความ exception หรือค่าตัวแปรในเครื่อง เพราะข้อมูลเหล่านี้อาจมีข้อความผู้ป่วยหรือรหัสลับโดยไม่มีรูปแบบให้ตรวจจับได้แน่นอน ค่าตัวแปรจะแสดงเพียงชนิดและความยาว การป้องกันนี้ไม่ได้ครอบคลุมการเขียน log ตามอำเภอใจ จึงต้องไม่ใส่ bundle ดิบหรือข้อมูลรับรองใน log
+
+## ข้อมูลสำหรับพัฒนา
+
+ใช้บันทึกและเลขประจำตัวที่สร้างขึ้นทั้งหมดใน fixture และ cassette ใช้ `bba.deid_redactor.PHI_REGEXES` เมื่อต้องตรวจข้อความทดสอบที่มีรูปแบบคล้าย PHI แทนการคัดลอก regex ไปสร้างอีกชุด
+
+ข้อมูลส่งออกทางคลินิกยังเป็นข้อมูลอ่อนไหวหลังเปลี่ยนเลขประจำตัว bundle ที่มีข้อมูลจริงผสมอยู่ รวมถึงข้อมูลเข้ารหัสหรือชุดที่เรียกว่า "mock-AN" ไม่ใช่ fixture สังเคราะห์ที่ได้รับอนุมัติ ห้ามนำ export ดิบ ข้อความผู้ป่วย หรือ bundle ทางคลินิกที่เข้ารหัสเข้า Git การเปลี่ยน AN ไม่ได้ยืนยันว่าข้อความส่วนอื่นไม่มีข้อมูลระบุตัวตน
+
+โค้ดหลักอยู่ใน `src/bba/deid_redactor/redactor.py`, `src/bba/deid_redactor/admission.py`, `src/bba/application/audit.py` และ `src/bba/cli/phi_scrubber.py`

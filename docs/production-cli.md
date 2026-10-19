@@ -9,7 +9,9 @@ uv run bba audit --input /srv/bba/export/BDVST.csv
 
 The command validates and normalizes the export, assembles canonical orders, and calls `bba.audit_pipeline.run_pipeline`. The adapters use the existing Hb and platelet lookups, cohort detector, evidence builder, returns ledger, declared-use interpretation, MSBOS references, and feature flags. They preserve the issue-time evidence-anchor policy. They do not infer administration from a blood-bank issue timestamp.
 
-Without model configuration, deterministic results commit to `BBA_DATA_DIR/audit_store`. Orders that require model review commit as `NEEDS_REVIEW` with `privacy_admission_failed`. No model credentials or Postgres connection are needed for this local mode. Raw notes stay local and do not enter the transport or persisted calls. The application creates an owner-readable `identity.key` for stable HMAC patient and admission identifiers. Back up this file with the data directory.
+Without model configuration, deterministic results commit to `BBA_DATA_DIR/audit_store`. Eligible red-cell orders that require model review commit as `NEEDS_REVIEW` with `privacy_admission_failed`. No model credentials or Postgres connection are needed for this local mode. Raw notes stay local and do not enter the transport or persisted calls. The application creates an owner-readable `identity.key` for stable HMAC patient and admission identifiers. Back up this file with the data directory.
+
+The local review behavior applies to eligible red-cell model work. The platelet model route is separately controlled by `feature_flags.PLATELET_LLM_ENABLED`, which defaults to false. When disabled, unresolved platelet work can remain uncommitted and the supported CLI refuses to mark the run complete. Configure and verify the platelet route before treating a mixed bundle as a completed audit. This module flag is not a field in `BBA_APPLICATION_CONFIG`.
 
 A successful audit completion counts committed AuditRows. Ingested tables never count as audited rows. An empty eligible cohort or uncommitted result fails the command without a completion marker. A platelet order suppressed within an MTP window intentionally emits no AuditRow.
 
@@ -86,7 +88,7 @@ Unredacted PHI lookup remains unavailable from this CLI composition. Deployments
 
 ## Verify without live calls
 
-Run `tests/unit/test_application.py` and `tests/unit/test_application_cassette.py`. The tests construct synthetic canonical CSV exports. They prove local privacy review, authenticated artifact admission, cassette classification, committed row persistence, report format selection, evaluation, and monitoring. The cassette test injects an in-memory batch store. Production model runs always use Postgres checkpoints. These tests do not establish clinical validity, production authentication integration, or Postgres deployment readiness.
+Run `tests/unit/test_application.py` and `tests/unit/test_application_cassette.py`. The tests construct synthetic canonical CSV exports and cover local privacy review, authenticated artifact admission, cassette classification, committed row persistence, reports, evaluation, and monitoring. The cassette journey runs both an in-memory store and a disposable PostgreSQL variant with the unprivileged application role. Set `BBA_REQUIRE_POSTGRES_TESTS=1` to require database infrastructure. Production model runs use PostgreSQL checkpoints. These checks do not establish clinical validity, production authentication integration, or deployment readiness.
 
 ## Preserve local evidence
 

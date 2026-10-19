@@ -1,8 +1,12 @@
-# Monthly report schema (issue #28)
+# Monthly RBC report schema
 
-`bba.report_generator` emits six CSV files plus one PDF for every monthly run.
-This doc is the contract between the report writer, the committee dashboard
-preview, and the downstream consumers that grep/join the CSVs.
+`bba.report_generator` writes monthly RBC summaries from a committed audit run.
+The CLI builder selects `component = "red_cell"` before aggregation. Platelet
+rows do not contribute to RBC totals or rates.
+
+The output contains five committee CSVs, one own-view CSV per requested
+physician, a committee PDF, and `provenance.json`. The number of files therefore
+depends on the number of requested physicians.
 
 ## File layout
 
@@ -15,44 +19,55 @@ preview, and the downstream consumers that grep/join the CSVs.
   pipeline_health.csv                             # committee
   physician_own_view_<physician_id>.csv           # one per requested physician
   report_<YYYY-MM-DD>.pdf                         # committee PDF
+  provenance.json                                # per-RBC-row provenance
 ```
 
 The PDF filename embeds the first-of-month date (`report_2026-05-01.pdf`).
 
-**Per-physician separation.** The physician own-view does **not** ship as a
-single committee CSV because that file would expose every physician's own
-rate to every recipient. Instead the generator emits one
-`physician_own_view_<physician_id>.csv` per physician requested in
-`ReportInputs.physician_ids_for_own_view`. Each file contains exactly one
-data row plus the reproducibility footer; distributing the file to that
-physician therefore never leaks another physician's rate. PRD user story
-#10: "comparing my RBC ordering against peer-anonymous benchmarks ...
-without being publicly identified."
+Each `physician_own_view_<physician_id>.csv` contains one physician's data row
+with anonymous peer quartiles. The requested physicians come from
+`ReportInputs.physician_ids_for_own_view`. The committee PDF also includes a
+physician table. Output-directory permissions and distribution controls must
+match these audiences.
 
-The committee PDF still renders a physician-own-view table for the
-committee's internal review.
+## Run-level provenance summary
 
-## Reproducibility footer
+Each CSV data row carries six summary fields. Empty sections receive a synthetic
+row with the same fields. The PDF repeats the summary on each page.
 
-Every CSV data row (and the synthetic row emitted for an empty section)
-carries six additional columns at the end:
+| Column | Meaning |
+| --- | --- |
+| `policy_version` | Policy identifier shared by the run's RBC rows. |
+| `model_id` | A shared model identifier, or a sorted JSON list of distinct identifiers. Rule-only rows use `deterministic`. Other non-provider paths use their own marker identifiers. |
+| `redactor_version` | Applied redactor version. A mixture of applied and unapplied rows is represented as a JSON list including `not-applied`. |
+| `redactor_model_sha` | Applied redactor checkpoint identifier. Unapplied rows use `unavailable`. |
+| `prompt_hash` | A shared prompt hash, or a digest of sorted `(audit_id, prompt_hash)` pairs when prompts differ. |
+| `evidence_bundle_hash` | Digest of sorted `(audit_id, evidence_bundle_hash)` pairs from RBC source rows. This is not an evidence-schema hash. |
 
-| Column                 | Meaning                                                                            |
-|------------------------|------------------------------------------------------------------------------------|
-| `policy_version`       | KCMH PR-17.x policy revision that drove the deterministic classifier.              |
-| `model_id`             | Snapshot-pinned Anthropic model ID that produced the LLM classification.           |
-| `redactor_version`     | Version of the `macsermkiat/thai-medical-deid` redactor that processed the bundle. |
-| `redactor_model_sha`   | SHA of the redactor's HuggingFace model checkpoint.                                |
-| `prompt_hash`          | SHA of the system prompt + few-shot bundle the LLM call used.                      |
-| `evidence_bundle_hash` | SHA of the canonical evidence-bundle schema the run used.                          |
+The builder validates code version, policy, local month, and applied-redactor
+identity across the full RBC set before excluding non-scorable rows. Distinct
+model and prompt identifiers are preserved rather than attributed to one model.
+Deterministic and rejected rows do not claim that a provider or redactor ran.
 
-The ticket scope (issue #28) names only the first three; the rest follow
-PRD §"Output schema" so the reproducibility chain remains intact for a
-six-month-later audit (PRD §"Reproducibility = we have the original answer").
+## Per-row provenance
 
-Stamping the footer **per row** (rather than only in a trailing line) keeps the
-reproducibility chain intact under `grep`, `awk`, or partial-section extracts.
-The PDF carries the same six identifiers on every page.
+`provenance.json` contains one object for each RBC source row, including rows
+excluded from scoring. Each object has these fields:
+
+- `audit_id`
+- `run_id`
+- `code_version_slug`
+- `model_id`
+- `policy_version`
+- `prompt_hash`
+- `evidence_bundle_hash`
+- `redactor_version`
+- `redactor_model_sha`
+
+Aggregate CSV rows contain the run summary, not the complete provenance of each
+underlying order. The sidecar supplies that mapping. Retained source snapshots,
+configuration, code, and response artifacts are also needed to trace a stored
+answer. A new provider call is not guaranteed to reproduce that answer.
 
 ## Month bucketing
 
@@ -72,28 +87,26 @@ below are tallied:
 
 - **Excluded before projection (non-scorable).** `RETURNED_NOT_TRANSFUSED`
   and `PERIOP_TRANSFUSION_EXEMPT` rows are dropped from the report input
-  entirely (spec #119) — they are absent from `total_orders` and every
-  count/rate, mirroring their exclusion from attribution rates. The default
-  projector fails loud on them, so they must be filtered upstream.
+  before aggregation. They are absent from `total_orders` and every count
+  and rate. The default projector rejects them if they reach projection.
 - **`PREOP_OVER_RESERVATION` → `INAPPROPRIATE`** (ticket #162). It counts
   as an inappropriate-side finding in the tallies below; the aggregate
   models additionally track an `over_reservation_count` field that the CSV
   writer does not yet serialize as a column.
 - **Requires an injected projector.** `POTENTIALLY_INAPPROPRIATE` and
-  `PREOP_RESERVATION_UNCONFIRMED` have no default mapping — the caller must
-  supply a `classification_projector` (e.g. pooling the latter into
-  Unresolved) or the run fails loud rather than guessing.
+  `PREOP_RESERVATION_UNCONFIRMED` have no default mapping. The caller must
+  supply a `classification_projector`, or the builder rejects the run.
 
 ## CSV section schemas
 
 ### `hospital_trend.csv`
 
-One row per month covered by the run (Phase 1 emits a single row).
+One row for the report month. The builder rejects a run spanning local months.
 
 | Column                   | Type    | Notes                                |
 |--------------------------|---------|--------------------------------------|
 | `month`                  | date    | First-of-month, ISO 8601.            |
-| `total_orders`           | int     | All audited orders in the month.     |
+| `total_orders`           | int     | Scorable RBC orders after component filtering, exclusions, and projection.     |
 | `appropriate`            | int     | Count where `final_classification = APPROPRIATE`. |
 | `inappropriate`          | int     | Count where `final_classification = INAPPROPRIATE`. |
 | `needs_review`           | int     | Count where `final_classification = NEEDS_REVIEW`. |
@@ -106,7 +119,7 @@ One row per distinct `ward_id`, sorted ascending.
 
 | Column                   | Type   | Notes                                  |
 |--------------------------|--------|----------------------------------------|
-| `ward_id`                | string | Hashed ward identifier.                |
+| `ward_id`                | string | Resolved grouping identifier. The supported CLI uses the ordering doctor's department text, or a sentinel. |
 | `total_orders`           | int    |                                        |
 | `appropriate`            | int    |                                        |
 | `inappropriate`          | int    |                                        |
@@ -118,17 +131,15 @@ One row per distinct `ward_id`, sorted ascending.
 
 One file per `physician_id` in `ReportInputs.physician_ids_for_own_view`;
 each file contains exactly one data row.
-Peer benchmarks are quartile statistics computed over **all** physicians with
-at least one order in the month — not only the requested subset — so a small
-subset cannot mis-report the population distribution.
+Peer benchmarks use all physicians with at least one scorable RBC order in
+the report month, including physicians whose own-view files were not requested.
 
-The "own-data only" property is structural: each row carries the physician's
-own absolute numbers plus aggregate peer quartiles. There is no field that
-exposes another physician's individual orders or rate.
+Each own-view row contains the physician's absolute numbers and aggregate
+peer quartiles. It has no field for another physician's individual rate.
 
 | Column                                | Type   | Notes                                                  |
 |---------------------------------------|--------|--------------------------------------------------------|
-| `physician_id`                        | string | Hashed physician identifier.                           |
+| `physician_id`                        | string | Resolved physician identifier. The supported CLI uses the ordering-doctor code from `DCTREQ`, or a sentinel. |
 | `own_total`                           | int    |                                                        |
 | `own_inappropriate_rate`              | float  | In `[0, 1]`.                                           |
 | `peer_median_inappropriate_rate`      | float  | Median across all physicians in the month.             |
@@ -168,7 +179,7 @@ Single-row summary of the month's operational health.
 |---------------------------------|-------|---------------------------------------------------------------------------------------------|
 | `total_orders`                  | int   |                                                                                             |
 | `classified_orders`             | int   | Rows where `final_classification ∈ {APPROPRIATE, INAPPROPRIATE}`.                            |
-| `needs_review_count`            | int   | Rows where `final_classification = NEEDS_REVIEW`, **or** `final_classification ∈ {APPROPRIATE, INAPPROPRIATE}` **and** `needs_human_review` flag is set. INSUFFICIENT_EVIDENCE rows are excluded even when the flag is set — they live in `insufficient_evidence_count` only, so a documentation-absence spike is not double-counted as an LLM-review spike. |
+| `needs_review_count`            | int   | Rows where `final_classification = NEEDS_REVIEW`, **or** `final_classification ∈ {APPROPRIATE, INAPPROPRIATE}` **and** `needs_human_review` flag is set. INSUFFICIENT_EVIDENCE rows are excluded even when flagged. They count only in `insufficient_evidence_count`. |
 | `needs_review_rate`             | float | `needs_review_count / total_orders`, in `[0, 1]`.                                            |
 | `insufficient_evidence_count`   | int   | Rows where `final_classification = INSUFFICIENT_EVIDENCE`. PRD §"Documentation absence ≠ INAPPROPRIATE": its own bucket. |
 | `insufficient_evidence_rate`    | float | `insufficient_evidence_count / total_orders`, in `[0, 1]`.                                   |
@@ -182,3 +193,10 @@ Single-row summary of the month's operational health.
 * Booleans render as lowercase `true` / `false` (no section currently emits
   bool cells, but the writer's contract supports them for forward
   compatibility with sentinel / dashboard sections).
+
+## Implementation references
+
+- [`builder.py`](../src/bba/report_generator/builder.py) selects rows, validates run metadata, projects classifications, and constructs provenance.
+- [`aggregate.py`](../src/bba/report_generator/aggregate.py) computes section counts and rates.
+- [`csv_writer.py`](../src/bba/report_generator/csv_writer.py) defines emitted headers and formatting.
+- [`generator.py`](../src/bba/report_generator/generator.py) writes CSVs, the PDF, and `provenance.json`.

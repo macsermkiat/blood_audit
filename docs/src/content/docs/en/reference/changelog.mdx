@@ -1,30 +1,17 @@
 ---
 title: Changelog
-description: Phase 1 (RBC) is feature-complete and Phase 2 (platelet auditor) is merged. The v0.1.0 tag and authoritative release notes live on GitHub.
+description: Repository implementation notes and historical development milestones.
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
+## Current implementation
 
-<AtAGlance
-  items={[
-    { label: "Current version", value: "0.1.0 in pyproject.toml (30 modules under bba.*).", tone: "ok" },
-    { label: "Release notes", value: "GitHub Releases becomes canonical after tag." },
-    { label: "2026-07 wave", value: "Returns ledger, declared-use USETYPE routing, and MSBOS reservation audit all merged and default-ON." },
-    { label: "Not included", value: "Pilot validation, production wiring, and Phase B re-encryption.", tone: "warn" },
-  ]}
-/>
+The package version in `pyproject.toml` is `0.1.0`. Audit execution, evaluation, dashboard serving, reporting, and sentinel commands have application implementations. The CLI is no longer an ingest-only scaffold. Deployment configuration, privacy admission, database roles, and the dashboard identity adapter remain operator responsibilities.
 
-## Status
+The current source also includes inclusive RBC and platelet boundaries, exact-request response reuse, recoverable model attempts, signed privacy admission, sealed source snapshots, and version-bound reviewer decisions. See [Install](/blood_audit/en/operators/install/) and [Module glossary](/blood_audit/en/reference/module-glossary/) for current guidance.
 
-30 modules under `bba.*` are merged to `main`, `version = "0.1.0"` in
-`pyproject.toml`. The `v0.1.0` tag itself is pending. The maintainer will
-trigger it explicitly with shared-state intent.
+The entries below record development milestones as they were described at the time. References to incomplete wiring, flags, thresholds, and release plans in those entries are historical, not current setup instructions. Publication and tags are recorded on [GitHub Releases](https://github.com/macsermkiat/blood_audit/releases).
 
-Until the tag fires, this page is a stub. The authoritative changelog
-will live at
-[GitHub Releases](https://github.com/macsermkiat/blood_audit/releases).
-
-## What "Phase 1 (RBC) feature-complete" includes
+## Initial Phase 1 milestone
 
 - 12-stage audit pipeline modules (ingest → audit_store); CLI wiring is staged.
 - Deterministic 3-tier Hb classifier with cohort-aware thresholds.
@@ -169,10 +156,9 @@ will live at
   `aplastic_active_therapy_indication`, keeps it separate from
   `prophylactic_marrow_failure`.
 
-## What is explicitly out of scope for now
+## Outstanding work recorded after the September milestones
 
-- Wiring of the three remaining integration-seam subcommands
-  (`evaluate`, `serve-dashboard`, `sentinel`).
+- At that milestone, `evaluate`, `serve-dashboard`, and `sentinel` still needed application wiring. These commands are now implemented.
 - The platelet LLM leg in production (behind the default-off flag until
   clinician sign-off).
 - Pilot validation (M8, the gating milestone before any production

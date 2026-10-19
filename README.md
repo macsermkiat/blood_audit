@@ -1,672 +1,89 @@
-# blood_audit: KCMH transfusion audit pipeline
+# blood_audit
 
-Post-hoc audit of inpatient adult transfusion appropriateness at Chulalongkorn Hospital (KCMH), against PR 17.2 + AABB 2023 guidelines. Phase 1 audits red blood cell (RBC) orders; Phase 2 extends the same pipeline to platelet orders.
+Retrospective quality-improvement audits of inpatient adult red-cell and platelet orders at King Chulalongkorn Memorial Hospital (KCMH). The application reads completed HOSxP exports, applies the repository's PR 17.2 and AABB 2023 policy implementation, and stores classifications with evidence and provenance.
 
-> Status: 30 modules under `src/bba/`, version `0.1.0`.
-> - Phase 1 (RBC) is feature-complete at module level. `bba audit` composes the supported raw-export audit through committed AuditRows. Local mode needs no model credentials. Admitted model runs use trusted privacy artifacts and durable batch checkpoints. See [the operator guide](docs/production-cli.md).
-> - Phase 2 (platelet auditor) is merged (PR #85). The deterministic leg is live; the platelet LLM leg is behind a default-off flag (`feature_flags.PLATELET_LLM_ENABLED`). The RBC path is byte-identical throughout.
-> - 2026-07 wave (all default-ON): the BDVSTTRANS returns ledger (returned / peri-op-transfused terminals, excluded from scoring), declared-use USETYPE routing (order-level pre-op exemption; USETYPE is the only pre-op router), and the MSBOS pre-op reservation audit (over-reservation screening with planned-op picker v2 + OPRTACT→ICD9 bridge). See [What's new since Phase 1](#whats-new-since-phase-1).
-> - Pilot validation against one month of historical data is pending clinical co-lead sign-off (M8). Phase B operative-table re-encryption is pending KCMH IT (#2).
+This software supports review after care. It does not authorize transfusion orders or provide bedside alerts. Software tests do not establish clinical validity or de-identification quality.
 
-Full requirements: [PRD, issue #1](https://github.com/macsermkiat/blood_audit/issues/1).
+## Start here
 
-## What this is (and isn't)
+- [Operators](docs/src/content/docs/en/operators/overview.mdx) can install the application, prepare an export, and run an audit.
+- [Developers](docs/src/content/docs/en/developers/architecture.mdx) can trace the application and its module contracts.
+- [Clinical reviewers](docs/src/content/docs/en/clinical/what-this-is.mdx) can check scope, implemented rules, and report interpretation.
+- The [documentation site](https://macsermkiat.github.io/blood_audit/) has English and Thai guides.
 
-- It is a post-hoc Quality Improvement pipeline. It reads finished HOSxP exports, routes each blood-bank order to its component family, then classifies each RBC unit against the 3-tier Hb policy (cohort-aware thresholds + deterministic bypasses) and each platelet unit against the §5.1 count gate. Core verdicts are `APPROPRIATE` / `NEEDS_REVIEW` / `INSUFFICIENT_EVIDENCE` / `POTENTIALLY_INAPPROPRIATE` / `INAPPROPRIATE`, plus four routing/reservation terminals: `RETURNED_NOT_TRANSFUSED` and `PERIOP_TRANSFUSION_EXEMPT` (excluded from appropriateness scoring), `PREOP_OVER_RESERVATION` (MSBOS over-reservation), and `PREOP_RESERVATION_UNCONFIRMED` (flag-gated, default-off).
-- It is not a real-time clinical decision support tool. Nothing in this codebase is intended to influence a transfusion order at the point of care.
+## Run a local audit
 
-## Quickstart
+Use Python 3.13 or later and `uv`. Run from the source checkout so the matching database migration project is available when needed.
 
-Requires Python ≥ 3.13 and [`uv`](https://docs.astral.sh/uv/).
-
-```bash
-git clone git@github.com:macsermkiat/blood_audit.git
+```sh
+git clone https://github.com/macsermkiat/blood_audit.git
 cd blood_audit
 uv sync
+export BBA_DATA_DIR=/srv/bba/data
+uv run bba audit --input /srv/bba/export/BDVST.csv
 ```
 
-The pipeline reads a HOSxP CSV bundle. No sample data ships in-repo (PHI exposure risk); see [Expected input bundle](#expected-input-bundle). Configuration is via environment variables. Each run path below needs a different subset, so set them per path rather than all at once:
+Stage the complete canonical bundle beside `BDVST.csv`. The exporter must apply the approved adult-cohort filter because the bundle has no age column. Use an access-controlled directory. Raw and encrypted clinical exports, audit outputs, and partly de-identified data must stay outside version control.
 
-| Variable | Needed by | Purpose |
-|----------|-----------|---------|
-| `BBA_DATA_DIR` | path B (`bba` CLI) | persistent AuditRows, model calls, request manifests, and run state |
-| `BBA_DB_URL` | model batch checkpoints + dashboard | Postgres DSN (`postgresql://user@host/db`) |
-| `ANTHROPIC_API_KEY` | path A (LLM leg) | Anthropic API key (`sk-ant-...`) |
-| `BBA_PILOT_WORK_DIR` | paths A, C (pilot scripts) | where outputs land (e.g. `/tmp/bba_mini`) |
-| `BBA_REVIEW_XLSX`, `BBA_BDVST_CSV`, `BBA_DCT_CSV` | path C (ranking) | verdict source + attribution inputs |
-| `BBA_BDVSTTRANS_CSV` | path A (optional) | returns-ledger BDVSTTRANS export override (defaults to the canonical `data/encrypted` export) |
-| `BBA_PILOT_MSBOS_RESERVATION=0` etc. | path A (optional) | kill-switches for the default-ON pilot flags (see [Feature flags](#feature-flags)) |
+The default local mode needs no provider credentials or PostgreSQL connection. It persists deterministic results and routes eligible unresolved red-cell orders to local privacy review. It makes no model calls. A successful completion counts committed AuditRows, not ingested tables.
 
-## Run the pipeline
+The platelet model route is disabled by default through `PLATELET_LLM_ENABLED`. Unresolved platelet orders need that route enabled; the CLI fails completion if expected results remain uncommitted. Deterministic platelet outcomes and MTP suppression follow their own rules. See the [platelet guide](docs/src/content/docs/en/developers/platelet-auditor.mdx) before auditing a mixed bundle.
 
-Pick the path that matches your goal. Full operator walkthrough:
-[docs site → Operators](docs/src/content/docs/en/operators/run-pipeline.mdx).
+The [operator contract](docs/production-cli.md) covers signed privacy admission, cassette and live transports, PostgreSQL checkpoints, reports, evaluation, monitoring, and authenticated review. The repository does not supply a production-approved redactor or an identity provider. A provider key alone is insufficient to authorize clinical evidence submission.
 
-| I want to… | Path | Entry point |
-|------------|------|-------------|
-| Run **deterministic + live LLM** together on a small sample (RBC end-to-end; platelet LLM off by default) and get a review HTML | **A** | pilot scripts |
-| **Audit** a full HOSxP export into committed AuditRows (the supported CLI) | **B** | `bba` CLI |
-| **Rank ordering doctors / departments** by appropriateness | **C** | ranking script |
+## Keep audit identity stable
 
-> Every path reads real HOSxP data and writes real PHI. Never commit, email, or share any output.
+Input bytes, schema, code version, and explicit application configuration determine the run identity. The audit seals its input bundle before classification. Repeat execution reuses immutable committed results. `--force` bypasses the CLI completion shortcut and records an override; it does not replace committed classifications or resubmit an uncertain provider request.
 
-### Path A: full audit on a sample (pilot scripts)
+For changed analysis, use a new approved policy version and prepare matching admission evidence for the new run. Keep `BBA_DATA_DIR/identity.key` with its protected data directory so patient and admission identifiers stay stable.
 
-These historical scripts run the deterministic classifier and an admitted LLM
-leg on a small sample, then produce a review HTML. Use Path B for the supported
-application. The pilot is a dataset-specific composition example.
-(Details: [`scripts/pilot/README.md`](scripts/pilot/README.md).)
+## Prepare the input bundle
 
-The live LLM leg covers RBC orders. While `PLATELET_LLM_ENABLED` is off (the
-default), `run_llm_leg.py` skips present-count platelet orders (they get a
-deterministic verdict but orphan instead of an LLM review), so a sample that
-includes platelet orders is not audited end-to-end until the flag is enabled.
+File names are case-sensitive. The canonical schema registry currently contains:
 
-```bash
-uv sync --extra live
-export ANTHROPIC_API_KEY=sk-ant-...          # the LLM leg
-export BBA_PILOT_WORK_DIR=/tmp/bba_mini      # all outputs land here
-export BBA_PRIVACY_POLICY=/path/to/trust-policy.json
-export BBA_PRIVACY_ARTIFACTS=/path/to/approved-evidence.json
-
-uv run python scripts/pilot/sample_bundle.py         # 1. sample ~10 cases
-uv run python scripts/pilot/run_pipeline.py          # 2. deterministic verdicts  → report.csv
-uv run --extra live python scripts/pilot/run_llm_leg.py # 3. admitted batch → llm_report.json
-uv run python scripts/pilot/audit_llm_responses.py   # 4. audit the responses (code checks, no API) → llm_response_audit.json
-uv run python scripts/pilot/build_review.py          # 5. assemble review          → review.html
-
-open "$BBA_PILOT_WORK_DIR/review.html"
+```text
+BDVST.csv
+BDVSTDT.csv
+BDVSTST.csv
+BDVSTTRANS.csv
+BDTYPE.csv
+Diagnosis.csv
+Lab.csv
+Med.csv
+IPDADMPROGRESS.csv
+IPDNRFOCUSDT.csv
+IPTSUMOPRT.csv
+INCPT_OPRTACT.csv
+ICD9CM.csv
 ```
 
-An approved local redaction authority must issue the exact evidence artifacts
-before the model step. Encryption or an asserted hash does not establish
-deidentification. Missing or rejected proof produces local review without a
-model call. See [privacy admission](docs/production-cli.md#admit-model-evidence).
+The [ingest schemas](src/bba/ingest/schemas.py) define required columns. Normalization projects recognized columns and handles supported export variants before strict schema validation. Missing required columns still fail. See [export joins](docs/hosxp-export-reference.md) and the [ingest guide](docs/src/content/docs/en/operators/ingest-csv.mdx) for source-system details.
 
-Step 5 refuses to render model responses without a response audit that matches
-`llm_report.json` (by its SHA-256) and carries no HIGH finding; set
-`BBA_PILOT_ALLOW_UNAUDITED=1` to build the page anyway. See
-[`scripts/pilot/README.md`](scripts/pilot/README.md) for the fix-and-rerun
-loop and the separate dev-test consortium (Claude Code subagents reviewing
-response soundness; not a pipeline step, not a gate).
+## Review and report
 
-Step 2's `report.csv` now also carries the default-ON overlay columns: returns-ledger
-disposition (`RETURNED_NOT_TRANSFUSED` / `PERIOP_TRANSFUSION_EXEMPT` terminals),
-declared-use USETYPE routing, and MSBOS reservation verdicts
-(`PREOP_OVER_RESERVATION` + reservation reasons). See
-[What's new since Phase 1](#whats-new-since-phase-1).
+`bba report` renders HTML, JSON, or PDF for a committed run. Attribution requires the matching `BBA_BDVST_CSV` and `BBA_DCT_CSV` inputs. Reports retain per-row policy, redactor, prompt, and model provenance. Red-cell scorecards and appropriateness denominators do not silently include platelet results or routing exemptions.
 
-To iterate on a single case without re-running the whole batch, set
-`BBA_PILOT_ONLY_REQNO` (with a fresh `BBA_PILOT_RUN_ID`). The fresh record is
-merged into `llm_report.json` and the other cases keep theirs. See
-[`scripts/pilot/README.md`](scripts/pilot/README.md#re-running-a-single-case).
+`bba serve-dashboard` serves authenticated review behind an HTTPS reverse proxy. The queue includes committed unresolved cases from both components. Reviewers can agree, override, or escalate, with append-only history and stale-write checks. Deployment must supply trusted reviewer authentication and migrated database roles.
 
-### Path B: audit a full export with the supported CLI
+Historical pilot scripts and the human-review ranking workflow are documented separately in [scripts/pilot/README.md](scripts/pilot/README.md). They are dataset-specific tools with their own inputs and flags. Use the supported CLI guide for operational setup.
 
-Runs the wired `bba` CLI against a full 13-file HOSxP export.
+## Check a change
 
-```bash
-export BBA_DATA_DIR=/path/to/persistent/data   # persistent audit data
-
-# 1. Ingest the bundle: validate + normalize, write the run completion marker under $BBA_DATA_DIR
-uv run bba ingest /path/to/hosxp_bundle/BDVST.csv
-
-# 2. Audit the bundle and persist actual classification rows
-uv run bba audit --input /path/to/hosxp_bundle/BDVST.csv
+```sh
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src
+BBA_REQUIRE_POSTGRES_TESTS=1 uv run --extra live pytest -q --tb=short --cov=src/bba --cov-fail-under=80
+cd docs
+ASTRO_TELEMETRY_DISABLED=1 npm run build
 ```
 
-`bba audit` validates the full export, builds canonical row contexts, and invokes the existing audit pipeline. It commits deterministic results and routes model-bound cases without approved evidence to local `NEEDS_REVIEW`. Model transport requires explicit configuration and trusted privacy admission. Re-running the same input and configuration is idempotent. See [Run a supported HOSxP audit](docs/production-cli.md) for model configuration, recovery, reports, evaluation, monitoring, and authenticated review.
+PostgreSQL tests require Docker and test dependencies. CI requires those tests and at least 80% source coverage. Real-data reconciliation tests skip when their protected workbooks and exports are absent. Do not copy those materials into the repository to satisfy a test.
 
-### Path C: rank doctors / departments (attribution)
+## References
 
-Ranks the top-10 ordering doctors and departments by blood-order appropriateness
-in three buckets (appropriate / inappropriate / unresolved). Thin glue over
-`bba.attribution`. Full guide:
-[docs site → Operators → Doctor and department ranking](docs/src/content/docs/en/operators/doctor-ranking.mdx).
-
-To rank a pilot run's own output (Path A above), use `rank_merged.py`, one
-component at a time. It merges `report.csv`'s deterministic verdicts with
-`llm_report.json`'s LLM verdicts, replacing only the deterministic rows that
-were routed onward (`NEEDS_REVIEW` / `POTENTIALLY_INAPPROPRIATE`):
-
-```bash
-export BBA_PILOT_WORK_DIR=/tmp/bba_mini
-uv run python scripts/pilot/rank_merged.py red_cell
-uv run python scripts/pilot/rank_merged.py platelet
-```
-
-`rank_doctors.py` ranks against the 300-case human-review workbook (the
-default `BBA_VERDICT_SOURCE=human`) or the audit store
-(`BBA_VERDICT_SOURCE=pipeline`). The audit store holds the LLM-leg rows and the
-deterministic MSBOS reservation rows only, so a `pipeline`-source ranking's
-denominators miss the deterministic clears, returns and peri-op exemptions.
-Use `rank_merged.py` above to rank a pilot run instead:
-
-```bash
-export BBA_REVIEW_XLSX="$HOME/Downloads/Review การใช้เลือด.xlsx"  # verdict source (300-case review)
-export BBA_BDVST_CSV=/path/to/BDVST.csv    # BDVST export with REQNO + DCTREQ
-export BBA_DCT_CSV=/path/to/DCT.csv        # DCT.csv doctor registry
-export BBA_PILOT_WORK_DIR=/tmp/bba_mini    # outputs land here
-
-uv run python scripts/pilot/rank_doctors.py     # → doctor_ranking.csv, department_ranking.csv, doctor_rankings.html
-open "$BBA_PILOT_WORK_DIR/doctor_rankings.html"
-```
-
-## CLI
-
-| Subcommand | Status | Notes |
-|------------|--------|-------|
-| `bba ingest <csv> [--schema-version v1]` | Wired | Validates + hashes + normalizes the 13-table HOSxP bundle, then writes the run completion marker (marker-only today; Parquet loader is the intended next storage). `--schema-version` selects the ingest schema (default `v1`). |
-| `bba audit --input <csv>` | Wired | Run-level idempotent; `--force` overrides with an `audit_log` row. |
-| `bba evaluate --run-id <id> --labels reviewed.csv` | Wired | Compare explicit reviewed labels with committed audit rows. |
-| `bba report --run-id <id> --format html\|pdf\|json` | Wired | Renders the monthly report from the audit store: committee CSVs + per-physician CSVs + PDF under `$BBA_DATA_DIR/reports/<run_id>/`. Ward/physician attribution resolvers come from `BBA_BDVST_CSV` / `BBA_DCT_CSV`. |
-| `bba serve-dashboard --port 8000` | Wired | Requires a Postgres review role, signed-session secret, HTTPS origin, and attribution inputs. |
-| `bba sentinel --weekly\|--quarterly --manifest runs.json` | Wired | Compare explicit baseline and current runs over fixed membership. |
-
-The three remaining integration seams (`evaluate`, `serve-dashboard`, `sentinel`) fail loud with a `CliError` describing the missing glue. They do not fabricate defaults that would silently mis-configure the underlying module.
-
-Examples (Path B; `BBA_DATA_DIR` must be set):
-
-```bash
-# Ingest + audit a bundle. The run_id is derived from the input + code version,
-# so re-running the same bundle is a no-op.
-uv run bba ingest /path/to/hosxp_bundle/BDVST.csv
-uv run bba audit --input /path/to/hosxp_bundle/BDVST.csv
-
-# Confirm a run already completed this session and print its row count (no-op).
-# --run-id and --input are mutually exclusive; --run-id alone never re-runs the
-# pipeline — it errors if that run was never completed:
-uv run bba audit --run-id <run_id>
-
-# Force a re-audit of an already-complete run — writes an audit_log override row
-# instead of no-op'ing (needs --input; --force without --input does not re-run):
-uv run bba audit --input /path/to/hosxp_bundle/BDVST.csv --force
-```
-
-## Expected input bundle
-
-The HOSxP export directory must contain these 13 CSV files (header validation is strict; see `src/bba/ingest/schemas.py` for column lists):
-
-```
-BDVST.csv                       Blood-bank visit (one row per unit)
-BDVSTDT.csv                     Blood-bank visit dates / times (USETYPE drives declared-use routing)
-BDVSTTRANS.csv                  Unit disposition ledger (returns / transfusion status, per-unit)
-BDTYPE.csv                      Blood-component-type dictionary
-BDVSTST.csv                     Blood-bank visit status
-Diagnosis.csv                   ICD-10 admission + discharge dx
-Lab.csv                         All lab results (Hb queried here)
-MED.csv                         Medication administration record
-IPDADMPROGRESS.csv              Daily admission progress notes
-IPDNRFOCUSDT.csv                Nursing focus-charting timestamps
-IPTSUMOPRT.csv                  Operative table (Phase B — re-encrypted AN pending #2)
-INCPT_OPRTACT.csv               Procedure charge support (INCPT joined to OPRTACT on Income, per #69)
-ICD9CM.csv                      ICD-9-CM Vol 3 procedure code dictionary
-```
-
-A `run_id` is `sha256(bundle_hashes + schema_fingerprint + code_version)`, with explicit application configuration also included when configured. The same bundle + same code version always produces the same `run_id`, so re-running `bba audit` is a no-op unless `--force`.
-
-## HOSxP join examples
-
-These examples document how to pull the supporting HOSxP tables for the
-adult inpatient transfusion subpopulation. Replace `DATE '<START_DATE>'`
-and `DATE '<END_DATE>'` with the export window, for example the first and
-last date of the audit month or year.
-
-Common cohort pattern:
-
-- Anchor on `CUH.BDVST` because it contains blood-bank visits/orders.
-- Join `CUH.PT` on `HN` to compute adult age at `BDVSTDATE`.
-- Keep inpatient rows only: `AN IS NOT NULL`.
-- Exclude cancelled blood-bank visits: `CANCELDATE IS NULL`.
-- Join most clinical evidence tables back to the subpopulation by `AN`.
-
-```sql
-/* LAB */
-WITH SUBPOPULATION AS
-(
- SELECT DISTINCT b.HN ,b.AN --,b.BDVSTDATE
- FROM CUH.BDVST b
-  LEFT JOIN CUH.PT t ON t.HN = b.HN
- WHERE b.BDVSTDATE BETWEEN DATE '<START_DATE>' AND DATE '<END_DATE>'
-     AND TRUNC(MONTHS_BETWEEN(b.BDVSTDATE,t.BRTHDATE)/12) > 15
-     AND b.CANCELDATE IS NULL
-     AND b.AN IS NOT NULL
-)
-SELECT DISTINCT sp.HN
-    ,sp.AN
---    ,e.NAME AS SEX
---    ,FLOOR(MONTHS_BETWEEN(sp.BDVSTDATE,p.BRTHDATE)/12) AS AGE
---    ,p.BRTHDATE
---    ,OCCPTN
-    ,l.LVSTDATE
-    ,l.LVSTTIME
-    ,l.LABGRP
-    ,(SELECT NAME FROM CUH.LABGRP b WHERE b.LABGRP = l.LABGRP) AS NAME_LABGRP
-    ,l.LABEXM
-    ,(SELECT NAME FROM CUH.LABEXM x WHERE x.LABEXM = l.LABEXM) AS NAME_LABEXM
-    ,l.RESULT
-    ,l.MINNRM
-    ,l.MAXNRM
-    ,l.NRMUNIT
-FROM SUBPOPULATION sp
---    LEFT JOIN CUH.PT p ON p.HN = sp.HN
---    LEFT JOIN CUH.MALE e ON e.MALE = p.MALE
-    LEFT JOIN CUH.LVSTEXM l ON l.AN = sp.AN
-WHERE l.LVSTDATE BETWEEN DATE '<START_DATE>' AND DATE '<END_DATE>'
-    AND l.RESULT IS NOT NULL;
-```
-
-```sql
-/* Diagnosis */
-WITH SUBPOPULATION AS
-(
- SELECT DISTINCT b.HN ,b.AN ,b.BDVSTDATE
- FROM CUH.BDVST b
-  LEFT JOIN CUH.PT t ON t.HN = b.HN
- WHERE b.BDVSTDATE BETWEEN DATE '<START_DATE>' AND DATE '<END_DATE>'
-     AND TRUNC(MONTHS_BETWEEN(b.BDVSTDATE,t.BRTHDATE)/12) > 15
-     AND b.CANCELDATE IS NULL
-     AND b.AN IS NOT NULL
-)
-SELECT DISTINCT
-    sp.HN
-    ,sp.AN
-    ,sp.BDVSTDATE AS V_DATE
-    ,d2.NAME AS NAME_DIAGTYPE
-    ,d.ICD10
-    ,c.ICD10WHO
-    ,c.NAME AS NAME_ICD10
-    ,'IN_HOSPITAL' AS DIAG_TYPE
-FROM SUBPOPULATION sp
-    INNER JOIN CUH.IPTSUMDIAG d ON d.AN = sp.AN
-    LEFT JOIN CUH.ICD10 c ON c.ICD10 = d.ICD10
-    LEFT JOIN CUH.DIAGTYPE d2 ON d2.DIAGTYPE = d.DIAGTYPE
-WHERE sp.BDVSTDATE BETWEEN DATE '<START_DATE>' AND DATE '<END_DATE>';
---    AND d.DIAGTYPE = 3
---    AND c.ICD10WHO NOT IN ('O82','O820','O821','O842')
-```
-
-```sql
-/* MED */
-WITH SUBPOPULATION AS
-(
- SELECT DISTINCT b.HN ,b.AN ,b.BDVSTDATE
- FROM CUH.BDVST b
-  LEFT JOIN CUH.PT t ON t.HN = b.HN
- WHERE b.BDVSTDATE BETWEEN DATE '<START_DATE>' AND DATE '<END_DATE>'
-     AND TRUNC(MONTHS_BETWEEN(b.BDVSTDATE,t.BRTHDATE)/12) > 15
-     AND b.CANCELDATE IS NULL
-     AND b.AN IS NOT NULL
-)
-SELECT DISTINCT sp.HN
-    ,sp.AN
-    ,p.PRSCDATE
-    ,p.PRSCTIME
-    ,p2.MEDITEM
-    ,m.MEDNAME AS NAME_MEDITEM
-    ,r.GENERIC
-    ,r.NAME AS NAME_GENERIC
-    ,m.STRENGTH
-    ,(SELECT NAME FROM CUH.STRENGTHUNIT s WHERE s.STRENGTHUNIT = m.STRENGTHUNIT) AS STRENGTHUNIT
-    ,(SELECT NAME FROM CUH.MEDUSETYPE m3 WHERE m3.MEDFORM = m.MEDFORM AND m3.MEDUSETYPE = m.MEDUSETYPE) AS MEDUSETYPE
-    ,(SELECT NAME FROM CUH.MEDUSEQTY m2 WHERE m2.MEDUSEQTY = m.MEDUSEQTY) AS MEDUSEQTY
-FROM SUBPOPULATION sp
-    INNER JOIN CUH.PRSC p ON p.AN = sp.AN
-    LEFT JOIN CUH.PRSCDT p2 ON p2.SPHMLCT = p.SPHMLCT AND p2.PRSCNO = p.PRSCNO
-    LEFT JOIN CUH.MEDITEMDIS m ON m.MEDITEM = p2.MEDITEM
-    LEFT JOIN CUH.MEDITEMGNR g ON g.MEDITEM = m.MEDITEM
-    LEFT JOIN CUH.MEDGENERIC r ON r.GENERIC = g.GENERIC
-WHERE p.PRSCDATE BETWEEN DATE '<START_DATE>' AND DATE '<END_DATE>'
-    AND m.MEDTYPE = 10;
-```
-
-```sql
-/* Patient Background */
-WITH SUBPOPULATION AS
-(
- SELECT DISTINCT b.HN ,b.AN ,b.BDVSTDATE
- FROM CUH.BDVST b
-  LEFT JOIN CUH.PT t ON t.HN = b.HN
- WHERE b.BDVSTDATE BETWEEN DATE '<START_DATE>' AND DATE '<END_DATE>'
-     AND TRUNC(MONTHS_BETWEEN(b.BDVSTDATE,t.BRTHDATE)/12) > 15
-     AND b.CANCELDATE IS NULL
-     AND b.AN IS NOT NULL
-)
-SELECT DISTINCT sp.HN
-    ,sp.AN
-    ,d.DLVSTREQNO
-    ,d.DLVSTRECDATE
-    ,d.DLVSTRECTIME
-    ,d.WARD
-    ,d.ROOM
-    ,d.BEDNO
-    ,d.PTNTTYPE
-    ,d.GRVDTY
-    ,d.PARITY
-    ,d.PARITY2
-    ,d.PARITY3
-    ,d.PARITY4
-    ,d.ABRTN
-    ,d.ABRTNFLAG
-    ,d.CURTTFLAG
-    ,d.ANCFLAG
-    ,d.ANCPLACE
-    ,(SELECT ANCPLACENM FROM CUH.ANCPLACE a WHERE a.ANCPLACE = d.ANCPLACE) AS NAME_ANCPLACE
-    ,d.ANCPLACE2
-    ,(SELECT ANCPLACENM FROM CUH.ANCPLACE a WHERE a.ANCPLACE = d.ANCPLACE2) AS NAME_ANCPLACE2
-    ,d.NOATTEND
-    ,d.NOATTEND2
-    ,d.LMPDATE
-    ,d.EDCDATE
-    ,d.GSTTNAGE
-    ,d.GSTTNDAY
-    ,d.LABFLAG
-    ,d.TKDATEBLDG
-    ,d.BLDTEST
-    ,d.RHTEST
-    ,(SELECT NAME FROM CUH.RHTEST r WHERE r.RHTEST = d.RHTEST) AS NAME_RHTEST
-    ,d.TKDATEHBSAG
-    ,d.HBSAGTEST
---    ,(SELECT NAME FROM CUH.HBSAGTEST h WHERE h.HBSAGTEST = d.HBSAGTEST) AS NAME_HBSAGTEST
-    ,d.TKDATEVDRL
-    ,d.VDRLTEST
---    ,(SELECT NAME FROM CUH.VDRLTEST v WHERE v.VDRLTEST = d.VDRLTEST) AS NAME_VDRLTEST
-    ,d.TKDATETPHA
-    ,d.TPHATEST
-    ,(SELECT NAME FROM CUH.TPHATEST t WHERE t.TPHATEST = d.TPHATEST) AS NAME_TPHATEST
-    ,d.HIVTEST
-    ,(SELECT NAME FROM CUH.HIVTEST h2 WHERE h2.HIVTEST = d.HIVTEST) AS NAME_HIVTEST
-    ,d.TKDATEHCT
-    ,d.HCTTEST
-    ,d.TKDATECMIA
-    ,d.CMIATEST
-    ,(SELECT NAME FROM CUH.CMIATEST c WHERE c.CMIATEST = d.CMIATEST) AS NAME_CMIATEST
-    ,d.LEADSIGN
---    ,(SELECT NAME FROM CUH.LEADSIGN l WHERE l.LEADSIGN = d.LEADSIGN) AS NAME_LEADSIGN
-    ,d.LEADSIGNOTH
-    ,d.HEADENGGMNT
-    ,d.HEARTSOUND
-    ,d.SOUNDDATE
-    ,d.SOUNDTIME
-    ,d.RECSTATUS
-    ,d.KEYBACK
-    ,d.TKDATEHIV
-    ,d.FHRAMT
-    ,d.DLVSTPLACE
-    ,d.CMIATESTNEW
-    ,d2.INDCTION
-    ,d2.INDCTIONOTH
-    ,d2.EPISTM
-    ,d2.MTHDRP
-    ,d2.PLCNTDL
-    ,d3.ONSETDATE
-    ,d3.ONSETTIME
-    ,d3.FDLTTNDATE
-    ,d3.FDLTTNTIME
-    ,d3.DBRTHDATE
-    ,d3.DBRTHTIME
-    ,d3.PLCTDATE
-    ,d3.PLCTTIME
-    ,d3.RPTRTYPE
-    ,d3.RPTRDATE
-    ,d3.RPTRTIME
-FROM SUBPOPULATION sp
-    LEFT JOIN CUH.DLVSTEXT d ON d.AN = sp.AN
-    LEFT JOIN CUH.DLVSTDESC d2 ON d2.DLVSTREQNO = d.DLVSTREQNO
-    LEFT JOIN CUH.DLVST d3 ON d3.DLVSTREQNO = d.DLVSTREQNO
-WHERE d.DLVSTRECDATE BETWEEN DATE '<START_DATE>' AND DATE '<END_DATE>';
-```
-
-```sql
-/* IPDNRFOCUSDT */
-WITH SUBPOPULATION AS
-(
- SELECT DISTINCT b.HN ,b.AN ,b.BDVSTDATE
- FROM CUH.BDVST b
-  LEFT JOIN CUH.PT t ON t.HN = b.HN
- WHERE b.BDVSTDATE BETWEEN DATE '<START_DATE>' AND DATE '<END_DATE>'
-     AND TRUNC(MONTHS_BETWEEN(b.BDVSTDATE,t.BRTHDATE)/12) > 15
-     AND b.CANCELDATE IS NULL
-     AND b.AN IS NOT NULL
-)
-SELECT DISTINCT sp.HN
-    ,sp.AN
-    ,i.ITEMNO
-    ,i.ITEMNO2
-    ,i.FOCUS
-    ,i.ACTION
-    ,i.RESPONSE
-    ,i.PROGRESSDATE
-    ,i.PROGRESSTIME
-FROM SUBPOPULATION sp
-    INNER JOIN CUH.IPDNRFOCUSDT i ON i.AN = sp.AN
-WHERE i.CANCELDATE IS NULL;
-```
-
-```sql
-/* IPDADMPROGRESS */
-WITH SUBPOPULATION AS
-(
- SELECT DISTINCT b.HN ,b.AN --,b.BDVSTDATE
- FROM CUH.BDVST b
-  LEFT JOIN CUH.PT t ON t.HN = b.HN
- WHERE b.BDVSTDATE BETWEEN DATE '<START_DATE>' AND DATE '<END_DATE>'
-     AND TRUNC(MONTHS_BETWEEN(b.BDVSTDATE,t.BRTHDATE)/12) > 15
-     AND b.CANCELDATE IS NULL
-     AND b.AN IS NOT NULL
-)
-SELECT DISTINCT sp.HN
-    ,i.*
-FROM SUBPOPULATION sp
-    INNER JOIN CUH.IPDADMPROGRESS i ON i.AN = sp.AN
-WHERE i.CANCELDATE IS NULL;
-```
-
-```sql
-/* INCPT */
-SELECT
-  "KCMH_HIS"."INCPT"."hn" AS "hn",
-  "KCMH_HIS"."INCPT"."incdate" AS "incdate",
-  "KCMH_HIS"."INCPT"."inctime" AS "inctime",
-  "KCMH_HIS"."INCPT"."ordercode" AS "ordercode",
-  "KCMH_HIS"."INCPT"."income" AS "income",
-  "KCMH_HIS"."INCPT"."an" AS "an",
-  "KCMH_HIS"."INCPT"."canceldate" AS "canceldate",
-  "KCMH_HIS"."INCPT"."incgrp" AS "incgrp",
-  "Incgrp"."name" AS "Incgrp__name",
-  "Incgrp"."incgrp" AS "Incgrp__incgrp",
-  "Oprtact - Income"."oprtact" AS "Oprtact - Income__oprtact",
-  "Oprtact - Income"."name_en" AS "Oprtact - Income__name_en",
-  "Oprtact - Income"."name" AS "Oprtact - Income__name",
-  "Oprtact - Income"."income" AS "Oprtact - Income__income",
-  "Oprtact - Income"."maxamt" AS "Oprtact - Income__maxamt",
-  "Oprtact - Income"."dftamt" AS "Oprtact - Income__dftamt",
-  "Oprtact - Income"."rfndamt" AS "Oprtact - Income__rfndamt",
-  "Oprtact - Income"."minamt" AS "Oprtact - Income__minamt",
-  "Oprtact - Income"."spclty" AS "Oprtact - Income__spclty",
-  "Oprtact - Income"."otamt" AS "Oprtact - Income__otamt",
-  "Oprtact - Income"."otrfndamt" AS "Oprtact - Income__otrfndamt",
-  "Oprtact - Income"."icd9cm" AS "Oprtact - Income__icd9cm",
-  "Oprtact - Income"."icd10tm" AS "Oprtact - Income__icd10tm",
-  "Oprtact - Income"."oprttype" AS "Oprtact - Income__oprttype",
-  "Oprtact - Income"."cost" AS "Oprtact - Income__cost",
-  "Oprtact - Income"."nhso" AS "Oprtact - Income__nhso",
-  "Oprtact - Income"."drgmx" AS "Oprtact - Income__drgmx",
-  "Oprtact - Income"."csmbs" AS "Oprtact - Income__csmbs",
-  "Oprtact - Income"."sss" AS "Oprtact - Income__sss",
-  "Oprtact - Income"."var" AS "Oprtact - Income__var",
-  "Oprtact - Income"."minvalue" AS "Oprtact - Income__minvalue",
-  "Oprtact - Income"."maxvalue" AS "Oprtact - Income__maxvalue",
-  "Oprtact - Income"."dscper" AS "Oprtact - Income__dscper",
-  "Oprtact - Income"."dscamt" AS "Oprtact - Income__dscamt",
-  "Oprtact - Income"."prfact" AS "Oprtact - Income__prfact",
-  "Oprtact - Income"."sumprfamt" AS "Oprtact - Income__sumprfamt",
-  "Oprtact - Income"."oprtgrp" AS "Oprtact - Income__oprtgrp",
-  "Oprtact - Income"."icdnum" AS "Oprtact - Income__icdnum",
-  "Oprtact - Income"."icdtype" AS "Oprtact - Income__icdtype",
-  "Oprtact - Income"."highcost" AS "Oprtact - Income__highcost",
-  "Oprtact - Income"."major" AS "Oprtact - Income__major",
-  "Oprtact - Income"."dz8" AS "Oprtact - Income__dz8",
-  "Oprtact - Income"."vac" AS "Oprtact - Income__vac",
-  "Oprtact - Income"."vcctype" AS "Oprtact - Income__vcctype",
-  "Oprtact - Income"."timemake" AS "Oprtact - Income__timemake",
-  "Oprtact - Income"."validcode" AS "Oprtact - Income__validcode",
-  "Oprtact - Income"."canceldate" AS "Oprtact - Income__canceldate",
-  "Oprtact - Income"."datasource" AS "Oprtact - Income__datasource",
-  "Oprtact - Income"."firststf" AS "Oprtact - Income__firststf",
-  "Oprtact - Income"."firstdate" AS "Oprtact - Income__firstdate",
-  "Oprtact - Income"."laststf" AS "Oprtact - Income__laststf",
-  "Oprtact - Income"."lastdate" AS "Oprtact - Income__lastdate",
-  "Oprtact - Income"."incomeold" AS "Oprtact - Income__incomeold",
-  "Oprtact - Income"."icd9cmadd1" AS "Oprtact - Income__icd9cmadd1",
-  "Oprtact - Income"."icd9cmadd2" AS "Oprtact - Income__icd9cmadd2",
-  "Oprtact - Income"."oprtactauto" AS "Oprtact - Income__oprtactauto",
-  "Oprtact - Income"."perday" AS "Oprtact - Income__perday",
-  "Oprtact - Income"."unit" AS "Oprtact - Income__unit",
-  "Oprtact - Income"."note" AS "Oprtact - Income__note",
-  "Oprtact - Income"."cancelstf" AS "Oprtact - Income__cancelstf",
-  "Oprtact - Income"."cancelnote" AS "Oprtact - Income__cancelnote",
-  "Oprtact - Income"."oprtactgrp" AS "Oprtact - Income__oprtactgrp",
-  "Oprtact - Income"."thtype" AS "Oprtact - Income__thtype",
-  "Oprtact - Income"."addper" AS "Oprtact - Income__addper",
-  "Oprtact - Income"."remflag" AS "Oprtact - Income__remflag",
-  "Oprtact - Income"."nodefchk" AS "Oprtact - Income__nodefchk"
-FROM
-  "KCMH_HIS"."INCPT"
- 
-LEFT JOIN "KCMH_HIS"."INCGRP" AS "Incgrp" ON "KCMH_HIS"."INCPT"."incgrp" = "Incgrp"."incgrp"
-  LEFT JOIN "cleaned_ddc_internal"."OPRTACT" AS "Oprtact - Income" ON "KCMH_HIS"."INCPT"."income" = "Oprtact - Income"."oprtact"
-WHERE
-  "KCMH_HIS"."INCPT"."incgrp" BETWEEN 110
-   AND 111
-  AND (
-    "KCMH_HIS"."INCPT"."incdate" >= timestamp '2025-01-01 00:00:00.000'
-  )
-  AND (
-    "KCMH_HIS"."INCPT"."incdate" < timestamp '2026-01-01 00:00:00.000'
-  )
-  AND ("KCMH_HIS"."INCPT"."an" IS NOT NULL)
-  AND (
-    ("KCMH_HIS"."INCPT"."an" <> '')
-   
-    OR ("KCMH_HIS"."INCPT"."an" IS NULL)
-  )
-```
-
-
-## Architecture
-
-30 modules under `src/bba/`. See [`docs/CONTEXT.md`](docs/CONTEXT.md) for the module glossary. Every public interface, invariant, and seam is documented there. Read it before touching anything.
-
-Coarse dependency shape (the RBC path is Phase 1; the platelet path is Phase 2 and forks at the `component_map` intake gate):
-
-```
-ingest → audit_orders → component_map ─┬─ RED_CELL → hb_lookup, vitals_extractor, cohort_detector
-                                       │                             ↘
-                                       │                              deterministic_classifier
-                                       │                                     ↘
-                                       └─ PLATELET → platelet_lookup → platelet_classifier
-                                                                             ↘ (platelet_guardrail)
-evidence_bundle_builder → deid_redactor → prompt_builder → llm_client ─────────↘
-                                                    ↘                    quote_grounder → confidence_calibrator
-                                                                                                  ↘
-                                                                                    audit_pipeline → audit_store
-                                                                                                         ↑
-      eval_harness, monitoring, review_actions, dashboard, report_generator, attribution, verification, cli
-```
-
-Modules added since the initial Phase 1 build: `component_map` (component-family intake gate), `platelet_lookup`, `platelet_classifier`, `platelet_guardrail` (Phase 2 platelet auditor); `attribution` (doctor/department appropriateness ranking); `verification` (before/after scoring for the peri-op fix); `returns_ledger` (BDVSTTRANS unit-disposition aggregation); `declared_use` (order-time declared use from `BDVSTDT.USETYPE`); `preop_reservation` (MSBOS pre-op reservation evaluation, planned-op picker + OPRTACT→ICD9 bridge); `feature_flags` (runtime flag module).
-
-## What's new since Phase 1
-
-- Phase 2 platelet auditor (merged, PR #85). `component_map` routes each blood-bank order to a component family (`RED_CELL`, `PLATELET`, `FFP`, `CRYO`, `WHOLE_BLOOD`, `UNKNOWN`) from the BDTYPE dictionary name. Platelet orders go through `platelet_lookup` (count value layer) and `platelet_classifier` (§5.1 gate). The gate auto-clears nothing: count ≥ 100 ×10³/µL → `POTENTIALLY_INAPPROPRIATE` (routes to the LLM review leg), count < 100 → `NEEDS_REVIEW` (defers to the LLM leg), missing count → `INSUFFICIENT_EVIDENCE` by default. The platelet LLM leg (`PLATELET_REVIEW` prompt + grounded-hard-signal over-clear guardrail) is behind default-off `feature_flags.PLATELET_LLM_ENABLED`, so today only missing-count `INSUFFICIENT_EVIDENCE` rows are written deterministic-final. Present-count orders (`POTENTIALLY_INAPPROPRIATE` / `NEEDS_REVIEW`) are classified but orphan (skipped, not reviewed) until the flag is enabled.
-- Doctor / department attribution (Feature 2, PR #82). `bba.attribution` ranks the top-10 ordering doctors and departments by blood-order appropriateness in three buckets (appropriate / inappropriate / unresolved). Attribution is `BDVST.DCTREQ` → `DCT.csv`; the verdict source is swappable (`VerdictSource`): the current build ranks on the 300-case human review, and a full-cohort pipeline verdict source drops in without other changes. Driven by `scripts/pilot/rank_doctors.py` and surfaced through the `serve-dashboard` integration seam.
-- Cohort refinements. Orthopedic surgery is now its own `ORTHO_SURGERY` cohort (Hb floor 8.0, PR #83), split out from the cardiac cohort. A `CARDIOPULMONARY_COMORBIDITY` cohort (heart-disease floor 8.0) and the peri-op defer-to-LLM behavior landed in PR #81: pre-op crossmatch defers to the LLM, and hard peri-op evidence (`intraop_transfusion` or `EBL ≥ 500 mL`) bypasses.
-- Returns ledger (spec #119; go-live PR #138). `returns_ledger` aggregates the per-unit `BDVSTTRANS` disposition export. Orders whose units were all returned un-transfused terminal as `RETURNED_NOT_TRANSFUSED`; orders transfused peri-operatively terminal as `PERIOP_TRANSFUSION_EXEMPT`. Both are excluded from appropriateness scoring: they route out, they don't judge. Default-ON (`RETURNS_LEDGER_ENABLED`); `BBA_BDVSTTRANS_CSV` overrides the ledger path in the pilot legs.
-- Declared-use USETYPE routing (specs #147 + #194/#195). `declared_use` interprets the order-time `BDVSTDT.USETYPE`. Orders whose `USETYPE` code declares surgical use (`2` → `surgery`) or type-and-screen (`3` → `type_screen`) are exempt at the order level (`preop_declared_exempt` → `PERIOP_TRANSFUSION_EXEMPT`). Ledger absence or inconclusiveness does not defeat the exemption, though a complete all-returned ledger still wins (`RETURNED_NOT_TRANSFUSED` has higher precedence). USETYPE is now the only pre-op router: the legacy bare-surgical ≤6h / ≤72h deterministic-APPROPRIATE bypasses are retired while the flags are ON (structured routing keeps the 6h/72h windows). Default-ON (`DECLARED_USETYPE_ENABLED`, `DECLARED_USE_PREOP_EXEMPT_ENABLED`).
-- MSBOS pre-op reservation audit (specs #159 to #175). `preop_reservation` audits reserved units for planned operations against the MSBOS / OPBloodLimit reference. Over-reservation surfaces as the `PREOP_OVER_RESERVATION` review class; the platelet leg screens reserved platelets against clinician-signed count cutoffs (MNS 80k; neuraxial 100k; cardiac-CPB 100k, per 10³/µL). Never-guess rules: a missing count with reserved units routes to review, and zero reserved units is never "over". Returned/exempt orders still carry an MSBOS `reservation_annotation` (annotation, not verdict) so C:T waste stays visible. Default-ON (`MSBOS_RESERVATION_ENABLED`).
-- Planned-op picker v2 + OPRTACT→ICD9 bridge (specs #196 to #216). The MSBOS arm picks the planned operation inside a 72-hour window via a vendored OPRTACT→ICD9 bridge reference (`scripts/build_oprtact_icd9_bridge.py`), with a guarded-prefix denylist, a dominance-ceiling rule, and full picker provenance embedded on every reservation marker. Bridge disagreements gate the verdict to review instead of guessing. Default-ON (`MSBOS_PLANNED_OP_PICKER_V2_ENABLED`, effective only with the MSBOS flag).
-- Administration-confirmation gate (spec #105). Reserve-ahead orders whose transfusion can't be confirmed from the record terminal as `PREOP_RESERVATION_UNCONFIRMED` instead of receiving an Hb verdict. Behind the default-OFF `RESERVE_AHEAD_ROUTER_ENABLED` flag pending the #109 clinical gate.
-- CLI `bba report` is wired. It renders committee CSVs, per-physician CSVs, and the PDF from the audit store (`build_report_inputs` + `generate_monthly_report`); no longer a `CliError` seam. Requires `BBA_BDVST_CSV` / `BBA_DCT_CSV` for the ward/physician attribution resolvers (fail loud when unset). The report aggregate models track an `over_reservation_count` (not yet serialized as a CSV column).
-- Doctor ranking verdict source is selectable. `BBA_VERDICT_SOURCE=pipeline` ranks on full-cohort pipeline verdicts from the audit store; the default remains the 300-case human-review workbook (`human`).
-- MSBOS name-match offline study (specs #185 to #193). A Tier-1 deterministic + Tier-2 LLM procedure-name matcher (`scripts/pilot/msbos_name_match_study.py`) for reservation cases the coded pickers can't resolve. It is an annotation-only offline study, not wired into the pipeline.
-
-## Feature flags
-
-Runtime flags live in `src/bba/feature_flags.py` (plain module constants; the pilot scripts apply the `BBA_PILOT_*` env overrides):
-
-| Flag | Default | Pilot kill-switch / override |
-|------|---------|------------------------------|
-| `RETURNS_LEDGER_ENABLED` | **ON** | — |
-| `DECLARED_USETYPE_ENABLED` | **ON** | `BBA_PILOT_DECLARED_USETYPE=0` |
-| `DECLARED_USE_PREOP_EXEMPT_ENABLED` | **ON** | `BBA_PILOT_DECLARED_USE_PREOP_EXEMPT=0` |
-| `MSBOS_RESERVATION_ENABLED` | **ON** | `BBA_PILOT_MSBOS_RESERVATION=0` |
-| `MSBOS_PLANNED_OP_PICKER_V2_ENABLED` | **ON** (needs the MSBOS flag) | `BBA_PILOT_MSBOS_PLANNED_OP_PICKER_V2` |
-| `PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED` | **ON** (hematology sign-off 2026-09-20) | `BBA_PILOT_PLATELET_AUTOCLEAR=0` |
-| `PLATELET_LLM_ENABLED` | off | — |
-| `RESERVE_AHEAD_ROUTER_ENABLED` | off (pending #109 gate) | `BBA_PILOT_RESERVE_AHEAD_ROUTER` |
-| `PLATELET_TREND_GUARDRAIL_ENABLED` | off (issue #237) | `BBA_PILOT_PLATELET_TREND=1` |
-
-The active combination is encoded in the pilot store code-version token, currently
-`pilot-mini+returns+declared+msbos5+opbound2+usetypeonly` with all defaults.
-
-## Safety & policy notes
-
-- No live PHI in tests. Integration tests use mock-AN fixtures; LLM tests replay VCR cassettes from `#22`.
-- The 3-tier Hb classifier is authoritative. Vitals are supporting evidence only. Deterministic bypasses require structured MTP, procedure-timing, pre-op crossmatch, delta-Hb, or hard peri-op evidence (`intraop_transfusion` or `EBL ≥ 500 mL`). See the docs page [3-tier Hb classifier](docs/src/content/docs/en/developers/three-tier-hb.mdx) for the decision-flow graphic.
-- The missing-Hb positive-evidence pre-pass is disabled by default. The `enable_missing_hb_positive_evidence` flag (`BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE`) is `False` until the QI committee signs off. When `False`, missing Hb always returns `INSUFFICIENT_EVIDENCE` (original PRD spec); when `True`, the pre-pass auto-approves on hard peri-op evidence and defers everything else to the LLM rather than dead-ending.
-- Hemodynamic and peri-op summaries are supporting evidence only. The `scan_hemodynamics` and `scan_periop` scans surface MAP/vasopressor/EBL facts as pinned, truncation-exempt evidence items. They never gate the deterministic classifier. All appropriateness weighting stays with the LLM and the auditor.
-- Quote-grounding is fail-closed. The LLM_REVIEW leg's claims are checked against six anti-hallucination layers (NFC + substring + cited_id + within-doc uniqueness + ≥25 chars + numeric-tuple + medical-NLI). Failures route to `hallucination_suspect`, not to a result row.
-- Prose-trusted bleeding auto-clears are current-episode only. The RBC over-clear guardrail's sole prose exemption (a grounded `ACTIVE_BLEEDING` quote, confidence ≥ 0.8, > 300 mL or a life-threatening marker) blanks quote spans charted under a `d/m/y` date anchor (Thai BE or CE) more than 7 days before the order, so a weeks-old quantified index bleed cannot clear today's order (case 68080335). Undated or unparseable text is untouched. The gate can only withhold the exemption, never widen the auto-clear surface. The RBC prompt states the same current-episode rule so the model's verdict agrees with the guardrail.
-- The platelet auditor auto-clears nothing. `platelet_classifier` never emits `APPROPRIATE` or `INAPPROPRIATE` in v1: because the policies withhold platelets at very low counts for several exclusion populations (TTP/HIT transfusion is actively harmful), every present count routes onward to review or the LLM rather than dead-ending as deterministic-final. Pinned by a hypothesis property test (CR-M2).
-- Component families are isolated at intake. `component_map` keeps platelet statistics out of RBC reporting and the dashboard, and excludes `FFP` / `CRYO` / `WHOLE_BLOOD` with a precise reason rather than guessing them into an auditable family.
-- Run-level idempotency is enforced at the store layer. `bba audit` cannot accidentally produce two rows for the same `(run_id, encounter_id)` pair.
-- Returns-terminal and declared-exempt orders never enter appropriateness statistics. `RETURNED_NOT_TRANSFUSED` and `PERIOP_TRANSFUSION_EXEMPT` are routing terminals, excluded from scoring in reports, ranking, and the dashboard; only `PREOP_OVER_RESERVATION` counts against a service (as an over-reservation bucket).
-- The MSBOS arm never guesses. Unresolved or ambiguous planned operations, bridge disagreements, and missing pre-op counts with reserved units all route to review. None auto-clear and none auto-flag. Melena is treated as digested/old blood: it never satisfies the >300 mL active-bleeding volume exemption (shock or low Hb are the only clears).
-
-## How this was built (history)
-
-Each module was developed against a child issue under the PRD using a three-step Claude Code workflow:
-
-```
-./scripts/ralph_ticket.sh <N> <module_path>
-```
-
-Generates:
-1. `/tdd`: scaffold failing tests + interface (RED)
-2. `/ralph-loop`: iterate red → green → refactor until `<promise>ISSUE-N-COMPLETE</promise>` fires
-3. `/codex:review`: independent review on the diff
-
-Then `gh issue close N` after review passes. Parallel work happened in `git worktree` siblings (`../blood_audit-<branch>/`).
-
-### Build order
-
-| Ticket | Module | Depends on |
-|--------|--------|------------|
-| #2 | M0 — KCMH IT procedure-table export request (manual) | (none) |
-| #3 | `bba.ingest` | (none — foundation) |
-| #4 | `bba.audit_orders` | #3 |
-| #5 | `bba.hb_lookup` | #3 |
-| #6 | `bba.vitals_extractor` | #3 |
-| #16 | `bba.evidence_bundle_builder` | #3, #5, #6 |
-| #19 | `bba.audit_store` | #3 |
-| #17 | `bba.deid_redactor` | #16 |
-| #7 | `bba.cohort_detector` | #3, #2 |
-| #8 | `bba.deterministic_classifier` | #4, #5, #6, #7 |
-| #21 | `bba.prompt_builder` | #17 |
-| #22 | `bba.llm_client` | #21 |
-| #20 | `bba.eval_harness` | #19 |
-| #23 | `bba.confidence_calibrator` | #22 |
-| #18 | `bba.quote_grounder` | (none — pure function) |
-| #25 | `bba.review_actions` | #19 |
-| #24 | `bba.audit_pipeline` | #8, #16, #17, #22, #18, #19 |
-| #26 | `bba.dashboard` | #19, #25 |
-| #27 | `bba.monitoring` | #20, #24 |
-| #28 | `bba.report_generator` | #19 |
-| #29 | `bba.cli` | #24, #20, #28, #26, #27 |
-
-Modules without deps were built in parallel.
-
-Phase 2 (platelet auditor) and the attribution/cohort features followed the same workflow on feature branches: `feat/periop-defer-llm` (#81, peri-op defer + cardiopulmonary cohort), `feat/doctor-dept-ranking` (#82, `attribution`), `feat/ortho-surgery-cohort` (#83, `ORTHO_SURGERY` split), `feat/platelet-auditor` (#84, deterministic core), and `feat/platelet-pipeline-dispatch` (#85, live-pipeline integration + platelet LLM leg).
-
-The 2026-07 wave followed the same spec → tickets → review workflow: returns ledger (spec #119, PRs #120 to #138), declared-use USETYPE routing (spec #147, PRs #148 to #152 + #194/#195), MSBOS reservation (specs #159 to #176, PRs #160 to #184), name-match study (spec #185, PRs #190 to #193), and planned-op picker v2 + bridge (spec #196, PRs #202 to #216).
+- [Current module contracts](docs/CONTEXT.md) describe boundaries and persistent identities.
+- [Feature flags](src/bba/feature_flags.py) define current defaults. Pilot environment overrides do not configure every supported CLI path.
+- [Clinical policy implementation](docs/src/content/docs/en/clinical/policy-summary.mdx) describes precedence and boundary cases.
+- [Requirements](https://github.com/macsermkiat/blood_audit/issues/1) retain the original scope.
+- [Historical documentation](docs/history/README.md) preserves earlier build notes and plans. Historical instructions are not operational guidance.

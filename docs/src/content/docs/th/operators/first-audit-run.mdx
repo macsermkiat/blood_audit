@@ -1,89 +1,61 @@
 ---
-title: รันออดิทครั้งแรก
-description: รัน bba ingest และ bba audit ครบจบจากข้อมูลส่งออก HOSxP
+title: ตรวจข้อมูลครั้งแรก
+description: บันทึกผลการตรวจแบบ local โดยไม่ใช้ API key หรือ Postgres
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
-import CliCommandCard from "../../../../components/CliCommandCard.astro";
+ขั้นตอนนี้บันทึกผลที่กฎตัดสินได้ และส่งกรณีที่ต้องใช้หลักฐานสำหรับโมเดลให้คนทบทวน ใช้ข้อมูลสังเคราะห์เพื่อตรวจการติดตั้ง หรือใช้ข้อมูลโรงพยาบาลบนเครื่องที่ได้รับอนุญาต
 
-เอกสารนี้พาเดินเส้นทาง Phase 1 ตั้งแต่รับข้อมูลส่งออกจาก HOSxP
-จนตรวจ bundle, normalize rows และบันทึก run markers โดยรันซ้ำได้อย่างปลอดภัย
+## เตรียมชุดข้อมูล
 
-<AtAGlance
-  title="สิ่งที่จะได้"
-  items={[
-    { label: "ข้อมูลเข้า", value: "path ของ CSV หนึ่งไฟล์ภายใน bundle จาก HOSxP" },
-    { label: "เขียนออก", value: "$BBA_DATA_DIR/audit/<run_id>/ พร้อม markers ใต้ audit_runs", tone: "ok" },
-    { label: "รันซ้ำ", value: "input เดิม + code เดิม = run_id เดิม และไม่เขียนซ้ำ" },
-    { label: "ตรวจสอบ", value: "ดู run markers และ structured logs หลังรัน" },
-  ]}
-/>
+วาง [CSV มาตรฐานทั้ง 13 ไฟล์](/blood_audit/th/operators/ingest-csv/#expected-tables) ไว้ข้าง `BDVST.csv` กรองกลุ่มผู้ใหญ่ตามขอบเขตที่อนุมัติตั้งแต่ขั้นส่งออก และเก็บข้อมูลไว้นอก repository
 
-:::note[ขอบเขต Phase 1]
-ใน Phase 1, `bba audit` ทำเฉพาะ **ส่วน ingest** ของ pipeline
-แถว classification (`APPROPRIATE`, `INAPPROPRIATE`, `NEEDS_REVIEW`, ฯลฯ)
-ยังไม่ถูกเขียนโดยคำสั่งนี้ ส่วน LLM analysis จะเชื่อมต่อใน Phase 1.5
-ดูรายละเอียดที่ [คำสั่ง audit](/blood_audit/th/operators/audit-command/)
-:::
+เลือกพื้นที่ถาวรที่จำกัดสิทธิ์ หากใช้พื้นที่เดิม ให้ตรวจเจ้าของและสิทธิ์ก่อน แอปจะปฏิเสธไฟล์คลินิกเดิมที่เปิดสิทธิ์กว้างเกินไป
 
-## 1. ทางเลือก: ตรวจชุดข้อมูลก่อน
-
-<CliCommandCard
-  command="bba ingest INPUT_CSV --schema-version v1"
-  summary="ตรวจสอบไฟล์ CSV จาก HOSxP, hash input, drain rows ผ่าน normalization และเขียน completion marker ใต้ $BBA_DATA_DIR/ingest/v1"
-  flags={[
-    { name: "INPUT_CSV", description: "เส้นทางของ CSV หลักจาก HOSxP", required: true },
-    { name: "--schema-version v1", description: "schema fingerprint ที่ใช้ร่วมในการสร้าง run_id" },
-  ]}
-  envVars={["BBA_DATA_DIR"]}
-  example={`uv run bba ingest /var/data/exports/PHI_xxx_001.csv --schema-version v1`}
-/>
-
-ขั้นตอนนี้เหมาะเมื่ออยากตรวจ bundle แยกก่อนรัน audit สำหรับเส้นทางปกติของ
-operator ใน Phase 1 สามารถรัน `bba audit --input ...` ได้เลย เพราะคำสั่ง audit
-จะเรียก ingest validation/drain ภายในอยู่แล้ว
-
-## 2. รัน audit (Phase 1: ส่วน ingest)
-
-<CliCommandCard
-  command="bba audit --input INPUT_CSV"
-  summary="Phase 1: validate และ drain ชุด CSV จาก HOSxP ภายใต้ $BBA_DATA_DIR/audit/<run_id>/ แล้วบันทึก completion/run-state markers"
-  flags={[
-    { name: "--input INPUT_CSV", description: "เส้นทาง CSV เดียวกับที่ใช้ตอน ingest" },
-    { name: "--run-id RUN_ID", description: "ใช้ run_id ที่เคยรันสำเร็จแล้ว (no-op ยกเว้นใส่ --force)" },
-    { name: "--force", description: "ข้าม idempotency จะเพิ่มแถว compliance ลง audit_log พร้อม idempotency_override=true" },
-  ]}
-  envVars={["BBA_DATA_DIR"]}
-  example={`uv run bba audit --input /var/data/exports/PHI_xxx_001.csv`}
-/>
-
-คำสั่งนี้รันซ้ำได้อย่างปลอดภัย: ถ้าใช้ CSV เดิม ระบบจะไม่เขียนผลซ้ำ
-ยกเว้นใส่ `--force` ซึ่งจะบันทึก idempotency override ไว้ใน audit trail
-
-## 3. ตรวจสอบ run markers
-
-Subcommand 4 ตัวที่ใช้ดูผลหลัง audit (`evaluate`, `report`,
-`serve-dashboard`, `sentinel`) จะ raise `CliError` ใน Phase 1 โดยตั้งใจ ดู
-[Integration seams](/blood_audit/th/operators/integration-seams/)
-
-ตอนนี้สิ่งที่ตรวจสอบได้ดีที่สุดคือ run markers และ structured logs:
-
-```bash
-# ตรวจว่ามี directory ของ run_id และ run-state marker
-ls -la "$BBA_DATA_DIR/audit/<RUN_ID>/"
-ls "$BBA_DATA_DIR/audit_runs/<RUN_ID>/"
+```sh
+export BBA_DATA_DIR=/srv/bba/data
 ```
 
-## สิ่งที่จะเห็นใน Phase 1.5
+ตัวอย่างนี้ใช้ `/srv/bba/export` เป็นที่วางชุดข้อมูล เปลี่ยนทั้งสองพาธให้ตรงกับพื้นที่ที่อนุมัติ สำหรับครั้งแรกให้ใช้ค่าเริ่มต้นของโหมด local หากมี `BBA_APPLICATION_CONFIG` อยู่แล้ว ให้ตรวจว่าไฟล์นั้นเลือกโหมดใด
 
-เมื่อเชื่อม LLM analysis แล้ว `bba audit` จะเขียน `AuditRow`
-1 แถวต่อคำสั่งให้เลือดที่ตรวจสอบลงใน audit store เพิ่มเติม
-คอลัมน์ `final_classification` จะมีค่าเป็น 1 ใน verdict หลัก 5 ค่า —
-`APPROPRIATE`, `INAPPROPRIATE`, `NEEDS_REVIEW`,
-`INSUFFICIENT_EVIDENCE`, `POTENTIALLY_INAPPROPRIATE` — หรือเป็น terminal
-ฝั่ง routing/reservation: `RETURNED_NOT_TRANSFUSED` และ
-`PERIOP_TRANSFUSION_EXEMPT` (ไม่นับในการให้คะแนน),
-`PREOP_OVER_RESERVATION` และ `PREOP_RESERVATION_UNCONFIRMED`
-(มี flag ควบคุม, default-off) ส่วน `LLM_REVIEW` เป็นแนวคิดการ routing
-(ไม่ใช่ค่าที่บันทึกจริง) ถ้า quote-grounding ล้มเหลวจะกลายเป็น
-`final_classification = NEEDS_REVIEW` พร้อม `review_reason` ที่ระบุ
+## ตรวจรูปแบบข้อมูล
+
+ขั้นนี้ทำหรือข้ามก็ได้ คำสั่งตรวจ header และการปรับรูปแบบแถว จากนั้นเขียน ingest completion marker โดยยังไม่จัดประเภทคำสั่งเลือด
+
+```sh
+uv run bba ingest /srv/bba/export/BDVST.csv
+```
+
+เมื่อสำเร็จจะมี log `ingest.complete` หากขาดไฟล์หรือคอลัมน์ที่จำเป็น คำสั่งจะหยุด การรัน audit จะตรวจ snapshot ของข้อมูลอีกครั้ง จึงไม่จำเป็นต้องรัน ingest แยกทุกครั้ง
+
+## บันทึกผลการตรวจ
+
+ค่า `PLATELET_LLM_ENABLED` ใน repository เป็น false หากมีคำสั่งเกล็ดเลือดที่ต้องเข้าเส้นทางทบทวนซึ่งยังปิดอยู่ ระบบจะหยุดเมื่อพบงานที่ยังบันทึกไม่ครบ และไม่สร้าง completion marker ตรวจเส้นทางที่อนุมัติก่อนใช้กลุ่มข้อมูลเกล็ดเลือด
+
+```sh
+uv run bba audit --input /srv/bba/export/BDVST.csv
+```
+
+ระบบเก็บ snapshot ของข้อมูล ประกอบคำสั่งเลือด จัดประเภท และบันทึก `AuditRow` ไว้ใต้ `$BBA_DATA_DIR/audit_store` จำนวนงานที่เสร็จนับจากแถวผลการตรวจที่บันทึกแล้ว หากไม่มีคำสั่งที่อยู่ในขอบเขต คำสั่งจะไม่บันทึกว่ารอบนั้นเสร็จ
+
+จด run ID จาก structured log เมื่อสำเร็จจะมี `audit.complete` พร้อมจำนวนแถว กรณีที่ต้องใช้โมเดลจะคงเป็น `NEEDS_REVIEW` พร้อม `privacy_admission_failed` ในโหมด local กรณีเหล่านี้ยังไม่ได้รับการตัดสินจากโมเดล
+
+ครั้งแรกระบบสร้าง `identity.key` สำหรับรหัสแทนผู้ป่วยและการนอนโรงพยาบาลด้วย HMAC สำรองคีย์พร้อมไดเรกทอรีข้อมูล
+
+
+## ตรวจการรันซ้ำ
+
+รันคำสั่ง audit เดิมด้วยข้อมูล การตั้งค่า และรุ่นโค้ดเดิม หากรอบนั้นเสร็จแล้วจะมี log `audit.noop` และใช้ผลที่บันทึกไว้
+
+`--force` ข้ามการตรวจว่ารอบเสร็จแล้วและบันทึกการสั่งรันซ้ำ แต่ไม่เขียนทับผลที่ยืนยันแล้ว หากเปลี่ยนนโยบายหรือเพิ่งได้หลักฐานที่อนุมัติ ให้ใช้ policy version ใหม่และเริ่มรอบใหม่ ดู [คำสั่ง audit](/blood_audit/th/operators/audit-command/)
+
+## สร้างรายงานจากผลที่บันทึกแล้ว
+
+รายงานรายเดือนใช้เฉพาะเม็ดเลือดแดงและไม่รับรอบที่มีแต่เกล็ดเลือด ต้องใช้ไฟล์คำสั่งเลือดและทะเบียนแพทย์ที่ตรงกัน
+
+```sh
+export BBA_BDVST_CSV=/srv/bba/export/BDVST.csv
+export BBA_DCT_CSV=/srv/bba/export/DCT.csv
+uv run bba report --run-id RUN_ID --format html
+```
+
+แทน `RUN_ID` ด้วย ID ที่จดไว้ คำสั่งจะแสดงพาธไฟล์ HTML เก็บรายงานในช่องทางทบทวนที่อนุมัติ ดูรูปแบบ JSON และ PDF ที่ [สร้างรายงาน](/blood_audit/th/operators/generate-report/)

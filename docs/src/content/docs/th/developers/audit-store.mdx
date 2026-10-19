@@ -1,48 +1,54 @@
 ---
 title: Audit store
-description: ตารางและ invariant สำหรับ AuditRow, LLM call และสถานะของ run
+description: ผลตรวจที่แก้ทับไม่ได้ ลำดับการเรียกโมเดล และการ commit ที่กู้คืนได้
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
+`bba.audit_store` เก็บ `AuditRow` และ `LlmCall` เป็น Parquet หนึ่งแถวคือคำสั่งของส่วนประกอบเลือดหนึ่งชนิด รายการเรียกโมเดลเก็บแต่ละครั้งพร้อมที่มา ส่วนผล deterministic และผลที่ปฏิเสธการส่งข้อมูลใช้ marker ที่ระบุชัดว่าไม่ได้เรียกโมเดลหรือ redactor
 
-Audit store คือแหล่งเก็บผลลัพธ์หลัง pipeline ทำงานเสร็จ ใช้สำหรับรายงาน QI,
-การทบทวนย้อนหลัง และ audit trail
+โมเดลทั้งสองเป็น frozen Pydantic record และตรึงค่า JSON ที่ซ้อนกันด้วย โมเดลปฏิเสธเวลาที่ไม่มี timezone และแปลงเวลาที่มี timezone เป็น UTC ชนิด `SafeId` ปฏิเสธค่าว่าง ตัวคั่นเส้นทาง `.` และ `..`
 
-<AtAGlance
-  title="สรุป store"
-  items={[
-    { label: "เก็บ", value: "AuditRow และ LlmCall records" },
-    { label: "Invariant", value: "rows immutable, timezone-aware UTC และ keyed ด้วย SafeId", tone: "ok" },
-    { label: "Idempotency", value: "duplicate (audit_id, run_id, code_version) ต้อง no-op" },
-    { label: "Phase 1", value: "CLI เขียน ingest/run markers; AuditRow path จะเชื่อมใน Phase 1.5", tone: "warn" },
-  ]}
-/>
+## ค่าการจำแนก
 
-## Classification ที่เก็บจริง
+`rule_classification` คือผลจากกฎ deterministic ส่วน `final_classification` คือผลหลังตรวจโมเดลและใช้กฎตรวจคำตอบเมื่อมีขั้นตอนเหล่านั้น ค่าที่เก็บได้คือ:
 
-`final_classification` เก็บได้ 9 ค่า:
+```python
+Classification = Literal[
+    "APPROPRIATE",
+    "INAPPROPRIATE",
+    "NEEDS_REVIEW",
+    "INSUFFICIENT_EVIDENCE",
+    "POTENTIALLY_INAPPROPRIATE",
+    "PREOP_RESERVATION_UNCONFIRMED",
+    "PREOP_OVER_RESERVATION",
+    "RETURNED_NOT_TRANSFUSED",
+    "PERIOP_TRANSFUSION_EXEMPT",
+]
+```
 
-- `APPROPRIATE`
-- `INAPPROPRIATE`
-- `NEEDS_REVIEW`
-- `INSUFFICIENT_EVIDENCE`
-- `POTENTIALLY_INAPPROPRIATE`
-- `PREOP_RESERVATION_UNCONFIRMED`
-- `PREOP_OVER_RESERVATION`
-- `RETURNED_NOT_TRANSFUSED`
-- `PERIOP_TRANSFUSION_EXEMPT`
+`RETURNED_NOT_TRANSFUSED` และ `PERIOP_TRANSFUSION_EXEMPT` ไม่นับในคะแนนความเหมาะสม ผลด้านการจองเลือดแยกจากการตัดสินข้อบ่งชี้ให้เลือด
 
-สี่ค่าสุดท้ายเป็น routing / reservation terminals ที่มาจาก returns ledger,
-declared-use USETYPE และ MSBOS reservation arms:
-`RETURNED_NOT_TRANSFUSED` และ `PERIOP_TRANSFUSION_EXEMPT` เป็น
-deterministic-final และ**ไม่ถูกนับใน appropriateness scoring**;
-`PREOP_OVER_RESERVATION` เป็นผลตรวจ MSBOS over-reservation;
-`PREOP_RESERVATION_UNCONFIRMED` เป็นแบบ flag-gated (default-off)
+`LLM_REVIEW` เป็นแนวคิดสำหรับส่งต่อภายใน ส่วน `hallucination_suspect` และ `privacy_admission_failed` เป็นเหตุผลการทบทวน ไม่ใช่ค่าการจำแนก
 
-`LLM_REVIEW` เป็น routing label ภายใน deterministic classifier ไม่ใช่ค่าที่เก็บ
-ส่วน `hallucination_suspect` เป็น `review_reason` ไม่ใช่ classification
+## ลำดับการ commit
 
-## Idempotency
+ระบบเขียนรายการเรียกก่อน เขียนผลตรวจตามมา และเขียน commit marker เป็นลำดับสุดท้าย การอ่านผลต้องมี marker ที่ใช้ได้ ถ้างานขาดช่วงจึงอาจมีรายการเรียกโดยยังไม่เผยแพร่ผลที่ไม่ครบ
 
-การเขียนซ้ำด้วย `(audit_id, run_id, code_version)` เดิมต้องไม่สร้างแถวซ้ำ
-เพราะ audit report ต้อง reproducible และตรวจย้อนหลังได้
+การเขียนซ้ำคีย์ `(audit_id, run_id, code_version)` ที่ commit แล้วไม่สร้างผลใหม่ API สำหรับอ่านรับตัวกรอง code version เพื่อไม่จับคู่ผลกับการเรียกคนละรุ่น แต่ละรายการเก็บ `attempt_index`, รุ่นโมเดล และที่มาของคำขอ การกู้คืนใช้ลำดับและกฎตรวจเดียวกับการรันปกติ
+
+CLI เขียนผล `AuditRow` จริงผ่าน store นี้ และมีเครื่องหมายจบงานแยกต่างหาก `--force` ข้ามทางลัดที่เห็นว่างานจบแล้วและบันทึกการฝืนรัน แต่ไม่แทนที่ผลเดิม การเปลี่ยนวิธีประเมินต้องใช้ identity ของนโยบายหรือการตั้งค่าใหม่
+
+## Manifest สำหรับกู้คืน
+
+run-context manifest ผูกบริบททางคลินิก feature flag และการตั้งค่านโยบาย ส่วน batch manifest เพิ่มลำดับ audit ID คำขอที่ตรงกันทุกส่วน และการตั้งค่าโมเดล transport manifest ผูก payload ของผู้ให้บริการกับ remote batch ID
+
+ใช้คำตอบใน cache ซ้ำได้เมื่อคำขอตรงกันทุกส่วนเท่านั้น batch ID หรือ prompt hash อย่างเดียวไม่พอ การกู้คืนปฏิเสธหลักฐาน โมเดล นโยบาย หรือ code version ที่เปลี่ยน และตรวจ grounding ใหม่ก่อนเผยแพร่ผล หากอาจส่งคำขอแล้วแต่ไม่มีหลักฐานผูกผลที่บันทึกถาวร ต้องตรวจสอบก่อนส่งซ้ำ
+
+## สิทธิ์จัดเก็บและ Postgres
+
+ผลตรวจ รายการเรียก และ manifest ใช้ directory และไฟล์ที่เจ้าของเข้าถึงได้เท่านั้น ระบบปฏิเสธไฟล์เดิมที่เปิดสิทธิ์กว้างเกินไปหรือใช้ symlink เป็นไฟล์ปลายทาง ส่วน snapshot ต้นฉบับจำกัดเป็นอ่านอย่างเดียว ดูแลสิ่งเหล่านี้เป็นเวชระเบียน
+
+Postgres เก็บ checkpoint ใน `batch_runs` และประวัติทบทวนใน `review_actions` ซึ่งมีข้อกำหนด migration และสิทธิ์ฐานข้อมูลแยกกัน ตั้ง `BBA_DB_URL` เป็น runtime DSN เช่น `postgresql://user@host/database` ตัวเชื่อม SQLAlchemy แปลงผ่าน `ReviewActionsConfig.sqlalchemy_dsn` อย่าส่ง URL แบบ `postgresql+psycopg://` ให้ connection ของ psycopg โดยตรง
+
+`migrate_cold_storage` ย้าย extended-thinking payload รุ่นเก่าไปเก็บแยกได้ ช่วงเวลาที่เอกสารกำหนดคือ 90 วัน ต้องเรียกการย้ายโดยตรง ไม่ได้ทำอัตโนมัติเมื่อเก็บแถว
+
+สัญญาโมเดลและการเขียนอยู่ใน `src/bba/audit_store/models.py` และ `src/bba/audit_store/store.py` เงื่อนไขกู้คืนอยู่ใน `src/bba/audit_pipeline/manifest.py` และ `src/bba/audit_pipeline/resume.py`

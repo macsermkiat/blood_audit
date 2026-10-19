@@ -1,68 +1,41 @@
 ---
 title: Report output
-description: What the QI committee sees — six CSV sections plus a PDF summary.
+description: Monthly RBC summaries, physician own-view files, and audit provenance.
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
+The monthly report summarises RBC orders from one committed audit run. Platelet orders do not enter these RBC counts or rates. The reviewer queue covers committed unresolved cases from both components.
 
-The report is the end product the QI committee reads. It is not a live
-dashboard and it is not a scorecard for disciplining individuals.
+## Files and audiences
 
-<AtAGlance
-  items={[
-    { label: "Output set", value: "Six committee CSV sections, per-physician own-view CSVs, and one PDF." },
-    { label: "Privacy", value: "Physician own-view files are split one physician per file.", tone: "ok" },
-    { label: "Reproducible", value: "Every row and page records the policy, model, and evidence behind it." },
-    { label: "Coverage", value: "One month of completed transfusion orders from a single audit run." },
-  ]}
-/>
+The generator writes five committee CSVs, one own-view CSV per requested physician, a committee PDF, and `provenance.json`.
 
-## Six CSV sections (plus per-physician files and a PDF)
+| File | Contents |
+| --- | --- |
+| `hospital_trend.csv` | Monthly totals and classification counts, with the inappropriate rate. |
+| `ward_scorecard.csv` | The same counts grouped by ward. |
+| `indication_distribution.csv` | Counts per indication code. An order can contribute to several indications. |
+| `cohort_exception.csv` | Counts and inappropriate rates by clinical-context cohort. |
+| `pipeline_health.csv` | Classified, review, and insufficient-evidence counts and rates. |
+| `physician_own_view_<physician_id>.csv` | One physician's own totals and rate, with anonymous peer quartiles. |
+| `report_<YYYY-MM-DD>.pdf` | Committee tables. The date is the first day of the report month. |
+| `provenance.json` | Source-row identities and the policy, model, prompt, evidence, and redactor identifiers used. |
 
-| Section file | Audience | Contents |
-| --- | --- | --- |
-| `hospital_trend.csv` | QI committee | One row per month covered: total / appropriate / inappropriate / needs_review / insufficient_evidence counts, plus inappropriate_rate. |
-| `ward_scorecard.csv` | Ward leads + QI committee | One row per `ward_id`. Same counts as the hospital trend, scoped to the ward. |
-| `physician_own_view_<physician_id>.csv` | The named physician only | One file per physician. Holds the physician's own absolute numbers plus peer median / p25 / p75 inappropriate-rate quartiles. No other physician's individual rate is in the file. |
-| `indication_distribution.csv` | QI committee | One row per distinct indication code. An order with N indication codes contributes 1 to each. |
-| `cohort_exception.csv` | QI committee | One row per `cohort_applied` (including `default`). Useful for spotting cohorts with unusual inappropriate-rates. |
-| `pipeline_health.csv` | QI committee | Single-row operational summary: classified vs needs-review vs insufficient-evidence counts and rates. Documentation absence is its own bucket, never folded into "inappropriate". |
-| `report_<YYYY-MM-DD>.pdf` | QI committee | Single PDF with all the above sections rendered as tables, plus the reproducibility footer on every page. |
+Own-view CSVs are separate files, each with one physician's data row. Distribute a file only to its intended recipient. The committee PDF includes a physician table and needs committee-level access controls. File separation does not enforce permissions on the output directory or delivery channel.
 
-## Which orders are counted
+## Scoring and review counts
 
-Orders whose `final_classification` is `RETURNED_NOT_TRANSFUSED` or
-`PERIOP_TRANSFUSION_EXEMPT` are excluded from appropriateness scoring.
-They never inflate or dilute a ward's or a physician's rate, because no
-transfusion was judged. `PREOP_OVER_RESERVATION` rows are scored on the
-inappropriate side.
+`RETURNED_NOT_TRANSFUSED` and `PERIOP_TRANSFUSION_EXEMPT` rows are excluded from scoring and from the report's `total_orders`. `PREOP_OVER_RESERVATION` counts on the inappropriate side. `INSUFFICIENT_EVIDENCE` remains a separate category.
 
-`INSUFFICIENT_EVIDENCE` is never folded into `INAPPROPRIATE`. Missing
-documentation is a records problem, not a finding that the transfusion
-was wrong, and the report keeps the two apart.
+`POTENTIALLY_INAPPROPRIATE` and `PREOP_RESERVATION_UNCONFIRMED` need an explicit classification projector. The default builder rejects these labels rather than guessing how they contribute to the four report categories.
 
-## Per-physician separation by design
+Pipeline-health review counts include `NEEDS_REVIEW` and classified orders with `needs_human_review` set. Insufficient-evidence rows stay in their own count, including when flagged. These report metrics differ from the dashboard's unresolved human-review queue.
 
-`physician_own_view` does not ship as a single committee CSV. That would
-expose every physician's own rate to every recipient. Instead the
-generator emits one file per physician, each holding exactly one data
-row. Sending the file to that physician therefore never leaks another
-physician's rate.
+## Provenance and reproducibility
 
-The committee PDF still renders a physician-own-view table for the
-committee's internal review.
+Each CSV data row and PDF page carries a run-level provenance summary. A run may contain deterministic results and several LLM models or prompts. The summary represents that mixture, while `provenance.json` preserves each RBC source row's exact identifiers, including excluded rows.
 
-## Reproducibility
+The evidence footer hash is a digest of sorted audit-ID and evidence-hash pairs. It is not an evidence-schema hash. For mixed prompts, `prompt_hash` is also an aggregate digest. The model field can contain a sorted JSON list. Deterministic rows use `deterministic` and can show `not-applied` for a redactor that did not run.
 
-Every CSV row and every PDF page records which policy version, which
-model, and which evidence produced it. An auditor six months later can
-take the same inputs and the same code and reproduce any line in the
-report. The exact field names are listed under
-[Generate the report](/blood_audit/en/operators/generate-report/).
+These records support tracing a stored answer. A new model call is not guaranteed to reproduce the original answer. Reproduction also needs the retained inputs, code, configuration, and artifacts.
 
-## How to produce it
-
-Run [`bba report`](/blood_audit/en/operators/generate-report/). The
-column-by-column contract is
-[`docs/report-schema.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/report-schema.md),
-summarized at [Report schema](/blood_audit/en/reference/report-schema/).
+Run [`bba report`](/blood_audit/en/operators/generate-report/) to produce the files. [Report schema](/blood_audit/en/reference/report-schema/) describes the stored labels and provenance fields.

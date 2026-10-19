@@ -1,69 +1,32 @@
 ---
 title: Quote grounding (6 layers)
-description: Six fail-closed layers between an LLM citation and a published audit row.
+description: Citation checks, first-failure reasons, and the limits of text grounding.
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
 import QuoteGroundingLayers from "../../../../components/QuoteGroundingLayers.astro";
 
-When the deterministic classifier routes a row to LLM review, the LLM
-emits a clinical reasoning summary along with quoted evidence from the
-de-identified bundle. Every quote passes through six mandatory
-fail-closed layers; a seventh medical-NLI semantic-entailment layer is
-opt-in.
-
-<AtAGlance
-  items={[
-    { label: "Input", value: "LLM citation + evidence_id + de-identified evidence bundle." },
-    { label: "Mandatory", value: "Six deterministic quote checks always run.", tone: "ok" },
-    { label: "Optional", value: "Medical-NLI runs only when deployment passes an NLI gate." },
-    { label: "Failure", value: "Any failed mandatory layer becomes NEEDS_REVIEW / hallucination_suspect.", tone: "warn" },
-  ]}
-/>
+`bba.quote_grounder.verify_citation` checks a model citation against the redacted evidence. It rejects an empty quote first, then evaluates the mandatory checks until one fails. A passing citation must satisfy every applicable check.
 
 <QuoteGroundingLayers />
 
-## What "fail-closed" means
+## Verification result
 
-Any of the six mandatory layers that returns false marks the row as
-`final_classification = NEEDS_REVIEW` with `review_reason =
-"hallucination_suspect"`. The row is never silently downgraded, retried
-with relaxed constraints, or accepted as an `APPROPRIATE` /
-`INAPPROPRIATE` result. The QI committee can filter on
-`review_reason = "hallucination_suspect"` to audit grounding failures
-separately.
+The verifier returns the first failure reason. Missing or duplicated source IDs fail as `CITED_ID_NOT_FOUND`. Quote comparison uses NFC-normalized text and word-aligned substring boundaries. Uniqueness uses the same boundaries.
 
-`hallucination_suspect` is a `review_reason` flag, not a classification
-literal. The stored `Classification` literals are `APPROPRIATE`,
-`INAPPROPRIATE`, `NEEDS_REVIEW`, `INSUFFICIENT_EVIDENCE`,
-`POTENTIALLY_INAPPROPRIATE`, plus the routing/reservation terminals
-`PREOP_RESERVATION_UNCONFIRMED`, `PREOP_OVER_RESERVATION`,
-`RETURNED_NOT_TRANSFUSED`, and `PERIOP_TRANSFUSION_EXEMPT` — see
-[Audit store](/blood_audit/en/developers/audit-store/).
+Numeric grounding compares supported analyte, value, and unit triples. Any structured `lab_tuple` must match a triple parsed from the quote itself. This is narrower than checking every number or proving that a clinical conclusion is correct.
 
-## The medical-NLI layer is opt-in
+The pipeline verifies attempts against the row's redacted evidence and selects the latest passing attempt. If no attempt passes, it writes `final_classification = NEEDS_REVIEW` with `review_reason = "hallucination_suspect"`. That reason is a flag, not a classification literal. See [Audit store](/blood_audit/en/developers/audit-store/).
 
-`bba.quote_grounder.verify_citation(..., nli_gate=None)` defaults to
-**no NLI check**. The verifier only evaluates the medical-NLI layer
-when the caller passes a non-null `NLIEntailmentGate`. Default call
-sites in the repo do not pass one, so the layer is not part of the
-mandatory fail-closed stack today.
+Recovery uses the same real verifier. A cached response does not bypass grounding, and a changed request cannot reuse an older response merely because the audit ID matches.
 
-PRD §9 specifies medical-NLI as opt-in. Deployments that want the
-extra semantic check construct an `NLIEntailmentGate` (typically over a
-hosted ClinicalBERT-NLI checkpoint) and pass it into the verifier.
+## Optional NLI check
 
-## What you may not do
+`verify_citation(..., nli_gate=None)` omits the NLI check. A caller can supply an `NLIEntailmentGate` for an additional entailment predicate. The default application does not supply one.
 
-- Mock or short-circuit any layer in tests.
-- Add an opt-out flag to skip grounding for "fast iteration".
-- Lower the 25-character minimum.
-- Replace the medical-NLI step with a bare string check.
+The gate receives the normalized cited source as its premise and the normalized quote as its hypothesis. This interface does not by itself verify every statement in a reasoning summary. Text grounding establishes where a quote came from. Clinical validation and reviewer judgment remain separate requirements.
 
-If you find yourself wanting to do any of the above, the right answer is
-to write a smaller test fixture, not to weaken the contract.
+## Test the boundary
 
-## Where this lives in code
+Exercise the actual verifier with synthetic adversarial fixtures. Cover missing IDs, duplicate source IDs, short quotes, shifted word boundaries, repeated text, and conflicting lab tuples. Keep the production minimum at `MIN_QUOTE_LENGTH = 25`. The API's `min_length` parameter supports evaluation sweeps and does not justify weakening application grounding.
 
-- `src/bba/quote_grounder/` — the 6-layer pipeline.
-- Cassette-backed integration tests live under `tests/unit/cassettes/`.
+The ordered checks live in `src/bba/quote_grounder/verifier.py`. Individual predicates live in `src/bba/quote_grounder/layers.py`.

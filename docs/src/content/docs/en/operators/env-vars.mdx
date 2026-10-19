@@ -1,105 +1,80 @@
 ---
 title: Environment variables
-description: The three environment variables blood_audit requires before any audit can run.
+description: Settings for local audit, admitted model review, reporting, and authenticated review.
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
 import EnvVarChecklist from "../../../../components/EnvVarChecklist.astro";
 
-blood_audit enforces a strict env-var contract for the full deployment:
-three core variables, plus two attribution inputs for the wired
-`bba report` subcommand. Missing or malformed values fail fast with
-`CliError` — they never silently degrade.
-
-<AtAGlance
-  items={[
-    { label: "Phase 1 required", value: "BBA_DATA_DIR only.", tone: "ok" },
-    { label: "Phase 1.5 required", value: "BBA_DB_URL and ANTHROPIC_API_KEY when analysis is wired." },
-    { label: "Secret handling", value: "Never paste ANTHROPIC_API_KEY into issues, screenshots, or logs.", tone: "warn" },
-    { label: "Driver rule", value: "Postgres URLs must use postgresql+psycopg://." },
-  ]}
-/>
+The required settings depend on the command and transport. A local audit needs `BBA_DATA_DIR`. Model submission and authenticated review require additional configuration.
 
 <EnvVarChecklist />
 
-## Which variables are needed today
+## Local audit
 
-| Variable | Required for Phase 1 `bba audit`? | First used by |
-| --- | --- | --- |
-| `BBA_DATA_DIR` | Yes — validated at every CLI invocation | `bba.cli.main._resolve_data_dir` |
-| `BBA_DB_URL` | No — needed in Phase 1.5 | `bba.audit_pipeline.store.PostgresBatchRunStore`, `bba.review_actions` |
-| `ANTHROPIC_API_KEY` | No — needed in Phase 1.5 | `bba.llm_client` (Anthropic Batch API) |
-| `BBA_BDVST_CSV` | Only for `bba report` | `bba.cli.main._get_ward_resolver` (fails loud when unset) |
-| `BBA_DCT_CSV` | Only for `bba report` | `bba.cli.main._get_physician_resolver` (fails loud when unset) |
+`BBA_DATA_DIR` must be an absolute writable path for persistent audit records. The directory holds run state, sealed source snapshots, `identity.key`, audit rows, calls, reports, and analysis artifacts. Use access-controlled storage outside the repository.
 
-Set all of these when configuring a long-lived deployment. Only
-`BBA_DATA_DIR` is strictly required for running the Phase 1 ingest leg
-locally; the wired `bba report` subcommand additionally requires
-`BBA_BDVST_CSV` and `BBA_DCT_CSV` for its ward/physician attribution
-resolvers.
+`BBA_APPLICATION_CONFIG` optionally names a JSON file validated by `bba.application.config.ApplicationConfig`. Unknown fields fail validation. The defaults are `transport: "local"` and `policy_version: "repository-policy"`.
 
-## Important details
+## Model review
 
-### `BBA_DATA_DIR`
+An offline cassette configuration has this shape.
 
-Must be an **absolute path**. The directory must exist and be writable by
-the service user. Validated by `_resolve_data_dir()` in
-`src/bba/cli/main.py`. Holds:
-
-- Phase 1 ingest and audit run markers
-- Phase 1.5 Parquet audit rows when storage wiring is enabled
-- Run-state completion markers used by idempotency
-
-### `BBA_DB_URL`
-
-Postgres DSN. Always use the `+psycopg` driver suffix — SQLAlchemy
-routes a bare `postgresql://` URL to psycopg2 by default, which is **not**
-the driver this project ships. Canonical converter:
-`bba.review_actions.models.ReviewActionsConfig.sqlalchemy_dsn`.
-
-Example:
-
-```text
-postgresql+psycopg://bba_user@db.internal:5432/blood_audit
+```json
+{
+  "policy_version": "your-approved-policy-version",
+  "transport": "cassette",
+  "cassette": "/srv/bba/cassettes/approved-synthetic.json"
+}
 ```
 
-### `ANTHROPIC_API_KEY`
+Set `BBA_APPLICATION_CONFIG` to this file. For live mode, use `transport: "live"`, omit `cassette`, and set `allow_live_api` to `true`. Install the [live dependency](/blood_audit/en/operators/install/#install-the-live-provider-dependency) and supply `ANTHROPIC_API_KEY` through the deployment's secret mechanism. Live requests can incur provider charges.
 
-Required before `bba audit` invokes the Batch API. The cost guard in
-`src/bba/audit_pipeline/cost_guard.py` rejects live API access in tests
-to prevent accidental Batch submission during development.
+Both model modes use these admission inputs.
 
-## Pilot-only variables
+| Variable | Required content |
+| --- | --- |
+| `BBA_PRIVACY_POLICY` | Trust-policy JSON with `key_id`, `public_key_file`, and `approved_redactor`. The approved redactor identifies `version`, a nonzero SHA-256 `model_sha`, and `gazetteer_version`. |
+| `BBA_PRIVACY_ARTIFACTS` | JSON object keyed by audit ID. Each value is a `PrivacyArtifact` containing the exact redacted `evidence_chunks` and signed `attestation`. |
+| `BBA_DB_URL` | Migrated Postgres checkpoint database, with the required role permissions. Use `postgresql://user@host/database`. |
 
-The pilot legs (Path A / Path C) read a wider set of `BBA_PILOT_*`
-variables plus `BBA_BDVSTTRANS_CSV` (returns-ledger export override) and
-the flag kill-switches for the default-ON features
-(`BBA_PILOT_MSBOS_RESERVATION=0`, `BBA_PILOT_DECLARED_USETYPE=0`,
-`BBA_PILOT_DECLARED_USE_PREOP_EXEMPT=0`,
-`BBA_PILOT_MSBOS_PLANNED_OP_PICKER_V2=0`). These are documented on
-[Run the pipeline](/blood_audit/en/operators/run-pipeline/) and
-[Doctor & department ranking](/blood_audit/en/operators/doctor-ranking/);
-the table above covers the supported CLI only.
+The public-key file contains the 32-byte Ed25519 verification key. An approved local redaction service prepares the evidence through `RedactionAuthority.prepare`. That service holds the private signing key, approved model, and k-anonymity gate. Keep the private key outside the audit application.
 
-Three more pilot-only variables, added with the response-audit gate and the
-platelet count-trend guardrail:
+Attestations bind the exact prompt, audit ID, run ID, redactor version, and passed privacy checks. Prepare them with the same bundle, package version, and application configuration used by the audit. Missing or rejected admission leaves the case for local review. A caller's assertion or a digest alone cannot authorize submission.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `BBA_PILOT_PLATELET_TREND` | `0` (off) | Set to `1` to render the projected 24 h platelet count line in the LLM evidence and enable the count-trend floor (`PLATELET_TREND_GUARDRAIL_ENABLED`, issue #237). |
-| `BBA_PILOT_ALLOW_UNAUDITED` | unset | Set to `1` to let `build_review.py` render LLM responses that have no matching response audit, or whose audit carries a HIGH finding. The builder prints the reason it would otherwise have refused. |
-| `BBA_AUDIT_JUDGE_MODELS` | `claude-sonnet-5,claude-haiku-4-5-20251001,claude-opus-5` | Comma-separated judge model ids for `audit_llm_responses.py --judge candidates\|all`, the opt-in API version of the label-vs-reasoning check. Bills `ANTHROPIC_API_KEY`. |
+`enable_missing_hb_positive_evidence` and `enable_missing_platelet_defer` default to `false`. Enable either application setting only for its approved policy.
 
-## Verify
+The checkpoint store accepts the plain Postgres DSN above through psycopg. The review adapter converts that DSN for SQLAlchemy internally. Do not supply a `postgresql+psycopg://` URL to the shared setting.
 
-```bash
-env | grep -E '^(BBA_DATA_DIR|BBA_DB_URL|ANTHROPIC_API_KEY|BBA_BDVST_CSV|BBA_DCT_CSV)='
+## Reports and dashboard attribution
+
+`BBA_BDVST_CSV` names the matching BDVST export with `REQNO` and `DCTREQ`. `BBA_DCT_CSV` names the doctor registry. Both are required by `bba report` and `bba serve-dashboard`. `DCTREQ` identifies the physician, and the doctor's department supplies the report's ward grouping.
+
+## Dashboard authentication
+
+`BBA_DASHBOARD_AUTH_SECRET` must contain at least 32 UTF-8 bytes. Your trusted identity adapter and dashboard share this secret to sign and verify sessions. `BBA_DASHBOARD_PUBLIC_ORIGIN` must be the externally visible HTTPS origin.
+
+The CLI binds to loopback behind an HTTPS proxy. It does not issue reviewer identities. See [Serve authenticated review](/blood_audit/en/operators/integration-seams/#serve-authenticated-review) for the cookie and identity contract.
+
+## Check presence without printing values
+
+Run a presence check on the settings required for your deployment. This prints names and status only, including for the database URL and authentication secret.
+
+```sh
+uv run python - <<'PYTHON'
+import os
+names = (
+    "BBA_DATA_DIR", "BBA_APPLICATION_CONFIG", "BBA_PRIVACY_POLICY",
+    "BBA_PRIVACY_ARTIFACTS", "BBA_DB_URL", "ANTHROPIC_API_KEY",
+    "BBA_BDVST_CSV", "BBA_DCT_CSV", "BBA_DASHBOARD_AUTH_SECRET",
+    "BBA_DASHBOARD_PUBLIC_ORIGIN",
+)
+for name in names:
+    print(f"{name}: {'set' if os.environ.get(name) else 'unset'}")
+PYTHON
 ```
 
-Every variable your phase needs should print (all five for a full
-deployment that runs `bba report`). Values for `ANTHROPIC_API_KEY`
-should never be logged; redact before sharing terminal output.
+An unset optional setting is expected in local mode. Presence does not establish that a configuration is valid. Keep credentials out of shell transcripts, screenshots, and issue reports.
 
-## Next steps
+## Pilot settings
 
-Run your [first audit](/blood_audit/en/operators/first-audit-run/).
+Research scripts read a separate set of `BBA_PILOT_*` settings and feature switches. They do not configure the supported application. See [Run the pipeline](/blood_audit/en/operators/run-pipeline/) and the [pilot README](https://github.com/macsermkiat/blood_audit/blob/main/scripts/pilot/README.md) for the script-specific contract.

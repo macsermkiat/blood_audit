@@ -1,142 +1,60 @@
 ---
-title: จัดอันดับแพทย์และแผนก
-description: รันฟีเจอร์ attribution เพื่อจัดอันดับแพทย์และแผนก 10 อันดับแรก ตามความเหมาะสมของการสั่งใช้เลือด
+title: อันดับแพทย์และแผนก
+description: จัดอันดับผล pilot โดยใช้ตัวหารครบถ้วนและไฟล์ระบุแพทย์ที่ตรงกัน
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
+เก็บข้อมูลนำเข้าและผลจัดอันดับในช่องทางทบทวนที่อนุมัติ ไฟล์เหล่านี้เชื่อมตัวตนแพทย์กับผลประเมินทางคลินิก การเข้ารหัสรหัสผู้ป่วยไม่ได้ทำให้เผยแพร่ไฟล์ได้
 
-ฟีเจอร์ attribution (`bba.attribution`) จัดอันดับแพทย์ผู้สั่ง 10 อันดับแรก
-และแผนก 10 อันดับแรก ตามความเหมาะสมของการสั่งใช้เลือด แบ่งเป็นสามกลุ่ม:
-เหมาะสม, ไม่เหมาะสม และยังไม่สรุป
+## จัดอันดับผล pilot
 
-<AtAGlance
-  title="สิ่งที่จะได้"
-  items={[
-    { label: "จัดอันดับอะไร", value: "แพทย์ 10 อันดับแรก และแผนก 10 อันดับแรก ตามความเหมาะสมของการสั่งใช้เลือด" },
-    { label: "กลุ่ม", value: "เหมาะสม / ไม่เหมาะสม / ยังไม่สรุป" },
-    { label: "วิธีรัน", value: "uv run python scripts/pilot/rank_doctors.py", tone: "ok" },
-    { label: "ผลลัพธ์มี PHI", value: "ตัวตนแพทย์ผูกกับ verdict จริง ห้าม commit หรือแชร์", tone: "warn" },
-  ]}
-/>
+ใช้ `rank_merged.py` สำหรับ [research pilot](/blood_audit/th/operators/run-pipeline/) สคริปต์รวมผลจากกฎใน `report.csv` กับ `llm_report.json` ก่อนคำนวณสรุป
 
-:::caution[ข้อมูล PHI จริงทั้ง input และ output]
-Input เป็นข้อมูลผู้ป่วย/คำสั่งจริงที่เข้ารหัส และ output มี PHI จริง คือ
-ตัวตนแพทย์ผูกกับ verdict ความเหมาะสมจริง ห้าม commit, ส่งอีเมล หรือแชร์
-workbook, ไฟล์ CSV `BDVST`/`DCT` หรือ output CSV/HTML ที่สร้างขึ้น
-นอกช่องทางตรวจที่ได้รับอนุมัติ
-:::
+audit store ของขั้นโมเดลใน pilot ไม่มีผลที่กฎตัดสินจบหลายประเภท หากอ่านเฉพาะ store นี้ ตัวหารจะขาดคำสั่งเหล่านั้น ข้อจำกัดนี้เป็นของสคริปต์ pilot ไม่ใช่การประกอบผลทั้งหมดของแอปที่รองรับ
 
-## จัดอันดับผลลัพธ์ pilot: ใช้ rank_merged.py
+กำหนด `BBA_PILOT_WORK_DIR` เป็นไดเรกทอรีผล pilot พร้อม `BBA_BDVST_CSV` และ `BBA_DCT_CSV` ที่ตรงกัน รันแต่ละผลิตภัณฑ์แยกกัน เพราะสถิติ trigger ใช้ผลตรวจคนละชนิด
 
-ถ้าจะจัดอันดับผลลัพธ์จากการรัน pilot (เส้นทาง A ใน
-[รัน pipeline](/blood_audit/th/operators/run-pipeline/)) ให้ใช้
-`scripts/pilot/rank_merged.py` แทน `rank_doctors.py` ที่ตั้ง
-`BBA_VERDICT_SOURCE=pipeline`
-
-เพราะแหล่ง `pipeline` อ่านจาก audit store ซึ่งมีแต่แถวของ LLM leg กับแถว
-MSBOS over-reservation คำสั่งที่ deterministic leg ตัดสินจบไปเลย (auto-clear,
-คืนเลือด, ยกเว้น peri-op) จะไม่เข้า audit store เลย ทำให้ตัวหารของการจัดอันดับ
-แบบ pipeline ขาดหายไป
-
-`rank_merged.py` รวม `report.csv` (verdict ของ deterministic leg) กับ
-`llm_report.json` (verdict ของ LLM leg) โดย verdict จาก LLM จะแทนที่เฉพาะ
-คำสั่งที่ deterministic leg ส่งต่อไป (`NEEDS_REVIEW` หรือ
-`POTENTIALLY_INAPPROPRIATE`) ส่วน verdict ที่จบแล้วยังคงเดิม รันทีละ
-component เพราะคอลัมน์ trigger (mean/min/max) เป็น Hb สำหรับ red cell
-และ platelet count สำหรับ platelet:
-
-```bash
+```sh
 uv run python scripts/pilot/rank_merged.py red_cell
 uv run python scripts/pilot/rank_merged.py platelet
 ```
 
-## rank_doctors.py คืออะไร
+ผลโมเดลจะแทนผลจากกฎเฉพาะคำสั่งที่กฎส่งไปทบทวนต่อ ผลที่กฎตัดสินจบแล้วยังคงเดิม หากโมเดลมี `REQNO` ที่ไม่อยู่ในรายงาน สคริปต์จะหยุด
 
-`bba.attribution` (Feature 2, PR #82) จัดอันดับแพทย์ผู้สั่งและแผนก 10 อันดับแรก
-ตามความเหมาะสมของการสั่งใช้เลือด แบ่งเป็นสามกลุ่ม: เหมาะสม, ไม่เหมาะสม และยังไม่สรุป
+แต่ละผลิตภัณฑ์เขียน `<component>_doctor_ranking.csv`, `<component>_department_ranking.csv` และ `<component>_doctor_rankings.html` ใต้ `BBA_PILOT_WORK_DIR`
 
-สาย attribution จะย้อนคำสั่งกลับไปหาแพทย์:
+## จัดอันดับจากคนทบทวนหรือผลที่บันทึกใน store
 
-- `REQNO` ของคำสั่ง → `BDVST.DCTREQ` → ทะเบียนแพทย์ `DCT.csv`
+`rank_doctors.py` เลือกแหล่งผลด้วย `BBA_VERDICT_SOURCE` ค่าเริ่มต้น `human` อ่าน Sheet1 คอลัมน์ J ของ workbook ส่วน `pipeline` อ่านแถวเม็ดเลือดแดงของรอบที่เลือกจาก audit store ใช้แหล่งนี้เมื่อแถวที่บันทึกครอบคลุมประชากรที่ต้องการจัดอันดับ
 
-แหล่งที่มาของ verdict สลับได้ ผ่าน seam ชื่อ `VerdictSource` และเลือกได้
-ตอนรันด้วย `BBA_VERDICT_SOURCE`: ค่าเริ่มต้น `human` จัดอันดับจาก workbook
-การตรวจโดยคน 300 เคส (Sheet1, คอลัมน์ J) ส่วน `pipeline` จัดอันดับจาก verdict
-ของ pipeline เต็มทั้ง cohort ที่อ่านจาก audit store (`BBA_AUDIT_STORE_DIR` +
-`BBA_RUN_ID` / `BBA_CODE_VERSION`) เมื่อใช้แหล่ง pipeline, scorecard จะมี
-terminal ฝั่งคืนเลือด (`RETURNED_NOT_TRANSFUSED` / `PERIOP_TRANSFUSION_EXEMPT`)
-เป็นกลุ่ม *ไม่นับคะแนน (excluded)* ด้วย และรวม `PREOP_OVER_RESERVATION`
-เข้าฝั่งไม่เหมาะสม โดยนับแยกไว้เป็น `over_reservation_count`
-
-จะจัดอันดับผลลัพธ์ของ pilot ให้ใช้ `rank_merged.py` ด้านบนแทนแหล่ง pipeline
-เพราะ audit store ที่แหล่ง pipeline อ่าน มีแต่แถวของ LLM leg
-
-ตัวนี้เป็นสคริปต์ pilot / integration seam ไม่ใช่ subcommand ระดับบนของ
-`bba` และยังถูกนำเสนอผ่าน integration seam ของ `serve-dashboard`
-(attribution resolvers) อีกด้วย
-
-## วิธีรัน
-
-สคริปต์ pilot คือ `scripts/pilot/rank_doctors.py` จาก root ของ repo:
-
-```bash
+```sh
+export BBA_REVIEW_XLSX=/srv/bba/reviewed-labels.xlsx
+export BBA_BDVST_CSV=/srv/bba/export/BDVST.csv
+export BBA_DCT_CSV=/srv/bba/export/DCT.csv
+export BBA_PILOT_WORK_DIR=/srv/bba/pilot
+export BBA_PILOT_REPORT_CSV=/srv/bba/pilot/report.csv
 uv run python scripts/pilot/rank_doctors.py
 ```
 
-สคริปต์ fail loud (exit ไม่เป็นศูนย์) ถ้าไฟล์ input ตัวใดตัวหนึ่งในสามหายไป
-พร้อมพิมพ์ว่าไฟล์ไหนที่หาย
+กำหนดพาธเองเพื่อหลีกเลี่ยงค่าเริ่มต้นของงานวิจัยที่ชี้ไป workbook ในเครื่องและข้อมูล Bloodbank ข้าง repository หากขาดไฟล์ที่ต้องใช้ สคริปต์จะหยุด
 
-### ตัวแปรสภาพแวดล้อม
-
-| ตัวแปร | คืออะไร | ค่าเริ่มต้น |
-| --- | --- | --- |
-| `BBA_REVIEW_XLSX` | workbook การตรวจโดยคน (แหล่งของ verdict) | `~/Downloads/Review การใช้เลือด.xlsx` |
-| `BBA_BDVST_CSV` | ไฟล์ส่งออก BDVST ที่มี `REQNO` + `DCTREQ` | `../Bloodbank/data/encrypted/BDVST.csv` (สัมพัทธ์กับ root ของ repo) |
-| `BBA_DCT_CSV` | ทะเบียนแพทย์ `DCT.csv` | `../Bloodbank/data/raw/DCT.csv` |
-| `BBA_PILOT_WORK_DIR` | โฟลเดอร์ผลลัพธ์ | `/tmp/bba_mini` |
-| `BBA_VERDICT_SOURCE` | แหล่งที่มาของ verdict: `human` หรือ `pipeline` | `human` |
-| `BBA_AUDIT_STORE_DIR` | ไดเรกทอรีของ audit store (เฉพาะแหล่ง pipeline) | — |
-| `BBA_RUN_ID` | ขอบเขต run_id สำหรับอ่านจาก store (เฉพาะแหล่ง pipeline) | — |
-| `BBA_CODE_VERSION` | ขอบเขต code version สำหรับอ่านจาก store (เฉพาะแหล่ง pipeline) | — |
-| `BBA_PILOT_REPORT_CSV` | ไฟล์ `report.csv` ราย order ของ pilot (ให้ค่า mean pre-transfusion trigger) จำเป็นสำหรับ**ทุก** run ไม่ว่า human หรือ pipeline — ถ้าไฟล์หายจะ fail loud | `$BBA_PILOT_WORK_DIR/report.csv` |
-
-### ตัวอย่างการรัน
-
-```bash
-export BBA_REVIEW_XLSX="$HOME/Downloads/Review การใช้เลือด.xlsx"
-export BBA_BDVST_CSV=/path/to/BDVST.csv
-export BBA_DCT_CSV=/path/to/DCT.csv
-export BBA_PILOT_WORK_DIR=/tmp/bba_mini
-uv run python scripts/pilot/rank_doctors.py
-open "$BBA_PILOT_WORK_DIR/doctor_rankings.html"
-```
-
-## ผลลัพธ์
-
-เขียนไปที่ `$BBA_PILOT_WORK_DIR`:
-
-| ผลลัพธ์ | คืออะไร |
+| ตัวแปร | การใช้งาน |
 | --- | --- |
-| `doctor_ranking.csv` | แพทย์ 10 อันดับแรก จัดอันดับพร้อมจำนวนต่อกลุ่ม |
-| `department_ranking.csv` | แผนก 10 อันดับแรก จัดอันดับพร้อมจำนวนต่อกลุ่ม |
-| `doctor_rankings.html` | หน้าเดียวจบสำหรับให้คนตรวจ |
+| `BBA_VERDICT_SOURCE` | ค่าเริ่มต้น `human` หรือเลือก `pipeline` |
+| `BBA_REVIEW_XLSX` | Workbook ของแหล่ง human ค่าเริ่มต้น `~/Downloads/Review การใช้เลือด.xlsx` |
+| `BBA_BDVST_CSV` | ไฟล์คำสั่งที่มี `REQNO` และ `DCTREQ` ค่าเริ่มต้นงานวิจัย `../Bloodbank/data/encrypted/BDVST.csv` |
+| `BBA_DCT_CSV` | ทะเบียนแพทย์ ค่าเริ่มต้นงานวิจัย `../Bloodbank/data/raw/DCT.csv` |
+| `BBA_PILOT_WORK_DIR` | ไดเรกทอรีผล ค่าเริ่มต้น `/tmp/bba_mini` |
+| `BBA_PILOT_REPORT_CSV` | ข้อมูล trigger รายคำสั่ง ต้องใช้ทั้งสองแหล่ง ค่าเริ่มต้น `report.csv` ใน work directory |
+| `BBA_AUDIT_STORE_DIR` | Root ของ audit store สำหรับ pipeline หากไม่ตั้งจะใช้ `$BBA_DATA_DIR/audit_store` |
+| `BBA_RUN_ID` | ต้องระบุรอบเดียวเมื่อใช้ pipeline |
+| `BBA_CODE_VERSION` | รุ่นโค้ดของ pipeline เลือกได้ ใช้เมื่อรอบที่เลือกมีหลายรุ่นจนแยกผลไม่ได้ |
 
-สคริปต์ยังพิมพ์สรุปการกระทบยอด (reconciliation summary) ไปที่ stdout:
-จำนวน verdict ทั้งหมด (พร้อมจำนวนเหมาะสม / ไม่เหมาะสม / ยังไม่สรุป), กลุ่มที่จัดอันดับ,
-ค่า threshold ขั้นต่ำ (minimum-N) และจำนวนแถวตารางของแพทย์/แผนก
+สคริปต์เขียน `doctor_ranking.csv`, `department_ranking.csv` และ `doctor_rankings.html` ใน work directory และแสดงสรุปจำนวน verdict กลุ่มที่จัดอันดับ เกณฑ์จำนวนตัวอย่างขั้นต่ำ และจำนวนแถวผล
 
-## อยู่ตรงไหนในโค้ด
+## ตีความแพทย์และแผนก
 
-- `src/bba/attribution/`: module ที่มีเทสต์ (loaders, aggregation, ranking,
-  writers)
-- `scripts/pilot/rank_doctors.py`: glue บาง ๆ ที่ resolve path ของ input และ
-  รายงานสรุปการกระทบยอด
-- `scripts/pilot/rank_merged.py`: รวม `report.csv` กับ `llm_report.json`
-  เป็น verdict เดียวต่อคำสั่งต่อ component แล้วเรียก ranking/writer ของ
-  `bba.attribution` ตัวเดียวกัน
+`bba.attribution` จัดอันดับแพทย์และแผนก 10 อันดับแรก โดยแบ่งผลเป็นเหมาะสม ไม่เหมาะสม และยังไม่สรุป ระบบเชื่อม `REQNO` กับ `BDVST.DCTREQ` แล้วค้น `DCT.csv` แผนกจึงหมายถึงแผนกของแพทย์ผู้สั่ง
 
-## ขั้นถัดไป
+แหล่ง pipeline นับ `RETURNED_NOT_TRANSFUSED` และ `PERIOP_TRANSFUSION_EXEMPT` ในกลุ่มไม่นับคะแนน ส่วน `PREOP_OVER_RESERVATION` รวมอยู่ฝั่งไม่เหมาะสมและนับ `over_reservation_count` แยกด้วย ตรวจประชากรของแหล่งข้อมูลก่อนตีความอัตรา
 
-- [ตัวแปรสภาพแวดล้อม](/blood_audit/th/operators/env-vars/): ตัวแปรที่ CLI ที่รองรับอ่าน
-- [Integration seams](/blood_audit/th/operators/integration-seams/): จุดที่ attribution ถูกนำเสนอผ่าน `serve-dashboard`
-- [แก้ปัญหาเบื้องต้น](/blood_audit/th/operators/troubleshooting/): ปัญหาที่พบบ่อย
+สคริปต์จัดอันดับแยกจาก `bba report` แต่รายงานและ dashboard ใช้ attribution loaders ชุดเดียวกัน ดูไฟล์ที่ต้องใช้ที่ [สร้างรายงาน](/blood_audit/th/operators/generate-report/)

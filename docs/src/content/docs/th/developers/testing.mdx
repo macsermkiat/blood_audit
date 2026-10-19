@@ -1,38 +1,38 @@
 ---
 title: การทดสอบ
-description: test gates ที่ใช้ป้องกัน regression ใน blood_audit
+description: การตรวจในเครื่อง Postgres ที่ต้องรันจริง และ fixture โมเดลแบบออฟไลน์
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
-
-<AtAGlance
-  title="สรุป test gates"
-  items={[
-    { label: "Blocking", value: "ruff, ruff format, mypy src, pytest", tone: "ok" },
-    { label: "Advisory", value: "mypy tests ยังอนุญาตให้ warn จนกว่าจะจ่าย test helper debt", tone: "warn" },
-    { label: "Docker", value: "Postgres tests auto-skip เมื่อ Docker/testcontainers ไม่พร้อม" },
-    { label: "LLM tests", value: "ใช้ cassette เท่านั้น; cost guard กัน live API calls" },
-  ]}
-/>
-
-## คำสั่งหลัก
+รันการตรวจ source ที่ต้องผ่านจาก root ของ repository:
 
 ```bash
+uv sync --frozen --extra live
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
-uv run pytest
+BBA_REQUIRE_POSTGRES_TESTS=1 uv run --extra live pytest -q --tb=short --cov=src/bba --cov-fail-under=80 --cov-report=term-missing
 ```
 
-ผล pytest ที่คาดหวังเมื่อไม่มี Docker: ~3771 pass / ~49 skip / 0 errors
-(ยืนยัน 2026-07-22) เมื่อ Docker ทำงาน testcontainers-postgres tests
-จะรันจริงแทนการ skip และจำนวน skip ลดลงเหลือหลักหน่วย
+extra `live` ติดตั้ง SDK ให้การทดสอบ transport import ได้ แต่ test ยังปฏิเสธการเรียกบริการจริง เปิด Docker ก่อนรันชุด Postgres ที่บังคับให้ทำงาน
 
-`mypy tests` เป็น advisory ในตอนนี้ (~676 errors) เพราะยังมี debt ใน
-test helpers แต่ `mypy src` ต้องผ่านแบบ strict
+## การทดสอบ Postgres
 
-## LLM และ cost guard
+`tests/conftest.py` มี fixture ร่วมสำหรับ Postgres 16 เมื่อตั้ง `BBA_REQUIRE_POSTGRES_TESTS=1` หากขาด dependency หรือเชื่อมต่อ Docker ไม่ได้ test จะล้มเหลว CI ตั้งค่านี้และบังคับ source coverage อย่างน้อย 80 เปอร์เซ็นต์
 
-test ที่เกี่ยวกับ LLM ต้องใช้ cassette หรือ fixture เท่านั้น ห้ามเรียก live API
-โดยไม่ตั้งใจ cost guard ใน `bba.audit_pipeline.cost_guard` จะ block
-live access ใน test context
+ถ้าไม่ตั้งค่านี้ fixture อาจข้ามเมื่อ dependency หรือ Docker ไม่พร้อม หลังผ่านการตรวจความพร้อมแล้ว ข้อผิดพลาดระหว่างเริ่ม container, migration, เนื้อหา test และ teardown ต้องรายงานเป็นความล้มเหลว ห้ามจับข้อผิดพลาดทั้งหมดแล้วเปลี่ยนเป็น skip
+
+ระบุ test ที่ skip หรือ deselect พร้อมเหตุผล ผลรันที่ไม่มี database test ไม่ยืนยันว่าการเชื่อมฐานข้อมูลผ่าน ส่วน test ที่ต้องใช้ workbook ทางคลินิกในเครื่องต้องมีข้อมูลนั้นต่างหาก ห้ามคัดลอกข้อมูลผู้ป่วยเข้า repository เพื่อให้ fixture ทำงาน
+
+## การทดสอบโมเดลแบบออฟไลน์
+
+`bba.audit_pipeline.cost_guard` ปิดกั้น live transport ในบริบททดสอบ ใช้ fixture สังเคราะห์และคำตอบจาก cassette โดย `tests/unit/test_llm_client.py` และ `tests/unit/test_application_cassette.py` สร้าง cassette ทดสอบใน directory ชั่วคราว cassette ที่บันทึกจากข้อมูลทางคลินิกยังเป็นข้อมูลอ่อนไหว แม้ชื่อไฟล์จะระบุว่าสังเคราะห์
+
+`tests/unit/test_application.py` ตรวจการประกอบงานในโหมด local ส่วน `tests/unit/test_application_cassette.py` ตรวจคำขอ cassette ที่ผ่านการอนุมัติ มี integration test แยกสำหรับการประกอบระบบด้วย Postgres การทดสอบเหล่านี้ยืนยันพฤติกรรมบนข้อมูลสังเคราะห์ ไม่ได้ยืนยันความถูกต้องทางคลินิกหรือความพร้อมของการติดตั้งในโรงพยาบาล
+
+test ของ grounding ต้องเรียกการตรวจจริง ครอบคลุม source ID, ข้อความที่ normalize แล้ว, ขอบเขตคำ, ความซ้ำ และ lab tuple ส่วน test กู้คืนต้องพิสูจน์ว่าบริบทหรือคำขอที่เปลี่ยนถูกปฏิเสธ และ replay ซ้ำไม่สร้างผลที่ commit แล้วซ้ำอีก
+
+## Type check และ CI
+
+`pyproject.toml` กำหนด strict mypy สำหรับ source คำสั่ง `uv run mypy src` ต้องผ่าน ส่วน `uv run mypy tests` ยังเป็น advisory ขณะมีหนี้ด้านชนิดข้อมูลในตัวช่วยทดสอบ ข้อผิดพลาดเหล่านี้ยังต้องตรวจ เพราะอาจปิดบัง fixture หรือ assertion ที่ผิดได้
+
+`.github/workflows/ci.yml` รัน lint, format, source typing และ pytest พร้อม Docker งาน `ci` รวมผลที่ต้องผ่าน จำนวน test เปลี่ยนตามโค้ดและ fixture ให้รายงานผลรันปัจจุบันแทนการเทียบกับจำนวน pass คงที่ในเอกสาร

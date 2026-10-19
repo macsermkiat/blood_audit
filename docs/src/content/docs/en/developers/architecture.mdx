@@ -1,94 +1,51 @@
 ---
 title: Architecture
-description: How the 30 modules under bba.* fit together.
+description: Application entry points, module boundaries, and persisted audit data.
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
 import PipelineDiagram from "../../../../components/PipelineDiagram.astro";
 import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
 
 <QiNotSamdBanner variant="compact" />
 
-<AtAGlance
-  items={[
-    { label: "Shape", value: "30 modules, 12 happy-path stages (RBC), deterministic-first. Intake forks into RBC (Phase 1) and platelet (Phase 2) legs; returns/declared-use/MSBOS overlay arms are default-ON." },
-    { label: "Boundary", value: "Only bba.audit_pipeline orchestrates across stage boundaries." },
-    { label: "Phase 1 CLI", value: "bba audit wires ingest only; analysis modules are implemented for Phase 1.5.", tone: "warn" },
-    { label: "Safety invariant", value: "No real-time output; de-id before LLM; quote grounding fail-closed.", tone: "ok" },
-  ]}
-/>
-
-## The 12-stage happy path
+`bba audit` validates a canonical HOSxP export and writes audit results. `bba.application` connects the CLI to context assembly, privacy admission, and `bba.audit_pipeline.run_pipeline`. The pipeline applies deterministic rules before considering a model request.
 
 <PipelineDiagram />
 
-Each stage is an importable subpackage under `src/bba/`. The `bba.audit_pipeline`
-module orchestrates them; no other module reaches across stage boundaries.
+## Application boundaries
 
-Intake forks at `bba.component_map`: red-cell orders take the 12-stage RBC path
-below (Phase 1), and platelet orders take the platelet leg (Phase 2 — merged,
-PR #85). The RBC path is byte-identical whether or not the platelet feature is
-enabled.
-
-## Module map (30 modules)
-
-| Module | Role |
+| Package | Responsibility |
 | --- | --- |
-| `bba.ingest` | HOSxP CSV schema validation + row normalization drain, content-hashed `run_id`. |
-| `bba.audit_orders` | Per-(HN, REQNO) blood-order filter; hard exclusions (age, products, ICD gates); admits platelet-only orders isolated from RBC stats. |
-| `bba.component_map` | Intake gate: routes each order to a component family (RED_CELL, PLATELET, FFP, CRYO, WHOLE_BLOOD, UNKNOWN); forks the RBC and platelet legs. |
-| `bba.hb_lookup` | Pre-transfusion Hb from the Lab table. |
-| `bba.vitals_extractor` | BP, HR, urine output, temperature from MED + progress notes. |
-| `bba.cohort_detector` | Deterministic cohort assignment: default, cardiac-surgery, ortho-surgery, ESRD-EPO, cardiopulmonary-comorbidity (heart disease), MTP, active heme malignancy, unknown. |
-| `bba.deterministic_classifier` | 3-tier Hb engine → `APPROPRIATE`, `NEEDS_REVIEW`, `INSUFFICIENT_EVIDENCE`, `POTENTIALLY_INAPPROPRIATE`, plus the routing terminals `RETURNED_NOT_TRANSFUSED` / `PERIOP_TRANSFUSION_EXEMPT`. Never emits `INAPPROPRIATE` (LLM-only). |
-| `bba.evidence_bundle_builder` | Structures evidence (unredacted) for the LLM context window. |
-| `bba.deid_redactor` | De-identifies the bundle before any data leaves the audit container. |
-| `bba.prompt_builder` | Few-shot + clinical-history system message. |
-| `bba.llm_client` | Anthropic Batch API client; Sonnet → Opus escalation; prompt caching. |
-| `bba.quote_grounder` | 6 fail-closed anti-hallucination layers. |
-| `bba.confidence_calibrator` | Isotonic regression + ECE for multi-model ensembles. |
-| `bba.audit_pipeline` | Orchestration; resumable batch run state machine. |
-| `bba.audit_store` | Append-only Parquet records plus Postgres-backed batch/review state; idempotency enforcement. |
-| `bba.review_actions` | PHI-aware per-physician review action log. |
-| `bba.monitoring` | Sentinel κ-statistic; quarterly drift SPRT. |
-| `bba.dashboard` | FastAPI reviewer UI (integration seam). |
-| `bba.report_generator` | 6-section CSV + PDF monthly report. |
-| `bba.eval_harness` | Gold-standard performance primitives. |
-| `bba.platelet_lookup` | Platelet count value layer (Lab LABEXM 290078; parser + observation model). |
-| `bba.platelet_classifier` | §5.1 platelet gate; auto-clears nothing (≥ 100 → review, &lt; 100 → defer-LLM, missing → `INSUFFICIENT_EVIDENCE`). |
-| `bba.platelet_guardrail` | Over-clear guardrail for the platelet LLM leg (grounded hard signals; gated by default-off `PLATELET_LLM_ENABLED`). |
-| `bba.attribution` | Ranks top-10 ordering doctors / departments by appropriateness (`BDVST.DCTREQ` → `DCT.csv`; swappable verdict source). |
-| `bba.verification` | Before/after scoring for the peri-op fix (confusion matrix by mechanism). |
-| `bba.returns_ledger` | BDVSTTRANS per-unit disposition aggregation → `not_transfused` / `transfused` / `inconclusive`; feeds the returns terminals. Default-ON. |
-| `bba.declared_use` | Interprets order-time `BDVSTDT.USETYPE` (declared surgical / type-and-screen intent); the sole pre-op router in default mode. Default-ON. |
-| `bba.preop_reservation` | MSBOS reservation evaluation: reference loader, planned-op picker v2, OPRTACT→ICD9 bridge, RBC + platelet legs, reason vocabulary (`reason_presentation`). Default-ON. |
-| `bba.feature_flags` | Runtime flag module (7 flags; pilot legs apply `BBA_PILOT_*` env overrides). |
-| `bba.cli` | Click entry point; dispatches to six subcommands (`report` is wired; `evaluate` / `serve-dashboard` / `sentinel` remain seams). |
+| `bba.cli` | Parses commands and configuration, manages CLI run markers, and installs exception-log handling. |
+| `bba.application` | Seals source snapshots, assembles canonical clinical context, configures transport and admission, and composes reporting, evaluation, monitoring, and review. |
+| `bba.ingest` | Validates and normalizes the canonical CSV bundle. |
+| `bba.audit_orders` | Selects eligible order-level audit units and separates RBC from platelet orders. |
+| `bba.hb_lookup`, `bba.platelet_lookup` | Select pre-order lab results and trends. |
+| `bba.vitals_extractor`, `bba.cohort_detector` | Extract structured clinical context. |
+| `bba.deterministic_classifier`, `bba.platelet_classifier` | Apply component-specific deterministic rules. |
+| `bba.returns_ledger`, `bba.declared_use`, `bba.preop_reservation` | Interpret unit disposition, declared use, and MSBOS reservations. |
+| `bba.evidence_bundle_builder`, `bba.deid_redactor`, `bba.prompt_builder` | Assemble evidence and require approved redaction before model submission. |
+| `bba.llm_client`, `bba.quote_grounder`, `bba.platelet_guardrail` | Transport model requests, check citations, and apply response guardrails. |
+| `bba.audit_pipeline` | Classify, partition, submit, verify, persist, and reconcile interrupted batches. |
+| `bba.audit_store` | Persist immutable audit rows, ordered calls, and commit markers. |
+| `bba.dashboard`, `bba.review_actions` | Authenticate review requests and record adjudication with revision checks. |
+| `bba.report_generator`, `bba.attribution` | Produce reports with physician attribution and per-row provenance. |
+| `bba.eval_harness`, `bba.monitoring` | Compare reviewed labels and committed re-audits. |
 
-The full glossary lives in [Module glossary](/blood_audit/en/reference/module-glossary/)
-(transcluded from `docs/CONTEXT.md`).
+`bba.component_map` also exposes a six-family name classifier. The supported HOSxP order builder uses product-code allow-lists for its RBC and platelet intake. Do not assume every caller uses the name classifier.
 
-## Invariants worth keeping
+## Data and recovery identity
 
-1. **Deterministic-first.** The deterministic classifier is authoritative.
-   The LLM route is entered only after the deterministic classifier returns
-   `NEEDS_REVIEW` or `POTENTIALLY_INAPPROPRIATE`.
-2. **Idempotent re-runs.** `run_id = sha256(input_csv_hash +
-   schema_fingerprint + code_version)`. `bba audit` is a no-op on a
-   completed `run_id` unless `--force` is passed (which writes an
-   `idempotency_override=true` row to `audit_log`).
-3. **Quote-grounded LLM output.** All six grounding layers run; failure
-   sets `final_classification = NEEDS_REVIEW` with `review_reason =
-   "hallucination_suspect"`, never an `APPROPRIATE` / `INAPPROPRIATE`
-   result row.
-4. **No real-time path.** No subscriber to the audit stream emits
-   clinician alerts. This is QI, not SaMD.
-5. **De-identification happens before any cross-container hop.** The
-   `bba.deid_redactor` step is non-optional.
+The application seals input CSV bytes before context assembly. It verifies the snapshot against the source identity, schema, code version, and application configuration. Exporter changes cannot replace the in-progress snapshot.
 
-## Where the integration seams live
+Deterministic-final rows write without a model call. Other RBC rows require signed privacy admission. Without it, the application commits local review results. The platelet model route has its own feature flag. If the flag leaves eligible platelet work uncommitted, the application fails without a completion marker.
 
-`bba.dashboard`, `bba.eval_harness`, and the sentinel orchestration in
-`bba.monitoring` ship complete but are not wired to the CLI by default
-(`bba report` is now wired to `bba.report_generator`). See
-[Integration seams](/blood_audit/en/operators/integration-seams/).
+For admitted model work, immutable manifests bind ordered audit IDs, evidence, prompt content, model settings, and policy context. Recovery rejects changed identity and reruns the real verifier before rebuilding rows. An uncertain submission requires operator reconciliation before another submission.
+
+A completed `(audit_id, run_id, code_version)` is immutable. `--force` bypasses the CLI completion shortcut and records the override. It does not overwrite committed rows or manifests. See [Audit store](/blood_audit/en/developers/audit-store/).
+
+## Deployment dependencies
+
+Local deterministic audits need neither model credentials nor Postgres. Admitted cassette and live model runs use a migrated Postgres batch store. The dashboard also needs a migrated review store, a trusted identity adapter, and an HTTPS reverse proxy.
+
+The application does not bundle the hospital's approved redaction backend or identity service. See [Application integration](/blood_audit/en/operators/integration-seams/) for those operator-supplied dependencies and [Pipeline stages](/blood_audit/en/developers/pipeline-stages/) for the processing sequence.

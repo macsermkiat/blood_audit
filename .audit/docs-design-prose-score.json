@@ -1,0 +1,34 @@
+{
+  "score": 11,
+  "patternScore": 13,
+  "uniformityScore": 6,
+  "stats": {
+    "sentenceCount": 74,
+    "wordCount": 728,
+    "meanSentenceLength": 9.84,
+    "burstiness": 1.2,
+    "typeTokenRatio": 0.55,
+    "trigramRepetition": 0.06
+  },
+  "findings": [
+    {
+      "id": "oxford-triple",
+      "category": "language",
+      "weight": 1,
+      "note": "Rule of three. Often legitimate; counted lightly and matters in clusters.",
+      "match": "operators, developers, and clinical",
+      "index": 4830,
+      "line": 99
+    },
+    {
+      "id": "oxford-triple",
+      "category": "language",
+      "weight": 1,
+      "note": "Rule of three. Often legitimate; counted lightly and matters in clusters.",
+      "match": "boundaries, routing, and preceding",
+      "index": 5222,
+      "line": 103
+    }
+  ],
+  "confidence": "high"
+}

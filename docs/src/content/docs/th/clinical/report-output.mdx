@@ -1,62 +1,41 @@
 ---
 title: ผลลัพธ์รายงาน
-description: ผลลัพธ์รายงานที่คณะกรรมการ QI จะได้รับจาก audit store
+description: รายงาน RBC รายเดือน ไฟล์รายแพทย์ และข้อมูลตรวจสอบที่มาของผล
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
+รายงานรายเดือนสรุปคำสั่ง RBC จาก audit run ที่บันทึกแล้วหนึ่งชุด ไม่รวมเกล็ดเลือดในจำนวนหรืออัตราของ RBC ส่วนคิวทบทวนแสดงกรณีที่บันทึกแล้วและยังไม่จบการทบทวนจากทั้งสองส่วนประกอบ
 
-รายงานเป็นผลปลายทางสำหรับคณะกรรมการ QI ไม่ใช่ real-time dashboard
-และไม่ใช่ scorecard สำหรับลงโทษรายบุคคล
+## ไฟล์ที่สร้าง
 
-<AtAGlance
-  title="สรุปผลลัพธ์"
-  items={[
-    { label: "ชุด output", value: "CSV 6 ส่วนสำหรับคณะกรรมการ, physician own-view CSV และ PDF" },
-    { label: "Privacy", value: "physician own-view แยกหนึ่งไฟล์ต่อหนึ่งแพทย์", tone: "ok" },
-    { label: "ทำซ้ำได้", value: "ทุกแถวและทุกหน้าบันทึก policy, model และหลักฐานที่ใช้ตัดสิน" },
-    { label: "ครอบคลุม", value: "คำสั่งให้เลือดที่เสร็จแล้วหนึ่งเดือน จาก audit run เดียว" },
-  ]}
-/>
+ระบบสร้าง CSV สำหรับคณะกรรมการห้าไฟล์ ไฟล์สำหรับแพทย์แต่ละคน PDF สำหรับคณะกรรมการ และ `provenance.json`
 
-## ไฟล์หลัก
+| ไฟล์ | เนื้อหา |
+| --- | --- |
+| `hospital_trend.csv` | จำนวนคำสั่งและผลจำแนกรายเดือน พร้อมอัตรา inappropriate |
+| `ward_scorecard.csv` | จำนวนและอัตราแยกตาม ward |
+| `indication_distribution.csv` | จำนวนตามข้อบ่งชี้ คำสั่งเดียวอาจนับในหลายข้อบ่งชี้ |
+| `cohort_exception.csv` | จำนวนและอัตราตาม cohort |
+| `pipeline_health.csv` | จำนวนและอัตราของผลที่จำแนกแล้ว ผลที่ต้องทบทวน และหลักฐานไม่พอ |
+| `physician_own_view_<physician_id>.csv` | ข้อมูลของแพทย์หนึ่งคนพร้อม quartile ของกลุ่มเทียบ โดยไม่แสดงอัตรารายบุคคลของแพทย์อื่น |
+| `report_<YYYY-MM-DD>.pdf` | ตารางสำหรับคณะกรรมการ วันที่ในชื่อเป็นวันแรกของเดือนรายงาน |
+| `provenance.json` | รหัสแถวต้นทางและข้อมูล policy, model, prompt, evidence และ redactor |
 
-| ไฟล์ | ผู้ใช้หลัก | ใช้ทำอะไร |
-| --- | --- | --- |
-| `hospital_trend.csv` | QI committee | ดูแนวโน้มระดับโรงพยาบาล |
-| `ward_scorecard.csv` | QI committee | ดูรูปแบบระดับ ward โดยไม่ใช้เป็นบทลงโทษ |
-| `indication_breakdown.csv` | QI committee | แยกตาม indication |
-| `cohort_exception.csv` | QI committee | ดูบริบททางคลินิก/threshold ที่ผิดปกติ |
-| `pipeline_health.csv` | IT + QI | ติดตาม failures, NEEDS_REVIEW และ grounding issues |
-| `physician_own_view/*.csv` | แพทย์ผู้ทบทวน | ให้แพทย์ดูเฉพาะรายการของตนเอง |
+CSV รายแพทย์มีข้อมูลหนึ่งแถวต่อไฟล์ ควรส่งให้เจ้าของข้อมูลเท่านั้น PDF สำหรับคณะกรรมการมีตารางรายแพทย์ด้วย จึงต้องควบคุมสิทธิ์เข้าถึง การแยกไฟล์ไม่ได้กำหนดสิทธิ์ของโฟลเดอร์หรือช่องทางส่งให้เอง
 
-## คำสั่งที่นับและไม่นับ
+## กฎการนับ
 
-คำสั่งที่ `final_classification` เป็น `RETURNED_NOT_TRANSFUSED` หรือ
-`PERIOP_TRANSFUSION_EXEMPT` ถูกตัดออกจากการคิดคะแนนความเหมาะสม
-ไม่ทำให้อัตราของ ward หรือของแพทย์สูงขึ้นหรือเจือจางลง เพราะไม่มี
-การให้เลือดที่ถูกตัดสิน ส่วนแถว `PREOP_OVER_RESERVATION`
-คิดคะแนนอยู่ฝั่ง inappropriate
+`RETURNED_NOT_TRANSFUSED` และ `PERIOP_TRANSFUSION_EXEMPT` ไม่รวมในคะแนนหรือ `total_orders` ส่วน `PREOP_OVER_RESERVATION` นับฝั่ง inappropriate และ `INSUFFICIENT_EVIDENCE` แยกเป็นอีกกลุ่ม
 
-`INSUFFICIENT_EVIDENCE` ต้องไม่ถูกรวมเข้า `INAPPROPRIATE` เพราะเป็น
-คนละความหมาย ข้อมูลไม่พอคือปัญหาเอกสารและหลักฐาน ไม่ใช่การตัดสินว่า
-ให้เลือดไม่เหมาะสม
+`POTENTIALLY_INAPPROPRIATE` และ `PREOP_RESERVATION_UNCONFIRMED` ต้องมีตัวแปลง classification ที่กำหนดชัดเจน ตัวสร้างรายงานเริ่มต้นจะปฏิเสธแทนการเดาว่าควรรวมในกลุ่มใด
 
-## กฎ privacy
+จำนวนที่ต้องทบทวนใน pipeline health รวม `NEEDS_REVIEW` และผลที่จำแนกแล้วแต่มี `needs_human_review` ผลที่หลักฐานไม่พอยังนับเฉพาะกลุ่มของตนแม้มี flag จึงใช้ความหมายต่างจากคิวที่รอคนตัดสินใน dashboard
 
-Physician own-view ต้องแยกไฟล์ต่อแพทย์ ห้ามรวมเป็นไฟล์เดียวที่ทุกคน
-เห็นกันหมด แต่ละไฟล์มีข้อมูลแถวเดียว รายงานสำหรับคณะกรรมการควรเป็น
-aggregate หรือ de-identified ตามขอบเขตที่กำหนด
+## ที่มาของผล
 
-## ทำซ้ำได้
+ทุกแถว CSV และทุกหน้า PDF มีข้อมูลสรุปที่มาระดับ run ชุดเดียวอาจมีทั้งผลจากกฎและ LLM หลายรุ่นหรือหลาย prompt ข้อมูลสรุปแสดงความหลากหลายนั้น ส่วน `provenance.json` เก็บค่าที่ใช้จริงต่อแถว RBC รวมแถวที่ยกเว้นจากคะแนน
 
-ทุกแถว CSV และทุกหน้า PDF บันทึกว่าใช้ policy เวอร์ชันใด โมเดลใด และ
-หลักฐานชุดใดในการตัดสิน ผู้ตรวจในภายหลังจึงย้อนกลับไปสร้างผลเดิมได้
-จากข้อมูลและ code ชุดเดียวกัน ชื่อฟิลด์ทั้งหมดอยู่ที่
-[สร้างรายงาน](/blood_audit/th/operators/generate-report/)
+`evidence_bundle_hash` ในส่วนสรุปเป็น hash ของคู่ audit ID และ evidence hash ที่เรียงแล้ว ไม่ใช่ hash ของ schema หากมีหลาย prompt ค่า `prompt_hash` เป็น hash รวมเช่นกัน `model_id` อาจเป็น JSON list ที่เรียงแล้ว แถวจากกฎใช้ `deterministic` และอาจใช้ `not-applied` สำหรับ redactor ที่ไม่ได้ทำงาน
 
-## วิธีสร้างรายงาน
+ข้อมูลเหล่านี้ช่วยตรวจย้อนคำตอบที่เก็บไว้ การเรียกโมเดลใหม่ไม่ได้รับประกันว่าจะได้คำตอบเดิม ต้องเก็บข้อมูลเข้า โค้ด การตั้งค่า และ artifact สำหรับการตรวจสอบด้วย
 
-ใช้คำสั่ง [`bba report`](/blood_audit/th/operators/generate-report/)
-ส่วนสัญญาระดับคอลัมน์อยู่ที่
-[`docs/report-schema.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/report-schema.md)
-สรุปไว้ที่ [Report schema](/blood_audit/th/reference/report-schema/)
+ใช้ [`bba report`](/blood_audit/th/operators/generate-report/) เพื่อสร้างไฟล์ ดูความหมายฟิลด์ที่ [โครงสร้างรายงาน](/blood_audit/th/reference/report-schema/)

@@ -1,139 +1,53 @@
 ---
 title: รัน pipeline
-description: สองวิธีรัน blood_audit — แบบ pilot อย่างง่ายเพื่อทดสอบ และแบบ production CLI ที่รองรับ
+description: เลือก CLI ที่รองรับหรือทำซ้ำขั้นตอน pilot สำหรับงานวิจัย
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
+ใช้ CLI ที่รองรับเมื่อตรวจชุดข้อมูล HOSxP มาตรฐาน ส่วน research pilot เป็นสคริปต์อีกชุดที่มีการตั้งค่าและผลทบทวนของตนเอง
 
-มีสองวิธีในการรันออดิท ขึ้นกับว่าคุณต้องการอะไร:
+## รันแอปที่รองรับ
 
-<AtAGlance
-  title="สิ่งที่จะได้"
-  items={[
-    { label: "เส้นทาง A — Pilot", value: "ดู pipeline ทำงานครบจบบนตัวอย่างเล็ก ๆ และได้ HTML สำหรับให้คนตรวจ" },
-    { label: "เส้นทาง B — Production", value: "รัน bba CLI ที่รองรับ กับข้อมูลส่งออก HOSxP เต็มชุด", tone: "ok" },
-    { label: "ต้องมีก่อน", value: "Python ≥ 3.13, uv และ ANTHROPIC_API_KEY สำหรับส่วน LLM" },
-  ]}
-/>
+ค่า `PLATELET_LLM_ENABLED` ใน repository เป็น false หากมีงานเกล็ดเลือดที่ต้องเข้าเส้นทางทบทวนซึ่งยังปิดอยู่ คำสั่งจะหยุดเมื่อพบงานที่บันทึกไม่ครบ และไม่บันทึกว่ารอบเสร็จแล้ว
 
-:::caution[ข้อมูล PHI จริง]
-ทั้งสองเส้นทางอ่านข้อมูลผู้ป่วยจริง ไฟล์ใด ๆ ที่ pilot เขียนใต้
-`$BBA_PILOT_WORK_DIR` (bundle ที่สุ่ม, `review.html`, audit store) มี
-PHI จริง ห้าม commit, ส่งอีเมล หรือแชร์นอกช่องทางตรวจที่ได้รับอนุมัติ
-:::
+```sh
+export BBA_DATA_DIR=/srv/bba/data
+uv run bba audit --input /srv/bba/export/BDVST.csv
+```
 
-## เส้นทาง A: รันแบบ pilot อย่างง่าย (ทดสอบ)
+โหมดนี้บันทึกผลจากกฎและกรณีที่ต้องให้คนทบทวนในเครื่อง โดยไม่ต้องใช้ Postgres หรือ credentials ของโมเดล ดูชุดข้อมูลและผลที่คาดได้ที่ [ตรวจข้อมูลครั้งแรก](/blood_audit/th/operators/first-audit-run/) และดูโหมด cassette กับ live ที่ [ตัวแปรแวดล้อม](/blood_audit/th/operators/env-vars/)
 
-วิธีที่เร็วที่สุดในการดู pipeline ทำงานครบจบ โดยสุ่มเคสประมาณ 10 เคส
-จาก bundle HOSxP ที่เข้ารหัส แล้วเดินผ่านสคริปต์ pilot สี่ตัว
-จบที่ไฟล์ `review.html` หน้าเดียวสำหรับแพทย์ตรวจ
 
-สคริปต์เหล่านี้อยู่นอกแพ็กเกจ `bba` โดยตั้งใจ เป็น glue เชิง
-deployment (ตัวอย่างการประกอบ modules) ไม่ใช่ entry point ที่รองรับ
-ดูรายละเอียดและตัวปรับค่าได้ที่
-[`scripts/pilot/README.md`](https://github.com/macsermkiat/blood_audit/blob/main/scripts/pilot/README.md)
+ดูรายงาน การประเมิน การเปรียบเทียบรอบ และการตัดสินผลที่ [สร้างรายงาน](/blood_audit/th/operators/generate-report/) และ [การเชื่อมต่อระบบ](/blood_audit/th/operators/integration-seams/)
 
-```bash
-# ครั้งเดียว จาก root ของ repo:
-uv sync
+## ทำซ้ำ research pilot
 
-# จำเป็นสำหรับส่วน LLM; ผลลัพธ์ pilot ทั้งหมดจะอยู่ใน work dir:
-export ANTHROPIC_API_KEY=sk-ant-...
-export BBA_PILOT_WORK_DIR=/tmp/bba_mini
+สคริปต์ pilot สุ่ม bundle แยกตามผลิตภัณฑ์ รันกฎ ส่งหลักฐานแบบมีโครงสร้างให้โมเดลเมื่อเลือกใช้ ตรวจคำตอบ และสร้างหน้าทบทวน การตั้งค่าและที่เก็บผลต่างจากแอปที่ใช้ signed admission
 
-# ตัวเลือก override:
-#   BBA_BDVSTTRANS_CSV=...                    override ไฟล์ส่งออก returns ledger
-#                                             (ค่าเริ่มต้นคือ BDVSTTRANS
-#                                             มาตรฐานใน data/encrypted)
-#   BBA_PILOT_MSBOS_RESERVATION=0             บังคับปิดส่วน MSBOS
-#   BBA_PILOT_DECLARED_USETYPE=0              บังคับปิด declared-USETYPE
-#   BBA_PILOT_DECLARED_USE_PREOP_EXEMPT=0     กลับไปใช้ routing ก่อนผ่าตัดแบบเดิม
-#   BBA_PILOT_MSBOS_PLANNED_OP_PICKER_V2=0    บังคับปิด picker v2
-# (ทั้งสี่ฟีเจอร์ default-ON)
+ใช้เครื่องที่ได้รับอนุญาตและ work directory ที่จำกัดสิทธิ์ ค่าเริ่มต้นของสคริปต์บางตัวอ่านไฟล์โรงพยาบาล ตรวจทุกพาธก่อนรัน และเก็บข้อมูล workbook กับผลลัพธ์ไว้นอก repository
 
-# ขั้น 1 — สุ่มประมาณ 10 เคสจาก bundle ที่เข้ารหัส → bundle/ + manifest
+[pilot README](https://github.com/macsermkiat/blood_audit/blob/main/scripts/pilot/README.md) อธิบายค่าของแต่ละสคริปต์ ตั้ง `BBA_PILOT_*` และตัวแปรข้อมูลนำเข้าก่อนใช้ลำดับนี้
+
+```sh
 uv run python scripts/pilot/sample_bundle.py
-
-# ขั้น 2 — verdict จาก deterministic classifier → report.csv
 uv run python scripts/pilot/run_pipeline.py
+```
 
-# ขั้น 3 — Anthropic batch จริง (de-id → prompt → ground → calibrate) → llm_report.json
-uv run python scripts/pilot/run_llm_leg.py
+จะได้ `bundle/`, `sample_manifest.csv` และ `report.csv` จากกฎใน work directory ที่กำหนด deterministic report มีผลจาก returns declared-use และ MSBOS reservation ที่เปิดใช้อยู่ด้วย
 
-# ขั้น 4: ตรวจคำตอบของ LLM (เช็กด้วยโค้ดล้วน ไม่เรียก API) → llm_response_audit.json
+ขั้นโมเดลต่อไปอาจมีค่าใช้จ่าย ขออนุมัติและติดตั้ง live dependency ก่อนเรียก
+
+```sh
+uv run --extra live python scripts/pilot/run_llm_leg.py
 uv run python scripts/pilot/audit_llm_responses.py
-
-# ขั้น 5: ประกอบหน้า review หน้าเดียว → review.html
 uv run python scripts/pilot/build_review.py
-
-open "$BBA_PILOT_WORK_DIR/review.html"
 ```
 
-ผลลัพธ์ของแต่ละขั้น:
+ขั้นโมเดลเขียน `llm_report.json` และ audit-store artifacts response audit ตรวจการ parse คำตอบถูกตัด เหตุผลขัดกับ label และการเปลี่ยนผลโดยไม่มีเหตุผลบันทึก โดยไม่แก้ classification การตรวจด้วยโค้ดตามค่าเริ่มต้นไม่เรียกโมเดล ส่วน judge mode ที่เลือกเพิ่มอาจเรียกผู้ให้บริการ
 
-| ขั้น | สคริปต์ | ผลลัพธ์ |
-|------|--------|--------|
-| 1 | `sample_bundle.py` | `bundle/` (CSV ที่สุ่ม) + `sample_manifest.csv` |
-| 2 | `run_pipeline.py` | `report.csv` (verdict deterministic ต่อเคส) |
-| 3 | `run_llm_leg.py` | `llm_report.json` + `data/audit_store/` |
-| 4 | `audit_llm_responses.py` | `llm_response_audit.json` / `.csv` + `llm_response_audit_reqnos.txt` |
-| 5 | `build_review.py` | `review.html` (หน้าเดียวสำหรับคนตรวจ) |
+review builder ต้องมี response audit ที่ตรงกับ SHA-256 ของรายงานและไม่มี HIGH finding ค่า `BBA_PILOT_ALLOW_UNAUDITED=1` ข้ามการตรวจนี้ จึงห้ามถือว่าผลที่ได้ผ่านการทบทวนแล้ว ใช้การตรวจตามปกติโดยไม่เปิดค่านี้
 
-ขั้น 4 เช็กคำตอบที่ LLM ส่งกลับมา (parse ไม่ผ่าน, คำตอบถูกตัดที่ output
-token limit, label กับข้อสรุปใน reasoning ไม่ตรงกัน, verdict เปลี่ยนโดยไม่มี
-เหตุผลบันทึกไว้ ฯลฯ) โดยไม่แก้ verdict ใด ๆ เขียนแค่ finding เท่านั้น
+โมเดล pilot รับหลักฐานแบบมีโครงสร้าง เช่น รหัสวินิจฉัย ผลตรวจ ยา และตัวเลข vital signs ที่สกัดในเครื่อง ไม่ส่งข้อความ progress note หรือ focus note ดิบ ขอบเขตนี้ไม่ได้ยืนยันว่าข้อมูลแบบมีโครงสร้างได้รับอนุมัติให้ส่งออกแล้ว
 
-ขั้น 5 จะปฏิเสธไม่ render คำตอบ LLM ถ้ายังไม่มี response audit ที่ตรงกับ
-`llm_report.json` (เทียบด้วย SHA-256) และต้องไม่มี HIGH finding ด้วย ตั้ง
-`BBA_PILOT_ALLOW_UNAUDITED=1` เพื่อ build หน้าต่อไปได้ทั้งที่ยังไม่ผ่าน ดู
-[`scripts/pilot/README.md`](https://github.com/macsermkiat/blood_audit/blob/main/scripts/pilot/README.md)
-สำหรับ loop แก้-แล้ว-รันซ้ำ และ dev-test consortium (ให้ Claude Code
-subagent ช่วยตรวจความสมเหตุสมผลของคำตอบ ไม่ใช่ pipeline step และไม่ใช่ gate)
+## จัดอันดับผล pilot
 
-`report.csv` จากขั้น 2 ยังมีคอลัมน์ overlay ที่ default-ON ด้วย:
-สถานะจาก returns ledger (`RETURNED_NOT_TRANSFUSED` /
-`PERIOP_TRANSFUSION_EXEMPT`), routing ตาม USETYPE แบบ declared-use
-และ verdict การจองเลือดตาม MSBOS (`PREOP_OVER_RESERVATION` +
-เหตุผลการจอง พร้อม provenance ของ picker v2)
-
-:::note[LLM เห็นอะไรและไม่เห็นอะไร]
-pilot ไม่ส่ง progress / focus notes แบบข้อความอิสระไปยัง API
-เพราะ bundle นั้นยังไม่ผ่าน de-identification ส่งออกเฉพาะสัญญาณที่เป็น
-โครงสร้าง: ICD-10, ประวัติ Hb, ค่า CBC, รายการยา และ *ตัวเลข* สัญญาณชีพ
-ที่สกัดด้วย regex ในเครื่อง ตัวเนื้อความ narrative ไม่ออกจากเครื่อง
-:::
-
-## เส้นทาง B: รันแบบ production (CLI ที่รองรับ)
-
-รัน `bba` CLI ที่ wire แล้ว กับข้อมูลส่งออก HOSxP เต็ม 13 ไฟล์
-
-```bash
-export BBA_DATA_DIR=/path/to/persistent/data   # run-state ตอนนี้ (Parquet + DuckDB วางแผนไว้)
-export BBA_DB_URL=postgresql://user@host/db     # audit-store + dashboard
-export ANTHROPIC_API_KEY=sk-ant-...             # ส่วน LLM review
-
-# 1. Ingest bundle CSV ของ HOSxP: validate + normalize, เขียน run completion marker ใต้ $BBA_DATA_DIR
-uv run bba ingest /path/to/hosxp_bundle/BDVST.csv
-
-# 2. รัน audit ingest leg (validate + normalize, เขียน run completion marker; idempotent ต่อ run_id)
-#    ตอนนี้เขียนแค่ marker: ตัวเขียน payload DuckDB + Parquet เป็น storage ขั้นถัดไปที่ตั้งใจไว้
-#    ส่วน analysis (classifier + LLM review + quote grounding) จะ wire เข้า CLI ใน Phase 1.5
-uv run bba audit --input /path/to/hosxp_bundle/BDVST.csv
-```
-
-`bba audit` เป็น run-level idempotent: รันซ้ำด้วย input เดิม + code เดิม
-จะไม่เขียนซ้ำ ใช้ `--force` เพื่อ override (เขียน compliance row ลง
-`audit_log`) ดูสัญญาต่อ flag ได้ที่
-[รันออดิทครั้งแรก](/blood_audit/th/operators/first-audit-run/) และ
-[คำสั่ง audit](/blood_audit/th/operators/audit-command/)
-
-## ควรรันอันไหน?
-
-- ถ้าต้องการเดโม pipeline หรือเช็กการเปลี่ยนแปลงครบจบ ใช้เส้นทาง A
-- ถ้าต้องการออดิทข้อมูลจริงสำหรับคณะกรรมการ QI ใช้เส้นทาง B
-
-## ขั้นถัดไป
-
-- [ตัวแปรสภาพแวดล้อม](/blood_audit/th/operators/env-vars/): ทุกตัวแปรที่ CLI อ่าน
-- [Ingest CSV](/blood_audit/th/operators/ingest-csv/): รูปแบบ bundle 13 ไฟล์
-- [แก้ปัญหาเบื้องต้น](/blood_audit/th/operators/troubleshooting/): ปัญหาที่พบบ่อย
+ใช้ `scripts/pilot/rank_merged.py` รวมผลจากกฎกับโมเดลก่อนจัดอันดับ ดูกติกาตัวหารและไฟล์ที่ต้องใช้ที่ [อันดับแพทย์และแผนก](/blood_audit/th/operators/doctor-ranking/)
