@@ -25,6 +25,8 @@ result. It DOES raise on backend errors (caught and re-raised as
 
 from __future__ import annotations
 
+from datetime import date
+
 from bba.deid_redactor.age import apply_age_cap
 from bba.deid_redactor.canonical import build_envelope, compute_redaction_hash
 from bba.deid_redactor.date_shift import shift_date_spans_in_text, shift_dates_in_text
@@ -130,7 +132,7 @@ def _redact_one_note(
     note: NoteInput,
     backend: RedactorBackend,
     classifier: RoleClassifier,
-    admission_date: object,
+    admission_date: date,
 ) -> str:
     """Run the per-note redaction sub-pipeline.
 
@@ -153,14 +155,6 @@ def _redact_one_note(
         spans=backend_result.spans,
         classifier=classifier,
     )
-
-    # admission_date arrives as ``date`` (Pydantic ``date`` field), but
-    # the function signature uses ``object`` to dodge a circular import
-    # at type-check time. The shift contracts require ``date``; the model
-    # validator already guarantees it.
-    from datetime import date as _date
-
-    assert isinstance(admission_date, _date)  # nosec - boundary contract
 
     # Order: convert backend-tagged DATE placeholders first (one per
     # DATE span, in document order), then catch any remaining literal

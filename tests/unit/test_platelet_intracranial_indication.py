@@ -94,7 +94,7 @@ class TestPromptStatesTheRuling:
             .split("  6. Intracranial bleed", 1)[1]
             .split("\n\n", 1)[0]
         )
-        assert "<50,000 /μL" in section
+        assert "≤50,000 /μL" in section
         assert "stable" in section and "chronic SDH" in section
 
     def test_chronic_sdh_expansion_is_not_active_bleeding(self) -> None:
@@ -113,7 +113,7 @@ class TestPromptStatesTheRuling:
         # Widened to 4–7 with the 2026-09-22 rulings (active bleeding became
         # indication 7); the point stands: the terminal line must name every
         # non-procedure indication so it cannot contradict one of them.
-        assert "no indication 4–8 below its threshold" in prompt
+        assert "no indication 4–8 at or below its threshold" in prompt
         assert "no indication 4 or 5 below its threshold" not in prompt
         assert "no indication 4, 5 or 6 below its threshold" not in prompt
 

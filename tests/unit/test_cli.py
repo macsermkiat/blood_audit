@@ -976,6 +976,9 @@ class TestEnvVarSurfaceIsTight:
             "ANTHROPIC_API_KEY",
             "BBA_BDVST_CSV",
             "BBA_DCT_CSV",
+            "BBA_APPLICATION_CONFIG",
+            "BBA_DASHBOARD_AUTH_SECRET",
+            "BBA_DASHBOARD_PUBLIC_ORIGIN",
         }
     )
 
@@ -1105,38 +1108,19 @@ class TestBbaIngestWiring:
         assert "BBA_DATA_DIR" in str(result.exception)
 
 
-class TestUnwiredSubcommandsFailLoud:
-    """The three subcommands whose underlying module does not yet expose
-    a single-call facade fail loud with :class:`CliError` rather than
-    fabricating defaults. Verifies the contract phrasing names the
-    integration seam.
-
-    Note: ``bba report`` graduated out of this list once
-    :mod:`bba.report_generator.builder` landed — its remaining loud-fail
-    surface is the per-resolver injection seam, covered by
-    :class:`TestBbaReportResolverSeamsFailLoud`."""
-
+class TestProductionCommandsRequireExplicitInputs:
     @pytest.mark.parametrize(
-        ("argv", "expected_seam"),
+        ("argv", "required"),
         [
-            (["evaluate", "--run-id", "abc"], "bba.cli.main.bba_evaluate"),
-            (
-                ["serve-dashboard", "--port", "8765"],
-                "bba.cli.main.bba_serve_dashboard",
-            ),
-            (["sentinel", "--weekly"], "bba.cli.main.bba_sentinel"),
+            (["evaluate", "--run-id", "abc"], "--labels"),
+            (["serve-dashboard", "--port", "8765"], "BBA_DASHBOARD_AUTH_SECRET"),
+            (["sentinel", "--weekly"], "--manifest"),
         ],
     )
-    def test_unwired_subcommand_raises_cli_error(
-        self,
-        runner: CliRunner,
-        argv: list[str],
-        expected_seam: str,
-    ) -> None:
+    def test_missing_configuration_fails_loud(self, runner, argv, required):
         result = runner.invoke(cli, argv)
         assert result.exit_code != 0
-        assert isinstance(result.exception, CliError), result.exception
-        assert expected_seam in str(result.exception), result.exception
+        assert required in result.output or required in str(result.exception)
 
 
 class TestBbaReportResolverSeamsFailLoud:
@@ -1205,7 +1189,7 @@ class TestBbaReportWiring:
                 "bba.cli.main.build_report_inputs", return_value=sentinel_inputs
             ) as mock_build,
             patch(
-                "bba.cli.main.generate_monthly_report", return_value=sentinel_artifacts
+                "bba.cli.main.write_report", return_value=sentinel_artifacts.pdf_path
             ) as mock_generate,
         ):
             result = runner.invoke(cli, ["report", "--run-id", "r1", "--format", "pdf"])
@@ -1218,7 +1202,7 @@ class TestBbaReportWiring:
         assert kwargs["ward_resolver"] is sentinel_ward
         assert kwargs["physician_resolver"] is sentinel_physician
         assert kwargs["output_dir"] == tmp_path / "reports" / "r1"
-        mock_generate.assert_called_once_with(sentinel_inputs)
+        mock_generate.assert_called_once_with(sentinel_inputs, "pdf")
 
     def test_report_fails_loud_on_empty_audit_store(
         self,
@@ -1572,13 +1556,16 @@ class TestAuditWithoutInputCannotReachPipeline:
         self,
         runner: CliRunner,
         stub_store: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
         stub_store.run_complete.return_value = False
         with patch("bba.cli.main._get_audit_run_store", return_value=stub_store):
             result = runner.invoke(cli, ["audit", "--run-id", "abc123"])
         assert result.exit_code != 0
         # click.UsageError flows through; message names the constraint.
-        assert "without --input" in result.output or "without --input" in str(
+        assert "no recorded source" in result.output or "no recorded source" in str(
             result.exception
         ), (result.output, result.exception)
 
@@ -1604,10 +1591,7 @@ class TestPhiScrubberEdgeCases:
 
         assert "<REDACTED:type=int len=-1>" in scrubbed, scrubbed
 
-    def test_repr_failed_branch_does_not_crash(self) -> None:
-        """If a frame-local's ``repr`` itself raises, the scrubber emits
-        ``<repr-failed>`` rather than letting the exception escape and
-        clobbering the original traceback."""
+    def test_frame_values_are_never_rendered(self) -> None:
 
         class _ReprBomb:
             def __repr__(self) -> str:
@@ -1622,7 +1606,7 @@ class TestPhiScrubberEdgeCases:
         except RuntimeError as exc:
             scrubbed = scrub_traceback(type(exc), exc, exc.__traceback__)
 
-        assert "<repr-failed>" in scrubbed, scrubbed
+        assert "<REDACTED:type=_ReprBomb len=-1>" in scrubbed, scrubbed
 
     def test_dunder_locals_skipped(self) -> None:
         """``__doc__`` / ``__name__`` / ``__builtins__`` style bindings
@@ -1638,6 +1622,23 @@ class TestPhiScrubberEdgeCases:
             scrubbed = scrub_traceback(type(exc), exc, exc.__traceback__)
 
         assert "__secret__" not in scrubbed, scrubbed
+
+    def test_credentials_and_unrecognized_clinical_text_never_enter_logs(self):
+        def boom():
+            dsn = "postgresql://user:synthetic-password@localhost/db"
+            secret = "synthetic-dashboard-signing-secret"
+            rows = [{"text": "Unique unrecognized clinical narrative"}]
+            raise ValueError(f"invalid config {dsn} {secret} {rows}")
+
+        try:
+            boom()
+        except ValueError as exc:
+            scrubbed = scrub_traceback(type(exc), exc, exc.__traceback__)
+        assert "synthetic-password" not in scrubbed
+        assert "synthetic-dashboard-signing-secret" not in scrubbed
+        assert "Unique unrecognized clinical narrative" not in scrubbed
+        assert "ValueError" in scrubbed
+        assert "in boom" in scrubbed
 
     def test_install_excepthook_with_sidecar_creates_file(
         self,
@@ -1764,153 +1765,31 @@ class TestEndToEndAuditIdempotency:
         assert len(post_store.audit_log_entries(run_id)) == 2
 
 
-class TestRunAuditPipelineIngestLeg:
-    """The Phase 1 ``_run_audit_pipeline`` deliverable is the ingest leg
-    — calling :func:`bba.ingest.ingest` with a per-run output directory,
-    then recording one row marker per ingested HOSxP table so
-    :meth:`AuditRunStore.run_count` stays consistent with
-    :meth:`AuditRunStore.run_complete`."""
-
-    def test_calls_ingest_with_per_run_output_dir(
-        self,
-        tmp_path: Path,
-        fake_csv: Path,
-        stub_store: MagicMock,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
+class TestRunAuditPipelineComposition:
+    def test_records_only_committed_audit_ids(
+        self, tmp_path, fake_csv, stub_store, monkeypatch
+    ):
         import bba.cli.main as main_module
-        from bba.ingest import IngestResult
 
         monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
-        run_id = "abc123def4567890"
-        fake_result = IngestResult(
-            run_id=run_id,
-            rows_written=0,
-            tables_written=("BDVST",),
-            skipped_idempotent=False,
-        )
-        with patch("bba.cli.main.ingest", return_value=fake_result) as mock_ingest:
+        with patch("bba.cli.main.audit_bundle", return_value=("audit-1", "audit-2")):
             main_module._run_audit_pipeline(
-                run_id=run_id, input_csv=fake_csv, store=stub_store
+                run_id="run-1", input_csv=fake_csv, store=stub_store
             )
-        mock_ingest.assert_called_once()
-        (config,) = mock_ingest.call_args.args
-        assert config.input_dir == fake_csv.parent
-        assert config.output_dir == tmp_path / "audit" / run_id
-
-    def test_missing_data_dir_raises_cli_error(
-        self,
-        tmp_path: Path,
-        fake_csv: Path,
-        stub_store: MagicMock,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        import bba.cli.main as main_module
-
-        monkeypatch.delenv("BBA_DATA_DIR", raising=False)
-        with pytest.raises(CliError, match="BBA_DATA_DIR"):
-            main_module._run_audit_pipeline(
-                run_id="abc123def4567890",
-                input_csv=fake_csv,
-                store=stub_store,
-            )
-
-    def test_records_one_row_marker_per_ingested_table(
-        self,
-        tmp_path: Path,
-        fake_csv: Path,
-        stub_store: MagicMock,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """The pipeline trusts :attr:`IngestResult.tables_written` —
-        the typed return value from :func:`bba.ingest.ingest` — and
-        records one ``store.record_row`` per validated table."""
-        import bba.cli.main as main_module
-        from bba.ingest import IngestResult
-
-        monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
-        run_id = "abc123def4567890"
-        fake_result = IngestResult(
-            run_id=run_id,
-            rows_written=0,
-            tables_written=("BDVST", "BDTYPE", "Diagnosis"),
-            skipped_idempotent=False,
-        )
-        with patch("bba.cli.main.ingest", return_value=fake_result):
-            main_module._run_audit_pipeline(
-                run_id=run_id, input_csv=fake_csv, store=stub_store
-            )
-        recorded_audit_ids = {
-            call.args[1] for call in stub_store.record_row.call_args_list
-        }
-        assert recorded_audit_ids == {
-            "phase1_ingest_BDVST",
-            "phase1_ingest_BDTYPE",
-            "phase1_ingest_Diagnosis",
+        assert {c.args[1] for c in stub_store.record_row.call_args_list} == {
+            "audit-1",
+            "audit-2",
         }
 
-    def test_zero_tables_written_raises_cli_error(
-        self,
-        tmp_path: Path,
-        fake_csv: Path,
-        stub_store: MagicMock,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Defensive guard: if ingest's contract changes and it returns
-        an empty ``tables_written`` tuple, the pipeline must fail loud
-        rather than let bba_audit mark the run complete with zero rows."""
+    def test_empty_audit_cannot_be_complete(
+        self, tmp_path, fake_csv, stub_store, monkeypatch
+    ):
         import bba.cli.main as main_module
-        from bba.ingest import IngestResult
 
         monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
-        empty_result = IngestResult(
-            run_id="abc123def4567890",
-            rows_written=0,
-            tables_written=(),
-            skipped_idempotent=False,
-        )
-        with patch("bba.cli.main.ingest", return_value=empty_result):
-            with pytest.raises(CliError, match="zero ingested tables"):
+        with patch("bba.cli.main.audit_bundle", return_value=()):
+            with pytest.raises(CliError, match="no committed rows"):
                 main_module._run_audit_pipeline(
-                    run_id="abc123def4567890",
-                    input_csv=fake_csv,
-                    store=stub_store,
+                    run_id="run-1", input_csv=fake_csv, store=stub_store
                 )
         stub_store.record_row.assert_not_called()
-
-    def test_real_store_run_count_matches_after_pipeline(
-        self,
-        runner: CliRunner,
-        fake_csv: Path,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """End-to-end integration against the real
-        :class:`FileBackedAuditRunStore`: after a successful audit,
-        ``run_complete`` is True and ``run_count`` equals the number of
-        validated HOSxP tables returned by ingest. This proves the
-        round-2 inconsistency (complete=True with count=0) is
-        impossible — the pipeline writes the markers BEFORE bba_audit
-        writes the completion marker, and the count source is the
-        ingest function's typed return value (so a future ingest that
-        adds parquet writes does not break this contract)."""
-        from bba.cli.audit_run_store import FileBackedAuditRunStore
-        from bba.ingest import IngestResult
-
-        monkeypatch.setenv("BBA_DATA_DIR", str(tmp_path))
-        fake_result = IngestResult(
-            run_id="placeholder",  # overwritten by CLI; real value is computed
-            rows_written=0,
-            tables_written=("BDVST", "Diagnosis", "Lab"),
-            skipped_idempotent=False,
-        )
-        with patch("bba.cli.main.ingest", return_value=fake_result):
-            result = runner.invoke(cli, ["audit", "--input", str(fake_csv)])
-        assert result.exit_code == 0, result.output
-
-        markers = list((tmp_path / "audit_runs").glob("run_*.complete"))
-        assert len(markers) == 1, markers
-        run_id = markers[0].stem.removeprefix("run_").removesuffix(".complete")
-        store = FileBackedAuditRunStore(tmp_path)
-        assert store.run_complete(run_id) is True
-        assert store.run_count(run_id) == 3

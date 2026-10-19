@@ -24,6 +24,7 @@ from bba.llm_client import RawBatchResponse
 from bba.llm_client.conclusion import closing_classification, concluded_class
 from bba.llm_client.models import SONNET_MODEL_ID, BatchSubmissionResult
 from bba.platelet_lookup.models import PlateletLookupResult
+from bba.prompt_builder import EvidenceChunk
 from bba.prompt_builder.system_prompt import platelet_system_prompt, system_prompt_for
 
 _RUN_TS = datetime(2026, 9, 22, 4, 0, tzinfo=UTC)
@@ -167,6 +168,13 @@ def _ctx() -> PipelineRowContext:
         policy_version="kcmh-pr17.2-2024",
         prompt_hash="ph",
         evidence_bundle_hash="bh",
+        evidence_chunks=(
+            EvidenceChunk(
+                evidence_id="E16",
+                source="Note",
+                text="acute on chronic SDH with mass effect",
+            ),
+        ),
     )
 
 
@@ -177,7 +185,7 @@ def _response(
         "indications": [
             {
                 "code": "6",
-                "quote": "acute on chronic SDH",
+                "quote": "acute on chronic SDH with mass effect",
                 "source_id": "E16",
                 "confidence": 0.9,
             }

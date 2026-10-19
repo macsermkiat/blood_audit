@@ -30,11 +30,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from fastapi import Depends, FastAPI, Form, HTTPException
 from fastapi import Request as FastApiRequest
 from fastapi.responses import HTMLResponse
+from starlette.responses import Response
 from fastapi.templating import Jinja2Templates
 
 from bba.audit_store import AuditRow, Classification, LlmCall, SnapshotView
@@ -60,6 +62,15 @@ from bba.dashboard.models import (
 )
 from bba.feature_flags import RETURNS_LEDGER_ENABLED
 from bba.review_actions import PhiAccessInput
+from bba.dashboard.adjudication import (
+    case_context,
+    submit_decision,
+    row_hash,
+    selected_version,
+    unresolved,
+)
+from bba.dashboard.auth import authenticated_context, check_csrf
+from bba.dashboard.security import configure_security
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +145,10 @@ def _audit_row_to_queue_item(config: DashboardConfig, row: AuditRow) -> QueueIte
     return QueueItem(
         audit_id=row.audit_id,
         run_id=row.run_id,
+        component=row.component,
+        code_version=selected_version(config),
+        platelet_value=row.platelet_value,
+        platelet_freshness=row.platelet_freshness,
         order_datetime=row.order_datetime,
         hb_value=row.hb_value,
         hb_freshness=row.hb_freshness,
@@ -163,6 +178,11 @@ def _audit_row_to_case_detail(
     return CaseDetail(
         audit_id=row.audit_id,
         run_id=row.run_id,
+        component=row.component,
+        code_version=selected_version(config),
+        platelet_value=row.platelet_value,
+        platelet_freshness=row.platelet_freshness,
+        row_hash=row_hash(row),
         final_classification=row.final_classification,
         rule_classification=row.rule_classification,
         confidence=row.confidence,
@@ -182,29 +202,32 @@ def _audit_row_to_case_detail(
 
 
 def _read_snapshot_rows(config: DashboardConfig) -> tuple[AuditRow, ...]:
-    """Read RBC audit rows via the daily-rotated DuckDB snapshot view.
-
-    Keyed by ``datetime.now(UTC).date()`` — same-day reads share the
-    materialized snapshot, mid-batch writes are isolated. The first read
-    of a given day materializes the view; subsequent reads return the
-    same frozen result set.
-
-    Only ``component == "red_cell"`` rows are returned. Platelet rows use
-    different clinical thresholds (platelet count vs Hb) and are excluded
-    from every RBC dashboard view (queue, ward/physician scorecard, pipeline
-    health). This is the single choke point: filtering here keeps every
-    downstream handler free of per-component branching.
-    """
+    """Read one configured code version from the frozen daily snapshot."""
     today = datetime.now(UTC).date()
     view = SnapshotView.open(config.audit_store, today)
-    return tuple(r for r in view.read_audit_results() if r.component == "red_cell")
+    rows = view.read_audit_results(code_version=selected_version(config))
+    return tuple(
+        row for row in rows if config.run_id is None or row.run_id == config.run_id
+    )
 
 
-def _find_audit_row(config: DashboardConfig, audit_id: str) -> AuditRow:
-    for row in _read_snapshot_rows(config):
-        if row.audit_id == audit_id:
-            return row
-    raise AuditNotFoundError(f"audit_id {audit_id!r} not found in today's snapshot")
+def _find_audit_row(
+    config: DashboardConfig, audit_id: str, run_id: str | None = None
+) -> AuditRow:
+    rows = tuple(
+        row
+        for row in _read_snapshot_rows(config)
+        if row.audit_id == audit_id and (run_id is None or row.run_id == run_id)
+    )
+    if len(rows) > 1:
+        raise HTTPException(
+            status_code=409, detail="audit ID exists in multiple runs; select a run"
+        )
+    if rows:
+        return rows[0]
+    raise AuditNotFoundError(
+        f"audit_id {audit_id!r} not found in the selected snapshot"
+    )
 
 
 def _count_classification(
@@ -298,7 +321,12 @@ def list_queue(
     """
     del context  # queue scope is global (PRD §17 — no per-reviewer slice)
     rows = _read_snapshot_rows(config)
-    review_rows = tuple(r for r in rows if r.final_classification == "NEEDS_REVIEW")
+    review_rows = tuple(
+        r
+        for r in rows
+        if (r.needs_human_review or r.final_classification == "NEEDS_REVIEW")
+        and unresolved(config, r)
+    )
     items = [_audit_row_to_queue_item(config, r) for r in review_rows]
     sort_fn: dict[str, Callable[[QueueItem], Any]] = {
         "order_datetime": lambda i: i.order_datetime,
@@ -314,6 +342,8 @@ def get_case_detail(
     config: DashboardConfig,
     context: RouteContext,
     audit_id: str,
+    *,
+    run_id: str | None = None,
 ) -> CaseDetail:
     """Return the case-detail view for ``audit_id``.
 
@@ -329,7 +359,7 @@ def get_case_detail(
     (:func:`record_break_glass_access`) is the only way to obtain
     un-redacted access without care-team membership.
     """
-    row = _find_audit_row(config, audit_id)
+    row = _find_audit_row(config, audit_id, run_id)
     if audit_id in context.reviewer.care_team_memberships:
         access = _phi_access_input(context, row, justification=None)
         with config.review_actions_store.access_phi(access):
@@ -342,6 +372,8 @@ def record_break_glass_access(
     context: RouteContext,
     audit_id: str,
     request: BreakGlassRequest,
+    *,
+    run_id: str | None = None,
 ) -> CaseDetail:
     """Write a ``phi_access_log`` row carrying ``request.justification``,
     THEN return the un-redacted :class:`CaseDetail`.
@@ -362,7 +394,7 @@ def record_break_glass_access(
             "non-whitespace string; un-redacted access is not granted "
             "without a reviewer-supplied rationale"
         )
-    row = _find_audit_row(config, audit_id)
+    row = _find_audit_row(config, audit_id, run_id)
     access = _phi_access_input(context, row, justification=request.justification)
     with config.review_actions_store.access_phi(access):
         return _audit_row_to_case_detail(config, row, unredacted=True)
@@ -381,7 +413,7 @@ def get_ward_scorecard(
     audited orders today.
     """
     del context
-    rows = _read_snapshot_rows(config)
+    rows = tuple(r for r in _read_snapshot_rows(config) if r.component == "red_cell")
     ward_rows = tuple(r for r in rows if _ward_id_for_row(config, r) == ward_id)
     aggs = _aggregate_classifications(ward_rows)
     return WardScorecard(
@@ -429,7 +461,7 @@ def get_physician_scorecard(
             f"view physician {physician_id!r}'s scorecard; the "
             f"per-physician view is strict own-view"
         )
-    rows = _read_snapshot_rows(config)
+    rows = tuple(r for r in _read_snapshot_rows(config) if r.component == "red_cell")
     phys_rows = tuple(
         r for r in rows if _physician_id_for_row(config, r) == physician_id
     )
@@ -471,11 +503,13 @@ def get_pipeline_health(
     while ``total_audits`` did not — codex round 4 P2.
     """
     del context
-    rows = _read_snapshot_rows(config)
+    rows = tuple(r for r in _read_snapshot_rows(config) if r.component == "red_cell")
     total = len(rows)
-    snapshot_audit_ids = {r.audit_id for r in rows}
-    all_calls = config.audit_store.read_llm_calls()
-    snapshot_calls = tuple(c for c in all_calls if c.audit_id in snapshot_audit_ids)
+    snapshot_ids = {(r.audit_id, r.run_id) for r in rows}
+    all_calls = config.audit_store.read_llm_calls(code_version=selected_version(config))
+    snapshot_calls = tuple(
+        c for c in all_calls if (c.audit_id, c.run_id) in snapshot_ids
+    )
     avg_latency = _average_llm_latency_ms(snapshot_calls)
     if total == 0:
         return PipelineHealth(
@@ -545,6 +579,8 @@ def get_route_context(request: FastApiRequest) -> RouteContext:
                 "not built via bba.dashboard.create_app"
             ),
         )
+    if config.auth_secret is not None:
+        return authenticated_context(request, config.auth_secret)
     if config.default_reviewer is None:
         raise HTTPException(
             status_code=401,
@@ -564,11 +600,7 @@ def get_route_context(request: FastApiRequest) -> RouteContext:
 def create_app(config: DashboardConfig) -> FastAPI:
     """Construct and return the FastAPI application for the reviewer UI.
 
-    Routes render Jinja2 templates under
-    ``src/bba/dashboard/templates/`` (Tailwind via CDN, HTMX via CDN —
-    sufficient for the Phase 1 acceptance criteria; production builds
-    compile Tailwind into a static stylesheet). Each route wraps the
-    corresponding module-level handler and translates
+    Routes render local templates and assets. Handlers translate
     :class:`DashboardError` subclasses into HTTP responses:
 
     * :class:`AuditNotFoundError` → 404
@@ -582,7 +614,9 @@ def create_app(config: DashboardConfig) -> FastAPI:
     The default returns ``config.default_reviewer`` (for dev / smoke
     tests) or raises 401 if no default is configured.
     """
-    app = FastAPI(title="bba.dashboard", version="0.1.0")
+    app = FastAPI(title="bba.dashboard", version="0.1.0", docs_url=None, redoc_url=None)
+    configure_security(app, config)
+
     # Stash the config on app.state so the module-level
     # ``get_route_context`` dependency can read it. Production
     # replaces the dependency entirely via
@@ -591,6 +625,9 @@ def create_app(config: DashboardConfig) -> FastAPI:
     app.state.dashboard_config = config
     template_dir = config.template_dir or _DEFAULT_TEMPLATE_DIR
     templates = Jinja2Templates(directory=str(template_dir))
+    templates.env.filters["bangkok"] = lambda value: value.astimezone(
+        ZoneInfo("Asia/Bangkok")
+    ).strftime("%Y-%m-%d %H:%M:%S %z Asia/Bangkok")
 
     @app.get("/queue", response_class=HTMLResponse)
     def _queue_route(
@@ -606,6 +643,7 @@ def create_app(config: DashboardConfig) -> FastAPI:
             "items": items,
             "sort_key": sort_key,
             "sort_direction": sort_direction,
+            "code_version": selected_version(config),
         }
         # HTMX requests carry the ``HX-Request: true`` header. Render
         # only the table fragment so the swap target (#queue-table)
@@ -622,15 +660,26 @@ def create_app(config: DashboardConfig) -> FastAPI:
         request: FastApiRequest,
         audit_id: str,
         context: RouteContext = Depends(get_route_context),
+        run_id: str | None = None,
     ) -> HTMLResponse:
         try:
-            detail = get_case_detail(config, context, audit_id)
+            detail = get_case_detail(config, context, audit_id, run_id=run_id)
         except AuditNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except UnredactedSourceUnavailableError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         return templates.TemplateResponse(
-            request, "case_detail.html", {"detail": detail}
+            request,
+            "case_detail.html",
+            {
+                "detail": detail,
+                **case_context(
+                    request,
+                    context,
+                    config,
+                    _find_audit_row(config, audit_id, detail.run_id),
+                ),
+            },
         )
 
     @app.post("/case/{audit_id}/break-glass", response_class=HTMLResponse)
@@ -638,8 +687,11 @@ def create_app(config: DashboardConfig) -> FastAPI:
         request: FastApiRequest,
         audit_id: str,
         justification: str = Form(...),
+        csrf_token: str = Form(""),
+        run_id: str | None = Form(None),
         context: RouteContext = Depends(get_route_context),
     ) -> HTMLResponse:
+        check_csrf(request, context, csrf_token)
         # Accept the justification as form data (what an HTMX-driven
         # form sends); construct the validated request object inside
         # the handler so a malformed empty value still surfaces via
@@ -650,7 +702,7 @@ def create_app(config: DashboardConfig) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         try:
             detail = record_break_glass_access(
-                config, context, audit_id, break_glass_request
+                config, context, audit_id, break_glass_request, run_id=run_id
             )
         except MissingJustificationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -659,7 +711,31 @@ def create_app(config: DashboardConfig) -> FastAPI:
         except UnredactedSourceUnavailableError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         return templates.TemplateResponse(
-            request, "case_detail.html", {"detail": detail}
+            request,
+            "case_detail.html",
+            {
+                "detail": detail,
+                **case_context(
+                    request,
+                    context,
+                    config,
+                    _find_audit_row(config, audit_id, detail.run_id),
+                ),
+            },
+        )
+
+    @app.post("/case/{audit_id}/decision", response_class=HTMLResponse)
+    async def _decision_route(
+        request: FastApiRequest,
+        audit_id: str,
+        context: RouteContext = Depends(get_route_context),
+    ) -> Response:
+        return await submit_decision(
+            request,
+            audit_id,
+            context,
+            config,
+            lambda audit, run: _find_audit_row(config, audit, run),
         )
 
     @app.get("/scorecard/ward/{ward_id}", response_class=HTMLResponse)

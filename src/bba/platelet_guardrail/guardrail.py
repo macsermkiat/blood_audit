@@ -79,10 +79,11 @@ def platelet_trend_unsupported(
     """True iff an LLM clear rests only on an "expected to fall" claim the count
     history does not support (issue #237, clinician ruling 2026-09-21).
 
-    At a trigger count of 10,000 /uL or more, the only route to
+    At a trigger count above 10,000 /uL, the only route to
     ``prophylactic_marrow_failure`` is indication 5's second arm, "expected to
-    drop below 10,000 /uL within 24 hours". That clause is a straight-line
-    projection through the last two pre-order counts
+    fall to 10,000 /uL or below within 24 hours" (inclusive since owner ruling
+    2026-09-27: a trigger or projection of exactly 10,000 /uL qualifies). That
+    clause is a straight-line projection through the last two pre-order counts
     (:func:`bba.platelet_lookup.project_24h`), so code decides it: the model
     sets the hard signal itself, which is why
     :func:`platelet_overclear_suspect` cannot catch these.
@@ -106,12 +107,12 @@ def platelet_trend_unsupported(
         return False
     if (
         trigger_count_k_ul is None
-        or trigger_count_k_ul < PLATELET_PROPHYLAXIS_THRESHOLD
+        or trigger_count_k_ul <= PLATELET_PROPHYLAXIS_THRESHOLD
     ):
         return False
     return (
         projected_24h_k_ul is None
-        or projected_24h_k_ul >= PLATELET_PROPHYLAXIS_THRESHOLD
+        or projected_24h_k_ul > PLATELET_PROPHYLAXIS_THRESHOLD
     )
 
 

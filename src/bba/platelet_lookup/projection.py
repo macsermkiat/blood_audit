@@ -1,9 +1,10 @@
 """Straight-line 24 h platelet projection (issue #237).
 
-Clinician ruling 2026-09-21: the policy clause "expected to drop below
-10,000 /uL within 24 hours" means a straight-line projection only. Take the
-last two platelet counts before the order and extend the line 24 h past the
-LATEST COUNT; the clause holds iff the projected value is below 10,000 /uL.
+Clinician ruling 2026-09-21: the policy clause "expected to fall to
+10,000 /uL or below within 24 hours" means a straight-line projection only.
+Take the last two platelet counts before the order and extend the line 24 h
+past the LATEST COUNT; the clause holds iff the projected value is at or below
+10,000 /uL (inclusive per owner ruling 2026-09-27).
 (A 30%-per-day reading was considered and dropped.)
 
 Edge cases, fixed here so the guardrail and the evidence line agree:

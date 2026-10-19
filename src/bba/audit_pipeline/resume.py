@@ -38,6 +38,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 
 from bba import feature_flags
+from bba.audit_pipeline.manifest import context_hash, has_manifest
 from bba.audit_pipeline.models import (
     AuditPipelineConfig,
     BatchRun,
@@ -45,7 +46,13 @@ from bba.audit_pipeline.models import (
     PipelineRowContext,
     ResumeReport,
 )
-from bba.audit_pipeline.pipeline import _classifier_inputs_for, rbc_task_mode
+from bba.audit_pipeline.pipeline import (
+    _classifier_inputs_for,
+    rbc_task_mode,
+    _normalize_llm_contexts,
+)
+from bba.audit_pipeline.replay import Verifier, default_verifier
+from bba.audit_pipeline.cost_guard import assert_test_safe_transport
 from bba.audit_pipeline.state_machine import is_terminal, transition
 from bba.audit_pipeline.store import BatchRunStore
 from bba.audit_store import AuditStore, LlmCall
@@ -72,6 +79,8 @@ def resume_on_startup(
     transport: AnthropicTransport | None = None,
     llm_config: LlmClientConfig | None = None,
     pipeline_config: AuditPipelineConfig | None = None,
+    verifier: Verifier = default_verifier,
+    batch_ids: Sequence[str] | None = None,
 ) -> ResumeReport:
     """Reconcile every non-terminal ``batch_runs`` row and return a report.
 
@@ -104,6 +113,11 @@ def resume_on_startup(
       without operator action.
     """
     contexts = contexts or {}
+    if transport is not None:
+        assert_test_safe_transport(
+            transport,
+            allow_live_api=pipeline_config.allow_live_api if pipeline_config else False,
+        )
 
     polled: list[str] = []
     completed: list[str] = []
@@ -111,7 +125,16 @@ def resume_on_startup(
     failed: list[str] = []
 
     for run in batch_run_store.list_all():
+        if batch_ids is not None and run.batch_id not in batch_ids:
+            continue
         if is_terminal(run.state):
+            continue
+
+        if run.code_version != audit_store.config.code_version or (
+            pipeline_config is not None
+            and pipeline_config.code_version != run.code_version
+        ):
+            failed.extend(run.audit_ids)
             continue
 
         polled.append(run.batch_id)
@@ -122,8 +145,8 @@ def resume_on_startup(
                 run,
                 to_state=BatchRunState.FAILED,
                 error_message=(
-                    "PENDING batch had no Anthropic submission; "
-                    "resume found a local create with no batch_id to poll"
+                    "PENDING batch has uncertain remote submission status; "
+                    "reconcile with Anthropic before any resubmission"
                 ),
                 now=_now_utc(),
             )
@@ -138,6 +161,7 @@ def resume_on_startup(
             transport=transport,
             llm_config=llm_config,
             pipeline_config=pipeline_config,
+            verifier=verifier,
         )
         completed.extend(run_completed)
         reemitted.extend(run_reemitted)
@@ -160,15 +184,41 @@ def _reconcile_submitted_or_partial(
     transport: AnthropicTransport | None,
     llm_config: LlmClientConfig | None,
     pipeline_config: AuditPipelineConfig | None = None,
+    verifier: Verifier = default_verifier,
 ) -> tuple[list[str], list[str], list[str]]:
     """Reconcile one SUBMITTED/PARTIAL row.
 
     Returns ``(completed, reemitted, failed)`` lists for the row. The
     caller folds these into the top-level report.
     """
-    cached_calls = _cached_calls_by_audit_id(audit_store, run_id=run.run_id)
+    batch_contexts = {aid: contexts[aid] for aid in run.audit_ids if aid in contexts}
+    if has_manifest(audit_store, run.batch_id) and len(batch_contexts) == len(
+        run.audit_ids
+    ):
+        batch_contexts = {
+            ctx.order.audit_id: ctx
+            for ctx in _normalize_llm_contexts(
+                tuple(batch_contexts.values()), run_id=run.run_id
+            )
+        }
+    contexts = batch_contexts
+    components = {ctx.component for ctx in contexts.values()}
+    effective_defer = bool(
+        components == {"platelet"}
+        and pipeline_config is not None
+        and pipeline_config.enable_missing_platelet_defer
+    )
+    cached_calls = _cached_calls_by_audit_id(
+        audit_store,
+        run_id=run.run_id,
+        code_version=run.code_version,
+        audit_ids=run.audit_ids,
+    )
     persisted_audit_ids = {
-        row.audit_id for row in audit_store.read_audit_results(run_id=run.run_id)
+        row.audit_id
+        for row in audit_store.read_audit_results(
+            run_id=run.run_id, code_version=run.code_version
+        )
     }
 
     audit_ids_without_audit_row = [
@@ -194,6 +244,8 @@ def _reconcile_submitted_or_partial(
                 transport=transport,
                 llm_config=llm_config,
                 audit_ids=audit_ids_missing_cached_calls,
+                audit_store=audit_store,
+                enable_missing_platelet_defer=effective_defer,
             )
         except Exception:
             # Anthropic-side failure (timeout, custom_id drift, SDK
@@ -204,31 +256,51 @@ def _reconcile_submitted_or_partial(
             response = None
         if response is not None:
             from bba.audit_pipeline.replay import apply_batch_results
+            from bba.audit_pipeline.exceptions import ResumeReconciliationError
 
+            if any(
+                result.custom_id not in run.audit_ids for result in response.results
+            ):
+                raise ResumeReconciliationError(
+                    "remote results contain an unexpected audit ID"
+                )
+            response = response.model_copy(
+                update={
+                    "results": tuple(
+                        result
+                        for result in response.results
+                        if result.custom_id in audit_ids_missing_cached_calls
+                    )
+                }
+            )
             polled_contexts = {
                 aid: contexts[aid]
                 for aid in audit_ids_missing_cached_calls
                 if aid in contexts
             }
             if polled_contexts:
-                _defer = (
-                    pipeline_config.enable_missing_platelet_defer
-                    if pipeline_config is not None
-                    else False
-                )
+                _defer = effective_defer
                 apply_batch_results(
                     response,
                     audit_store=audit_store,
                     run_id=run.run_id,
                     contexts=polled_contexts,
                     enable_missing_platelet_defer=_defer,
+                    verifier=verifier,
                 )
                 # Refresh cached state — the call(s) and audit row(s)
                 # are now persisted.
-                cached_calls = _cached_calls_by_audit_id(audit_store, run_id=run.run_id)
+                cached_calls = _cached_calls_by_audit_id(
+                    audit_store,
+                    run_id=run.run_id,
+                    code_version=run.code_version,
+                    audit_ids=run.audit_ids,
+                )
                 persisted_audit_ids = {
                     row.audit_id
-                    for row in audit_store.read_audit_results(run_id=run.run_id)
+                    for row in audit_store.read_audit_results(
+                        run_id=run.run_id, code_version=run.code_version
+                    )
                 }
 
     run_completed: list[str] = []
@@ -244,6 +316,16 @@ def _reconcile_submitted_or_partial(
             if audit_id not in contexts:
                 run_failed.append(audit_id)
                 continue
+            expected_hash = context_hash(
+                contexts[audit_id],
+                enable_missing_platelet_defer=effective_defer,
+            )
+            if any(
+                call.attempt_index is None or call.context_hash != expected_hash
+                for call in calls
+            ) or tuple(c.attempt_index for c in calls) != tuple(range(len(calls))):
+                run_failed.append(audit_id)
+                continue
             _re_emit_audit_row(
                 audit_id=audit_id,
                 calls=calls,
@@ -251,6 +333,8 @@ def _reconcile_submitted_or_partial(
                 audit_store=audit_store,
                 run_id=run.run_id,
                 pipeline_config=pipeline_config,
+                verifier=verifier,
+                enable_missing_platelet_defer=effective_defer,
             )
             run_reemitted.append(audit_id)
             run_completed.append(audit_id)
@@ -277,6 +361,8 @@ def _fetch_response_for_batch(
     transport: AnthropicTransport,
     llm_config: LlmClientConfig,
     audit_ids: Sequence[str],
+    audit_store: AuditStore,
+    enable_missing_platelet_defer: bool = False,
 ) -> RawBatchResponse | None:
     """Rebuild the submission set + call :meth:`fetch_batch_results`.
 
@@ -285,11 +371,15 @@ def _fetch_response_for_batch(
     ``audit_ids``). The caller then leaves the batch_run in its
     current state for the next resume to retry.
     """
-    requests = _rebuild_submission_requests(
-        run=run, contexts=contexts, audit_ids=audit_ids
+    from bba.audit_pipeline.manifest import load_manifest
+
+    requests, _stored_config = load_manifest(
+        run=run,
+        audit_store=audit_store,
+        contexts=contexts,
+        llm_config=llm_config,
+        enable_missing_platelet_defer=enable_missing_platelet_defer,
     )
-    if not requests:
-        return None
     assert run.anthropic_batch_id is not None
     return transport.fetch_batch_results(
         run.anthropic_batch_id,
@@ -402,13 +492,29 @@ def _rebuild_submission_requests(
 
 
 def _cached_calls_by_audit_id(
-    audit_store: AuditStore, *, run_id: str
+    audit_store: AuditStore,
+    *,
+    run_id: str,
+    code_version: str | None = None,
+    audit_ids: Sequence[str] = (),
 ) -> dict[str, tuple[LlmCall, ...]]:
     """Group every cached ``llm_calls`` row for ``run_id`` by audit_id."""
     grouped: dict[str, list[LlmCall]] = {}
-    for call in audit_store.read_llm_calls(run_id=run_id):
+    for call in audit_store.read_llm_calls(run_id=run_id, code_version=code_version):
         grouped.setdefault(call.audit_id, []).append(call)
-    return {aid: tuple(calls) for aid, calls in grouped.items()}
+    for aid in audit_ids:
+        checkpoint = audit_store.read_call_checkpoint(aid, run_id)
+        if checkpoint:
+            grouped[aid] = list(checkpoint)
+    return {
+        aid: tuple(
+            sorted(
+                calls,
+                key=lambda c: c.attempt_index if c.attempt_index is not None else -1,
+            )
+        )
+        for aid, calls in grouped.items()
+    }
 
 
 def _re_emit_audit_row(
@@ -419,6 +525,8 @@ def _re_emit_audit_row(
     audit_store: AuditStore,
     run_id: str,
     pipeline_config: AuditPipelineConfig | None = None,
+    verifier: Verifier = default_verifier,
+    enable_missing_platelet_defer: bool = False,
 ) -> None:
     """Rebuild an audit_row from cached call responses + context.
 
@@ -441,17 +549,15 @@ def _re_emit_audit_row(
         batch_id=f"resume-{audit_id}",
         results=results,
     )
-    _defer = (
-        pipeline_config.enable_missing_platelet_defer
-        if pipeline_config is not None
-        else False
-    )
+    _defer = enable_missing_platelet_defer
     apply_batch_results(
         synthetic_response,
         audit_store=audit_store,
         run_id=run_id,
         contexts={audit_id: context},
         enable_missing_platelet_defer=_defer,
+        verifier=verifier,
+        original_calls=calls,
     )
 
 
@@ -468,15 +574,17 @@ def _result_from_cached_call(call: LlmCall) -> BatchSubmissionResult:
     raw_response = {
         k: v for k, v in call.response_json.items() if k != "__bba_response_headers__"
     }
-    headers = call.response_json.get("__bba_response_headers__", {})
-    if not isinstance(headers, dict):
+    headers = call.response_headers or call.response_json.get(
+        "__bba_response_headers__", {}
+    )
+    if not isinstance(headers, Mapping):
         headers = {}
     return BatchSubmissionResult(
         custom_id=call.audit_id,
         model_id=call.model_id,
         raw_response_json=raw_response,
         request_json=dict(call.request_json),
-        response_headers=headers,
+        response_headers=dict(headers),
         request_timestamp=call.request_timestamp,
         latency_ms=call.latency_ms,
         anthropic_version=call.anthropic_version,

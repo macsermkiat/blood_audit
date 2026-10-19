@@ -1,29 +1,8 @@
-"""Process-level exception scrubbing for ``bba`` (PRD §20 / ticket #29).
+"""Log exception locations without rendering clinical data or credentials.
 
-A long-running ``bba audit`` reads PHI in memory (HOSxP bundles, free-
-text notes, ``hn`` / ``an`` identifiers). An uncaught exception would
-default-format its frame locals into the traceback, leaking PHI into
-the operator's log surface. The scrubber:
-
-1. Installs a :data:`sys.excepthook` that captures the traceback object
-   and walks its frame locals + globals.
-2. For any binding whose **name** matches :data:`PHI_LOCAL_NAME_REGEX`
-   (``bundle`` / ``patient`` / ``note`` / ``hn`` / ``an`` /
-   ``encounter``, case-insensitive prefix), the value's ``repr`` is
-   replaced with ``<REDACTED:type=<typename> len=<len>>``.
-3. For every string value, any match against :data:`PHI_REGEXES`
-   (HN-shaped digit runs, Western honorific + Capitalized name, Thai
-   honorifics) is replaced with ``<REDACTED:phi>``.
-4. The scrubbed traceback is emitted through ``structlog`` so the log
-   pipeline (file / SIEM / Loki) only ever sees redacted content.
-5. :mod:`faulthandler` is redirected to a sidecar file that gets
-   scrubbed *on read* (the write path is too hot — see PRD §20).
-
-:data:`PHI_REGEXES` is owned here for now; a follow-up to issue #17 will
-migrate it to :data:`bba.deid_redactor.PHI_REGEXES` so the redactor and
-the scrubber share one source of truth. Until then this module is the
-authority — see :class:`TestPhiRegexesProvenance` in
-``tests/unit/test_cli.py`` for the alignment check.
+Names and type/length markers identify frame bindings. Values and exception
+messages stay out of logs because neither PHI nor secrets have a complete
+textual pattern that a blacklist can safely recognize.
 """
 
 from __future__ import annotations
@@ -109,29 +88,12 @@ def _redact_phi_in_string(text: str) -> str:
 
 
 def _scrub_frame_dict(scope: Mapping[str, Any]) -> dict[str, Any]:
-    """Return a scrubbed copy of a frame's locals / globals.
-
-    Two passes:
-    1. PHI-named keys are replaced with the type/len marker regardless
-       of value type (a ``patient`` dict, a ``bundle`` Mapping, a
-       ``note`` str — all collapse to one marker).
-    2. Remaining string values are regex-swept against
-       :data:`PHI_REGEXES`; matched substrings collapse to
-       ``<REDACTED:phi>``.
-
-    Built-in module bindings (``__builtins__``, ``__name__``, ...) are
-    dropped — they are noisy and never PHI."""
+    """Return binding names and opaque markers without rendering their values."""
     out: dict[str, Any] = {}
     for name, value in scope.items():
         if name.startswith("__") and name.endswith("__"):
             continue
-        if PHI_LOCAL_NAME_REGEX.match(name):
-            out[name] = _redact_by_name(value)
-            continue
-        if isinstance(value, str):
-            out[name] = _redact_phi_in_string(value)
-            continue
-        out[name] = value
+        out[name] = _redact_by_name(value)
     return out
 
 
@@ -140,20 +102,8 @@ def scrub_traceback(
     exc_value: BaseException,
     exc_tb: TracebackType | None,
 ) -> str:
-    """Return a scrubbed rendering of ``(exc_type, exc_value, exc_tb)``.
-
-    Walks the traceback frame-by-frame and emits, for each frame:
-
-    * the file / line / function header (``traceback.format_list`` form);
-    * the source line (already redacted by Python's traceback module);
-    * a ``locals:`` block of ``name = repr`` entries built from the
-      scrubbed copy of the frame's locals.
-
-    The output is multi-line; tests assert the *absence* of PHI
-    substrings and the *presence* of ``<REDACTED``.
-    """
-    scrubbed_message = _redact_phi_in_string(str(exc_value))
-    lines: list[str] = [f"{exc_type.__name__}: {scrubbed_message}"]
+    """Render exception type and frame locations with opaque local markers."""
+    lines: list[str] = [f"{exc_type.__name__}: <REDACTED:exception-message>"]
     tb: TracebackType | None = exc_tb
     while tb is not None:
         frame = tb.tb_frame
@@ -163,11 +113,7 @@ def scrub_traceback(
         )
         scrubbed_locals = _scrub_frame_dict(frame.f_locals)
         for name, value in scrubbed_locals.items():
-            try:
-                rendered = repr(value)
-            except Exception:  # noqa: BLE001 — repr must not blow up the hook
-                rendered = "<repr-failed>"
-            lines.append(f"    {name} = {_redact_phi_in_string(rendered)}")
+            lines.append(f"    {name} = {value}")
         tb = tb.tb_next
     return "\n".join(lines)
 

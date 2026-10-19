@@ -26,7 +26,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict
+from pydantic import AfterValidator, BaseModel, ConfigDict, SecretStr, model_validator
 
 from bba.audit_store import AuditRow, AuditStore, Classification
 from bba.review_actions import ReviewActionsStore
@@ -192,6 +192,10 @@ class QueueItem(BaseModel):
 
     audit_id: SafeId
     run_id: SafeId
+    component: str = "red_cell"
+    code_version: str = ""
+    platelet_value: float | None = None
+    platelet_freshness: str | None = None
     order_datetime: UTCDatetime
     hb_value: float
     # ``hb_freshness == "missing"`` marks the 0.0 sentinel emitted by the
@@ -220,6 +224,11 @@ class CaseDetail(BaseModel):
 
     audit_id: SafeId
     run_id: SafeId
+    component: str = "red_cell"
+    code_version: str = ""
+    row_hash: str = ""
+    platelet_value: float | None = None
+    platelet_freshness: str | None = None
     final_classification: Classification
     rule_classification: Classification
     confidence: float
@@ -372,10 +381,28 @@ class DashboardConfig(BaseModel):
     review_actions_store: ReviewActionsStore
     snapshot_dir: Path
     template_dir: Path | None = None
+    code_version: str | None = None
+    run_id: SafeId | None = None
+    auth_secret: SecretStr | None = None
+    public_origin: str | None = None
     default_reviewer: Reviewer | None = None
     unredacted_phi_resolver: UnredactedPhiResolver | None = None
     ward_attribution_resolver: WardAttributionResolver | None = None
     physician_attribution_resolver: PhysicianAttributionResolver | None = None
+
+    @model_validator(mode="after")
+    def _validate_auth(self) -> DashboardConfig:
+        from bba.dashboard.auth import _secret_bytes, validate_origin
+
+        if self.auth_secret is not None:
+            _secret_bytes(self.auth_secret)
+            if self.default_reviewer is not None:
+                raise ValueError("signed authentication cannot use a default reviewer")
+            if self.public_origin is None:
+                raise ValueError("signed authentication requires public_origin")
+        if self.public_origin is not None:
+            validate_origin(self.public_origin)
+        return self
 
 
 __all__: Sequence[str] = (

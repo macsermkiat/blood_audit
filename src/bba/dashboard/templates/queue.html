@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}NEEDS_REVIEW queue · bba.dashboard{% endblock %}
+{% block title %}Human review queue · bba.dashboard{% endblock %}
 {% block content %}
 <section>
-  <h1 class="text-2xl font-semibold mb-4">NEEDS_REVIEW queue</h1>
-  <form class="flex gap-3 mb-4 text-sm" hx-get="/queue" hx-target="#queue-table" hx-swap="outerHTML">
+  <h1 class="text-2xl font-semibold mb-4">Human review queue</h1>
+  <form class="flex gap-3 mb-4 text-sm" action="/queue" method="get">
     <label class="flex items-center gap-2">Sort by
       <select name="sort_key" class="rounded border border-slate-300 px-2 py-1">
         <option value="order_datetime" {% if sort_key == "order_datetime" %}selected{% endif %}>order datetime</option>

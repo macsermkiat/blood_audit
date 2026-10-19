@@ -13,7 +13,7 @@ Public-surface invariants (issue #7 acceptance criteria):
   carry ``threshold=None`` because they are not threshold-driven cohorts:
           MTP auto-bypasses to APPROPRIATE, heme is T2-supportive (not a hard
           number), and UNKNOWN routes to review when the deterministic classifier
-          has not already stopped on the global Hb < 7.0 rule. Tests assert this
+          has not already stopped on the global Hb <= 7.0 rule. Tests assert this
           contract explicitly so a refactor cannot quietly downgrade the type.
 
 * ``CohortInputs.procedure_events`` distinguishes "data unavailable"

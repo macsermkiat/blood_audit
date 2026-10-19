@@ -15,6 +15,7 @@ This module is the persistence dependency for #26 (dashboard).
 
 from bba.review_actions.exceptions import (
     AppendOnlyViolationError,
+    ReviewConflictError,
     MigrationStateError,
     OverrideRequiresReasonError,
     PhiAccessLogIncompleteError,
@@ -51,6 +52,7 @@ __all__ = [
     "PhiAccessInput",
     "PhiAccessLog",
     "PhiAccessLogIncompleteError",
+    "ReviewConflictError",
     "ReviewAction",
     "ReviewActionInput",
     "ReviewActionsConfig",

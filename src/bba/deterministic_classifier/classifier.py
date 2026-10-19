@@ -9,14 +9,14 @@ specified in PRD §"Implementation Decisions §6":
    accepts peri-procedural proximity).
    With the pre-pass flag ON but no hard evidence → ``NEEDS_REVIEW``
    (defer to LLM); with the flag OFF → ``INSUFFICIENT_EVIDENCE``.
-2. Hb < 7.0 g/dL                    → ``APPROPRIATE`` (global low-Hb rule)
+2. Hb ≤ 7.0 g/dL                    → ``APPROPRIATE`` (global low-Hb rule)
 3. Cohort ``MTP``                   → ``APPROPRIATE`` (``bypass_reason=mtp``)
 4. Cohort ``UNKNOWN``               → ``NEEDS_REVIEW`` (no bypass)
 5. Legacy flag-OFF bypass: peri-procedural ≤ 6 h
                                     → ``APPROPRIATE`` (``bypass_reason=peri_procedural_6h``)
 6. Legacy flag-OFF structured pre-op crossmatch ≤ 72 h upcoming OR declared
    surgical intent,
-   with Hb ≥ cohort floor           → ``NEEDS_REVIEW``
+   with Hb > cohort floor           → ``NEEDS_REVIEW``
                                        (``rationale=preop_defer_llm`` for the
                                        structured signal, otherwise
                                        ``preop_defer_llm_declared``;
@@ -27,17 +27,17 @@ specified in PRD §"Implementation Decisions §6":
                                        Hb is NOT deferred — it clears at step 10
                                        (its Hb is the indication).
 7. Bypass: delta-Hb trigger fired   → ``APPROPRIATE`` (``bypass_reason=delta_hb``)
-8. Hemodilution: Hb < threshold AND ≥ 2 L crystalloid in 4 h
+8. Hemodilution: Hb ≤ threshold AND ≥ 2 L crystalloid in 4 h
                                     → ``NEEDS_REVIEW`` (``bypass_reason=hemodilution_flagged``)
-9. Single-low-Hb-no-trend: Hb < threshold AND ``needs_review_single_low_hb``
+9. Single-low-Hb-no-trend: Hb ≤ threshold AND ``needs_review_single_low_hb``
                                     → ``NEEDS_REVIEW`` (``bypass_reason=none``;
-                                       isolated Hb < 8 with no prior 24 h
+                                       isolated Hb ≤ 8 with no prior 24 h
                                        observation cannot be interpreted as
                                        confirmed anemia without a trend —
                                        PR #52 Codex P1 + hb_lookup contract)
 10. Plain Hb-tier rule:
-   - Hb < ``cohort_threshold``       → ``APPROPRIATE``
-   - ``cohort_threshold`` ≤ Hb < 10  → ``NEEDS_REVIEW``
+   - Hb ≤ ``cohort_threshold``       → ``APPROPRIATE``
+   - ``cohort_threshold`` < Hb < 10  → ``NEEDS_REVIEW``
    - Hb ≥ 10                         → ``POTENTIALLY_INAPPROPRIATE``
 
 Precedence notes:
@@ -62,14 +62,19 @@ Precedence notes:
   ambiguous case to human review, or records an ``INSUFFICIENT_EVIDENCE``
   documentation gap — rather than dead-ending here. With the flag OFF the
   pre-pass is inert and the case is terminal ``INSUFFICIENT_EVIDENCE``.
-* Hb < 7.0 g/dL is globally ``APPROPRIATE`` before cohort-specific review
+* Hb ≤ 7.0 g/dL is globally ``APPROPRIATE`` before cohort-specific review
   routes. This includes UNKNOWN / non-threshold cohorts and the safety flags
   that otherwise protect the cohort-threshold branch.
 * MTP precedes peri-procedural / delta-Hb so the bypass_reason reflects the
   most clinically load-bearing fact when multiple signals fire.
-* Hemodilution is checked only inside the ``Hb < threshold`` branch — it is
+* Hemodilution is checked only inside the ``Hb ≤ threshold`` branch — it is
   scoped to the cohort-threshold auto-APPROPRIATE case it would otherwise
-  produce, and never overrides the global Hb < 7.0 rule.
+  produce, and never overrides the global Hb ≤ 7.0 rule.
+* Every Hb indication threshold is inclusive: a value exactly AT the
+  universal 7.0 or at the cohort floor qualifies (owner ruling 2026-09-27,
+  review case REQNO 68004713). Rationale slugs keep their historical ``lt``
+  names (``hb_lt_7_universal``, ``hb_lt_threshold``) for persisted-data
+  compatibility.
 """
 
 from __future__ import annotations
@@ -96,8 +101,9 @@ dispatch (:func:`bba.audit_pipeline.pipeline.rbc_task_mode`) mirrors
 this."""
 
 UNIVERSAL_LOW_HB_APPROPRIATE_THRESHOLD: float = 7.0
-"""Hb (g/dL) below which RBC/LPRC orders are deterministically
-``APPROPRIATE`` before cohort-specific routing."""
+"""Hb (g/dL) at or below which RBC/LPRC orders are deterministically
+``APPROPRIATE`` before cohort-specific routing. Inclusive: Hb exactly 7.0
+qualifies (owner ruling 2026-09-27, case 68004713)."""
 
 PERI_PROCEDURAL_WINDOW_HOURS: float = 6.0
 """PRD §6 peri-procedural bypass window (hours). A procedure within this
@@ -111,7 +117,7 @@ HEMODILUTION_CRYSTALLOID_LITERS: float = 2.0
 """PRD §6 + Round 1 B5: ≥ 2 L of crystalloid in the prior 4 h marks the
 Hb as hemodilution-suspect. Triggers ``NEEDS_REVIEW`` rather than
 auto-APPROPRIATE in the cohort-threshold branch, but never overrides the
-global Hb < 7.0 rule."""
+global Hb ≤ 7.0 rule."""
 
 PERIOP_MIN_EBL_ML: int = 500
 """Estimated-blood-loss floor (mL) that counts as a HARD peri-op signal.
@@ -327,10 +333,11 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
             rationale="hb_missing",
         )
 
-    # 2. Global low-Hb rule — Hb < 7.0 is appropriate before cohort-specific
+    # 2. Global low-Hb rule — Hb <= 7.0 is appropriate before cohort-specific
     #    review routes, including UNKNOWN / non-threshold cohorts and safety
-    #    flags such as hemodilution or isolated low-Hb-without-trend.
-    if hb.value_g_dl < UNIVERSAL_LOW_HB_APPROPRIATE_THRESHOLD:
+    #    flags such as hemodilution or isolated low-Hb-without-trend. The
+    #    boundary is inclusive (owner ruling 2026-09-27, case 68004713).
+    if hb.value_g_dl <= UNIVERSAL_LOW_HB_APPROPRIATE_THRESHOLD:
         return ClassifierResult(
             classification="APPROPRIATE",
             bypass_reason=BypassReason.NONE,
@@ -347,7 +354,7 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
             rationale="bypass_mtp",
         )
 
-    # 4. Cohort UNKNOWN — for Hb >= 7.0, refuse to default to 7.0 when
+    # 4. Cohort UNKNOWN — for Hb > 7.0, refuse to default to 7.0 when
     #    procedure data was missing.
     if cohort.label == CohortLabel.UNKNOWN:
         return ClassifierResult(
@@ -390,15 +397,15 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
     #    original rationale slug when both signals are present.
     #
     #    Only defer when the Hb tier would not already clear the order: a
-    #    sub-threshold Hb (below the cohort floor) is itself the indication
+    #    sub-threshold Hb (at or below the cohort floor) is itself the indication
     #    and must clear (APPROPRIATE, below) regardless of an upcoming
     #    procedure. Deferring it would trap the order — the LLM re-clears the
     #    sub-threshold Hb and the over-clear guardrail (which exempts only
-    #    Hb < 7.0) now ASSERTS INAPPROPRIATE (#94), worsening the trap
+    #    Hb <= 7.0) now ASSERTS INAPPROPRIATE (#94), worsening the trap
     #    (Codex P2). Non-threshold cohorts (Hb-independent) fall through to
-    #    their own routing below. Hb < 7.0
+    #    their own routing below. Hb <= 7.0
     #    already returned APPROPRIATE at step 2, so this only gates the
-    #    [cohort_floor, ...) gray-zone / high-Hb pre-op cases.
+    #    (cohort_floor, ...) gray-zone / high-Hb pre-op cases.
     upcoming = inputs.upcoming_procedure_hours
     structured_upcoming = (
         upcoming is not None and upcoming <= PRE_OP_CROSSMATCH_WINDOW_HOURS
@@ -408,7 +415,7 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
         not inputs.enable_declared_use_preop_exemption
         and (structured_upcoming or declared_surgical)
         and threshold is not None
-        and hb.value_g_dl >= threshold
+        and hb.value_g_dl > threshold
     ):
         return ClassifierResult(
             classification="NEEDS_REVIEW",
@@ -429,8 +436,8 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
             rationale="bypass_delta_hb",
         )
 
-    # Non-threshold-driven cohorts that survived the global Hb < 7.0 rule
-    # and the bypasses above. In practice this is Hb >= 7.0
+    # Non-threshold-driven cohorts that survived the global Hb <= 7.0 rule
+    # and the bypasses above. In practice this is Hb > 7.0
     # HEME_MALIGNANCY_ACTIVE; MTP and UNKNOWN exited above. The T2-supportive
     # heme cohort defers to the LLM stage for context interpretation.
     if threshold is None:
@@ -442,12 +449,13 @@ def classify(inputs: ClassifierInputs) -> ClassifierResult:
         )
 
     # Plain cohort-threshold rule with two carve-outs scoped to the remaining
-    # would-be auto-APPROPRIATE branch (which is now always Hb >= 7.0):
+    # would-be auto-APPROPRIATE branch (which is now always Hb > 7.0):
     #   * Hemodilution-flagged (≥ 2 L crystalloid in 4 h)
-    #   * Single-low-Hb-no-trend (isolated Hb < 8 with no prior 24 h
+    #   * Single-low-Hb-no-trend (isolated Hb <= 8 with no prior 24 h
     #     observation), for threshold-driven cohorts above the global 7.0 rule.
+    # Hb exactly at the floor qualifies (owner ruling 2026-09-27).
     hb_value = hb.value_g_dl
-    if hb_value < threshold:
+    if hb_value <= threshold:
         if inputs.crystalloid_liters_prior_4h >= HEMODILUTION_CRYSTALLOID_LITERS:
             return ClassifierResult(
                 classification="NEEDS_REVIEW",

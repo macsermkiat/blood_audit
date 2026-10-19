@@ -32,8 +32,14 @@ import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from importlib import import_module
+from pathlib import Path
 from typing import Any, Final
 
+from bba.deid_redactor.admission import PrivacyAdmissionError, PrivacyAdmissionPolicy
+from bba.llm_client.request_identity import (
+    RequestManifestStore,
+    canonical_request_manifest,
+)
 from bba.llm_client.exceptions import (
     AnthropicAPIError,
     LlmClientConfigError,
@@ -238,9 +244,10 @@ _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
             "description": (
                 (
                     "True iff the evidence grounds an invasive procedure or surgery "
-                    "within the audit window whose policy threshold the count sits "
-                    "below (LP <50-80k /uL; CVC, thoracocentesis, arthrocentesis, "
-                    "dental extraction <50k /uL; major surgery <80-100k /uL)."
+                    "within the audit window whose policy threshold the count "
+                    "meets (LP <=50-80k /uL; CVC, thoracocentesis, "
+                    "arthrocentesis, dental extraction <=50k /uL; major surgery "
+                    "<=80k /uL (<100k /uL high risk))."
                 )
                 + _SIGNAL_ORDER_RULE
             ),
@@ -250,8 +257,9 @@ _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
             "description": (
                 (
                     "True iff the evidence grounds chemo/HSCT/consumptive "
-                    "thrombocytopenia with count <10,000 /uL (or expected <10,000 "
-                    "/uL within 24 hours) AND no exclusion population applies. "
+                    "thrombocytopenia with count <=10,000 /uL (or expected to fall "
+                    "to 10,000 /uL or below within 24 hours) AND no exclusion "
+                    "population applies. "
                     "Aplastic anaemia on active therapy belongs under "
                     "aplastic_active_therapy_indication, not here."
                 )
@@ -263,10 +271,10 @@ _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
             "description": (
                 (
                     "True iff the evidence grounds an intracranial bleed with the "
-                    "count below its threshold: <100,000 /uL when acute, "
-                    "acute-on-chronic, growing, or neurosurgery is planned; <50,000 "
-                    "/uL when stable and non-operative (including a stable chronic "
-                    "SDH). Chronic SDH expansion belongs here, not under "
+                    "count meeting its threshold: <100,000 /uL when acute, "
+                    "acute-on-chronic, growing, or neurosurgery is planned; "
+                    "<=50,000 /uL when stable and non-operative (including a "
+                    "stable chronic SDH). Chronic SDH expansion belongs here, not under "
                     "active_bleeding."
                 )
                 + _SIGNAL_ORDER_RULE
@@ -278,10 +286,10 @@ _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
                 (
                     "True iff the notes document aplastic anaemia on active therapy "
                     "aimed at reversing the thrombocytopenia (ATG, cyclosporine, "
-                    "eltrombopag, transplant work-up) with the count below its "
-                    "indication 8 threshold: <10,000 /uL (or expected <10,000 /uL "
-                    "within 24 hours), or <20,000 /uL during the ATG course or with "
-                    "sepsis. Chronic, stable or untreated aplastic anaemia is an "
+                    "eltrombopag, transplant work-up) with the count at or below "
+                    "its indication 8 threshold: <=10,000 /uL (or expected to fall "
+                    "to 10,000 /uL or below within 24 hours), or <=20,000 /uL "
+                    "during the ATG course or with sepsis. Chronic, stable or untreated aplastic anaemia is an "
                     "exclusion population, not this signal."
                 )
                 + _SIGNAL_ORDER_RULE
@@ -384,6 +392,8 @@ class AnthropicBatchTransport:
         self,
         *,
         api_key: str | None = None,
+        privacy_policy: PrivacyAdmissionPolicy | None = None,
+        manifest_root: Path | None = None,
         poll_interval_seconds: float = 30.0,
         max_wait_seconds: float = 86_400.0,
     ) -> None:
@@ -395,6 +405,10 @@ class AnthropicBatchTransport:
                 "ANTHROPIC_API_KEY not configured; set the env var or "
                 "supply api_key= to AnthropicBatchTransport(...)"
             )
+        self._privacy_policy = privacy_policy
+        self._manifests = (
+            RequestManifestStore(manifest_root) if manifest_root is not None else None
+        )
         self._api_key = resolved_key
         self._poll_interval = poll_interval_seconds
         self._max_wait = max_wait_seconds
@@ -413,23 +427,29 @@ class AnthropicBatchTransport:
         checkpoint) call this first, persist, then invoke
         :meth:`fetch_batch_results`.
         """
-        client = self._client()
+        self._admit(requests)
+        if self._manifests is None:
+            raise LlmClientConfigError(
+                "live API requires a durable request manifest_root"
+            )
+        manifest = canonical_request_manifest(
+            requests=requests, model=model, prompt_cache_enabled=prompt_cache_enabled
+        )
+        submission_id = self._manifests.prepare(manifest)
+        known_batch = self._manifests.remote_batch_id(submission_id)
+        if known_batch is not None:
+            return known_batch
         per_row_requests = [
-            {
-                "custom_id": req.audit_id,
-                "params": build_anthropic_request(
-                    req,
-                    model=model,
-                    prompt_cache_enabled=prompt_cache_enabled,
-                ),
-            }
-            for req in requests
+            {"custom_id": row["audit_id"], "params": row["payload"]}
+            for row in manifest["rows"]
         ]
+        client = self._client()
         try:
             batch = client.messages.batches.create(requests=per_row_requests)
         except Exception as exc:  # SDK error surface intentionally broad
             raise AnthropicAPIError(f"Message Batches create failed: {exc!r}") from exc
         batch_id: str = batch.id
+        self._manifests.bind(submission_id, batch_id)
         return batch_id
 
     def fetch_batch_results(
@@ -443,9 +463,22 @@ class AnthropicBatchTransport:
         """Poll ``batch_id`` until completion and return the results.
 
         Raises :class:`AnthropicAPIError` on timeout or
-        ``custom_id`` drift. ``requests`` is the original submission
-        set; each result's ``request_json`` is rebuilt from the
-        matching :class:`BatchSubmissionRequest`."""
+        ``custom_id`` drift. ``requests`` must match the persisted original
+        manifest. Each result carries the original stored payload and model."""
+        self._admit(requests)
+        if self._manifests is None:
+            raise LlmClientConfigError(
+                "live API requires a durable request manifest_root"
+            )
+        manifest = self._manifests.load_matching(
+            batch_id,
+            canonical_request_manifest(
+                requests=requests,
+                model=model,
+                prompt_cache_enabled=prompt_cache_enabled,
+            ),
+        )
+        request_by_id = {row["audit_id"]: row["payload"] for row in manifest["rows"]}
         client = self._client()
         deadline = time.monotonic() + self._max_wait
         while True:
@@ -459,7 +492,6 @@ class AnthropicBatchTransport:
             time.sleep(self._poll_interval)
 
         results: list[BatchSubmissionResult] = []
-        request_by_id = {req.audit_id: req for req in requests}
         for entry in client.messages.batches.results(batch_id):
             custom_id = entry.custom_id
             outer_request = request_by_id.get(custom_id)
@@ -470,12 +502,8 @@ class AnthropicBatchTransport:
             results.append(
                 _result_from_batch_entry(
                     entry,
-                    model=model,
-                    request_payload=build_anthropic_request(
-                        outer_request,
-                        model=model,
-                        prompt_cache_enabled=prompt_cache_enabled,
-                    ),
+                    model=manifest["model"],
+                    request_payload=outer_request,
                 )
             )
         return RawBatchResponse(batch_id=batch_id, results=tuple(results))
@@ -507,6 +535,14 @@ class AnthropicBatchTransport:
             prompt_cache_enabled=prompt_cache_enabled,
         )
 
+    def _admit(self, requests: Sequence[BatchSubmissionRequest]) -> None:
+        if self._privacy_policy is None:
+            raise PrivacyAdmissionError(
+                "live API requires a configured privacy trust root"
+            )
+        for request in requests:
+            self._privacy_policy.verify(request)
+
     def _client(self) -> Any:
         """Construct the SDK client. Lazy-imported so the SDK isn't a
         hard install dependency."""
@@ -515,10 +551,11 @@ class AnthropicBatchTransport:
         except ImportError as exc:
             raise LlmClientConfigError(
                 "anthropic SDK not installed; "
-                "`uv add anthropic` to use AnthropicBatchTransport"
+                "`uv sync --extra live` to use AnthropicBatchTransport"
             ) from exc
         return anthropic.Anthropic(
             api_key=self._api_key,
+            max_retries=0,
             default_headers={"anthropic-beta": ANTHROPIC_BETA_HEADER},
         )
 

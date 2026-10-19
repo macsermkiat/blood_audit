@@ -20,6 +20,7 @@ from datetime import datetime
 
 from bba.audit_store.models import ColdStorageReport, _deep_thaw
 from bba.audit_store.store import AuditStore, _hash_id
+from bba.secure_files import private_directory, read_private_bytes, write_private_bytes
 
 
 def migrate_cold_storage(store: AuditStore, older_than: datetime) -> ColdStorageReport:
@@ -30,7 +31,7 @@ def migrate_cold_storage(store: AuditStore, older_than: datetime) -> ColdStorage
     idempotent: a call already migrated (``extended_thinking_blocks is None``)
     is skipped on the second run.
     """
-    store.cold_storage_dir.mkdir(parents=True, exist_ok=True)
+    private_directory(store.cold_storage_dir)
 
     moved: list[str] = []
     bytes_moved = 0
@@ -59,7 +60,11 @@ def migrate_cold_storage(store: AuditStore, older_than: datetime) -> ColdStorage
         blob = json.dumps(
             _deep_thaw(call.extended_thinking_blocks), ensure_ascii=False
         ).encode("utf-8")
-        cold_path.write_bytes(blob)
+        try:
+            write_private_bytes(cold_path, blob)
+        except FileExistsError:
+            if read_private_bytes(cold_path) != blob:
+                raise ValueError("cold-storage blob differs from original call")
         bytes_moved += len(blob)
 
         migrated = call.model_copy(

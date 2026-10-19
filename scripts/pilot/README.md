@@ -5,20 +5,9 @@ a small random sample drawn from an encrypted HOSxP bundle, then
 materialises a single self-contained HTML for human clinical review.
 Built for the M8 pilot-run milestone before clinical co-lead sign-off.
 
-These scripts intentionally live outside the `bba.*` package — they are
-deployment-shaped glue that the `bba.cli`'s integration seams (e.g.
-`bba audit`'s LLM-leg) would otherwise own. Treat them as a worked
-example of how to compose the modules, not as a supported entry point.
+These scripts remain historical pilot examples outside the `bba.*` package. The supported application entry point is now `bba audit`. It composes canonical HOSxP inputs, deterministic decisions, trusted privacy admission, model review, and committed AuditRows. Use [the production CLI guide](../../docs/production-cli.md) for operator configuration and verification.
 
-## Why these scripts exist
-
-The CLI's `bba audit` ships only the ingest leg today. The LLM-driven
-analysis leg (deterministic classifier → evidence bundle → de-id →
-prompt → Anthropic Batch → quote ground → calibrate → audit store) is
-documented as an integration seam — the modules ship, but the
-orchestrator that composes them is left to the deployment. These
-scripts are that composition, written against the encrypted bundle in
-`../Bloodbank/data/encrypted/`.
+The pilot scripts retain dataset-specific sampling and review artifacts. They use the same privacy and request-identity boundaries when a model transport is selected.
 
 ## Pipeline
 
@@ -54,7 +43,7 @@ build_review.py         →  review.html    (single page for human review;
 | `BBA_PILOT_REQNO_FILE` | _(unset)_ | Text file with one REQNO per line (blank lines and lines starting with `#` are ignored). `sample_bundle.py` builds the bundle from exactly those RBC orders instead of a seeded draw, and ignores `BBA_PILOT_SAMPLE_N` / `BBA_PILOT_SAMPLE_SEED`. Stops without writing anything if a REQNO is missing, is not an eligible RBC order, matches more than one (HN, AN), or is listed twice. Use a fresh `BBA_PILOT_WORK_DIR`: a failed run leaves an earlier run's files in place. Use it to rebuild a reviewed sample: a seed reproduces a sample only on the exact BDVST snapshot it was drawn from |
 | `BBA_PILOT_PLATELET_REQNO_FILE` | _(unset)_ | Same format as `BBA_PILOT_REQNO_FILE`, for platelet-ONLY orders: `sample_bundle.py` builds the platelet stream from exactly those orders and ignores `BBA_PILOT_PLATELET_SAMPLE_N` / `BBA_PILOT_PLATELET_SEED` (manifest seed = `list`). Stops without writing if a REQNO is not an eligible platelet-only order (a mixed RBC+platelet REQNO is rejected). Lets a doctor-restricted cohort carry its platelet orders |
 | `BBA_PILOT_ICD10_CSV` | `../Bloodbank/data/raw/ICD10.csv` | ICD-10 master dictionary |
-| `BBA_PILOT_LLM_MODEL` | `claude-sonnet-5` | Anthropic model id |
+| `BBA_PILOT_LLM_MODEL` | `claude-sonnet-5-5` | Anthropic model id |
 | `BBA_PILOT_RUN_ID` | `pilot-mini` | run_id stamped on audit_store rows |
 | `BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE` | `false` | Opt-in to the missing-Hb MTP / peri-procedural auto-APPROPRIATE pre-check (SEED — set `1`/`true` only after clinical sign-off) |
 | `BBA_PILOT_DECLARED_USETYPE` | `0` (off) | When set to `1`, threads BDVSTDT.USETYPE declared intent into both pilot legs and appends `declared_use_code` / `declared_use_label` to `report.csv` |
@@ -64,15 +53,19 @@ build_review.py         →  review.html    (single page for human review;
 | `BBA_PILOT_TRANSPORT` | `anthropic-batch` | `claude-cli` runs the LLM leg through the local `claude` CLI on the claude.ai subscription, one `claude -p --json-schema` call per case, answers checkpointed under `$BBA_PILOT_WORK_DIR/cli_batches/<batch_id>/` (resume with `BBA_PILOT_BATCH_ID`). For A/B runs that should not spend API credit; NOT the production path, rows carry `_transport: claude-cli`. No `ANTHROPIC_API_KEY` needed |
 | `BBA_PILOT_CLI_WORKERS` | `3` | Concurrent `claude -p` processes when `BBA_PILOT_TRANSPORT=claude-cli` |
 | `ANTHROPIC_API_KEY` | _(required for `anthropic-batch`)_ | Anthropic credentials |
+| `BBA_PRIVACY_POLICY` | _(required before live submission)_ | Operator-controlled Ed25519 public-key policy and approved redactor identity |
+| `BBA_PRIVACY_ARTIFACTS` | _(required before live submission)_ | Approved redacted evidence and signed attestations keyed by audit ID, bound to the exact prompt and run |
 | `BBA_DATA_DIR` | _(required for `bba ingest`)_ | Where ingest writes Parquet + markers |
 | `BBA_DB_URL` | _(required for `bba ingest`)_ | DB URL — placeholder is fine for ingest-only |
 
 ## End-to-end
 
 ```bash
-uv sync                                              # in repo root, once
+uv sync --extra live                                 # in repo root, once
 export ANTHROPIC_API_KEY=sk-ant-…
 export BBA_PILOT_WORK_DIR=/tmp/bba_mini
+export BBA_PRIVACY_POLICY=/path/to/trust-policy.json
+export BBA_PRIVACY_ARTIFACTS=/path/to/approved-evidence.json
 
 uv run python scripts/pilot/sample_bundle.py         # sample 10 cases
 uv run python scripts/pilot/run_pipeline.py          # deterministic verdicts
@@ -84,11 +77,16 @@ export BBA_DATA_DIR="$BBA_PILOT_WORK_DIR/data"
 export BBA_DB_URL=postgresql://localhost/bba_pilot
 uv run bba ingest "$BBA_PILOT_WORK_DIR/bundle/BDVST.csv"
 
-uv run python scripts/pilot/run_llm_leg.py           # live Anthropic batch
+uv run --extra live python scripts/pilot/run_llm_leg.py # admitted Anthropic batch
 uv run python scripts/pilot/audit_llm_responses.py   # audit the responses (code checks, no API)
 uv run python scripts/pilot/build_review.py          # assemble review.html
 open "$BBA_PILOT_WORK_DIR/review.html"
 ```
+
+The model step requires artifacts issued by the approved local redaction
+authority for this exact run and evidence. Missing or rejected proof routes to
+local review before either API or subscription transport. Encryption alone is
+insufficient. Follow [privacy admission](../../docs/production-cli.md#admit-model-evidence).
 
 ## Auditing the LLM responses before the page is built
 
@@ -210,7 +208,7 @@ validation step (M8 milestone).
 
 - **Model-id bypass.** `run_llm_leg.py` calls `AnthropicBatchTransport`
   directly instead of through `LlmClientConfig`. The model ids pinned in
-  `src/bba/llm_client/models.py` (`claude-sonnet-5`, `claude-opus-4-8`)
+  `src/bba/llm_client/models.py` (`claude-sonnet-5-5`, `claude-opus-5-5`)
   are bare aliases the live Anthropic API accepts, so the echoed
   model_id validates against `ALLOWED_MODELS` natively — no runtime
   allow-set patch is needed.

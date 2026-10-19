@@ -3,7 +3,7 @@
 Post-hoc audit of inpatient adult transfusion appropriateness at Chulalongkorn Hospital (KCMH), against PR 17.2 + AABB 2023 guidelines. Phase 1 audits red blood cell (RBC) orders; Phase 2 extends the same pipeline to platelet orders.
 
 > Status: 30 modules under `src/bba/`, version `0.1.0`.
-> - Phase 1 (RBC) is feature-complete at module level. `bba audit` runs the ingest leg today; the analysis leg (deterministic classifier → LLM review → quote grounding) runs via the pilot scripts and is wired into the CLI in Phase 1.5.
+> - Phase 1 (RBC) is feature-complete at module level. `bba audit` composes the supported raw-export audit through committed AuditRows. Local mode needs no model credentials. Admitted model runs use trusted privacy artifacts and durable batch checkpoints. See [the operator guide](docs/production-cli.md).
 > - Phase 2 (platelet auditor) is merged (PR #85). The deterministic leg is live; the platelet LLM leg is behind a default-off flag (`feature_flags.PLATELET_LLM_ENABLED`). The RBC path is byte-identical throughout.
 > - 2026-07 wave (all default-ON): the BDVSTTRANS returns ledger (returned / peri-op-transfused terminals, excluded from scoring), declared-use USETYPE routing (order-level pre-op exemption; USETYPE is the only pre-op router), and the MSBOS pre-op reservation audit (over-reservation screening with planned-op picker v2 + OPRTACT→ICD9 bridge). See [What's new since Phase 1](#whats-new-since-phase-1).
 > - Pilot validation against one month of historical data is pending clinical co-lead sign-off (M8). Phase B operative-table re-encryption is pending KCMH IT (#2).
@@ -29,8 +29,8 @@ The pipeline reads a HOSxP CSV bundle. No sample data ships in-repo (PHI exposur
 
 | Variable | Needed by | Purpose |
 |----------|-----------|---------|
-| `BBA_DATA_DIR` | path B (`bba` CLI) | run-state directory (Parquet + DuckDB planned) |
-| `BBA_DB_URL` | audit-store + dashboard | Postgres DSN (`postgresql://user@host/db`) |
+| `BBA_DATA_DIR` | path B (`bba` CLI) | persistent AuditRows, model calls, request manifests, and run state |
+| `BBA_DB_URL` | model batch checkpoints + dashboard | Postgres DSN (`postgresql://user@host/db`) |
 | `ANTHROPIC_API_KEY` | path A (LLM leg) | Anthropic API key (`sk-ant-...`) |
 | `BBA_PILOT_WORK_DIR` | paths A, C (pilot scripts) | where outputs land (e.g. `/tmp/bba_mini`) |
 | `BBA_REVIEW_XLSX`, `BBA_BDVST_CSV`, `BBA_DCT_CSV` | path C (ranking) | verdict source + attribution inputs |
@@ -45,17 +45,16 @@ Pick the path that matches your goal. Full operator walkthrough:
 | I want to… | Path | Entry point |
 |------------|------|-------------|
 | Run **deterministic + live LLM** together on a small sample (RBC end-to-end; platelet LLM off by default) and get a review HTML | **A** | pilot scripts |
-| **Ingest + validate** a full HOSxP export into the store (the supported CLI) | **B** | `bba` CLI |
+| **Audit** a full HOSxP export into committed AuditRows (the supported CLI) | **B** | `bba` CLI |
 | **Rank ordering doctors / departments** by appropriateness | **C** | ranking script |
 
 > Every path reads real HOSxP data and writes real PHI. Never commit, email, or share any output.
 
 ### Path A: full audit on a sample (pilot scripts)
 
-This is the closest thing to an end-to-end audit today: it runs the deterministic
-classifier and the live LLM leg together on one sample. It samples ~10 cases
-from an encrypted bundle, walks them through four scripts, and produces a review
-HTML. It is a worked example of how the modules compose, not a supported entry point.
+These historical scripts run the deterministic classifier and an admitted LLM
+leg on a small sample, then produce a review HTML. Use Path B for the supported
+application. The pilot is a dataset-specific composition example.
 (Details: [`scripts/pilot/README.md`](scripts/pilot/README.md).)
 
 The live LLM leg covers RBC orders. While `PLATELET_LLM_ENABLED` is off (the
@@ -64,17 +63,25 @@ deterministic verdict but orphan instead of an LLM review), so a sample that
 includes platelet orders is not audited end-to-end until the flag is enabled.
 
 ```bash
+uv sync --extra live
 export ANTHROPIC_API_KEY=sk-ant-...          # the LLM leg
 export BBA_PILOT_WORK_DIR=/tmp/bba_mini      # all outputs land here
+export BBA_PRIVACY_POLICY=/path/to/trust-policy.json
+export BBA_PRIVACY_ARTIFACTS=/path/to/approved-evidence.json
 
 uv run python scripts/pilot/sample_bundle.py         # 1. sample ~10 cases
 uv run python scripts/pilot/run_pipeline.py          # 2. deterministic verdicts  → report.csv
-uv run python scripts/pilot/run_llm_leg.py           # 3. live Anthropic batch     → llm_report.json
+uv run --extra live python scripts/pilot/run_llm_leg.py # 3. admitted batch → llm_report.json
 uv run python scripts/pilot/audit_llm_responses.py   # 4. audit the responses (code checks, no API) → llm_response_audit.json
 uv run python scripts/pilot/build_review.py          # 5. assemble review          → review.html
 
 open "$BBA_PILOT_WORK_DIR/review.html"
 ```
+
+An approved local redaction authority must issue the exact evidence artifacts
+before the model step. Encryption or an asserted hash does not establish
+deidentification. Missing or rejected proof produces local review without a
+model call. See [privacy admission](docs/production-cli.md#admit-model-evidence).
 
 Step 5 refuses to render model responses without a response audit that matches
 `llm_report.json` (by its SHA-256) and carries no HIGH finding; set
@@ -94,28 +101,21 @@ To iterate on a single case without re-running the whole batch, set
 merged into `llm_report.json` and the other cases keep theirs. See
 [`scripts/pilot/README.md`](scripts/pilot/README.md#re-running-a-single-case).
 
-### Path B: ingest a full export (supported `bba` CLI)
+### Path B: audit a full export with the supported CLI
 
 Runs the wired `bba` CLI against a full 13-file HOSxP export.
 
 ```bash
-export BBA_DATA_DIR=/path/to/persistent/data   # run-state today (Parquet + DuckDB planned)
+export BBA_DATA_DIR=/path/to/persistent/data   # persistent audit data
 
 # 1. Ingest the bundle: validate + normalize, write the run completion marker under $BBA_DATA_DIR
 uv run bba ingest /path/to/hosxp_bundle/BDVST.csv
 
-# 2. Run the audit ingest leg (validate + normalize, write the run completion marker; idempotent per run_id)
+# 2. Audit the bundle and persist actual classification rows
 uv run bba audit --input /path/to/hosxp_bundle/BDVST.csv
 ```
 
-What `bba audit` does today: the ingest leg only. It validates the
-schema, normalizes rows, and writes a run completion marker under
-`$BBA_DATA_DIR/audit/<run_id>/` (marker-only; DuckDB + Parquet payload writers
-are the intended next storage). The analysis leg
-(deterministic classifier → evidence bundle → de-id → prompt → LLM batch →
-quote grounding → audit-store write) runs through the pilot scripts (Path A)
-today; its CLI wiring lands in Phase 1.5. Re-running the same input + code
-version is a no-op; pass `--force` to override (writes an `audit_log` row).
+`bba audit` validates the full export, builds canonical row contexts, and invokes the existing audit pipeline. It commits deterministic results and routes model-bound cases without approved evidence to local `NEEDS_REVIEW`. Model transport requires explicit configuration and trusted privacy admission. Re-running the same input and configuration is idempotent. See [Run a supported HOSxP audit](docs/production-cli.md) for model configuration, recovery, reports, evaluation, monitoring, and authenticated review.
 
 ### Path C: rank doctors / departments (attribution)
 
@@ -158,10 +158,10 @@ open "$BBA_PILOT_WORK_DIR/doctor_rankings.html"
 |------------|--------|-------|
 | `bba ingest <csv> [--schema-version v1]` | Wired | Validates + hashes + normalizes the 13-table HOSxP bundle, then writes the run completion marker (marker-only today; Parquet loader is the intended next storage). `--schema-version` selects the ingest schema (default `v1`). |
 | `bba audit --input <csv>` | Wired | Run-level idempotent; `--force` overrides with an `audit_log` row. |
-| `bba evaluate --run-id <id>` | Integration seam | Underlying `bba.eval_harness` primitives ship and are tested; the CLI hand-off composes them against the deployment's `audit_store`. Raises `CliError` until wired. |
+| `bba evaluate --run-id <id> --labels reviewed.csv` | Wired | Compare explicit reviewed labels with committed audit rows. |
 | `bba report --run-id <id> --format html\|pdf\|json` | Wired | Renders the monthly report from the audit store: committee CSVs + per-physician CSVs + PDF under `$BBA_DATA_DIR/reports/<run_id>/`. Ward/physician attribution resolvers come from `BBA_BDVST_CSV` / `BBA_DCT_CSV`. |
-| `bba serve-dashboard --port 8000` | Integration seam | FastAPI app from `bba.dashboard.create_app` ships; CLI needs deployment-specific resolvers (auth, snapshot dir, PHI un-redactor). |
-| `bba sentinel --weekly\|--quarterly` | Integration seam | `bba.monitoring` primitives ship; CLI needs the deployment's cadence dispatcher. |
+| `bba serve-dashboard --port 8000` | Wired | Requires a Postgres review role, signed-session secret, HTTPS origin, and attribution inputs. |
+| `bba sentinel --weekly\|--quarterly --manifest runs.json` | Wired | Compare explicit baseline and current runs over fixed membership. |
 
 The three remaining integration seams (`evaluate`, `serve-dashboard`, `sentinel`) fail loud with a `CliError` describing the missing glue. They do not fabricate defaults that would silently mis-configure the underlying module.
 
@@ -203,7 +203,7 @@ INCPT_OPRTACT.csv               Procedure charge support (INCPT joined to OPRTAC
 ICD9CM.csv                      ICD-9-CM Vol 3 procedure code dictionary
 ```
 
-A `run_id` is `sha256(input_csv_hash + schema_fingerprint + code_version)`. The same bundle + same code version always produces the same `run_id`, so re-running `bba audit` is a no-op unless `--force`.
+A `run_id` is `sha256(bundle_hashes + schema_fingerprint + code_version)`, with explicit application configuration also included when configured. The same bundle + same code version always produces the same `run_id`, so re-running `bba audit` is a no-op unless `--force`.
 
 ## HOSxP join examples
 

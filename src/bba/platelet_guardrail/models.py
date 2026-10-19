@@ -2,7 +2,7 @@
 
 Phase 2 counterpart to the RBC B1 guardrail's hard-signal set
 (:func:`bba.audit_pipeline.replay._has_structured_hard_signal`), which is
-entirely Hb-shaped (Hb<7, MTP, peri-op, SBP/HR). Per the user ruling
+entirely Hb-shaped (Hb<=7, MTP, peri-op, SBP/HR). Per the user ruling
 (2026-07-08, "ADD hard signals"), the platelet LLM leg MAY finalize
 ``APPROPRIATE`` below the review ceiling only when one of these positive
 indications is grounded from the notes; absent any, the over-clear guardrail
@@ -13,25 +13,28 @@ Derived from the Chula DRAFT platelet policy (AABB/ICTMG 2025):
 * ``active_bleeding`` — documented active / life-threatening / clinically
   significant bleeding. The strongest indication for a low-count transfusion.
 * ``procedure_indication`` — an invasive procedure or surgery in-window whose
-  policy threshold the count sits below (LP <50-80k; CVC, thoracocentesis,
-  arthrocentesis, dental extraction <50k; major surgery <80-100k).
+  policy threshold the count meets (LP <=50-80k; CVC, thoracocentesis,
+  arthrocentesis, dental extraction <=50k; major surgery <=80k, <100k high
+  risk). Cutoffs are inclusive (owner ruling 2026-09-27) except 100k, which
+  stays strict (ruling 2026-09-28).
 * ``prophylactic_marrow_failure`` — chemo / HSCT / consumptive thrombocytopenia
-  with count <10k (or expected <10k within 24h), AND no exclusion population.
+  with count <=10k (or expected to fall to <=10k within 24h), AND no exclusion
+  population.
   Aplastic anaemia on active therapy is NOT reported here (see the fifth
   signal): the count-trend floor reads this signal alone and would floor a
   valid ATG clear at 10-20k.
-* ``intracranial_bleed_indication`` — intracranial bleed below its threshold
-  (clinician ruling 2026-09-21): acute / acute-on-chronic / growing / operative
-  <100k, stable non-operative (incl. stable chronic SDH) <50k. Kept separate
+* ``intracranial_bleed_indication`` — intracranial bleed meeting its
+  threshold (clinician ruling 2026-09-21): acute / acute-on-chronic / growing /
+  operative <100k, stable non-operative (incl. stable chronic SDH) <=50k. Kept separate
   from ``active_bleeding`` because chronic SDH expansion is not active bleeding.
 * ``aplastic_active_therapy_indication`` — indication 8 (clinician ruling
   2026-09-23): aplastic anaemia on active therapy (ATG, cyclosporine,
-  eltrombopag, transplant work-up) below <10k, or <20k during the ATG course or
-  with sepsis. Its own signal so the count-trend floor, which reads only
+  eltrombopag, transplant work-up) at or below 10k, or <=20k during the ATG
+  course or with sepsis. Its own signal so the count-trend floor, which reads only
   ``prophylactic_marrow_failure``, does not send a valid ATG clear at 10-20k to
   review.
 
-Deliberately NOT a blanket ``count < 10`` exemption (§8/CR-C2): a plt<10
+Deliberately NOT a blanket ``count <= 10`` exemption (§8/CR-C2): a plt<=10
 dengue-no-bleed / TTP / HIT / ITP / aplastic-no-bleed patient is exactly the
 population the policy WITHHOLDS platelets from, so a low count alone must never
 exempt an LLM clear. The LLM must ground a POSITIVE indication and confirm no

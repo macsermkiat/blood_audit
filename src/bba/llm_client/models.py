@@ -5,7 +5,7 @@ established by :mod:`bba.prompt_builder` and :mod:`bba.audit_store`:
 
 * Allow-set-pinned model IDs in :data:`ALLOWED_MODELS` — the client may
   only invoke the two IDs in that set; swapping models requires a code
-  change (PRD §13). The IDs are bare aliases (Claude Sonnet 5 / Opus 4.8
+  change (PRD §13). The IDs are bare aliases (Claude Sonnet 5.5 / Opus 5.5
   ship without dated snapshots), so this guards model *swaps*, not
   Anthropic point releases under the same alias.
 * Frozen Pydantic models for every persistable record so the audit
@@ -48,6 +48,7 @@ from bba.audit_store.models import (
     SafeId,
     UTCDatetime,
 )
+from bba.deid_redactor.admission import PrivacyAttestation
 from bba.platelet_guardrail.models import PlateletHardSignals
 from bba.prompt_builder.models import PromptBuildResult, TaskMode
 
@@ -57,18 +58,18 @@ from bba.prompt_builder.models import PromptBuildResult, TaskMode
 # =============================================================================
 
 
-SONNET_MODEL_ID: Final[str] = "claude-sonnet-5"
+SONNET_MODEL_ID: Final[str] = "claude-sonnet-5-5"
 """Primary model ID — Claude Sonnet 5.
 
-Claude Sonnet 5 ships as a bare alias with no dated snapshot; the alias
-is the canonical ID (per Anthropic's Sonnet 5 model docs). The pin is
+Claude Sonnet 5.5 ships as a bare alias with no dated snapshot; the alias
+is the canonical ID (per Anthropic's Sonnet 5.5 model docs). The pin is
 the allow-set below, not a date suffix — bumping the model still forces
 an explicit edit to this constant + a golden-set re-run, but Anthropic
 point releases under the same alias are no longer detected here."""
 
 
-OPUS_MODEL_ID: Final[str] = "claude-opus-4-8"
-"""Escalation model ID — Claude Opus 4.8, a bare alias like
+OPUS_MODEL_ID: Final[str] = "claude-opus-5-5"
+"""Escalation model ID — Claude Opus 5.5, a bare alias like
 :data:`SONNET_MODEL_ID`. Opus is the escalation target after Sonnet
 retries are exhausted (PRD §13)."""
 
@@ -84,7 +85,7 @@ enforces membership in this set — that allow-list is the pin.
 
 MAX_SONNET_ATTEMPTS: Final[int] = 2
 """Sonnet retry budget before escalation (PRD §13: "retry → Sonnet
-(≤ 2x) → escalate to Opus 4.7")."""
+(≤ 2x) → escalate to Opus 5.5")."""
 
 
 ANTHROPIC_BETA_HEADER: Final[str] = "message-batches-2024-09-24"
@@ -94,8 +95,8 @@ production."""
 
 
 Model = Literal[
-    "claude-sonnet-5",
-    "claude-opus-4-8",
+    "claude-sonnet-5-5",
+    "claude-opus-5-5",
 ]
 """Type-level alias for the two allowed model IDs."""
 
@@ -216,21 +217,21 @@ class PlateletLlmClassificationResponse(LlmClassificationResponse):
     """Documented active, life-threatening, or clinically significant bleeding."""
 
     procedure_indication: StrictBool
-    """Invasive procedure in-window below its policy threshold (LP/CVC/surgery)."""
+    """Invasive procedure in-window at or below its policy threshold (LP/CVC/surgery)."""
 
     prophylactic_marrow_failure: StrictBool
-    """Chemo/HSCT/consumptive with count <10k (or expected <10k/24h), no exclusion."""
+    """Chemo/HSCT/consumptive with count <=10k (or expected <=10k/24h), no exclusion."""
 
     # Defaulted (unlike the three above) so responses persisted before the
     # 2026-09-21 intracranial ruling still parse on replay. New requests always
     # carry it: the tool schema lists it as required.
     intracranial_bleed_indication: StrictBool = False
-    """Intracranial bleed below its threshold (acute/growing/operative <100k, stable <50k)."""
+    """Intracranial bleed meeting its threshold (acute/growing/operative <100k, stable <=50k)."""
 
     # Defaulted for the same reason: responses persisted before the 2026-09-23
     # aplastic anaemia ruling carry four signals.
     aplastic_active_therapy_indication: StrictBool = False
-    """Aplastic anaemia on active therapy below its indication 8 threshold (<10k; <20k during ATG or with sepsis)."""
+    """Aplastic anaemia on active therapy at or below its indication 8 threshold (<=10k; <=20k during ATG or with sepsis)."""
     # Defaulted for the same replay reason (ruling 2026-09-23); the tool schema
     # lists it as required. StrictInt so a string "100000" fails closed.
     specialist_platelet_target_per_ul: StrictInt | None = None
@@ -323,6 +324,7 @@ class BatchSubmissionRequest(BaseModel):
     run_id: SafeId
     task_mode: TaskMode
     prompt: PromptBuildResult
+    privacy_attestation: PrivacyAttestation | None = None
 
 
 class BatchSubmissionResult(BaseModel):

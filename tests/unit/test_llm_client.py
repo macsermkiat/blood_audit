@@ -343,11 +343,11 @@ class TestPinnedModelId:
         # Change-detector: the primary model is pinned to a specific bare
         # alias. Bumping it must be an explicit edit to the constant (not
         # a transparent SDK upgrade) followed by a golden-set re-run.
-        assert SONNET_MODEL_ID == "claude-sonnet-5"
+        assert SONNET_MODEL_ID == "claude-sonnet-5-5"
         assert "sonnet" in SONNET_MODEL_ID
 
     def test_opus_model_id_is_expected_alias(self) -> None:
-        assert OPUS_MODEL_ID == "claude-opus-4-8"
+        assert OPUS_MODEL_ID == "claude-opus-5-5"
         assert "opus" in OPUS_MODEL_ID
 
     def test_unpinned_model_rejected_by_config(self) -> None:
@@ -637,7 +637,7 @@ class TestMalformedJsonFailClosed:
 # =============================================================================
 # AC ④ — Retry → escalation test
 #
-# WHY: PRD §13 "Retry → Sonnet (≤ 2x) → escalate to Opus 4.7".
+# WHY: PRD §13 "Retry → Sonnet (≤ 2x) → escalate to Opus 5.5".
 # Cost + latency vs. recovery tradeoff: a single Sonnet failure can
 # be transient (rate-limit, content filter); two failures probably
 # aren't, and Opus is reserved for those.
@@ -1741,6 +1741,7 @@ class TestAnthropicBatchEntryErrorHandling:
         monkeypatch: pytest.MonkeyPatch,
         result_type: str,
         expected_parse_reason: ParseFailureReason,
+        tmp_path: Path,
     ) -> None:
         # Stand up a fake `anthropic` SDK that the lazy import inside
         # AnthropicBatchTransport.submit_batch picks up. The fake
@@ -1750,7 +1751,10 @@ class TestAnthropicBatchEntryErrorHandling:
         )
         monkeypatch.setitem(__import__("sys").modules, "anthropic", fake_module)
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-xxx")
-        transport = AnthropicBatchTransport(poll_interval_seconds=0.0)
+        transport = AnthropicBatchTransport(
+            poll_interval_seconds=0.0, manifest_root=tmp_path
+        )
+        monkeypatch.setattr(transport, "_admit", lambda _: None)
         response = transport.submit_batch(
             model=SONNET_MODEL_ID,
             requests=[_request(audit_id="a1")],
@@ -1806,7 +1810,9 @@ def _build_fake_anthropic_sdk(*, entries: list[_FakeBatchEntry]) -> Any:
             return entries
 
     class _Anthropic:
-        def __init__(self, *, api_key: str, default_headers: dict[str, str]) -> None:
+        def __init__(
+            self, *, api_key: str, default_headers: dict[str, str], max_retries: int
+        ) -> None:
             self.messages = SimpleNamespace(batches=_BatchesNamespace())
 
     return SimpleNamespace(Anthropic=_Anthropic)

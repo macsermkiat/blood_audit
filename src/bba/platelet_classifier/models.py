@@ -13,7 +13,7 @@ Public-surface invariants (docs plan §5.1, §8/CR-C1, CR-M2):
 * With :data:`bba.feature_flags.PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED` off
   (the default) the platelet classifier NEVER emits ``"APPROPRIATE"`` or
   ``"INAPPROPRIATE"``. With it on, the single ``APPROPRIATE`` path is the
-  cohort-gated prophylaxis clear (fresh count < 10, heme/chemo diagnosis, no
+  cohort-gated prophylaxis clear (fresh count <= 10, heme/chemo diagnosis, no
   withhold population); ``"INAPPROPRIATE"`` is still never emitted. Otherwise, in v1, Platelet appropriateness is context-dependent (indication, procedure,
   and 6+ exclusion populations such as TTP/HIT/ITP/dengue where transfusion is
   withheld or harmful) and cannot be safely auto-cleared or auto-condemned by

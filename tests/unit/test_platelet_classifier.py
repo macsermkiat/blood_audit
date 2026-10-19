@@ -191,8 +191,16 @@ class TestProphylaxisAutoclear:
         assert result.classification == "NEEDS_REVIEW"
         assert result.rationale == "plt_defer_llm"
 
-    @pytest.mark.parametrize("count", [10.0, 10.1, 50.0, 99.9])
-    def test_count_at_or_above_threshold_defers(self, count: float) -> None:
+    def test_count_exactly_at_threshold_clears(self) -> None:
+        # Owner ruling 2026-09-27 (triggered by RBC case 68004713): a value
+        # exactly AT an indication threshold qualifies, so a fresh 10,000 /uL
+        # on a qualifying admission meets the "10,000/uL" prophylaxis row.
+        result = classify_platelet(self._in(count=10.0))
+        assert result.classification == "APPROPRIATE"
+        assert result.rationale == "plt_lt_10_heme_prophylaxis"
+
+    @pytest.mark.parametrize("count", [10.1, 50.0, 99.9])
+    def test_count_above_threshold_defers(self, count: float) -> None:
         assert classify_platelet(self._in(count=count)).classification == "NEEDS_REVIEW"
 
     @pytest.mark.parametrize(
@@ -342,7 +350,7 @@ class TestProphylaxisAutoclear:
         ) or (chemo_evidence and "D46" in codes)
         expected = (
             count is not None
-            and count < 10.0
+            and count <= 10.0
             and fresh == "fresh"
             and indicated
             and not any(

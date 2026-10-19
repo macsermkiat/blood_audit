@@ -366,6 +366,8 @@ transfusion time, so a low value an earlier order already addressed does not
 count. `None` when no observation
 falls in the window. The RBC prompt (`system_prompt.py`) states the same rule
 for `SUB_THRESHOLD_HB` in both gray-zone and high-Hb-override task modes.
+Sub-threshold means AT OR BELOW the cohort floor: an Hb exactly at the floor
+qualifies (owner ruling 2026-09-27, review case REQNO 68004713).
 
 ### AnchorCandidate
 
@@ -718,16 +720,27 @@ hard-peri-op-evidence positive-evidence pre-pass (`APPROPRIATE` on an
 Hb-independent signal);
 with the pre-pass flag on but no hard evidence → `NEEDS_REVIEW` (defer to
 LLM), with the flag off → `INSUFFICIENT_EVIDENCE` (see "Missing-Hb
-positive-evidence pre-check"); (2) Hb < 7.0 →
+positive-evidence pre-check"); (2) Hb ≤ 7.0 →
 `APPROPRIATE`/`NONE`; (3) cohort `MTP` → `APPROPRIATE`/`MTP`;
 (4) cohort `UNKNOWN` → `NEEDS_REVIEW`; (5) delta-Hb fired →
 `APPROPRIATE`/`DELTA_HB`; (6) non-threshold cohort →
-`NEEDS_REVIEW`; (7) hemodilution (Hb < threshold ∧ ≥ 2 L crystalloid)
+`NEEDS_REVIEW`; (7) hemodilution (Hb ≤ threshold ∧ ≥ 2 L crystalloid)
 → `NEEDS_REVIEW`/`HEMODILUTION_FLAGGED`; (8)
-single-low-Hb-no-trend (Hb < threshold ∧ `needs_review_single_low_hb`)
-→ `NEEDS_REVIEW`/`NONE`; (9) plain Hb-tier: `< threshold` →
-`APPROPRIATE`, `[threshold, 10)` → `NEEDS_REVIEW`, `≥ 10` →
+single-low-Hb-no-trend (Hb ≤ threshold ∧ `needs_review_single_low_hb`)
+→ `NEEDS_REVIEW`/`NONE`; (9) plain Hb-tier: `≤ threshold` →
+`APPROPRIATE`, `(threshold, 10)` → `NEEDS_REVIEW`, `≥ 10` →
 `POTENTIALLY_INAPPROPRIATE`.
+
+Inclusive indication thresholds (owner ruling 2026-09-27, triggered by review
+case REQNO 68004713: Hb 7.0 at the default 7.0 floor was routed to the gray
+zone and the LLM called it INAPPROPRIATE): a value exactly AT an indication
+threshold qualifies — the universal Hb 7.0 rule, every cohort floor, and every
+platelet indication cutoff except 100,000 /uL (high-risk surgery, acute
+intracranial bleed), which stays strict `<100,000` (follow-up ruling
+2026-09-28). Routing gates (`HB_GT_10_THRESHOLD`,
+`PLATELET_REVIEW_CEILING`) are unchanged. Rationale slugs keep their historical
+`lt` names (`hb_lt_7_universal`, `hb_lt_threshold`,
+`plt_lt_10_heme_prophylaxis`) for persisted-data compatibility.
 
 With `DECLARED_USE_PREOP_EXEMPT_ENABLED=False`, the legacy procedure routing is
 restored byte-for-byte: missing-Hb and Hb-present proximity ≤6 h can produce
@@ -758,7 +771,7 @@ Literal across `audit_store`, `deterministic_classifier`,
 ### Cohort UNKNOWN routing
 
 `label=UNKNOWN`, `threshold=None` → `NEEDS_REVIEW`/`NONE` when Hb is
-≥ 7.0. Hb < 7.0 now stops earlier as `APPROPRIATE`. For the remaining
+> 7.0. Hb ≤ 7.0 now stops earlier as `APPROPRIATE`. For the remaining
 UNKNOWN cases, the classifier refuses to silently default to
 `DEFAULT_THRESHOLD=7.0` when procedure data was missing upstream. Hb
 missing still wins over UNKNOWN — no current Hb means no anchor for any
@@ -766,19 +779,19 @@ interpretation. `TestCohortUnknownRoutesToNeedsReview`.
 
 ### Non-threshold cohort fallthrough
 
-After the global Hb < 7.0 rule and bypass chain, a `threshold=None`
-cohort surviving the earlier steps (in practice, Hb ≥ 7.0
+After the global Hb ≤ 7.0 rule and bypass chain, a `threshold=None`
+cohort surviving the earlier steps (in practice, Hb > 7.0
 `HEME_MALIGNANCY_ACTIVE` — `MTP` and `UNKNOWN` exited earlier) routes
 to `NEEDS_REVIEW`/`NONE` with
 `rationale="cohort_non_threshold"`. The T2-supportive heme cohort
 is not Hb-tier-driven; the LLM stage handles its context
-interpretation for Hb ≥ 7.0. Hb < 7.0 is globally `APPROPRIATE`
+interpretation for Hb > 7.0. Hb ≤ 7.0 is globally `APPROPRIATE`
 before this cohort branch.
 
 ### Hemodilution carve-out
 
-After the global Hb < 7.0 rule, inside the remaining sub-threshold branch
-(Hb < `cohort_threshold`), if
+After the global Hb ≤ 7.0 rule, inside the remaining sub-threshold branch
+(Hb ≤ `cohort_threshold`), if
 `crystalloid_liters_prior_4h ≥ 2.0` (Round 1 B5), classification is
 `NEEDS_REVIEW` with `bypass_reason=HEMODILUTION_FLAGGED` instead of
 auto-APPROPRIATE. Scoped to the would-be auto-APPROPRIATE branch
@@ -787,9 +800,10 @@ on the classifier module as `HEMODILUTION_CRYSTALLOID_LITERS = 2.0`.
 
 ### Single-low-Hb-no-trend carve-out
 
-After the global Hb < 7.0 rule and the hemodilution check, if
+After the global Hb ≤ 7.0 rule and the hemodilution check, if
 `hb_result.needs_review_single_low_hb` is set (upstream contract:
-isolated Hb < 8 g/dL with no prior 24 h observation), classification is
+isolated Hb ≤ 8 g/dL with no prior 24 h observation; inclusive since the
+2026-09-27 ruling so an at-floor 8.0 gets the same check as 7.9), classification is
 `NEEDS_REVIEW`/`NONE` with
 `rationale="single_low_hb_no_trend"`. PR #52 Codex P1: a lone
 unconfirmed low value cannot be treated as confirmed anemia. The
@@ -2291,7 +2305,7 @@ reader does not re-litigate:
 ### Allow-set-pinned model ID
 
 The two model IDs the client may invoke are bare aliases
-(`claude-sonnet-5`, `claude-opus-4-8`) — Claude Sonnet 5 and Opus 4.8
+(`claude-sonnet-5-5`, `claude-opus-5-5`) — Claude Sonnet 5.5 and Opus 5.5
 ship without dated snapshots, so the alias is the canonical ID. They
 live behind `SONNET_MODEL_ID` and `OPUS_MODEL_ID` in
 `bba.llm_client.models`; the runtime allowlist is
@@ -2349,7 +2363,7 @@ forge an inconsistent `ParseOutcome`.
 
 `bba.llm_client.escalation.run_with_escalation` runs one audit row
 through up to `MAX_SONNET_ATTEMPTS = 2` Sonnet calls, then escalates
-to Opus 4.7 iff every Sonnet attempt produced `parse_failure=True`.
+to Opus 5.5 iff every Sonnet attempt produced `parse_failure=True`.
 PRD §13 cap of two Sonnet retries is structural: `LlmClientConfig`'s
 `max_sonnet_attempts` field is bounded `ge=2, le=MAX_SONNET_ATTEMPTS`.
 The policy is pure-control-flow over `ParseOutcome`; the HTTP
@@ -3264,41 +3278,17 @@ otherwise leave the patient's given+family name in the operator log.
 `bba.cli.phi_scrubber.PHI_REGEXES` re-exports this tuple unchanged so
 the redactor and the traceback scrubber cannot drift.
 
-### Phase 1 ingest leg
+### Supported application composition
 
-The Phase 1 deliverable for `bba audit`: call
-`bba.ingest.ingest(IngestConfig(...))` against `input_csv.parent` and
-record one `phase1_ingest_<table>` row marker per validated HOSxP
-table from `IngestResult.tables_written`. The LLM-driven analysis leg
-(deterministic classifier → evidence bundle → de-id → prompt → batch
-submit → quote ground → calibrate → audit_store write) requires a
-context-builder composition over `audit_orders` /
-`deterministic_classifier` / `evidence_bundle_builder` /
-`deid_redactor` / `prompt_builder` that `bba.audit_pipeline`'s contract
-explicitly delegates to its caller. When that orchestration facade
-lands, the `_run_audit_pipeline` seam delegates to it.
+`bba.application` composes normalized HOSxP exports into `PipelineRowContext` inputs for the existing `run_pipeline`. The adapters join orders, diagnoses, lab results, notes, medications, procedures, returns, declared use, and MSBOS reservations through the current public modules and feature flags. No classification engine is duplicated.
 
-### Zero-table guard
+The default local configuration commits deterministic classifications and local `NEEDS_REVIEW` for model-bound cases without privacy approval. The application never sends raw narrative. Explicit cassette or live configuration admits exact redacted artifacts through an operator-controlled `PrivacyAdmissionPolicy`. Admitted model work uses Postgres batch checkpoints. Live mode requires explicit `allow_live_api` and remains prohibited in tests.
 
-The defensive check in `_run_audit_pipeline` that raises `CliError` if
-`IngestResult.tables_written` is empty. Real ingest raises
-`IncompleteInputError` before returning an empty tuple, but the guard
-remains so a future ingest revision cannot silently mark a run
-complete with zero row markers — keeping `run_complete=True` and
-`run_count==0` an impossible state.
+`_run_audit_pipeline` records markers only for committed AuditRows. It cannot declare ingestion-only work complete. The application creates an owner-readable patient-identity HMAC key in the data directory and records the source path for `--run-id` recovery. An explicit application JSON configuration contributes to the CLI run identity.
 
-### Integration-contract CliError
+The report command renders the selected HTML, JSON, or PDF format. Evaluation requires a reviewed-label CSV. Sentinel cadence dispatch requires explicit baseline and current runs, code versions, and immutable audit-ID membership. Dashboard serving requires a valid signed reviewer session, an HTTPS public origin, a dedicated authentication secret, and an unprivileged Postgres review role. The CLI has no anonymous reviewer fallback.
 
-The pattern used by the four subcommands (`evaluate`, `report`,
-`serve-dashboard`, `sentinel`) whose underlying module does not yet
-expose a single-call facade matching the CLI's flag surface. Each
-body validates inputs via Pydantic, emits a structured `<sub>.start`
-log, and raises `CliError` naming the integration seam (e.g.
-`bba.cli.main.bba_evaluate`) and the underlying module's currently
-exposed primitives. The error is not a TODO — it's the CLI's
-"fail loud at the integration boundary" contract from PRD §20, and is
-the regression guard that keeps the subcommands' bodies thin until
-the underlying facades land.
+The detailed operator contract is in [production-cli.md](production-cli.md). The synthetic local and cassette CLI journeys are in `tests/unit/test_application.py` and `tests/unit/test_application_cassette.py`.
 
 ### Excepthook + faulthandler sidecar
 
@@ -3609,8 +3599,9 @@ the structured grounded signals and their `any_signal()` test.
 
 ### platelet_trend_unsupported
 
-Issue #237, clinician ruling 2026-09-21: the policy clause "expected to drop
-below 10,000 /uL within 24 hours" means a straight-line projection only.
+Issue #237, clinician ruling 2026-09-21: the policy clause "expected to fall
+to 10,000 /uL or below within 24 hours" (inclusive per owner ruling 2026-09-27)
+means a straight-line projection only.
 `bba.platelet_lookup.project_24h(observations, anchor_utc) → float | None` takes
 the last two counts in the strict 7-day pre-order window and extends the line
 24 h past the LATEST COUNT (not past the order). `None` when fewer than two
@@ -3621,7 +3612,7 @@ are one draw (highest `item_no` wins); a line below zero is reported as 0.
 `bba.platelet_guardrail.platelet_trend_unsupported(final, hard_signals,
 trigger_count, projected_24h) → bool`. True iff the LLM returned `APPROPRIATE`,
 `prophylactic_marrow_failure` is the ONLY true hard signal, the trigger count is
-10 ×10³/µL or more, and the projection is `None` or 10 or more. The model sets
+above 10 ×10³/µL, and the projection is `None` or above 10. The model sets
 that hard signal itself, so `platelet_overclear_suspect` cannot catch these. On
 a hit replay floors the row to `NEEDS_REVIEW` with
 `PLATELET_TREND_REVIEW_REASON = "platelet_trend_unsupported"` (never

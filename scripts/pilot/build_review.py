@@ -138,9 +138,9 @@ _RATIONALE_LABELS: dict[str, str] = {
     "plt_missing_defer_llm": "No usable platelet count — indication judged by the LLM",
     "plt_missing": "No platelet count in the 7-day pre-order window",
     "plt_ge_100": "Platelet count ≥ 100,000 /µL — above every policy threshold",
-    "plt_lt_10_heme_prophylaxis": "Fresh count < 10,000 /µL on a heme-malignancy / chemotherapy admission with no withhold population — prophylaxis auto-clear",
-    "hb_lt_7_universal": "Hb < 7.0 g/dL — below the universal threshold; no bypass required",
-    "hb_lt_threshold": "Hb below the cohort-specific threshold",
+    "plt_lt_10_heme_prophylaxis": "Fresh count ≤ 10,000 /µL on a heme-malignancy / chemotherapy admission with no withhold population — prophylaxis auto-clear",
+    "hb_lt_7_universal": "Hb ≤ 7.0 g/dL — at or below the universal threshold; no bypass required",
+    "hb_lt_threshold": "Hb at or below the cohort-specific threshold",
     "hb_7_to_10": "Hb 7.0–10.0 g/dL — gray zone; requires a documented clinical indication",
     "hb_ge_10": "Hb ≥ 10.0 g/dL — above threshold; no qualifying bypass was found",
     "hb_missing": "No Hb result in the 7-day pre-anchor window",
@@ -247,11 +247,11 @@ _REVIEW_REASON_LABELS: dict[str, str] = {
         "trusted; a human decides"
     ),
     "platelet_trend_unsupported": (
-        "Platelet clear floored to NEEDS_REVIEW: the count was 10,000 /uL or "
-        "more and the clear rested only on 'expected to drop below 10,000 /uL "
+        "Platelet clear floored to NEEDS_REVIEW: the count was above 10,000 /uL "
+        "and the clear rested only on 'expected to fall to 10,000 /uL or below "
         "within 24 hours', but the straight-line projection through the last "
-        "two pre-order counts is 10,000 /uL or more, or fewer than two counts "
-        "were on file (clinician ruling 2026-09-21)"
+        "two pre-order counts is above 10,000 /uL, or fewer than two counts "
+        "were on file (clinician rulings 2026-09-21, 2026-09-27)"
     ),
     "platelet_specialist_target": (
         "Platelet order moved from INAPPROPRIATE to NEEDS_REVIEW: it fails the "

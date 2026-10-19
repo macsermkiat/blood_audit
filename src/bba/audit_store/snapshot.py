@@ -11,6 +11,7 @@ after that point are invisible to this view until the next day's rotation.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import io
 from datetime import date
 from pathlib import Path
 
@@ -19,6 +20,7 @@ import pyarrow.parquet as pq
 
 from bba.audit_store.models import AuditRow
 from bba.audit_store.store import AuditStore, _slugify_code_version
+from bba.secure_files import private_atomic_path, read_private_bytes
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,7 +58,7 @@ class SnapshotView:
         snapshot_path = _snapshot_path(self.store, self.as_of)
         if not snapshot_path.exists():
             return ()
-        table = pq.read_table(snapshot_path)  # type: ignore[no-untyped-call]
+        table = pq.read_table(io.BytesIO(read_private_bytes(snapshot_path)))  # type: ignore[no-untyped-call]
         payloads = table.column("payload").to_pylist()
         slugs = table.column("code_version_slug").to_pylist()
         target_slug = (
@@ -82,11 +84,12 @@ def _materialize(store: AuditStore, snapshot_path: Path) -> None:
     (Codex P2 round 8). Writes atomically (write-then-rename) so a crash
     mid-write cannot leave a half-formed snapshot.
     """
-    store.snapshots_dir.mkdir(parents=True, exist_ok=True)
     records = list(store._iter_audit_records())
     payloads = [row.model_dump_json() for row, _slug in records]
     slugs = [slug for _row, slug in records]
     table = pa.table({"code_version_slug": slugs, "payload": payloads})
-    tmp = snapshot_path.with_suffix(snapshot_path.suffix + ".tmp")
-    pq.write_table(table, tmp)  # type: ignore[no-untyped-call]
-    tmp.replace(snapshot_path)
+    try:
+        with private_atomic_path(snapshot_path) as temporary:
+            pq.write_table(table, temporary)  # type: ignore[no-untyped-call]
+    except FileExistsError:
+        read_private_bytes(snapshot_path)
