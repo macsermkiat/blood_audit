@@ -43,6 +43,7 @@ from bba.feature_flags import (
     RETURNS_LEDGER_ENABLED,
 )
 from bba.deterministic_classifier.rationales import PREOP_DECLARED_EXEMPT
+from bba.llm_client.conclusion import closing_classification
 from bba.preop_reservation.reason_presentation import (
     WITHIN_REASONS as _MSBOS_WITHIN_REASONS,
     bucket_for,
@@ -269,6 +270,41 @@ _REVIEW_REASON_LABELS: dict[str, str] = {
     "empty_response": "Parse failure — the model returned an empty response",
     "tool_use_missing": ("Parse failure — no tool-use block was found in the response"),
 }
+
+
+_OVERRIDE_WHY: dict[str, str] = {
+    "llm_overclear_asserted_inappropriate": (
+        "The audit accepts an LLM clear of a gray-zone or high-Hb order only "
+        "with Hb at or below 7.0 g/dL, an MTP, a recorded intra-operative "
+        "transfusion or major operative blood loss, or a bleed over 300 mL or "
+        "marked life-threatening. A cited ACS, documented instability or Hb at "
+        "or below the cohort floor sends the order to human review instead. "
+        "The evidence the model cited grounded none of these"
+    ),
+    "llm_native_review_asserted_inappropriate": (
+        "The model found no hard indication and no qualifying bleed, and the "
+        "audit closes such orders as INAPPROPRIATE rather than leaving them open"
+    ),
+}
+
+
+def _override_banner(model_said: str, final: str, review_reason: str) -> str:
+    """Explain a final verdict that differs from the model's own conclusion.
+
+    The reasoning text is the model's; the verdict above it may be a
+    guardrail's. Without this line a reviewer reads "appropriate" reasoning
+    under an "inappropriate" verdict (clinician review 2026-11-09).
+    """
+    why = _OVERRIDE_WHY.get(review_reason) or _REVIEW_REASON_LABELS.get(
+        review_reason, review_reason
+    )
+    return (
+        "<div class='override'><b>Guardrail override.</b> "
+        f"The model concluded <b>{esc(_display_cls(model_said))}</b> "
+        "(its reasoning is below); "
+        f"the final verdict is <b>{esc(_display_cls(final))}</b>. "
+        f"{esc(why)}.</div>"
+    )
 
 
 def _code_abbr(code: str, labels: dict[str, str]) -> str:
@@ -1920,6 +1956,9 @@ def main() -> None:
                 f"<div class='rationale'>provenance: "
                 f"{_code_abbr(review_reason, _REVIEW_REASON_LABELS)}</div>"
             )
+            model_said = closing_classification(llm_block.get("reasoning_en") or "")
+            if model_said is not None and model_said != fc.upper():
+                parts.append(_override_banner(model_said, fc, review_reason))
             parts.append("<h5>Indications</h5>")
             parts.append(render_indications(llm_block["indications"]))
             parts.append("<h5>Negative evidence</h5>")
@@ -2365,6 +2404,8 @@ def main() -> None:
     .vbox { padding: 14px; border: 1px solid var(--s-border); border-radius: 6px; }
     .vbox.det { background: var(--s-bg-raised); }
     .vbox.llm { background: var(--info-bg); border-color: oklch(80% 0.08 280); }
+    .override { margin: 8px 0; padding: 8px 10px; border-radius: 4px;
+                background: var(--warn-bg); color: var(--warn-fg); }
     .cls { font-size: 1rem; font-weight: 700; padding: 5px 12px; border-radius: 20px;
            display: inline-block; margin-bottom: 8px; letter-spacing: 0.02em; }
     .cls-appropriate { background: var(--ok-bg);   color: var(--ok-fg); }

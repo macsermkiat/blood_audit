@@ -261,6 +261,72 @@ def test_summary_pills_and_mismatch_rendered_server_side(
     assert "(LLM not run)" in rendered
 
 
+def _override_llm_json(*, final: str, reason: str, reasoning_en: str) -> str:
+    return json.dumps(
+        [
+            {
+                "reqno": "R1",
+                "llm_final": {
+                    "final_classification": final,
+                    "confidence": 0.9,
+                    "model": "test",
+                    "review_reason": reason,
+                    "indications": [],
+                    "negative_evidence": [],
+                    "reasoning_en": reasoning_en,
+                    "reasoning_th": "x",
+                },
+            }
+        ]
+    )
+
+
+def test_guardrail_override_shows_what_the_model_concluded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Clinician review 2026-11-09: the reasoning read "appropriate" while the
+    # verdict said "inappropriate". The guardrail's verdict stands, but the page
+    # must say the model concluded otherwise and why it was overridden.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN\nHN1,R1,AN1\n",
+        report_csv="reqno,classification\nR1,NEEDS_REVIEW\n",
+        llm_json=_override_llm_json(
+            final="INAPPROPRIATE",
+            reason="llm_overclear_asserted_inappropriate",
+            reasoning_en="Post-op day 1. Final classification: APPROPRIATE.",
+        ),
+    ).decode()
+
+    assert "Guardrail override" in rendered
+    assert "The model concluded <b>Appropriate</b>" in rendered
+    assert "the final verdict is <b>Inappropriate</b>" in rendered
+    assert "Hb at or below 7.0 g/dL" in rendered
+
+
+def test_model_verdict_without_override_shows_no_banner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN\nHN1,R1,AN1\n",
+        report_csv="reqno,classification\nR1,NEEDS_REVIEW\n",
+        llm_json=_override_llm_json(
+            final="INAPPROPRIATE",
+            reason="model_verdict",
+            reasoning_en="No indication. Final classification: INAPPROPRIATE.",
+        ),
+    ).decode()
+
+    assert "Guardrail override" not in rendered
+
+
 def test_msbos_flag_off_report_columns_do_not_change_review_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
