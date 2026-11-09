@@ -13,6 +13,7 @@ from bba.hb_lookup.anchor import (
     EvidenceAnchor,
     resolve_evidence_anchor,
     resolve_hb_with_fallback,
+    resolve_lab_anchor,
 )
 from bba.hb_lookup.lookup import lookup_hb
 from bba.hb_lookup.models import (
@@ -36,4 +37,5 @@ __all__ = [
     "parse_hb_value",
     "resolve_evidence_anchor",
     "resolve_hb_with_fallback",
+    "resolve_lab_anchor",
 ]

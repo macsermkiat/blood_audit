@@ -204,7 +204,7 @@ def _filter_meds(meds: Sequence[MedRecord], anchor: datetime) -> tuple[MedRecord
 
 
 def _filter_hb(
-    hbs: Sequence[HbRecord], anchor: datetime, hb_anchor: datetime | None = None
+    hbs: Sequence[HbRecord], anchor: datetime, lab_anchor: datetime | None = None
 ) -> tuple[HbRecord, ...]:
     # Hb history is pre-order only — post-order labs belong to the response
     # analysis, not the decision evidence. The lower bound is STRICT
@@ -214,12 +214,12 @@ def _filter_hb(
     # and admitting it to the bundle would let the LLM cite evidence the
     # classifier never saw.
     #
-    # The upper bound is ``hb_anchor`` when the resolver anchored the Hb on a
-    # post-order draw (see :class:`OrderAnchor.hb_anchor`); otherwise it is the
+    # The upper bound is ``lab_anchor`` when the deciding Hb is a
+    # post-order draw (see :class:`OrderAnchor.lab_anchor`); otherwise it is the
     # order anchor. Without this, a fallback-anchored case would route to the
     # LLM on an Hb the bundle then dropped, so the model could not cite the
     # value that triggered submission.
-    upper = hb_anchor if hb_anchor is not None else anchor
+    upper = lab_anchor if lab_anchor is not None else anchor
     return tuple(
         h
         for h in hbs
@@ -228,16 +228,18 @@ def _filter_hb(
 
 
 def _filter_platelet(
-    plts: Sequence[PlateletRecord], anchor: datetime
+    plts: Sequence[PlateletRecord], anchor: datetime, lab_anchor: datetime | None = None
 ) -> tuple[PlateletRecord, ...]:
     # Platelet trend is pre-order only, same STRICT 7-day lower bound as
     # _filter_hb (a count at exactly 7 d old is invisible to the deterministic
-    # platelet gate's lookup). The upper bound is the order anchor: post-order
+    # platelet gate's lookup). The upper bound is the order anchor, or the
+    # deciding count's draw when that is later (same rule as _filter_hb): later
     # counts belong to the response analysis, not the decision evidence.
+    upper = lab_anchor if lab_anchor is not None else anchor
     return tuple(
         p
         for p in plts
-        if anchor - p.timestamp < WINDOW_PLATELET_BEFORE and p.timestamp <= anchor
+        if anchor - p.timestamp < WINDOW_PLATELET_BEFORE and p.timestamp <= upper
     )
 
 
@@ -1103,13 +1105,13 @@ def build_evidence_bundle(
     )
 
     meds = _filter_meds(inputs.meds, anchor_dt)
-    hb_anchor_dt = (
-        _to_utc(inputs.anchor.hb_anchor)
-        if inputs.anchor.hb_anchor is not None
+    lab_anchor_dt = (
+        _to_utc(inputs.anchor.lab_anchor)
+        if inputs.anchor.lab_anchor is not None
         else None
     )
-    hbs = _filter_hb(inputs.hb_history, anchor_dt, hb_anchor_dt)
-    platelets = _filter_platelet(inputs.platelet_history, anchor_dt)
+    hbs = _filter_hb(inputs.hb_history, anchor_dt, lab_anchor_dt)
+    platelets = _filter_platelet(inputs.platelet_history, anchor_dt, lab_anchor_dt)
     # Drop all-null vitals (only note_source populated): no measurement to
     # cite, so the LLM would get a dead E_N reference into the bundle.
     vitals_in_window = _filter_vitals(inputs.vitals, anchor_dt)

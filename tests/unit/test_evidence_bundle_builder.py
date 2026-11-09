@@ -819,12 +819,12 @@ class TestHbHistoryWindow:
 
 
 class TestHbFallbackAnchor:
-    """``OrderAnchor.hb_anchor`` extends the Hb upper bound to a post-order draw.
+    """``OrderAnchor.lab_anchor`` extends the Hb upper bound to a post-order draw.
 
     Pins the contract the divergence-fix follow-up needs (see
     ``docs/handoff-hb-anchor-unification``): when the shared resolver anchors
     the Hb on a draw minutes *after* REQTIME, that draw is what routed the
-    case to the LLM. Without ``hb_anchor`` the default ``<= order_datetime``
+    case to the LLM. Without ``lab_anchor`` the default ``<= order_datetime``
     window drops it and the model can't cite the value that triggered review.
     """
 
@@ -834,10 +834,10 @@ class TestHbFallbackAnchor:
             hn_hash="hn-aaa",
             an_hash="an-bbb",
             products=("LPRC",),
-            hb_anchor=ANCHOR_DT + timedelta(hours=hb_offset_hours),
+            lab_anchor=ANCHOR_DT + timedelta(hours=hb_offset_hours),
         )
 
-    def test_post_order_hb_kept_when_hb_anchor_set(self) -> None:
+    def test_post_order_hb_kept_when_lab_anchor_set(self) -> None:
         # The fallback-anchored draw (+5 min) is the trigger; it must appear.
         bundle = _build_minimal(
             anchor=self._anchor_with_hb(hb_offset_hours=5.0 / 60.0),
@@ -846,13 +846,13 @@ class TestHbFallbackAnchor:
         labs = _items_by_source(bundle, "Lab")
         assert len(labs) == 1
 
-    def test_post_order_hb_still_dropped_without_hb_anchor(self) -> None:
+    def test_post_order_hb_still_dropped_without_lab_anchor(self) -> None:
         # Same draw, default anchor (no override): original window applies.
         bundle = _build_minimal(hb_history=(_hb(offset_hours=5.0 / 60.0, value=10.0),))
         assert _items_by_source(bundle, "Lab") == ()
 
-    def test_draw_after_hb_anchor_dropped(self) -> None:
-        # hb_anchor is the upper bound, not an open door to all post-order
+    def test_draw_after_lab_anchor_dropped(self) -> None:
+        # lab_anchor is the upper bound, not an open door to all post-order
         # labs: a draw later than the resolved anchor is still response-phase.
         bundle = _build_minimal(
             anchor=self._anchor_with_hb(hb_offset_hours=5.0 / 60.0),
@@ -860,7 +860,7 @@ class TestHbFallbackAnchor:
         )
         assert _items_by_source(bundle, "Lab") == ()
 
-    def test_pre_order_history_still_kept_with_hb_anchor(self) -> None:
+    def test_pre_order_history_still_kept_with_lab_anchor(self) -> None:
         # Extending the upper bound must not evict legitimate prior draws.
         bundle = _build_minimal(
             anchor=self._anchor_with_hb(hb_offset_hours=5.0 / 60.0),
@@ -3013,6 +3013,25 @@ class TestPlateletCountTrend:
         # evidence — excluded, same as post-order Hb.
         bundle = _build_minimal(platelet_history=(_plt(offset_hours=+3, value=30.0),))
         assert [it for it in bundle.items if it.source == "Lab"] == []
+
+    def test_count_drawn_before_dispense_kept_when_lab_anchor_set(self) -> None:
+        # Clinician review 2026-11-09: the order is judged on the count drawn
+        # before dispense. That count sits after the request time, so the
+        # bundle must still show it or the LLM cannot cite the deciding value.
+        bundle = _build_minimal(
+            anchor=OrderAnchor(
+                order_datetime=ANCHOR_DT,
+                hn_hash="hn-aaa",
+                an_hash="an-bbb",
+                products=("LPPC",),
+                lab_anchor=ANCHOR_DT + timedelta(hours=2),
+            ),
+            platelet_history=(_plt(offset_hours=+2, value=30.0),),
+        )
+        lab_values = [
+            it.payload["value_k_ul"] for it in bundle.items if it.source == "Lab"
+        ]
+        assert lab_values == [30.0]
 
     def test_empty_platelet_history_is_byte_identical(self) -> None:
         # The load-bearing byte-identity guarantee: an RBC-shaped bundle built

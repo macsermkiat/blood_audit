@@ -156,6 +156,7 @@ from bba.hb_lookup import (
     parse_hb_value,
     resolve_evidence_anchor,
     resolve_hb_with_fallback,
+    resolve_lab_anchor,
 )
 from bba.platelet_classifier import classify_platelet
 from bba.platelet_classifier.models import PlateletClassifierInputs
@@ -1554,13 +1555,15 @@ def main() -> None:
             if not _platelet_llm_enabled():
                 continue
             plt_obs = _plt_observations(lab, order.an)
+            plt_lab_anchor = resolve_lab_anchor(
+                order_datetime=order.order_datetime,
+                candidates=candidates_by_reqno.get(order.reqno, []),
+            ).anchor_utc
             plt_result = lookup_platelet(
                 observations=plt_obs,
-                anchor_utc=order.order_datetime,
+                anchor_utc=plt_lab_anchor,
             )
-            plt_projected = project_24h(
-                observations=plt_obs, anchor_utc=order.order_datetime
-            )
+            plt_projected = project_24h(observations=plt_obs, anchor_utc=plt_lab_anchor)
             # The evidence bundle (below) is built for EVERY platelet order,
             # including those with no usable count, so the returns short-circuit
             # can screen returns-first with the bundle's windowed peri-op — the
@@ -1671,6 +1674,10 @@ def main() -> None:
                         hn_hash=hn_hash,
                         an_hash=an_hash,
                         products=order.products_ordered,
+                        lab_anchor=plt_result.datetime_utc
+                        if plt_result.datetime_utc is not None
+                        and plt_result.datetime_utc > order.order_datetime
+                        else None,
                     ),
                     component="platelet",
                     diagnoses=plt_diagnoses,
@@ -1914,14 +1921,17 @@ def main() -> None:
         hb_obs = _hb_observations(lab, order.an)
         hb, _hb_anchor_display, _hb_anchor_reason = resolve_hb_with_fallback(
             observations=hb_obs,
-            order_datetime=ev_anchor,
+            order_datetime=resolve_lab_anchor(
+                order_datetime=order.order_datetime,
+                candidates=candidates_by_reqno.get(order.reqno, []),
+            ).anchor_utc,
             candidates=candidates_by_reqno.get(order.reqno, []),
             not_before_utc=_last_rbc_order_before(
                 rbc_orders_by_an, order.an, ev_anchor
             ),
         )
-        # When the resolver anchored on a post-anchor draw (the fallback
-        # ladder), that draw is the Hb that routed this case to the LLM. Carry
+        # When the deciding Hb is a post-anchor draw (read at dispense time, or
+        # via the fallback ladder), that draw is the Hb that routed this case. Carry
         # its timestamp so the evidence bundle's Hb upper bound includes it;
         # otherwise the model adjudicates without the triggering value. None
         # for the order-time path keeps the original pre-anchor-only window.
@@ -2114,7 +2124,7 @@ def main() -> None:
                     hn_hash=hn_hash,
                     an_hash=an_hash,
                     products=order.products_ordered,
-                    hb_anchor=hb_bundle_anchor,
+                    lab_anchor=hb_bundle_anchor,
                     window_anchor=ev_anchor if reanchored else None,
                 ),
                 diagnoses=diagnoses,

@@ -65,6 +65,7 @@ from bba.hb_lookup import (
     parse_hb_value,
     resolve_evidence_anchor,
     resolve_hb_with_fallback,
+    resolve_lab_anchor,
 )
 from bba.ingest.date_parser import parse_kcmh_english_date
 from bba.ingest.models import ParsedTimeOfDay
@@ -217,6 +218,7 @@ REPORT_FIELDNAMES = [
     "component",
     "platelet_count_k_ul",
     "platelet_freshness",
+    "platelet_anchor_datetime_local",
 ]
 
 # Returns-ledger disposition columns (spec #119, ticket #120). Appended to the
@@ -1285,11 +1287,15 @@ def main() -> None:
             usetype_values_by_hn_reqno.get(((order.hn or "").strip(), order.reqno), [])
         )
         # --- Platelet path (Phase 2, component="platelet") ---
+        lab_anchor = resolve_lab_anchor(
+            order_datetime=order.order_datetime,
+            candidates=candidates_by_reqno.get(order.reqno, []),
+        )
         if order.component == "platelet":
             plt_obs = _build_platelet_observations(lab, order.an)
             plt_result = lookup_platelet(
                 observations=plt_obs,
-                anchor_utc=order.order_datetime,
+                anchor_utc=lab_anchor.anchor_utc,
             )
             # Returns-ledger short-circuit FIRST (mirror pipeline.run_pipeline's
             # platelet branch): an all-returned platelet order skips the platelet
@@ -1352,6 +1358,7 @@ def main() -> None:
                 "component": "platelet",
                 "platelet_count_k_ul": plt_result.value_k_ul,
                 "platelet_freshness": plt_result.freshness,
+                "platelet_anchor_datetime_local": lab_anchor.display,
                 "classification": plt_classification,
                 "rationale": plt_rationale,
             }
@@ -1408,10 +1415,10 @@ def main() -> None:
 
         # --- Red-cell path (Phase 1, component="red_cell") ---
         # Reserve-ahead elective orders are crossmatched days before transfusion;
-        # re-anchor the Hb lookback (and the LLM gate's evidence windows) onto
-        # the issue datetime so the op-day Hb is what the order is judged on.
-        # Cohort, procedure proximity and the classifier itself keep the REQ
-        # order anchor — those encode the order-decision context, not evidence.
+        # re-anchor the LLM gate's evidence windows onto the issue datetime. The
+        # Hb itself is read at lab_anchor (dispense time). Cohort, procedure
+        # proximity and the classifier keep the REQ order anchor: those encode
+        # the order-decision context, not evidence.
         evidence_anchor = resolve_evidence_anchor(
             order_datetime=order.order_datetime,
             candidates=candidates_by_reqno.get(order.reqno, []),
@@ -1419,9 +1426,11 @@ def main() -> None:
         hb_obs = _build_hb_observations(lab, order.an)
         hb, hb_anchor_display, hb_anchor_reason = resolve_hb_with_fallback(
             observations=hb_obs,
-            order_datetime=evidence_anchor.anchor_utc,
+            order_datetime=lab_anchor.anchor_utc,
             candidates=candidates_by_reqno.get(order.reqno, []),
         )
+        if hb_anchor_reason == "order_datetime":
+            hb_anchor_display, hb_anchor_reason = lab_anchor.display, lab_anchor.reason
         op_events = _build_op_events(
             iptsumoprt, ipddchsumoprt, incpt, optract_dict, icd9_dict, order.an
         )

@@ -668,6 +668,28 @@ def test_platelet_case_shows_the_count_not_the_hb_anchor(
     assert "data-component='platelet'" in rendered
 
 
+def test_platelet_count_read_at_dispense_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Clinician review 2026-11-09: the count is read at dispense time, so the
+    # page must say which moment the count belongs to.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN1,P1,AN1,platelet\n",
+        report_csv=(
+            "reqno,classification,rationale,component,platelet_count_k_ul,"
+            "platelet_freshness,platelet_anchor_datetime_local\n"
+            "P1,NEEDS_REVIEW,plt_defer_llm,platelet,11.0,fresh,2025-04-23 15:14\n"
+        ),
+        llm_json="[]",
+    ).decode()
+
+    assert "Platelet count @ dispense 2025-04-23 15:14:" in rendered
+
+
 def test_page_title_is_component_neutral_when_platelets_present(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

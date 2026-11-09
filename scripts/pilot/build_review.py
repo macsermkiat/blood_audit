@@ -958,8 +958,10 @@ def _platelet_meta_items(det: dict[str, str]) -> list[str]:
         count_disp = f"{count_k} ×10³/µL ({per_ul} /µL)"
     else:
         count_disp = "—"
+    dispense = (det.get("platelet_anchor_datetime_local") or "").strip()
+    read_at = f"dispense {dispense}" if dispense else "order"
     return [
-        f"<div><b>Platelet count @ order:</b> {esc(count_disp)} "
+        f"<div><b>Platelet count @ {esc(read_at)}:</b> {esc(count_disp)} "
         f"({esc(det.get('platelet_freshness') or '—')})</div>",
     ]
 
