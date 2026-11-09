@@ -137,7 +137,7 @@ _RATIONALE_LABELS: dict[str, str] = {
     "plt_defer_llm": "Platelet count on file — no deterministic verdict; indication judged by the LLM",
     "plt_missing_defer_llm": "No usable platelet count — indication judged by the LLM",
     "plt_missing": "No platelet count in the 7-day pre-order window",
-    "plt_ge_100": "Platelet count ≥ 100,000 /µL — above every policy threshold",
+    "plt_ge_100": "Platelet count ≥ 100,000 /µL — screening flag, not a verdict: above every count threshold, so only active bleeding can justify it; the LLM verdict decides",
     "plt_lt_10_heme_prophylaxis": "Fresh count ≤ 10,000 /µL on a heme-malignancy / chemotherapy admission with no withhold population — prophylaxis auto-clear",
     "hb_lt_7_universal": "Hb ≤ 7.0 g/dL — at or below the universal threshold; no bypass required",
     "hb_lt_threshold": "Hb at or below the cohort-specific threshold",
@@ -2588,13 +2588,17 @@ def main() -> None:
         )
         glossary_appropriate = (
             "Order meets evidence-based indications. RBC: Hb below threshold or "
-            "qualifying bypass. Platelet: count below the policy threshold for a "
-            "documented indication (procedure, active bleeding, chemo/HSCT or "
-            "consumptive thrombocytopenia prophylaxis)."
+            "qualifying bypass. Platelet: documented active bleeding at any count, "
+            "or a count at or below the policy threshold for another documented "
+            "indication (procedure, chemo/HSCT or consumptive thrombocytopenia "
+            "prophylaxis)."
         )
         glossary_potentially = (
-            "RBC: Hb above threshold and no qualifying bypass. Platelet: count "
-            "≥ 100,000 /µL, above every policy threshold. Warrants clinician review."
+            "Screening flag from the deterministic pre-check, not a final verdict; "
+            "the LLM verdict beside it is the audit's answer. RBC: Hb above "
+            "threshold and no qualifying bypass. Platelet: count ≥ 100,000 /µL, "
+            "above every count threshold, so only documented active bleeding can "
+            "justify it."
         )
         glossary_excluded = (
             "Case excluded from audit scope (e.g. paediatric, hemoglobinopathy, "

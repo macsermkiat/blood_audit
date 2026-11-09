@@ -844,7 +844,8 @@ def test_platelet_page_explains_platelet_codes_and_verdicts(
 
     assert "<dt>plt_defer_llm</dt>" in rendered
     assert "<dt>plt_lt_10_heme_prophylaxis</dt>" in rendered
-    assert "Platelet: count below the policy threshold" in rendered
+    assert "Platelet: documented active bleeding at any count" in rendered
+    assert "Screening flag from the deterministic pre-check" in rendered
     assert "non-RBC product" not in rendered
     # The verdict box resolves the code to its label instead of a bare slug.
     assert "indication judged by the LLM" in rendered
