@@ -1437,7 +1437,7 @@ def main() -> None:
         med_events = _build_med_events(med, order.an)
         crystalloid_events = tuple(m for m in med_events if _is_crystalloid(m.drug))
         crystalloid_liters = total_crystalloid_liters(
-            crystalloid_events, order.order_datetime
+            crystalloid_events, lab_anchor.anchor_utc
         )
         anc = _latest_anc(lab, order.an, order.order_datetime)
 

@@ -139,3 +139,21 @@ class TestPilotTransfusionCutoff:
             mod._last_rbc_order_before({"AN1": [older, ANCHOR]}, "AN1", ANCHOR) is None
         )
         assert mod._last_rbc_order_before({}, "AN1", ANCHOR) is None
+
+        # Clinician review 2026-11-09: the Hb is read at dispense time, after
+        # the order. The order being judged is not an earlier transfusion; an
+        # order placed between it and its dispense time is.
+        dispense = ANCHOR + timedelta(hours=5)
+        between = ANCHOR + timedelta(hours=1)
+        assert (
+            mod._last_rbc_order_before(
+                {"AN1": [ANCHOR]}, "AN1", dispense, own_order_utc=ANCHOR
+            )
+            is None
+        )
+        assert (
+            mod._last_rbc_order_before(
+                {"AN1": [ANCHOR, between]}, "AN1", dispense, own_order_utc=ANCHOR
+            )
+            == between
+        )

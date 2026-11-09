@@ -116,7 +116,7 @@ class TestHardSignalCoversIt:
 
 
 def test_terminal_line_counts_indication_eight() -> None:
-    assert "no indication 4–8 at or below its threshold" in _prompt()
+    assert "no indication 4–6 or 8 at or below its threshold" in _prompt()
 
 
 # --- Fifth hard signal (Codex on the PR) -------------------------------------

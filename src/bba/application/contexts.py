@@ -369,7 +369,7 @@ def build_contexts(
                         )
                     )
                 ),
-                order.order_datetime,
+                lab_anchor,
             ),
             hn_hash=hn_hash,
             an_hash=an_hash,

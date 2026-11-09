@@ -274,12 +274,15 @@ _REVIEW_REASON_LABELS: dict[str, str] = {
 
 _OVERRIDE_WHY: dict[str, str] = {
     "llm_overclear_asserted_inappropriate": (
-        "The audit accepts an LLM clear of a gray-zone or high-Hb order only "
-        "with Hb at or below 7.0 g/dL, an MTP, a recorded intra-operative "
-        "transfusion or major operative blood loss, or a bleed over 300 mL or "
-        "marked life-threatening. A cited ACS, documented instability or Hb at "
-        "or below the cohort floor sends the order to human review instead. "
-        "The evidence the model cited grounded none of these"
+        "The over-clear guardrail accepts an LLM clear of a withheld order only "
+        "on a structured signal (Hb at or below 7.0 g/dL, an MTP, a recorded "
+        "intra-operative transfusion or major operative blood loss) or a cited "
+        "bleed the model is confident in (0.8 or more) that is over 300 mL or "
+        "marked life-threatening, from the current episode and not melena. A "
+        "cited ACS, instability with bleeding or fluid-refractory shock, or a "
+        "SUB_THRESHOLD_HB citation whose Hb really is at or below the cohort "
+        "floor sends the order to human review instead. This order had none of "
+        "these"
     ),
     "llm_native_review_asserted_inappropriate": (
         "The model found no hard indication and no qualifying bleed, and the "

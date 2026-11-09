@@ -1607,8 +1607,11 @@ class TestRbcPromptHashGolden:
     # rule starts ABOVE the floor. Blessed by
     # tests/unit/test_prompt_rulings_2026_09_27.py and
     # test_at_floor_hb_is_sub_threshold.
+    # Re-pinned for the 2026-11-09 clinician review: the shared indication
+    # vocabulary adds LAB TIMING (labs read at the dispense time). Blessed by
+    # tests/unit/test_prompt_rulings_2026_11_09.py.
     RBC_HB_7_10_75_EMPTY_EVIDENCE = (
-        "fa3b81bea806c6d6271436eba588aec9b2f314a1669f95aca830f493cf0fb8be"
+        "fd4e20017d4f02a406201142439c99d0e29ff812a7f91425377b9916dce8a283"
     )
     # Re-pinned for #93 boundary alignment: dispatch routes Hb >= 10.0 to this
     # template (engine ``hb_ge_10``), so its prose states the inclusive
@@ -1627,8 +1630,11 @@ class TestRbcPromptHashGolden:
     # SUB_THRESHOLD_HB definition and this template's 24 h-minimum sentence
     # now read "at or below" the floor. Blessed by
     # tests/unit/test_prompt_rulings_2026_09_27.py.
+    # Re-pinned for the 2026-11-09 clinician review: the shared indication
+    # vocabulary adds LAB TIMING (labs read at the dispense time). Blessed by
+    # tests/unit/test_prompt_rulings_2026_11_09.py.
     RBC_HB_GT_10_75_EMPTY_EVIDENCE = (
-        "49d8eacc797dae81c3b79ea931a4fd97497c3c963d14125cc8cf1eaae155fbdc"
+        "8ad2e1ef32cfa9d61a9455f3796f7229d617ae81bc9b23a973ca8fc176e3e645"
     )
 
     def test_hb_7_10_review_cohort_7_5_hash_is_pinned(self) -> None:

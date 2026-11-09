@@ -722,16 +722,22 @@ def _hash(s: str) -> str:
 
 
 def _last_rbc_order_before(
-    rbc_orders_by_an: dict[str, list[datetime]], an: str, order_utc: datetime
+    rbc_orders_by_an: dict[str, list[datetime]],
+    an: str,
+    order_utc: datetime,
+    *,
+    own_order_utc: datetime | None = None,
 ) -> datetime | None:
     """The most recent RBC order for this admission inside the 24 h before
     ``order_utc``, or None. Bounds the 24 h minimum Hb (issue #249): a low that
     an earlier transfusion already corrected must not make a later order
-    sub-threshold. An order is the best transfusion timestamp this leg has."""
+    sub-threshold. An order is the best transfusion timestamp this leg has.
+    ``order_utc`` is the lab anchor (dispense time), which can fall after the
+    order itself, so ``own_order_utc`` excludes the order being judged."""
     earlier = [
         t
         for t in rbc_orders_by_an.get(an, ())
-        if t < order_utc and order_utc - t <= timedelta(hours=24)
+        if t < order_utc and order_utc - t <= timedelta(hours=24) and t != own_order_utc
     ]
     return max(earlier) if earlier else None
 
@@ -1199,6 +1205,7 @@ def _annotate_platelet_lab(
     anchor_utc: datetime,
     is_closest: bool,
     projection_line: str | None = None,
+    anchor_label: str = "order",
 ) -> str:
     """Append the count's age (and the trigger marker) to a platelet Lab chunk.
 
@@ -1209,10 +1216,10 @@ def _annotate_platelet_lab(
     """
     flags: list[str] = []
     if is_closest:
-        flags.append("closest pre-order platelet count")
+        flags.append(f"closest pre-{anchor_label} platelet count")
     if timestamp_utc is not None:
         hrs = (anchor_utc - timestamp_utc).total_seconds() / 3600.0
-        flags.append(f"{hrs:.1f}h before order")
+        flags.append(f"{hrs:.1f}h before {anchor_label}")
     annotated = f"{text}  [{'; '.join(flags)}]" if flags else text
     if is_closest and projection_line:
         return f"{annotated}\n{projection_line}"
@@ -1853,7 +1860,12 @@ def main() -> None:
                     text = _annotate_platelet_lab(
                         text,
                         timestamp_utc=item.timestamp_utc,
-                        anchor_utc=order.order_datetime,
+                        anchor_utc=plt_lab_anchor,
+                        anchor_label=(
+                            "dispense"
+                            if plt_lab_anchor != order.order_datetime
+                            else "order"
+                        ),
                         is_closest=item.id == closest_plt_id,
                         projection_line=(
                             _render_platelet_projection(plt_projected)
@@ -1918,16 +1930,23 @@ def main() -> None:
         # keep "order", so their evidence text is byte-identical to before.
         anchor_label = "transfusion" if reanchored else "order"
 
+        # Hb is read, flagged and guardrail-checked at one moment: the lab
+        # anchor (dispense time; clinician review 2026-11-09).
+        lab_dt = resolve_lab_anchor(
+            order_datetime=order.order_datetime,
+            candidates=candidates_by_reqno.get(order.reqno, []),
+        ).anchor_utc
+        hb_label = anchor_label if lab_dt == ev_anchor else "dispense"
         hb_obs = _hb_observations(lab, order.an)
         hb, _hb_anchor_display, _hb_anchor_reason = resolve_hb_with_fallback(
             observations=hb_obs,
-            order_datetime=resolve_lab_anchor(
-                order_datetime=order.order_datetime,
-                candidates=candidates_by_reqno.get(order.reqno, []),
-            ).anchor_utc,
+            order_datetime=lab_dt,
             candidates=candidates_by_reqno.get(order.reqno, []),
             not_before_utc=_last_rbc_order_before(
-                rbc_orders_by_an, order.an, ev_anchor
+                rbc_orders_by_an,
+                order.an,
+                lab_dt,
+                own_order_utc=order.order_datetime,
             ),
         )
         # When the deciding Hb is a post-anchor draw (read at dispense time, or
@@ -2002,9 +2021,7 @@ def main() -> None:
         )
 
         crystalloid_events = tuple(m for m in med_events if _is_crystalloid(m.drug))
-        crystalloid_liters = total_crystalloid_liters(
-            crystalloid_events, order.order_datetime
-        )
+        crystalloid_liters = total_crystalloid_liters(crystalloid_events, lab_dt)
 
         vitals_notes = vitals_notes_for(progress, focus, order.an, ev_anchor)
         vitals = extract_vitals(anchor=ev_anchor, notes=vitals_notes)
@@ -2051,7 +2068,7 @@ def main() -> None:
         # backward upper bound (ev_anchor) hides the peri-transfusion drop the
         # case is actually about. Widen the upper bound to the end of op-day +N
         # so the LLM sees the full trajectory. The builder mirrors this via
-        # OrderAnchor.hb_anchor (passed below). Non-reanchored orders keep the
+        # OrderAnchor.lab_anchor (passed below). Non-reanchored orders keep the
         # backward-only bound, so their bundles stay byte-identical.
         if reanchored:
             hb_op_day_hi = datetime.combine(
@@ -2153,13 +2170,13 @@ def main() -> None:
         min24_id: str | None = None
         min48_id: str | None = None
         if hb_payloads:
-            pre = [(i, v, t) for i, v, t in hb_payloads if t <= ev_anchor]
+            pre = [(i, v, t) for i, v, t in hb_payloads if t <= lab_dt]
             if pre:
                 closest_id = max(pre, key=lambda x: x[2])[0]
-                w24 = [x for x in pre if (ev_anchor - x[2]) <= timedelta(hours=24)]
+                w24 = [x for x in pre if (lab_dt - x[2]) <= timedelta(hours=24)]
                 if w24:
                     min24_id = min(w24, key=lambda x: x[1])[0]
-                w48 = [x for x in pre if (ev_anchor - x[2]) <= timedelta(hours=48)]
+                w48 = [x for x in pre if (lab_dt - x[2]) <= timedelta(hours=48)]
                 if w48:
                     min48_id = min(w48, key=lambda x: x[1])[0]
 
@@ -2170,26 +2187,26 @@ def main() -> None:
                 continue
             if item.id in (closest_id, min24_id, min48_id):
                 ts = item.timestamp_utc
-                hrs = (ev_anchor - ts).total_seconds() / 3600.0 if ts else None
+                hrs = (lab_dt - ts).total_seconds() / 3600.0 if ts else None
                 flags: list[str] = []
                 if item.id == closest_id:
-                    flags.append(f"closest pre-{anchor_label} Hb")
+                    flags.append(f"closest pre-{hb_label} Hb")
                 if item.id == min24_id:
-                    flags.append(f"minimum in 24h pre-{anchor_label}")
+                    flags.append(f"minimum in 24h pre-{hb_label}")
                 if item.id == min48_id and item.id != min24_id:
-                    flags.append(f"minimum in 48h pre-{anchor_label}")
+                    flags.append(f"minimum in 48h pre-{hb_label}")
                 if hrs is not None:
-                    flags.append(f"{hrs:.1f}h before {anchor_label}")
+                    flags.append(f"{hrs:.1f}h before {hb_label}")
                 text = f"{text}  [{'; '.join(flags)}]"
             elif item.source == "Lab" and "value_g_dl" in dict(item.payload):
                 ts = item.timestamp_utc
-                hrs = (ev_anchor - ts).total_seconds() / 3600.0 if ts else None
+                hrs = (lab_dt - ts).total_seconds() / 3600.0 if ts else None
                 if hrs is not None:
                     # Re-anchored bundles include op-day draws AFTER the
                     # transfusion (intra-op nadir, morning-after); render those
                     # as "after" instead of a negative "before".
                     when = "before" if hrs >= 0 else "after"
-                    text = f"{text}  [{abs(hrs):.1f}h {when} {anchor_label}]"
+                    text = f"{text}  [{abs(hrs):.1f}h {when} {hb_label}]"
             chunks.append(
                 EvidenceChunk(
                     evidence_id=item.id,
@@ -2259,10 +2276,19 @@ def main() -> None:
 
         guidance_lines = [
             "Hb weighting policy for this audit:",
-            "- The Hb value CLOSEST to the order datetime is the primary trigger.",
-            "- The LOWEST Hb in the 24h-pre-order window dominates the indication call.",
+            f"- The Hb value CLOSEST to the {hb_label} datetime is the primary trigger.",
+            f"- The LOWEST Hb in the 24h-pre-{hb_label} window dominates the indication call.",
             "- A 48h-window minimum is supportive but not primary.",
-            "- Hb values >48h before the order are background trend only.",
+            f"- Hb values >48h before the {hb_label} are background trend only.",
+            *(
+                [
+                    "- 'dispense' is when the blood bank issued this order's blood.",
+                    "  It is the moment the order is judged at: an Hb drawn between",
+                    "  the order and dispense counts as pre-dispense.",
+                ]
+                if hb_label == "dispense"
+                else []
+            ),
             "Each Hb chunk above carries a bracketed flag for these positions.",
             "",
             "REASONING REQUIREMENT — transparency about non-primary Hb values:",

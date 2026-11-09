@@ -35,7 +35,7 @@ class TestActiveBleedingClearsAtAnyCount:
 
     def test_100k_ceiling_names_bleeding_as_the_exception(self) -> None:
         prompt = _platelet()
-        assert "except active bleeding (indication 7)" in prompt
+        assert "Active bleeding (indication 7) has no count threshold" in prompt
 
     def test_bleeding_exception_does_not_reach_withhold_populations(self) -> None:
         prompt = _platelet()
@@ -55,3 +55,33 @@ class TestCentralVenousCatheterIsAProcedure:
 
     def test_any_central_venous_catheter_counts(self) -> None:
         assert "any central venous catheter insertion" in _platelet()
+
+
+class TestLabTimingIsTheDispenseTime:
+    """Labs are read at dispense time (same review), so the prompt must define
+    'before the order' for labs the same way, or the model judges on a
+    different Hb from the one the guardrail checks."""
+
+    def test_rbc_prompts_define_lab_timing(self) -> None:
+        from bba.prompt_builder.system_prompt import system_prompt_for
+
+        for mode in ("HB_7_10_REVIEW", "HB_GT_10_OVERRIDE"):
+            prompt = system_prompt_for(task_mode=mode, cohort_threshold=7.0)
+            assert "LAB TIMING" in prompt
+            assert "the dispense time" in prompt
+
+    def test_platelet_prompt_defines_lab_timing(self) -> None:
+        prompt = _platelet()
+        assert "LAB TIMING" in prompt
+        assert "pre-order counts" not in prompt
+
+
+class TestPlateletWordingFollowUps:
+    def test_bleeding_still_needs_grounding(self) -> None:
+        prompt = _platelet()
+        assert "Active bleeding (indication 7) has no count threshold" in prompt
+        assert "must still be grounded in the notes" in prompt
+
+    def test_terminal_line_drops_indication_7_threshold(self) -> None:
+        prompt = _platelet()
+        assert "no indication 4–6 or 8 at or below its threshold" in prompt
