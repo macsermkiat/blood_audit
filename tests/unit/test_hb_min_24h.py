@@ -161,3 +161,69 @@ class TestPilotTransfusionCutoff:
             )
             == sibling_dispensed_earlier
         )
+
+
+def _pilot_llm_leg():
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    pilot = Path(__file__).resolve().parents[2] / "scripts" / "pilot"
+    if str(pilot) not in sys.path:
+        sys.path.insert(0, str(pilot))
+    spec = importlib.util.spec_from_file_location(
+        "pilot_run_llm_leg_trigger", pilot / "run_llm_leg.py"
+    )
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class TestEvidenceSeesWhatTheGuardrailJudges:
+    """Third review of the dispense change (2026-11-10): the model must be
+    shown, and flagged on, every Hb draw the replay guardrail reads."""
+
+    def test_bundle_reaches_a_poct_draw_between_order_and_dispense(self) -> None:
+        # Order at -3 h, dispense at 0. HEMATOLOGY 9.1 at -30 h is the
+        # current value, but the 24 h minimum is a POCT 7.4 at -1 h. The
+        # bundle bound must reach the dispense time, not stop at the
+        # order or the older HEMATOLOGY draw.
+        mod = _pilot_llm_leg()
+        order = ANCHOR - timedelta(hours=3)
+        hematology_draw = ANCHOR - timedelta(hours=30)
+        assert mod._hb_bundle_upper(ANCHOR, hematology_draw, order) == ANCHOR
+
+    def test_bundle_window_unchanged_when_nothing_is_after_it(self) -> None:
+        mod = _pilot_llm_leg()
+        assert mod._hb_bundle_upper(ANCHOR, ANCHOR - timedelta(hours=2), ANCHOR) is None
+
+    def test_fallback_hb_is_flagged_at_the_anchor_that_supplied_it(self) -> None:
+        from bba.hb_lookup import (
+            AnchorCandidate,
+            resolve_hb_with_fallback,
+            trigger_draws,
+        )
+
+        mod = _pilot_llm_leg()
+        bank = AnchorCandidate(
+            anchor_utc=ANCHOR + timedelta(hours=3),
+            display="bank",
+            reason="blood_bank_visit_fallback",
+        )
+        later = HbObservation(
+            value_g_dl=6.8,
+            datetime_utc=ANCHOR + timedelta(hours=2),
+            source="HEMATOLOGY",
+            item_no=7,
+        )
+        hb, display, reason = resolve_hb_with_fallback(
+            observations=[later], order_datetime=ANCHOR, candidates=[bank]
+        )
+        moment = mod._hb_trigger_anchor(ANCHOR, reason, display, [bank])
+        draws = trigger_draws(observations=[later], anchor_utc=moment)
+
+        assert moment == bank.anchor_utc
+        assert draws.current == later
+        assert hb.value_g_dl == draws.current.value_g_dl

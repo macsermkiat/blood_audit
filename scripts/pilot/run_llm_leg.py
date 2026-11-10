@@ -150,6 +150,7 @@ from bba.evidence_bundle_builder import (
     build_evidence_bundle,
 )
 from bba.hb_lookup import (
+    AnchorCandidate,
     EvidenceAnchor,
     HbLookupResult,
     HbObservation,
@@ -738,6 +739,38 @@ def _last_rbc_order_before(
         if t < order_utc and order_utc - t <= timedelta(hours=24)
     ]
     return max(earlier) if earlier else None
+
+
+def _hb_trigger_anchor(
+    lab_dt: datetime,
+    reason: str,
+    display: str,
+    candidates: Sequence[AnchorCandidate],
+) -> datetime:
+    """The moment lookup_hb actually read the Hb from.
+
+    ``lab_dt`` when the primary lookup hit (reason ``order_datetime``);
+    otherwise the fallback candidate that supplied the Hb because nothing sat
+    in the 7 days before ``lab_dt``. The evidence flags are computed at this
+    same moment so they name the draws the guardrail judges."""
+    if reason == "order_datetime":
+        return lab_dt
+    return next(
+        c.anchor_utc for c in candidates if c.reason == reason and c.display == display
+    )
+
+
+def _hb_bundle_upper(
+    lab_dt: datetime, deciding_draw: datetime | None, window_anchor: datetime
+) -> datetime | None:
+    """Upper bound for the bundle's Hb history, or None to keep the window.
+
+    Every draw lookup_hb can judge (current, 24 h minimum) sits at or before
+    the later of ``lab_dt`` and the deciding draw. When that is after the
+    window anchor the bundle must reach it, or the model cannot see a value
+    the guardrail reads (third review of the dispense change)."""
+    upper = max(t for t in (lab_dt, deciding_draw) if t is not None)
+    return upper if upper > window_anchor else None
 
 
 def _hb_observations(lab: list[dict[str, str]], an: str) -> list[HbObservation]:
@@ -1950,22 +1983,19 @@ def main() -> None:
         hb_label = anchor_label if lab_dt == ev_anchor else "dispense"
         hb_obs = _hb_observations(lab, order.an)
         hb_not_before = _last_rbc_order_before(rbc_orders_by_an, order.an, lab_dt)
-        hb, _hb_anchor_display, _hb_anchor_reason = resolve_hb_with_fallback(
+        hb, hb_anchor_display, hb_anchor_reason = resolve_hb_with_fallback(
             observations=hb_obs,
             order_datetime=lab_dt,
             candidates=candidates_by_reqno.get(order.reqno, []),
             not_before_utc=hb_not_before,
         )
-        # When the deciding Hb is a post-anchor draw (read at dispense time, or
-        # via the fallback ladder), that draw is the Hb that routed this case. Carry
-        # its timestamp so the evidence bundle's Hb upper bound includes it;
-        # otherwise the model adjudicates without the triggering value. None
-        # for the order-time path keeps the original pre-anchor-only window.
-        hb_bundle_anchor = (
-            hb.datetime_utc
-            if hb.datetime_utc is not None and hb.datetime_utc > ev_anchor
-            else None
+        hb_trigger_anchor = _hb_trigger_anchor(
+            lab_dt,
+            hb_anchor_reason,
+            hb_anchor_display,
+            candidates_by_reqno.get(order.reqno, []),
         )
+        hb_bundle_anchor = _hb_bundle_upper(lab_dt, hb.datetime_utc, ev_anchor)
 
         op_events = _op_events(
             iptsumoprt, ipddchsumoprt, incpt, optract_dict, icd9_dict, order.an
@@ -2175,11 +2205,29 @@ def main() -> None:
             if it.source == "Lab" and "value_g_dl" in dict(it.payload)
         }
         draws = trigger_draws(
-            observations=hb_obs, anchor_utc=lab_dt, not_before_utc=hb_not_before
+            observations=hb_obs,
+            anchor_utc=hb_trigger_anchor,
+            not_before_utc=hb_not_before,
         )
         closest_id = hb_item_ids.get(draws.current.item_no) if draws.current else None
         min24_id = hb_item_ids.get(draws.min_24h.item_no) if draws.min_24h else None
         min48_id = hb_item_ids.get(draws.min_48h.item_no) if draws.min_48h else None
+        unflagged = [
+            name
+            for name, draw, flag_id in (
+                ("closest", draws.current, closest_id),
+                ("24h minimum", draws.min_24h, min24_id),
+                ("48h minimum", draws.min_48h, min48_id),
+            )
+            if draw is not None and flag_id is None
+        ]
+        if unflagged:
+            print(
+                f"WARNING {order.reqno}: Hb {', '.join(unflagged)} draw judged by "
+                "the guardrail is missing from the evidence bundle",
+                file=sys.stderr,
+            )
+        flag_label = hb_label if hb_trigger_anchor == lab_dt else "lookup time"
 
         chunks: list[EvidenceChunk] = []
         for item in bundle.items:
@@ -2191,13 +2239,14 @@ def main() -> None:
                 hrs = (lab_dt - ts).total_seconds() / 3600.0 if ts else None
                 flags: list[str] = []
                 if item.id == closest_id:
-                    flags.append(f"closest pre-{hb_label} Hb")
+                    flags.append(f"closest pre-{flag_label} Hb")
                 if item.id == min24_id:
-                    flags.append(f"minimum in 24h pre-{hb_label}")
+                    flags.append(f"minimum in 24h pre-{flag_label}")
                 if item.id == min48_id and item.id != min24_id:
-                    flags.append(f"minimum in 48h pre-{hb_label}")
+                    flags.append(f"minimum in 48h pre-{flag_label}")
                 if hrs is not None:
-                    flags.append(f"{hrs:.1f}h before {hb_label}")
+                    when = "before" if hrs >= 0 else "after"
+                    flags.append(f"{abs(hrs):.1f}h {when} {hb_label}")
                 text = f"{text}  [{'; '.join(flags)}]"
             elif item.source == "Lab" and "value_g_dl" in dict(item.payload):
                 ts = item.timestamp_utc
@@ -2280,7 +2329,19 @@ def main() -> None:
             f"- The Hb value CLOSEST to the {hb_label} datetime is the primary trigger.",
             f"- The LOWEST Hb in the 24h-pre-{hb_label} window dominates the indication call.",
             "- A 48h-window minimum is supportive but not primary.",
+            "- A laboratory (HEMATOLOGY) Hb outranks a point-of-care (POCT) Hb",
+            "  in the same window; the flags already follow that rule, so a",
+            "  flagged laboratory value can be older than an unflagged POCT one.",
             f"- Hb values >48h before the {hb_label} are background trend only.",
+            *(
+                [
+                    f"- No Hb was drawn in the 7 days before the {hb_label}, so the",
+                    "  audit reads the first Hb after it, at the 'lookup time'",
+                    "  (a later blood-bank time); the flags are relative to that.",
+                ]
+                if flag_label == "lookup time"
+                else []
+            ),
             *(
                 [
                     "- 'dispense' is when the blood bank issued this order's blood.",

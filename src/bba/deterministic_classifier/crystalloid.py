@@ -2,15 +2,17 @@
 
 The deterministic classifier's hemodilution rule (Round 1 B5) requires
 knowing how much crystalloid (NSS, LRS, RLS, Plasmalyte, D5W, …) was
-administered in the 4 h before the order anchor. The orchestrator
+administered in the 4 h before the Hb draw the order is judged on (only
+fluid given before a draw can dilute it; clinician review 2026-11-09 moved
+callers from the order time to the draw). The orchestrator
 derives that scalar from the MED.csv stream via
 :func:`total_crystalloid_liters` and passes it as
 ``ClassifierInputs.crystalloid_liters_prior_4h``.
 
 This helper is intentionally minimal: a thin sum-and-window utility that
 parses a unit-bearing dose string (``"1000 mL"`` / ``"1 L"`` / ``"500 cc"``)
-into liters and filters the events to the [order_datetime - window,
-order_datetime] interval. Drug-name → "is crystalloid?" classification
+into liters and filters the events to the [anchor_utc - window,
+anchor_utc] interval. Drug-name → "is crystalloid?" classification
 lives upstream in the MED-table reader; this helper trusts that the
 ``med_events`` passed in are already crystalloid-only.
 
@@ -27,7 +29,7 @@ from bba.cohort_detector import MedEvent
 
 CRYSTALLOID_WINDOW_HOURS: float = 4.0
 """PRD §6 hemodilution lookback window (hours): we sum crystalloid
-administrations in [order_datetime - 4 h, order_datetime]."""
+administrations in [anchor_utc - 4 h, anchor_utc]."""
 
 
 _DOSE_PATTERN = re.compile(
@@ -59,7 +61,7 @@ The lookahead is whitespace-tolerant so ``"500 mL / h"`` is also rejected.
 
 def total_crystalloid_liters(
     med_events: tuple[MedEvent, ...],
-    order_datetime: datetime,
+    anchor_utc: datetime,
     window_hours: float = CRYSTALLOID_WINDOW_HOURS,
 ) -> float:
     """Return total crystalloid volume (liters) administered in the window.
@@ -73,8 +75,9 @@ def total_crystalloid_liters(
       accepts mL / cc / L (case-insensitive) and returns 0.0 for rows
       whose dose cannot be parsed.
 
-    * ``order_datetime`` — tz-aware UTC order anchor. Events strictly
-      AFTER ``order_datetime`` are excluded. Events at-or-before are
+    * ``anchor_utc`` — tz-aware UTC time of the Hb draw being judged (the
+      order time when there is none). Events strictly AFTER ``anchor_utc``
+      are excluded. Events at-or-before are
       included iff they fall inside the window.
 
     * ``window_hours`` — defaults to :data:`CRYSTALLOID_WINDOW_HOURS`
@@ -85,10 +88,10 @@ def total_crystalloid_liters(
     :data:`bba.deterministic_classifier.HEMODILUTION_CRYSTALLOID_LITERS`
     (2.0 L) to decide whether the hemodilution bypass fires.
     """
-    window_start = order_datetime - timedelta(hours=window_hours)
+    window_start = anchor_utc - timedelta(hours=window_hours)
     total = 0.0
     for event in med_events:
-        if event.timestamp > order_datetime:
+        if event.timestamp > anchor_utc:
             continue
         if event.timestamp < window_start:
             continue
