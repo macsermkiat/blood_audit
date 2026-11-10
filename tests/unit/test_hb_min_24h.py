@@ -140,20 +140,24 @@ class TestPilotTransfusionCutoff:
         )
         assert mod._last_rbc_order_before({}, "AN1", ANCHOR) is None
 
-        # Clinician review 2026-11-09: the Hb is read at dispense time, after
-        # the order. The order being judged is not an earlier transfusion; an
-        # order placed between it and its dispense time is.
-        dispense = ANCHOR + timedelta(hours=5)
-        between = ANCHOR + timedelta(hours=1)
+        # Clinician review 2026-11-09: the map holds dispense times and the
+        # Hb is read at this order's own dispense. The order itself (at the
+        # anchor) never counts; a sibling counts only once its blood was
+        # dispensed before this one's, not merely ordered before it.
+        own_dispense = ANCHOR + timedelta(hours=4)
+        sibling_dispensed_later = ANCHOR + timedelta(hours=6)
+        sibling_dispensed_earlier = ANCHOR + timedelta(hours=2)
         assert (
             mod._last_rbc_order_before(
-                {"AN1": [ANCHOR]}, "AN1", dispense, own_order_utc=ANCHOR
+                {"AN1": [own_dispense, sibling_dispensed_later]}, "AN1", own_dispense
             )
             is None
         )
         assert (
             mod._last_rbc_order_before(
-                {"AN1": [ANCHOR, between]}, "AN1", dispense, own_order_utc=ANCHOR
+                {"AN1": [own_dispense, sibling_dispensed_earlier]},
+                "AN1",
+                own_dispense,
             )
-            == between
+            == sibling_dispensed_earlier
         )

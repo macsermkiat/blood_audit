@@ -103,10 +103,11 @@ _RBC_INDICATION_VOCABULARY: Final[str] = (
     "count only values from the most recent transfusion in the window onward: "
     "a low that a transfusion has already corrected does not qualify. An Hb "
     "exactly at {cohort_threshold} g/dL qualifies as sub-threshold.\n"
-    "LAB TIMING. For every lab rule, 'the order' means the dispense time "
-    "when the Hb chunks are flagged against 'dispense': the blood bank issued "
-    "the blood then, and an Hb drawn between the order and the dispense time "
-    "counts as before it.\n"
+    "LAB TIMING. For every lab rule, 'the order' means the moment the Hb "
+    "chunks are flagged against: the dispense time when they say 'dispense' "
+    "(the blood bank issued the blood then, and an Hb drawn between the order "
+    "and the dispense time counts as before it), or the transfusion time when "
+    "they say 'transfusion'.\n"
 )
 
 

@@ -23,6 +23,7 @@ Per PRD §3 and Round 2 E3:
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from bba.hb_lookup.models import (
@@ -90,26 +91,70 @@ def lookup_hb(
     )
 
 
-def _min_24h(
+def _window_min(
     before_anchor: Sequence[HbObservation],
     anchor_utc: datetime,
+    window_span: timedelta,
     not_before_utc: datetime | None,
-) -> float | None:
-    """Lowest Hb in the 24 h before the anchor, from ``not_before_utc`` onward.
+) -> HbObservation | None:
+    """Lowest Hb in ``window_span`` before the anchor, from ``not_before_utc``
+    onward.
 
     Same HEMATOLOGY-preferred source rule as :func:`_select_current`, so the
     minimum and the current value are read from the same instrument."""
     window = [
         o
         for o in before_anchor
-        if anchor_utc - o.datetime_utc <= _MIN_WINDOW
+        if anchor_utc - o.datetime_utc <= window_span
         and (not_before_utc is None or o.datetime_utc >= not_before_utc)
     ]
     if not window:
         return None
     hematology = [o for o in window if o.source == "HEMATOLOGY"]
     pool: Sequence[HbObservation] = hematology if hematology else window
-    return min(o.value_g_dl for o in pool)
+    return min(pool, key=lambda o: (o.value_g_dl, -o.datetime_utc.timestamp()))
+
+
+def _min_24h(
+    before_anchor: Sequence[HbObservation],
+    anchor_utc: datetime,
+    not_before_utc: datetime | None,
+) -> float | None:
+    lowest = _window_min(before_anchor, anchor_utc, _MIN_WINDOW, not_before_utc)
+    return lowest.value_g_dl if lowest is not None else None
+
+
+@dataclass(frozen=True)
+class TriggerDraws:
+    """The draws :func:`lookup_hb` judges an order on, as observations.
+
+    ``current`` and ``min_24h`` are exactly the draws behind
+    ``value_g_dl`` and ``min_24h_g_dl``; ``min_48h`` applies the same source
+    and cutoff rules over 48 h. Evidence flags shown to the model must name
+    these draws, or the model reasons on a value the guardrail never sees.
+    """
+
+    current: HbObservation | None
+    min_24h: HbObservation | None
+    min_48h: HbObservation | None
+
+
+def trigger_draws(
+    *,
+    observations: Sequence[HbObservation],
+    anchor_utc: datetime,
+    not_before_utc: datetime | None = None,
+) -> TriggerDraws:
+    """The current, 24 h-minimum and 48 h-minimum draws at ``anchor_utc``."""
+    before_anchor = [o for o in observations if o.datetime_utc <= anchor_utc]
+    in_lookback = [o for o in before_anchor if anchor_utc - o.datetime_utc < _LOOKBACK]
+    if not in_lookback:
+        return TriggerDraws(current=None, min_24h=None, min_48h=None)
+    return TriggerDraws(
+        current=_select_current(in_lookback),
+        min_24h=_window_min(before_anchor, anchor_utc, _MIN_WINDOW, not_before_utc),
+        min_48h=_window_min(before_anchor, anchor_utc, 2 * _MIN_WINDOW, not_before_utc),
+    )
 
 
 def _select_current(in_lookback: Sequence[HbObservation]) -> HbObservation:

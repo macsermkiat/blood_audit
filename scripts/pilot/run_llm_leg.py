@@ -157,6 +157,7 @@ from bba.hb_lookup import (
     resolve_evidence_anchor,
     resolve_hb_with_fallback,
     resolve_lab_anchor,
+    trigger_draws,
 )
 from bba.platelet_classifier import classify_platelet
 from bba.platelet_classifier.models import PlateletClassifierInputs
@@ -722,22 +723,19 @@ def _hash(s: str) -> str:
 
 
 def _last_rbc_order_before(
-    rbc_orders_by_an: dict[str, list[datetime]],
-    an: str,
-    order_utc: datetime,
-    *,
-    own_order_utc: datetime | None = None,
+    rbc_orders_by_an: dict[str, list[datetime]], an: str, order_utc: datetime
 ) -> datetime | None:
-    """The most recent RBC order for this admission inside the 24 h before
-    ``order_utc``, or None. Bounds the 24 h minimum Hb (issue #249): a low that
-    an earlier transfusion already corrected must not make a later order
-    sub-threshold. An order is the best transfusion timestamp this leg has.
-    ``order_utc`` is the lab anchor (dispense time), which can fall after the
-    order itself, so ``own_order_utc`` excludes the order being judged."""
+    """The most recent RBC dispense for this admission inside the 24 h before
+    ``order_utc`` (the order's own lab anchor), or None. Bounds the 24 h
+    minimum Hb (issue #249): a low that an earlier transfusion already
+    corrected must not make a later order sub-threshold. The map holds each
+    order's dispense time (its order time when none is recorded), the closest
+    this leg has to a transfusion time; the order being judged sits exactly at
+    ``order_utc`` and so never counts as its own earlier transfusion."""
     earlier = [
         t
         for t in rbc_orders_by_an.get(an, ())
-        if t < order_utc and order_utc - t <= timedelta(hours=24) and t != own_order_utc
+        if t < order_utc and order_utc - t <= timedelta(hours=24)
     ]
     return max(earlier) if earlier else None
 
@@ -1209,7 +1207,8 @@ def _annotate_platelet_lab(
 ) -> str:
     """Append the count's age (and the trigger marker) to a platelet Lab chunk.
 
-    Platelet analog of the RBC path's Hb flags: the closest pre-order count is
+    Platelet analog of the RBC path's Hb flags: the closest count before the
+    anchor (dispense, or the order without one) is
     the one the threshold rule applies to; older counts are trend context.
     ``projection_line`` (issue #237) rides on the closest count only, so it is
     citable under a real bundle id and read next to the trigger count.
@@ -1226,7 +1225,9 @@ def _annotate_platelet_lab(
     return annotated
 
 
-def _render_platelet_projection(projected_k_ul: float | None) -> str:
+def _render_platelet_projection(
+    projected_k_ul: float | None, anchor_label: str = "order"
+) -> str:
     """The evidence line for :func:`bba.platelet_lookup.project_24h` (issue #237).
 
     The replay guardrail decides "expected to fall to 10,000 /uL or below within 24
@@ -1235,7 +1236,7 @@ def _render_platelet_projection(projected_k_ul: float | None) -> str:
     if projected_k_ul is None:
         return (
             "Projected platelet count in 24 h: not computable (needs two counts "
-            "6 to 72 h apart in the 7 days before the order)"
+            f"6 to 72 h apart in the 7 days before the {anchor_label})"
         )
     return (
         "Projected platelet count in 24 h (straight line through the last two "
@@ -1539,7 +1540,12 @@ def main() -> None:
     rbc_orders_by_an: dict[str, list[datetime]] = {}
     for o in fr.included:
         if o.component != "platelet":
-            rbc_orders_by_an.setdefault(o.an, []).append(o.order_datetime)
+            rbc_orders_by_an.setdefault(o.an, []).append(
+                resolve_lab_anchor(
+                    order_datetime=o.order_datetime,
+                    candidates=candidates_by_reqno.get(o.reqno, []),
+                ).anchor_utc
+            )
 
     for order in fr.included:
         if ONLY_REQNOS and order.reqno not in ONLY_REQNOS:
@@ -1868,7 +1874,12 @@ def main() -> None:
                         ),
                         is_closest=item.id == closest_plt_id,
                         projection_line=(
-                            _render_platelet_projection(plt_projected)
+                            _render_platelet_projection(
+                                plt_projected,
+                                "dispense"
+                                if plt_lab_anchor != order.order_datetime
+                                else "order",
+                            )
                             if PLATELET_TREND_PILOT_ENABLED
                             else None
                         ),
@@ -1938,16 +1949,12 @@ def main() -> None:
         ).anchor_utc
         hb_label = anchor_label if lab_dt == ev_anchor else "dispense"
         hb_obs = _hb_observations(lab, order.an)
+        hb_not_before = _last_rbc_order_before(rbc_orders_by_an, order.an, lab_dt)
         hb, _hb_anchor_display, _hb_anchor_reason = resolve_hb_with_fallback(
             observations=hb_obs,
             order_datetime=lab_dt,
             candidates=candidates_by_reqno.get(order.reqno, []),
-            not_before_utc=_last_rbc_order_before(
-                rbc_orders_by_an,
-                order.an,
-                lab_dt,
-                own_order_utc=order.order_datetime,
-            ),
+            not_before_utc=hb_not_before,
         )
         # When the deciding Hb is a post-anchor draw (read at dispense time, or
         # via the fallback ladder), that draw is the Hb that routed this case. Carry
@@ -2021,7 +2028,9 @@ def main() -> None:
         )
 
         crystalloid_events = tuple(m for m in med_events if _is_crystalloid(m.drug))
-        crystalloid_liters = total_crystalloid_liters(crystalloid_events, lab_dt)
+        crystalloid_liters = total_crystalloid_liters(
+            crystalloid_events, hb.datetime_utc or order.order_datetime
+        )
 
         vitals_notes = vitals_notes_for(progress, focus, order.an, ev_anchor)
         vitals = extract_vitals(anchor=ev_anchor, notes=vitals_notes)
@@ -2157,28 +2166,20 @@ def main() -> None:
         # Hb chunks get extra annotations so the LLM can weight closest +
         # lowest values: each Hb item is tagged with hours-before-anchor
         # plus optional flags for "closest", "min in 24h", "min in 48h".
-        hb_payloads: list[tuple[str, float, datetime]] = []
-        for it in bundle.items:
-            if it.source != "Lab":
-                continue
-            p = dict(it.payload)
-            if "value_g_dl" not in p or it.timestamp_utc is None:
-                continue
-            hb_payloads.append((it.id, float(p["value_g_dl"]), it.timestamp_utc))
-
-        closest_id: str | None = None
-        min24_id: str | None = None
-        min48_id: str | None = None
-        if hb_payloads:
-            pre = [(i, v, t) for i, v, t in hb_payloads if t <= lab_dt]
-            if pre:
-                closest_id = max(pre, key=lambda x: x[2])[0]
-                w24 = [x for x in pre if (lab_dt - x[2]) <= timedelta(hours=24)]
-                if w24:
-                    min24_id = min(w24, key=lambda x: x[1])[0]
-                w48 = [x for x in pre if (lab_dt - x[2]) <= timedelta(hours=48)]
-                if w48:
-                    min48_id = min(w48, key=lambda x: x[1])[0]
+        # The flags name the very draws lookup_hb judged (same source
+        # preference, same prior-transfusion cutoff), so the model and the
+        # replay guardrail reason on one Hb.
+        hb_item_ids = {
+            dict(it.payload).get("item_no"): it.id
+            for it in bundle.items
+            if it.source == "Lab" and "value_g_dl" in dict(it.payload)
+        }
+        draws = trigger_draws(
+            observations=hb_obs, anchor_utc=lab_dt, not_before_utc=hb_not_before
+        )
+        closest_id = hb_item_ids.get(draws.current.item_no) if draws.current else None
+        min24_id = hb_item_ids.get(draws.min_24h.item_no) if draws.min_24h else None
+        min48_id = hb_item_ids.get(draws.min_48h.item_no) if draws.min_48h else None
 
         chunks: list[EvidenceChunk] = []
         for item in bundle.items:
@@ -2293,13 +2294,13 @@ def main() -> None:
             "",
             "REASONING REQUIREMENT — transparency about non-primary Hb values:",
             "- If ANY sub-threshold Hb (< cohort threshold) exists in the 7-day",
-            "  pre-order history but falls OUTSIDE the 24h primary window,",
+            f"  pre-{hb_label} history but falls OUTSIDE the 24h primary window,",
             "  you MUST explicitly cite that value in reasoning_summary_en AND",
             "  reasoning_summary_th, naming the evidence id, the value, and the",
-            "  number of hours before the order it occurred.",
+            f"  number of hours before the {hb_label} it occurred.",
             "- State why that value is not the primary trigger (e.g. 'Hb 6.9",
-            "  g/dL [E_n] occurred 28 h pre-order, outside the 24h primary",
-            "  window; the closest pre-order Hb 7.1 g/dL [E_m] is gray-zone').",
+            f"  g/dL [E_n] occurred 28 h pre-{hb_label}, outside the 24h primary",
+            f"  window; the closest pre-{hb_label} Hb 7.1 g/dL [E_m] is gray-zone').",
             "- A reviewer must be able to verify from your reasoning that you",
             "  saw EVERY sub-threshold Hb in the 7-day window and explicitly",
             "  considered the temporal tradeoff between recency and value.",

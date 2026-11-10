@@ -472,7 +472,7 @@ def run_preflight() -> PreflightResult:
         med_events = _build_med_events(med, order.an)
         crystalloid_liters = total_crystalloid_liters(
             tuple(event for event in med_events if _is_crystalloid(event.drug)),
-            lab_dt,
+            hb.datetime_utc or order.order_datetime,
         )
         anc = _latest_anc(lab, order.an, order.order_datetime)
         cohort = assign_cohort(

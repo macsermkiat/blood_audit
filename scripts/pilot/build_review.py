@@ -277,12 +277,12 @@ _OVERRIDE_WHY: dict[str, str] = {
         "The over-clear guardrail accepts an LLM clear of a withheld order only "
         "on a structured signal (Hb at or below 7.0 g/dL, an MTP, a recorded "
         "intra-operative transfusion or major operative blood loss) or a cited "
-        "bleed the model is confident in (0.8 or more) that is over 300 mL or "
-        "marked life-threatening, from the current episode and not melena. A "
-        "cited ACS, instability with bleeding or fluid-refractory shock, or a "
-        "SUB_THRESHOLD_HB citation whose Hb really is at or below the cohort "
-        "floor sends the order to human review instead. This order had none of "
-        "these"
+        "bleed the model is confident in (0.8 or more) from the current episode "
+        "that is over 300 mL (melena does not count toward the volume) or "
+        "marked life-threatening. A confidently cited ACS, instability with "
+        "bleeding or fluid-refractory shock, or a SUB_THRESHOLD_HB citation "
+        "whose Hb really is at or below the cohort floor sends the order to "
+        "human review instead. This order had none of these"
     ),
     "llm_native_review_asserted_inappropriate": (
         "The model found no hard indication and no qualifying bleed, and the "

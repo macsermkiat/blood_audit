@@ -1609,9 +1609,10 @@ class TestRbcPromptHashGolden:
     # test_at_floor_hb_is_sub_threshold.
     # Re-pinned for the 2026-11-09 clinician review: the shared indication
     # vocabulary adds LAB TIMING (labs read at the dispense time). Blessed by
-    # tests/unit/test_prompt_rulings_2026_11_09.py.
+    # tests/unit/test_prompt_rulings_2026_11_09.py. Re-pinned again when LAB
+    # TIMING was extended to the 'transfusion' label (same test file).
     RBC_HB_7_10_75_EMPTY_EVIDENCE = (
-        "fd4e20017d4f02a406201142439c99d0e29ff812a7f91425377b9916dce8a283"
+        "78aa2f31c5b0c109e02cd828899f73174c80e34aee3f5062f7da8086c4133f61"
     )
     # Re-pinned for #93 boundary alignment: dispatch routes Hb >= 10.0 to this
     # template (engine ``hb_ge_10``), so its prose states the inclusive
@@ -1632,9 +1633,10 @@ class TestRbcPromptHashGolden:
     # tests/unit/test_prompt_rulings_2026_09_27.py.
     # Re-pinned for the 2026-11-09 clinician review: the shared indication
     # vocabulary adds LAB TIMING (labs read at the dispense time). Blessed by
-    # tests/unit/test_prompt_rulings_2026_11_09.py.
+    # tests/unit/test_prompt_rulings_2026_11_09.py. Re-pinned again when LAB
+    # TIMING was extended to the 'transfusion' label (same test file).
     RBC_HB_GT_10_75_EMPTY_EVIDENCE = (
-        "8ad2e1ef32cfa9d61a9455f3796f7229d617ae81bc9b23a973ca8fc176e3e645"
+        "ef69f90220d73007449c05876ade065c9387964a6861b29749ac0194387ba94e"
     )
 
     def test_hb_7_10_review_cohort_7_5_hash_is_pinned(self) -> None:

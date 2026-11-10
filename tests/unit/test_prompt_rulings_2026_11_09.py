@@ -69,6 +69,9 @@ class TestLabTimingIsTheDispenseTime:
             prompt = system_prompt_for(task_mode=mode, cohort_threshold=7.0)
             assert "LAB TIMING" in prompt
             assert "the dispense time" in prompt
+            # Reserve-ahead orders flag Hb against 'transfusion'; the definition
+            # must cover that label too (second review of e94166e).
+            assert "the transfusion time when they say 'transfusion'" in prompt
 
     def test_platelet_prompt_defines_lab_timing(self) -> None:
         prompt = _platelet()
