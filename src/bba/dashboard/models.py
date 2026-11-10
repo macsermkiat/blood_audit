@@ -238,6 +238,8 @@ class CaseDetail(BaseModel):
     negative_evidence_json: tuple[dict[str, object], ...]
     needs_human_review: bool
     review_reason: str | None
+    model_concluded: str | None = None
+    override_explanation: str | None = None
     hb_value: float
     # See :class:`QueueItem.hb_freshness` — same sentinel-detection contract.
     hb_freshness: str

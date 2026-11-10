@@ -62,6 +62,7 @@ from bba.dashboard.models import (
 )
 from bba.feature_flags import RETURNS_LEDGER_ENABLED
 from bba.review_actions import PhiAccessInput
+from bba.verdict_override import verdict_override
 from bba.dashboard.adjudication import (
     case_context,
     submit_decision,
@@ -175,6 +176,9 @@ def _audit_row_to_case_detail(
     else:
         raw_hn = None
         raw_an = None
+    override = verdict_override(
+        row.reasoning_summary_en, row.final_classification, row.review_reason
+    )
     return CaseDetail(
         audit_id=row.audit_id,
         run_id=row.run_id,
@@ -192,6 +196,8 @@ def _audit_row_to_case_detail(
         negative_evidence_json=tuple(dict(item) for item in row.negative_evidence_json),
         needs_human_review=row.needs_human_review,
         review_reason=row.review_reason,
+        model_concluded=override.model_concluded if override else None,
+        override_explanation=override.explanation if override else None,
         hb_value=row.hb_value,
         hb_freshness=row.hb_freshness,
         order_datetime=row.order_datetime,

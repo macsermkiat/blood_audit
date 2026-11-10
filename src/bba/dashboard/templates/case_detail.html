@@ -12,6 +12,9 @@
       <dt>Confidence</dt><dd>{{ "%.2f"|format(detail.confidence) }}</dd>
       <dt>Human review flagged</dt><dd>{{ detail.needs_human_review }}</dd>
       <dt>Review reason</dt><dd>{{ detail.review_reason or "None" }}</dd>
+      {% if detail.model_concluded %}
+      <dt>Model concluded</dt><dd>{{ detail.model_concluded }}. A guardrail set the pipeline classification, so the reasoning below argues for the model's conclusion, not for the pipeline classification.{% if detail.override_explanation %} {{ detail.override_explanation }}.{% endif %}</dd>
+      {% endif %}
     </dl>
   </div>
   <div>

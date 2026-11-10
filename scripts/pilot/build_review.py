@@ -43,7 +43,7 @@ from bba.feature_flags import (
     RETURNS_LEDGER_ENABLED,
 )
 from bba.deterministic_classifier.rationales import PREOP_DECLARED_EXEMPT
-from bba.llm_client.conclusion import closing_classification
+from bba.verdict_override import verdict_override
 from bba.preop_reservation.reason_presentation import (
     WITHIN_REASONS as _MSBOS_WITHIN_REASONS,
     bucket_for,
@@ -272,40 +272,25 @@ _REVIEW_REASON_LABELS: dict[str, str] = {
 }
 
 
-_OVERRIDE_WHY: dict[str, str] = {
-    "llm_overclear_asserted_inappropriate": (
-        "The over-clear guardrail accepts an LLM clear of a withheld order only "
-        "on a structured signal (Hb at or below 7.0 g/dL, an MTP, a recorded "
-        "intra-operative transfusion or major operative blood loss) or a cited "
-        "bleed the model is confident in (0.8 or more) from the current episode "
-        "that is over 300 mL (melena does not count toward the volume) or "
-        "marked life-threatening. A confidently cited ACS, instability with "
-        "bleeding or fluid-refractory shock, or a SUB_THRESHOLD_HB citation "
-        "whose Hb really is at or below the cohort floor sends the order to "
-        "human review instead. This order had none of these"
-    ),
-    "llm_native_review_asserted_inappropriate": (
-        "The model found no hard indication and no qualifying bleed, and the "
-        "audit closes such orders as INAPPROPRIATE rather than leaving them open"
-    ),
-}
-
-
-def _override_banner(model_said: str, final: str, review_reason: str) -> str:
+def _override_banner(final: str, reasoning_en: str, review_reason: str) -> str:
     """Explain a final verdict that differs from the model's own conclusion.
 
     The reasoning text is the model's; the verdict above it may be a
     guardrail's. Without this line a reviewer reads "appropriate" reasoning
-    under an "inappropriate" verdict (clinician review 2026-11-09).
+    under an "inappropriate" verdict (clinician review 2026-11-09). Empty when
+    the model's verdict stands.
     """
-    why = _OVERRIDE_WHY.get(review_reason) or _REVIEW_REASON_LABELS.get(
+    override = verdict_override(reasoning_en, final, review_reason)
+    if override is None:
+        return ""
+    why = override.explanation or _REVIEW_REASON_LABELS.get(
         review_reason, review_reason
     )
     return (
         "<div class='override'><b>Guardrail override.</b> "
-        f"The model concluded <b>{esc(_display_cls(model_said))}</b> "
+        f"The model concluded <b>{esc(_display_cls(override.model_concluded))}</b> "
         "(its reasoning is below); "
-        f"the final verdict is <b>{esc(_display_cls(final))}</b>. "
+        f"the final verdict is <b>{esc(_display_cls(override.final))}</b>. "
         f"{esc(why)}.</div>"
     )
 
@@ -1959,9 +1944,9 @@ def main() -> None:
                 f"<div class='rationale'>provenance: "
                 f"{_code_abbr(review_reason, _REVIEW_REASON_LABELS)}</div>"
             )
-            model_said = closing_classification(llm_block.get("reasoning_en") or "")
-            if model_said is not None and model_said != fc.upper():
-                parts.append(_override_banner(model_said, fc, review_reason))
+            parts.append(
+                _override_banner(fc, llm_block.get("reasoning_en") or "", review_reason)
+            )
             parts.append("<h5>Indications</h5>")
             parts.append(render_indications(llm_block["indications"]))
             parts.append("<h5>Negative evidence</h5>")
