@@ -1339,9 +1339,15 @@ def _incpt_evidence_chunks(
             )
             if c
         ]
-        optract_name = (optract.get("NAME EN") or "").strip() or (
-            optract.get("NAME") or ""
-        ).strip()
+        name_en = (optract.get("NAME EN") or "").strip()
+        name_th = (optract.get("NAME") or "").strip()
+        # The Thai name is often the specific one ("การใส่ Double lumen
+        # catheter") under a generic English one ("Venous catheterization").
+        optract_name = (
+            f"{name_en} / {name_th}"
+            if name_en and name_th and name_th != name_en
+            else name_en or name_th
+        )
         group_name = (r.get("INCGRP → NAME") or r.get("INCGRP__NAME") or "").strip()
         hours = (dt - anchor).total_seconds() / 3600.0
         text = (
@@ -1364,6 +1370,41 @@ def _incpt_evidence_chunks(
         )
         next_eid += 1
     return tuple(chunks), next_eid
+
+
+PLATELET_INCPT_START_EID = 801
+"""First evidence id for platelet procedure-charge chunks; the same range the
+RBC path uses, clear of the bundle's own ids."""
+
+
+def _platelet_procedure_chunks(
+    incpt: list[dict[str, str]],
+    optract_dict: dict[str, dict[str, str]],
+    *,
+    an: str,
+    order_utc: datetime,
+    window_start: datetime,
+    window_end: datetime,
+) -> tuple[EvidenceChunk, ...]:
+    """Procedure-charge evidence for a platelet order.
+
+    Bedside CVC / DLC insertions, taps and LPs are rarely coded as procedures
+    but are billed (INCPT group 110). Clinician review 2026-11-09: "CVC is a
+    procedure"; in 2025, 240 of 3,696 eligible platelet orders had a billed
+    CVC / DLC insertion within 24 h that the platelet leg never showed the
+    model. Same rendering and window as the notes the order already gets.
+    """
+    chunks, _ = _incpt_evidence_chunks(
+        incpt,
+        optract_dict,
+        an=an,
+        anchor=order_utc,
+        anchor_label="order",
+        window_start=window_start,
+        window_end=window_end,
+        start_eid=PLATELET_INCPT_START_EID,
+    )
+    return chunks
 
 
 def _build_inputs():
@@ -1925,6 +1966,16 @@ def main() -> None:
                             text=text,
                         )
                     )
+            plt_chunks.extend(
+                _platelet_procedure_chunks(
+                    incpt,
+                    optract_dict,
+                    an=order.an,
+                    order_utc=order.order_datetime,
+                    window_start=plt_notes_lo,
+                    window_end=plt_notes_hi,
+                )
+            )
             if not plt_chunks:
                 print(
                     f"  WARN: empty chunks for platelet order {order.reqno}; "

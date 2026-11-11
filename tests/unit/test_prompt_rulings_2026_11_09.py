@@ -88,3 +88,17 @@ class TestPlateletWordingFollowUps:
     def test_terminal_line_drops_indication_7_threshold(self) -> None:
         prompt = _platelet()
         assert "no indication 4–6 or 8 at or below its threshold" in prompt
+
+
+class TestProcedureChargesGroundProcedureIndications:
+    """The platelet leg now receives INCPT procedure charges. The prompt says
+    indications must be grounded in the notes, so it must also say a charge
+    counts, or the model sees a billed CVC insertion and still ignores it."""
+
+    def test_charge_record_grounds_indications_1_to_3(self) -> None:
+        prompt = _platelet()
+        assert "PROCEDURE RECORDS" in prompt
+        assert "grounds indications 1–3 as a note would" in prompt
+
+    def test_double_lumen_catheter_charge_is_named_as_a_cvc(self) -> None:
+        assert "Double lumen catheter (CVP)" in _platelet()
