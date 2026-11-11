@@ -159,6 +159,7 @@ from bba.hb_lookup import (
     resolve_evidence_anchor,
     resolve_hb_with_fallback,
     resolve_lab_anchor,
+    TriggerDraws,
     trigger_draws,
 )
 from bba.platelet_classifier import classify_platelet
@@ -748,8 +749,10 @@ def _rbc_dispense_times_by_an(
 ) -> dict[str, list[datetime]]:
     """Each admission's RBC dispense times, for the #249 transfusion cutoff.
 
-    An order with no dispense record is left out: nothing shows its blood was
-    given (issue #264, clinician sign-off 2026-11-11, option A).
+    An order with no usable dispense record is left out: nothing shows its
+    blood was given (issue #264, clinician sign-off 2026-11-11, option A). A
+    dispense recorded before the request is a data error and counts as none,
+    as in ``resolve_lab_anchor``.
     """
     by_an: dict[str, list[datetime]] = {}
     for o in orders:
@@ -784,15 +787,17 @@ def _hb_trigger_anchor(
 
 
 def _hb_bundle_upper(
-    lab_dt: datetime, deciding_draw: datetime | None, window_anchor: datetime
+    lab_dt: datetime, draws: TriggerDraws, window_anchor: datetime
 ) -> datetime | None:
     """Upper bound for the bundle's Hb history, or None to keep the window.
 
-    Every draw lookup_hb can judge (current, 24 h minimum) sits at or before
-    the later of ``lab_dt`` and the deciding draw. When that is after the
-    window anchor the bundle must reach it, or the model cannot see a value
-    the guardrail reads (third review of the dispense change)."""
-    upper = max(t for t in (lab_dt, deciding_draw) if t is not None)
+    The bundle must reach ``lab_dt`` and every draw the guardrail judges, or
+    the model cannot see a value the guardrail reads (third review of the
+    dispense change). On the fallback ladder the 24 h minimum can be newer
+    than the current draw (fourth review), so the bound comes from the draws
+    themselves, not from the current draw."""
+    judged = (draws.current, draws.min_24h, draws.min_48h)
+    upper = max([lab_dt, *(d.datetime_utc for d in judged if d is not None)])
     return upper if upper > window_anchor else None
 
 
@@ -1423,8 +1428,9 @@ def _platelet_procedure_chunks(
     procedure"; in 2025, 240 of 3,696 eligible platelet orders had a billed
     CVC / DLC insertion within 24 h that the platelet leg never showed the
     model. Same rendering and start as the notes window; the end reaches
-    ``PLATELET_PROCEDURE_HOURS_AFTER_DISPENSE`` past dispense when that is
-    later than the notes window's end.
+    ``PLATELET_PROCEDURE_HOURS_AFTER_DISPENSE`` past ``dispense_utc`` when
+    that is later than the notes window's end. With no dispense record the
+    caller passes the order time, so the window ends 24 h after the order.
     """
     chunks, _ = _incpt_evidence_chunks(
         incpt,
@@ -2074,7 +2080,12 @@ def main() -> None:
             hb_anchor_display,
             candidates_by_reqno.get(order.reqno, []),
         )
-        hb_bundle_anchor = _hb_bundle_upper(lab_dt, hb.datetime_utc, ev_anchor)
+        draws = trigger_draws(
+            observations=hb_obs,
+            anchor_utc=hb_trigger_anchor,
+            not_before_utc=hb_not_before,
+        )
+        hb_bundle_anchor = _hb_bundle_upper(lab_dt, draws, ev_anchor)
 
         op_events = _op_events(
             iptsumoprt, ipddchsumoprt, incpt, optract_dict, icd9_dict, order.an
@@ -2283,11 +2294,6 @@ def main() -> None:
             for it in bundle.items
             if it.source == "Lab" and "value_g_dl" in dict(it.payload)
         }
-        draws = trigger_draws(
-            observations=hb_obs,
-            anchor_utc=hb_trigger_anchor,
-            not_before_utc=hb_not_before,
-        )
         closest_id = hb_item_ids.get(draws.current.item_no) if draws.current else None
         min24_id = hb_item_ids.get(draws.min_24h.item_no) if draws.min_24h else None
         min48_id = hb_item_ids.get(draws.min_48h.item_no) if draws.min_48h else None

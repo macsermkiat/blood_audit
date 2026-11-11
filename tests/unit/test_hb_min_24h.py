@@ -190,14 +190,60 @@ class TestEvidenceSeesWhatTheGuardrailJudges:
         # current value, but the 24 h minimum is a POCT 7.4 at -1 h. The
         # bundle bound must reach the dispense time, not stop at the
         # order or the older HEMATOLOGY draw.
+        from bba.hb_lookup import trigger_draws
+
         mod = _pilot_llm_leg()
         order = ANCHOR - timedelta(hours=3)
-        hematology_draw = ANCHOR - timedelta(hours=30)
-        assert mod._hb_bundle_upper(ANCHOR, hematology_draw, order) == ANCHOR
+        draws = trigger_draws(
+            observations=[
+                _obs(30, 9.1),
+                _obs(1, 7.4, "POCT"),
+            ],
+            anchor_utc=ANCHOR,
+        )
+        assert draws.min_24h is not None and draws.min_24h.value_g_dl == 7.4
+        assert mod._hb_bundle_upper(ANCHOR, draws, order) == ANCHOR
 
     def test_bundle_window_unchanged_when_nothing_is_after_it(self) -> None:
+        from bba.hb_lookup import trigger_draws
+
         mod = _pilot_llm_leg()
-        assert mod._hb_bundle_upper(ANCHOR, ANCHOR - timedelta(hours=2), ANCHOR) is None
+        draws = trigger_draws(observations=[_obs(2, 8.0)], anchor_utc=ANCHOR)
+        assert mod._hb_bundle_upper(ANCHOR, draws, ANCHOR) is None
+
+    def test_bundle_reaches_a_fallback_minimum_newer_than_the_current_draw(
+        self,
+    ) -> None:
+        # Fourth review (2026-11-11): no dispense and no Hb in the 7 days
+        # before the order, so the lookup falls back to a blood-bank visit
+        # 40 h later. The current value prefers HEMATOLOGY 9.0 at +5 h, but
+        # the 24 h minimum is a POCT 6.5 at +30 h. The bundle must reach it.
+        from bba.hb_lookup import (
+            AnchorCandidate,
+            resolve_hb_with_fallback,
+            trigger_draws,
+        )
+
+        mod = _pilot_llm_leg()
+        bank = AnchorCandidate(
+            anchor_utc=ANCHOR + timedelta(hours=40),
+            display="bank",
+            reason="blood_bank_visit_fallback",
+        )
+        obs = [
+            _obs(-5, 9.0),
+            _obs(-30, 6.5, "POCT"),
+        ]
+        hb, display, reason = resolve_hb_with_fallback(
+            observations=obs, order_datetime=ANCHOR, candidates=[bank]
+        )
+        assert hb.min_24h_g_dl == 6.5
+        moment = mod._hb_trigger_anchor(ANCHOR, reason, display, [bank])
+        draws = trigger_draws(observations=obs, anchor_utc=moment)
+
+        upper = mod._hb_bundle_upper(ANCHOR, draws, ANCHOR)
+
+        assert upper is not None and upper >= ANCHOR + timedelta(hours=30)
 
     def test_fallback_hb_is_flagged_at_the_anchor_that_supplied_it(self) -> None:
         from bba.hb_lookup import (

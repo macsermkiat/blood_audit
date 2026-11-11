@@ -1287,7 +1287,8 @@ class TestRouteSmoke:
         page = client.get("/case/audit-override").text
 
         assert "Model concluded" in page
-        assert "APPROPRIATE" in page.split("Model concluded", 1)[1][:200]
+        # "INAPPROPRIATE" contains "APPROPRIATE", so match the whole value.
+        assert "<dt>Model concluded</dt><dd>APPROPRIATE." in page
         assert "Hb at or below 7.0 g/dL" in page
 
     def test_case_page_without_override_has_no_model_concluded_line(
