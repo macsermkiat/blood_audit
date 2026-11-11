@@ -227,3 +227,49 @@ class TestEvidenceSeesWhatTheGuardrailJudges:
         assert moment == bank.anchor_utc
         assert draws.current == later
         assert hb.value_g_dl == draws.current.value_g_dl
+
+
+class TestUndispensedSiblingIsNoTransfusion:
+    """Issue #264, clinician sign-off 2026-11-11 (option A): an RBC order with
+    no dispense record is no evidence that blood was given, so it must not
+    cut off the Hb another order on the same admission is judged on."""
+
+    def test_only_dispensed_rbc_orders_enter_the_cutoff_map(self) -> None:
+        from types import SimpleNamespace
+
+        from bba.hb_lookup import AnchorCandidate
+
+        mod = _pilot_llm_leg()
+        # B ordered 09:00, dispensed 12:00. A ordered 10:00, never dispensed.
+        b_order = ANCHOR
+        b_dispense = ANCHOR + timedelta(hours=3)
+        a_order = ANCHOR + timedelta(hours=1)
+        orders = [
+            SimpleNamespace(
+                component="rbc", an="AN1", reqno="B", order_datetime=b_order
+            ),
+            SimpleNamespace(
+                component="rbc", an="AN1", reqno="A", order_datetime=a_order
+            ),
+            SimpleNamespace(
+                component="platelet", an="AN1", reqno="P", order_datetime=a_order
+            ),
+        ]
+        candidates = {
+            "B": [
+                AnchorCandidate(
+                    anchor_utc=b_dispense, display="12:00", reason="issue_datetime"
+                )
+            ],
+            "P": [
+                AnchorCandidate(
+                    anchor_utc=a_order, display="10:00", reason="issue_datetime"
+                )
+            ],
+        }
+
+        by_an = mod._rbc_dispense_times_by_an(orders, candidates)
+
+        assert by_an == {"AN1": [b_dispense]}
+        # So B's Hb at 09:30 is no longer cut off by A's order time.
+        assert mod._last_rbc_order_before(by_an, "AN1", b_dispense) is None

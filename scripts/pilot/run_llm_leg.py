@@ -70,6 +70,7 @@ from zoneinfo import ZoneInfo
 
 import bba.feature_flags as feature_flags
 from bba.audit_orders import (
+    AuditOrder,
     AuditOrdersConfig,
     BloodOrderInput,
     build_audit_orders,
@@ -729,9 +730,9 @@ def _last_rbc_order_before(
     """The most recent RBC dispense for this admission inside the 24 h before
     ``order_utc`` (the order's own lab anchor), or None. Bounds the 24 h
     minimum Hb (issue #249): a low that an earlier transfusion already
-    corrected must not make a later order sub-threshold. The map holds each
-    order's dispense time (its order time when none is recorded), the closest
-    this leg has to a transfusion time; the order being judged sits exactly at
+    corrected must not make a later order sub-threshold. The map holds the
+    dispense times from ``_rbc_dispense_times_by_an``, the closest this leg has
+    to a transfusion time; the order being judged sits exactly at
     ``order_utc`` and so never counts as its own earlier transfusion."""
     earlier = [
         t
@@ -739,6 +740,28 @@ def _last_rbc_order_before(
         if t < order_utc and order_utc - t <= timedelta(hours=24)
     ]
     return max(earlier) if earlier else None
+
+
+def _rbc_dispense_times_by_an(
+    orders: Sequence[AuditOrder],
+    candidates_by_reqno: dict[str, list[AnchorCandidate]],
+) -> dict[str, list[datetime]]:
+    """Each admission's RBC dispense times, for the #249 transfusion cutoff.
+
+    An order with no dispense record is left out: nothing shows its blood was
+    given (issue #264, clinician sign-off 2026-11-11, option A).
+    """
+    by_an: dict[str, list[datetime]] = {}
+    for o in orders:
+        if o.component == "platelet":
+            continue
+        anchor = resolve_lab_anchor(
+            order_datetime=o.order_datetime,
+            candidates=candidates_by_reqno.get(o.reqno, []),
+        )
+        if anchor.reason == "issue_datetime":
+            by_an.setdefault(o.an, []).append(anchor.anchor_utc)
+    return by_an
 
 
 def _hb_trigger_anchor(
@@ -1623,15 +1646,7 @@ def main() -> None:
     # PipelineRowContext model so the schema is untouched; consumed only when
     # emitting the JSON report below.
     anchor_by_id: dict[str, EvidenceAnchor] = {}
-    rbc_orders_by_an: dict[str, list[datetime]] = {}
-    for o in fr.included:
-        if o.component != "platelet":
-            rbc_orders_by_an.setdefault(o.an, []).append(
-                resolve_lab_anchor(
-                    order_datetime=o.order_datetime,
-                    candidates=candidates_by_reqno.get(o.reqno, []),
-                ).anchor_utc
-            )
+    rbc_orders_by_an = _rbc_dispense_times_by_an(fr.included, candidates_by_reqno)
 
     for order in fr.included:
         if ONLY_REQNOS and order.reqno not in ONLY_REQNOS:
