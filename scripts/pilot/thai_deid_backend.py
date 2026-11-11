@@ -34,6 +34,22 @@ _PLACEHOLDER = re.compile(r"\[[A-Z_]+\]")
 # The tokenizer truncates at 510 tokens; without overlapping windows the NER
 # never sees names past that point in a long note.
 NER_STRIDE = 128
+# Measured on real long notes: NER over 400-char segments found names the
+# strided pass over the whole chunk missed, and never the reverse.
+NER_SEGMENT_CHARS = 400
+
+
+def split_segments(text: str, limit: int = NER_SEGMENT_CHARS) -> list[str]:
+    """Contiguous pieces of at most ``limit`` chars that rejoin to ``text``."""
+    segments: list[str] = []
+    position = 0
+    while len(text) - position > limit:
+        window = text[position : position + limit]
+        cut = window.rfind("\n") + 1 or window.rfind(" ") + 1 or limit
+        segments.append(text[position : position + cut])
+        position += cut
+    segments.append(text[position:])
+    return segments
 
 
 class ThaiDeidSetupError(RuntimeError):
@@ -54,8 +70,16 @@ class ThaiMedicalDeidBackend:
 
     def redact(self, text: str) -> BackendRedactionResult:
         try:
-            final = str(
-                self._module.anonymize_batch(_with_stride(self._ner), [text])[0][0]
+            ner = _with_stride(self._ner)
+            # Pass 1 sees the whole text so regex patterns never straddle a
+            # cut. Pass 2 re-runs NER on short segments, where recall holds on
+            # long notes; deid's placeholder overlap check keeps pass 1's
+            # tokens intact.
+            first = str(self._module.anonymize_batch(ner, [text])[0][0])
+            segments = split_segments(first)
+            final = "".join(
+                str(redacted)
+                for redacted, _ in self._module.anonymize_batch(ner, segments)
             )
         except Exception as exc:
             # The exception text can quote the note; keep only its type.
@@ -179,6 +203,7 @@ def redactor_version(deid_repo: Path, model_dir: Path) -> RedactorVersion:
             f"thai-medical-deid@{head}"
             f"+{_pipeline_version(deid_repo / ENTRY_RELPATH)}"
             f"+stride{NER_STRIDE}"
+            f"+seg{NER_SEGMENT_CHARS}"
             f"+transformers-{_dist_version('transformers')}"
             f"+tokenizers-{_dist_version('tokenizers')}"
             f"+torch-{_dist_version('torch')}"

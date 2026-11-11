@@ -19,14 +19,21 @@ from bba.deid_redactor import (
 )
 from bba.deid_redactor.exceptions import BackendRedactionError
 from thai_deid_backend import (
+    NER_SEGMENT_CHARS,
     ThaiDeidSetupError,
     ThaiMedicalDeidBackend,
     load_backend,
     model_manifest,
     redactor_version,
+    split_segments,
 )
 import thai_deid_backend
-from thai_deid_fakes import WindowedNer, fake_module, ner_driven_module
+from thai_deid_fakes import (
+    LengthLimitedNer,
+    WindowedNer,
+    fake_module,
+    ner_driven_module,
+)
 
 LIBRARY_VERSIONS = {"transformers": "5.1", "tokenizers": "0.2", "torch": "2.3"}
 VERSION = RedactorVersion(version="v", model_sha="a" * 64, gazetteer_version="g")
@@ -118,6 +125,55 @@ def test_name_past_the_ner_truncation_point_is_masked_through_redact_bundle():
     assert redacted.endswith("Called by Dr. [ATTENDING] at night.")
 
 
+def test_name_the_model_misses_in_a_long_note_is_masked_by_the_segment_pass():
+    name = "Somchai Jaidee"
+    text = "Hb 6.8 stable. " * 40 + f"Called by Dr. {name} at night."
+    ner = LengthLimitedNer((), (name,), limit=NER_SEGMENT_CHARS)
+    assert len(text) > NER_SEGMENT_CHARS
+
+    redacted = _redact(ThaiMedicalDeidBackend(ner_driven_module(), ner), text)
+
+    assert name not in redacted
+    assert redacted.endswith("Called by Dr. [ATTENDING] at night.")
+
+
+def test_segment_pass_leaves_a_pass_one_placeholder_as_one_token():
+    text = "RN Alice noted. " + "Hb 6.8 stable. " * 40 + "Dr. Bob agreed."
+    ner = LengthLimitedNer(("Alice",), ("Bob",), limit=NER_SEGMENT_CHARS)
+    backend = ThaiMedicalDeidBackend(ner_driven_module(), ner)
+
+    result = backend.redact(text)
+
+    assert result.text.startswith("RN [PERSON] noted.")
+    assert result.text.endswith("Dr. [PERSON] agreed.")
+    assert "[[" not in result.text
+    assert [s.original_text for s in result.spans] == ["Alice", "Bob"]
+    assert _redact(backend, text).startswith("RN [NURSE] noted.")
+
+
+def test_segments_rejoin_exactly_and_never_exceed_the_limit():
+    text = "word " * 300 + "x" * 900 + "\n" + "line two " * 100
+
+    segments = split_segments(text)
+
+    assert "".join(segments) == text
+    assert all(len(s) <= NER_SEGMENT_CHARS for s in segments)
+
+
+def test_segments_cut_after_the_last_newline_before_the_last_space():
+    head = "a" * 100 + " " + "b" * 100 + "\n"
+    text = head + "c " * 200
+
+    assert split_segments(text, 300)[0] == head
+
+
+def test_segments_cut_after_the_last_space_without_a_newline_else_hard():
+    spaced = "aaaa bbbb cccc"
+    assert split_segments(spaced, 10) == ["aaaa bbbb ", "cccc"]
+    assert split_segments("x" * 25, 10) == ["x" * 10, "x" * 10, "x" * 5]
+    assert split_segments("", 10) == [""]
+
+
 def _git(repo: Path, *args: str) -> None:
     subprocess.run(
         [
@@ -174,7 +230,7 @@ def test_version_names_the_commit_pipeline_weights_and_gazetteer(deid_checkout):
 
     adapter = hashlib.sha256(Path(thai_deid_backend.__file__).read_bytes())
     assert version.version == (
-        f"thai-medical-deid@{head}+pv1+stride128+transformers-5.1+tokenizers-0.2"
+        f"thai-medical-deid@{head}+pv1+stride128+seg400+transformers-5.1+tokenizers-0.2"
         f"+torch-2.3+adapter-{adapter.hexdigest()[:16]}"
     )
     assert version.model_sha == hashlib.sha256(model_manifest(model_dir)).hexdigest()
