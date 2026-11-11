@@ -34,8 +34,8 @@ _PLACEHOLDER = re.compile(r"\[[A-Z_]+\]")
 # The tokenizer truncates at 510 tokens; without overlapping windows the NER
 # never sees names past that point in a long note.
 NER_STRIDE = 128
-# Measured on real long notes: NER over 400-char segments found names the
-# strided pass over the whole chunk missed, and never the reverse.
+# Measured on 12 real long notes: NER over 400-char segments found 10 names,
+# the strided pass over the whole chunk 2, and none the segments missed.
 NER_SEGMENT_CHARS = 400
 
 
@@ -63,6 +63,16 @@ def _with_stride(ner: Any) -> Any:
     return strided
 
 
+def _persons_only(ner: Any) -> Any:
+    def persons(texts: Any, **kwargs: Any) -> Any:
+        return [
+            [e for e in entities if e.get("entity_group") == "PERSON"]
+            for entities in ner(texts, **kwargs)
+        ]
+
+    return persons
+
+
 class ThaiMedicalDeidBackend:
     def __init__(self, module: Any, ner: Any) -> None:
         self._module = module
@@ -72,15 +82,18 @@ class ThaiMedicalDeidBackend:
         try:
             ner = _with_stride(self._ner)
             # Pass 1 sees the whole text so regex patterns never straddle a
-            # cut. Pass 2 re-runs NER on short segments, where recall holds on
-            # long notes; deid's placeholder overlap check keeps pass 1's
-            # tokens intact.
-            first = str(self._module.anonymize_batch(ner, [text])[0][0])
-            segments = split_segments(first)
-            final = "".join(
-                str(redacted)
-                for redacted, _ in self._module.anonymize_batch(ner, segments)
-            )
+            # cut. On a long note, pass 2 re-runs NER on short segments, where
+            # name recall holds. It adds names only: on pass-1 output the model
+            # also tags vitals, dates and diagnoses (seen on real notes), and
+            # deid's placeholder overlap check keeps pass 1's tokens intact.
+            final = str(self._module.anonymize_batch(ner, [text])[0][0])
+            if len(final) > NER_SEGMENT_CHARS:
+                final = "".join(
+                    str(redacted)
+                    for redacted, _ in self._module.anonymize_batch(
+                        _persons_only(ner), split_segments(final)
+                    )
+                )
         except Exception as exc:
             # The exception text can quote the note; keep only its type.
             raise BackendRedactionError(

@@ -29,6 +29,7 @@ from thai_deid_backend import (
 )
 import thai_deid_backend
 from thai_deid_fakes import (
+    ContextShiftNer,
     LengthLimitedNer,
     WindowedNer,
     fake_module,
@@ -299,3 +300,28 @@ def test_empty_name_gazetteer_is_refused(deid_checkout):
 
     with pytest.raises(ThaiDeidSetupError, match="gazetteer is empty"):
         load_backend(repo, model_dir)
+
+
+def test_segment_pass_adds_names_but_not_ids_or_vitals():
+    # On real pass-1 output the model tagged a BP range and a date as
+    # HOSPITAL_IDS; pass 2 exists for names only.
+    text = "BP 79-111/42 stable. " + "Hb 6.8 stable. " * 40 + "Dr. Bob agreed."
+    ner = LengthLimitedNer(
+        (), ("Bob",), limit=NER_SEGMENT_CHARS, short_only_ids=("79-111/42",)
+    )
+
+    redacted = _redact(ThaiMedicalDeidBackend(ner_driven_module(), ner), text)
+
+    assert redacted.startswith("BP 79-111/42 stable.")
+    assert redacted.endswith("Dr. [ATTENDING] agreed.")
+
+
+def test_short_chunk_is_not_redacted_twice():
+    # Real case: "ICD-10 I481: Melaena" became "...: [PERSON]" when pass 2 saw
+    # pass 1's placeholders; a chunk that fits one segment gets one pass.
+    text = "ICD-10 I481: Melaena"
+    ner = ContextShiftNer(code="I481", word="Melaena")
+
+    result = ThaiMedicalDeidBackend(ner_driven_module(), ner).redact(text)
+
+    assert result.text == "ICD-10 [HOSPITAL_IDS]: Melaena"
