@@ -1,7 +1,7 @@
 """Date-shift transform: rewrite in-text dates as days from the anchor date.
 
-The caller supplies ``anchor_date`` as Day 0 (the audit passes the order
-date). The wrapper applies this AFTER ``thai-medical-deid`` has redacted explicit
+The caller supplies ``anchor_date`` as Day 0: the order's calendar date in
+hospital local time. The wrapper applies this AFTER ``thai-medical-deid`` has redacted explicit
 date PHI to ``[DATE]`` tokens. Any remaining literal date strings inside
 the note text — typically dates the backend missed inside running prose
 ("admitted on 2026-05-10") — are converted to anchored offsets like

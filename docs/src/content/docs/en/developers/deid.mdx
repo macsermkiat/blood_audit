@@ -7,9 +7,9 @@ description: The local redactor, signed privacy admission, and handling of clini
 
 ## Redaction contract
 
-`redact_bundle` takes a `RedactionRequest` and a `RedactorBackend`. The wrapper preserves clinical roles with tokens such as `[PATIENT]`, `[ATTENDING]`, and `[NURSE]`. It rewrites supported dates in note text as days from the order date, which the audit passes as `anchor_date`, and checks for semantic degradation.
+`redact_bundle` takes a `RedactionRequest` and a `RedactorBackend`. The wrapper preserves clinical roles with tokens such as `[PATIENT]`, `[ATTENDING]`, and `[NURSE]`. It rewrites supported dates in note text as days from `anchor_date`, which the caller sets to the order's calendar date in hospital local time, and checks for semantic degradation.
 
-The request carries no demographic fields such as sex, age, or ward, because none of them reach the model. Failed privacy checks or degraded notes require local review.
+The request carries no demographic fields such as sex, age, or ward, because the model never receives them as fields. An age or sex written inside a note still reaches the model, as before. Failed privacy checks or degraded notes require local review.
 
 The deployment supplies the approved backend and model artifact. The repository does not provide a ready-to-use, clinically approved redaction service. A pass-through backend is suitable only for synthetic tests.
 

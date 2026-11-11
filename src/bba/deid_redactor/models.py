@@ -222,12 +222,14 @@ class NoteInput(BaseModel):
 class RedactionRequest(BaseModel):
     """Top-level input to :func:`bba.deid_redactor.redact_bundle`.
 
-    ``anchor_date`` is Day 0 for the date-shift transform; the audit passes
-    the order date. No demographic field reaches the prompt, so the
-    request carries none.
+    ``anchor_date`` is Day 0 for the date-shift transform. The caller passes
+    the order's calendar date in hospital local time (Asia/Bangkok), not
+    its UTC date, or orders placed before 07:00 shift every Day N by one.
+    The model receives no demographic field, so the request carries none.
+    Unknown fields are rejected so a stale ``admission_date=`` fails loudly.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     notes: tuple[NoteInput, ...]
     anchor_date: date

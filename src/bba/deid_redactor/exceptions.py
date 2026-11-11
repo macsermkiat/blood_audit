@@ -36,10 +36,8 @@ class BackendRedactionError(DeidRedactorError):
 class DateShiftError(DeidRedactorError):
     """A date inside the redacted text could not be shifted.
 
-    Raised when the date-shift step encounters a parseable date that is
-    before the anchor date by more than the configured slack (a date
-    parser bug), or when anchor_date is naive (violating the project's
-    tz-aware-UTC contract — see :mod:`bba.ingest`).
+    Reserved for the date-shift step; the current transforms do not raise
+    it.
     """
 
 

@@ -858,6 +858,18 @@ class TestRedactBundleEndToEnd:
         result = redact_bundle(req, backend=backend)
         assert result.notes[0].redacted_text == "Hb 6.8 on Day -3; PRBC given Day 0"
 
+    def test_stale_admission_date_field_is_rejected(self) -> None:
+        # The anchor moved from the admission date to the order date. A
+        # caller still passing admission_date= must fail loudly, not have
+        # the field silently dropped next to anchor_date.
+        with pytest.raises(ValidationError):
+            RedactionRequest(
+                notes=(NoteInput(note_id="E1", text="plain note"),),
+                anchor_date=date(2026, 5, 10),
+                admission_date=date(2026, 5, 1),  # type: ignore[call-arg]
+                redactor_version=_version(),
+            )
+
     def test_backend_date_span_shifted_to_offset(self) -> None:
         # The backend tagged a date PHI as a span and replaced it with
         # the generic [DATE] placeholder; the wrapper rewrites the
