@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import stat
 from datetime import date
 from pathlib import Path
@@ -18,6 +19,7 @@ from bba.deid_redactor.admission import (
 from bba.llm_client.models import BatchSubmissionRequest
 from bba.prompt_builder import EvidenceChunk, PromptBuildRequest, build_prompt
 from issue_privacy_artifacts import (
+    _read_signing_key,
     issue_artifacts,
     issue_to_file,
     keygen,
@@ -262,3 +264,34 @@ def test_policy_from_a_different_key_aborts_issue_and_writes_no_file(tmp_path: P
 
     assert _issue_to_file(tmp_path, out, policy_trusts_signer=False) == 1
     assert not out.exists()
+
+
+@pytest.mark.parametrize("mode", [0o640, 0o604, 0o644, 0o660])
+def test_signing_key_readable_by_group_or_others_is_refused(tmp_path: Path, mode: int):
+    private_path, _ = keygen("k", tmp_path)
+    private_path.chmod(mode)
+
+    with pytest.raises(PermissionError, match="must not be accessible"):
+        _read_signing_key(private_path)
+
+
+def test_owner_only_signing_key_is_read(tmp_path: Path):
+    private_path, _ = keygen("k", tmp_path)
+
+    assert _read_signing_key(private_path) == private_path.read_bytes()
+
+
+def test_policy_file_is_world_readable_whatever_the_umask(
+    tmp_path: Path,
+):
+    # The pilot leg runs as another user and must be able to read the trust root.
+    version = _manifest_version()
+    _, public_path = keygen("k", tmp_path / "keys")
+    out = tmp_path / "policy.json"
+    previous = os.umask(0o077)
+    try:
+        write_policy(key_id="k", public_key=public_path, version=version, out=out)
+    finally:
+        os.umask(previous)
+
+    assert stat.S_IMODE(out.stat().st_mode) == 0o644
