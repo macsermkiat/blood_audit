@@ -7,22 +7,22 @@ description: The local redactor, signed privacy admission, and handling of clini
 
 ## Redaction contract
 
-`redact_bundle` takes a `RedactionRequest`, a `RedactorBackend`, and a `KAnonymityGate`. The wrapper preserves clinical roles with tokens such as `[PATIENT]`, `[ATTENDING]`, and `[NURSE]`. It shifts supported date spans to days relative to admission, caps structured age at 89, and checks for semantic degradation.
+`redact_bundle` takes a `RedactionRequest` and a `RedactorBackend`. The wrapper preserves clinical roles with tokens such as `[PATIENT]`, `[ATTENDING]`, and `[NURSE]`. It rewrites supported dates in note text as days from the order date, which the audit passes as `anchor_date`, and checks for semantic degradation.
 
-The k-anonymity check requires a group size of at least five for the quasi-identifier tuple of ward, ICD-3char, age band, sex, and admission month. Failed privacy checks or degraded notes require local review.
+The request carries no demographic fields such as sex, age, or ward, because none of them reach the model. Failed privacy checks or degraded notes require local review.
 
 The deployment supplies the approved backend and model artifact. The repository does not provide a ready-to-use, clinically approved redaction service. A pass-through backend is suitable only for synthetic tests.
 
 ## Signed admission
 
-The trusted local service constructs `RedactionAuthority` with its approved backend, model artifact, privacy gate, and private Ed25519 signing key. `RedactionAuthority.prepare` exports a `PrivacyArtifact` containing the exact redacted evidence and its attestation.
+The trusted local service constructs `RedactionAuthority` with its approved backend, model artifact, and private Ed25519 signing key. `RedactionAuthority.prepare` exports a `PrivacyArtifact` containing the exact redacted evidence and its attestation.
 
 The application receives the artifact and the issuer's public verification key. It must not receive the private signing key. `PrivacyAdmissionPolicy.verify` checks the signature and binds approval to:
 
 - The exact prompt content and task mode.
 - The audit ID and run ID.
 - The approved redactor version, nonzero model SHA-256, and gazetteer version.
-- A passed k-anonymity check and semantic checks.
+- Passed semantic checks.
 
 Evidence must match the redacted notes exactly, in order, with unique evidence IDs. The authority rejects unapproved few-shot examples. The prompt and privacy checks can also require local review.
 

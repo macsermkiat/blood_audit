@@ -20,7 +20,6 @@ from bba.cli.models import AuditCommandInput
 from bba.deid_redactor import (
     BackendRedactionResult,
     NoteInput,
-    QuasiIdentifiers,
     RedactionRequest,
     RedactorVersion,
     redact_bundle,
@@ -79,19 +78,10 @@ def test_cassette_cli_persists_model_rows_and_formats_then_evaluates_and_monitor
     result = redact_bundle(
         RedactionRequest(
             notes=(NoteInput(note_id="E1", text=text),),
-            quasi_identifiers=QuasiIdentifiers(
-                ward="synthetic",
-                icd_3char="D62",
-                age_band="60-69",
-                sex="M",
-                admission_month="2025-06",
-            ),
-            admission_date=date(2025, 6, 1),
-            patient_age_years=65,
+            anchor_date=date(2025, 6, 1),
             redactor_version=version,
         ),
         backend=SyntheticBackend(),
-        k_gate=lambda _: 5,
     )
     chunks = (EvidenceChunk(evidence_id="E1", source="Lab", text=text),)
     prompt, proof = attest_redaction(

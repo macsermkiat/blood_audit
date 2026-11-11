@@ -2,9 +2,8 @@
 
 The module surface mirrors :mod:`bba.quote_grounder`: a Protocol boundary
 isolates the wrapper from the heavy ``thai-medical-deid`` dependency so the
-post-processing logic (role-token mapping, date-shift, age cap, k-anonymity
-gate, semantic-degradation flag, canonical hashing) is unit-testable in
-isolation. The real backend is plugged in at the audit-pipeline boundary
+post-processing logic (role-token mapping, date-shift, semantic-degradation
+flag, canonical hashing) is unit-testable in isolation. The real backend is plugged in at the audit-pipeline boundary
 (#24); tests supply a stub that returns fixed
 :class:`BackendRedactionResult` values.
 
@@ -164,127 +163,9 @@ class RoleClassifier(Protocol):
         ...
 
 
-class KAnonymityGate(Protocol):
-    """Protocol the wrapper calls to look up the QI group size.
-
-    Returns the cohort size (number of records sharing the same
-    :class:`QuasiIdentifiers` tuple) for this record. The wrapper compares
-    against :data:`K_ANONYMITY_MIN` (5) and routes to NEEDS_REVIEW when
-    below threshold. The caller — typically the audit-pipeline orchestrator
-    (#24) — precomputes the population's QI groups (via
-    :func:`bba.deid_redactor.k_anonymity.compute_k_groups`) and adapts it
-    to this callable.
-    """
-
-    def __call__(self, qi: QuasiIdentifiers) -> int:  # pragma: no cover - protocol
-        ...
-
-
 # =============================================================================
-# Quasi-identifier + version metadata
+# Version metadata
 # =============================================================================
-
-
-_SEX_LITERAL: frozenset[str] = frozenset({"M", "F", "U"})
-"""Allowed sex codes. ``U`` (unknown) is required because HOSxP exports
-include records where sex is missing or unspecified — rejecting them at
-the redactor boundary would silently drop audit-eligible orders."""
-
-
-def _ensure_sex_literal(value: str) -> str:
-    """Reject sex codes outside :data:`_SEX_LITERAL`.
-
-    Free-form would silently fragment k-anonymity: ``"Male"`` and ``"M"``
-    would map to two distinct groups, halving k for the same population.
-    """
-    if value not in _SEX_LITERAL:
-        raise ValueError(
-            f"sex must be one of {sorted(_SEX_LITERAL)} (got {value!r}); "
-            "deviation breaks k-anonymity group equality"
-        )
-    return value
-
-
-SexCode = Annotated[str, AfterValidator(_ensure_sex_literal)]
-
-
-def _ensure_admission_month(value: str) -> str:
-    """Validate the admission-month format ``YYYY-MM``.
-
-    A free-form string here would silently break k-anonymity grouping:
-    ``"2026-05"`` and ``"2026-5"`` would be two distinct groups, halving k.
-    """
-    parts = value.split("-")
-    if len(parts) != 2 or len(parts[0]) != 4 or len(parts[1]) != 2:
-        raise ValueError(
-            f"admission_month must be 'YYYY-MM' (got {value!r}); "
-            "deviation breaks k-anonymity group equality"
-        )
-    if not parts[0].isdigit() or not parts[1].isdigit():
-        raise ValueError(
-            f"admission_month must be 'YYYY-MM' digits-only (got {value!r})"
-        )
-    month_int = int(parts[1])
-    if month_int < 1 or month_int > 12:
-        raise ValueError(f"admission_month month must be 01-12 (got {value!r})")
-    return value
-
-
-AdmissionMonth = Annotated[str, AfterValidator(_ensure_admission_month)]
-
-
-def _ensure_age_band(value: str) -> str:
-    """Validate the age-band format ``LO-HI`` (e.g. ``"60-69"``).
-
-    Mirrors :func:`_ensure_admission_month` — free-form strings would
-    fragment k-anonymity groups silently.
-    """
-    parts = value.split("-")
-    if len(parts) != 2 or not all(p.isdigit() for p in parts):
-        raise ValueError(
-            f"age_band must be 'LO-HI' integers (got {value!r}); "
-            "deviation breaks k-anonymity group equality"
-        )
-    lo, hi = int(parts[0]), int(parts[1])
-    if lo < 0 or hi < lo:
-        raise ValueError(f"age_band must have lo <= hi and lo >= 0 (got {value!r})")
-    return value
-
-
-AgeBand = Annotated[str, AfterValidator(_ensure_age_band)]
-
-
-class QuasiIdentifiers(BaseModel):
-    """The five quasi-identifier fields that define a k-anonymity equivalence class.
-
-    PRD §8: "k-anonymity gate (k ≥ 5 on ``{ward, ICD-3char, age-band, sex,
-    admission-month}``)". The model is hashable (frozen + only-primitive
-    fields) so it can be used as a ``Mapping`` key in
-    :func:`bba.deid_redactor.k_anonymity.compute_k_groups`.
-
-    Field formats are validated so equivalent-but-formatted-differently
-    inputs do not silently split a group (e.g. ``"2026-05"`` vs
-    ``"2026-5"`` would otherwise halve the effective k).
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    ward: str = Field(min_length=1)
-    icd_3char: str = Field(min_length=3, max_length=3)
-    age_band: AgeBand
-    sex: SexCode
-    admission_month: AdmissionMonth
-
-    def __hash__(self) -> int:
-        return hash(
-            (
-                self.ward,
-                self.icd_3char,
-                self.age_band,
-                self.sex,
-                self.admission_month,
-            )
-        )
 
 
 class RedactorVersion(BaseModel):
@@ -341,17 +222,15 @@ class NoteInput(BaseModel):
 class RedactionRequest(BaseModel):
     """Top-level input to :func:`bba.deid_redactor.redact_bundle`.
 
-    ``admission_date`` anchors the date-shift transform. ``patient_age``
-    is the raw years-at-admission; the wrapper applies the age cap (PRD
-    §8 — age cap 89) and surfaces the capped value on the result.
+    ``anchor_date`` is Day 0 for the date-shift transform; the audit passes
+    the order date. No demographic field reaches the prompt, so the
+    request carries none.
     """
 
     model_config = ConfigDict(frozen=True)
 
     notes: tuple[NoteInput, ...]
-    quasi_identifiers: QuasiIdentifiers
-    admission_date: date
-    patient_age_years: int = Field(ge=0)
+    anchor_date: date
     redactor_version: RedactorVersion
 
 
@@ -364,7 +243,6 @@ class NeedsReviewReason(StrEnum):
     OR-of-reasons.
     """
 
-    K_ANONYMITY_FAIL = "k_anonymity_below_5"
     SEMANTIC_DEGRADATION = "person_density_above_threshold"
 
 
@@ -373,7 +251,7 @@ class RedactedNote(BaseModel):
 
     ``redacted_text`` is the final form sent to the LLM: PHI replaced
     with role-bearing tokens, dates rewritten to ``Day N`` offsets from
-    admission. ``semantic_degraded`` is the per-note degradation flag
+    the anchor date. ``semantic_degraded`` is the per-note degradation flag
     (PRD §8 — >4 PERSON-class tokens within 50 chars); the result-level
     flag is the OR across all notes.
     """
@@ -390,8 +268,8 @@ class RedactionResult(BaseModel):
 
     Carries the redacted notes and every metadata field the audit row
     needs (PRD §"Output schema"): the redactor version stamps, the
-    post-cap age, the k-anonymity decision, the NEEDS_REVIEW routing,
-    and the canonical-bytes hash for bundle-hash stability.
+    NEEDS_REVIEW routing, and the canonical-bytes hash for bundle-hash
+    stability.
 
     The ``redaction_hash`` is computed by
     :func:`bba.deid_redactor.canonical.compute_redaction_hash` over a
@@ -407,10 +285,6 @@ class RedactionResult(BaseModel):
 
     notes: tuple[RedactedNote, ...]
     redactor_version: RedactorVersion
-    redacted_age: int = Field(ge=0)
-    age_capped: bool
-    k_anonymity_size: int = Field(ge=0)
-    k_anonymity_passed: bool
     route_to_needs_review: bool
     needs_review_reasons: tuple[NeedsReviewReason, ...]
     redaction_hash: str = Field(min_length=64, max_length=64)
@@ -446,10 +320,6 @@ class RedactionResult(BaseModel):
                 "model_sha": self.redactor_version.model_sha,
                 "gazetteer_version": self.redactor_version.gazetteer_version,
             },
-            redacted_age=self.redacted_age,
-            age_capped=self.age_capped,
-            k_anonymity_size=self.k_anonymity_size,
-            k_anonymity_passed=self.k_anonymity_passed,
             route_to_needs_review=self.route_to_needs_review,
             needs_review_reasons=[r.value for r in self.needs_review_reasons],
         )
@@ -468,19 +338,6 @@ class RedactionResult(BaseModel):
 # =============================================================================
 
 
-AGE_CAP: int = 89
-"""HIPAA-derived age cap. PRD §8: "age cap at 89" — ages above 89 are
-collapsed to 89 to defeat re-identification of the elderly tail."""
-
-
-K_ANONYMITY_MIN: int = 5
-"""Minimum cohort size below which a record routes to NEEDS_REVIEW.
-
-PRD §8: "k-anonymity gate (k ≥ 5 on ...)". The threshold is part of the
-contract — changing it changes every routed row, so it is exposed as a
-module constant rather than a function default."""
-
-
 SEMANTIC_WINDOW_CHARS: int = 50
 """Sliding-window width (in NFC characters) over which the
 semantic-degradation detector counts PERSON-class tokens. PRD §8."""
@@ -493,16 +350,10 @@ degraded. PRD §8 ("> 4 ``[PERSON]``-class tokens within 50 chars")."""
 
 
 __all__: Sequence[str] = (
-    "AGE_CAP",
-    "AdmissionMonth",
-    "AgeBand",
     "BackendRedactionResult",
-    "K_ANONYMITY_MIN",
-    "KAnonymityGate",
     "NeedsReviewReason",
     "NoteInput",
     "PERSON_CLASS_TOKENS",
-    "QuasiIdentifiers",
     "RedactedNote",
     "RedactionRequest",
     "RedactionResult",
@@ -513,6 +364,5 @@ __all__: Sequence[str] = (
     "RoleToken",
     "SEMANTIC_PERSON_THRESHOLD",
     "SEMANTIC_WINDOW_CHARS",
-    "SexCode",
     "UTCDatetime",
 )

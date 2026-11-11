@@ -37,7 +37,7 @@ import EnvVarChecklist from "../../../../components/EnvVarChecklist.astro";
 | `BBA_PRIVACY_ARTIFACTS` | JSON object ที่ใช้ audit ID เป็น key แต่ละค่าคือ `PrivacyArtifact` ที่มี `evidence_chunks` ซึ่งลบข้อมูลแล้วและ `attestation` ที่ลงลายมือชื่อ |
 | `BBA_DB_URL` | Postgres สำหรับ checkpoint ที่ทำ migration และกำหนดสิทธิ์แล้ว ใช้ `postgresql://user@host/database` |
 
-ไฟล์ public key เก็บ Ed25519 verification key ขนาด 32 ไบต์ บริการลบข้อมูลในเครื่องที่ได้รับอนุมัติเตรียมหลักฐานด้วย `RedactionAuthority.prepare` บริการนั้นถือ private signing key โมเดลที่อนุมัติ และ k-anonymity gate เก็บ private key แยกจากแอปตรวจเลือด
+ไฟล์ public key เก็บ Ed25519 verification key ขนาด 32 ไบต์ บริการลบข้อมูลในเครื่องที่ได้รับอนุมัติเตรียมหลักฐานด้วย `RedactionAuthority.prepare` บริการนั้นถือ private signing key และโมเดลที่อนุมัติ เก็บ private key แยกจากแอปตรวจเลือด
 
 attestation ผูกกับ prompt audit ID run ID รุ่น redactor และผลตรวจความเป็นส่วนตัวที่ผ่านแล้ว ต้องเตรียมด้วยชุดข้อมูล รุ่น package และไฟล์ตั้งค่าเดียวกับที่ใช้รัน หากข้อมูลอนุมัติหายไปหรือไม่ผ่าน กรณีนั้นจะอยู่ให้คนทบทวนในเครื่อง การยืนยันจากผู้เรียกหรือ digest เพียงอย่างเดียวไม่อนุญาตให้ส่งข้อมูล
 

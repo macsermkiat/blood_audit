@@ -77,10 +77,6 @@ def build_envelope(
     *,
     notes: Sequence[Mapping[str, Any]],
     redactor_version: Mapping[str, str],
-    redacted_age: int,
-    age_capped: bool,
-    k_anonymity_size: int,
-    k_anonymity_passed: bool,
     route_to_needs_review: bool,
     needs_review_reasons: Sequence[str],
 ) -> Mapping[str, Any]:
@@ -88,10 +84,6 @@ def build_envelope(
     return {
         "notes": [dict(n) for n in notes],
         "redactor_version": dict(redactor_version),
-        "redacted_age": int(redacted_age),
-        "age_capped": bool(age_capped),
-        "k_anonymity_size": int(k_anonymity_size),
-        "k_anonymity_passed": bool(k_anonymity_passed),
         "route_to_needs_review": bool(route_to_needs_review),
         "needs_review_reasons": list(needs_review_reasons),
     }

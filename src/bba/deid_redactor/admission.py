@@ -20,8 +20,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 
 from bba.deid_redactor.models import (
-    K_ANONYMITY_MIN,
-    KAnonymityGate,
     RedactionRequest,
     RedactionResult,
     RedactorBackend,
@@ -52,7 +50,6 @@ class PrivacyAttestation(BaseModel):
     prompt_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
     redaction_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     redactor_version: RedactorVersion
-    k_anonymity_size: int = Field(ge=K_ANONYMITY_MIN)
     semantic_checks_passed: StrictBool
     signature: str = Field(pattern=r"^[a-f0-9]{128}$")
 
@@ -102,9 +99,7 @@ def attest_redaction(
     result = RedactionResult.model_validate(result.model_dump(mode="json"))
     _real_version(result.redactor_version)
     if (
-        not result.k_anonymity_passed
-        or result.k_anonymity_size < K_ANONYMITY_MIN
-        or result.route_to_needs_review
+        result.route_to_needs_review
         or result.needs_review_reasons
         or any(
             n.semantic_degraded or detect_semantic_degradation(n.redacted_text)
@@ -138,7 +133,6 @@ def attest_redaction(
         "prompt_digest": _prompt_digest(prompt),
         "redaction_hash": result.redaction_hash,
         "redactor_version": result.redactor_version.model_dump(mode="json"),
-        "k_anonymity_size": result.k_anonymity_size,
         "semantic_checks_passed": True,
     }
     signature = (
@@ -245,7 +239,6 @@ class RedactionAuthority:
         self,
         *,
         backend: RedactorBackend,
-        k_gate: KAnonymityGate,
         model_artifact: Path,
         version: RedactorVersion,
         key_id: str,
@@ -260,7 +253,6 @@ class RedactionAuthority:
                 "configured redactor model artifact SHA mismatch"
             )
         self._backend = backend
-        self._k_gate = k_gate
         self._version = version
         self._key_id = key_id
         self._signing_key = signing_key
@@ -279,7 +271,7 @@ class RedactionAuthority:
             raise PrivacyAdmissionError(
                 "redaction request differs from approved model version"
             )
-        result = redact_bundle(request, backend=self._backend, k_gate=self._k_gate)
+        result = redact_bundle(request, backend=self._backend)
         notes = {note.note_id: note.redacted_text for note in result.notes}
         ids = tuple(chunk.evidence_id for chunk in prompt_request.evidence_chunks)
         if ids != tuple(note.note_id for note in result.notes):
