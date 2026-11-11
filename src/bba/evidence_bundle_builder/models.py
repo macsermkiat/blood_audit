@@ -203,15 +203,15 @@ class OrderAnchor(BaseModel):
     builder does NOT use them to filter records (the caller pre-filters,
     mirroring :mod:`bba.hb_lookup`).
 
-    ``hb_anchor`` is the Hb-lookup anchor when it differs from
-    ``order_datetime``. The shared resolver (:func:`bba.hb_lookup.
-    resolve_hb_with_fallback`) can anchor the Hb on a post-order draw (a lab
-    drawn minutes after REQTIME — see ``docs/handoff-hb-anchor-unification``).
-    When that happens the triggering Hb is *after* ``order_datetime``, so the
-    default ``h.timestamp <= order_datetime`` Hb window would drop the very
-    value that routed the case to the LLM. Set ``hb_anchor`` to that draw's
-    timestamp so the bundle's Hb upper bound includes it; leave ``None`` for
-    the order-time path (the common case) to keep the original window.
+    ``lab_anchor`` is the timestamp of the lab draw that decided the order
+    (the Hb for a red-cell order, the platelet count for a platelet order)
+    when it differs from ``order_datetime``. Lab lookups read back from the
+    dispense time (:func:`bba.hb_lookup.resolve_lab_anchor`) and the fallback
+    ladder can land on a post-order draw, so the deciding value can sit
+    *after* ``order_datetime``; the default ``timestamp <= order_datetime``
+    window would then drop the very value the order is judged on. Set
+    ``lab_anchor`` to that draw's timestamp so the Hb and platelet upper
+    bounds include it; leave ``None`` to keep the original window.
 
     ``window_anchor`` is the point every per-source window (progress, focus,
     meds, Hb, vitals) is centered on. It defaults to ``order_datetime``. Blood
@@ -230,7 +230,7 @@ class OrderAnchor(BaseModel):
     hn_hash: str
     an_hash: str
     products: tuple[str, ...]
-    hb_anchor: UTCDatetime | None = None
+    lab_anchor: UTCDatetime | None = None
     window_anchor: UTCDatetime | None = None
 
 

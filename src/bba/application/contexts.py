@@ -46,6 +46,7 @@ from bba.hb_lookup import (
     AnchorCandidate,
     resolve_evidence_anchor,
     resolve_hb_with_fallback,
+    resolve_lab_anchor,
 )
 from bba.platelet_lookup import lookup_platelet, project_24h
 from bba.preop_reservation import (
@@ -146,13 +147,16 @@ def build_contexts(
         anchor = resolve_evidence_anchor(
             order_datetime=order.order_datetime, candidates=candidates
         ).anchor_utc
+        lab_anchor = resolve_lab_anchor(
+            order_datetime=order.order_datetime, candidates=candidates
+        ).anchor_utc
         labs = scoped(tables, "Lab", order)
         hb_obs = hb_observations(labs)
         plt_obs = platelet_observations(labs)
         hb, _, _ = resolve_hb_with_fallback(
-            observations=hb_obs, order_datetime=anchor, candidates=candidates
+            observations=hb_obs, order_datetime=lab_anchor, candidates=candidates
         )
-        plt = lookup_platelet(observations=plt_obs, anchor_utc=anchor)
+        plt = lookup_platelet(observations=plt_obs, anchor_utc=lab_anchor)
         ops = operations(tables, order)
         meds = medications(scoped(tables, "Med", order))
         history = histories[(order.hn, order.an)]
@@ -193,7 +197,9 @@ def build_contexts(
                     hn_hash=hn_hash,
                     an_hash=an_hash,
                     products=order.products_ordered,
-                    hb_anchor=hb.datetime_utc,
+                    lab_anchor=plt.datetime_utc
+                    if order.component == "platelet"
+                    else hb.datetime_utc,
                     window_anchor=anchor,
                 ),
                 component=order.component,
@@ -363,7 +369,7 @@ def build_contexts(
                         )
                     )
                 ),
-                order.order_datetime,
+                hb.datetime_utc or order.order_datetime,
             ),
             hn_hash=hn_hash,
             an_hash=an_hash,
@@ -400,7 +406,7 @@ def build_contexts(
             component=order.component,
             platelet_result=plt if order.component == "platelet" else None,
             platelet_projected_24h_k_ul=project_24h(
-                observations=plt_obs, anchor_utc=anchor
+                observations=plt_obs, anchor_utc=lab_anchor
             )
             if order.component == "platelet"
             else None,

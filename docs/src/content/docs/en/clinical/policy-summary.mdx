@@ -43,13 +43,13 @@ This flow starts after order-level routing and shows the default Hb-present path
 
 The universal `Hb ≤ 7.0` rule runs before MTP and unknown-cohort checks. MTP then clears the remaining matching orders. Unknown context at `Hb > 7.0` routes to review before the later bypasses.
 
-A delta-Hb bypass requires a drop of at least 1.5 g/dL within 6 hours, 2.0 within 12 hours, or 2.5 within 24 hours. At higher cohort thresholds, crystalloid of at least 2 L in the prior 4 hours or an isolated low Hb without a prior trend can send a would-be clear to review. These checks do not undo the earlier universal rule. Vital signs alone do not create a deterministic bypass.
+A delta-Hb bypass requires a drop of at least 1.5 g/dL within 6 hours, 2.0 within 12 hours, or 2.5 within 24 hours. At higher cohort thresholds, crystalloid of at least 2 L in the 4 hours before the deciding Hb draw or an isolated low Hb without a prior trend can send a would-be clear to review. These checks do not undo the earlier universal rule. Vital signs alone do not create a deterministic bypass.
 
 When the declared-use exemption is disabled, the legacy path can clear an order with a procedure in the preceding 6 hours. An upcoming procedure within 72 hours, or a surgical declaration, instead defers an above-threshold order to the LLM. An upcoming procedure does not automatically establish a transfusion indication.
 
 ## Hb evidence and audit population
 
-The deterministic classifier uses the selected pre-order Hb from the seven-day lookup, with source and freshness metadata. The LLM's `SUB_THRESHOLD_HB` evidence uses the lowest Hb in the previous 24 hours, bounded by the latest transfusion in that window. These are separate values and must not be described as interchangeable.
+The deterministic classifier uses the Hb selected from the seven-day lookup before the blood was dispensed (before the order when no dispense time is recorded), with source and freshness metadata. The LLM's `SUB_THRESHOLD_HB` evidence uses the lowest Hb in the 24 hours before that same moment, bounded by the latest transfusion in that window. These are separate values and must not be described as interchangeable.
 
 The intended population is adult inpatients. The deployment must supply the approved adult cohort rather than assume that every export has already been filtered. Product routing separates RBC from platelets and other components.
 

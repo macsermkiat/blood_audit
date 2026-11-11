@@ -139,3 +139,183 @@ class TestPilotTransfusionCutoff:
             mod._last_rbc_order_before({"AN1": [older, ANCHOR]}, "AN1", ANCHOR) is None
         )
         assert mod._last_rbc_order_before({}, "AN1", ANCHOR) is None
+
+        # Clinician review 2026-11-09: the map holds dispense times and the
+        # Hb is read at this order's own dispense. The order itself (at the
+        # anchor) never counts; a sibling counts only once its blood was
+        # dispensed before this one's, not merely ordered before it.
+        own_dispense = ANCHOR + timedelta(hours=4)
+        sibling_dispensed_later = ANCHOR + timedelta(hours=6)
+        sibling_dispensed_earlier = ANCHOR + timedelta(hours=2)
+        assert (
+            mod._last_rbc_order_before(
+                {"AN1": [own_dispense, sibling_dispensed_later]}, "AN1", own_dispense
+            )
+            is None
+        )
+        assert (
+            mod._last_rbc_order_before(
+                {"AN1": [own_dispense, sibling_dispensed_earlier]},
+                "AN1",
+                own_dispense,
+            )
+            == sibling_dispensed_earlier
+        )
+
+
+def _pilot_llm_leg():
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    pilot = Path(__file__).resolve().parents[2] / "scripts" / "pilot"
+    if str(pilot) not in sys.path:
+        sys.path.insert(0, str(pilot))
+    spec = importlib.util.spec_from_file_location(
+        "pilot_run_llm_leg_trigger", pilot / "run_llm_leg.py"
+    )
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class TestEvidenceSeesWhatTheGuardrailJudges:
+    """Third review of the dispense change (2026-11-10): the model must be
+    shown, and flagged on, every Hb draw the replay guardrail reads."""
+
+    def test_bundle_reaches_a_poct_draw_between_order_and_dispense(self) -> None:
+        # Order at -3 h, dispense at 0. HEMATOLOGY 9.1 at -30 h is the
+        # current value, but the 24 h minimum is a POCT 7.4 at -1 h. The
+        # bundle bound must reach the dispense time, not stop at the
+        # order or the older HEMATOLOGY draw.
+        from bba.hb_lookup import trigger_draws
+
+        mod = _pilot_llm_leg()
+        order = ANCHOR - timedelta(hours=3)
+        draws = trigger_draws(
+            observations=[
+                _obs(30, 9.1),
+                _obs(1, 7.4, "POCT"),
+            ],
+            anchor_utc=ANCHOR,
+        )
+        assert draws.min_24h is not None and draws.min_24h.value_g_dl == 7.4
+        assert mod._hb_bundle_upper(ANCHOR, draws, order) == ANCHOR
+
+    def test_bundle_window_unchanged_when_nothing_is_after_it(self) -> None:
+        from bba.hb_lookup import trigger_draws
+
+        mod = _pilot_llm_leg()
+        draws = trigger_draws(observations=[_obs(2, 8.0)], anchor_utc=ANCHOR)
+        assert mod._hb_bundle_upper(ANCHOR, draws, ANCHOR) is None
+
+    def test_bundle_reaches_a_fallback_minimum_newer_than_the_current_draw(
+        self,
+    ) -> None:
+        # Fourth review (2026-11-11): no dispense and no Hb in the 7 days
+        # before the order, so the lookup falls back to a blood-bank visit
+        # 40 h later. The current value prefers HEMATOLOGY 9.0 at +5 h, but
+        # the 24 h minimum is a POCT 6.5 at +30 h. The bundle must reach it.
+        from bba.hb_lookup import (
+            AnchorCandidate,
+            resolve_hb_with_fallback,
+            trigger_draws,
+        )
+
+        mod = _pilot_llm_leg()
+        bank = AnchorCandidate(
+            anchor_utc=ANCHOR + timedelta(hours=40),
+            display="bank",
+            reason="blood_bank_visit_fallback",
+        )
+        obs = [
+            _obs(-5, 9.0),
+            _obs(-30, 6.5, "POCT"),
+        ]
+        hb, display, reason = resolve_hb_with_fallback(
+            observations=obs, order_datetime=ANCHOR, candidates=[bank]
+        )
+        assert hb.min_24h_g_dl == 6.5
+        moment = mod._hb_trigger_anchor(ANCHOR, reason, display, [bank])
+        draws = trigger_draws(observations=obs, anchor_utc=moment)
+
+        upper = mod._hb_bundle_upper(ANCHOR, draws, ANCHOR)
+
+        assert upper is not None and upper >= ANCHOR + timedelta(hours=30)
+
+    def test_fallback_hb_is_flagged_at_the_anchor_that_supplied_it(self) -> None:
+        from bba.hb_lookup import (
+            AnchorCandidate,
+            resolve_hb_with_fallback,
+            trigger_draws,
+        )
+
+        mod = _pilot_llm_leg()
+        bank = AnchorCandidate(
+            anchor_utc=ANCHOR + timedelta(hours=3),
+            display="bank",
+            reason="blood_bank_visit_fallback",
+        )
+        later = HbObservation(
+            value_g_dl=6.8,
+            datetime_utc=ANCHOR + timedelta(hours=2),
+            source="HEMATOLOGY",
+            item_no=7,
+        )
+        hb, display, reason = resolve_hb_with_fallback(
+            observations=[later], order_datetime=ANCHOR, candidates=[bank]
+        )
+        moment = mod._hb_trigger_anchor(ANCHOR, reason, display, [bank])
+        draws = trigger_draws(observations=[later], anchor_utc=moment)
+
+        assert moment == bank.anchor_utc
+        assert draws.current == later
+        assert hb.value_g_dl == draws.current.value_g_dl
+
+
+class TestUndispensedSiblingIsNoTransfusion:
+    """Issue #264, clinician sign-off 2026-11-11 (option A): an RBC order with
+    no dispense record is no evidence that blood was given, so it must not
+    cut off the Hb another order on the same admission is judged on."""
+
+    def test_only_dispensed_rbc_orders_enter_the_cutoff_map(self) -> None:
+        from types import SimpleNamespace
+
+        from bba.hb_lookup import AnchorCandidate
+
+        mod = _pilot_llm_leg()
+        # B ordered 09:00, dispensed 12:00. A ordered 10:00, never dispensed.
+        b_order = ANCHOR
+        b_dispense = ANCHOR + timedelta(hours=3)
+        a_order = ANCHOR + timedelta(hours=1)
+        orders = [
+            SimpleNamespace(
+                component="rbc", an="AN1", reqno="B", order_datetime=b_order
+            ),
+            SimpleNamespace(
+                component="rbc", an="AN1", reqno="A", order_datetime=a_order
+            ),
+            SimpleNamespace(
+                component="platelet", an="AN1", reqno="P", order_datetime=a_order
+            ),
+        ]
+        candidates = {
+            "B": [
+                AnchorCandidate(
+                    anchor_utc=b_dispense, display="12:00", reason="issue_datetime"
+                )
+            ],
+            "P": [
+                AnchorCandidate(
+                    anchor_utc=a_order, display="10:00", reason="issue_datetime"
+                )
+            ],
+        }
+
+        by_an = mod._rbc_dispense_times_by_an(orders, candidates)
+
+        assert by_an == {"AN1": [b_dispense]}
+        # So B's Hb at 09:30 is no longer cut off by A's order time.
+        assert mod._last_rbc_order_before(by_an, "AN1", b_dispense) is None

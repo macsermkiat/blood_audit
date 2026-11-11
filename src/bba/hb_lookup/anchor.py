@@ -89,6 +89,31 @@ def resolve_hb_with_fallback(
     return primary, "", "order_datetime"
 
 
+def resolve_lab_anchor(
+    *,
+    order_datetime: datetime,
+    candidates: Sequence[AnchorCandidate],
+) -> AnchorCandidate:
+    """The moment an order's Hb and platelet count are read back from.
+
+    The first ``issue_datetime`` (dispense) candidate at or after the order
+    wins: the clinical committee judges the order on the lab the doctor saw
+    when the blood left the bank, not the one on file at request time
+    (clinician review 2026-11-09). With no dispense record the order time
+    stands, labelled ``order_datetime``. A dispense recorded before the
+    request is a data error and is skipped.
+    """
+    for candidate in candidates:
+        if (
+            candidate.reason == "issue_datetime"
+            and candidate.anchor_utc >= order_datetime
+        ):
+            return candidate
+    return AnchorCandidate(
+        anchor_utc=order_datetime, display="", reason="order_datetime"
+    )
+
+
 @dataclass(frozen=True)
 class EvidenceAnchor:
     """Where the per-source evidence windows should be centered.

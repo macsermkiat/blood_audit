@@ -261,6 +261,72 @@ def test_summary_pills_and_mismatch_rendered_server_side(
     assert "(LLM not run)" in rendered
 
 
+def _override_llm_json(*, final: str, reason: str, reasoning_en: str) -> str:
+    return json.dumps(
+        [
+            {
+                "reqno": "R1",
+                "llm_final": {
+                    "final_classification": final,
+                    "confidence": 0.9,
+                    "model": "test",
+                    "review_reason": reason,
+                    "indications": [],
+                    "negative_evidence": [],
+                    "reasoning_en": reasoning_en,
+                    "reasoning_th": "x",
+                },
+            }
+        ]
+    )
+
+
+def test_guardrail_override_shows_what_the_model_concluded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Clinician review 2026-11-09: the reasoning read "appropriate" while the
+    # verdict said "inappropriate". The guardrail's verdict stands, but the page
+    # must say the model concluded otherwise and why it was overridden.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN\nHN1,R1,AN1\n",
+        report_csv="reqno,classification\nR1,NEEDS_REVIEW\n",
+        llm_json=_override_llm_json(
+            final="INAPPROPRIATE",
+            reason="llm_overclear_asserted_inappropriate",
+            reasoning_en="Post-op day 1. Final classification: APPROPRIATE.",
+        ),
+    ).decode()
+
+    assert "Guardrail override" in rendered
+    assert "The model concluded <b>Appropriate</b>" in rendered
+    assert "the final verdict is <b>Inappropriate</b>" in rendered
+    assert "Hb at or below 7.0 g/dL" in rendered
+
+
+def test_model_verdict_without_override_shows_no_banner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN\nHN1,R1,AN1\n",
+        report_csv="reqno,classification\nR1,NEEDS_REVIEW\n",
+        llm_json=_override_llm_json(
+            final="INAPPROPRIATE",
+            reason="model_verdict",
+            reasoning_en="No indication. Final classification: INAPPROPRIATE.",
+        ),
+    ).decode()
+
+    assert "Guardrail override" not in rendered
+
+
 def test_msbos_flag_off_report_columns_do_not_change_review_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -668,6 +734,28 @@ def test_platelet_case_shows_the_count_not_the_hb_anchor(
     assert "data-component='platelet'" in rendered
 
 
+def test_platelet_count_read_at_dispense_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Clinician review 2026-11-09: the count is read at dispense time, so the
+    # page must say which moment the count belongs to.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN1,P1,AN1,platelet\n",
+        report_csv=(
+            "reqno,classification,rationale,component,platelet_count_k_ul,"
+            "platelet_freshness,platelet_anchor_datetime_local\n"
+            "P1,NEEDS_REVIEW,plt_defer_llm,platelet,11.0,fresh,2025-04-23 15:14\n"
+        ),
+        llm_json="[]",
+    ).decode()
+
+    assert "Platelet count @ dispense 2025-04-23 15:14:" in rendered
+
+
 def test_page_title_is_component_neutral_when_platelets_present(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -822,7 +910,8 @@ def test_platelet_page_explains_platelet_codes_and_verdicts(
 
     assert "<dt>plt_defer_llm</dt>" in rendered
     assert "<dt>plt_lt_10_heme_prophylaxis</dt>" in rendered
-    assert "Platelet: count below the policy threshold" in rendered
+    assert "Platelet: documented active bleeding at any count" in rendered
+    assert "Screening flag from the deterministic pre-check" in rendered
     assert "non-RBC product" not in rendered
     # The verdict box resolves the code to its label instead of a bare slug.
     assert "indication judged by the LLM" in rendered

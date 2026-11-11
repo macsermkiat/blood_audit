@@ -100,7 +100,8 @@ class ClassifierInputs(BaseModel):
       anchor to the next operative event. ``None`` means no future
       operative event was found in the caller's lookahead window.
 
-    * ``crystalloid_liters_prior_4h`` is the 4-h totaling output. ``0.0``
+    * ``crystalloid_liters_prior_4h`` is the 4-h totaling output, over the
+      4 h before the deciding Hb draw (not the order). ``0.0``
       means "no crystalloid in window OR data unavailable but the caller
       asserts the 4-h check is N/A". The hemodilution rule only fires
       strictly ≥ :data:`bba.deterministic_classifier.HEMODILUTION_CRYSTALLOID_LITERS`.

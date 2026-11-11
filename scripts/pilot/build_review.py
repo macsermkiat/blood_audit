@@ -43,6 +43,7 @@ from bba.feature_flags import (
     RETURNS_LEDGER_ENABLED,
 )
 from bba.deterministic_classifier.rationales import PREOP_DECLARED_EXEMPT
+from bba.verdict_override import verdict_override
 from bba.preop_reservation.reason_presentation import (
     WITHIN_REASONS as _MSBOS_WITHIN_REASONS,
     bucket_for,
@@ -137,7 +138,7 @@ _RATIONALE_LABELS: dict[str, str] = {
     "plt_defer_llm": "Platelet count on file — no deterministic verdict; indication judged by the LLM",
     "plt_missing_defer_llm": "No usable platelet count — indication judged by the LLM",
     "plt_missing": "No platelet count in the 7-day pre-order window",
-    "plt_ge_100": "Platelet count ≥ 100,000 /µL — above every policy threshold",
+    "plt_ge_100": "Platelet count ≥ 100,000 /µL — screening flag, not a verdict: above every count threshold, so only active bleeding can justify it; the LLM verdict decides",
     "plt_lt_10_heme_prophylaxis": "Fresh count ≤ 10,000 /µL on a heme-malignancy / chemotherapy admission with no withhold population — prophylaxis auto-clear",
     "hb_lt_7_universal": "Hb ≤ 7.0 g/dL — at or below the universal threshold; no bypass required",
     "hb_lt_threshold": "Hb at or below the cohort-specific threshold",
@@ -269,6 +270,29 @@ _REVIEW_REASON_LABELS: dict[str, str] = {
     "empty_response": "Parse failure — the model returned an empty response",
     "tool_use_missing": ("Parse failure — no tool-use block was found in the response"),
 }
+
+
+def _override_banner(final: str, reasoning_en: str, review_reason: str) -> str:
+    """Explain a final verdict that differs from the model's own conclusion.
+
+    The reasoning text is the model's; the verdict above it may be a
+    guardrail's. Without this line a reviewer reads "appropriate" reasoning
+    under an "inappropriate" verdict (clinician review 2026-11-09). Empty when
+    the model's verdict stands.
+    """
+    override = verdict_override(reasoning_en, final, review_reason)
+    if override is None:
+        return ""
+    why = override.explanation or _REVIEW_REASON_LABELS.get(
+        review_reason, review_reason
+    )
+    return (
+        "<div class='override'><b>Guardrail override.</b> "
+        f"The model concluded <b>{esc(_display_cls(override.model_concluded))}</b> "
+        "(its reasoning is below); "
+        f"the final verdict is <b>{esc(_display_cls(override.final))}</b>. "
+        f"{esc(why)}.</div>"
+    )
 
 
 def _code_abbr(code: str, labels: dict[str, str]) -> str:
@@ -958,8 +982,10 @@ def _platelet_meta_items(det: dict[str, str]) -> list[str]:
         count_disp = f"{count_k} ×10³/µL ({per_ul} /µL)"
     else:
         count_disp = "—"
+    dispense = (det.get("platelet_anchor_datetime_local") or "").strip()
+    read_at = f"dispense {dispense}" if dispense else "order"
     return [
-        f"<div><b>Platelet count @ order:</b> {esc(count_disp)} "
+        f"<div><b>Platelet count @ {esc(read_at)}:</b> {esc(count_disp)} "
         f"({esc(det.get('platelet_freshness') or '—')})</div>",
     ]
 
@@ -1918,6 +1944,9 @@ def main() -> None:
                 f"<div class='rationale'>provenance: "
                 f"{_code_abbr(review_reason, _REVIEW_REASON_LABELS)}</div>"
             )
+            parts.append(
+                _override_banner(fc, llm_block.get("reasoning_en") or "", review_reason)
+            )
             parts.append("<h5>Indications</h5>")
             parts.append(render_indications(llm_block["indications"]))
             parts.append("<h5>Negative evidence</h5>")
@@ -2363,6 +2392,8 @@ def main() -> None:
     .vbox { padding: 14px; border: 1px solid var(--s-border); border-radius: 6px; }
     .vbox.det { background: var(--s-bg-raised); }
     .vbox.llm { background: var(--info-bg); border-color: oklch(80% 0.08 280); }
+    .override { margin: 8px 0; padding: 8px 10px; border-radius: 4px;
+                background: var(--warn-bg); color: var(--warn-fg); }
     .cls { font-size: 1rem; font-weight: 700; padding: 5px 12px; border-radius: 20px;
            display: inline-block; margin-bottom: 8px; letter-spacing: 0.02em; }
     .cls-appropriate { background: var(--ok-bg);   color: var(--ok-fg); }
@@ -2586,13 +2617,17 @@ def main() -> None:
         )
         glossary_appropriate = (
             "Order meets evidence-based indications. RBC: Hb below threshold or "
-            "qualifying bypass. Platelet: count below the policy threshold for a "
-            "documented indication (procedure, active bleeding, chemo/HSCT or "
-            "consumptive thrombocytopenia prophylaxis)."
+            "qualifying bypass. Platelet: documented active bleeding at any count, "
+            "or a count at or below the policy threshold for another documented "
+            "indication (procedure, chemo/HSCT or consumptive thrombocytopenia "
+            "prophylaxis)."
         )
         glossary_potentially = (
-            "RBC: Hb above threshold and no qualifying bypass. Platelet: count "
-            "≥ 100,000 /µL, above every policy threshold. Warrants clinician review."
+            "Screening flag from the deterministic pre-check, not a final verdict; "
+            "the LLM verdict beside it is the audit's answer. RBC: Hb above "
+            "threshold and no qualifying bypass. Platelet: count ≥ 100,000 /µL, "
+            "above every count threshold, so only documented active bleeding can "
+            "justify it."
         )
         glossary_excluded = (
             "Case excluded from audit scope (e.g. paediatric, hemoglobinopathy, "

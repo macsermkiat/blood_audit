@@ -1265,6 +1265,37 @@ class TestRouteSmoke:
         response = client.get("/case/audit-001")
         assert response.status_code == 200
 
+    def test_case_page_says_when_a_guardrail_overrode_the_model(
+        self, client: Any, audit_store: AuditStore
+    ) -> None:
+        # Clinician review 2026-11-09: the reasoning read "appropriate" under
+        # an "inappropriate" verdict. The verdict stands; the page must say the
+        # model concluded otherwise and why it was overridden.
+        row = _audit_row(audit_id="audit-override", run_id="run-override")
+        fields = row.model_dump()
+        fields.update(
+            final_classification="INAPPROPRIATE",
+            reasoning_summary_en="Post-op day 1. Final classification: APPROPRIATE.",
+            review_reason="llm_overclear_asserted_inappropriate",
+            needs_human_review=False,
+        )
+        audit_store.write(
+            AuditRow.model_validate(fields),
+            (_llm_call(audit_id="audit-override", run_id="run-override"),),
+        )
+
+        page = client.get("/case/audit-override").text
+
+        assert "Model concluded" in page
+        # "INAPPROPRIATE" contains "APPROPRIATE", so match the whole value.
+        assert "<dt>Model concluded</dt><dd>APPROPRIATE." in page
+        assert "Hb at or below 7.0 g/dL" in page
+
+    def test_case_page_without_override_has_no_model_concluded_line(
+        self, client: Any
+    ) -> None:
+        assert "Model concluded" not in client.get("/case/audit-001").text
+
     def test_post_break_glass_returns_200(self, client: Any) -> None:
         import re
 
