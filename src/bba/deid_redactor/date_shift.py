@@ -1,13 +1,13 @@
-"""Date-shift transform: rewrite in-text dates as Δ-days-from-admission.
+"""Date-shift transform: rewrite in-text dates as days from the anchor date.
 
-PRD §8: "Date-shift to relative offsets (Δ-days-from-admission)". The
-wrapper applies this AFTER ``thai-medical-deid`` has redacted explicit
+The caller supplies ``anchor_date`` as Day 0: the order's calendar date in
+hospital local time. The wrapper applies this AFTER ``thai-medical-deid`` has redacted explicit
 date PHI to ``[DATE]`` tokens. Any remaining literal date strings inside
 the note text — typically dates the backend missed inside running prose
 ("admitted on 2026-05-10") — are converted to anchored offsets like
 ``Day 0``, ``Day +3``, ``Day -2``.
 
-Determinism contract: same input text + same ``admission_date`` →
+Determinism contract: same input text + same ``anchor_date`` →
 byte-identical output. The bundle-hash stability AC depends on this —
 two runs over the same source must produce the same redacted bytes.
 
@@ -119,11 +119,10 @@ def format_offset(*, days: int) -> str:
     return f"Day {days}"
 
 
-def shift_dates_in_text(text: str, *, admission_date: date) -> str:
+def shift_dates_in_text(text: str, *, anchor_date: date) -> str:
     """Replace every detected literal date in ``text`` with its offset form.
 
-    ``admission_date`` is the patient's admission day; offsets are
-    ``(date_in_text - admission_date).days``. The transform is total
+    ``anchor_date`` is Day 0; offsets are ``(date_in_text - anchor_date).days``. The transform is total
     (every match in :func:`parse_dates` is replaced) and order-preserving
     (no re-flow of unmatched text).
 
@@ -137,7 +136,7 @@ def shift_dates_in_text(text: str, *, admission_date: date) -> str:
     cursor = 0
     for m in matches:
         parts.append(text[cursor : m.start])
-        delta_days = (m.parsed - admission_date).days
+        delta_days = (m.parsed - anchor_date).days
         parts.append(format_offset(days=delta_days))
         cursor = m.end
     parts.append(text[cursor:])
@@ -151,7 +150,7 @@ def shift_date_spans_in_text(
     redacted_text: str,
     *,
     spans: Sequence[RedactionSpan],
-    admission_date: date,
+    anchor_date: date,
 ) -> str:
     """Replace ``[DATE]`` placeholders with their per-span ``Day N`` offsets.
 
@@ -163,7 +162,7 @@ def shift_date_spans_in_text(
 
     * If ``span.original_text`` parses as one of the recognized formats
       (:data:`DATE_PATTERNS`), the placeholder becomes
-      :func:`format_offset` of the day delta from ``admission_date``.
+      :func:`format_offset` of the day delta from ``anchor_date``.
     * If ``span.original_text`` is empty or unparseable, the placeholder
       is left as ``[DATE]`` (the backend tagged a date PHI but did not
       surface a parseable form — typically because the backend's own
@@ -196,14 +195,14 @@ def shift_date_spans_in_text(
         if idx == -1:  # pragma: no cover - guarded by placeholder count check
             break
         parts.append(redacted_text[cursor:idx])
-        parts.append(_format_date_span(span, admission_date=admission_date))
+        parts.append(_format_date_span(span, anchor_date=anchor_date))
         cursor = idx + placeholder_len
 
     parts.append(redacted_text[cursor:])
     return "".join(parts)
 
 
-def _format_date_span(span: RedactionSpan, *, admission_date: date) -> str:
+def _format_date_span(span: RedactionSpan, *, anchor_date: date) -> str:
     """Render one DATE span as ``Day N`` or fall back to the placeholder.
 
     Unparseable spans (empty ``original_text`` or non-canonical format)
@@ -215,4 +214,4 @@ def _format_date_span(span: RedactionSpan, *, admission_date: date) -> str:
     matches = parse_dates(span.original_text)
     if not matches:
         return _DATE_PLACEHOLDER
-    return format_offset(days=(matches[0].parsed - admission_date).days)
+    return format_offset(days=(matches[0].parsed - anchor_date).days)

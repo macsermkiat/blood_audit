@@ -9,7 +9,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from bba.deid_redactor import (
     BackendRedactionResult,
     NoteInput,
-    QuasiIdentifiers,
     RedactionRequest,
     RedactorVersion,
     redact_bundle,
@@ -35,23 +34,14 @@ class Backend:
         return BackendRedactionResult(text=text)
 
 
-def admitted_request(*, k: int = 5, text: str = "Hb 8 g/dL"):
+def admitted_request(*, text: str = "Hb 8 g/dL"):
     result = redact_bundle(
         RedactionRequest(
             notes=(NoteInput(note_id="E1", text=text),),
-            quasi_identifiers=QuasiIdentifiers(
-                ward="W1",
-                icd_3char="D62",
-                age_band="60-69",
-                sex="M",
-                admission_month="2026-05",
-            ),
-            admission_date=date(2026, 5, 1),
-            patient_age_years=65,
+            anchor_date=date(2026, 5, 1),
             redactor_version=VERSION,
         ),
         backend=Backend(),
-        k_gate=lambda _: k,
     )
     prompt_request = PromptBuildRequest(
         task_mode="HB_7_10_REVIEW",
@@ -157,10 +147,19 @@ def test_modified_evidence_and_self_asserted_proof_are_rejected():
         policy().verify(request.model_copy(update={"privacy_attestation": proof}))
 
 
-@pytest.mark.parametrize("text,k", [("Hb 8", 4), ("[NURSE]" * 5, 5)])
-def test_failed_privacy_checks_cannot_be_attested(text, k):
+def test_semantic_degradation_cannot_be_attested():
+    # Five role tokens in a row leave the model nothing clinical to read; the
+    # authority must refuse to sign rather than send a degraded note.
     with pytest.raises(PrivacyAdmissionError, match="privacy checks"):
-        admitted_request(k=k, text=text)
+        admitted_request(text="[NURSE]" * 5)
+
+
+def test_attestation_carries_no_k_anonymity_field():
+    # Demographics never reach the prompt, so the signed payload must not
+    # bind a cohort size the export cannot supply.
+    proof = admitted_request().privacy_attestation
+    assert proof is not None
+    assert not any("anonymity" in name for name in proof.model_dump())
 
 
 def test_zero_model_hash_is_not_a_trusted_redactor():
@@ -272,7 +271,6 @@ def test_redaction_authority_verifies_actual_model_artifact(tmp_path: Path):
     with pytest.raises(PrivacyAdmissionError, match="artifact SHA mismatch"):
         RedactionAuthority(
             backend=Backend(),
-            k_gate=lambda _: 5,
             model_artifact=model_file,
             version=VERSION,
             key_id="local",
@@ -283,7 +281,6 @@ def test_redaction_authority_verifies_actual_model_artifact(tmp_path: Path):
     )
     authority = RedactionAuthority(
         backend=Backend(),
-        k_gate=lambda _: 5,
         model_artifact=model_file,
         version=version,
         key_id="local",
@@ -292,15 +289,7 @@ def test_redaction_authority_verifies_actual_model_artifact(tmp_path: Path):
     artifact = authority.prepare(
         RedactionRequest(
             notes=(NoteInput(note_id="E1", text="Hb 8"),),
-            quasi_identifiers=QuasiIdentifiers(
-                ward="W1",
-                icd_3char="D62",
-                age_band="60-69",
-                sex="M",
-                admission_month="2026-05",
-            ),
-            admission_date=date(2026, 5, 1),
-            patient_age_years=65,
+            anchor_date=date(2026, 5, 1),
             redactor_version=version,
         ),
         PromptBuildRequest(
@@ -316,3 +305,59 @@ def test_redaction_authority_verifies_actual_model_artifact(tmp_path: Path):
     )
     assert artifact.attestation.redactor_version == version
     assert artifact.evidence_chunks[0].text == "Hb 8"
+
+
+def test_notes_and_anchor_date_alone_are_enough_for_admission(tmp_path: Path):
+    # The HOSxP export has no sex, ward, or admission date and almost no age.
+    # A request built from redacted notes, the order date, and the redactor
+    # version must still reach a signed, verifiable admission.
+    import hashlib
+    from bba.deid_redactor.admission import RedactionAuthority
+    from bba.prompt_builder import build_prompt
+
+    model_file = tmp_path / "approved-model.bin"
+    model_file.write_bytes(b"synthetic local model artifact")
+    version = VERSION.model_copy(
+        update={"model_sha": hashlib.sha256(model_file.read_bytes()).hexdigest()}
+    )
+    authority = RedactionAuthority(
+        backend=Backend(),
+        model_artifact=model_file,
+        version=version,
+        key_id="local",
+        signing_key=KEY,
+    )
+    prompt_request = PromptBuildRequest(
+        task_mode="HB_7_10_REVIEW",
+        cohort_threshold=7.0,
+        evidence_chunks=(
+            EvidenceChunk(evidence_id="E1", source="Lab", text="Hb 8 on 2026-05-03"),
+        ),
+        few_shot_examples=(),
+    )
+    artifact = authority.prepare(
+        RedactionRequest(
+            notes=(NoteInput(note_id="E1", text="Hb 8 on 2026-05-03"),),
+            anchor_date=date(2026, 5, 1),
+            redactor_version=version,
+        ),
+        prompt_request,
+        audit_id="a1",
+        run_id="run1",
+    )
+    prompt = build_prompt(
+        prompt_request.model_copy(update={"evidence_chunks": artifact.evidence_chunks})
+    )
+
+    PrivacyAdmissionPolicy(
+        key_id="local", verification_key=PUBLIC_KEY, approved_redactor=version
+    ).verify(
+        BatchSubmissionRequest(
+            audit_id="a1",
+            run_id="run1",
+            task_mode=prompt.task_mode,
+            prompt=prompt,
+            privacy_attestation=artifact.attestation,
+        )
+    )
+    assert artifact.evidence_chunks[0].text == "Hb 8 on Day +2"

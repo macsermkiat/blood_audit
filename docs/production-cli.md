@@ -33,7 +33,7 @@ For a live run, install the provider dependency with `uv sync --extra live`, set
 
 Set `BBA_PRIVACY_POLICY` to the trust-policy JSON file. It contains `key_id`, `public_key_file`, and `approved_redactor`. `approved_redactor` contains the approved `version`, nonzero SHA-256 `model_sha`, and `gazetteer_version`. The key file contains the 32-byte Ed25519 public key. The application never receives the issuer's private signing key.
 
-Set `BBA_PRIVACY_ARTIFACTS` to a JSON object keyed by audit ID. Each value is a `bba.deid_redactor.admission.PrivacyArtifact` with exact redacted `evidence_chunks` and an `attestation`. An approved local redaction service produces this artifact through `RedactionAuthority.prepare`. That service owns the approved backend, model artifact, k-anonymity gate, and private signing key. Do not replace it with a pass-through backend for hospital data.
+Set `BBA_PRIVACY_ARTIFACTS` to a JSON object keyed by audit ID. Each value is a `bba.deid_redactor.admission.PrivacyArtifact` with exact redacted `evidence_chunks` and an `attestation`. An approved local redaction service produces this artifact through `RedactionAuthority.prepare`. That service owns the approved backend, model artifact, and private signing key. Do not replace it with a pass-through backend for hospital data.
 
 The attestation binds the exact prompt, audit ID, run ID, approved redactor version, and passed privacy checks. Compute the run ID with the same bundle, package version, and application configuration used for execution. An explicit application configuration contributes its canonical JSON to the CLI run identity. Missing policy or rejected evidence results in local review. A digest or caller assertion does not authorize submission.
 
