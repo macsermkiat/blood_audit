@@ -1376,6 +1376,12 @@ PLATELET_INCPT_START_EID = 801
 """First evidence id for platelet procedure-charge chunks; the same range the
 RBC path uses, clear of the bundle's own ids."""
 
+PLATELET_PROCEDURE_HOURS_AFTER_DISPENSE = 24
+"""How long after dispense a billed procedure still reaches the platelet
+model. The insertion usually follows the platelets: in 2025, 98 of 240 billed
+CVC / DLC insertions fell after midnight of the order day, all within 24 h of
+dispense."""
+
 
 def _platelet_procedure_chunks(
     incpt: list[dict[str, str]],
@@ -1383,8 +1389,9 @@ def _platelet_procedure_chunks(
     *,
     an: str,
     order_utc: datetime,
+    dispense_utc: datetime,
     window_start: datetime,
-    window_end: datetime,
+    notes_window_end: datetime,
 ) -> tuple[EvidenceChunk, ...]:
     """Procedure-charge evidence for a platelet order.
 
@@ -1392,7 +1399,9 @@ def _platelet_procedure_chunks(
     but are billed (INCPT group 110). Clinician review 2026-11-09: "CVC is a
     procedure"; in 2025, 240 of 3,696 eligible platelet orders had a billed
     CVC / DLC insertion within 24 h that the platelet leg never showed the
-    model. Same rendering and window as the notes the order already gets.
+    model. Same rendering and start as the notes window; the end reaches
+    ``PLATELET_PROCEDURE_HOURS_AFTER_DISPENSE`` past dispense when that is
+    later than the notes window's end.
     """
     chunks, _ = _incpt_evidence_chunks(
         incpt,
@@ -1401,7 +1410,10 @@ def _platelet_procedure_chunks(
         anchor=order_utc,
         anchor_label="order",
         window_start=window_start,
-        window_end=window_end,
+        window_end=max(
+            notes_window_end,
+            dispense_utc + timedelta(hours=PLATELET_PROCEDURE_HOURS_AFTER_DISPENSE),
+        ),
         start_eid=PLATELET_INCPT_START_EID,
     )
     return chunks
@@ -1972,8 +1984,9 @@ def main() -> None:
                     optract_dict,
                     an=order.an,
                     order_utc=order.order_datetime,
+                    dispense_utc=plt_lab_anchor,
                     window_start=plt_notes_lo,
-                    window_end=plt_notes_hi,
+                    notes_window_end=plt_notes_hi,
                 )
             )
             if not plt_chunks:
