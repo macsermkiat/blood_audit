@@ -31,10 +31,20 @@ from bba.deid_redactor.models import (
 ENTRY_RELPATH = Path("deidentify_nun.py")
 MODEL_FILENAME = "model.safetensors"
 _PLACEHOLDER = re.compile(r"\[[A-Z_]+\]")
+# The tokenizer truncates at 510 tokens; without overlapping windows the NER
+# never sees names past that point in a long note.
+NER_STRIDE = 128
 
 
 class ThaiDeidSetupError(RuntimeError):
     """The redactor checkout or model directory cannot be trusted."""
+
+
+def _with_stride(ner: Any) -> Any:
+    def strided(texts: Any, **kwargs: Any) -> Any:
+        return ner(texts, **{**kwargs, "stride": NER_STRIDE})
+
+    return strided
 
 
 class ThaiMedicalDeidBackend:
@@ -44,7 +54,9 @@ class ThaiMedicalDeidBackend:
 
     def redact(self, text: str) -> BackendRedactionResult:
         try:
-            final = str(self._module.anonymize_batch(self._ner, [text])[0][0])
+            final = str(
+                self._module.anonymize_batch(_with_stride(self._ner), [text])[0][0]
+            )
         except Exception as exc:
             # The exception text can quote the note; keep only its type.
             raise BackendRedactionError(

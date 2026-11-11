@@ -23,7 +23,7 @@ from thai_deid_backend import (
     load_backend,
     redactor_version,
 )
-from thai_deid_fakes import fake_module
+from thai_deid_fakes import WindowedNer, fake_module, ner_driven_module
 
 VERSION = RedactorVersion(version="v", model_sha="a" * 64, gazetteer_version="g")
 
@@ -99,6 +99,19 @@ def test_model_failure_message_never_quotes_the_note():
 
     assert "SECRET-NAME" not in str(caught.value)
     assert "RuntimeError" in str(caught.value)
+
+
+def test_name_past_the_ner_truncation_point_is_masked_through_redact_bundle():
+    name = "Somchai Jaidee"
+    text = "Hb 6.8 stable. " * 40 + f"Called by Dr. {name} at night."
+    ner = WindowedNer((name,), window=200)
+    assert ner([text], batch_size=1) == [[]]
+
+    backend = ThaiMedicalDeidBackend(ner_driven_module(), ner)
+    redacted = _redact(backend, text)
+
+    assert name not in redacted
+    assert redacted.endswith("Called by Dr. [ATTENDING] at night.")
 
 
 def _git(repo: Path, *args: str) -> None:
