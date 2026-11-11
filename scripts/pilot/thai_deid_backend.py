@@ -13,6 +13,7 @@ import ast
 import difflib
 import hashlib
 import importlib.util
+import importlib.metadata
 import os
 import re
 import subprocess
@@ -29,7 +30,6 @@ from bba.deid_redactor.models import (
 )
 
 ENTRY_RELPATH = Path("deidentify_nun.py")
-MODEL_FILENAME = "model.safetensors"
 _PLACEHOLDER = re.compile(r"\[[A-Z_]+\]")
 # The tokenizer truncates at 510 tokens; without overlapping windows the NER
 # never sees names past that point in a long note.
@@ -133,6 +133,36 @@ def _pipeline_version(entry: Path) -> str:
     raise ThaiDeidSetupError(f"PIPELINE_VERSION not found in {entry}")
 
 
+def model_manifest(model_dir: Path) -> bytes:
+    """One line per file, so config.json and tokenizer edits change the pin too."""
+    lines: list[str] = []
+    for root, _, names in os.walk(model_dir, followlinks=True):
+        for name in names:
+            path = Path(root) / name
+            relative = path.relative_to(model_dir).as_posix()
+            try:
+                with path.open("rb") as stream:
+                    digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            except OSError as exc:
+                raise ThaiDeidSetupError(f"cannot read {path}") from exc
+            lines.append(f"{relative}  {digest}\n")
+    if not lines:
+        raise ThaiDeidSetupError(f"no model files under {model_dir}")
+    return "".join(sorted(lines)).encode("utf-8")
+
+
+def _dist_version(distribution: str) -> str:
+    # Read from metadata so the policy command needs no torch import.
+    try:
+        return importlib.metadata.version(distribution)
+    except importlib.metadata.PackageNotFoundError as exc:
+        raise ThaiDeidSetupError(f"{distribution} is not installed") from exc
+
+
+def _adapter_digest() -> str:
+    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:16]
+
+
 def redactor_version(deid_repo: Path, model_dir: Path) -> RedactorVersion:
     if _git(deid_repo, "status", "--porcelain"):
         raise ThaiDeidSetupError(
@@ -140,19 +170,21 @@ def redactor_version(deid_repo: Path, model_dir: Path) -> RedactorVersion:
             "would not identify the code that redacts"
         )
     head = _git(deid_repo, "rev-parse", "HEAD")
-    model = model_dir / MODEL_FILENAME
-    try:
-        with model.open("rb") as stream:
-            model_sha = hashlib.file_digest(stream, "sha256").hexdigest()
-    except OSError as exc:
-        raise ThaiDeidSetupError(f"cannot read {model}") from exc
     try:
         import pythainlp
     except ImportError as exc:
         raise ThaiDeidSetupError("pythainlp is required to pin the gazetteer") from exc
     return RedactorVersion(
-        version=f"thai-medical-deid@{head}+{_pipeline_version(deid_repo / ENTRY_RELPATH)}",
-        model_sha=model_sha,
+        version=(
+            f"thai-medical-deid@{head}"
+            f"+{_pipeline_version(deid_repo / ENTRY_RELPATH)}"
+            f"+stride{NER_STRIDE}"
+            f"+transformers-{_dist_version('transformers')}"
+            f"+tokenizers-{_dist_version('tokenizers')}"
+            f"+torch-{_dist_version('torch')}"
+            f"+adapter-{_adapter_digest()}"
+        ),
+        model_sha=hashlib.sha256(model_manifest(model_dir)).hexdigest(),
         gazetteer_version=f"pythainlp-{pythainlp.__version__}",
     )
 
@@ -180,7 +212,7 @@ def load_backend(
             "Thai name gazetteer is empty (PyThaiNLP corpora missing); refusing "
             "to redact without it"
         )
-    if not version.version.endswith(f"+{module.PIPELINE_VERSION}"):
+    if f"+{module.PIPELINE_VERSION}+stride" not in version.version:
         raise ThaiDeidSetupError("PIPELINE_VERSION differs from the checked source")
     module.MODEL_ID = str(model_dir)
     return ThaiMedicalDeidBackend(module, module.load_ner_pipeline()), version

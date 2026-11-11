@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 import sys
 from datetime import date
@@ -21,10 +22,13 @@ from thai_deid_backend import (
     ThaiDeidSetupError,
     ThaiMedicalDeidBackend,
     load_backend,
+    model_manifest,
     redactor_version,
 )
+import thai_deid_backend
 from thai_deid_fakes import WindowedNer, fake_module, ner_driven_module
 
+LIBRARY_VERSIONS = {"transformers": "5.1", "tokenizers": "0.2", "torch": "2.3"}
 VERSION = RedactorVersion(version="v", model_sha="a" * 64, gazetteer_version="g")
 
 
@@ -134,6 +138,9 @@ def _git(repo: Path, *args: str) -> None:
 @pytest.fixture
 def deid_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setitem(sys.modules, "pythainlp", SimpleNamespace(__version__="9.9"))
+    monkeypatch.setattr(
+        thai_deid_backend, "_dist_version", lambda name: LIBRARY_VERSIONS[name]
+    )
     repo = tmp_path / "tmd"
     repo.mkdir(parents=True)
     entry = repo / "deidentify_nun.py"
@@ -158,8 +165,6 @@ def deid_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def test_version_names_the_commit_pipeline_weights_and_gazetteer(deid_checkout):
-    import hashlib
-
     repo, model_dir, _ = deid_checkout
     head = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True
@@ -167,9 +172,49 @@ def test_version_names_the_commit_pipeline_weights_and_gazetteer(deid_checkout):
 
     version = redactor_version(repo, model_dir)
 
-    assert version.version == f"thai-medical-deid@{head}+pv1"
-    assert version.model_sha == hashlib.sha256(b"weights").hexdigest()
+    adapter = hashlib.sha256(Path(thai_deid_backend.__file__).read_bytes())
+    assert version.version == (
+        f"thai-medical-deid@{head}+pv1+stride128+transformers-5.1+tokenizers-0.2"
+        f"+torch-2.3+adapter-{adapter.hexdigest()[:16]}"
+    )
+    assert version.model_sha == hashlib.sha256(model_manifest(model_dir)).hexdigest()
     assert version.gazetteer_version == "pythainlp-9.9"
+
+
+def test_editing_any_model_file_changes_the_pinned_model_sha(deid_checkout):
+    repo, model_dir, _ = deid_checkout
+    (model_dir / "config.json").write_text('{"id2label": {"1": "B-PERSON"}}')
+    pinned = redactor_version(repo, model_dir).model_sha
+
+    (model_dir / "config.json").write_text('{"id2label": {"1": "O"}}')
+
+    assert redactor_version(repo, model_dir).model_sha != pinned
+
+
+def test_manifest_lists_every_file_including_those_behind_symlinks(tmp_path: Path):
+    blobs = tmp_path / "blobs"
+    blobs.mkdir()
+    (blobs / "abc").write_bytes(b"weights")
+    snapshot = tmp_path / "snapshot"
+    (snapshot / "sub").mkdir(parents=True)
+    (snapshot / "model.safetensors").symlink_to(blobs / "abc")
+    (snapshot / "sub" / "vocab.txt").write_bytes(b"v")
+
+    manifest = model_manifest(snapshot).decode()
+
+    assert manifest == (
+        f"model.safetensors  {hashlib.sha256(b'weights').hexdigest()}\n"
+        f"sub/vocab.txt  {hashlib.sha256(b'v').hexdigest()}\n"
+    )
+
+
+def test_version_changes_when_a_library_version_changes(deid_checkout, monkeypatch):
+    repo, model_dir, _ = deid_checkout
+    pinned = redactor_version(repo, model_dir).version
+
+    monkeypatch.setitem(LIBRARY_VERSIONS, "transformers", "5.2")
+
+    assert redactor_version(repo, model_dir).version != pinned
 
 
 def test_dirty_checkout_is_refused(deid_checkout):

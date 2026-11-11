@@ -6,8 +6,9 @@ only the artifacts and the public-key policy.
 
 Order of work, with the same ``RUN_ID`` throughout::
 
-    ISSUER="uv run --with 'transformers[torch]' --with sentencepiece \\
-        --with pythainlp --with pandas --with tqdm --with openpyxl \\
+    ISSUER="uv run --with 'transformers[torch]==5.22.2' --with tokenizers==0.23.3 \\
+        --with torch==2.15.0 --with sentencepiece==0.2.3 --with pythainlp==5.4.0 \\
+        --with pandas==3.1.1 --with tqdm==4.70.1 --with openpyxl==3.1.5 \\
         python scripts/pilot/issue_privacy_artifacts.py"
 
     # 1. once: a key pair outside the repo
@@ -30,8 +31,9 @@ Order of work, with the same ``RUN_ID`` throughout::
         uv run python scripts/pilot/run_llm_leg.py
 
 The heavy dependencies are supplied by ``uv run --with``; they are not project
-dependencies. The model directory must hold ``model.safetensors``; its SHA-256
-becomes part of the approved version.
+dependencies. Their versions are part of the approved version, so use the same
+pins for ``policy`` and ``issue``. The approved model SHA-256 is the hash of a
+manifest of every file in the model directory (``model_manifest``).
 """
 
 from __future__ import annotations
@@ -42,6 +44,7 @@ import os
 import re
 import stat
 import sys
+import tempfile
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -60,7 +63,6 @@ from bba.deid_redactor.exceptions import BackendRedactionError
 from bba.deid_redactor.models import RedactorBackend, RedactorVersion
 from privacy_requests import PrivacyRequests, load_requests, write_private
 
-MODEL_FILENAME = "model.safetensors"
 KEY_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 KEY_BYTES = 32
 
@@ -171,18 +173,22 @@ def _cmd_policy(args: argparse.Namespace) -> int:
 
 
 def _cmd_issue(args: argparse.Namespace) -> int:
-    from thai_deid_backend import load_backend
+    from thai_deid_backend import load_backend, model_manifest
 
     requests = load_requests(args.requests)
     backend, version = load_backend(args.deid_repo, args.model_dir)
-    outcome = issue_artifacts(
-        requests,
-        backend=backend,
-        version=version,
-        model_artifact=args.model_dir / MODEL_FILENAME,
-        key_id=args.key_id,
-        signing_key=_read_signing_key(args.signing_key),
-    )
+    with tempfile.TemporaryDirectory() as scratch:
+        # The authority hashes one file; the manifest is that file.
+        manifest = Path(scratch) / "model.manifest"
+        manifest.write_bytes(model_manifest(args.model_dir))
+        outcome = issue_artifacts(
+            requests,
+            backend=backend,
+            version=version,
+            model_artifact=manifest,
+            key_id=args.key_id,
+            signing_key=_read_signing_key(args.signing_key),
+        )
     print(f"issued: {len(outcome.artifacts)}, refused: {sum(outcome.refused.values())}")
     for reason, count in sorted(outcome.refused.items()):
         print(f"  {count} x {reason}")
