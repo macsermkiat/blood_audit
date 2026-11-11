@@ -20,9 +20,11 @@ Order of work, with the same ``RUN_ID`` throughout::
     # 3. pilot, prepare mode: export the exact prompt requests (raw notes, 0600)
     BBA_PILOT_RUN_ID=run1 BBA_PILOT_PRIVACY_PREPARE=/secure/requests.json \\
         uv run python scripts/pilot/run_llm_leg.py
-    # 4. issue: redact, sign, write artifacts
+    # 4. issue: redact, sign, then check every artifact against the policy from
+    #    step 2 and write nothing if any check fails
     $ISSUER issue --requests /secure/requests.json \\
         --signing-key ~/.bba-keys/kcmh-2026.ed25519 --key-id kcmh-2026 \\
+        --policy ~/.bba-keys/policy.json \\
         --deid-repo ~/thai-medical-deid --model-dir ~/models/no-name-ner-th \\
         --out /secure/artifacts.json
     # 5. pilot, real run: same run id, so the signatures bind
@@ -61,6 +63,8 @@ from bba.deid_redactor.admission import (
 )
 from bba.deid_redactor.exceptions import BackendRedactionError
 from bba.deid_redactor.models import RedactorBackend, RedactorVersion
+from bba.llm_client import BatchSubmissionRequest
+from bba.prompt_builder import build_prompt
 from privacy_requests import PrivacyRequests, load_requests, write_private
 
 KEY_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -172,38 +176,93 @@ def _cmd_policy(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_issue(args: argparse.Namespace) -> int:
-    from thai_deid_backend import load_backend, model_manifest
+def verify_against_policy(
+    requests: PrivacyRequests,
+    artifacts: dict[str, PrivacyArtifact],
+    policy: PrivacyAdmissionPolicy,
+) -> None:
+    """Rebuild each prompt as run_llm_leg.py does and run the pilot's own check."""
+    for audit_id, artifact in artifacts.items():
+        prompt_request = requests.cases[audit_id].prompt_request
+        prompt = build_prompt(
+            prompt_request.model_copy(
+                update={"evidence_chunks": artifact.evidence_chunks}
+            )
+        )
+        policy.verify(
+            BatchSubmissionRequest(
+                audit_id=audit_id,
+                run_id=requests.run_id,
+                task_mode=prompt_request.task_mode,
+                prompt=prompt,
+                privacy_attestation=artifact.attestation,
+            )
+        )
 
-    requests = load_requests(args.requests)
-    backend, version = load_backend(args.deid_repo, args.model_dir)
+
+def issue_to_file(
+    requests: PrivacyRequests,
+    *,
+    backend: RedactorBackend,
+    version: RedactorVersion,
+    manifest: bytes,
+    key_id: str,
+    signing_key: bytes,
+    policy: PrivacyAdmissionPolicy,
+    out: Path,
+) -> int:
     with tempfile.TemporaryDirectory() as scratch:
         # The authority hashes one file; the manifest is that file.
-        manifest = Path(scratch) / "model.manifest"
-        manifest.write_bytes(model_manifest(args.model_dir))
+        manifest_path = Path(scratch) / "model.manifest"
+        manifest_path.write_bytes(manifest)
         outcome = issue_artifacts(
             requests,
             backend=backend,
             version=version,
-            model_artifact=manifest,
-            key_id=args.key_id,
-            signing_key=_read_signing_key(args.signing_key),
+            model_artifact=manifest_path,
+            key_id=key_id,
+            signing_key=signing_key,
         )
     print(f"issued: {len(outcome.artifacts)}, refused: {sum(outcome.refused.values())}")
     for reason, count in sorted(outcome.refused.items()):
         print(f"  {count} x {reason}")
     if not outcome.artifacts:
         return 1
+    try:
+        verify_against_policy(requests, outcome.artifacts, policy)
+    except PrivacyAdmissionError as exc:
+        # The pilot would reject every row and burn the run id; this is a
+        # key, policy or redactor mismatch, not a bad case, so write nothing.
+        print(f"policy check failed, nothing written: {exc}")
+        return 1
     write_private(
-        args.out,
+        out,
         json.dumps(
             {k: v.model_dump(mode="json") for k, v in outcome.artifacts.items()},
             ensure_ascii=False,
             indent=2,
         ),
     )
-    print(f"artifacts: {args.out}")
+    print(f"artifacts: {out}")
     return 0
+
+
+def _cmd_issue(args: argparse.Namespace) -> int:
+    from thai_deid_backend import load_backend, model_manifest
+
+    requests = load_requests(args.requests)
+    policy = PrivacyAdmissionPolicy.from_file(args.policy)
+    backend, version = load_backend(args.deid_repo, args.model_dir)
+    return issue_to_file(
+        requests,
+        backend=backend,
+        version=version,
+        manifest=model_manifest(args.model_dir),
+        key_id=args.key_id,
+        signing_key=_read_signing_key(args.signing_key),
+        policy=policy,
+        out=args.out,
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -228,6 +287,7 @@ def _parser() -> argparse.ArgumentParser:
     issue_cmd.add_argument("--requests", required=True, type=Path)
     issue_cmd.add_argument("--signing-key", required=True, type=Path)
     issue_cmd.add_argument("--key-id", required=True)
+    issue_cmd.add_argument("--policy", required=True, type=Path)
     issue_cmd.add_argument("--out", required=True, type=Path)
 
     for command in (policy_cmd, issue_cmd):

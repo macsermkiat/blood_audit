@@ -19,6 +19,7 @@ from bba.llm_client.models import BatchSubmissionRequest
 from bba.prompt_builder import EvidenceChunk, PromptBuildRequest, build_prompt
 from issue_privacy_artifacts import (
     issue_artifacts,
+    issue_to_file,
     keygen,
     write_policy,
 )
@@ -213,3 +214,51 @@ def test_policy_file_loads_and_pins_the_approved_redactor(issuer):
 
     assert policy.key_id == "test-key"
     assert policy.approved_redactor.version == "thai-medical-deid@abc+pv1"
+
+
+MANIFEST = b"model.safetensors  deadbeef\n"
+
+
+def _manifest_version() -> RedactorVersion:
+    return RedactorVersion(
+        version="thai-medical-deid@abc+pv1",
+        model_sha=hashlib.sha256(MANIFEST).hexdigest(),
+        gazetteer_version="pythainlp-9.9",
+    )
+
+
+def _issue_to_file(tmp_path: Path, out: Path, *, policy_trusts_signer: bool) -> int:
+    version = _manifest_version()
+    private_path, signer_public = keygen("test-key", tmp_path / "signer")
+    _, other_public = keygen("test-key", tmp_path / "other")
+    policy_path = tmp_path / "policy.json"
+    write_policy(
+        key_id="test-key",
+        public_key=signer_public if policy_trusts_signer else other_public,
+        version=version,
+        out=policy_path,
+    )
+    return issue_to_file(
+        _requests(a1=NOTE),
+        backend=ThaiMedicalDeidBackend(fake_module(REPLACEMENTS), None),
+        version=version,
+        manifest=MANIFEST,
+        key_id="test-key",
+        signing_key=private_path.read_bytes(),
+        policy=PrivacyAdmissionPolicy.from_file(policy_path),
+        out=out,
+    )
+
+
+def test_issue_writes_artifacts_the_policy_admits(tmp_path: Path):
+    out = tmp_path / "artifacts.json"
+
+    assert _issue_to_file(tmp_path, out, policy_trusts_signer=True) == 0
+    assert set(load_privacy_artifacts(out)) == {"a1"}
+
+
+def test_policy_from_a_different_key_aborts_issue_and_writes_no_file(tmp_path: Path):
+    out = tmp_path / "artifacts.json"
+
+    assert _issue_to_file(tmp_path, out, policy_trusts_signer=False) == 1
+    assert not out.exists()
