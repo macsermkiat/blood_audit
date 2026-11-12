@@ -21,6 +21,7 @@ from bba.deid_redactor import (
 )
 from bba.deid_redactor.exceptions import BackendRedactionError
 from thai_deid_backend import (
+    _windows,
     NER_WINDOW_CHARS,
     NER_WINDOW_STEP,
     ThaiDeidSetupError,
@@ -472,3 +473,16 @@ def test_manifest_follows_a_symlinked_directory(tmp_path: Path):
     manifest = model_manifest(snapshot).decode()
 
     assert f"tokenizer/vocab.txt  {hashlib.sha256(b'v').hexdigest()}\n" in manifest
+
+
+def test_window_edges_land_on_whitespace_and_windows_still_overlap():
+    # A window ending inside a name could let the model tag only part of it.
+    text = " ".join(f"word{i:03d}" for i in range(200))
+    spans = _windows(text)
+
+    assert spans[0][0] == 0 and spans[-1][1] == len(text)
+    for start, end in spans:
+        assert start == 0 or text[start - 1].isspace()
+        assert end == len(text) or text[end].isspace()
+    for (_, prev_end), (next_start, _) in zip(spans, spans[1:]):
+        assert next_start < prev_end

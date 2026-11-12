@@ -41,11 +41,33 @@ NER_WINDOW_CHARS = 400
 NER_WINDOW_STEP = 250
 
 
-def _window_starts(length: int) -> list[int]:
-    starts = [0]
-    while starts[-1] + NER_WINDOW_CHARS < length:
-        starts.append(starts[-1] + NER_WINDOW_STEP)
-    return starts
+# Window edges move to nearby whitespace so no window ends inside a word, where
+# the model could tag only the first part of a name.
+NER_WINDOW_SNAP = 40
+
+
+def _windows(text: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    nominal = 0
+    while True:
+        start = nominal
+        if nominal:
+            ahead = re.search(r"\s", text[nominal : nominal + NER_WINDOW_SNAP])
+            start = nominal + ahead.end() if ahead else nominal
+        end = min(nominal + NER_WINDOW_CHARS, len(text))
+        if end < len(text):
+            back = max(
+                (
+                    m.start()
+                    for m in re.finditer(r"\s", text[end - NER_WINDOW_SNAP : end])
+                ),
+                default=None,
+            )
+            end = end - NER_WINDOW_SNAP + back if back is not None else end
+        spans.append((start, end))
+        if nominal + NER_WINDOW_CHARS >= len(text):
+            return spans
+        nominal += NER_WINDOW_STEP
 
 
 class ThaiDeidSetupError(RuntimeError):
@@ -65,10 +87,10 @@ def windowed_person_ner(ner: Any) -> Any:
     def persons(texts: Any, **kwargs: Any) -> Any:
         results: list[list[dict[str, Any]]] = []
         for text in texts:
-            starts = _window_starts(len(text))
-            windows = [text[s : s + NER_WINDOW_CHARS] for s in starts]
+            spans = _windows(text)
+            windows = [text[start:end] for start, end in spans]
             found: list[dict[str, Any]] = []
-            for offset, entities in zip(starts, ner(windows, **kwargs)):
+            for (offset, _), entities in zip(spans, ner(windows, **kwargs)):
                 found.extend(
                     {**e, "start": e["start"] + offset, "end": e["end"] + offset}
                     for e in entities
