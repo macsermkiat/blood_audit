@@ -21,6 +21,7 @@ from bba.deid_redactor import (
 )
 from bba.deid_redactor.exceptions import BackendRedactionError
 from thai_deid_backend import (
+    _clip,
     _windows,
     NER_WINDOW_CHARS,
     NER_WINDOW_STEP,
@@ -219,9 +220,9 @@ def test_windowed_ner_gives_one_sorted_person_list_per_text_with_scores_kept():
             for _ in windows
         ]
 
-    out = windowed_person_ner(ner)(["x" * 1000, "short"], batch_size=1)
+    out = windowed_person_ner(ner)(["x" * 1000, "x" * 12], batch_size=1)
 
-    assert seen == [[400, 400, 400, 250], [5]]
+    assert seen == [[400, 400, 400, 250], [12]]
     assert [e["start"] for e in out[0]] == [5, 255, 505, 755]
     assert all(e["score"] == 0.9 and e["entity_group"] == "PERSON" for e in out[0])
     assert out[1] == [{"start": 5, "end": 9, "entity_group": "PERSON", "score": 0.9}]
@@ -485,4 +486,60 @@ def test_window_edges_land_on_whitespace_and_windows_still_overlap():
         assert start == 0 or text[start - 1].isspace()
         assert end == len(text) or text[end].isspace()
     for (_, prev_end), (next_start, _) in zip(spans, spans[1:]):
-        assert next_start < prev_end
+        assert prev_end - next_start >= 70
+
+
+def test_hit_spanning_a_placeholder_still_masks_the_surname():
+    # Pass 1 masked the first name only; the model then tags "PERSON] Jaidee",
+    # which deid would skip whole for overlapping a placeholder.
+    text = "Hb 6.8 stable. " * 40 + "Called by [PERSON] Jaidee at night."
+    hit_start = text.index("PERSON] Jaidee")
+
+    def ner(windows, **kwargs):
+        return [
+            [
+                {
+                    "start": w.index("PERSON] Jaidee"),
+                    "end": w.index("PERSON] Jaidee") + len("PERSON] Jaidee"),
+                    "entity_group": "PERSON",
+                    "score": 0.9,
+                }
+            ]
+            if "PERSON] Jaidee" in w
+            else []
+            for w in windows
+        ]
+
+    out = windowed_person_ner(ner)([text])[0]
+
+    assert {(e["start"], e["end"]) for e in out} == {
+        (hit_start + len("PERSON] "), hit_start + len("PERSON] Jaidee"))
+    }
+
+
+def test_clip_keeps_thai_vowel_marks_and_drops_punctuation_fragments():
+    text = "[PERSON] ศุภกิตติ, ok"
+    end = text.index(",") + 1
+
+    assert _clip(text, 1, end, [(0, 8)]) == [(9, end - 1)]
+    assert text[9 : end - 1] == "ศุภกิตติ"
+    assert _clip(text, 1, 9, [(0, 8)]) == []
+
+
+@pytest.mark.parametrize(
+    "offsets",
+    [
+        (39, 360),  # edges pulled the most the snap allows
+        (60, 330),  # whitespace just beyond the snap reach must be ignored
+    ],
+)
+def test_worst_case_snapping_keeps_a_70_char_overlap(offsets):
+    chars = ["x"] * 1600
+    for k in range(7):
+        for offset in offsets:
+            if 250 * k + offset < len(chars):
+                chars[250 * k + offset] = " "
+    spans = _windows("".join(chars))
+
+    for (_, prev_end), (next_start, _) in zip(spans, spans[1:]):
+        assert prev_end - next_start >= 70

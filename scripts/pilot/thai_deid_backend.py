@@ -17,6 +17,7 @@ import importlib.metadata
 import os
 import re
 import subprocess
+import unicodedata
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -35,8 +36,8 @@ _PLACEHOLDER = re.compile(r"\[[A-Z_]+\]")
 # never sees names past that point in a long note.
 NER_STRIDE = 128
 # Measured on 12 real long notes: NER over 400-char pieces found 10 names, the
-# strided pass over the whole chunk 2. Windows overlap by 150 chars, so a name
-# shorter than that lies whole in some window instead of being cut in two.
+# strided pass over the whole chunk 2. Windows overlap by 150 chars, at least
+# 70 after edge snapping, so a name up to 70 chars lies whole in some window.
 NER_WINDOW_CHARS = 400
 NER_WINDOW_STEP = 250
 
@@ -81,6 +82,38 @@ def _with_stride(ner: Any) -> Any:
     return strided
 
 
+def _is_filler(char: str) -> bool:
+    # Not isalnum: Thai vowel and tone marks are category Mn and belong to the name.
+    return char.isspace() or unicodedata.category(char).startswith("P")
+
+
+def _clip(
+    text: str, start: int, end: int, placeholders: list[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    """The parts of [start, end) outside existing placeholders, trimmed.
+
+    deid skips any hit that overlaps a placeholder, so a hit such as
+    "PERSON] surname" after a masked first name would leave the surname.
+    """
+    pieces = [(start, end)]
+    for lo, hi in placeholders:
+        pieces = [
+            part
+            for a, b in pieces
+            for part in ((a, min(b, lo)), (max(a, hi), b))
+            if part[0] < part[1]
+        ]
+    trimmed: list[tuple[int, int]] = []
+    for a, b in pieces:
+        while a < b and _is_filler(text[a]):
+            a += 1
+        while b > a and _is_filler(text[b - 1]):
+            b -= 1
+        if a < b:
+            trimmed.append((a, b))
+    return trimmed
+
+
 def windowed_person_ner(ner: Any) -> Any:
     """PERSON entities from overlapping windows, offsets mapped to the full text."""
 
@@ -90,12 +123,15 @@ def windowed_person_ner(ner: Any) -> Any:
             spans = _windows(text)
             windows = [text[start:end] for start, end in spans]
             found: list[dict[str, Any]] = []
+            placeholders = [m.span() for m in _PLACEHOLDER.finditer(text)]
             for (offset, _), entities in zip(spans, ner(windows, **kwargs)):
-                found.extend(
-                    {**e, "start": e["start"] + offset, "end": e["end"] + offset}
-                    for e in entities
-                    if e.get("entity_group") == "PERSON"
-                )
+                for e in entities:
+                    if e.get("entity_group") != "PERSON":
+                        continue
+                    for start, end in _clip(
+                        text, e["start"] + offset, e["end"] + offset, placeholders
+                    ):
+                        found.append({**e, "start": start, "end": end})
             results.append(sorted(found, key=lambda e: e["start"]))
         return results
 
@@ -289,7 +325,7 @@ def _exec_entry(entry: Path, source: bytes) -> ModuleType:
     # stale or planted bytecode cache from running unpinned code.
     module = ModuleType("deidentify_nun")
     module.__file__ = str(entry)
-    exec(compile(source, str(entry), "exec"), module.__dict__)
+    exec(compile(source, str(entry), "exec", dont_inherit=True), module.__dict__)
     return module
 
 
