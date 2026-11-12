@@ -52,6 +52,16 @@ Environment variables:
   INAPPROPRIATE to review when the count is below a target a consulting
   specialist documented (ruling 2026-09-23; default: the library flag
   ``PLATELET_SPECIALIST_TARGET_GUARDRAIL_ENABLED``, OFF).
+* ``BBA_PRIVACY_POLICY`` / ``BBA_PRIVACY_ARTIFACTS`` — trust-root policy file
+  and the issuer's ``{audit_id: PrivacyArtifact}`` map. Every submission needs
+  both; see ``issue_privacy_artifacts.py``.
+* ``BBA_PILOT_PRIVACY_PREPARE`` — path of a request file to write instead of
+  running: the exact prompt requests this run would submit, with raw note text
+  (mode 0600). Exits 0 before injection-flagged rows, privacy admission and
+  transport. Deterministic rows written earlier in the pass are identical in
+  the real run, which the idempotent store skips. Use the same
+  ``BBA_PILOT_RUN_ID`` as the real run. Incompatible with
+  ``BBA_PRIVACY_ARTIFACTS``.
 """
 
 from __future__ import annotations
@@ -201,6 +211,14 @@ from _bdvsttrans_source import load_bdvsttrans_rows
 from _claude_cli_transport import ClaudeCliTransport
 from _hosxp_dt import _combine, _parse_hosxp_date, _parse_time
 from _periop_notes import vitals_notes_for
+from privacy_requests import (
+    PrivacyCase,
+    PrivacyPrepareError,
+    PrivacyRequests,
+    bangkok_anchor,
+    prepare_path,
+    write_requests,
+)
 
 WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
 BUNDLE = WORK / "bundle"
@@ -2871,6 +2889,10 @@ def main() -> None:
                 )
         sys.exit("nothing to submit")
 
+    try:
+        privacy_prepare_path = prepare_path(os.environ)
+    except PrivacyPrepareError as exc:
+        sys.exit(str(exc))
     privacy_policy_path = os.environ.get("BBA_PRIVACY_POLICY")
     privacy_artifacts_path = os.environ.get("BBA_PRIVACY_ARTIFACTS")
     privacy_policy = (
@@ -2902,21 +2924,22 @@ def main() -> None:
     # to Anthropic; it is quarantined to a local NEEDS_REVIEW row below,
     # mirroring the batch pipeline's _persist_injection_flagged_row.
     injection_flagged: list[PipelineRowContext] = []
+    prompt_requests: dict[str, PromptBuildRequest] = {}
     for ctx in llm_contexts:
         if ctx.component == "platelet":
             # Platelet review uses the dedicated PLATELET_REVIEW task mode
             # and system prompt (no Hb cohort threshold).
-            prompt = build_prompt(
-                PromptBuildRequest(
-                    task_mode="PLATELET_REVIEW",
-                    cohort_threshold=None,
-                    evidence_chunks=ctx.evidence_chunks,
-                    few_shot_examples=(),
-                )
+            request = PromptBuildRequest(
+                task_mode="PLATELET_REVIEW",
+                cohort_threshold=None,
+                evidence_chunks=ctx.evidence_chunks,
+                few_shot_examples=(),
             )
+            prompt = build_prompt(request)
             if prompt.route_to_needs_review:
                 injection_flagged.append(ctx)
                 continue
+            prompt_requests[ctx.order.audit_id] = request
             submissions.append(
                 BatchSubmissionRequest(
                     audit_id=ctx.order.audit_id,
@@ -2937,17 +2960,17 @@ def main() -> None:
             and cres.rationale in _RESERVE_AHEAD_RATIONALES
         )
         task_mode = rbc_task_mode(ctx.hb_result.value_g_dl, reserve_ahead=reserve_ahead)
-        prompt = build_prompt(
-            PromptBuildRequest(
-                task_mode=task_mode,
-                cohort_threshold=threshold,
-                evidence_chunks=ctx.evidence_chunks,
-                few_shot_examples=(),
-            )
+        request = PromptBuildRequest(
+            task_mode=task_mode,
+            cohort_threshold=threshold,
+            evidence_chunks=ctx.evidence_chunks,
+            few_shot_examples=(),
         )
+        prompt = build_prompt(request)
         if prompt.route_to_needs_review:
             injection_flagged.append(ctx)
             continue
+        prompt_requests[ctx.order.audit_id] = request
         submissions.append(
             BatchSubmissionRequest(
                 audit_id=ctx.order.audit_id,
@@ -2956,6 +2979,30 @@ def main() -> None:
                 prompt=prompt,
             )
         )
+
+    if privacy_prepare_path is not None:
+        anchors = {
+            ctx.order.audit_id: bangkok_anchor(ctx.order.order_datetime)
+            for ctx in llm_contexts
+        }
+        write_requests(
+            privacy_prepare_path,
+            PrivacyRequests(
+                run_id=RUN_ID,
+                cases={
+                    audit_id: PrivacyCase(
+                        anchor_date=anchors[audit_id], prompt_request=request
+                    )
+                    for audit_id, request in prompt_requests.items()
+                },
+            ),
+        )
+        print(
+            f"privacy prepare: exported {len(prompt_requests)}, "
+            f"injection-flagged skipped {len(injection_flagged)} "
+            f"-> {privacy_prepare_path}"
+        )
+        sys.exit(0)
 
     # Codex round-5 P2 (security): persist injection-flagged rows locally as
     # NEEDS_REVIEW — they were never sent to Anthropic. Mirrors the batch
