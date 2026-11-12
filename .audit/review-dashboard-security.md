@@ -1,0 +1,19 @@
+# Dashboard and adjudication security review
+
+Reviewed the current root worktree on 2026-10-19, Bangkok time. No confirmed actionable security or correctness findings in the assigned dashboard and adjudication changes.
+
+The scope includes `src/bba/dashboard`, `src/bba/review_actions`, migration `d2e3f4a5b6c7`, dashboard adjudication tests, and the evidence-bound PostgreSQL decision tests in `tests/unit/test_review_actions.py`. Pipeline, privacy admission, provider execution, and CLI composition are excluded.
+
+The implementation derives reviewer identity from a validated signed session or an explicitly supplied trusted dependency. Form fields cannot replace that identity. Configured signed authentication rejects a simultaneous default reviewer and requires an HTTPS public origin. Missing sessions fail closed. Issuance requires an external trusted identity adapter, which this review did not exercise.
+
+Both decision and break-glass routes validate signed, session-bound CSRF tokens before their writes. Synthetic TestClient probes confirmed that a token from another signed session is rejected with 403 on both routes, including sessions for the same reviewer. Same-session submission succeeds. Invalid tokens and foreign Origin headers are also covered by the tests.
+
+Review identity includes audit ID, run ID, code version, and a digest of the entire immutable audit row. Forms carry that identity and the prior action revision. The handler compares it against the selected snapshot and committed live evidence. PostgreSQL decision writes acquire transaction-scoped submission and identity locks, compare the latest revision, and append within the transaction. Reused submission IDs return the existing action only when every input field, including reviewer identity, matches. Different payloads conflict. Unique indexes independently protect submission and revision uniqueness. This is a source-level assessment until the root's real PostgreSQL runs complete.
+
+Bound overrides require a replacement classification and a nonblank reason. The queue includes both components when the review flag or NEEDS_REVIEW classification requires attention. It excludes evidence with a resolving agree or override decision. Escalation stays unresolved. Decision history is scoped to the exact evidence identity. Snapshot reads select one code version, and ambiguous audit IDs across runs return conflict rather than choosing a row.
+
+Templates escape evidence, reasoning, identifiers, notes, and decision rationale. A synthetic script and image event-handler payload in stored reasoning and citations rendered as escaped text. Static assets are local. The inspected templates and JavaScript contain no dynamic HTML insertion or remote scripts. Responses carry no-store/private caching, restrictive CSP, no-referrer, frame denial, and MIME-sniffing protection. Care-team and break-glass identifier access record the PHI-access row before identifier resolution. Physician scorecards retain the strict own-view check.
+
+Verification ran `.venv/bin/python -m pytest tests/unit/test_dashboard_adjudication.py tests/unit/test_dashboard.py -q` and returned 76 passed. A separate synthetic TestClient probe checked evidence escaping, cross-session CSRF rejection on both writes, successful signed-session decisions, and same-reviewer retry idempotency. It exited with code zero. PyArrow emitted sandbox CPU-introspection warnings, but the assertions completed.
+
+No source files changed during this review. The Prove It Works principle changed the review choice from accepting tests alone to exercising adversarial rendered evidence and signed-session submissions directly. No browser driver, real PostgreSQL execution, external identity provider, reverse proxy, TLS endpoint, live provider, or patient data was used by this reviewer. The root owns browser and PostgreSQL checks. This review does not certify deployment configuration or clinical policy.

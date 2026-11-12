@@ -9,7 +9,7 @@ for lab citations, and an optional medical-NLI semantic-entailment gate.
 This module is a *pure function* (no I/O, zero deps on the Anthropic SDK).
 It is the failure-mode gate for the LLM-stage pipeline (#24): if every
 Tier-1 citation in an indication list is rejected, the caller retries on
-Sonnet and then escalates to Opus 4.7 (PRD §"Anti-hallucination is layered,
+Sonnet and then escalates to Opus 5.5 (PRD §"Anti-hallucination is layered,
 not single-shot.").
 """
 

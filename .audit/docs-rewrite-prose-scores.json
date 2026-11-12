@@ -1,0 +1,138 @@
+[
+  {
+    "path": "README.md",
+    "score": 10
+  },
+  {
+    "path": "PRODUCT.md",
+    "score": 13
+  },
+  {
+    "path": "DESIGN.md",
+    "score": 11
+  },
+  {
+    "path": "docs/CONTEXT.md",
+    "score": 11
+  },
+  {
+    "path": "docs/production-cli.md",
+    "score": 7
+  },
+  {
+    "path": "docs/hosxp-export-reference.md",
+    "score": 0
+  },
+  {
+    "path": "docs/report-schema.md",
+    "score": 9
+  },
+  {
+    "path": "docs/src/content/docs/en/index.mdx",
+    "score": 0
+  },
+  {
+    "path": "docs/src/content/docs/en/operators/integration-seams.mdx",
+    "score": 0
+  },
+  {
+    "path": "docs/src/content/docs/en/operators/generate-report.mdx",
+    "score": 15
+  },
+  {
+    "path": "docs/src/content/docs/en/operators/overview.mdx",
+    "score": 10
+  },
+  {
+    "path": "docs/src/content/docs/en/operators/run-pipeline.mdx",
+    "score": 13
+  },
+  {
+    "path": "docs/src/content/docs/en/operators/doctor-ranking.mdx",
+    "score": 9
+  },
+  {
+    "path": "docs/src/content/docs/en/operators/audit-command.mdx",
+    "score": 11
+  },
+  {
+    "path": "docs/src/content/docs/en/operators/install.mdx",
+    "score": 0
+  },
+  {
+    "path": "docs/src/content/docs/en/operators/env-vars.mdx",
+    "score": 12
+  },
+  {
+    "path": "docs/src/content/docs/en/operators/ingest-csv.mdx",
+    "score": 20
+  },
+  {
+    "path": "docs/src/content/docs/en/operators/troubleshooting.mdx",
+    "score": 9
+  },
+  {
+    "path": "docs/src/content/docs/en/operators/first-audit-run.mdx",
+    "score": 9
+  },
+  {
+    "path": "docs/src/content/docs/en/clinical/report-output.mdx",
+    "score": 19
+  },
+  {
+    "path": "docs/src/content/docs/en/clinical/policy-summary.mdx",
+    "score": 0
+  },
+  {
+    "path": "docs/src/content/docs/en/clinical/what-this-is.mdx",
+    "score": 1
+  },
+  {
+    "path": "docs/src/content/docs/en/reference/report-schema.mdx",
+    "score": 14
+  },
+  {
+    "path": "docs/src/content/docs/en/reference/module-glossary.mdx",
+    "score": 20
+  },
+  {
+    "path": "docs/src/content/docs/en/reference/changelog.mdx",
+    "score": 9
+  },
+  {
+    "path": "docs/src/content/docs/en/developers/platelet-auditor.mdx",
+    "score": 8
+  },
+  {
+    "path": "docs/src/content/docs/en/developers/deid.mdx",
+    "score": 8
+  },
+  {
+    "path": "docs/src/content/docs/en/developers/contributing.mdx",
+    "score": 13
+  },
+  {
+    "path": "docs/src/content/docs/en/developers/testing.mdx",
+    "score": 10
+  },
+  {
+    "path": "docs/src/content/docs/en/developers/quote-grounding.mdx",
+    "score": 11
+  },
+  {
+    "path": "docs/src/content/docs/en/developers/audit-store.mdx",
+    "score": 9
+  },
+  {
+    "path": "docs/src/content/docs/en/developers/architecture.mdx",
+    "score": 13
+  },
+  {
+    "path": "docs/src/content/docs/en/developers/pipeline-stages.mdx",
+    "score": 12
+  },
+  {
+    "path": "docs/src/content/docs/en/developers/three-tier-hb.mdx",
+    "score": 0
+  }
+]

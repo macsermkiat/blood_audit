@@ -1,99 +1,60 @@
 ---
 title: First audit run
-description: Run bba ingest and bba audit end-to-end against a HOSxP export.
+description: Commit a local audit without model credentials or a Postgres connection.
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
-import CliCommandCard from "../../../../components/CliCommandCard.astro";
+This run writes deterministic classifications and flags cases that need model evidence for human review. Use a synthetic export while checking installation, or an approved hospital export on its authorized host.
 
-This page walks the Phase 1 happy path: a HOSxP export goes in, the bundle
-is validated and row-normalized, and idempotent run markers are written.
+## Prepare a complete bundle
 
-<AtAGlance
-  items={[
-    { label: "Input", value: "One CSV path inside the HOSxP export bundle." },
-    { label: "Writes", value: "$BBA_DATA_DIR/audit/<run_id>/ plus audit_runs markers.", tone: "ok" },
-    { label: "Idempotent", value: "Same bundle + same code = same run_id; re-run is a no-op." },
-    { label: "Inspect", value: "Check run markers and structured logs after the run." },
-  ]}
-/>
+Place all [13 canonical CSVs](/blood_audit/en/operators/ingest-csv/#expected-tables) beside `BDVST.csv`. Apply the approved adult cohort filter during export. Keep the bundle outside the repository.
 
-:::note[Phase 1 scope]
-In Phase 1, `bba audit` runs the **ingest leg** only. Classification rows
-(`APPROPRIATE`, `INAPPROPRIATE`, `NEEDS_REVIEW`, etc.) are not yet
-written by this command; the LLM analysis leg is wired in Phase 1.5.
-See [audit command](/blood_audit/en/operators/audit-command/) for the
-exact contract.
-:::
+Choose a private persistent data directory. The application rejects existing clinical storage with broader permissions, so review ownership and access before reusing older directories.
 
-## 1. Optional: validate the export bundle
-
-<CliCommandCard
-  command="bba ingest INPUT_CSV --schema-version v1"
-  summary="Validates the HOSxP CSV bundle, hashes inputs, drains rows through normalization, and writes a completion marker under $BBA_DATA_DIR/ingest/v1."
-  flags={[
-    { name: "INPUT_CSV", description: "Path to the primary HOSxP export CSV.", required: true },
-    { name: "--schema-version v1", description: "Schema fingerprint to include in run_id derivation." },
-  ]}
-  envVars={["BBA_DATA_DIR"]}
-  example={`uv run bba ingest /var/data/exports/PHI_xxx_001.csv --schema-version v1`}
-/>
-
-This step is useful when you want a separate preflight validation pass.
-For the normal Phase 1 operator path, `bba audit --input ...` below also
-runs the ingest validation/drain internally.
-
-Under the hood, the `run_id` is `sha256(input_csv_hash +
-schema_fingerprint + code_version)`. You do not need to compute it
-yourself; the CLI does.
-
-## 2. Run the audit (Phase 1: ingest leg)
-
-<CliCommandCard
-  command="bba audit --input INPUT_CSV"
-  summary="Phase 1: validates and drains the HOSxP CSV bundle under $BBA_DATA_DIR/audit/<run_id>/ and records completion/run-state markers."
-  flags={[
-    { name: "--input INPUT_CSV", description: "Same CSV path used for ingest." },
-    { name: "--run-id RUN_ID", description: "Reuse an existing run_id (no-op unless --force)." },
-    { name: "--force", description: "Override idempotency. Writes a compliance row to audit_log with idempotency_override=true." },
-  ]}
-  envVars={["BBA_DATA_DIR"]}
-  example={`uv run bba audit --input /var/data/exports/PHI_xxx_001.csv`}
-/>
-
-The command is **idempotent**. Re-running the same CSV is a no-op unless
-`--force` is passed. Forced re-runs are recorded as idempotency overrides.
-
-## 3. Inspect the run markers
-
-The four post-audit subcommands (`evaluate`, `report`,
-`serve-dashboard`, `sentinel`) raise `CliError` in Phase 1 — see
-[Integration seams](/blood_audit/en/operators/integration-seams/).
-
-For now, the most useful checks are on the run markers and logs:
-
-```bash
-# Confirm the audit run-state directory exists.
-ls -la "$BBA_DATA_DIR/audit/<RUN_ID>/"
-ls "$BBA_DATA_DIR/audit_runs/<RUN_ID>/"
+```sh
+export BBA_DATA_DIR=/srv/bba/data
 ```
 
-## What you will see in Phase 1.5
+These examples use `/srv/bba/export` for the staged bundle. Replace both paths with approved locations on your host. For this first run, use the default local application configuration. An existing `BBA_APPLICATION_CONFIG` can select a different mode.
 
-Once the LLM analysis leg is wired, `bba audit` will additionally write
-one `AuditRow` per audited order to the audit store. The
-`final_classification` column holds one of the five core verdicts —
-`APPROPRIATE`, `INAPPROPRIATE`, `NEEDS_REVIEW`,
-`INSUFFICIENT_EVIDENCE`, `POTENTIALLY_INAPPROPRIATE` — or one of the
-routing/reservation terminals: `RETURNED_NOT_TRANSFUSED` and
-`PERIOP_TRANSFUSION_EXEMPT` (excluded from scoring),
-`PREOP_OVER_RESERVATION`, and `PREOP_RESERVATION_UNCONFIRMED`
-(flag-gated, default-off). `LLM_REVIEW` is a routing concept (not a
-stored value); failed quote-grounding becomes
-`final_classification = NEEDS_REVIEW` with `review_reason` set.
+## Validate the bundle
 
-## Next steps
+This optional preflight checks headers and row normalization. It writes an ingest completion marker and does not classify orders.
 
-- [Ingest CSV](/blood_audit/en/operators/ingest-csv/) — expected input shape.
-- [audit command](/blood_audit/en/operators/audit-command/) — every flag.
-- [Troubleshooting](/blood_audit/en/operators/troubleshooting/) — common failures.
+```sh
+uv run bba ingest /srv/bba/export/BDVST.csv
+```
+
+A successful command logs `ingest.complete`. Missing required files or columns stop the command. The audit command also validates its sealed input snapshot, so a separate ingest is optional.
+
+## Commit the audit
+
+`PLATELET_LLM_ENABLED` is false in the repository configuration. If a bundle contains platelet orders that require the disabled review route, the application rejects the uncommitted work and does not mark the run complete. A local audit is not a guarantee that every platelet order can complete. Confirm the approved deployment route before selecting a platelet cohort.
+
+```sh
+uv run bba audit --input /srv/bba/export/BDVST.csv
+```
+
+The command seals a source snapshot, assembles orders, classifies them, and commits `AuditRow` records under `$BBA_DATA_DIR/audit_store`. Its completion state counts committed audit rows. An empty eligible cohort fails without a completion marker.
+
+Record the run ID from the structured logs. A successful audit logs `audit.complete` with its row count. Cases that require model review stay `NEEDS_REVIEW` with `privacy_admission_failed` in local mode. Those cases have not received a model judgment.
+
+The first run creates `identity.key` for stable HMAC patient and admission identifiers. Back up the key with the data directory.
+
+## Check a rerun
+
+Repeat the audit command with the same bundle, configuration, and code version. A completed run logs `audit.noop`. It reuses committed results.
+
+`--force` bypasses the completion shortcut and records an override. It does not replace committed classifications. To evaluate changed policy or newly admitted evidence, create a new policy version and run. See the [audit command reference](/blood_audit/en/operators/audit-command/).
+
+## Render the committed results
+
+The monthly report covers red-cell rows and rejects a platelet-only run. It requires the corresponding order export and doctor registry for attribution.
+
+```sh
+export BBA_BDVST_CSV=/srv/bba/export/BDVST.csv
+export BBA_DCT_CSV=/srv/bba/export/DCT.csv
+uv run bba report --run-id RUN_ID --format html
+```
+
+Replace `RUN_ID` with the recorded ID. The command prints the HTML artifact path. Keep the report within the approved review channel. See [Generate the report](/blood_audit/en/operators/generate-report/) for JSON and PDF outputs.

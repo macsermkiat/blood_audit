@@ -50,6 +50,7 @@ EXPECTED_BASE_FIELDNAMES = [
     "component",
     "platelet_count_k_ul",
     "platelet_freshness",
+    "platelet_anchor_datetime_local",
 ]
 
 EXPECTED_RETURNS_FIELDNAMES = [

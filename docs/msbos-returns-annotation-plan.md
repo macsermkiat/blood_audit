@@ -1,5 +1,7 @@
 # MSBOS reservation annotation for returns-terminal orders
 
+> Historical design record. Dates, rollout states, and proposed behavior below describe the original work and may be superseded. Use [current module contracts](CONTEXT.md) and the [operator guide](production-cli.md) for current behavior.
+
 **Status:** SHIPPED (2026-07-17). Landed as spec #176 → tickets #177–#180 →
 PRs #181/#182/#183/#184, all merged to main. This file is the design plan of
 record: consortium-reviewed (Codex advisor + 3 Claude lenses; all blockers

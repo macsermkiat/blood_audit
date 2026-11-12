@@ -18,7 +18,7 @@ const defaultTiles: Tile[] = [
     label: "Operators",
     audience: "KCMH IT",
     description:
-      "Install the package, configure three env vars, run bba ingest then bba audit, hand the dataset to the QI committee.",
+      "Install the application, prepare an export, configure access, and generate reports.",
     primaryHref: "/blood_audit/en/operators/install/",
     primaryText: "Install",
     secondaryHref: "/blood_audit/en/operators/first-audit-run/",
@@ -28,7 +28,7 @@ const defaultTiles: Tile[] = [
     label: "Developers",
     audience: "maintaining src/bba/",
     description:
-      "12 pipeline stages, deterministic 3-tier Hb classifier, six fail-closed quote-grounding layers, audit store.",
+      "Trace the processing stages, module contracts, evidence checks, and tests.",
     primaryHref: "/blood_audit/en/developers/architecture/",
     primaryText: "Architecture",
     secondaryHref: "/blood_audit/en/reference/module-glossary/",
@@ -38,7 +38,7 @@ const defaultTiles: Tile[] = [
     label: "Clinical",
     audience: "QI committee",
     description:
-      "Post-hoc audit scope, five stored classifications, six report sections. Not Software as a Medical Device.",
+      "Understand audit scope, implemented rules, and how to interpret reports.",
     primaryHref: "/blood_audit/en/clinical/what-this-is/",
     primaryText: "What this is",
     secondaryHref: "/blood_audit/en/clinical/policy-summary/",
@@ -49,7 +49,7 @@ const defaultTiles: Tile[] = [
 const { tiles = defaultTiles } = Astro.props;
 ---
 
-<section class="audience-tiles" aria-label="Doorways for each audience">
+<section class="audience-tiles" aria-label="Guides by audience">
   <ol class="audience-tiles__list" role="list">
     {tiles.map((tile, idx) => (
       <li class="audience-tile">

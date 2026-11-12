@@ -94,6 +94,10 @@ code, pre, kbd, samp {
 .content h2 { letter-spacing: -0.005em; margin-top: 2rem; }
 .content h3 { margin-top: 1.5rem; }
 
+:root[data-has-hero] .hero {
+  padding-block: 2.5rem;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Card primitive                                                     */
 /* ------------------------------------------------------------------ */

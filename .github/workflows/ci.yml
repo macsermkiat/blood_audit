@@ -71,6 +71,8 @@ jobs:
   test:
     name: pytest (with docker)
     runs-on: ubuntu-latest
+    env:
+      BBA_REQUIRE_POSTGRES_TESTS: "1"
     # Docker is already available on ubuntu-latest images, so the
     # testcontainers-postgres integration tests exercise rather than skip.
     steps:
@@ -81,10 +83,10 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
 
-      - run: uv sync --frozen
+      - run: uv sync --frozen --extra live
 
       - name: pytest
-        run: uv run pytest -q --tb=short
+        run: uv run --extra live pytest -q --tb=short --cov=src/bba --cov-fail-under=80 --cov-report=term-missing --junitxml=pytest-results.xml
 
   ci:
     name: ci

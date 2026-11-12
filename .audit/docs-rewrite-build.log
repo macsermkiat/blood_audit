@@ -1,0 +1,126 @@
+npm notice run blood-audit-docs@0.1.0 build
+npm notice run astro build
+(node:6653) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+17:53:51 [content] Syncing content
+17:53:51 [content] Synced content
+17:53:51 [types] Generated 205ms
+17:53:51 [build] output: "static"
+17:53:51 [build] mode: "static"
+17:53:51 [build] directory: /Users/admin/Project_Chatbot_research/blood_audit/docs/dist/
+17:53:51 [build] Collecting build info...
+17:53:51 [build] ✓ Completed in 467ms.
+17:53:51 [build] Building static entrypoints...
+17:53:52 [vite] ✓ built in 1.24s
+17:53:52 [build] ✓ Completed in 1.25s.
+
+ building client (vite) 
+17:53:52 [vite] transforming...
+17:53:52 [vite] ✓ 19 modules transformed.
+17:53:52 [vite] rendering chunks...
+17:53:52 [vite] computing gzip size...
+17:53:52 [vite] dist/_astro/ec.0vx5m.js                                                              2.52 kB
+17:53:52 [vite] dist/_astro/ec.v4551.css                                                            18.22 kB │ gzip:  3.94 kB
+17:53:52 [vite] dist/_astro/MobileTableOfContents.astro_astro_type_script_index_0_lang.C181hMzK.js   0.67 kB │ gzip:  0.40 kB
+17:53:52 [vite] dist/_astro/TableOfContents.astro_astro_type_script_index_0_lang.CKWWgpjV.js         1.67 kB │ gzip:  0.87 kB
+17:53:52 [vite] dist/_astro/page.B1D-nYk3.js                                                         2.24 kB │ gzip:  1.01 kB
+17:53:52 [vite] dist/_astro/Search.astro_astro_type_script_index_0_lang.CHGvNQ-2.js                  2.72 kB │ gzip:  1.39 kB
+17:53:52 [vite] dist/_astro/ui-core.CzISUWN0.js                                                     94.19 kB │ gzip: 26.92 kB
+17:53:52 [vite] ✓ built in 84ms
+
+ generating static routes 
+17:53:52 ▶ @astrojs/starlight/routes/static/404.astro
+17:53:52   └─ /404.htmlEntry docs → 404 was not found.
+ (+10ms) 
+17:53:52 ▶ @astrojs/starlight/routes/static/index.astro
+17:53:52   ├─ /en/index.html (+5ms) 
+17:53:52   ├─ /th/index.html (+2ms) 
+17:53:52   ├─ /en/clinical/policy-summary/index.html (+4ms) 
+17:53:52   ├─ /en/clinical/report-output/index.html (+6ms) 
+17:53:52   ├─ /en/developers/contributing/index.html (+3ms) 
+17:53:52   ├─ /en/developers/architecture/index.html (+3ms) 
+17:53:52   ├─ /en/developers/audit-store/index.html (+2ms) 
+17:53:52   ├─ /en/developers/pipeline-stages/index.html (+3ms) 
+17:53:52   ├─ /en/clinical/what-this-is/index.html (+3ms) 
+17:53:52   ├─ /en/developers/deid/index.html (+3ms) 
+17:53:52   ├─ /en/developers/testing/index.html (+2ms) 
+17:53:52   ├─ /en/developers/three-tier-hb/index.html (+2ms) 
+17:53:52   ├─ /en/developers/quote-grounding/index.html (+4ms) 
+17:53:52   ├─ /en/reference/module-glossary/index.html (+2ms) 
+17:53:52   ├─ /en/reference/changelog/index.html (+2ms) 
+17:53:52   ├─ /en/reference/report-schema/index.html (+2ms) 
+17:53:52   ├─ /th/clinical/what-this-is/index.html (+2ms) 
+17:53:52   ├─ /th/operators/env-vars/index.html (+2ms) 
+17:53:52   ├─ /th/operators/first-audit-run/index.html (+2ms) 
+17:53:52   ├─ /th/operators/install/index.html (+2ms) 
+17:53:52   ├─ /th/operators/overview/index.html (+2ms) 
+17:53:52   ├─ /en/operators/first-audit-run/index.html (+3ms) 
+17:53:52   ├─ /en/operators/audit-command/index.html (+2ms) 
+17:53:52   ├─ /en/operators/ingest-csv/index.html (+2ms) 
+17:53:52   ├─ /en/operators/env-vars/index.html (+2ms) 
+17:53:52   ├─ /en/operators/overview/index.html (+2ms) 
+17:53:52   ├─ /en/operators/install/index.html (+3ms) 
+17:53:52   ├─ /en/operators/integration-seams/index.html (+2ms) 
+17:53:52   ├─ /en/operators/troubleshooting/index.html (+2ms) 
+17:53:52   ├─ /th/reference/changelog/index.html (+2ms) 
+17:53:52   ├─ /th/reference/module-glossary/index.html (+2ms) 
+17:53:52   ├─ /th/clinical/policy-summary/index.html (+2ms) 
+17:53:52   ├─ /th/reference/report-schema/index.html (+2ms) 
+17:53:52   ├─ /th/clinical/report-output/index.html (+2ms) 
+17:53:52   ├─ /th/operators/audit-command/index.html (+1ms) 
+17:53:52   ├─ /th/operators/ingest-csv/index.html (+2ms) 
+17:53:52   ├─ /th/operators/integration-seams/index.html (+2ms) 
+17:53:52   ├─ /th/operators/troubleshooting/index.html (+2ms) 
+17:53:52   ├─ /th/developers/architecture/index.html (+2ms) 
+17:53:52   ├─ /th/developers/audit-store/index.html (+2ms) 
+17:53:52   ├─ /th/developers/deid/index.html (+3ms) 
+17:53:52   ├─ /th/developers/pipeline-stages/index.html (+2ms) 
+17:53:52   ├─ /th/developers/quote-grounding/index.html (+2ms) 
+17:53:52   ├─ /th/developers/contributing/index.html (+2ms) 
+17:53:52   ├─ /th/developers/testing/index.html (+2ms) 
+17:53:52   ├─ /th/developers/three-tier-hb/index.html (+2ms) 
+17:53:52   ├─ /en/operators/run-pipeline/index.html (+2ms) 
+17:53:52   ├─ /th/operators/run-pipeline/index.html (+1ms) 
+17:53:52   ├─ /en/developers/platelet-auditor/index.html (+1ms) 
+17:53:52   ├─ /en/operators/doctor-ranking/index.html (+2ms) 
+17:53:52   ├─ /th/developers/platelet-auditor/index.html (+2ms) 
+17:53:52   ├─ /th/operators/doctor-ranking/index.html (+2ms) 
+17:53:52   ├─ /en/operators/generate-report/index.html (+1ms) 
+17:53:52   └─ /th/operators/generate-report/index.html (+1ms) 
+17:53:52 ✓ Completed in 165ms.
+
+(node:6653) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+npm notice run @astrojs/starlight@0.34.8 npx
+npm notice run 'pagefind' --site ../../../dist
+
+Running Pagefind v1.5.2 (Extended)
+Running from: "/Users/admin/Project_Chatbot_research/blood_audit/docs/node_modules/@astrojs/starlight"
+Source:       "../../../dist"
+Output:       "../../../dist/pagefind"
+
+[Walking source directory]
+Found 56 files matching **/*.{html}
+
+[Parsing files]
+Found a data-pagefind-body element on the site.
+↳ Ignoring pages without this tag.
+
+[Reading languages]
+Discovered 2 languages: en, th
+
+[Building search indexes]
+Total: 
+  Indexed 2 languages
+  Indexed 54 pages
+  Indexed 4142 words
+  Indexed 0 filters
+  Indexed 0 sorts
+Note: Pagefind doesn't support stemming for the language th. 
+Search will still work, but will not match across root words.
+Note: Pagefind doesn't support stemming for the language th. 
+Search will still work, but will not match across root words.
+
+Finished in 0.095 seconds
+17:53:53 [@astrojs/sitemap] `sitemap-index.xml` created at `dist`
+17:53:53 [build] 55 page(s) built in 2.57s
+17:53:53 [build] Complete!

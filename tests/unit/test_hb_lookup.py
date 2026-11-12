@@ -538,7 +538,7 @@ class TestDeltaHbWindowsShape:
 
 
 # =============================================================================
-# AC: Single-Hb (no prior in window) flagged for NEEDS_REVIEW if Hb < 8
+# AC: Single-Hb (no prior in window) flagged for NEEDS_REVIEW if Hb <= 8
 # =============================================================================
 
 
@@ -554,11 +554,21 @@ class TestSingleLowHbReview:
         )
         assert result.needs_review_single_low_hb is True
 
-    def test_single_hb_exactly_8_does_not_flag(self) -> None:
-        # The threshold is strictly < 8.0 — 8.0 itself is not low enough
-        # alone to trigger the review flag.
+    def test_single_hb_exactly_8_flags_review(self) -> None:
+        # Owner ruling 2026-09-27 (case 68004713): an Hb exactly at an 8.0
+        # cohort floor now qualifies as sub-threshold and would auto-clear,
+        # so an isolated 8.0 with no trend needs the same safety flag as 7.9.
         result = lookup_hb(
             observations=[_obs(offset_hours=2, value=8.0)],
+            anchor_utc=ANCHOR,
+        )
+        assert result.needs_review_single_low_hb is True
+
+    def test_single_hb_just_above_8_does_not_flag(self) -> None:
+        # 8.1 is above every cohort floor, so it can never auto-clear on the
+        # Hb tier and needs no isolated-value safety flag.
+        result = lookup_hb(
+            observations=[_obs(offset_hours=2, value=8.1)],
             anchor_utc=ANCHOR,
         )
         assert result.needs_review_single_low_hb is False

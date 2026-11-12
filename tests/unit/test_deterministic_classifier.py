@@ -70,6 +70,7 @@ from hypothesis import strategies as st
 from bba.audit_store import Classification
 from bba.cohort_detector import (
     CARDIAC_SURGERY_THRESHOLD,
+    CARDIOPULMONARY_COMORBIDITY_THRESHOLD,
     DEFAULT_THRESHOLD,
     ESRD_EPO_THRESHOLD,
     ORTHO_CARDIAC_THRESHOLD,
@@ -526,7 +527,7 @@ class TestHbTierByCohort:
     """One test per (Hb-tier × cohort) cell, with no bypass active.
 
     The matrix exercises every threshold-driven cohort against the three
-    Hb tiers (< threshold, threshold ≤ Hb < 10, ≥ 10). Non-threshold
+    Hb tiers (≤ threshold, threshold < Hb < 10, ≥ 10). Non-threshold
     cohorts (MTP, HEME_MALIGNANCY_ACTIVE) have their own tests in
     :class:`TestBypassPathways` / :class:`TestB2Invariant` because their
     classification rules are not Hb-tier-driven.
@@ -573,7 +574,7 @@ class TestHbTierByCohort:
     def test_hb_gray_zone_is_needs_review(
         self, label: CohortLabel, threshold: float
     ) -> None:
-        """cohort_threshold ≤ Hb < 10 → NEEDS_REVIEW (LLM-eligible
+        """cohort_threshold < Hb < 10 → NEEDS_REVIEW (LLM-eligible
         gray-zone case, persisted canonically per audit_store contract)."""
         # Pick Hb halfway between threshold and 10
         hb_value = (threshold + HB_GT_10_THRESHOLD) / 2.0
@@ -613,16 +614,64 @@ class TestHbTierByCohort:
         assert result.bypass_reason == BypassReason.NONE
         assert result.cohort_threshold == threshold
 
-    def test_hb_at_threshold_boundary_is_needs_review(self) -> None:
-        """Hb == cohort_threshold falls into the gray zone (the ``<``
-        in ``Hb < cohort_threshold`` is strict; equal Hb routes to LLM)."""
+    @pytest.mark.parametrize(
+        ("label", "threshold", "expected_rationale"),
+        [
+            (CohortLabel.DEFAULT, DEFAULT_THRESHOLD, "hb_lt_7_universal"),
+            (CohortLabel.ESRD_EPO, ESRD_EPO_THRESHOLD, "hb_lt_7_universal"),
+            (CohortLabel.CARDIAC_SURGERY, CARDIAC_SURGERY_THRESHOLD, "hb_lt_threshold"),
+            (CohortLabel.ORTHO_SURGERY, ORTHO_SURGERY_THRESHOLD, "hb_lt_threshold"),
+            (
+                CohortLabel.CARDIOPULMONARY_COMORBIDITY,
+                CARDIOPULMONARY_COMORBIDITY_THRESHOLD,
+                "hb_lt_threshold",
+            ),
+        ],
+    )
+    def test_hb_at_threshold_boundary_is_appropriate(
+        self, label: CohortLabel, threshold: float, expected_rationale: str
+    ) -> None:
+        """Hb == cohort_threshold QUALIFIES (inclusive ``<=``).
+
+        WHY: owner ruling 2026-09-27 (review case REQNO 68004713: Hb 7.0 at
+        the default 7.0 floor was routed to the gray zone and the LLM called
+        it INAPPROPRIATE). A value exactly AT an indication threshold meets
+        the indication; the floor itself is sub-threshold. The 7.0 floors
+        clear via the universal rule, the higher floors via the cohort rule
+        (the rationale slugs keep their historical ``lt`` names)."""
         result = classify(
             _inputs(
-                hb=_hb(DEFAULT_THRESHOLD),
-                cohort=_cohort(CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+                hb=_hb(threshold),
+                cohort=_cohort(label, threshold),
+            )
+        )
+        assert result.classification == "APPROPRIATE"
+        assert result.bypass_reason == BypassReason.NONE
+        assert result.rationale == expected_rationale
+
+    @pytest.mark.parametrize(
+        ("label", "threshold"),
+        [
+            (CohortLabel.DEFAULT, DEFAULT_THRESHOLD),
+            (
+                CohortLabel.CARDIOPULMONARY_COMORBIDITY,
+                CARDIOPULMONARY_COMORBIDITY_THRESHOLD,
+            ),
+        ],
+    )
+    def test_hb_just_above_threshold_is_needs_review(
+        self, label: CohortLabel, threshold: float
+    ) -> None:
+        """Ruling 2026-09-27 moves only the boundary value: Hb 0.1 above the
+        floor (7.1 default, 8.1 cardiopulmonary) is still the gray zone."""
+        result = classify(
+            _inputs(
+                hb=_hb(round(threshold + 0.1, 1)),
+                cohort=_cohort(label, threshold),
             )
         )
         assert result.classification == "NEEDS_REVIEW"
+        assert result.rationale == "hb_7_to_10"
 
     def test_hb_missing_is_insufficient_evidence(self) -> None:
         """Hb missing (freshness=missing), no Hb-independent positive
@@ -890,6 +939,40 @@ class TestPreopAndDeltaBypassPathways:
         assert result.bypass_reason == BypassReason.NONE
         assert result.cohort_threshold == 7.0
         assert result.rationale == "hb_lt_7_universal"
+
+    @pytest.mark.parametrize(
+        ("label", "threshold", "expected_rationale"),
+        [
+            (CohortLabel.ORTHO_SURGERY, ORTHO_SURGERY_THRESHOLD, "hb_lt_threshold"),
+            (CohortLabel.DEFAULT, DEFAULT_THRESHOLD, "hb_lt_7_universal"),
+        ],
+    )
+    def test_pre_op_at_cohort_threshold_clears_instead_of_deferring(
+        self, label: CohortLabel, threshold: float, expected_rationale: str
+    ) -> None:
+        """Owner ruling 2026-09-27 (case 68004713): an Hb exactly at the floor
+        is sub-threshold, so it is itself the indication and must clear rather
+        than be deferred by an upcoming procedure."""
+        result = classify(
+            _inputs(
+                hb=_hb(threshold),
+                cohort=_cohort(label, threshold),
+                upcoming_procedure_hours=24.0,
+            )
+        )
+        assert result.classification == "APPROPRIATE"
+        assert result.rationale == expected_rationale
+
+    def test_pre_op_just_above_cohort_threshold_still_defers(self) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(8.1),
+                cohort=_cohort(CohortLabel.ORTHO_SURGERY, ORTHO_SURGERY_THRESHOLD),
+                upcoming_procedure_hours=24.0,
+            )
+        )
+        assert result.classification == "NEEDS_REVIEW"
+        assert result.rationale == "preop_defer_llm"
 
     def test_pre_op_at_or_above_cohort_threshold_still_defers(self) -> None:
         """A pre-op order at/above the cohort floor (gray zone) has no
@@ -1637,6 +1720,20 @@ class TestHemodilutionFlag:
         assert result.bypass_reason == BypassReason.NONE
         assert result.rationale == "hb_lt_7_universal"
 
+    def test_hemodilution_applies_at_the_floor(self) -> None:
+        """Owner ruling 2026-09-27: Hb exactly at the 8.0 floor is now the
+        would-be auto-APPROPRIATE branch, so the hemodilution carve-out must
+        guard it too."""
+        result = classify(
+            _inputs(
+                hb=_hb(8.0),
+                cohort=_cohort(CohortLabel.ORTHO_SURGERY, ORTHO_SURGERY_THRESHOLD),
+                crystalloid_liters_prior_4h=2.5,
+            )
+        )
+        assert result.classification == "NEEDS_REVIEW"
+        assert result.bypass_reason == BypassReason.HEMODILUTION_FLAGGED
+
     def test_below_2l_crystalloid_does_not_flag(self) -> None:
         """< 2 L crystalloid → plain Hb-tier rule applies (APPROPRIATE
         for Hb < threshold)."""
@@ -1810,7 +1907,7 @@ class TestSingleLowHbReviewFlag:
     global Hb < 7.0 rule wins first.
 
     Upstream contract (PRD §3, hb_lookup model docstring): the flag is
-    True only when the most-recent Hb is < 8 g/dL and no prior 24 h
+    True only when the most-recent Hb is <= 8 g/dL and no prior 24 h
     observation exists — i.e., a worrying value with no trend to
     interpret it against. The deterministic stage cannot honor confirmed
     anemia without a confirming observation, so an isolated low value
@@ -1843,6 +1940,22 @@ class TestSingleLowHbReviewFlag:
         assert result.classification == "NEEDS_REVIEW"
         assert result.bypass_reason == BypassReason.NONE
         assert result.cohort_threshold == 8.0
+        assert result.rationale == "single_low_hb_no_trend"
+
+    def test_isolated_hb_at_8_floor_routes_to_needs_review(self) -> None:
+        """Owner ruling 2026-09-27: Hb exactly 8.0 now qualifies against an
+        8.0 floor, so an isolated 8.0 with no trend must get the same
+        single-low-Hb safety check as 7.9 instead of auto-clearing."""
+        result = classify(
+            _inputs(
+                hb=_hb(8.0, needs_review_single_low_hb=True),
+                cohort=_cohort(
+                    CohortLabel.CARDIOPULMONARY_COMORBIDITY,
+                    CARDIOPULMONARY_COMORBIDITY_THRESHOLD,
+                ),
+            )
+        )
+        assert result.classification == "NEEDS_REVIEW"
         assert result.rationale == "single_low_hb_no_trend"
 
     def test_isolated_low_hb_below_7_routes_to_appropriate(self) -> None:
@@ -1923,10 +2036,22 @@ class TestGlobalLowHbRule:
         assert result.cohort_threshold is None
         assert result.rationale == "hb_lt_7_universal"
 
-    def test_hb_at_7_does_not_use_global_rule(self) -> None:
+    def test_hb_at_7_uses_global_rule(self) -> None:
+        # Owner ruling 2026-09-27 (case 68004713): Hb exactly 7.0 qualifies
+        # for the universal rule, even in a non-threshold cohort.
         result = classify(
             _inputs(
                 hb=_hb(UNIVERSAL_LOW_HB_APPROPRIATE_THRESHOLD),
+                cohort=_cohort(CohortLabel.HEME_MALIGNANCY_ACTIVE, None),
+            )
+        )
+        assert result.classification == "APPROPRIATE"
+        assert result.rationale == "hb_lt_7_universal"
+
+    def test_hb_just_above_7_does_not_use_global_rule(self) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(7.1),
                 cohort=_cohort(CohortLabel.HEME_MALIGNANCY_ACTIVE, None),
             )
         )
@@ -1956,16 +2081,31 @@ class TestCohortUnknownRoutesToNeedsReview:
         assert result.cohort_threshold is None
         assert result.rationale == "hb_lt_7_universal"
 
-    def test_unknown_cohort_with_hb_at_7_is_needs_review(self) -> None:
+    def test_unknown_cohort_with_hb_at_7_is_appropriate(self) -> None:
+        # Owner ruling 2026-09-27 (case 68004713): the universal rule is
+        # inclusive, so Hb exactly 7.0 clears before the UNKNOWN route.
         result = classify(
             _inputs(
                 hb=_hb(7.0),
                 cohort=_cohort(CohortLabel.UNKNOWN, None),
             )
         )
+        assert result.classification == "APPROPRIATE"
+        assert result.bypass_reason == BypassReason.NONE
+        assert result.cohort_threshold is None
+        assert result.rationale == "hb_lt_7_universal"
+
+    def test_unknown_cohort_with_hb_just_above_7_is_needs_review(self) -> None:
+        result = classify(
+            _inputs(
+                hb=_hb(7.1),
+                cohort=_cohort(CohortLabel.UNKNOWN, None),
+            )
+        )
         assert result.classification == "NEEDS_REVIEW"
         assert result.bypass_reason == BypassReason.NONE
         assert result.cohort_threshold is None
+        assert result.rationale == "cohort_unknown"
 
     def test_unknown_cohort_with_high_hb_is_needs_review(self) -> None:
         """UNKNOWN routes to NEEDS_REVIEW even at high Hb — the system

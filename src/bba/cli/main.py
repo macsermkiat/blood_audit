@@ -1,29 +1,14 @@
-"""``bba`` — the click root group and the six subcommand functions.
-
-Each subcommand is intentionally a thin wrapper over an already-tested
-module entrypoint:
-
-* ``bba ingest``          → :func:`bba.ingest.ingest`
-* ``bba audit``           → idempotent wrap of audit-pipeline orchestration
-* ``bba evaluate``        → :mod:`bba.eval_harness`
-* ``bba report``          → :func:`bba.report_generator.generate_monthly_report`
-* ``bba serve-dashboard`` → :func:`bba.dashboard.create_app` + ``uvicorn``
-* ``bba sentinel``        → :mod:`bba.monitoring` cadence dispatch
-
-Three of the six subcommands (``evaluate``, ``report``, ``serve-dashboard``,
-``sentinel``) require multi-store / multi-resolver glue that lives in the
-underlying module rather than in the CLI; their bodies fail loud with a
-:class:`CliError` describing the contract at the integration boundary
-rather than fabricating defaults that would silently mis-configure the
-underlying module. The CLI's job is to expose the surface and keep the
-input-validation / logging hygiene tight; building production-grade
-defaults for the per-store integrations is owned by each module."""
+"""Supported command-line entry points and deployment configuration boundaries."""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
 from typing import cast
+import json
+import hashlib
+
+from pydantic import SecretStr
 
 import click
 
@@ -55,13 +40,22 @@ from bba.attribution import (
     make_physician_resolver,
     make_ward_resolver,
 )
-from bba.ingest import IngestConfig, IngestResult, ingest, schema_fingerprint
+from bba.ingest import IngestConfig, ingest, schema_fingerprint
+from bba.application.audit import audit_bundle
+from bba.application.config import load_config
+from bba.application.operations import (
+    MonitoringManifest,
+    evaluate,
+    persist_analysis,
+    run_rows,
+    sentinel,
+    write_report,
+)
 from bba.audit_store import AuditStore, AuditStoreConfig
 from bba.report_generator import (
     PhysicianAttributionResolver,
     WardAttributionResolver,
     build_report_inputs,
-    generate_monthly_report,
 )
 
 
@@ -204,12 +198,20 @@ def bba_audit(input_csv: Path | None, run_id: str | None, force: bool) -> None:
                 run_id=resolved,
                 idempotency_override=True,
             )
-        if inputs.input_csv is None:
-            raise click.UsageError(
-                "bba audit --run-id without --input cannot reach the "
-                "pipeline; the run was not previously completed"
+        source = inputs.input_csv
+        if source is None:
+            manifest_path = (
+                _resolve_data_dir() / "audit_runs" / f"{resolved}.input.json"
             )
-        _run_audit_pipeline(run_id=resolved, input_csv=inputs.input_csv, store=store)
+            if not manifest_path.exists():
+                raise click.UsageError("no recorded source for this run; use --input")
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            source = Path(manifest["input_csv"])
+            if _resolve_run_id(AuditCommandInput(input_csv=source)) != resolved:
+                raise CliError(
+                    "source bundle or application configuration changed; use --input for a new run"
+                )
+        _run_audit_pipeline(run_id=resolved, input_csv=source, store=store)
         store.mark_run_complete(resolved)
         _log.info(
             "audit.complete",
@@ -220,17 +222,25 @@ def bba_audit(input_csv: Path | None, run_id: str | None, force: bool) -> None:
 
 @click.command(name="evaluate")
 @click.option("--run-id", type=str, required=True)
-def bba_evaluate(run_id: str) -> None:
-    """Evaluate the gold-standard performance for a finished run."""
+@click.option(
+    "--labels",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+)
+@click.option("--code-version", "selected_version", type=str, default=None)
+def bba_evaluate(run_id: str, labels: Path, selected_version: str | None) -> None:
+    """Compare committed classifications against explicit reviewed CSV labels."""
     inputs = EvaluateCommandInput(run_id=run_id)
-    _log.info("evaluate.start", run_id=inputs.run_id)
-    raise CliError(
-        f"evaluate run_id={inputs.run_id}: bba.eval_harness exposes "
-        "stratified-sample / agreement / cluster-CI primitives but not a "
-        "single-call evaluate(run_id) facade. The CLI's hand-off seam is "
-        "bba.cli.main.bba_evaluate; production wiring composes the "
-        "primitives against the configured audit_store."
+    version = selected_version or code_version()
+    result = evaluate(
+        run_rows(_get_audit_store(), inputs.run_id, version),
+        labels,
     )
+    target = persist_analysis(
+        _resolve_data_dir() / "evaluations",
+        {"run_id": inputs.run_id, "code_version": version, **result},
+    )
+    click.echo(str(target))
 
 
 @click.command(name="report")
@@ -243,12 +253,7 @@ def bba_evaluate(run_id: str) -> None:
     show_default=True,
 )
 def bba_report(run_id: str, report_format: str) -> None:
-    """Render a monthly report (html / pdf / json) from a finished run.
-
-    The on-disk artifacts (committee CSVs + per-physician CSVs + PDF)
-    are produced unconditionally; ``--format`` is captured as run
-    metadata in the structured log and is reserved for a future
-    stdout-shaping pass (see ``bba.cli.main.bba_report`` follow-up)."""
+    """Render a committed run as HTML, PDF or JSON."""
     inputs = ReportCommandInput(
         run_id=run_id,
         format=cast(ReportFormat, report_format),
@@ -262,63 +267,84 @@ def bba_report(run_id: str, report_format: str) -> None:
         ward_resolver=_get_ward_resolver(),
         physician_resolver=_get_physician_resolver(),
     )
-    artifacts = generate_monthly_report(report_inputs)
+    path = write_report(report_inputs, inputs.format)
     _log.info(
-        "report.complete",
-        run_id=inputs.run_id,
-        format=inputs.format,
-        pdf_path=str(artifacts.pdf_path),
-        committee_csv_count=len(artifacts.csv_paths),
-        physician_csv_count=len(artifacts.physician_own_view_csv_paths),
+        "report.complete", run_id=inputs.run_id, format=inputs.format, path=str(path)
     )
-    click.echo(str(artifacts.pdf_path))
+    click.echo(str(path))
 
 
 @click.command(name="serve-dashboard")
 @click.option("--port", type=int, default=8000, show_default=True)
-def bba_serve_dashboard(port: int) -> None:
-    """Serve the reviewer dashboard (FastAPI) on ``--port``."""
+@click.option("--run-id", type=str, default=None)
+@click.option("--code-version", "selected_version", type=str, default=None)
+def bba_serve_dashboard(
+    port: int, run_id: str | None, selected_version: str | None
+) -> None:
+    """Serve behind an HTTPS auth proxy that issues signed bba_session cookies."""
+    import uvicorn
+    from bba.dashboard import DashboardConfig, create_app
+    from bba.review_actions import ReviewActionsConfig, ReviewActionsStore
+
     inputs = ServeDashboardInput(port=port)
-    _log.info("serve_dashboard.start", port=inputs.port)
-    raise CliError(
-        f"serve-dashboard port={inputs.port}: bba.dashboard.create_app "
-        "requires a DashboardConfig (audit_store, review_actions_store, "
-        "snapshot_dir, unredacted_phi_resolver, attribution resolvers). "
-        "The CLI's hand-off seam is bba.cli.main.bba_serve_dashboard; "
-        "production wiring instantiates the stores from BBA_DATA_DIR / "
-        "BBA_DB_URL and the resolvers from the deployment's auth surface."
-    )
+    dsn = os.environ.get("BBA_DB_URL")
+    secret = os.environ.get("BBA_DASHBOARD_AUTH_SECRET")
+    origin = os.environ.get("BBA_DASHBOARD_PUBLIC_ORIGIN")
+    if not dsn or not secret or not origin:
+        raise CliError(
+            "serve-dashboard requires BBA_DB_URL, BBA_DASHBOARD_AUTH_SECRET and BBA_DASHBOARD_PUBLIC_ORIGIN"
+        )
+    reviews = ReviewActionsStore(ReviewActionsConfig(dsn=dsn))
+    try:
+        config = DashboardConfig(
+            audit_store=_get_audit_store(),
+            review_actions_store=reviews,
+            snapshot_dir=_resolve_data_dir() / "snapshots",
+            code_version=selected_version or code_version(),
+            run_id=run_id,
+            auth_secret=SecretStr(secret),
+            public_origin=origin,
+            ward_attribution_resolver=_get_ward_resolver(),
+            physician_attribution_resolver=_get_physician_resolver(),
+        )
+        uvicorn.run(create_app(config), host="127.0.0.1", port=inputs.port)
+    finally:
+        reviews.close()
 
 
 @click.command(name="sentinel")
 @click.option("--weekly", is_flag=True, default=False)
 @click.option("--quarterly", is_flag=True, default=False)
-def bba_sentinel(weekly: bool, quarterly: bool) -> None:
-    """Run a monitoring sentinel cadence (weekly κ or quarterly golden-set).
-
-    ``--weekly`` and ``--quarterly`` are mutually exclusive — supplying
-    both is a usage error (the spec requires exactly one). Click's
-    ``flag_value`` shortcut silently last-wins on conflict, so we use
-    two booleans + an explicit XOR check."""
-    if weekly and quarterly:
+@click.option(
+    "--manifest",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+)
+def bba_sentinel(weekly: bool, quarterly: bool, manifest: Path | None) -> None:
+    """Compare explicit baseline/current committed runs using a fixed manifest."""
+    if weekly == quarterly:
         raise click.UsageError(
-            "bba sentinel --weekly and --quarterly are mutually exclusive"
+            "bba sentinel requires exactly one of --weekly or --quarterly; they are mutually exclusive"
         )
-    if not (weekly or quarterly):
+    if manifest is None:
         raise click.UsageError(
-            "bba sentinel requires exactly one of --weekly or --quarterly"
+            "bba sentinel requires --manifest with baseline/current runs, versions and sentinel membership"
         )
     cadence: SentinelCadence = "weekly" if weekly else "quarterly"
     inputs = SentinelCommandInput(cadence=cadence)
-    _log.info("sentinel.start", cadence=inputs.cadence)
-    raise CliError(
-        f"sentinel cadence={inputs.cadence}: bba.monitoring exposes "
-        "draw_weekly_reviewer_sample, evaluate_sentinel_run, and "
-        "evaluate_golden_set_drift as primitives but no cadence "
-        "dispatcher. The CLI's hand-off seam is bba.cli.main.bba_sentinel; "
-        "production wiring loads the prior-period audit rows from the "
-        "configured audit_store and dispatches to the matching primitive."
+    selection = MonitoringManifest.model_validate_json(
+        manifest.read_text(encoding="utf-8")
     )
+    result = sentinel(_get_audit_store(), selection, quarterly=quarterly)
+    target = persist_analysis(
+        _resolve_data_dir() / "monitoring",
+        {
+            **result.model_dump(mode="json"),
+            "cadence": inputs.cadence,
+            "comparison": selection.model_dump(mode="json"),
+        },
+    )
+    click.echo(str(target))
 
 
 # ---------------------------------------------------------------------------
@@ -423,71 +449,21 @@ def _run_audit_pipeline(
     input_csv: Path,
     store: AuditRunStore,
 ) -> None:
-    """Run the Phase 1 audit pipeline for ``input_csv``.
-
-    The Phase 1 deliverable for ``bba audit`` is the *ingest leg* of
-    the pipeline: the HOSxP CSV bundle is materialised into the
-    configured DuckDB + Parquet store under
-    ``BBA_DATA_DIR/audit/<run_id>/``. The LLM-driven analysis leg
-    (deterministic classifier → evidence bundle → de-id → prompt →
-    batch submit → quote ground → calibrate → audit_store write)
-    requires a context-builder composition over :mod:`bba.audit_orders`
-    / :mod:`bba.deterministic_classifier` /
-    :mod:`bba.evidence_bundle_builder` / :mod:`bba.deid_redactor` /
-    :mod:`bba.prompt_builder` that is owned by
-    :mod:`bba.audit_pipeline` per its own contract ("the pipeline never
-    re-implements upstream modules; the caller assembles the context").
-    When that orchestration facade lands, this seam delegates to it.
-
-    ``store.record_row`` is called once per ingested HOSxP table so
-    :meth:`AuditRunStore.run_count` is consistent with
-    :meth:`AuditRunStore.run_complete` after this function returns —
-    a downstream observer querying ``run_count > 0`` will see a real
-    count of committed units of work, not a stale zero.
-
-    Tests patch this seam via
-    ``patch("bba.cli.main._run_audit_pipeline", ...)`` to isolate the
-    CLI's idempotency / force / scrubbing behaviour from the ingest
-    cost."""
-    output_dir = _resolve_data_dir() / "audit" / run_id
-    config = IngestConfig(
-        input_dir=input_csv.parent,
-        output_dir=output_dir,
-        code_version=code_version(),
-    )
-    result: IngestResult = ingest(config)
-    # ``IngestResult.tables_written`` is the authoritative list of
-    # validated HOSxP tables for this run; trusting the function's
-    # typed return value is more robust than re-globbing the output
-    # directory (which would be tied to whichever ingest revision is
-    # currently shipping parquet writes vs marker-only writes).
-    if not result.tables_written:
-        # Defensive guard: a successful ingest invariably returns at
-        # least one validated table (and otherwise raises
-        # ``IncompleteInputError``). Reaching here means ingest's
-        # contract changed silently — refuse to mark the run complete
-        # rather than persist a ``run_<id>.complete`` marker for a run
-        # with zero row markers (PRD §20 "CLI fails loud").
-        raise CliError(
-            f"audit pipeline for run_id={run_id} produced zero ingested "
-            "tables; refusing to mark the run complete (a successful "
-            "Phase 1 audit must yield at least one validated HOSxP table)"
-        )
-    # Record one marker per validated HOSxP table so run_count is
-    # consistent with the completed marker that bba_audit writes next.
-    # The audit_id namespace ``phase1_ingest_<table>`` is reserved for
-    # the ingest-leg-only Phase 1; the full LLM-driven leg will write
-    # ``audit_<hn_hash>_<requested_at>`` rows under the same run_id.
-    for table_name in result.tables_written:
-        store.record_row(run_id, f"phase1_ingest_{table_name}")
-    _log.info(
-        "audit.pipeline_ingest_complete",
+    """Compose the supported application and count committed AuditRows."""
+    raw_config = os.environ.get("BBA_APPLICATION_CONFIG")
+    config = load_config(Path(raw_config) if raw_config else None)
+    audit_ids = audit_bundle(
+        input_csv=input_csv,
+        data_dir=_resolve_data_dir(),
+        version=code_version(),
         run_id=run_id,
-        output_dir=str(output_dir),
-        leg="phase1_ingest_only",
-        table_count=len(result.tables_written),
-        ingest_skipped_idempotent=result.skipped_idempotent,
+        audit_store=_get_audit_store(),
+        config=config,
     )
+    if not audit_ids:
+        raise CliError("audit emitted no committed rows; refusing to record completion")
+    for audit_id in audit_ids:
+        store.record_row(run_id, audit_id)
 
 
 def _resolve_run_id(inputs: AuditCommandInput) -> str:
@@ -499,11 +475,18 @@ def _resolve_run_id(inputs: AuditCommandInput) -> str:
     if inputs.run_id is not None:
         return inputs.run_id
     assert inputs.input_csv is not None, "AuditCommandInput XOR invariant"
-    return compute_run_id(
+    base_run_id = compute_run_id(
         input_csv=inputs.input_csv,
         schema_fingerprint=SchemaFingerprint(schema_fingerprint()),
         code_version_str=CodeVersion(code_version()),
     )
+    raw_config = os.environ.get("BBA_APPLICATION_CONFIG")
+    if raw_config:
+        config = load_config(Path(raw_config))
+        return hashlib.sha256(
+            f"{base_run_id}|{config.model_dump_json()}".encode()
+        ).hexdigest()[:16]
+    return base_run_id
 
 
 # ---------------------------------------------------------------------------

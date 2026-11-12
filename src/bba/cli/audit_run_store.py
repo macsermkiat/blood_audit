@@ -40,6 +40,8 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
+from bba.secure_files import private_directory, write_private_bytes
+
 
 class FileBackedAuditRunStore:
     """File-backed implementation of the :class:`AuditRunStore` Protocol.
@@ -58,14 +60,21 @@ class FileBackedAuditRunStore:
 
     def run_complete(self, run_id: str, /) -> bool:
         """Return ``True`` iff the ``run_<run_id>.complete`` marker exists."""
-        return self._marker_path(run_id).is_file()
+        if not self._marker_path(run_id).is_file():
+            return False
+        legacy = self._rows_dir(run_id).glob("phase1_ingest_*.row")
+        return not any(legacy) or self.run_count(run_id) > 0
 
     def run_count(self, run_id: str, /) -> int:
         """Return the count of per-row markers in ``rows_<run_id>/``."""
         rows_dir = self._rows_dir(run_id)
         if not rows_dir.is_dir():
             return 0
-        return sum(1 for _ in rows_dir.iterdir())
+        return sum(
+            1
+            for path in rows_dir.glob("*.row")
+            if not path.name.startswith("phase1_ingest_")
+        )
 
     def record_idempotency_override(
         self,
@@ -89,11 +98,11 @@ class FileBackedAuditRunStore:
             "ts": datetime.now(tz=UTC).isoformat(),
         }
         line = (json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8")
-        self._root.mkdir(parents=True, exist_ok=True)
+        private_directory(self._root)
         fd = os.open(
             self._audit_log_path,
             os.O_WRONLY | os.O_APPEND | os.O_CREAT,
-            0o644,
+            0o600,
         )
         try:
             # ``os.write`` may return a short count on some platforms;
@@ -131,9 +140,9 @@ class FileBackedAuditRunStore:
         path is per-run). Crash safety is OS-provided: a crashed
         process releases its kernel-held flock automatically, so a
         retry after a crash does not stall."""
-        self._root.mkdir(parents=True, exist_ok=True)
+        private_directory(self._root)
         lock_path = self._lock_path(run_id)
-        fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o644)
+        fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
             try:
@@ -151,11 +160,9 @@ class FileBackedAuditRunStore:
         The CLI's idempotency contract depends on the marker existing
         iff the run truly committed every row; atomic write-then-rename
         rules out a half-formed marker from a crashed write."""
-        self._root.mkdir(parents=True, exist_ok=True)
+        private_directory(self._root)
         target = self._marker_path(run_id)
-        tmp = target.with_suffix(target.suffix + ".tmp")
-        tmp.write_text("ok\n", encoding="utf-8")
-        tmp.replace(target)
+        write_private_bytes(target, b"ok\n", replace=True)
 
     def record_row(self, run_id: str, audit_id: str, /) -> None:
         """Touch a per-row marker under ``rows_<run_id>/<audit_id>.row``.
@@ -164,8 +171,8 @@ class FileBackedAuditRunStore:
         :meth:`run_count` reflects real progress and stays consistent
         with :meth:`run_complete`."""
         rows_dir = self._rows_dir(run_id)
-        rows_dir.mkdir(parents=True, exist_ok=True)
-        (rows_dir / f"{audit_id}.row").write_text("ok\n", encoding="utf-8")
+        private_directory(rows_dir)
+        write_private_bytes(rows_dir / f"{audit_id}.row", b"ok\n", replace=True)
 
     def _marker_path(self, run_id: str) -> Path:
         return self._root / f"run_{run_id}.complete"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -93,6 +94,19 @@ def _render_review_with_rows(
     manifest.write_text(manifest_csv, encoding="utf-8")
     report.write_text(report_csv, encoding="utf-8")
     llm_report.write_text(llm_json, encoding="utf-8")
+    # A clean response audit, as audit_llm_responses.py leaves it (#239 gate).
+    response_audit = root / "llm_response_audit.json"
+    response_audit.write_text(
+        json.dumps(
+            {
+                "judge": "all",
+                "report_sha256": hashlib.sha256(llm_json.encode("utf-8")).hexdigest(),
+                "findings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(module, "RESPONSE_AUDIT", response_audit)
 
     monkeypatch.setattr(module, "WORK", root)
     monkeypatch.setattr(module, "BUNDLE", bundle)
@@ -247,6 +261,72 @@ def test_summary_pills_and_mismatch_rendered_server_side(
     assert "(LLM not run)" in rendered
 
 
+def _override_llm_json(*, final: str, reason: str, reasoning_en: str) -> str:
+    return json.dumps(
+        [
+            {
+                "reqno": "R1",
+                "llm_final": {
+                    "final_classification": final,
+                    "confidence": 0.9,
+                    "model": "test",
+                    "review_reason": reason,
+                    "indications": [],
+                    "negative_evidence": [],
+                    "reasoning_en": reasoning_en,
+                    "reasoning_th": "x",
+                },
+            }
+        ]
+    )
+
+
+def test_guardrail_override_shows_what_the_model_concluded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Clinician review 2026-11-09: the reasoning read "appropriate" while the
+    # verdict said "inappropriate". The guardrail's verdict stands, but the page
+    # must say the model concluded otherwise and why it was overridden.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN\nHN1,R1,AN1\n",
+        report_csv="reqno,classification\nR1,NEEDS_REVIEW\n",
+        llm_json=_override_llm_json(
+            final="INAPPROPRIATE",
+            reason="llm_overclear_asserted_inappropriate",
+            reasoning_en="Post-op day 1. Final classification: APPROPRIATE.",
+        ),
+    ).decode()
+
+    assert "Guardrail override" in rendered
+    assert "The model concluded <b>Appropriate</b>" in rendered
+    assert "the final verdict is <b>Inappropriate</b>" in rendered
+    assert "Hb at or below 7.0 g/dL" in rendered
+
+
+def test_model_verdict_without_override_shows_no_banner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN\nHN1,R1,AN1\n",
+        report_csv="reqno,classification\nR1,NEEDS_REVIEW\n",
+        llm_json=_override_llm_json(
+            final="INAPPROPRIATE",
+            reason="model_verdict",
+            reasoning_en="No indication. Final classification: INAPPROPRIATE.",
+        ),
+    ).decode()
+
+    assert "Guardrail override" not in rendered
+
+
 def test_msbos_flag_off_report_columns_do_not_change_review_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -310,7 +390,7 @@ def test_msbos_flag_on_renders_summary_cases_counts_glossary_and_css(
             "msbos_resolved_icd9,msbos_reference_hash,msbos_plt_category,"
             "msbos_plt_count_k_ul,msbos_plt_over_above_per_ul,"
             "msbos_plt_clinician_signed,returns_units_transfused,"
-            "returns_units_returned\n"
+            "returns_units_returned,returns_units_total\n"
             "R1,RETURNED_NOT_TRANSFUSED,red_cell,3,G/M,2,over_gm_excess,True,"
             "0139,hash,,,,,,\n"
             "R2,RETURNED_NOT_TRANSFUSED,red_cell,1,G/M,2,within_recommendation,"
@@ -321,7 +401,7 @@ def test_msbos_flag_on_renders_summary_cases_counts_glossary_and_css(
             "R5,RETURNED_NOT_TRANSFUSED,red_cell,0,,0,reservation_lookup_miss,"
             "False,,hash,,,,,,\n"
             "R6,PERIOP_TRANSFUSION_EXEMPT,red_cell,2,G/M,2,"
-            "within_recommendation,False,0139,hash,,,,,1,1\n"
+            "within_recommendation,False,0139,hash,,,,,0,1,2\n"
         ),
         llm_json="[]",
         msbos_enabled=True,
@@ -337,7 +417,11 @@ def test_msbos_flag_on_renders_summary_cases_counts_glossary_and_css(
     assert "MSBOS reservation: Reserved 3; MSBOS tariff G/M 2" in rendered
     assert "<span class='cls cls-msbos-warn'>unlinked</span>" in rendered
     assert "Reservation detail lines not linked (unlinked)" in rendered
-    assert "Reserved 2; MSBOS tariff G/M 2; 1 transfused, 1 returned" in rendered
+    # The ledger never records status 5 (transfused), so the page states
+    # returned units out of the total instead of a transfused count that is
+    # always 0 (review of platelet case 68012561, 2026-09-23).
+    assert "Reserved 2; MSBOS tariff G/M 2; 1 of 2 units returned" in rendered
+    assert " transfused, " not in rendered
     assert "<span class='cls cls-msbos-warn'>PLT 120 > 100</span>" in rendered
     assert (
         "Reserved 2u platelets; pre-op count 120k/uL > neuraxial cutoff 100k/uL"
@@ -452,12 +536,13 @@ def test_msbos_case_line_maps_every_reachable_reason() -> None:
     exempt = module._msbos_case_line(
         _returns_det(
             "over_gm_excess",
-            returns_units_transfused="1",
+            returns_units_transfused="0",
             returns_units_returned="2",
+            returns_units_total="3",
         ),
         "PERIOP_TRANSFUSION_EXEMPT",
     )
-    assert exempt == "Reserved 3; MSBOS tariff G/M 2; 1 transfused, 2 returned"
+    assert exempt == "Reserved 3; MSBOS tariff G/M 2; 2 of 3 units returned"
 
 
 def _platelet_returns_det(reason: str, **extra: str) -> dict[str, str]:
@@ -598,9 +683,641 @@ def test_msbos_platelet_case_line_maps_every_reason() -> None:
     exempt = module._msbos_case_line(
         _platelet_returns_det(
             "within_neuraxial",
-            returns_units_transfused="1",
+            returns_units_transfused="0",
             returns_units_returned="1",
+            returns_units_total="2",
         ),
         "PERIOP_TRANSFUSION_EXEMPT",
     )
-    assert exempt.endswith("; 1 transfused, 1 returned")
+    assert exempt.endswith("; 1 of 2 units returned")
+
+
+# ---------------------------------------------------------------------------
+# Component-aware rendering (platelet orders on the shared review page)
+# ---------------------------------------------------------------------------
+
+_PLT_REPORT = (
+    "reqno,classification,rationale,component,platelet_count_k_ul,"
+    "platelet_freshness,hb_value_g_dl,cohort_label,cohort_threshold\n"
+    "P1,NEEDS_REVIEW,plt_defer_llm,platelet,11.0,fresh,,,\n"
+)
+_RBC_REPORT = (
+    "reqno,classification,rationale,component,platelet_count_k_ul,"
+    "platelet_freshness,hb_value_g_dl,cohort_label,cohort_threshold\n"
+    "R1,APPROPRIATE,hb_lt_7_universal,red_cell,,,6.5,cohort_unknown,7.0\n"
+)
+
+
+def test_platelet_case_shows_the_count_not_the_hb_anchor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A reviewer judging a platelet order needs the trigger count; the Hb value,
+    # Hb lookup anchor and Hb cohort threshold are RBC concepts that read as
+    # missing data ("—", "n/a") on a platelet case.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN1,P1,AN1,platelet\n",
+        report_csv=_PLT_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    assert "Platelet count @ order:" in rendered
+    assert "11,000 /µL" in rendered
+    assert "(fresh)" in rendered
+    assert "Hb @ anchor" not in rendered
+    assert "Hb lookup anchor" not in rendered
+    assert "Platelet count history" in rendered
+    assert "Hb history" not in rendered
+    assert "data-component='platelet'" in rendered
+
+
+def test_platelet_count_read_at_dispense_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Clinician review 2026-11-09: the count is read at dispense time, so the
+    # page must say which moment the count belongs to.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN1,P1,AN1,platelet\n",
+        report_csv=(
+            "reqno,classification,rationale,component,platelet_count_k_ul,"
+            "platelet_freshness,platelet_anchor_datetime_local\n"
+            "P1,NEEDS_REVIEW,plt_defer_llm,platelet,11.0,fresh,2025-04-23 15:14\n"
+        ),
+        llm_json="[]",
+    ).decode()
+
+    assert "Platelet count @ dispense 2025-04-23 15:14:" in rendered
+
+
+def test_page_title_is_component_neutral_when_platelets_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv=("HN,REQNO,AN,component\nHN1,P1,AN1,platelet\nHN2,R1,AN2,rbc\n"),
+        report_csv=_PLT_REPORT + _RBC_REPORT.split("\n", 1)[1],
+        llm_json="[]",
+    ).decode()
+
+    assert "KCMH RBC Order Appropriateness Audit" not in rendered
+    assert "Blood Component Order Appropriateness Audit" in rendered
+    assert "1 RBC, 1 platelet" in rendered
+    # Mixed pages get a component column, a count column and a filter.
+    assert "<th>Comp</th>" in rendered and "<th>Plt (k/µL)</th>" in rendered
+    assert "id='filter-component'" in rendered
+    # The RBC case on the same page keeps its Hb strip.
+    assert "Hb @ anchor" in rendered
+
+
+def test_rbc_only_page_is_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # RBC-only reviews already in clinicians' hands must not change shape.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN2,R1,AN2,rbc\n",
+        report_csv=_RBC_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    assert "KCMH RBC Order Appropriateness Audit — Human Review" in rendered
+    assert "Hb @ anchor" in rendered and "Hb history" in rendered
+    assert "<th>Comp</th>" not in rendered
+    # No component CONTROL on an RBC-only page (the shared filter script may
+    # still name the element id).
+    assert "id='filter-component'" not in rendered
+    assert "data-component='" not in rendered
+
+
+def test_platelet_history_window_matches_the_gate_bounds() -> None:
+    # lookup_platelet() and the LLM bundle's _filter_platelet() use a STRICT
+    # 7-day lower bound and an inclusive order-time upper bound. The page says
+    # it shows the same window, so a count exactly 7 days old (which the gate
+    # ignores) must not be presented to the reviewer as decision evidence.
+    from datetime import datetime, timedelta
+
+    module = _load_build_review()
+    anchor = datetime(2025, 3, 8, 9, 0, tzinfo=module.TZ_LOCAL)
+
+    assert module._in_platelet_window(anchor, anchor) is True
+    assert (
+        module._in_platelet_window(
+            anchor - timedelta(days=7) + timedelta(minutes=1), anchor
+        )
+        is True
+    )
+    assert module._in_platelet_window(anchor - timedelta(days=7), anchor) is False
+    assert module._in_platelet_window(anchor + timedelta(minutes=1), anchor) is False
+    assert module._in_platelet_window(None, anchor) is False
+    assert module._in_platelet_window(anchor, None) is False
+
+
+def test_keyboard_navigation_skips_filtered_out_cases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Codex P2 on #236: with a filter active (component or mismatches), j/k
+    # stepped through the full case list and scrolled to display:none sections,
+    # so navigation appeared to stall on interleaved pages.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN2,R1,AN2,rbc\n",
+        report_csv=_RBC_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    assert "caseEls[next].style.display === 'none'" in rendered
+    assert "Math.min(activeIdx + 1, caseEls.length - 1)" not in rendered
+
+
+def test_mismatch_filter_reads_the_flag_from_the_nav_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Codex P2 on #236 (and a latent bug on main): the [!] / [!!] mismatch flag
+    # is rendered only inside the nav link, so a filter that looked for it
+    # inside the case section hid EVERY case when "Mismatches only" was ticked.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN2,R1,AN2,rbc\n",
+        report_csv=_RBC_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    assert "sec.querySelector('.nav-flag')" not in rendered
+    assert "link.querySelector('.nav-flag')" in rendered
+    # One implementation serves both controls.
+    assert "window.filterMismatches = applyFilters;" in rendered
+    assert "window.filterComponent = applyFilters;" in rendered
+
+
+def test_excluded_platelet_order_keeps_its_component_from_the_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Codex P2 on #236: an order excluded by build_audit_orders has a sparse
+    # report row with no component column value. Without the manifest it was
+    # rendered and counted as RBC, so the platelet filter hid it and the page
+    # header miscounted (308 RBC instead of 304 on the hematology sandbox).
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN1,P9,AN1,platelet\n",
+        report_csv=(
+            "reqno,classification,rationale,component\nP9,excluded,hemoglobinopathy,\n"
+        ),
+        llm_json="[]",
+    ).decode()
+
+    assert "data-component='platelet'" in rendered
+    assert "(0 RBC, 1 platelet)" in rendered
+    assert "Platelet count history" in rendered
+
+
+def test_platelet_page_explains_platelet_codes_and_verdicts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Codex P2 on #236: the glossary defined every verdict in Hb terms and left
+    # plt_* rationale codes as raw slugs, which is wrong or unreadable for the
+    # platelet cases the page now presents.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN1,P1,AN1,platelet\n",
+        report_csv=_PLT_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    assert "<dt>plt_defer_llm</dt>" in rendered
+    assert "<dt>plt_lt_10_heme_prophylaxis</dt>" in rendered
+    assert "Platelet: documented active bleeding at any count" in rendered
+    assert "Screening flag from the deterministic pre-check" in rendered
+    assert "non-RBC product" not in rendered
+    # The verdict box resolves the code to its label instead of a bare slug.
+    assert "indication judged by the LLM" in rendered
+
+
+def test_platelet_page_explains_the_count_trend_review_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Issue #237: a reviewer who opens a row floored by the count-trend
+    # guardrail must learn WHY it is in their queue (the projection did not
+    # support "expected below 10,000"), not read a bare slug.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN1,P1,AN1,platelet\n",
+        report_csv=_PLT_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    assert (
+        "straight-line projection"
+        in module._REVIEW_REASON_LABELS["platelet_trend_unsupported"]
+    )
+    assert rendered.count("<dt>platelet_trend_unsupported</dt>") == 1
+    assert rendered.count("<dt>platelet_llm_overclear_suspect</dt>") == 1
+
+
+def test_initial_keyboard_lookup_ignores_hidden_cases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Codex P2 on #236: before any case is active, findActiveByScroll scanned
+    # hidden sections too; a display:none section has a zero rect and was picked.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN2,R1,AN2,rbc\n",
+        report_csv=_RBC_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    assert "if (caseEls[i].style.display === 'none') continue;" in rendered
+    # With every case filtered out the lookup must not fall back to case 0,
+    # or `e` / `x` would act on a hidden case.
+    assert "return firstVisible;" in rendered
+    assert "firstVisible < 0 ? 0" not in rendered
+
+
+def test_applying_a_filter_drops_the_active_case(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Codex P2 on #236: a case active before filtering stayed active after it
+    # was hidden, so `e` marked a hidden case reviewed and `x` expanded it.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN2,R1,AN2,rbc\n",
+        report_csv=_RBC_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    apply_body = rendered.split("function applyFilters()", 1)[1].split(
+        "window.filterMismatches", 1
+    )[0]
+    assert "activeIdx = -1;" in apply_body
+    # Same function scope: the handler state is declared in the script that
+    # defines applyFilters, not in a separate block.
+    assert rendered.count("var activeIdx = -1;") == 1
+
+
+# --- Issue #239: the page is not built from unaudited LLM responses ------------
+# A clinician found a self-contradicting answer on case 1 of a rendered page.
+# audit_llm_responses.py catches those, but only if it actually runs: the page
+# builder refuses LLM verdicts that have no clean, full audit OF THIS REPORT.
+
+_LLM_ENTRY = (
+    '[{"reqno": "R1", "audit_id": "a1", "llm_final": '
+    '{"final_classification": "APPROPRIATE", "model": "claude-sonnet-5-5"}}]'
+)
+
+
+def _audit_json(report_json: str, *, judge: str = "all", findings: str = "[]") -> str:
+    digest = hashlib.sha256(report_json.encode("utf-8")).hexdigest()
+    return (
+        f'{{"judge": "{judge}", "report_sha256": "{digest}", "findings": {findings}}}'
+    )
+
+
+def _gate_paths(
+    tmp_path: Path, llm_json: str, audit_json: str | None
+) -> tuple[Path, Path]:
+    report = tmp_path / "llm_report.json"
+    audit = tmp_path / "llm_response_audit.json"
+    report.write_text(llm_json, encoding="utf-8")
+    if audit_json is not None:
+        audit.write_text(audit_json, encoding="utf-8")
+    return report, audit
+
+
+def test_llm_verdicts_without_an_audit_block_the_page(tmp_path: Path) -> None:
+    module = _load_build_review()
+    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, None)
+
+    blocker = module.response_audit_blocker(report, audit)
+
+    assert blocker is not None
+    assert "audit_llm_responses.py" in blocker
+
+
+def test_high_finding_blocks_the_page(tmp_path: Path) -> None:
+    module = _load_build_review()
+    high = '[{"reqno": "R1", "code": "consortium_label_contradiction", "severity": "HIGH"}]'
+    report, audit = _gate_paths(
+        tmp_path, _LLM_ENTRY, _audit_json(_LLM_ENTRY, findings=high)
+    )
+
+    blocker = module.response_audit_blocker(report, audit)
+
+    assert blocker is not None
+    assert "1 HIGH" in blocker
+
+
+def test_audit_of_a_different_report_does_not_unlock_the_page(tmp_path: Path) -> None:
+    # A re-run merges fresh records into llm_report.json. An audit that read the
+    # OLD report says nothing about them, even if it finished later (an mtime
+    # check would accept it), so the audit is bound to the report's contents.
+    module = _load_build_review()
+    rerun = _LLM_ENTRY.replace("APPROPRIATE", "INAPPROPRIATE")
+    report, audit = _gate_paths(tmp_path, rerun, _audit_json(_LLM_ENTRY))
+
+    blocker = module.response_audit_blocker(report, audit)
+
+    assert blocker is not None
+    assert "different llm_report.json" in blocker
+
+
+def test_clean_full_audit_of_this_report_lets_the_page_build(tmp_path: Path) -> None:
+    module = _load_build_review()
+    medium = '[{"reqno": "R1", "code": "label_before_reasoning", "severity": "MEDIUM"}]'
+    report, audit = _gate_paths(
+        tmp_path, _LLM_ENTRY, _audit_json(_LLM_ENTRY, findings=medium)
+    )
+
+    assert module.response_audit_blocker(report, audit) is None
+
+
+def test_runs_without_model_responses_need_no_audit(tmp_path: Path) -> None:
+    # No LLM leg, or only deterministic rows the LLM leg persists under
+    # llm_final (MSBOS over-reservation, injection filter): nothing to audit,
+    # and those runs rendered before this gate existed.
+    module = _load_build_review()
+    deterministic = (
+        '[{"reqno": "R1", "audit_id": "a1", "llm_final": '
+        '{"final_classification": "PREOP_OVER_RESERVATION", "model": "msbos-reservation"}}]'
+    )
+    for llm_json in ("[]", deterministic):
+        report, audit = _gate_paths(tmp_path, llm_json, None)
+        assert module.response_audit_blocker(report, audit) is None
+    assert module.response_audit_blocker(tmp_path / "absent.json", audit) is None
+
+
+def test_a_missing_llm_result_still_needs_the_audit(tmp_path: Path) -> None:
+    module = _load_build_review()
+    dropped = '[{"reqno": "R1", "audit_id": "a1", "llm_final": null}]'
+    report, audit = _gate_paths(tmp_path, dropped, None)
+
+    assert module.response_audit_blocker(report, audit) is not None
+
+
+def test_main_refuses_to_render_and_the_override_is_explicit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_build_review()
+    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, None)
+    monkeypatch.setattr(module, "LLM_REPORT", report)
+    monkeypatch.setattr(module, "RESPONSE_AUDIT", audit)
+    monkeypatch.delenv("BBA_PILOT_ALLOW_UNAUDITED", raising=False)
+
+    with pytest.raises(SystemExit) as refused:
+        module.enforce_response_audit()
+    assert "BBA_PILOT_ALLOW_UNAUDITED=1" in str(refused.value)
+
+    monkeypatch.setenv("BBA_PILOT_ALLOW_UNAUDITED", "1")
+    module.enforce_response_audit()  # explicit operator override: no exit
+
+
+@pytest.mark.parametrize("judge", ["off", "candidates", "all"])
+def test_the_code_check_audit_is_what_unlocks_the_page(
+    tmp_path: Path, judge: str
+) -> None:
+    # User ruling 2026-09-21: the model consortium is a dev-test review run from
+    # Claude Code, not a production step, so the page does not wait for it. The
+    # gate is the code audit: it exists, it read THIS report, it has no HIGH.
+    module = _load_build_review()
+    report, audit = _gate_paths(
+        tmp_path, _LLM_ENTRY, _audit_json(_LLM_ENTRY, judge=judge)
+    )
+
+    assert module.response_audit_blocker(report, audit) is None
+
+
+def test_an_audit_file_from_before_the_report_digest_does_not_unlock_the_page(
+    tmp_path: Path,
+) -> None:
+    module = _load_build_review()
+    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, "[]")
+
+    assert module.response_audit_blocker(report, audit) is not None
+
+
+def test_the_page_renders_the_report_the_gate_validated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Local Codex review of #241: the gate read llm_report.json, then main()
+    # read it again later. A re-run landing between the two reads was rendered
+    # without ever being audited. main() now renders what the gate returned.
+    module = _load_build_review()
+    validated = [
+        {
+            "reqno": "R1",
+            "llm_final": {
+                "final_classification": "INAPPROPRIATE",
+                "confidence": 0.9,
+                "model": "claude-sonnet-5-5",
+                "review_reason": None,
+                "indications": [],
+                "negative_evidence": [],
+                "reasoning_en": "VALIDATED-REPORT-REASONING",
+                "reasoning_th": "x",
+            },
+        }
+    ]
+    monkeypatch.setattr(module, "enforce_response_audit", lambda: validated)
+
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN\nHN1,R1,AN1\n",
+        report_csv="reqno,classification\nR1,NEEDS_REVIEW\n",
+        llm_json=json.dumps(
+            [
+                {
+                    "reqno": "R1",
+                    "llm_final": {
+                        **validated[0]["llm_final"],
+                        "reasoning_en": "UNAUDITED-RERUN",
+                    },
+                }
+            ]
+        ),
+    ).decode()
+
+    assert "VALIDATED-REPORT-REASONING" in rendered
+    assert "UNAUDITED-RERUN" not in rendered
+
+
+def test_the_gate_hands_back_the_entries_it_validated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_build_review()
+    report, audit = _gate_paths(tmp_path, _LLM_ENTRY, _audit_json(_LLM_ENTRY))
+    monkeypatch.setattr(module, "LLM_REPORT", report)
+    monkeypatch.setattr(module, "RESPONSE_AUDIT", audit)
+
+    assert module.enforce_response_audit() == json.loads(_LLM_ENTRY)
+
+    monkeypatch.setattr(module, "LLM_REPORT", tmp_path / "absent.json")
+    assert module.enforce_response_audit() == []
+
+
+def test_returned_cell_states_units_returned_out_of_units_issued() -> None:
+    # Case 68012561: one bag came back at 10:05, then five more were issued and
+    # given. A bare return time read as "this order was returned".
+    module = _load_build_review()
+    det = {
+        "returned_blood_datetime_local": "2025-02-26 10:05:24",
+        "returns_units_returned": "1",
+        "returns_units_total": "6",
+    }
+
+    assert (
+        module._returned_display(det, [])
+        == "2025-02-26 10:05:24 (1 of 6 units returned)"
+    )
+
+
+def test_returned_cell_without_ledger_counts_keeps_the_time_alone() -> None:
+    module = _load_build_review()
+    det = {"returned_blood_datetime_local": "2025-02-26 10:05:24"}
+
+    assert module._returned_display(det, []) == "2025-02-26 10:05:24"
+    assert module._returned_display({}, []) == "—"
+
+
+def test_platelet_page_explains_the_specialist_target_review_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Ruling 2026-09-23: the reviewer must see that the order failed policy but
+    # followed a consultant's documented target, not a bare slug.
+    module = _load_build_review()
+    rendered = _render_review_with_rows(
+        module,
+        tmp_path,
+        monkeypatch,
+        manifest_csv="HN,REQNO,AN,component\nHN1,P1,AN1,platelet\n",
+        report_csv=_PLT_REPORT,
+        llm_json="[]",
+    ).decode()
+
+    assert "specialist" in module._REVIEW_REASON_LABELS["platelet_specialist_target"]
+    assert rendered.count("<dt>platelet_specialist_target</dt>") == 1
+
+
+def test_nursing_notes_sort_by_clock_time_not_by_the_raw_digits() -> None:
+    # HOSxP drops leading zeros from PROGRESSTIME, so 02:33 arrives as "23300"
+    # and 16:54 as "165400". A text sort puts 16:54 first; a reviewer reading
+    # the shift sequence around the order needs the night note before the
+    # afternoon one.
+    module = _load_build_review()
+    afternoon = {"PROGRESSDATE": "2025-01-02 00:00:00.000", "PROGRESSTIME": "165400"}
+    night = {"PROGRESSDATE": "2025-01-02 00:00:00.000", "PROGRESSTIME": "23300"}
+    next_day = {"PROGRESSDATE": "2025-01-03 00:00:00.000", "PROGRESSTIME": "5"}
+
+    ordered = sorted([next_day, afternoon, night], key=module.focus_note_sort_key)
+
+    assert ordered == [night, afternoon, next_day]
+
+
+def test_same_day_progress_notes_without_note_number_sort_by_entry_time() -> None:
+    # PROGDATE carries no time (always 00:00); when PROGNO cannot order the
+    # day, the entry timestamp does, instead of export order.
+    module = _load_build_review()
+    evening = {
+        "PROGDATE": "2024-04-02 00:00:00.000",
+        "FIRSTDATE": "2024-04-02 20:17:30.000",
+        "ITEMNO": "1",
+    }
+    morning = {
+        "PROGDATE": "2024-04-02 00:00:00.000",
+        "FIRSTDATE": "2024-04-02 08:05:00.000",
+        "ITEMNO": "2",
+    }
+    day_before = {
+        "PROGDATE": "2024-04-01 00:00:00.000",
+        "FIRSTDATE": "2024-04-03 09:00:00.000",
+        "ITEMNO": "1",
+    }
+
+    ordered = sorted([evening, morning, day_before], key=module.progress_note_sort_key)
+
+    assert ordered == [day_before, morning, evening]
+
+
+def test_same_day_progress_notes_sort_by_note_number() -> None:
+    # PROGNO is HOSxP's per-day note sequence; it orders the day numerically,
+    # so note 10 does not land before note 2.
+    module = _load_build_review()
+    note_10 = {"PROGDATE": "2024-04-02 00:00:00.000", "ITEMNO": "1", "PROGNO": "10"}
+    note_2 = {"PROGDATE": "2024-04-02 00:00:00.000", "ITEMNO": "1", "PROGNO": "2"}
+
+    ordered = sorted([note_10, note_2], key=module.progress_note_sort_key)
+
+    assert ordered == [note_2, note_10]
+
+
+def test_every_progress_note_of_a_day_survives_dedup() -> None:
+    # HOSxP exports ITEMNO=1 on every progress row; the notes of one day differ
+    # only by PROGNO. Deduping on (date, ITEMNO) showed the reviewer one note
+    # per day while the LLM saw all of them.
+    module = _load_build_review()
+    day = "2024-07-26 00:00:00.000"
+    morning = {"PROGDATE": day, "ITEMNO": "1", "PROGNO": "1"}
+    evening = {"PROGDATE": day, "ITEMNO": "1", "PROGNO": "3"}
+
+    assert module.progress_note_key(morning) != module.progress_note_key(evening)
+    # The same row reached twice (first-N of AN and the window) is one note.
+    assert module.progress_note_key(morning) == module.progress_note_key(dict(morning))
+
+
+def test_progress_note_header_shows_when_the_note_was_entered() -> None:
+    module = _load_build_review()
+
+    with_entry = module.progress_note_when(
+        {"PROGDATE": "2024-04-02 00:00:00.000", "FIRSTDATE": "2024-04-02 16:18:16.000"}
+    )
+    without_entry = module.progress_note_when({"PROGDATE": "2024-04-02 00:00:00.000"})
+
+    assert with_entry == "2024-04-02 (entered 2024-04-02 16:18:16)"
+    assert without_entry == "2024-04-02"
+
+
+def test_a_note_missing_its_entry_time_keeps_its_note_number_place() -> None:
+    # FIRSTDATE is not a required ingest column and can be blank on one row
+    # only. A blank sorted before every timestamp, so the day's last note
+    # jumped to the top (Codex review on #259).
+    module = _load_build_review()
+    day = "2024-04-02 00:00:00.000"
+    timed = {"PROGDATE": day, "PROGNO": "2", "FIRSTDATE": "2024-04-02 08:05:00.000"}
+    untimed = {"PROGDATE": day, "PROGNO": "10", "FIRSTDATE": ""}
+
+    ordered = sorted([untimed, timed], key=module.progress_note_sort_key)
+
+    assert ordered == [timed, untimed]

@@ -20,7 +20,7 @@ const isThai = Astro.url.pathname.includes("/th/");
 const englishGroups: StageGroup[] = [
   {
     legLabel: "Data preparation",
-    legSubtitle: "Stage 1 runs today via bba audit; stages 2-5 wire in Phase 1.5",
+    legSubtitle: "Validated source snapshots and order-level clinical context",
     stages: [
       { slug: "ingest", label: "Ingest", module: "bba.ingest" },
       { slug: "audit_orders", label: "Audit orders", module: "bba.audit_orders" },
@@ -31,14 +31,14 @@ const englishGroups: StageGroup[] = [
   },
   {
     legLabel: "Analysis",
-    legSubtitle: "Modules implemented; CLI wiring lands in Phase 1.5",
+    legSubtitle: "Deterministic decisions, admitted model review, and committed results",
     stages: [
       { slug: "deterministic_classifier", label: "Deterministic classify", module: "bba.deterministic_classifier" },
       { slug: "evidence_bundle_builder", label: "Evidence bundle", module: "bba.evidence_bundle_builder" },
       { slug: "deid_redactor", label: "De-identify", module: "bba.deid_redactor" },
       { slug: "prompt_builder", label: "Prompt build", module: "bba.prompt_builder" },
-      { slug: "llm_client", label: "LLM batch", module: "bba.llm_client" },
-      { slug: "quote_grounder", label: "Quote ground", module: "bba.quote_grounder" },
+      { slug: "llm_client", label: "Admitted model request", module: "bba.llm_client" },
+      { slug: "quote_grounder", label: "Verify citations", module: "bba.quote_grounder" },
       { slug: "audit_store", label: "Audit store", module: "bba.audit_store" },
     ],
   },
@@ -47,25 +47,25 @@ const englishGroups: StageGroup[] = [
 const thaiGroups: StageGroup[] = [
   {
     legLabel: "เตรียมข้อมูล",
-    legSubtitle: "Stage 1 รันผ่าน bba audit ได้แล้ว; stage 2-5 จะเชื่อมใน Phase 1.5",
+    legSubtitle: "ตรวจ snapshot ต้นฉบับและประกอบบริบทของแต่ละคำสั่ง",
     stages: [
-      { slug: "ingest", label: "Ingest", module: "bba.ingest" },
-      { slug: "audit_orders", label: "คำสั่งที่ audit", module: "bba.audit_orders" },
+      { slug: "ingest", label: "รับและตรวจข้อมูล", module: "bba.ingest" },
+      { slug: "audit_orders", label: "คำสั่งที่เข้าเกณฑ์", module: "bba.audit_orders" },
       { slug: "hb_lookup", label: "หา Hb", module: "bba.hb_lookup" },
-      { slug: "vitals_extractor", label: "Vital signs", module: "bba.vitals_extractor" },
+      { slug: "vitals_extractor", label: "สัญญาณชีพ", module: "bba.vitals_extractor" },
       { slug: "cohort_detector", label: "บริบททางคลินิก", module: "bba.cohort_detector" },
     ],
   },
   {
     legLabel: "วิเคราะห์",
-    legSubtitle: "มี modules แล้ว; การเชื่อมเข้ากับ CLI จะมาใน Phase 1.5",
+    legSubtitle: "ใช้กฎ ตรวจสิทธิ์ส่งโมเดล และบันทึกผล",
     stages: [
-      { slug: "deterministic_classifier", label: "จำแนกแบบ deterministic", module: "bba.deterministic_classifier" },
-      { slug: "evidence_bundle_builder", label: "รวม evidence bundle", module: "bba.evidence_bundle_builder" },
-      { slug: "deid_redactor", label: "De-identify", module: "bba.deid_redactor" },
+      { slug: "deterministic_classifier", label: "จำแนกตามกฎ", module: "bba.deterministic_classifier" },
+      { slug: "evidence_bundle_builder", label: "รวมหลักฐาน", module: "bba.evidence_bundle_builder" },
+      { slug: "deid_redactor", label: "ปกปิดข้อมูล", module: "bba.deid_redactor" },
       { slug: "prompt_builder", label: "สร้าง prompt", module: "bba.prompt_builder" },
-      { slug: "llm_client", label: "LLM batch", module: "bba.llm_client" },
-      { slug: "quote_grounder", label: "Quote grounding", module: "bba.quote_grounder" },
+      { slug: "llm_client", label: "คำขอโมเดลที่อนุมัติ", module: "bba.llm_client" },
+      { slug: "quote_grounder", label: "ตรวจข้อความอ้างอิง", module: "bba.quote_grounder" },
       { slug: "audit_store", label: "Audit store", module: "bba.audit_store" },
     ],
   },
@@ -77,7 +77,7 @@ const { highlightStage } = Astro.props;
 let globalIndex = 0;
 ---
 
-<figure class="pipeline" aria-label={isThai ? "blood_audit pipeline — 12 ขั้นตอนใน 2 ส่วน" : "blood_audit pipeline — 12 stages across 2 legs"}>
+<figure class="pipeline" aria-label={isThai ? "blood_audit pipeline, 12 ขั้นตอนหลัก" : "blood_audit pipeline, 12 main stages"}>
   {groups.map((group, gIdx) => (
     <section class="pipeline__leg" data-leg={gIdx === 0 ? "ingest" : "analysis"}>
       <header class="pipeline__leg-header">
@@ -106,18 +106,17 @@ let globalIndex = 0;
   <figcaption class="pipeline__caption">
     {isThai ? (
       <>
-        Pipeline มี 12 ขั้นตอนหลัก แต่ละขั้นตอนเป็น subpackage ใต้
-        <code>src/bba/</code>. ใน Phase 1, <code>bba audit</code> เชื่อมเฉพาะ
-        <code>bba.ingest</code>; stage 2-12 มี modules แล้วและจะเชื่อมเข้า CLI
-        ใน Phase 1.5. Idempotency ระดับ run บังคับใช้ที่ <code>audit_store</code>.
+        <code>bba.application</code> เชื่อม CLI เข้ากับขั้นตอนเหล่านี้ผ่าน
+        <code>bba.audit_pipeline</code>. ผลที่กฎตัดสินจบได้ไม่เรียกโมเดล
+        ส่วนคำขอโมเดลต้องผ่านการอนุมัติข้อมูลด้วยลายเซ็นก่อนส่ง
+        เกล็ดเลือดมีตัวค้นผลแล็บ ตัวจำแนก และ flag ส่งโมเดลแยกต่างหาก
       </>
     ) : (
       <>
-        Twelve happy-path stages. Each stage is an importable subpackage under
-        <code>src/bba/</code>. In Phase 1, <code>bba audit</code> wires
-        <code>bba.ingest</code> only; stages 2-12 are implemented modules wired
-        into the CLI in Phase 1.5. Run-level idempotency is enforced at
-        <code>audit_store</code>.
+        <code>bba.application</code> connects the CLI to these modules through
+        <code>bba.audit_pipeline</code>. Deterministic-final rows skip the model
+        steps. Model requests require signed privacy admission. Platelet orders use
+        a separate lookup, classifier, and model-routing flag.
       </>
     )}
   </figcaption>
@@ -135,9 +134,6 @@ let globalIndex = 0;
     border-radius: 0.625rem;
     padding: 0.875rem 1rem 1rem;
     background: var(--sl-color-bg-nav);
-  }
-  .pipeline__leg[data-leg="analysis"] {
-    border-style: dashed;
   }
   .pipeline__leg-header {
     display: flex;

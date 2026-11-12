@@ -1,0 +1,2 @@
+step	decision	evidence
+1	Rewrite all ranked documentation groups under the user's go-ahead; preserve historical records and application behavior.	.audit/docs-review.md; baseline main b343d9a; existing user files recorded in shipping-preserved-files.json.

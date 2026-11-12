@@ -59,7 +59,7 @@ class BypassReason(StrEnum):
       the documented surgical haemorrhage stands in for the absent Hb.
     * :attr:`MTP` — cohort detector flagged the massive-transfusion-protocol
       cluster (≥4 RBC units in 1 h, or RBC + FFP + platelets co-ordered).
-    * :attr:`HEMODILUTION_FLAGGED` — after the global Hb < 7.0 rule, Hb is
+    * :attr:`HEMODILUTION_FLAGGED` — after the global Hb ≤ 7.0 rule, Hb is
       still sub-threshold but ≥2 L of crystalloid in the prior 4 h marks the
       reading as hemodilution-suspect; route to
       :data:`bba.audit_store.Classification` ``NEEDS_REVIEW`` rather than
@@ -100,7 +100,8 @@ class ClassifierInputs(BaseModel):
       anchor to the next operative event. ``None`` means no future
       operative event was found in the caller's lookahead window.
 
-    * ``crystalloid_liters_prior_4h`` is the 4-h totaling output. ``0.0``
+    * ``crystalloid_liters_prior_4h`` is the 4-h totaling output, over the
+      4 h before the deciding Hb draw (not the order). ``0.0``
       means "no crystalloid in window OR data unavailable but the caller
       asserts the 4-h check is N/A". The hemodilution rule only fires
       strictly ≥ :data:`bba.deterministic_classifier.HEMODILUTION_CRYSTALLOID_LITERS`.
@@ -179,7 +180,7 @@ class ClassifierResult(BaseModel):
     field directly with no further interpretation.
 
     ``bypass_reason`` is :attr:`BypassReason.NONE` whenever the result was
-    produced by the plain Hb-tier rule (Hb < threshold, threshold ≤ Hb <
+    produced by the plain Hb-tier rule (Hb ≤ threshold, threshold < Hb <
     10, Hb ≥ 10, or Hb missing). Otherwise it identifies which of the five
     bypass pathways fired.
 

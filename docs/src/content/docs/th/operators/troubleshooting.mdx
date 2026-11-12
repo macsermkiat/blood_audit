@@ -1,58 +1,54 @@
 ---
-title: แก้ปัญหาเบื้องต้น
-description: จุดที่พบบ่อยเมื่อรัน blood_audit และวิธีแยกปัญหา
+title: แก้ปัญหาการใช้งาน
+description: ตรวจการตั้งค่า สิทธิ์ส่งข้อมูล การกู้คืนงาน และบริการทบทวน
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
+อย่าใส่ข้อความคลินิก รหัสระบุตัวบุคคล token หรือรหัสผ่านฐานข้อมูลในรายงานปัญหา exception hook ของ CLI เก็บชนิดข้อผิดพลาดและตำแหน่งโค้ด แต่ไม่เก็บข้อความ exception หรือค่าตัวแปร ใช้ข้อมูลสังเคราะห์เมื่อส่งปัญหาให้ผู้อื่น
 
-<AtAGlance
-  title="เริ่มตรวจจากตรงนี้"
-  items={[
-    { label: "เช็คแรก", value: "BBA_DATA_DIR ต้องเป็น absolute path และเขียนได้" },
-    { label: "Postgres", value: "DSN ต้องมี +psycopg เช่น postgresql+psycopg://", tone: "warn" },
-    { label: "ไม่ใช่บั๊ก", value: "integration-seam commands ตั้งใจให้ fail loud ใน Phase 1" },
-    { label: "รันซ้ำปลอดภัย", value: "ใช้ --force เฉพาะเมื่ออยากบันทึก override row ใน audit_log" },
-  ]}
-/>
+## ไม่ได้ตั้ง `BBA_DATA_DIR` หรือพาธใช้ไม่ได้
 
-## `BBA_DATA_DIR` ใช้ไม่ได้
+กำหนดพาธแบบ absolute ที่บัญชีบริการเขียนได้ ไฟล์คลินิกเดิมต้องให้สิทธิ์เฉพาะเจ้าของและไม่ใช้ final symlink หากย้ายข้อมูลเก่า ให้ตรวจเจ้าของและสิทธิ์แบบออฟไลน์ก่อน แอปไม่ปรับสิทธิ์ไฟล์คลินิกเดิมให้โดยเงียบ ๆ
 
-ตรวจว่าเป็น absolute path, directory มีอยู่จริง และ user ที่รัน service
-เขียนได้:
+## Postgres ปฏิเสธ URL
 
-```bash
-echo "$BBA_DATA_DIR"
-test -d "$BBA_DATA_DIR"
-test -w "$BBA_DATA_DIR"
-```
+ตั้ง `BBA_DB_URL` เป็น DSN แบบ `postgresql://bba@db.internal/blood_audit` checkpoint store ใช้ psycopg โดยตรง ส่วน review adapter แปลง DSN สำหรับ SQLAlchemy ภายใน ห้ามใช้ `postgresql+psycopg://` เป็น DSN ร่วมของแอป
 
-ถ้า path เป็น relative หรือเขียนไม่ได้ CLI จะหยุดตั้งแต่เริ่มด้วย
-`CliError`
+หลังตรวจการเชื่อมต่อแล้ว ให้ตรวจ migration และ privileges ของบัญชีที่เลือก model checkpoint และ review actions มีข้อกำหนด storage ของตนเอง
 
-## Postgres DSN ผิดรูปแบบ
+## กรณีที่ต้องใช้โมเดลยังอยู่ให้คนทบทวน
 
-สำหรับ Phase 1.5 ต้องใช้:
+โหมด local จะบันทึกกรณีเหล่านี้เป็น `NEEDS_REVIEW` พร้อม `privacy_admission_failed` ตามปกติ
 
-```text
-postgresql+psycopg://user@host:5432/dbname
-```
+หากตั้งโหมดโมเดลแล้ว ให้ตรวจ application JSON พาธ trust policy public key ที่อนุมัติ และ signed artifacts attestation ต้องตรงกับ prompt run ID audit ID และ redactor ที่อนุมัติ ดู [การตั้งค่าโมเดล](/blood_audit/th/operators/env-vars/#model-review)
 
-อย่าใช้ `postgresql://` แบบเปล่า เพราะ SQLAlchemy จะพาไปใช้ psycopg2
-ซึ่งไม่ใช่ driver ที่โครงการนี้เลือกใช้
+ผล local ที่เสร็จแล้วยังคงแก้ทับไม่ได้แม้เพิ่มไฟล์อนุมัติ ให้ใช้ policy version ใหม่และเตรียมหลักฐานสำหรับรอบใหม่
 
-## Subcommand บางตัว fail ทันที
+## รัน audit ซ้ำแล้วไม่ทำงานเพิ่ม
 
-`evaluate`, `report`, `serve-dashboard` และ `sentinel` fail โดยตั้งใจใน
-Phase 1 เพราะยังเป็น integration seams ดูรายละเอียดที่
-[Integration seams](/blood_audit/th/operators/integration-seams/)
+<h3 id="run-level-idempotency">Run-level idempotency</h3>
 
-## Run-level idempotency
+ชุดข้อมูลมาตรฐาน schema รุ่นโค้ด และการตั้งค่าเดียวกันใช้ audit identity เดียวกัน หากเสร็จแล้วจะมี log `audit.noop`
 
-ถ้ารัน input เดิมและ code เดิม จะได้ `run_id` เดิมและไม่เขียน run marker หรือผลลัพธ์ซ้ำ
-นี่เป็นพฤติกรรมที่ถูกต้อง หากต้องการบังคับรันซ้ำจริง ๆ ให้ใช้ `--force`
-เพื่อให้ระบบบันทึก audit trail ว่ามีการ override idempotency
+`--force` ข้ามขั้นนี้และบันทึกการสั่งซ้ำ แต่ pipeline ยังคงเก็บ classification กับ request manifest เดิม อย่าแก้ completion file เพื่อแทนผล ใช้ policy version ใหม่เมื่อต้องการวิเคราะห์ใหม่
 
-## ข้อมูลจริงห้ามลง issue
+## ไม่ทราบผลการส่งคำขอไปยังผู้ให้บริการ
 
-เวลาเปิด issue หรือส่ง screenshot ให้ใช้ placeholder เช่น `PHI_xxx_001`
-แทน HN, AN, REQNO หรือชื่อผู้ป่วยจริงเสมอ
+หยุดการส่งซ้ำอัตโนมัติ เก็บ request manifest กับ batch checkpoint แล้วตรวจผลกับข้อมูลฝั่งผู้ให้บริการ แอปไม่ retry คำขอที่ยังไม่ทราบผลโดยเงียบ ๆ เมื่อทราบผลแล้วจึงกู้คืนด้วยรอบและการตั้งค่าที่บันทึกไว้
+
+## รายงานระบุแพทย์ไม่ได้
+
+ตั้ง `BBA_BDVST_CSV` ให้ชี้ไฟล์ที่ตรงกับรอบและมี `REQNO` กับ `DCTREQ` ตั้ง `BBA_DCT_CSV` ให้ชี้ทะเบียนแพทย์ ทั้งรายงานและ dashboard ต้องใช้สองไฟล์นี้ รายงานยังปฏิเสธ policy version หรือ redactor version ที่ขัดกัน และข้อมูลจากหลายเดือนตามเวลาท้องถิ่น
+
+## Dashboard ตอบ HTTP 401
+
+ตรวจว่า identity adapter ออก `bba_session` ที่ลงลายมือชื่อด้วย secret เดียวกับ dashboard ตรวจเวลาหมดอายุ HTTPS origin และ cookie attributes ดู [เปิดหน้าทบทวนที่ยืนยันตัวตนแล้ว](/blood_audit/th/operators/integration-seams/#serve-authenticated-review)
+
+ต้องมี signed session ที่ใช้ได้แม้เข้าผ่าน proxy ข้อมูลในฟอร์มใช้แทนตัวตน reviewer ไม่ได้
+
+## บันทึกการทบทวนแล้วได้ HTTP 403 หรือ 409
+
+403 อาจเกิดจาก origin หรือ CSRF ไม่ตรง ใช้ HTTPS origin ที่กำหนดและโหลดฟอร์มใหม่ที่ผูกกับ session ส่วน 409 หมายถึงมีการเปลี่ยนคำตัดสินหลังโหลดหน้า ให้เปิดกรณีใหม่ ตรวจผลปัจจุบัน แล้วจึงส่งการแก้อย่างตั้งใจ
+
+## การทดสอบ Postgres ถูกข้าม
+
+การทดสอบ local ที่ไม่บังคับฐานข้อมูลอาจ skip เมื่อใช้ Docker ไม่ได้ ผลนั้นยังไม่ยืนยันพฤติกรรมฐานข้อมูล เริ่ม Docker แล้วใช้ `BBA_REQUIRE_POSTGRES_TESTS=1` ตาม [คู่มือทดสอบ](/blood_audit/th/developers/testing/) ในโหมดบังคับ หาก infrastructure ใช้ไม่ได้ การทดสอบต้องล้มเหลว

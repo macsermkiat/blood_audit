@@ -1,62 +1,35 @@
 ---
 title: ติดตั้ง
-description: ติดตั้ง blood_audit ด้วย uv แล้วตรวจสอบว่า CLI พร้อมใช้งาน
+description: ติดตั้งจาก source checkout และตรวจคำสั่ง CLI ที่พร้อมใช้
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
+ติดตั้ง Python 3.13 ขึ้นไปและ uv แล้วใช้ lockfile เพื่อติดตั้ง dependency ของ repository
 
-<AtAGlance
-  title="สรุปการติดตั้ง"
-  items={[
-    { label: "เป้าหมาย", value: "สร้าง environment ที่ทำซ้ำได้จาก uv.lock" },
-    { label: "ต้องมี", value: "Python 3.13+ และ uv 0.9.24+", tone: "ok" },
-    { label: "ห้าม", value: "อย่าตั้ง UV_LOCKED=1 พร้อม uv sync --frozen", tone: "warn" },
-    { label: "ตรวจสอบ", value: "uv run bba --help ต้องเห็น subcommand 6 ตัว" },
-  ]}
-/>
-
-## สิ่งที่ต้องมี
-
-| สิ่งที่ต้องมี | เวอร์ชัน |
-| --- | --- |
-| Python | ≥ 3.13 |
-| uv | ≥ 0.9.24 |
-| PostgreSQL | ≥ 14 (driver psycopg3) |
-| Docker (สำหรับเทสต์เท่านั้น) | latest |
-
-## Clone และ sync dependencies
-
-```bash
+```sh
 git clone https://github.com/macsermkiat/blood_audit.git
 cd blood_audit
 uv sync --frozen
-```
-
-Lockfile ถูก freeze ไว้แล้ว **ห้ามตั้ง `UV_LOCKED=1`** เพราะจะขัดแย้งกับ
-`--frozen` ใน uv ≥ 0.9
-
-## ตรวจสอบ CLI
-
-```bash
 uv run bba --help
 ```
 
-จะเห็น subcommand 6 ตัว โดย 3 ตัว คือ `evaluate`,
-`serve-dashboard` และ `sentinel` จะ raise `CliError` โดยตั้งใจ
-**ไม่ใช่บั๊ก** ดูรายละเอียดที่ [Integration seams](/blood_audit/th/operators/integration-seams/)
-(ส่วน `report` เชื่อมแล้ว: ใช้ render รายงานรายเดือนจาก audit store)
+หน้าช่วยเหลือแสดงหกคำสั่ง ได้แก่ `audit`, `evaluate`, `ingest`, `report`, `sentinel` และ `serve-dashboard` ใช้ `--help` ต่อท้ายแต่ละคำสั่งเพื่อดูอาร์กิวเมนต์
 
-## ตั้งค่า GitHub Pages ครั้งเดียว (เฉพาะการเผยแพร่เอกสารนี้)
+โหมด local ไม่ต้องเชื่อม Postgres และไม่ต้องใช้ API key ทำต่อที่ [ตรวจข้อมูลครั้งแรก](/blood_audit/th/operators/first-audit-run/)
 
-ข้ามส่วนนี้ได้ หากคุณกำลังดูแล pipeline ไม่ได้ดูแลการเผยแพร่เว็บเอกสาร
+## ติดตั้ง dependency สำหรับ live
 
-ถ้าจะเผยแพร่เว็บเอกสารจาก fork ของคุณเอง:
+สำหรับระบบที่ได้รับอนุมัติให้ส่งข้อมูลไปยังโมเดลจริง ให้ติดตั้ง dependency เพิ่ม
 
-1. Settings ของ repo → **Pages** → Source: **GitHub Actions**
-2. Merge การเปลี่ยนแปลงที่แตะ `docs/**` เข้า `main`
-3. Workflow `deploy-docs` จะ build และ deploy ให้อัตโนมัติ
-   URL ของ Pages จะปรากฏใน run summary
+```sh
+uv sync --frozen --extra live
+```
 
-## ขั้นถัดไป
+ใช้ `uv run --extra live bba ...` เมื่อรันโหมดนี้ เพื่อให้ uv เก็บ dependency ของผู้ให้บริการไว้ ตั้งค่า [การทบทวนด้วยโมเดล](/blood_audit/th/operators/env-vars/#model-review) ให้ครบก่อนใช้ข้อมูลโรงพยาบาล
 
-ตั้งค่า [environment variables](/blood_audit/th/operators/env-vars/)
+## เตรียมฐานข้อมูลสำหรับใช้งานจริง
+
+ใช้ source checkout เมื่อติดตั้ง model checkpoint หรือบริการหน้าทบทวน โครงการ migration ของ Alembic อยู่ที่ root และไม่ได้รวมใน standalone wheel ต้องใช้ migration ที่ตรงกับรุ่นแอปและเตรียมสิทธิ์ฐานข้อมูลก่อนเริ่มบริการ
+
+หน้าทบทวนตรวจ migration และสิทธิ์ของบัญชีฐานข้อมูลตอนเริ่ม ต้องใช้บัญชี reviewer ที่ไม่มีสิทธิ์เกินจำเป็น มี HTTPS reverse proxy และมี identity adapter ที่ออก session พร้อมลายมือชื่อ ดู [เปิดหน้าทบทวนที่ยืนยันตัวตนแล้ว](/blood_audit/th/operators/integration-seams/#serve-authenticated-review)
+
+Docker ใช้สำหรับการทดสอบ Postgres ผ่าน container ไม่ใช่ข้อกำหนดของการตรวจแบบ local ดู [การทดสอบ](/blood_audit/th/developers/testing/)

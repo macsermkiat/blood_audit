@@ -1,75 +1,54 @@
 ---
 title: Troubleshooting
-description: Common failures and how to diagnose them.
+description: Resolve configuration, admission, recovery, attribution, and review-service failures.
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
+Keep error reports free of clinical text, identifiers, tokens, and database credentials. The CLI's exception hook records types and code locations while withholding messages and local values. Use synthetic reproductions when sharing a failure.
 
-<AtAGlance
-  items={[
-    { label: "First check", value: "Confirm BBA_DATA_DIR is absolute and writable." },
-    { label: "DB check", value: "Postgres DSN must include +psycopg.", tone: "warn" },
-    { label: "Known non-bug", value: "Integration-seam commands fail loud in Phase 1." },
-    { label: "Safe rerun", value: "Use --force only when you want an audit_log override row." },
-  ]}
-/>
+## `BBA_DATA_DIR` is missing or invalid
 
-## `CliError: BBA_DATA_DIR not set` at startup
+Set an absolute path that the service user can write to. Existing clinical storage must have owner-only access and must not use final symlinks. Review older storage ownership and permissions offline before migration. The application does not silently change access to existing records.
 
-`BBA_DATA_DIR` is the only env var the Phase 1 CLI validates directly.
-See [Environment variables](/blood_audit/en/operators/env-vars/) for
-the full three-variable contract and which are needed in Phase 1 vs
-Phase 1.5. Set `BBA_DATA_DIR` to an absolute path the service user can
-write to, then re-run.
+## Postgres rejects the connection URL
 
-## `sqlalchemy.exc.NoSuchModuleError: Can't load plugin: sqlalchemy.dialects:postgresql.psycopg2`
+Use a plain DSN such as `postgresql://bba@db.internal/blood_audit` for `BBA_DB_URL`. The batch checkpoint store uses psycopg directly. The review adapter converts the DSN for SQLAlchemy internally. A `postgresql+psycopg://` URL is not a shared application DSN.
 
-Your `BBA_DB_URL` is missing the `+psycopg` driver suffix. SQLAlchemy
-defaults to psycopg2; the project ships psycopg3.
+Check migration state and the selected role's privileges after checking connectivity. Model checkpoints and reviewer actions have their own storage requirements.
 
-Fix: change `postgresql://...` to `postgresql+psycopg://...`.
+## Model cases stay in local review
 
-## `CliError: missing glue` from `bba evaluate` / `bba report` / `bba serve-dashboard` / `bba sentinel`
+In default local mode, this is expected. The application commits `NEEDS_REVIEW` with `privacy_admission_failed` for cases that need model evidence.
 
-These are [integration seams](/blood_audit/en/operators/integration-seams/),
-not bugs. Wait for Phase 1.5 deployment wiring.
+For a configured model run, verify the application JSON, trust-policy path, approved public key, and signed artifacts. Attestations must match the exact prompt, run ID, audit ID, and approved redactor. See [Model review settings](/blood_audit/en/operators/env-vars/#model-review).
 
-## Tests skip ~43 Postgres tests on a clean machine
+A completed local result remains immutable after you add admission files. Create a new approved policy version and run, then prepare artifacts for that identity.
 
-Expected. Those tests use testcontainers + Docker. If Docker is not
-running locally, they auto-skip. Start Docker Desktop, re-run pytest.
-
-## `mypy` exits with 212 errors
-
-You ran `uv run mypy tests`. The 212 errors are type-helper looseness
-under `tests/` only — none can mask a real bug in `src/`. Tracked as
-Phase 1 debt; the CI annotates them as a warning, not a failure.
-
-`uv run mypy src` should always exit 0.
-
-## `bba audit` re-run is a no-op
-
-Run-level idempotency.
+## An audit rerun is a no-op
 
 ### Run-level idempotency
 
-`run_id = sha256(input_csv_hash + schema_fingerprint + code_version)`.
-Identical inputs and code → identical `run_id` → the audit store refuses
-to write a duplicate. Pass `--force` to override; a compliance row will
-be appended to `audit_log` explaining the override.
+The same canonical bundle, schema, code version, and application configuration select the same audit identity. A completed run logs `audit.noop`.
 
-## `timeout: command not found` on macOS
+`--force` bypasses that shortcut and records an override. The pipeline still preserves committed classifications and request manifests. Do not edit completion files to replace results. Use a new policy version for changed analysis.
 
-macOS ships without GNU `timeout`. Install coreutils for `gtimeout`, or
-use Python's `httpx.ASGITransport` for in-process tests.
+## A provider submission has an uncertain outcome
 
-## Anthropic API tests appear to make network calls
+Stop automatic resubmission. Preserve request manifests and batch checkpoints, and reconcile the request against provider records. The application does not silently retry uncertain submissions. Once the outcome is known, use the recorded run and configuration for the appropriate recovery path.
 
-They do not. Network access is rejected by the cost guard in
-`src/bba/audit_pipeline/cost_guard.py`. Cassette-backed responses live
-under `tests/unit/cassettes/`.
+## A report cannot resolve attribution
 
-## Direct push to `main` is rejected by a pre-push hook
+Set `BBA_BDVST_CSV` to the matching export containing `REQNO` and `DCTREQ`. Set `BBA_DCT_CSV` to the doctor registry. Both report and dashboard startup need these inputs. A report also rejects mixed applied policy versions, conflicting redactor versions, and multiple local calendar months.
 
-Expected. All changes go through PRs. Use `chore/`, `fix/`, `feat/`,
-`docs/` branch prefixes. Repo convention is `gh pr merge --merge`.
+## The dashboard returns HTTP 401
+
+Verify that the identity adapter issued a valid `bba_session` cookie using the same secret as the dashboard. Confirm the expiry, externally visible HTTPS origin, and cookie attributes. See [Serve authenticated review](/blood_audit/en/operators/integration-seams/#serve-authenticated-review).
+
+A signed session is required even when accessing the service through a proxy. A form field cannot supply reviewer identity.
+
+## A review save returns HTTP 403 or 409
+
+A 403 can indicate an origin or CSRF mismatch. Use the configured HTTPS origin and obtain a fresh session-bound form. A 409 indicates that the decision changed since the form loaded. Reload the case, inspect the current decision, and submit a deliberate update.
+
+## Postgres tests are skipped
+
+Optional local database tests can skip when Docker is unavailable. That does not verify database behavior. Start Docker and run the required database suite with `BBA_REQUIRE_POSTGRES_TESTS=1`, as described in [Testing](/blood_audit/en/developers/testing/). Required-mode infrastructure failures must fail the run.

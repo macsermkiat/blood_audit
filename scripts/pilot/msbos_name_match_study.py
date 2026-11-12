@@ -82,7 +82,7 @@ REPORT = WORK / "report.csv"
 OUTPUT = WORK / "msbos_name_match_study.csv"
 TIER2_CACHE = WORK / "msbos_name_match_tier2_cache.json"
 
-SONNET_MODEL_ID = "claude-sonnet-5"
+SONNET_MODEL_ID = "claude-sonnet-5-5"
 _TIER2_PROMPT_VERSION = "tier2-namematch-v1"
 _TIER2_SCHEMA_VERSION = "v1"
 _TIER2_MODEL = SONNET_MODEL_ID

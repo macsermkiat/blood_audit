@@ -41,6 +41,7 @@ from bba.audit_orders import AuditOrder
 from bba.audit_store.models import Component, SafeId, UTCDatetime
 from bba.cohort_detector import CohortAssignment
 from bba.declared_use import DeclaredUseLabel
+from bba.deid_redactor.admission import PrivacyAttestation
 from bba.hb_lookup import HbLookupResult
 from bba.platelet_lookup.models import PlateletLookupResult
 from bba.preop_reservation import PlateletReservationDecision, ReservationDecision
@@ -183,6 +184,7 @@ class PipelineRowContext(BaseModel):
     evidence_bundle_hash: str = Field(min_length=1)
 
     evidence_chunks: tuple[EvidenceChunk, ...] = ()
+    privacy_attestation: PrivacyAttestation | None = None
 
     # Deterministic peri-op signal carried through from
     # :class:`bba.evidence_bundle_builder.EvidenceBundle.periop_summary`
@@ -226,6 +228,15 @@ class PipelineRowContext(BaseModel):
     # Platelet lookup result (Phase 2, platelet path only). None on RBC contexts.
     platelet_result: PlateletLookupResult | None = None
 
+    # Straight-line 24 h projection through the last two pre-order counts
+    # (:func:`bba.platelet_lookup.project_24h`, issue #237). None when no
+    # usable pair of draws exists. ``platelet_projection_computed`` says the
+    # caller actually ran the projection: the count-trend floor reads None as
+    # "not supported" only then, so a context builder that predates #237 leaves
+    # the floor inert instead of sending every such clear to review.
+    platelet_projected_24h_k_ul: float | None = None
+    platelet_projection_computed: bool = False
+
     # MTP-window suppression flag (Phase 2, B4). A platelet unit co-ordered
     # inside an active MTP window is suppressed: no AuditRow is emitted.
     platelet_mtp_suppressed: bool = False
@@ -236,6 +247,8 @@ class PipelineRowContext(BaseModel):
         *,
         order: "AuditOrder",
         platelet_result: "PlateletLookupResult | None",
+        platelet_projected_24h_k_ul: float | None = None,
+        platelet_projection_computed: bool = False,
         hn_hash: str,
         an_hash: str,
         prior_rbc_units_24h: int = 0,
@@ -312,6 +325,8 @@ class PipelineRowContext(BaseModel):
             declared_use=declared_use,
             component="platelet",
             platelet_result=platelet_result,
+            platelet_projected_24h_k_ul=platelet_projected_24h_k_ul,
+            platelet_projection_computed=platelet_projection_computed,
             platelet_mtp_suppressed=platelet_mtp_suppressed,
             platelet_reservation_decision=platelet_reservation_decision,
             enable_missing_hb_positive_evidence=enable_missing_hb_positive_evidence,
@@ -336,6 +351,7 @@ class AuditPipelineConfig(BaseModel):
 
     db_url: str = Field(min_length=1)
     code_version: str = Field(min_length=1)
+    allow_live_api: bool = False
     max_batch_size: int = Field(default=100, ge=1, le=10_000)
     poll_interval_seconds: float = Field(default=30.0, gt=0.0)
 

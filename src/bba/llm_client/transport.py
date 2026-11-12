@@ -32,8 +32,14 @@ import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from importlib import import_module
+from pathlib import Path
 from typing import Any, Final
 
+from bba.deid_redactor.admission import PrivacyAdmissionError, PrivacyAdmissionPolicy
+from bba.llm_client.request_identity import (
+    RequestManifestStore,
+    canonical_request_manifest,
+)
 from bba.llm_client.exceptions import (
     AnthropicAPIError,
     LlmClientConfigError,
@@ -53,8 +59,12 @@ _TOOL_DESCRIPTION: Final[str] = (
     "the supplied evidence. Mandatory tool; no free-form text answers."
 )
 
-MAX_OUTPUT_TOKENS: Final[int] = 4096
+MAX_OUTPUT_TOKENS: Final[int] = 8192
 """Max tokens reserved for the LLM's tool-call output.
+
+Raised from 4096 (2026-09-21): 3 of 107 sandbox answers stopped at the old
+limit, and because every schema asks for ``classification`` LAST a cut-off
+answer carries no label at all (schema_mismatch / NEEDS_REVIEW).
 
 Sized for the structured-output envelope (classification + up to ~5
 indications with verbatim quotes + reasoning summaries in EN + TH).
@@ -119,18 +129,40 @@ def build_anthropic_request(
     }
 
 
+# Field order is load-bearing in every schema below (issues #239, #242): a
+# forced tool call is generated in schema order, so ``classification`` comes
+# LAST, after the reasoning and every other judgment. With the label first the
+# model committed to it before reasoning: 22 of 297 real-data platelet answers,
+# and RBC answers 68023033 / 68042514 / 68055542, carried APPROPRIATE while
+# their own reasoning concluded INAPPROPRIATE or NEEDS_REVIEW. The model can
+# still ignore property order, so the field states the rule in words too.
+_LABEL_FIELD: Final[str] = "classification"
+
+
+def _label_property(written_after: str) -> dict[str, Any]:
+    return {
+        "type": "string",
+        "enum": [
+            "APPROPRIATE",
+            "INAPPROPRIATE",
+            "NEEDS_REVIEW",
+            "INSUFFICIENT_EVIDENCE",
+        ],
+        "description": (
+            f"Write this field LAST, after {written_after}. It must be the "
+            "class that reasoning_summary_en concludes: if your reasoning ends "
+            "at INAPPROPRIATE or NEEDS_REVIEW, this field says the same."
+        ),
+    }
+
+
+def _without_label(names: Any) -> list[str]:
+    return [name for name in names if name != _LABEL_FIELD]
+
+
 _TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
     "type": "object",
     "properties": {
-        "classification": {
-            "type": "string",
-            "enum": [
-                "APPROPRIATE",
-                "INAPPROPRIATE",
-                "NEEDS_REVIEW",
-                "INSUFFICIENT_EVIDENCE",
-            ],
-        },
         "indications": {
             "type": "array",
             "items": {
@@ -163,56 +195,132 @@ _TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
                 "gray-zone) in English, as Thai clinicians do."
             ),
         },
+        _LABEL_FIELD: _label_property("both reasoning summaries"),
     },
     "required": [
-        "classification",
         "indications",
         "negative_evidence",
         "reasoning_summary_en",
         "reasoning_summary_th",
+        _LABEL_FIELD,
     ],
 }
+
+_SIGNAL_ORDER_RULE: Final[str] = (
+    " Write this boolean after both reasoning summaries; it must agree with "
+    "what reasoning_summary_en concludes about this indication."
+)
+"""Appended to every platelet hard-signal description. Once the label was
+pinned last (#239) the model moved the four booleans to the FRONT and set
+prophylactic_marrow_failure true before reasoning that the count was above the
+threshold (68042732, 68051598): the same commit-before-reasoning defect."""
 
 # Platelet-specific extension: adds the three hard-signal booleans that
 # parse_platelet_structured_response requires. Without these fields the
 # model never emits them, every platelet response fails SCHEMA_MISMATCH,
 # and the live platelet leg can produce no real verdicts.
-# Used ONLY for PLATELET_REVIEW requests; RBC requests use _TOOL_INPUT_SCHEMA
-# unchanged so the RBC path remains byte-identical.
+# Used ONLY for PLATELET_REVIEW requests. The hard signals sit between the
+# reasoning and the label (see the field-order note above).
 _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
     "type": "object",
     "properties": {
-        **_TOOL_INPUT_SCHEMA["properties"],
+        **{
+            name: _TOOL_INPUT_SCHEMA["properties"][name]
+            for name in _without_label(_TOOL_INPUT_SCHEMA["properties"])
+        },
         "active_bleeding": {
             "type": "boolean",
             "description": (
-                "True iff the evidence explicitly grounds documented active, "
-                "life-threatening, or clinically significant bleeding AND no "
-                "exclusion population applies. Set False for bare low count alone."
+                (
+                    "True iff the evidence explicitly grounds documented active, "
+                    "life-threatening, or clinically significant bleeding AND no "
+                    "exclusion population applies. Set False for bare low count alone."
+                )
+                + _SIGNAL_ORDER_RULE
             ),
         },
         "procedure_indication": {
             "type": "boolean",
             "description": (
-                "True iff the evidence grounds an invasive procedure or surgery "
-                "within the audit window whose policy threshold the count sits "
-                "below (LP <50-80k /uL, CVC <50k /uL, major surgery <80-100k /uL)."
+                (
+                    "True iff the evidence grounds an invasive procedure or surgery "
+                    "within the audit window whose policy threshold the count "
+                    "meets (LP <=50-80k /uL; CVC, thoracocentesis, "
+                    "arthrocentesis, dental extraction <=50k /uL; major surgery "
+                    "<=80k /uL (<100k /uL high risk))."
+                )
+                + _SIGNAL_ORDER_RULE
             ),
         },
         "prophylactic_marrow_failure": {
             "type": "boolean",
             "description": (
-                "True iff the evidence grounds chemo/HSCT/consumptive "
-                "thrombocytopenia with count <10,000 /uL (or expected <10,000 "
-                "/uL within 24 hours) AND no exclusion population applies."
+                (
+                    "True iff the evidence grounds chemo/HSCT/consumptive "
+                    "thrombocytopenia with count <=10,000 /uL (or expected to fall "
+                    "to 10,000 /uL or below within 24 hours) AND no exclusion "
+                    "population applies. "
+                    "Aplastic anaemia on active therapy belongs under "
+                    "aplastic_active_therapy_indication, not here."
+                )
+                + _SIGNAL_ORDER_RULE
             ),
         },
+        "intracranial_bleed_indication": {
+            "type": "boolean",
+            "description": (
+                (
+                    "True iff the evidence grounds an intracranial bleed with the "
+                    "count meeting its threshold: <100,000 /uL when acute, "
+                    "acute-on-chronic, growing, or neurosurgery is planned; "
+                    "<=50,000 /uL when stable and non-operative (including a "
+                    "stable chronic SDH). Chronic SDH expansion belongs here, not under "
+                    "active_bleeding."
+                )
+                + _SIGNAL_ORDER_RULE
+            ),
+        },
+        "aplastic_active_therapy_indication": {
+            "type": "boolean",
+            "description": (
+                (
+                    "True iff the notes document aplastic anaemia on active therapy "
+                    "aimed at reversing the thrombocytopenia (ATG, cyclosporine, "
+                    "eltrombopag, transplant work-up) with the count at or below "
+                    "its indication 8 threshold: <=10,000 /uL (or expected to fall "
+                    "to 10,000 /uL or below within 24 hours), or <=20,000 /uL "
+                    "during the ATG course or with sepsis. Chronic, stable or untreated aplastic anaemia is an "
+                    "exclusion population, not this signal."
+                )
+                + _SIGNAL_ORDER_RULE
+            ),
+        },
+        "specialist_platelet_target_per_ul": {
+            "type": ["integer", "null"],
+            "description": (
+                "The platelet target in /uL that a consulting specialist team "
+                "documented for this patient before the order (e.g. 'chest keep "
+                "plt 100,000' -> 100000), or null when none is documented. A ward "
+                "standing order or unit protocol is not a specialist target. This "
+                "is not an indication: it does not change your verdict. Write it "
+                "after both reasoning summaries; it must match the specialist "
+                "advice quoted in reasoning_summary_en."
+            ),
+        },
+        _LABEL_FIELD: _label_property(
+            "both reasoning summaries, the five hard-signal booleans and the "
+            "specialist target"
+        ),
     },
     "required": [
-        *_TOOL_INPUT_SCHEMA["required"],
+        *_without_label(_TOOL_INPUT_SCHEMA["required"]),
         "active_bleeding",
         "procedure_indication",
         "prophylactic_marrow_failure",
+        "intracranial_bleed_indication",
+        "aplastic_active_therapy_indication",
+        "specialist_platelet_target_per_ul",
+        _LABEL_FIELD,
     ],
 }
 
@@ -220,7 +328,10 @@ _PLATELET_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
 _RESERVE_AHEAD_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
     "type": "object",
     "properties": {
-        **_TOOL_INPUT_SCHEMA["properties"],
+        **{
+            name: _TOOL_INPUT_SCHEMA["properties"][name]
+            for name in _without_label(_TOOL_INPUT_SCHEMA["properties"])
+        },
         "administration_evidence": {
             "type": "array",
             "items": {
@@ -247,12 +358,17 @@ _RESERVE_AHEAD_TOOL_INPUT_SCHEMA: Final[dict[str, Any]] = {
             "type": "string",
             "enum": ["APPROPRIATE", "INAPPROPRIATE", "INSUFFICIENT_EVIDENCE"],
         },
+        _LABEL_FIELD: _label_property(
+            "both reasoning summaries, the administration fields and "
+            "reservation_assessment"
+        ),
     },
     "required": [
-        *_TOOL_INPUT_SCHEMA["required"],
+        *_without_label(_TOOL_INPUT_SCHEMA["required"]),
         "administration_evidence",
         "administration_claimed",
         "reservation_assessment",
+        _LABEL_FIELD,
     ],
 }
 
@@ -276,6 +392,8 @@ class AnthropicBatchTransport:
         self,
         *,
         api_key: str | None = None,
+        privacy_policy: PrivacyAdmissionPolicy | None = None,
+        manifest_root: Path | None = None,
         poll_interval_seconds: float = 30.0,
         max_wait_seconds: float = 86_400.0,
     ) -> None:
@@ -287,6 +405,10 @@ class AnthropicBatchTransport:
                 "ANTHROPIC_API_KEY not configured; set the env var or "
                 "supply api_key= to AnthropicBatchTransport(...)"
             )
+        self._privacy_policy = privacy_policy
+        self._manifests = (
+            RequestManifestStore(manifest_root) if manifest_root is not None else None
+        )
         self._api_key = resolved_key
         self._poll_interval = poll_interval_seconds
         self._max_wait = max_wait_seconds
@@ -305,23 +427,29 @@ class AnthropicBatchTransport:
         checkpoint) call this first, persist, then invoke
         :meth:`fetch_batch_results`.
         """
-        client = self._client()
+        self._admit(requests)
+        if self._manifests is None:
+            raise LlmClientConfigError(
+                "live API requires a durable request manifest_root"
+            )
+        manifest = canonical_request_manifest(
+            requests=requests, model=model, prompt_cache_enabled=prompt_cache_enabled
+        )
+        submission_id = self._manifests.prepare(manifest)
+        known_batch = self._manifests.remote_batch_id(submission_id)
+        if known_batch is not None:
+            return known_batch
         per_row_requests = [
-            {
-                "custom_id": req.audit_id,
-                "params": build_anthropic_request(
-                    req,
-                    model=model,
-                    prompt_cache_enabled=prompt_cache_enabled,
-                ),
-            }
-            for req in requests
+            {"custom_id": row["audit_id"], "params": row["payload"]}
+            for row in manifest["rows"]
         ]
+        client = self._client()
         try:
             batch = client.messages.batches.create(requests=per_row_requests)
         except Exception as exc:  # SDK error surface intentionally broad
             raise AnthropicAPIError(f"Message Batches create failed: {exc!r}") from exc
         batch_id: str = batch.id
+        self._manifests.bind(submission_id, batch_id)
         return batch_id
 
     def fetch_batch_results(
@@ -335,9 +463,22 @@ class AnthropicBatchTransport:
         """Poll ``batch_id`` until completion and return the results.
 
         Raises :class:`AnthropicAPIError` on timeout or
-        ``custom_id`` drift. ``requests`` is the original submission
-        set; each result's ``request_json`` is rebuilt from the
-        matching :class:`BatchSubmissionRequest`."""
+        ``custom_id`` drift. ``requests`` must match the persisted original
+        manifest. Each result carries the original stored payload and model."""
+        self._admit(requests)
+        if self._manifests is None:
+            raise LlmClientConfigError(
+                "live API requires a durable request manifest_root"
+            )
+        manifest = self._manifests.load_matching(
+            batch_id,
+            canonical_request_manifest(
+                requests=requests,
+                model=model,
+                prompt_cache_enabled=prompt_cache_enabled,
+            ),
+        )
+        request_by_id = {row["audit_id"]: row["payload"] for row in manifest["rows"]}
         client = self._client()
         deadline = time.monotonic() + self._max_wait
         while True:
@@ -351,7 +492,6 @@ class AnthropicBatchTransport:
             time.sleep(self._poll_interval)
 
         results: list[BatchSubmissionResult] = []
-        request_by_id = {req.audit_id: req for req in requests}
         for entry in client.messages.batches.results(batch_id):
             custom_id = entry.custom_id
             outer_request = request_by_id.get(custom_id)
@@ -362,12 +502,8 @@ class AnthropicBatchTransport:
             results.append(
                 _result_from_batch_entry(
                     entry,
-                    model=model,
-                    request_payload=build_anthropic_request(
-                        outer_request,
-                        model=model,
-                        prompt_cache_enabled=prompt_cache_enabled,
-                    ),
+                    model=manifest["model"],
+                    request_payload=outer_request,
                 )
             )
         return RawBatchResponse(batch_id=batch_id, results=tuple(results))
@@ -399,6 +535,14 @@ class AnthropicBatchTransport:
             prompt_cache_enabled=prompt_cache_enabled,
         )
 
+    def _admit(self, requests: Sequence[BatchSubmissionRequest]) -> None:
+        if self._privacy_policy is None:
+            raise PrivacyAdmissionError(
+                "live API requires a configured privacy trust root"
+            )
+        for request in requests:
+            self._privacy_policy.verify(request)
+
     def _client(self) -> Any:
         """Construct the SDK client. Lazy-imported so the SDK isn't a
         hard install dependency."""
@@ -407,10 +551,11 @@ class AnthropicBatchTransport:
         except ImportError as exc:
             raise LlmClientConfigError(
                 "anthropic SDK not installed; "
-                "`uv add anthropic` to use AnthropicBatchTransport"
+                "`uv sync --extra live` to use AnthropicBatchTransport"
             ) from exc
         return anthropic.Anthropic(
             api_key=self._api_key,
+            max_retries=0,
             default_headers={"anthropic-beta": ANTHROPIC_BETA_HEADER},
         )
 

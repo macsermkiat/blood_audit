@@ -1,0 +1,44 @@
+---
+title: Generate the report
+description: Render committed audit rows as HTML, JSON, or monthly PDF outputs.
+---
+
+Keep generated reports within the approved review channel. They connect clinical orders with physicians and departments, even when patient identifiers are pseudonymous.
+
+The monthly report includes red-cell rows. It filters out platelet rows and rejects a platelet-only run. Use the review queue for committed platelet cases that need adjudication.
+
+## Select a committed run
+
+Set the data directory and the matching attribution exports. `DCT.csv` is an additional doctor registry, separate from the canonical audit bundle.
+
+```sh
+export BBA_DATA_DIR=/srv/bba/data
+export BBA_BDVST_CSV=/srv/bba/export/BDVST.csv
+export BBA_DCT_CSV=/srv/bba/export/DCT.csv
+uv run bba report --run-id RUN_ID --format html
+```
+
+Replace `RUN_ID` with the selected run's ID. The command reads committed rows from the audit store and prints the artifact path. It rejects conflicting applied policy or redactor versions and rows spanning multiple local calendar months.
+
+## Choose an output format
+
+```sh
+uv run bba report --run-id RUN_ID --format json
+uv run bba report --run-id RUN_ID --format pdf
+```
+
+| Format | Output under `$BBA_DATA_DIR/reports/RUN_ID/` |
+| --- | --- |
+| `html` | `report.html` with escaped row data and provenance. |
+| `json` | `report.json` with serialized report inputs and per-row provenance. |
+| `pdf` | Monthly PDF, committee CSV sections, and per-physician CSV artifacts. |
+
+The PDF generator writes one `physician_own_view_<physician_id>.csv` per physician selected in the report inputs. Each file has one physician's aggregate row. Review the recipient and delivery channel before distributing any artifact.
+
+## Check attribution and provenance
+
+The attribution chain is `REQNO` to `BDVST.DCTREQ` to the `DCT.csv` registry. The doctor's department supplies the report's existing ward grouping. It is not a separately measured admission ward. Missing attribution settings fail the command.
+
+Mixed deterministic and model results retain their per-row provenance. The report distinguishes local deterministic markers from provider calls. It does not imply that every reported order received model review. Policy, model, redactor, prompt, and evidence identifiers support later reconstruction.
+
+See [Report output](/blood_audit/en/clinical/report-output/) for committee interpretation and [Report schema](/blood_audit/en/reference/report-schema/) for fields.

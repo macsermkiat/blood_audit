@@ -16,48 +16,48 @@ const isThai = Astro.url.pathname.includes("/th/");
 const englishTiers: Tier[] = [
   {
     label: "Tier 1",
-    range: "Hb < 7.0 globally, or 7.0 ≤ Hb < cohort threshold for higher-threshold cohorts",
+    range: "Hb ≤ 7.0 globally, or 7.0 < Hb ≤ cohort threshold",
     ruleOutput: "APPROPRIATE",
     routes: "auto-classify",
-    rule: "Hb < 7.0 is always auto-classified appropriate before cohort routing. For higher-threshold cohorts, Hb 7.0 up to the cohort threshold is appropriate unless hemodilution or single-low-Hb-no-trend sends the row to review.",
+    rule: "Hb ≤ 7.0 returns APPROPRIATE before MTP or unknown-cohort checks. Above 7.0, Hb at or below the cohort threshold clears unless hemodilution or an isolated low Hb requires review.",
   },
   {
     label: "Tier 2",
-    range: "cohort threshold ≤ Hb < 10 g/dL",
+    range: "cohort threshold < Hb < 10 g/dL",
     ruleOutput: "NEEDS_REVIEW",
     routes: "LLM review",
-    rule: "Gray zone. Deterministic rule outputs NEEDS_REVIEW. The pipeline routes the row to the LLM for clinical reasoning.",
+    rule: "Above the cohort threshold and below 10.0, the classifier returns NEEDS_REVIEW unless an earlier routing rule applies.",
   },
   {
     label: "Tier 3",
     range: "Hb ≥ 10 g/dL",
     ruleOutput: "POTENTIALLY_INAPPROPRIATE",
     routes: "LLM review",
-    rule: "High pre-transfusion Hb. Deterministic rule outputs POTENTIALLY_INAPPROPRIATE. The pipeline routes the row to the LLM, which may override on documented positive evidence.",
+    rule: "If no earlier rule applies, Hb at or above 10.0 returns POTENTIALLY_INAPPROPRIATE for review. This is not a final INAPPROPRIATE finding.",
   },
 ];
 
 const thaiTiers: Tier[] = [
   {
     label: "Tier 1",
-    range: "Hb < 7.0 ทุก cohort หรือ 7.0 ≤ Hb < threshold สำหรับ cohort ที่ threshold สูงกว่า",
+    range: "Hb ≤ 7.0 ทุก cohort หรือ 7.0 < Hb ≤ เกณฑ์ cohort",
     ruleOutput: "APPROPRIATE",
     routes: "auto-classify",
-    rule: "Hb < 7.0 ให้ appropriate ก่อนดู cohort เสมอ ส่วน cohort ที่ threshold สูงกว่า ถ้า Hb 7.0 ถึงต่ำกว่า threshold จะ appropriate ได้ ยกเว้นมี hemodilution หรือ single-low-Hb-no-trend",
+    rule: "Hb ≤ 7.0 ให้ APPROPRIATE ก่อนตรวจ MTP หรือ cohort ที่ไม่ทราบ หาก Hb สูงกว่า 7.0 แต่ไม่เกินเกณฑ์ cohort จะผ่าน ยกเว้นมี hemodilution หรือ Hb ต่ำครั้งเดียวที่ต้องทบทวน",
   },
   {
     label: "Tier 2",
-    range: "threshold ของ cohort ≤ Hb < 10 g/dL",
+    range: "เกณฑ์ cohort < Hb < 10 g/dL",
     ruleOutput: "NEEDS_REVIEW",
     routes: "LLM review",
-    rule: "Gray zone deterministic rule ให้ NEEDS_REVIEW และ pipeline ส่งต่อให้ LLM ช่วยอ่านหลักฐานทางคลินิก",
+    rule: "เมื่อ Hb สูงกว่าเกณฑ์ cohort แต่ต่ำกว่า 10.0 และไม่เข้าเงื่อนไขก่อนหน้า ระบบให้ NEEDS_REVIEW",
   },
   {
     label: "Tier 3",
     range: "Hb ≥ 10 g/dL",
     ruleOutput: "POTENTIALLY_INAPPROPRIATE",
     routes: "LLM review",
-    rule: "Hb ก่อนให้เลือดสูง จึง flag เป็น POTENTIALLY_INAPPROPRIATE แล้วส่ง LLM เพื่อค้นหาหลักฐานบวกที่บันทึกไว้ก่อนสรุปผล",
+    rule: "หากไม่เข้าเงื่อนไขก่อนหน้า Hb ตั้งแต่ 10.0 ให้ POTENTIALLY_INAPPROPRIATE เพื่อทบทวน ยังไม่ใช่ผลสรุปว่า INAPPROPRIATE",
   },
 ];
 
@@ -77,7 +77,7 @@ const routeText = (r: Tier["routes"]) => {
   return r === "auto-classify" ? "จำแนกอัตโนมัติ" : "ส่ง LLM review";
 };
 
-const tierNumber = (label: string) => label.replace(/[^0-9]/g, "") || "—";
+const tierNumber = (label: string) => label.replace(/[^0-9]/g, "") || "?";
 ---
 
 <section class="hb-matrix" aria-label={isThai ? "นโยบาย classification แบบ 3-tier Hb" : "3-tier Hb classification policy"}>
@@ -113,15 +113,13 @@ const tierNumber = (label: string) => label.replace(/[^0-9]/g, "") || "—";
   <p class="hb-matrix__note">
     {isThai ? (
       <>
-        Vitals (BP, HR, urine output, temperature) เป็น <strong>หลักฐานประกอบเท่านั้น</strong>
-        และไม่ override Hb tier ด้วยตัวเอง deterministic bypass ต้องมีหลักฐานเชิงโครงสร้าง เช่น
-        MTP, procedure timing, pre-op crossmatch หรือ delta-Hb
+        ตารางนี้แสดงช่วง Hb หลังตรวจการยกเว้นและกฎที่มาก่อนแล้ว
+        Vital signs ใช้ประกอบการทบทวน ไม่ทำให้เกิด deterministic bypass ด้วยตัวเอง
       </>
     ) : (
       <>
-        Vitals (BP, HR, urine output, temperature) are <strong>supporting evidence only</strong>.
-        They never override the Hb-based tier on their own. Deterministic bypasses require
-        structured MTP, procedure-timing, pre-op crossmatch, or delta-Hb evidence.
+        These ranges apply after earlier exclusions and routing rules.
+        Vital signs support review but do not create a deterministic bypass on their own.
       </>
     )}
   </p>

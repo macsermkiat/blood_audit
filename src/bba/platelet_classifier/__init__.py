@@ -10,8 +10,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from bba.platelet_classifier.classifier import (
+    PLATELET_PROPHYLAXIS_CONDITIONAL_INDICATION_PREFIXES,
+    PLATELET_PROPHYLAXIS_EXCLUSION_PREFIXES,
+    PLATELET_PROPHYLAXIS_INDICATION_PREFIXES,
+    PLATELET_PROPHYLAXIS_THRESHOLD,
     PLATELET_REVIEW_CEILING,
     classify_platelet,
+    qualifies_for_prophylaxis_autoclear,
 )
 from bba.platelet_classifier.models import (
     PlateletClassifierInputs,
@@ -19,8 +24,13 @@ from bba.platelet_classifier.models import (
 )
 
 __all__: Sequence[str] = (
+    "PLATELET_PROPHYLAXIS_CONDITIONAL_INDICATION_PREFIXES",
+    "PLATELET_PROPHYLAXIS_EXCLUSION_PREFIXES",
+    "PLATELET_PROPHYLAXIS_INDICATION_PREFIXES",
+    "PLATELET_PROPHYLAXIS_THRESHOLD",
     "PLATELET_REVIEW_CEILING",
     "PlateletClassifierInputs",
     "PlateletClassifierResult",
     "classify_platelet",
+    "qualifies_for_prophylaxis_autoclear",
 )

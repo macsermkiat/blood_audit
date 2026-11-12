@@ -13,8 +13,9 @@ from bba.hb_lookup.anchor import (
     EvidenceAnchor,
     resolve_evidence_anchor,
     resolve_hb_with_fallback,
+    resolve_lab_anchor,
 )
-from bba.hb_lookup.lookup import lookup_hb
+from bba.hb_lookup.lookup import TriggerDraws, lookup_hb, trigger_draws
 from bba.hb_lookup.models import (
     DeltaHbWindow,
     HbFreshness,
@@ -36,4 +37,7 @@ __all__ = [
     "parse_hb_value",
     "resolve_evidence_anchor",
     "resolve_hb_with_fallback",
+    "resolve_lab_anchor",
+    "TriggerDraws",
+    "trigger_draws",
 ]

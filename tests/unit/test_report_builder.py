@@ -310,21 +310,14 @@ class TestEvidenceBundleHashIsPerRow:
 
 
 class TestRunLevelFieldsAreEqualityChecked:
-    """The five truly run-level fields (``policy_version``, ``model_id``,
-    ``redactor_version``, ``redactor_model_sha``, ``prompt_hash``) MUST
-    agree across every row — :class:`PipelineRowContext` documents them
-    as "pinned per run". Disagreement signals a corrupt run (e.g., two
-    different runs accidentally sharing a ``run_id``) and must fail
-    loud."""
+    """A run must retain one policy and approved redactor identity."""
 
     @pytest.mark.parametrize(
         "field",
         [
             "policy_version",
-            "model_id",
             "redactor_version",
             "redactor_model_sha",
-            "prompt_hash",
         ],
     )
     def test_mismatch_raises_mixed_run_metadata_error(
@@ -343,6 +336,90 @@ class TestRunLevelFieldsAreEqualityChecked:
                 physician_resolver=lambda _r: "phys-1",
             )
         assert field in str(excinfo.value)
+
+
+class TestMixedModelProvenance:
+    def test_deterministic_rows_do_not_claim_llm_redaction(
+        self, tmp_path: Path
+    ) -> None:
+        rows = (
+            _row(
+                audit_id="det",
+                model_id="deterministic",
+                redactor_version="not-applied",
+                redactor_model_sha="unavailable",
+            ),
+            _row(audit_id="llm"),
+        )
+        inputs = build_report_inputs(
+            run_id="run-aaa",
+            audit_store=_store_returning(*rows),
+            output_dir=tmp_path,
+            ward_resolver=lambda _: "ward-1",
+            physician_resolver=lambda _: "phys-1",
+        )
+        assert {p.redactor_version for p in inputs.provenance} == {
+            "not-applied",
+            rows[1].redactor_version,
+        }
+        assert "not-applied" in inputs.footer.redactor_version
+        assert "unavailable" in inputs.footer.redactor_model_sha
+
+    def test_mixed_models_and_prompts_keep_exact_row_provenance(
+        self, tmp_path: Path
+    ) -> None:
+        rows = (
+            _row(audit_id="det", model_id="deterministic", prompt_hash="no-prompt"),
+            _row(audit_id="sonnet", model_id="claude-sonnet-5-5", prompt_hash="p1"),
+            _row(audit_id="opus", model_id="claude-opus-5-5", prompt_hash="p2"),
+        )
+        inputs = build_report_inputs(
+            run_id="run-aaa",
+            audit_store=_store_returning(*rows),
+            output_dir=tmp_path,
+            ward_resolver=lambda _: "ward-1",
+            physician_resolver=lambda _: "phys-1",
+        )
+        assert inputs.footer.model_id == (
+            '["claude-opus-5-5","claude-sonnet-5-5","deterministic"]'
+        )
+        assert {p.audit_id: (p.model_id, p.prompt_hash) for p in inputs.provenance} == {
+            "det": ("deterministic", "no-prompt"),
+            "sonnet": ("claude-sonnet-5-5", "p1"),
+            "opus": ("claude-opus-5-5", "p2"),
+        }
+        reverse = build_report_inputs(
+            run_id="run-aaa",
+            audit_store=_store_returning(*reversed(rows)),
+            output_dir=tmp_path,
+            ward_resolver=lambda _: "ward-1",
+            physician_resolver=lambda _: "phys-1",
+        )
+        assert inputs.footer == reverse.footer
+        assert inputs.provenance == reverse.provenance
+
+    def test_generated_report_exposes_reproducible_provenance_file(
+        self, tmp_path: Path
+    ) -> None:
+        import json
+
+        from bba.report_generator import generate_monthly_report
+
+        row = _row(audit_id="det", model_id="deterministic")
+        inputs = build_report_inputs(
+            run_id="run-aaa",
+            audit_store=_store_returning(row),
+            output_dir=tmp_path,
+            ward_resolver=lambda _: "ward-1",
+            physician_resolver=lambda _: "phys-1",
+        )
+        artifacts = generate_monthly_report(inputs)
+        assert artifacts.provenance_path is not None
+        content = json.loads(artifacts.provenance_path.read_text())
+        assert content[0]["audit_id"] == row.audit_id
+        assert content[0]["model_id"] == row.model_id
+        assert content[0]["prompt_hash"] == row.prompt_hash
+        assert content[0]["evidence_bundle_hash"] == row.evidence_bundle_hash
 
 
 class TestReadUsesReadRunRecords:

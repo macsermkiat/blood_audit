@@ -15,7 +15,7 @@ export default defineConfig({
     starlight({
       title: "blood_audit",
       description:
-        "KCMH RBC transfusion audit pipeline — post-hoc quality-improvement audit against PR 17.2 + AABB 2023.",
+        "Retrospective quality-improvement audits of red-cell and platelet orders at KCMH.",
       defaultLocale: "en",
       locales: {
         en: { label: "English", lang: "en" },
@@ -29,6 +29,10 @@ export default defineConfig({
         },
       ],
       customCss: ["./src/styles/custom.css"],
+      components: {
+        // Adds the "Thai pages are abridged, English is authoritative" note.
+        Banner: "./src/components/ThaiAbridgedBanner.astro",
+      },
       sidebar: [
         {
           label: "Operators",
@@ -39,10 +43,11 @@ export default defineConfig({
             { label: "Environment variables", translations: { th: "ตัวแปรสภาพแวดล้อม" }, slug: "operators/env-vars" },
             { label: "First audit run", translations: { th: "รันออดิทครั้งแรก" }, slug: "operators/first-audit-run" },
             { label: "Run the pipeline", translations: { th: "รัน pipeline" }, slug: "operators/run-pipeline" },
+            { label: "Generate the report", translations: { th: "สร้างรายงาน" }, slug: "operators/generate-report" },
             { label: "Doctor & department ranking", translations: { th: "จัดอันดับแพทย์/แผนก" }, slug: "operators/doctor-ranking" },
-            { label: "Ingest CSV", translations: { th: "Ingest CSV" }, slug: "operators/ingest-csv" },
+            { label: "Ingest CSV", translations: { th: "นำเข้าข้อมูล CSV" }, slug: "operators/ingest-csv" },
             { label: "audit command", translations: { th: "คำสั่ง audit" }, slug: "operators/audit-command" },
-            { label: "Integration seams", translations: { th: "จุดเชื่อมต่อระบบ" }, slug: "operators/integration-seams" },
+            { label: "Model and reviewer setup", translations: { th: "ตั้งค่าโมเดลและผู้ทบทวน" }, slug: "operators/integration-seams" },
             { label: "Troubleshooting", translations: { th: "แก้ปัญหาเบื้องต้น" }, slug: "operators/troubleshooting" },
           ],
         },
@@ -57,7 +62,7 @@ export default defineConfig({
             { label: "Quote grounding (6 layers)", translations: { th: "Quote grounding 6 ชั้น" }, slug: "developers/quote-grounding" },
             { label: "De-identification", translations: { th: "De-identification" }, slug: "developers/deid" },
             { label: "Audit store", translations: { th: "Audit store" }, slug: "developers/audit-store" },
-            { label: "Contributing", translations: { th: "การ contribute" }, slug: "developers/contributing" },
+            { label: "Contributing", translations: { th: "แนวทางร่วมพัฒนา" }, slug: "developers/contributing" },
             { label: "Testing", translations: { th: "การทดสอบ" }, slug: "developers/testing" },
           ],
         },

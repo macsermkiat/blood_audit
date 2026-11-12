@@ -55,10 +55,16 @@ _TRAILING_COLUMNS: tuple[_RankingColumn, ...] = (
 # absent. Kept strictly separate: Hb from red-cell orders, platelet count
 # from platelet orders.
 _MEAN_COLUMNS: tuple[_RankingColumn, ...] = (
+    # Each component's min / max sit beside its mean (clinician request
+    # 2026-09-19: the range tells an outlier from a habit).
     ("mean_hb_g_dl", lambda row: row.mean_hb),
     ("hb_order_n", lambda row: row.hb_order_n),
+    ("hb_min_g_dl", lambda row: row.hb_min),
+    ("hb_max_g_dl", lambda row: row.hb_max),
     ("mean_platelet_k_ul", lambda row: row.mean_platelet),
     ("platelet_order_n", lambda row: row.platelet_order_n),
+    ("platelet_min_k_ul", lambda row: row.platelet_min),
+    ("platelet_max_k_ul", lambda row: row.platelet_max),
 )
 
 
@@ -140,6 +146,14 @@ def _format_mean(mean: float | None, n: int) -> str:
     return "&mdash;"
 
 
+def _format_range(lo: float | None, hi: float | None, n: int) -> str:
+    """Render a trigger range cell: ``lo–hi`` to one decimal when the group
+    has a usable sample, otherwise an em-dash (same rule as the mean)."""
+    if n > 0 and lo is not None and hi is not None:
+        return f"{lo:.1f}&ndash;{hi:.1f}"
+    return "&mdash;"
+
+
 def _render_table(table: RankingTable) -> str:
     returns_header = (
         '<th class="num">Returned, not transfused</th>'
@@ -155,7 +169,9 @@ def _render_table(table: RankingTable) -> str:
         f'<th class="num">{html.escape(table.bucket)} rate</th>'
         f"<th>N &ge; {table.min_orders}</th>"
         '<th class="num">Mean Hb (g/dL)</th>'
+        '<th class="num">Hb range (g/dL)</th>'
         '<th class="num">Mean platelet (&times;10&sup3;/&micro;L)</th>'
+        '<th class="num">Platelet range (&times;10&sup3;/&micro;L)</th>'
     )
     body_rows: list[str] = []
     for row in table.rows:
@@ -180,8 +196,11 @@ def _render_table(table: RankingTable) -> str:
             f'<td class="num">{_format_cell(row.bucket_rate)}</td>'
             f"<td>{threshold_mark}</td>"
             f'<td class="num">{_format_mean(row.mean_hb, row.hb_order_n)}</td>'
+            f'<td class="num">{_format_range(row.hb_min, row.hb_max, row.hb_order_n)}</td>'
             f'<td class="num">'
             f"{_format_mean(row.mean_platelet, row.platelet_order_n)}</td>"
+            f'<td class="num">'
+            f"{_format_range(row.platelet_min, row.platelet_max, row.platelet_order_n)}</td>"
             "</tr>"
         )
     return f"<table><thead><tr>{header_cells}</tr></thead><tbody>{''.join(body_rows)}</tbody></table>"
@@ -216,7 +235,9 @@ def write_rankings_html(
         "group's scorable red-cell orders, and Mean platelet "
         "(&times;10&sup3;/&micro;L) the mean pre-transfusion platelet count "
         "over its scorable platelet orders; n is how many of those orders "
-        "carried a usable value, and a column shows &mdash; when none did."
+        "carried a usable value, and a column shows &mdash; when none did. "
+        "The range columns give the lowest and highest value among those "
+        "same orders."
     )
     returns_total = (
         f"; {totals.returned_not_transfused} returned/not-transfused excluded"

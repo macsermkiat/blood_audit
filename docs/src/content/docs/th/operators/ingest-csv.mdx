@@ -1,82 +1,47 @@
 ---
 title: นำเข้า CSV
-description: โครงสร้างชุดข้อมูล CSV จาก HOSxP และสิ่งที่ bba ingest เขียนออก
+description: ไฟล์ HOSxP มาตรฐานและขอบเขตของคำสั่ง ingest
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
+`bba ingest` ตรวจชุด CSV จาก HOSxP และปรับรูปแบบข้อมูล เมื่อผ่านครบจะบันทึก completion marker ใช้ `bba audit` เมื่อต้องการจัดประเภทคำสั่งเลือดและบันทึก audit rows
 
-`bba ingest` คือจุดเริ่มต้นสำหรับตรวจชุดข้อมูลส่งออกจาก HOSxP ใน Phase 1
-คำสั่งนี้ตรวจ header ตาม schema, คำนวณ hash, stream แถวผ่าน normalization
-และเขียน completion marker ภายใต้ `$BBA_DATA_DIR` ส่วน DuckDB + Parquet
-เป็นรูปแบบ storage ที่ตั้งใจจะเชื่อมต่อถัดไป แต่ `bba ingest` ยังไม่เขียน
-ไฟล์เหล่านั้นในปัจจุบัน
+```sh
+export BBA_DATA_DIR=/srv/bba/data
+uv run bba ingest /srv/bba/export/BDVST.csv --schema-version v1
+```
 
-<AtAGlance
-  title="สรุปสั้น"
-  items={[
-    { label: "ขนาด bundle", value: "ใช้ตาราง CSV จาก HOSxP จำนวน 13 ตารางหลัก", tone: "ok" },
-    { label: "การตรวจ", value: "header ต้องตรงกับ schema v1; คอลัมน์ขาดหรือคอลัมน์แปลกจะ fail" },
-    { label: "ผลลัพธ์วันนี้", value: "completion marker หลังตรวจ schema และ normalize rows สำเร็จ" },
-    { label: "กฎ PHI", value: "ในเอกสารและ issue ใช้ PHI_xxx เสมอ ห้ามใส่ HN/AN จริง", tone: "warn" },
-  ]}
-/>
+ไฟล์มาตรฐานทั้งหมดต้องอยู่ในไดเรกทอรีเดียวกัน ผู้ส่งออกต้องกรองกลุ่มผู้ใหญ่ตามขอบเขตที่อนุมัติ เพราะชุดข้อมูลไม่มีคอลัมน์อายุ
 
-## ตารางที่ต้องมี
+<h2 id="expected-tables">ไฟล์ที่ต้องมี</h2>
 
-ชุดข้อมูลส่งออกจาก HOSxP มีตารางหลัก 13 ตาราง:
-
-| ตาราง | ใช้ทำอะไร |
+| CSV | การใช้งาน |
 | --- | --- |
-| `BDVST` | header ของคำสั่งเลือด: HN, AN, REQNO, ชนิดผลิตภัณฑ์, วันเวลา request, แพทย์ผู้สั่ง (DCTREQ) |
-| `BDVSTDT` | รายละเอียดคำสั่งและบริบทระดับ unit/product ส่วน `USETYPE` ในตารางนี้เป็นตัวขับ routing แบบ declared-use ก่อนผ่าตัด |
-| `BDVSTTRANS` | ledger สถานะรายยูนิต (คืนเลือด / ให้แล้ว / เข้ากันไม่ได้) — แหล่งข้อมูล returns ledger เบื้องหลัง `RETURNED_NOT_TRANSFUSED` |
-| `BDTYPE` | reference ของชนิดผลิตภัณฑ์เลือด |
-| `BDVSTST` | reference ของสถานะการให้เลือด |
-| `Diagnosis` | หลักฐาน ICD-10 สำหรับ exclusion และบริบททางคลินิก |
-| `Lab` | Hb, ANC และ lab อื่นที่เกี่ยวข้อง |
-| `Med` | หลักฐานยา: dialysis med, chemo med, ปริมาณ crystalloid |
-| `IPDADMPROGRESS` | progress note สำหรับ evidence bundle ของ LLM |
-| `IPDNRFOCUSDT` | nursing note สำหรับ evidence bundle ของ LLM |
-| `IPTSUMOPRT` | operative event และเวลา procedure |
-| `INCPT_OPRTACT` | ตาราง procedure charge-support: export ที่ pre-join INCPT ⋈ OPRTACT บน Income (ตาม #69) และถูก validate เป็นส่วนหนึ่งของ schema v1 |
-| `ICD9CM` | dictionary ของ procedure code และ flag ว่าเป็น OR/non-OR |
+| `BDVST.csv` | หัวคำสั่ง รหัสผู้ป่วยและการนอนโรงพยาบาล ชนิดเลือด เวลาขอ และแพทย์ผู้สั่ง `DCTREQ` |
+| `BDVSTDT.csv` | รายละเอียดผลิตภัณฑ์และการใช้ที่ระบุด้วย `USETYPE` |
+| `BDVSTTRANS.csv` | สถานะรายยูนิต เช่น คืน ใช้แล้ว และเข้ากันไม่ได้ |
+| `BDTYPE.csv` | ตารางอ้างอิงผลิตภัณฑ์เลือด |
+| `BDVSTST.csv` | ตารางอ้างอิงสถานะ |
+| `Diagnosis.csv` | รหัสวินิจฉัยสำหรับกลุ่มโรคและเกณฑ์คัดออก |
+| `Lab.csv` | Hb จำนวนเกล็ดเลือด และผลตรวจอื่น |
+| `Med.csv` | หลักฐานยา |
+| `IPDADMPROGRESS.csv` | บันทึกความก้าวหน้าที่เก็บในเครื่องจนผ่านการลบข้อมูลและตรวจสิทธิ์ส่ง |
+| `IPDNRFOCUSDT.csv` | บันทึกพยาบาลที่ต้องผ่านข้อกำหนดเดียวกัน |
+| `IPTSUMOPRT.csv` | เหตุการณ์ผ่าตัดและเวลา |
+| `INCPT_OPRTACT.csv` | ค่าหัตถการที่ join ด้วย `Income` ไว้แล้ว |
+| `ICD9CM.csv` | พจนานุกรมหัตถการและการจัดกลุ่ม OR |
 
-สัญญาของคอลัมน์จริงอยู่ใน `src/bba/ingest/`
+schema และกฎปรับรูปแบบอยู่ใน `src/bba/ingest/` ระบบแปลงชื่อคอลัมน์ตาม mapping ตัดชื่อซ้ำ และเลือกเฉพาะคอลัมน์ที่รู้จัก คอลัมน์ส่วนเกินจะถูกตัดออกพร้อมบันทึกไว้ หากขาดคอลัมน์หรือไฟล์ที่จำเป็น การตรวจจะไม่ผ่าน
 
-## สิ่งที่ ingest เขียนออก
+`DCT.csv` เป็นข้อมูลเพิ่มสำหรับระบุแพทย์ในรายงานและหน้าทบทวน ไม่ใช่หนึ่งใน 13 ไฟล์มาตรฐาน
 
-เมื่อ `bba ingest` สำเร็จใน Phase 1 จะได้:
+## ผลจาก ingest
 
-- `$BBA_DATA_DIR/ingest/v1/` เป็น root ของ ingest output
-- `_run_<run_id>.complete` marker เพื่อบอกว่า schema validation และ
-  row-normalization drain สำเร็จแล้ว
-- ถ้า marker นี้หายไป การ ingest ซ้ำจะเริ่มใหม่อย่างปลอดภัย
+คำสั่งใช้ `$BBA_DATA_DIR/ingest/v1/` เป็น output root และสร้าง `_run_<run_id>.complete` เมื่อผ่านการตรวจและปรับรูปแบบครบ ingest แบบแยกไม่ได้เขียนตาราง Parquet ที่ปรับรูปแบบแล้วหรือผลจัดประเภท `AuditRow`
 
-สำหรับ `bba audit --input ...` ใน Phase 1 จะรัน ingest validation/drain
-ภายใต้ `$BBA_DATA_DIR/audit/<run_id>/` และบันทึก run-state หนึ่งรายการต่อ
-ตาราง HOSxP ที่ validate ผ่าน
+ชุดข้อมูล schema และรุ่นโค้ดเดิมใช้ ingest identity ที่เสร็จแล้วได้ หากไม่มี completion marker การรันครั้งถัดไปจะตรวจใหม่
 
-## การสร้าง run_id
+audit มี run identity snapshot และการบันทึกผลของตนเอง การมี ingest marker จึงไม่ได้แปลว่าตรวจคำสั่งเลือดแล้ว ดู [ตรวจข้อมูลครั้งแรก](/blood_audit/th/operators/first-audit-run/)
 
-```text
-run_id = sha256(input_csv_hash + schema_fingerprint + code_version)
-```
+## ปกป้องข้อมูลส่งออก
 
-หลักสำคัญคือ input เดิม + schema เดิม + code เดิม ต้องได้ `run_id` เดิม
-เสมอ เพื่อให้การรันซ้ำไม่เขียนผลซ้ำโดยไม่ตั้งใจ
-
-## ตัวอย่าง placeholder
-
-ตัวอย่างในเอกสารนี้ใช้ placeholder เท่านั้น:
-
-```text
-HN: PHI_xxx_001
-AN: PHI_xxx_002
-REQNO: PHI_xxx_003
-```
-
-ห้ามแทนค่าด้วย HN, AN หรือ REQNO จริงในเอกสาร screenshot หรือ issue report
-
-## ขั้นถัดไป
-
-- [คำสั่ง audit](/blood_audit/th/operators/audit-command/) — รันเส้นทาง validate/drain ของ ingest ใน Phase 1
+เก็บไฟล์ส่งออกและผลที่ได้ไว้นอก repository การเข้ารหัส identifier ไม่ได้ยืนยันว่าข้อมูลเผยแพร่ได้ ใช้ข้อมูลสังเคราะห์ เช่น `PHI_xxx_001` ในเอกสาร ภาพหน้าจอ และ issue

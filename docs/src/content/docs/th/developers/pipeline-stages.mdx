@@ -1,87 +1,46 @@
 ---
-title: ขั้นตอน pipeline
-description: 12 stage ของ blood_audit ตั้งแต่ ingest จนถึง audit store
+title: ขั้นตอนประมวลผล
+description: ลำดับการตรวจ ขอบเขตการบันทึก และการกู้คืน batch ที่ขาดช่วง
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
 import PipelineDiagram from "../../../../components/PipelineDiagram.astro";
+
+`bba.application.audit_bundle` ประกอบข้อมูลให้ `bba.audit_pipeline.run_pipeline` แผนภาพแสดงขั้นตอนหลักของ RBC ส่วนเกล็ดเลือดใช้ตัวค้นผลแล็บ ตัวจำแนก และกฎตรวจคำตอบของตนเอง
 
 <PipelineDiagram />
 
-<AtAGlance
-  title="สรุป pipeline"
-  items={[
-    { label: "Stage 1", value: "Ingest รันจาก CLI ได้แล้วใน Phase 1", tone: "ok" },
-    { label: "Stage 2-12", value: "มี module แล้ว; CLI orchestration จะมาใน Phase 1.5", tone: "warn" },
-    { label: "Data handoff", value: "แต่ละ stage ส่งต่อ typed Pydantic objects หรือ persisted rows" },
-    { label: "Failure mode", value: "validation, de-id, grounding และ persistence ต้อง fail loud" },
-  ]}
-/>
+## เตรียมหลักฐานในเครื่อง
 
-## 1. `bba.ingest`
+1. เก็บ CSV มาตรฐานเป็น snapshot ที่จำกัดสิทธิ์ ตรวจ hash, schema, code version และการตั้งค่าก่อนจำแนก
+2. ตรวจและปรับข้อมูลด้วย `bba.ingest`
+3. เลือกคำสั่งที่เข้าเกณฑ์ด้วย `bba.audit_orders` ผู้ส่งออกข้อมูลต้องคัดกลุ่มผู้ใหญ่ไว้ก่อน เพราะ export มาตรฐานไม่มีคอลัมน์อายุ
+4. ใช้ผลแล็บตามชนิดเลือด สัญญาณชีพ และตัวตรวจ cohort เพื่อประกอบบริบทก่อนสั่ง เวลาจ่ายเลือดใช้เป็นจุดอ้างอิงหลักฐาน ไม่ใช่หลักฐานว่าให้เลือดแล้ว
+5. เพิ่มข้อมูลสถานะเลือดรายยูนิต วัตถุประสงค์ที่ระบุ และการจองตาม MSBOS เท่าที่มี
 
-อ่าน HOSxP CSV bundle, ตรวจ schema, คำนวณ hash, stream rows ผ่าน
-normalization และเขียน completion marker ของ run
+## ใช้กฎ deterministic
 
-## 2. `bba.audit_orders`
+pipeline เรียกตัวจำแนก RBC หรือเกล็ดเลือดกับแต่ละบริบท และบันทึกผลที่กฎตัดสินจบได้โดยไม่ส่งโมเดล คำสั่งเกล็ดเลือดร่วมในช่วง MTP ที่ถูกระงับไม่สร้างผลตรวจแยก
 
-เลือก RBC และ platelet orders ที่ต้อง audit (intake gate `bba.component_map`
-แยก component family ให้แต่ละ order) และสร้าง anchor หนึ่งรายการต่อคำสั่งให้เลือด
+ผล RBC ที่เป็น `NEEDS_REVIEW` หรือ `POTENTIALLY_INAPPROPRIATE` จะเข้าสู่การตรวจสิทธิ์ส่งข้อมูล ส่วนเกล็ดเลือดต้องเปิด `PLATELET_LLM_ENABLED` เพิ่มด้วย ดู [กฎ Hb](/blood_audit/th/developers/three-tier-hb/) และ [การตรวจเกล็ดเลือด](/blood_audit/th/developers/platelet-auditor/)
 
-## 3. `bba.hb_lookup`
+## อนุมัติและส่งคำขอโมเดล
 
-หา pre-transfusion Hb จาก Lab ย้อนหลัง 7 วัน เลือกค่าที่ analytic-valid
-และเลือก hematology Hb ก่อน POCT เมื่อมีหลายแหล่ง
+`bba.evidence_bundle_builder` รวมหลักฐานในเครื่อง ผู้รับรองที่อนุมัติปกปิดข้อมูลและลงลายเซ็นให้ prompt, audit ID และ run ID ที่ตรงกัน แอปพลิเคชันตรวจคำรับรองด้วย public Ed25519 key ดู [De-identification](/blood_audit/th/developers/deid/)
 
-## 4. `bba.vitals_extractor`
+ตัวสร้าง prompt จัดรูปหลักฐานที่อนุมัติแล้ว ก่อนส่ง ระบบเก็บเนื้อหาคำขอและบริบทสำหรับกู้คืนใน manifest ที่แก้ทับไม่ได้ งานโมเดลใช้ checkpoint ใน Postgres transport สำหรับบริการจริงปิดการ retry อัตโนมัติของ SDK หากไม่ทราบผลการส่ง ต้องตรวจสอบก่อนส่งคำขอใหม่
 
-ดึง vital signs เป็น evidence ประกอบสำหรับ LLM แต่ไม่ใช้เป็น deterministic bypass
-โดยลำพัง
+ในโหมด local หรือเมื่อการอนุมัติไม่ผ่าน แถว RBC ที่ต้องใช้โมเดลจะบันทึกเป็น `NEEDS_REVIEW` พร้อม `privacy_admission_failed` โดยไม่ส่งบันทึกดิบเข้า transport หรือเก็บเป็นคำขอโมเดล
 
-## 5. `bba.cohort_detector`
+## ตรวจคำตอบและบันทึก
 
-assign clinical-context cohort เช่น default, cardiac surgery, ortho-surgery,
-ESRD-EPO, cardiopulmonary-comorbidity (heart disease), MTP, active heme
-malignancy หรือ unknown
+ระบบตรวจรูปแบบคำตอบ ตรวจข้อความอ้างอิงกับหลักฐานที่ปกปิดแล้ว และใช้กฎของส่วนประกอบเลือดนั้น ระบบเก็บความพยายามแต่ละครั้งตามลำดับ และเลือกครั้งล่าสุดที่ผ่านการตรวจ หากไม่มีครั้งใดผ่าน ให้ `NEEDS_REVIEW` พร้อม `hallucination_suspect`
 
-## 6. `bba.deterministic_classifier`
+`bba.audit_store` เขียนรายการเรียกก่อน เขียนผลตรวจตามมา แล้วเขียน commit marker เป็นลำดับสุดท้าย ผู้อ่านเห็นเฉพาะผลที่ commit แล้ว แอปพลิเคชันเขียนเครื่องหมายจบงานเมื่อบันทึกงานที่เข้าเกณฑ์และไม่ถูกระงับครบแล้ว จำนวนแถว ingest ไม่ใช่จำนวนผลตรวจ
 
-ใช้กฎ 3-tier Hb, bypass และ review flags เพื่อสร้าง `rule_classification`
-ผลที่ auto-classify ได้จะจบโดยไม่เรียก LLM ส่วน `NEEDS_REVIEW` และ
-`POTENTIALLY_INAPPROPRIATE` จะเข้าสู่ LLM route
+## กู้คืน batch ที่ขาดช่วง
 
-Overlay arms 3 ตัว (เปิดเป็น default-ON) ทำงานที่ stage นี้: returns ledger
-(`bba.returns_ledger`) จบ order เป็น `RETURNED_NOT_TRANSFUSED` ได้,
-declared-use USETYPE routing (`bba.declared_use`) จบเป็น
-`PERIOP_TRANSFUSION_EXEMPT` และ MSBOS reservation audit
-(`bba.preop_reservation`) รายงาน `PREOP_OVER_RESERVATION`
-เมื่อจองเลือดเกินสำหรับ planned operation
+batch store เก็บสถานะ `pending`, `submitted`, `partial`, `complete` และ `failed` ฟังก์ชัน `resume_on_startup` ตรวจ code version, บริบท, นโยบาย และคำขอเดิมก่อนสร้างผลคืน
 
-## 7. `bba.evidence_bundle_builder`
+batch ที่เป็น submitted หรือ partial อาจกู้จากรายการเรียกที่บันทึกแล้ว หรือดึงผลจาก remote batch ID เดิม คำตอบใน cache ต้องผ่าน verifier จริงอีกครั้ง หาก manifest หายหรือเปลี่ยนจะกู้ต่อไม่ได้ ส่วน pending ที่ไม่แน่ใจว่าส่งไปแล้วหรือไม่จะเป็น failed และต้องให้ผู้ดูแลตรวจสอบ จึงไม่ควรรับประกันว่าทุกงานที่ขาดช่วงจะจบได้โดยไม่ต้องดำเนินการเพิ่มเติม
 
-รวม Hb, vitals, anchor notes, medication, cohort evidence, ICD codes
-และ procedure evidence ให้ LLM เห็นเฉพาะหลักฐานที่เกี่ยวข้อง
-
-## 8. `bba.deid_redactor`
-
-ลบหรือแทน PHI เช่น HN, AN, REQNO, ชื่อ, DOB, dates และอายุ ≥ 90
-ก่อนส่งออกจาก audit container
-
-## 9. `bba.prompt_builder`
-
-สร้าง prompt จาก policy paraphrase, evidence bundle และ expected JSON schema
-
-## 10. `bba.llm_client`
-
-ส่ง batch ไปยัง LLM provider และติดตาม state ผ่าน `batch_runs`
-
-## 11. `bba.quote_grounder`
-
-ตรวจทุก quote ของ LLM ด้วย 6 mandatory layers ถ้าชั้นใด fail จะเก็บ
-`final_classification = NEEDS_REVIEW` พร้อม `review_reason =
-"hallucination_suspect"`
-
-## 12. `bba.audit_store`
-
-เขียน `AuditRow`, `LlmCall`, run state และ audit log โดยรักษา idempotency
-และ timestamp แบบ timezone-aware UTC
+ดู [Audit store](/blood_audit/th/developers/audit-store/) และ [คำสั่ง audit](/blood_audit/th/operators/audit-command/)

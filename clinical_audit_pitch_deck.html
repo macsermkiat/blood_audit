@@ -1,0 +1,1669 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clinical Review Deck | RBC Transfusion Audit</title>
+  <style>
+    /* ===========================================
+       VIEWPORT FITTING: MANDATORY BASE STYLES
+       =========================================== */
+
+    html, body {
+      height: 100%;
+      overflow-x: hidden;
+    }
+
+    html {
+      scroll-snap-type: y mandatory;
+      scroll-behavior: smooth;
+    }
+
+    .slide {
+      width: 100vw;
+      height: 100vh;
+      height: 100dvh;
+      overflow: hidden;
+      scroll-snap-align: start;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+
+    .slide-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      max-height: 100%;
+      overflow: hidden;
+      padding: var(--slide-padding);
+    }
+
+    :root {
+      --title-size: clamp(1.7rem, 5.2vw, 4.4rem);
+      --h2-size: clamp(1.45rem, 3.7vw, 2.85rem);
+      --h3-size: clamp(1.08rem, 2.45vw, 1.82rem);
+      --body-size: clamp(1rem, 1.38vw, 1.2rem);
+      --small-size: clamp(0.82rem, 1vw, 0.98rem);
+
+      --slide-padding: clamp(1rem, 3vh, 2.75rem) clamp(1.2rem, 4vw, 4rem);
+      --content-gap: clamp(0.65rem, 1.7vw, 1.65rem);
+      --element-gap: clamp(0.35rem, 0.9vw, 0.85rem);
+    }
+
+    .card, .container, .content-box {
+      max-width: min(90vw, 1000px);
+      max-height: min(80vh, 700px);
+    }
+
+    .feature-list, .bullet-list {
+      gap: clamp(0.4rem, 1vh, 1rem);
+    }
+
+    .feature-list li, .bullet-list li {
+      font-size: var(--body-size);
+      line-height: 1.4;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+      gap: clamp(0.5rem, 1.5vw, 1rem);
+    }
+
+    img, .image-container {
+      max-width: 100%;
+      max-height: min(50vh, 400px);
+      object-fit: contain;
+    }
+
+    @media (max-height: 700px) {
+      :root {
+        --slide-padding: clamp(0.7rem, 2.3vh, 1.35rem) clamp(1rem, 3vw, 2rem);
+        --content-gap: clamp(0.45rem, 1.25vw, 0.95rem);
+        --title-size: clamp(1.35rem, 4.6vw, 2.75rem);
+        --h2-size: clamp(1.1rem, 3.2vw, 1.95rem);
+      }
+    }
+
+    @media (max-height: 600px) {
+      :root {
+        --slide-padding: clamp(0.48rem, 1.8vh, 0.9rem) clamp(0.85rem, 2.5vw, 1.5rem);
+        --content-gap: clamp(0.3rem, 0.9vw, 0.65rem);
+        --title-size: clamp(1.1rem, 4vw, 2rem);
+        --body-size: clamp(0.92rem, 1.18vw, 1rem);
+      }
+
+      .nav-dots, .keyboard-hint, .decorative {
+        display: none;
+      }
+    }
+
+    @media (max-height: 500px) {
+      :root {
+        --slide-padding: clamp(0.35rem, 1.4vh, 0.65rem) clamp(0.65rem, 2vw, 1rem);
+        --title-size: clamp(1rem, 3.5vw, 1.5rem);
+        --h2-size: clamp(0.9rem, 2.5vw, 1.25rem);
+        --body-size: clamp(0.88rem, 1vw, 0.95rem);
+      }
+    }
+
+    @media (max-width: 600px) {
+      :root {
+        --title-size: clamp(1.25rem, 7vw, 2.5rem);
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.2s !important;
+      }
+
+      html {
+        scroll-behavior: auto;
+      }
+    }
+
+    :root {
+      --ink: oklch(22% 0.015 28);
+      --ink-2: oklch(33% 0.018 28);
+      --paper: oklch(98% 0.006 28);
+      --paper-2: oklch(95% 0.01 28);
+      --paper-3: oklch(91% 0.014 28);
+      --red: oklch(43% 0.18 28);
+      --red-soft: oklch(92% 0.045 28);
+      --moss: oklch(47% 0.055 155);
+      --moss-soft: oklch(91% 0.035 155);
+      --gold: oklch(55% 0.085 72);
+      --blue-gray: oklch(44% 0.04 235);
+      --line: rgba(21, 23, 21, 0.18);
+      --shadow: 0 24px 60px rgba(21, 23, 21, 0.16);
+      --radius: 8px;
+      --font-sans: Avenir Next, Segoe UI, Helvetica Neue, Arial, sans-serif;
+      --font-display: Avenir Next, Segoe UI, Helvetica Neue, Arial, sans-serif;
+      --font-mono: Menlo, Consolas, Monaco, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: var(--font-sans);
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: color-mix(in oklch, var(--paper-2) 52%, transparent);
+      z-index: 0;
+    }
+
+    main {
+      position: relative;
+      z-index: 1;
+    }
+
+    h1, h2, h3, p {
+      margin: 0;
+    }
+
+    h1 {
+      font-family: var(--font-display);
+      font-size: var(--title-size);
+      line-height: 0.98;
+      font-weight: 800;
+      max-width: 14ch;
+      letter-spacing: 0;
+      text-wrap: balance;
+    }
+
+    h2 {
+      font-family: var(--font-display);
+      font-size: var(--h2-size);
+      line-height: 1.04;
+      font-weight: 780;
+      letter-spacing: 0;
+      text-wrap: balance;
+    }
+
+    h3 {
+      font-size: var(--h3-size);
+      line-height: 1.16;
+      font-weight: 720;
+      letter-spacing: 0;
+      text-wrap: balance;
+    }
+
+    p, li {
+      font-size: var(--body-size);
+      line-height: 1.42;
+    }
+
+    .kicker {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: var(--red);
+      font-family: var(--font-sans);
+      font-size: var(--small-size);
+      text-transform: none;
+      letter-spacing: 0.02em;
+      font-weight: 800;
+    }
+
+    .kicker::before {
+      content: "";
+      width: 1.1em;
+      height: 0.18em;
+      background: currentColor;
+    }
+
+    .eyebrow {
+      color: var(--blue-gray);
+      font-family: var(--font-sans);
+      font-size: var(--small-size);
+      letter-spacing: 0.02em;
+      text-transform: none;
+      font-weight: 800;
+    }
+
+    .lead {
+      max-width: 64ch;
+      color: var(--ink-2);
+      font-size: clamp(1rem, 1.35vw, 1.22rem);
+      line-height: 1.48;
+      text-wrap: pretty;
+    }
+
+    .muted {
+      color: rgba(21, 23, 21, 0.68);
+    }
+
+    .title-slide {
+      background: var(--paper);
+    }
+
+    .title-slide::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 46vw;
+      background: var(--ink);
+      z-index: 0;
+    }
+
+    .title-slide .slide-content {
+      display: grid;
+      grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+      gap: clamp(1rem, 5vw, 5rem);
+      align-items: center;
+      align-content: center;
+      position: relative;
+      z-index: 1;
+    }
+
+    .title-panel {
+      color: var(--paper);
+      align-self: stretch;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: var(--content-gap);
+      padding-right: clamp(0.5rem, 3vw, 2rem);
+    }
+
+    .title-panel .kicker {
+      color: var(--red-soft);
+    }
+
+    .title-panel .lead {
+      color: rgba(247, 245, 239, 0.78);
+    }
+
+    .seal {
+      width: clamp(8rem, 24vw, 21rem);
+      aspect-ratio: 1;
+      border: clamp(0.35rem, 0.8vw, 0.7rem) solid var(--red);
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: var(--paper-2);
+      box-shadow: var(--shadow);
+      justify-self: center;
+      position: relative;
+    }
+
+    .seal::before {
+      content: "";
+      position: absolute;
+      inset: 11%;
+      border: 1px solid color-mix(in oklch, var(--ink) 18%, transparent);
+      border-radius: 50%;
+      background: var(--moss-soft);
+    }
+
+    .seal::after {
+      content: "QI";
+      position: absolute;
+      inset: clamp(1.2rem, 4.4vw, 2.7rem);
+      border: 1px solid rgba(247, 245, 239, 0.82);
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      color: var(--paper);
+      font-family: var(--font-display);
+      font-size: clamp(2.2rem, 8vw, 6rem);
+      font-weight: 850;
+      background: var(--ink);
+    }
+
+    .slide--dark {
+      color: var(--paper);
+      background: var(--ink);
+    }
+
+    .slide--dark .lead,
+    .slide--dark .muted,
+    .slide--dark li {
+      color: rgba(247, 245, 239, 0.78);
+    }
+
+    .slide--dark .eyebrow {
+      color: var(--red-soft);
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: minmax(0, 0.88fr) minmax(0, 1.12fr);
+      gap: clamp(1rem, 4vw, 3rem);
+      align-items: stretch;
+      align-content: stretch;
+    }
+
+    .slide-content.split > .stack {
+      justify-content: center;
+    }
+
+    .slide-content.split > .ledger,
+    .slide-content.split > .route-board {
+      align-self: stretch;
+    }
+
+    .stack {
+      display: flex;
+      flex-direction: column;
+      gap: var(--content-gap);
+      min-height: 0;
+    }
+
+    .slide-content.stack > .mini-grid,
+    .slide-content.stack > .pipeline-strip,
+    .slide-content.stack > .threshold-board,
+    .slide-content.stack > .decision-tree,
+    .slide-content.stack > .quote-layers,
+    .slide-content.stack > .report-grid,
+    .slide-content.stack > .two-column-list {
+      flex: 1;
+      min-height: 0;
+      align-content: stretch;
+    }
+
+    .tight-stack {
+      display: flex;
+      flex-direction: column;
+      gap: var(--element-gap);
+      min-height: 0;
+    }
+
+    .callout {
+      border: 1px solid color-mix(in oklch, var(--red) 34%, var(--line));
+      padding: clamp(0.7rem, 2vw, 1.1rem) clamp(0.8rem, 2vw, 1.35rem);
+      background: color-mix(in oklch, var(--red-soft) 45%, var(--paper));
+      border-radius: var(--radius);
+      box-shadow: none;
+    }
+
+    .slide--dark .callout {
+      background: color-mix(in oklch, var(--red) 18%, var(--ink));
+      border-color: color-mix(in oklch, var(--red-soft) 35%, transparent);
+      box-shadow: none;
+    }
+
+    .ledger {
+      display: grid;
+      gap: clamp(0.55rem, 1.5vh, 1rem);
+      align-content: stretch;
+    }
+
+    .ledger-row {
+      display: grid;
+      grid-template-columns: clamp(2rem, 5vw, 3.2rem) minmax(0, 1fr);
+      align-items: center;
+      gap: clamp(0.6rem, 1.3vw, 1rem);
+      padding: clamp(0.7rem, 1.35vw, 1.05rem);
+      border: 1px solid var(--line);
+      background: rgba(247, 245, 239, 0.8);
+      border-radius: var(--radius);
+    }
+
+    .slide--dark .ledger-row {
+      border-color: rgba(247, 245, 239, 0.16);
+      background: rgba(247, 245, 239, 0.07);
+    }
+
+    .num {
+      width: clamp(2rem, 5vw, 3rem);
+      height: clamp(2rem, 5vw, 3rem);
+      display: grid;
+      place-items: center;
+      font-family: var(--font-mono);
+      font-size: clamp(0.75rem, 1.4vw, 1rem);
+      color: var(--paper);
+      background: var(--red);
+      border-radius: 50%;
+      font-weight: 850;
+    }
+
+    .label {
+      font-weight: 820;
+      font-size: clamp(1rem, 1.32vw, 1.2rem);
+      line-height: 1.24;
+    }
+
+    .note {
+      margin-top: 0.2rem;
+      color: rgba(21, 23, 21, 0.66);
+      font-size: clamp(0.92rem, 1.02vw, 1rem);
+      line-height: 1.42;
+    }
+
+    .slide--dark .note {
+      color: rgba(247, 245, 239, 0.64);
+    }
+
+    .mini-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: clamp(0.55rem, 1.3vw, 1rem);
+      grid-auto-rows: minmax(0, 1fr);
+    }
+
+    .mini-card {
+      min-height: clamp(7rem, 18vh, 10.8rem);
+      padding: clamp(0.8rem, 1.7vw, 1.2rem);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(247, 245, 239, 0.8);
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      gap: clamp(0.55rem, 1.1vw, 0.9rem);
+    }
+
+    .slide--dark .mini-card {
+      border-color: rgba(247, 245, 239, 0.16);
+      background: rgba(247, 245, 239, 0.07);
+    }
+
+    .mini-card strong {
+      display: block;
+      color: var(--red);
+      font-size: clamp(1rem, 1.24vw, 1.16rem);
+      line-height: 1.18;
+    }
+
+    .slide--dark .mini-card strong {
+      color: var(--red-soft);
+    }
+
+    .mini-card span {
+      font-size: clamp(0.92rem, 1.02vw, 1rem);
+      line-height: 1.42;
+      color: rgba(21, 23, 21, 0.68);
+    }
+
+    .slide--dark .mini-card span {
+      color: rgba(247, 245, 239, 0.68);
+    }
+
+    .pipeline-strip {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: clamp(0.35rem, 0.8vw, 0.75rem);
+    }
+
+    .pipe-step {
+      min-height: clamp(5.4rem, 15vh, 8.6rem);
+      border: 1px solid var(--line);
+      border-top: 0.35rem solid var(--moss);
+      border-radius: var(--radius);
+      background: rgba(247, 245, 239, 0.86);
+      padding: clamp(0.65rem, 1.25vw, 0.95rem);
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+
+    .pipe-step:nth-child(5),
+    .pipe-step:nth-child(6) {
+      border-top-color: var(--red);
+    }
+
+    .pipe-step b {
+      font-size: clamp(0.96rem, 1.12vw, 1.05rem);
+      line-height: 1.18;
+    }
+
+    .pipe-step span {
+      font-size: clamp(0.86rem, 0.98vw, 0.92rem);
+      line-height: 1.36;
+      color: rgba(21, 23, 21, 0.66);
+    }
+
+    .threshold-board {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: clamp(0.6rem, 1.5vw, 1rem);
+      align-items: stretch;
+    }
+
+    .threshold {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(247, 245, 239, 0.88);
+      padding: clamp(0.9rem, 1.9vw, 1.35rem);
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      gap: clamp(0.8rem, 1.8vh, 1.2rem);
+      min-height: clamp(10.5rem, 28vh, 16rem);
+    }
+
+    .threshold mark {
+      align-self: flex-start;
+      color: var(--paper);
+      background: var(--ink);
+      padding: 0.28rem 0.42rem;
+      border-radius: 999px;
+      font-family: var(--font-mono);
+      font-size: clamp(0.62rem, 0.95vw, 0.78rem);
+      font-weight: 850;
+    }
+
+    .threshold .range {
+      font-family: var(--font-display);
+      font-size: clamp(1.6rem, 4vw, 3.3rem);
+      line-height: 1;
+      color: var(--red);
+      font-weight: 700;
+    }
+
+    .threshold .outcome {
+      font-size: clamp(0.95rem, 1.08vw, 1.04rem);
+      line-height: 1.42;
+    }
+
+    .decision-tree {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      grid-auto-rows: minmax(clamp(4.4rem, 13vh, 6.7rem), auto);
+      gap: clamp(0.35rem, 0.8vw, 0.65rem);
+      align-items: stretch;
+    }
+
+    section[aria-labelledby="s8-title"] .decision-tree {
+      margin-bottom: 1.5rem;
+    }
+
+    .tree-node {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: clamp(0.45rem, 1vw, 0.75rem);
+      background: rgba(247, 245, 239, 0.88);
+      display: flex;
+      flex-direction: column;
+      gap: 0.28rem;
+      justify-content: center;
+      min-width: 0;
+    }
+
+    .tree-node b {
+      font-size: clamp(0.86rem, 1vw, 0.96rem);
+      line-height: 1.18;
+    }
+
+    .tree-node span {
+      font-size: clamp(0.78rem, 0.88vw, 0.84rem);
+      line-height: 1.5;
+      color: rgba(21, 23, 21, 0.66);
+    }
+
+    .tree-node.ok {
+      border-top: 0.28rem solid var(--moss);
+    }
+
+    .tree-node.warn {
+      border-top: 0.28rem solid var(--gold);
+    }
+
+    .tree-node.err {
+      border-top: 0.28rem solid var(--red);
+    }
+
+    .tree-arrow {
+      display: grid;
+      place-items: center;
+      color: var(--blue-gray);
+      font-family: var(--font-mono);
+      font-weight: 850;
+      font-size: clamp(0.7rem, 1.3vw, 1.05rem);
+    }
+
+    .tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: clamp(0.35rem, 0.8vw, 0.6rem);
+    }
+
+    .tag {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(247, 245, 239, 0.78);
+      padding: 0.4rem 0.62rem;
+      font-size: clamp(0.78rem, 1.02vw, 0.95rem);
+      line-height: 1;
+      font-weight: 780;
+      white-space: nowrap;
+    }
+
+    .tag.red {
+      border-color: rgba(185, 28, 28, 0.35);
+      background: var(--red-soft);
+      color: oklch(34% 0.12 28);
+    }
+
+    .tag.green {
+      border-color: rgba(85, 112, 100, 0.35);
+      background: var(--moss-soft);
+      color: oklch(34% 0.09 155);
+    }
+
+    .route-board {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: clamp(0.75rem, 1.8vw, 1.25rem);
+    }
+
+    .route {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: clamp(1rem, 2.1vw, 1.45rem);
+      background: rgba(247, 245, 239, 0.86);
+      min-height: clamp(15rem, 42vh, 23rem);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 0.85rem;
+    }
+
+    .route header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+
+    .route .badge {
+      font-family: var(--font-mono);
+      font-size: clamp(0.72rem, 1vw, 0.9rem);
+      padding: 0.35rem 0.5rem;
+      border-radius: 999px;
+      color: var(--paper);
+      background: var(--ink);
+      white-space: nowrap;
+    }
+
+    .route ul,
+    .plain-list {
+      margin: 0;
+      padding-left: 1.1rem;
+      display: flex;
+      flex-direction: column;
+      gap: clamp(0.35rem, 0.8vh, 0.6rem);
+    }
+
+    .route li,
+    .plain-list li {
+      font-size: clamp(0.98rem, 1.14vw, 1.08rem);
+      line-height: 1.42;
+    }
+
+    .quote-layers {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: clamp(0.35rem, 0.8vw, 0.65rem);
+      counter-reset: layer;
+    }
+
+    .layer {
+      counter-increment: layer;
+      border: 1px solid rgba(247, 245, 239, 0.18);
+      border-radius: var(--radius);
+      background: rgba(247, 245, 239, 0.08);
+      padding: clamp(0.7rem, 1.3vw, 1rem);
+      min-height: clamp(6.4rem, 18vh, 9.6rem);
+    }
+
+    .layer::before {
+      content: counter(layer, decimal-leading-zero);
+      display: block;
+      font-family: var(--font-mono);
+      color: var(--red-soft);
+      font-size: var(--small-size);
+      font-weight: 850;
+      margin-bottom: 0.45rem;
+    }
+
+    .layer b {
+      display: block;
+      font-size: clamp(0.92rem, 1.05vw, 1rem);
+      line-height: 1.2;
+      color: var(--paper);
+      margin-bottom: 0.3rem;
+    }
+
+    .layer span {
+      display: block;
+      font-size: clamp(0.8rem, 0.9vw, 0.86rem);
+      line-height: 1.36;
+      color: rgba(247, 245, 239, 0.66);
+    }
+
+    .report-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: clamp(0.55rem, 1.2vw, 0.9rem);
+    }
+
+    .report-cell {
+      min-height: clamp(6.2rem, 16vh, 8.8rem);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(247, 245, 239, 0.86);
+      padding: clamp(0.8rem, 1.5vw, 1.1rem);
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+
+    .report-cell b {
+      font-size: clamp(1rem, 1.12vw, 1.1rem);
+      line-height: 1.2;
+    }
+
+    .report-cell span {
+      font-size: clamp(0.92rem, 1vw, 0.98rem);
+      line-height: 1.4;
+      color: rgba(21, 23, 21, 0.68);
+    }
+
+    .two-column-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: clamp(0.75rem, 1.6vw, 1.1rem);
+    }
+
+    .check-item {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 0.65rem;
+      align-items: start;
+      padding: clamp(0.72rem, 1.4vw, 1.05rem);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(247, 245, 239, 0.82);
+    }
+
+    .check {
+      width: 1.55rem;
+      height: 1.55rem;
+      display: grid;
+      place-items: center;
+      color: var(--paper);
+      background: var(--moss);
+      border-radius: 50%;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      font-weight: 900;
+      line-height: 1;
+    }
+
+    .check-item b {
+      font-size: clamp(1rem, 1.12vw, 1.1rem);
+      line-height: 1.22;
+    }
+
+    .check-item span {
+      display: block;
+      margin-top: 0.18rem;
+      font-size: clamp(0.92rem, 1vw, 0.98rem);
+      line-height: 1.4;
+      color: rgba(21, 23, 21, 0.68);
+    }
+
+    .footer-note {
+      position: absolute;
+      left: clamp(1.2rem, 4vw, 4rem);
+      right: clamp(1.2rem, 4vw, 4rem);
+      bottom: clamp(0.6rem, 1.4vw, 1rem);
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      color: rgba(21, 23, 21, 0.48);
+      font-size: clamp(0.72rem, 0.82vw, 0.78rem);
+      font-family: var(--font-mono);
+      letter-spacing: 0.02em;
+    }
+
+    .slide--dark .footer-note {
+      color: rgba(247, 245, 239, 0.44);
+    }
+
+    .nav-dots {
+      position: fixed;
+      right: clamp(0.55rem, 1.5vw, 1rem);
+      top: 50%;
+      transform: translateY(-50%);
+      display: flex;
+      flex-direction: column;
+      gap: 0.42rem;
+      z-index: 20;
+    }
+
+    .nav-dots button {
+      width: 44px;
+      height: 44px;
+      border: 0;
+      border-radius: 50%;
+      background: transparent;
+      padding: 0;
+      cursor: pointer;
+      position: relative;
+    }
+
+    .nav-dots button::before {
+      content: "";
+      position: absolute;
+      inset: 17px;
+      border: 1px solid color-mix(in oklch, var(--ink) 45%, transparent);
+      border-radius: 50%;
+      background: color-mix(in oklch, var(--paper) 74%, transparent);
+    }
+
+    .nav-dots button:focus-visible {
+      outline: 2px solid var(--red);
+      outline-offset: -6px;
+    }
+
+    .nav-dots button[aria-current="true"]::before {
+      background: var(--red);
+      border-color: var(--red);
+      transform: scale(1.35);
+    }
+
+    .progress {
+      position: fixed;
+      left: 0;
+      bottom: 0;
+      width: 100%;
+      height: 0.28rem;
+      z-index: 20;
+      background: rgba(21, 23, 21, 0.12);
+    }
+
+    .progress span {
+      display: block;
+      height: 100%;
+      width: 100%;
+      background: var(--red);
+      transform: scaleX(0);
+      transform-origin: left center;
+      transition: transform 220ms ease;
+    }
+
+    .keyboard-hint {
+      display: none;
+    }
+
+    [data-reveal] {
+      transform: translateY(14px);
+      opacity: 0;
+      transition: transform 520ms cubic-bezier(.2,.75,.2,1), opacity 520ms ease;
+    }
+
+    .is-active [data-reveal] {
+      transform: translateY(0);
+      opacity: 1;
+    }
+
+    .is-active [data-reveal]:nth-child(2) { transition-delay: 70ms; }
+    .is-active [data-reveal]:nth-child(3) { transition-delay: 140ms; }
+    .is-active [data-reveal]:nth-child(4) { transition-delay: 210ms; }
+    .is-active [data-reveal]:nth-child(5) { transition-delay: 280ms; }
+    .is-active [data-reveal]:nth-child(6) { transition-delay: 350ms; }
+
+    @media (max-width: 900px) {
+      .title-slide,
+      .slide {
+        background-size: 32px 32px;
+      }
+
+      .title-slide .slide-content,
+      .split {
+        grid-template-columns: 1fr;
+      }
+
+      .title-slide {
+        background: var(--paper);
+      }
+
+      .title-slide::before {
+        inset: 0 0 auto 0;
+        width: 100vw;
+        height: 42vh;
+      }
+
+      .title-panel {
+        align-self: auto;
+        min-height: 36vh;
+      }
+
+      .seal {
+        width: clamp(7rem, 34vw, 14rem);
+      }
+
+      .mini-grid,
+      .threshold-board,
+      .route-board,
+      .report-grid,
+      .two-column-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .pipeline-strip {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .quote-layers {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .decision-tree {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-auto-rows: auto;
+      }
+
+      .tree-arrow {
+        display: none;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .mini-grid,
+      .threshold-board,
+      .route-board,
+      .report-grid,
+      .two-column-list {
+        grid-template-columns: 1fr;
+      }
+
+      .report-grid,
+      .two-column-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.55rem;
+      }
+
+      .report-cell,
+      .check-item {
+        padding: 0.58rem 0.62rem;
+      }
+
+      .report-cell b,
+      .check-item b {
+        font-size: clamp(0.78rem, 3.4vw, 0.95rem);
+        line-height: 1.16;
+      }
+
+      .report-cell span {
+        font-size: clamp(0.78rem, 3vw, 0.84rem);
+        line-height: 1.5;
+      }
+
+      .check {
+        width: 1.1rem;
+        height: 1.1rem;
+        font-size: 0.65rem;
+      }
+
+      .check-item {
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 0.4rem;
+      }
+
+      .check-item span {
+        display: none;
+      }
+
+      .pipeline-strip,
+      .quote-layers {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .decision-tree {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .footer-note {
+        display: none;
+      }
+
+      .nav-dots {
+        display: none;
+      }
+    }
+
+    @media (max-height: 700px) {
+      .mini-card,
+      .threshold,
+      .route,
+      .report-cell {
+        min-height: auto;
+      }
+
+      .seal {
+        width: clamp(6rem, 20vw, 12rem);
+      }
+
+      .route ul,
+      .plain-list {
+        gap: 0.25rem;
+      }
+    }
+
+    @media (max-height: 500px) and (min-width: 560px) {
+      .slide-content {
+        padding: clamp(0.45rem, 2vw, 0.85rem) clamp(0.8rem, 2vw, 1.3rem);
+      }
+
+      .stack,
+      .tight-stack {
+        gap: 0.35rem;
+      }
+
+      .lead {
+        max-width: 52ch;
+        font-size: clamp(0.82rem, 1.2vw, 0.95rem);
+        line-height: 1.32;
+      }
+
+      .mini-grid,
+      .report-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.35rem;
+      }
+
+      .mini-card,
+      .report-cell {
+        padding: 0.5rem 0.55rem;
+        min-height: auto;
+        gap: 0.3rem;
+      }
+
+      .mini-card strong,
+      .report-cell b {
+        font-size: clamp(0.78rem, 1.08vw, 0.9rem);
+        line-height: 1.12;
+      }
+
+      .mini-card span,
+      .report-cell span {
+        display: none;
+      }
+
+      .threshold-board,
+      .route-board {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.35rem;
+      }
+
+      .route-board {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .route,
+      .threshold {
+        padding: 0.45rem 0.5rem;
+        min-height: auto;
+        gap: 0.35rem;
+      }
+
+      .route header {
+        gap: 0.35rem;
+      }
+
+      .route .badge,
+      .threshold mark,
+      .tag {
+        display: none;
+      }
+
+      .route li,
+      .plain-list li,
+      .threshold .outcome {
+        font-size: clamp(0.72rem, 0.96vw, 0.85rem);
+        line-height: 1.5;
+      }
+
+      .threshold .range {
+        font-size: clamp(1rem, 2.8vw, 1.55rem);
+      }
+
+      .decision-tree {
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        grid-auto-rows: auto;
+        gap: 0.22rem;
+      }
+
+      .tree-arrow {
+        display: none;
+      }
+
+      .tree-node {
+        padding: 0.34rem 0.4rem;
+        gap: 0.16rem;
+      }
+
+      .tree-node b {
+        font-size: clamp(0.72rem, 0.96vw, 0.82rem);
+        line-height: 1.12;
+      }
+
+      .tree-node span {
+        display: none;
+      }
+
+      .tag-row {
+        gap: 0.25rem;
+      }
+
+      .two-column-list {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.35rem;
+      }
+
+      .check-item {
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 0.35rem;
+        padding: 0.45rem 0.5rem;
+      }
+
+      .check {
+        width: 1.15rem;
+        height: 1.15rem;
+        font-size: 0.7rem;
+      }
+
+      .check-item b {
+        font-size: clamp(0.7rem, 0.92vw, 0.82rem);
+        line-height: 1.12;
+      }
+
+      .check-item span {
+        display: none;
+      }
+
+      .callout {
+        padding: 0.38rem 0.55rem;
+      }
+
+      .callout p {
+        font-size: clamp(0.72rem, 0.96vw, 0.84rem);
+        line-height: 1.5;
+      }
+
+      .pipe-step span,
+      .layer span,
+      .note,
+      .footer-note {
+        display: none;
+      }
+    }
+
+    @media (max-height: 600px) {
+      .nav-dots {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <nav class="nav-dots" aria-label="Slide navigation"></nav>
+  <div class="progress" aria-hidden="true"><span></span></div>
+  <div class="keyboard-hint" aria-hidden="true">Arrow keys / swipe / wheel</div>
+
+  <main id="deck" aria-label="RBC transfusion audit clinical review deck">
+    <section class="slide title-slide" aria-labelledby="s1-title">
+      <div class="slide-content">
+        <div class="title-panel stack">
+          <p class="kicker" data-reveal>Clinical review deck</p>
+          <h1 id="s1-title" data-reveal>RBC transfusion audit</h1>
+          <p class="lead" data-reveal>Transparent post-hoc review of completed inpatient adult RBC transfusions, focused on clinical evidence, guideline alignment, and human adjudication.</p>
+        </div>
+        <div class="seal" data-reveal aria-hidden="true"></div>
+      </div>
+      <div class="footer-note"><span>KCMH PR 17.2 + AABB 2023</span><span>Quality improvement, not bedside decision support</span></div>
+    </section>
+
+    <section class="slide" aria-labelledby="s2-title">
+      <div class="slide-content split">
+        <div class="stack">
+          <p class="eyebrow" data-reveal>Purpose</p>
+          <h2 id="s2-title" data-reveal>What the doctor is reviewing</h2>
+          <p class="lead" data-reveal>This application reviews transfusions after care is complete. It does not recommend, approve, block, or alert during a live clinical decision.</p>
+        </div>
+        <div class="ledger" data-reveal>
+          <div class="ledger-row">
+            <div class="num">01</div>
+            <div><div class="label">Clinical policy logic</div><div class="note">Does the decision tree match KCMH PR 17.2 and AABB 2023?</div></div>
+          </div>
+          <div class="ledger-row">
+            <div class="num">02</div>
+            <div><div class="label">Evidence sources</div><div class="note">Are the right HOSxP fields used for Hb, diagnosis, procedures, meds, notes, and orders?</div></div>
+          </div>
+          <div class="ledger-row">
+            <div class="num">03</div>
+            <div><div class="label">Review boundaries</div><div class="note">Which cases can be auto-classified, and which must stay for clinician review?</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="footer-note"><span>Decision surface: audit row, not bedside alert</span><span>Slide 2</span></div>
+    </section>
+
+    <section class="slide slide--dark" aria-labelledby="s3-title">
+      <div class="slide-content stack">
+        <div class="tight-stack">
+          <p class="eyebrow" data-reveal>One order, one trace</p>
+          <h2 id="s3-title" data-reveal>Every audit row follows the same clinical path</h2>
+        </div>
+        <div class="pipeline-strip" data-reveal>
+          <div class="pipe-step"><b>Completed order</b><span>Adult inpatient RBC order from HOSxP, cancelled and out-of-scope rows removed.</span></div>
+          <div class="pipe-step"><b>Hb anchor</b><span>Most recent valid pre-transfusion Hb within 7 days, hematology preferred.</span></div>
+          <div class="pipe-step"><b>Clinical context</b><span>Procedure, diagnosis, medication, blood-order pattern, and ANC signals.</span></div>
+          <div class="pipe-step"><b>Rule engine</b><span>Fixed precedence: bypasses first, Hb tier after context.</span></div>
+          <div class="pipe-step"><b>Review route</b><span>Gray zone, high Hb, unknown context, or special context get evidence review.</span></div>
+          <div class="pipe-step"><b>Audit output</b><span>Stored classification, rationale, evidence hashes, and report section.</span></div>
+        </div>
+        <div class="callout" data-reveal>
+          <p><strong>Clinician-facing promise:</strong> the app should be able to answer, "What evidence did you use, what rule fired, and why was this row not left for review?"</p>
+        </div>
+      </div>
+      <div class="footer-note"><span>Workflow transparency</span><span>Slide 3</span></div>
+    </section>
+
+    <section class="slide" aria-labelledby="s4-title">
+      <div class="slide-content stack">
+        <div class="tight-stack">
+          <p class="eyebrow" data-reveal>Evidence map</p>
+          <h2 id="s4-title" data-reveal>What the audit checks before it flags</h2>
+        </div>
+        <div class="mini-grid" data-reveal>
+          <div class="mini-card"><strong>Lab Hb</strong><span>Current Hb, source, freshness, and 6 / 12 / 24 hour Hb-drop windows.</span></div>
+          <div class="mini-card"><strong>ICD-10 diagnoses</strong><span>Cardiac history, ESRD, heme malignancy, and hard exclusions.</span></div>
+          <div class="mini-card"><strong>ICD-9-CM procedures</strong><span>Cardiac, vascular, orthopedic, peri-procedural timing, and upcoming surgery.</span></div>
+          <div class="mini-card"><strong>Medication records</strong><span>Dialysis-context meds, chemotherapy signals, and recent crystalloid volume.</span></div>
+          <div class="mini-card"><strong>Blood-order pattern</strong><span>MTP signal from RBC unit clustering or RBC + FFP + platelet co-ordering.</span></div>
+          <div class="mini-card"><strong>Notes and vitals</strong><span>Supporting review evidence. Vitals never bypass Hb by themselves.</span></div>
+        </div>
+      </div>
+      <div class="footer-note"><span>No single-field shortcut</span><span>Slide 4</span></div>
+    </section>
+
+    <section class="slide" aria-labelledby="s5-title">
+      <div class="slide-content split">
+        <div class="stack">
+          <p class="eyebrow" data-reveal>Scope control</p>
+          <h2 id="s5-title" data-reveal>The first safety check is eligibility</h2>
+          <p class="lead" data-reveal>Before judging appropriateness, the app narrows the dataset to the population where the policy applies.</p>
+        </div>
+        <div class="route-board" data-reveal>
+          <article class="route">
+            <header><h3>Included</h3><span class="badge">audit scope</span></header>
+            <ul>
+              <li>Adult inpatient transfusion orders.</li>
+              <li>Eligible RBC products: LPRC, LDPRC, SDR.</li>
+              <li>Completed in-house requests with admission context.</li>
+            </ul>
+          </article>
+          <article class="route">
+            <header><h3>Excluded</h3><span class="badge">not judged</span></header>
+            <ul>
+              <li>Pediatric, outpatient, cancelled, refused, or inter-hospital rows.</li>
+              <li>Non-RBC products.</li>
+              <li>PR 17.2 out-of-scope diagnoses, such as hemoglobinopathy, AIHA, TMA, and obstetric conditions.</li>
+            </ul>
+          </article>
+        </div>
+      </div>
+      <div class="footer-note"><span>Out of scope is not inappropriate</span><span>Slide 5</span></div>
+    </section>
+
+    <section class="slide" aria-labelledby="s6-title">
+      <div class="slide-content stack">
+        <div class="tight-stack">
+          <p class="eyebrow" data-reveal>Hb anchor</p>
+          <h2 id="s6-title" data-reveal>How the app chooses the Hb used for audit</h2>
+        </div>
+        <div class="threshold-board" data-reveal>
+          <article class="threshold">
+            <mark>Lookback</mark>
+            <div class="range">&lt; 7d</div>
+            <p class="outcome">Uses the most recent valid pre-transfusion Hb before the order. If none exists, the row becomes <strong>INSUFFICIENT_EVIDENCE</strong>.</p>
+          </article>
+          <article class="threshold">
+            <mark>Preference</mark>
+            <div class="range">Lab</div>
+            <p class="outcome">Hematology Hb is preferred over POCT when available. Same-time ties use the later inserted lab item.</p>
+          </article>
+          <article class="threshold">
+            <mark>Trend</mark>
+            <div class="range">6/12/24h</div>
+            <p class="outcome">A rapid Hb fall can trigger an acute blood-loss bypass when the drop meets the clinical window threshold.</p>
+          </article>
+        </div>
+        <div class="callout" data-reveal>
+          <p><strong>Important distinction:</strong> missing Hb is a documentation gap. It is retained for QI visibility, not counted as inappropriate.</p>
+        </div>
+      </div>
+      <div class="footer-note"><span>Hb lookup rule</span><span>Slide 6</span></div>
+    </section>
+
+    <section class="slide" aria-labelledby="s7-title">
+      <div class="slide-content stack">
+        <div class="tight-stack">
+          <p class="eyebrow" data-reveal>Clinical context</p>
+          <h2 id="s7-title" data-reveal>Cohort means audit context, not a permanent patient label</h2>
+        </div>
+        <div class="mini-grid" data-reveal>
+          <div class="mini-card"><strong>Default / ESRD</strong><span>Default and ESRD-EPO contexts use Hb &le; 7.0 g/dL.</span></div>
+          <div class="mini-card"><strong>Cardiac surgery</strong><span>Recent cardiac or large-vessel operative context. Threshold: &le; 7.5.</span></div>
+          <div class="mini-card"><strong>Orthopedic surgery</strong><span>An orthopedic operation is sufficient for the cohort. Threshold: &le; 8.0.</span></div>
+          <div class="mini-card"><strong>Heart disease</strong><span>Heart-disease diagnoses trigger the retained cardiopulmonary cohort label. Threshold: &le; 8.0.</span></div>
+          <div class="mini-card"><strong>MTP</strong><span>Massive-transfusion pattern. Bypasses Hb threshold as appropriate.</span></div>
+          <div class="mini-card"><strong>Active heme malignancy</strong><span>Heme diagnosis + recent chemo + ANC &lt; 500. Routes to review.</span></div>
+        </div>
+        <p class="lead" data-reveal>For Hb above 7.0, unavailable procedure data routes to review rather than assuming the default cohort.</p>
+      </div>
+      <div class="footer-note"><span>Context before threshold</span><span>Slide 7</span></div>
+    </section>
+
+    <section class="slide" aria-labelledby="s8-title">
+      <div class="slide-content stack">
+        <div class="tight-stack">
+          <p class="eyebrow" data-reveal>Decision tree</p>
+          <h2 id="s8-title" data-reveal>First matching rule wins</h2>
+        </div>
+        <div class="decision-tree" data-reveal>
+          <div class="tree-node ok"><b>1. Complete returns?</b><span>Routing exemption if supported and not contradicted</span></div>
+          <div class="tree-node ok"><b>2. Declared surgical use?</b><span>Configured order-level exemption</span></div>
+          <div class="tree-node warn"><b>3. Missing Hb?</b><span>INSUFFICIENT_EVIDENCE by default; opt-in evidence route differs</span></div>
+          <div class="tree-node ok"><b>4. Hb &le; 7.0?</b><span>APPROPRIATE before cohort review</span></div>
+          <div class="tree-node ok"><b>5. MTP?</b><span>APPROPRIATE</span></div>
+          <div class="tree-node warn"><b>6. Unknown context?</b><span>NEEDS_REVIEW for remaining Hb &gt; 7.0</span></div>
+          <div class="tree-node warn"><b>7. Legacy procedure route?</b><span>6h bypass or 72h review deferral only when declared-use exemption is off</span></div>
+          <div class="tree-node ok"><b>8. Acute Hb drop?</b><span>APPROPRIATE when the configured delta-Hb rule fires</span></div>
+          <div class="tree-node warn"><b>9. No numeric threshold?</b><span>NEEDS_REVIEW</span></div>
+          <div class="tree-node ok"><b>10. Hb &le; cohort floor?</b><span>APPROPRIATE unless remaining safety flags require review</span></div>
+          <div class="tree-node warn"><b>11. Above floor, Hb &lt; 10?</b><span>NEEDS_REVIEW</span></div>
+          <div class="tree-node err"><b>12. Hb &ge; 10?</b><span>POTENTIALLY_INAPPROPRIATE; review eligible evidence</span></div>
+          <div class="tree-node warn"><b>Model review</b><span>Requires signed privacy admission</span></div>
+          <div class="tree-node warn"><b>Evidence checks</b><span>Rejected claims remain review work</span></div>
+          <div class="tree-node ok"><b>Stored decisions</b><span>Evidence, provenance, and reviewer history</span></div>
+        </div>
+      </div>
+      <div class="footer-note"><span>Implemented RBC order; reservation checks and flags also apply. Clinical sign-off is separate.</span><span>Slide 8</span></div>
+    </section>
+
+    <section class="slide" aria-labelledby="s9-title">
+      <div class="slide-content stack">
+        <div class="tight-stack">
+          <p class="eyebrow" data-reveal>Hb tier</p>
+          <h2 id="s9-title" data-reveal>Universal low-Hb rule first, then cohort tiers</h2>
+        </div>
+        <div class="threshold-board" data-reveal>
+          <article class="threshold">
+            <mark>Tier 1</mark>
+            <div class="range">&le; threshold</div>
+            <p class="outcome">Hb &le; 7.0 is <strong>APPROPRIATE</strong> before cohort review. At higher cohort floors, safety flags can require review.</p>
+          </article>
+          <article class="threshold">
+            <mark>Tier 2</mark>
+            <div class="range">threshold &lt; Hb &lt; 10</div>
+            <p class="outcome"><strong>NEEDS_REVIEW</strong>. The gray zone is not automatically called appropriate or inappropriate.</p>
+          </article>
+          <article class="threshold">
+            <mark>Tier 3</mark>
+            <div class="range">&ge; 10</div>
+            <p class="outcome"><strong>POTENTIALLY_INAPPROPRIATE</strong>, then reviewed for documented positive evidence.</p>
+          </article>
+        </div>
+        <div class="tag-row" data-reveal>
+          <span class="tag green">Default: 7.0</span>
+          <span class="tag green">Cardiac surgery: 7.5</span>
+          <span class="tag green">Orthopedic surgery: 8.0</span>
+          <span class="tag green">ESRD-EPO: 7.0</span>
+          <span class="tag red">MTP: bypass</span>
+          <span class="tag red">Active heme: review</span>
+        </div>
+      </div>
+      <div class="footer-note"><span>3-tier Hb policy</span><span>Slide 9</span></div>
+    </section>
+
+    <section class="slide" aria-labelledby="s10-title">
+      <div class="slide-content split">
+        <div class="stack">
+          <p class="eyebrow" data-reveal>Safety gates</p>
+          <h2 id="s10-title" data-reveal>Review routes after earlier rules</h2>
+          <p class="lead" data-reveal>These checks apply to remaining Hb above 7.0 after earlier exits. They do not override the universal low-Hb rule.</p>
+        </div>
+        <div class="ledger" data-reveal>
+          <div class="ledger-row">
+            <div class="num">A</div>
+            <div><div class="label">Unknown procedure context</div><div class="note">For remaining Hb above 7.0, missing procedure data routes to review rather than a default cohort.</div></div>
+          </div>
+          <div class="ledger-row">
+            <div class="num">B</div>
+            <div><div class="label">Hemodilution signal</div><div class="note">7.0 &lt; Hb &le; cohort threshold, with at least 2 L crystalloid in the prior 4 hours.</div></div>
+          </div>
+          <div class="ledger-row">
+            <div class="num">C</div>
+            <div><div class="label">Single low Hb without trend</div><div class="note">7.0 &lt; Hb &le; 8.0, within the cohort floor, without a prior 24-hour comparator.</div></div>
+          </div>
+          <div class="ledger-row">
+            <div class="num">D</div>
+            <div><div class="label">Special or gray-zone context</div><div class="note">Remaining active heme, above-threshold Hb below 10, and high-Hb rows route to evidence review when no earlier rule applies.</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="footer-note"><span>Universal Hb &le; 7.0 takes precedence over these review checks</span><span>Slide 10</span></div>
+    </section>
+
+    <section class="slide slide--dark" aria-labelledby="s11-title">
+      <div class="slide-content stack">
+        <div class="tight-stack">
+          <p class="eyebrow" data-reveal>LLM route</p>
+          <h2 id="s11-title" data-reveal>AI is used only for evidence review, then checked fail-closed</h2>
+          <p class="lead" data-reveal>Model submission requires signed admission for the exact redacted evidence. The verifier checks citations against that evidence and stops at the first failure.</p>
+        </div>
+        <div class="quote-layers" data-reveal>
+          <div class="layer"><b>Normalized text</b><span>NFC normalization gives quotes and sources a shared text representation.</span></div>
+          <div class="layer"><b>Contiguous match</b><span>The quote must match word-aligned source text.</span></div>
+          <div class="layer"><b>Cited source</b><span>The evidence ID must identify one supplied source.</span></div>
+          <div class="layer"><b>Unique within source</b><span>The normalized quote must have one aligned match.</span></div>
+          <div class="layer"><b>Minimum length</b><span>The production minimum is 25 normalized characters.</span></div>
+          <div class="layer"><b>Lab tuple integrity</b><span>Supported analyte, value, and unit triples must match the quote and source.</span></div>
+        </div>
+        <div class="callout" data-reveal>
+          <p><strong>Fail-closed rule:</strong> if no attempt passes grounding, the pipeline stores <strong>NEEDS_REVIEW</strong> with review reason <strong>hallucination_suspect</strong>. A later passing attempt can supersede an earlier rejection.</p>
+        </div>
+      </div>
+      <div class="footer-note"><span>Grounding checks establish citation support, not clinical truth or de-identification quality</span><span>Slide 11</span></div>
+    </section>
+
+    <section class="slide" aria-labelledby="s12-title">
+      <div class="slide-content stack">
+        <div class="tight-stack">
+          <p class="eyebrow" data-reveal>Doctor-facing output</p>
+          <h2 id="s12-title" data-reveal>What appears in the audit report</h2>
+        </div>
+        <div class="report-grid" data-reveal>
+          <div class="report-cell"><b>Hospital trend</b><span>Monthly total, appropriate, inappropriate, needs review, and insufficient evidence.</span></div>
+          <div class="report-cell"><b>Ward scorecard</b><span>Same buckets by ward, for QI pattern detection.</span></div>
+          <div class="report-cell"><b>Physician own-view</b><span>One physician per file with peer quartiles, not other physicians' individual rates.</span></div>
+          <div class="report-cell"><b>Indication breakdown</b><span>Distribution of indications across reviewed orders.</span></div>
+          <div class="report-cell"><b>Cohort exception</b><span>Classification patterns by context bucket, including default.</span></div>
+          <div class="report-cell"><b>Pipeline health</b><span>Shows review burden and documentation gaps separately.</span></div>
+        </div>
+        <div class="callout" data-reveal>
+          <p>Every row carries reproducibility identifiers: policy version, model ID, redactor version, prompt hash, and evidence-bundle hash.</p>
+        </div>
+      </div>
+      <div class="footer-note"><span>Monthly QI output</span><span>Slide 12</span></div>
+    </section>
+
+    <section class="slide" aria-labelledby="s13-title">
+      <div class="slide-content stack">
+        <div class="tight-stack">
+          <p class="eyebrow" data-reveal>Clinical sign-off checklist</p>
+          <h2 id="s13-title" data-reveal>The review questions for clinicians</h2>
+        </div>
+        <div class="two-column-list" data-reveal>
+          <div class="check-item"><div class="check">1</div><div><b>Are the thresholds clinically correct?</b><span>Default, cardiac surgery, orthopedic surgery, heart disease, ESRD-EPO, MTP, and active heme routing.</span></div></div>
+          <div class="check-item"><div class="check">2</div><div><b>Are the bypasses acceptable?</b><span>MTP, hard perioperative evidence, delta-Hb, and the separately configured legacy procedure routes.</span></div></div>
+          <div class="check-item"><div class="check">3</div><div><b>Are review flags conservative enough?</b><span>Unknown context, hemodilution, single-low-Hb-no-trend, gray-zone Hb, and high Hb.</span></div></div>
+          <div class="check-item"><div class="check">4</div><div><b>Are exclusions appropriate?</b><span>Age, product, status, inpatient scope, referral scope, and diagnosis exclusions.</span></div></div>
+          <div class="check-item"><div class="check">5</div><div><b>Is the report clinically useful?</b><span>Does it support QI discussion without becoming punitive or real-time CDS?</span></div></div>
+          <div class="check-item"><div class="check">6</div><div><b>What needs local policy wording?</b><span>Confirm terms that should match internal KCMH language before pilot use.</span></div></div>
+        </div>
+      </div>
+      <div class="footer-note"><span>Reviewer role</span><span>Slide 13</span></div>
+    </section>
+
+    <section class="slide slide--dark" aria-labelledby="s14-title">
+      <div class="slide-content split">
+        <div class="stack">
+          <p class="eyebrow" data-reveal>Proposed pilot review</p>
+          <h2 id="s14-title" data-reveal>Use the doctor review to lock the clinical rulebook</h2>
+          <p class="lead" data-reveal>Before a monthly report is treated as committee-ready, clinicians should review a sample of auto-classified rows, review-route rows, and documentation-gap rows.</p>
+        </div>
+        <div class="ledger" data-reveal>
+          <div class="ledger-row"><div class="num">1</div><div><div class="label">Validate rule examples</div><div class="note">Representative rows for each cohort and bypass.</div></div></div>
+          <div class="ledger-row"><div class="num">2</div><div><div class="label">Adjudicate review buckets</div><div class="note">Gray-zone, high-Hb, unknown context, and active heme rows.</div></div></div>
+          <div class="ledger-row"><div class="num">3</div><div><div class="label">Tune reporting language</div><div class="note">Make output clear for QI committee and non-technical clinicians.</div></div></div>
+        </div>
+      </div>
+      <div class="footer-note"><span>End state: transparent, clinically reviewed audit workflow</span><span>Slide 14</span></div>
+    </section>
+  </main>
+
+  <script>
+    class PresentationController {
+      constructor(root) {
+        this.root = root;
+        this.slides = Array.from(root.querySelectorAll(".slide"));
+        this.index = 0;
+        this.lastWheel = 0;
+        this.touchStartY = 0;
+        this.progress = document.querySelector(".progress span");
+        this.nav = document.querySelector(".nav-dots");
+        this.buildNav();
+        this.bindEvents();
+        this.observeSlides();
+        this.goTo(0, false);
+      }
+
+      buildNav() {
+        this.nav.innerHTML = "";
+        this.slides.forEach((slide, i) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.setAttribute("aria-label", `Go to slide ${i + 1}`);
+          button.addEventListener("click", () => this.goTo(i));
+          this.nav.appendChild(button);
+        });
+      }
+
+      bindEvents() {
+        window.addEventListener("keydown", (event) => {
+          const nextKeys = ["ArrowDown", "ArrowRight", "PageDown", " "];
+          const prevKeys = ["ArrowUp", "ArrowLeft", "PageUp"];
+          if (nextKeys.includes(event.key)) {
+            event.preventDefault();
+            this.next();
+          }
+          if (prevKeys.includes(event.key)) {
+            event.preventDefault();
+            this.prev();
+          }
+          if (event.key === "Home") {
+            event.preventDefault();
+            this.goTo(0);
+          }
+          if (event.key === "End") {
+            event.preventDefault();
+            this.goTo(this.slides.length - 1);
+          }
+        });
+
+        window.addEventListener("wheel", (event) => {
+          const now = Date.now();
+          if (now - this.lastWheel < 620 || Math.abs(event.deltaY) < 22) return;
+          this.lastWheel = now;
+          if (event.deltaY > 0) this.next();
+          if (event.deltaY < 0) this.prev();
+        }, { passive: true });
+
+        window.addEventListener("touchstart", (event) => {
+          this.touchStartY = event.changedTouches[0].clientY;
+        }, { passive: true });
+
+        window.addEventListener("touchend", (event) => {
+          const delta = this.touchStartY - event.changedTouches[0].clientY;
+          if (Math.abs(delta) < 40) return;
+          if (delta > 0) this.next();
+          if (delta < 0) this.prev();
+        }, { passive: true });
+      }
+
+      observeSlides() {
+        const observer = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            const i = this.slides.indexOf(entry.target);
+            this.index = i;
+            this.updateState();
+          });
+        }, { threshold: 0.62 });
+
+        this.slides.forEach((slide) => observer.observe(slide));
+      }
+
+      goTo(i, smooth = true) {
+        const target = Math.max(0, Math.min(this.slides.length - 1, i));
+        this.index = target;
+        this.slides[target].scrollIntoView({
+          behavior: smooth ? "smooth" : "auto",
+          block: "start"
+        });
+        this.updateState();
+      }
+
+      next() {
+        this.goTo(this.index + 1);
+      }
+
+      prev() {
+        this.goTo(this.index - 1);
+      }
+
+      updateState() {
+        this.slides.forEach((slide, i) => {
+          slide.classList.toggle("is-active", i === this.index);
+          slide.setAttribute("aria-hidden", i === this.index ? "false" : "true");
+        });
+        Array.from(this.nav.children).forEach((button, i) => {
+          button.setAttribute("aria-current", i === this.index ? "true" : "false");
+        });
+        const pct = ((this.index + 1) / this.slides.length) * 100;
+        this.progress.style.transform = `scaleX(${pct / 100})`;
+        document.title = `Slide ${this.index + 1}/${this.slides.length} | RBC Transfusion Audit`;
+      }
+    }
+
+    window.addEventListener("DOMContentLoaded", () => {
+      new PresentationController(document.getElementById("deck"));
+    });
+  </script>
+</body>
+</html>

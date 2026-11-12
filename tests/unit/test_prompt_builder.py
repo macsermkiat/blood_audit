@@ -1512,17 +1512,22 @@ class TestRbcClearCutPromptSemantics:
             "silent notes, drawing the precise line against INAPPROPRIATE"
         )
 
-    def test_at_floor_hb_is_not_sub_threshold(self) -> None:
-        # HB_7_10 only: an Hb exactly at the floor is AT the floor, not
-        # sub-threshold. The over-clear pile included Hb 7.0/7.1 mislabeled
-        # "sub-threshold" against a 7.0 floor — SUB_THRESHOLD_HB must be
-        # defined as strictly below the injected floor.
+    def test_at_floor_hb_is_sub_threshold(self) -> None:
+        # Owner ruling 2026-09-27 (case 68004713: Hb 7.0 at the default 7.0
+        # floor was routed to the gray zone and called INAPPROPRIATE): a value
+        # exactly AT the floor qualifies. SUB_THRESHOLD_HB must be defined as
+        # at or below the injected floor, and the old "AT the floor is NOT
+        # sub-threshold" sentence must be gone, or the model keeps condemning
+        # orders the deterministic rule now clears. Hb just above the floor
+        # (7.1 at 7.0) is still not sub-threshold.
         prompt = system_prompt_for(task_mode="HB_7_10_REVIEW", cohort_threshold=7.5)
-        assert "strictly below" in prompt.lower(), (
-            "HB_7_10 prompt must define SUB_THRESHOLD_HB as strictly below the "
-            "floor so an at-floor Hb is not mislabeled sub-threshold"
-        )
-        assert "7.5" in prompt, "the floor value must be injected verbatim"
+        assert "at or below the cohort floor of 7.5 g/dL" in prompt
+        assert "exactly at 7.5 g/dL qualifies" in prompt
+        assert "is NOT sub-threshold" not in prompt
+        assert "NOT sub-threshold" not in prompt
+        assert "strictly below" not in prompt.lower().split("active_bleeding rule")[0]
+        assert "Absent EVERY hard indication, an Hb above 7.5 g/dL" in prompt
+        assert "at or above 7.5" not in prompt
 
     def test_gt_10_override_states_inclusive_boundary(self) -> None:
         # GT_10 only: dispatch routes Hb >= 10.0 to this template (the
@@ -1587,8 +1592,27 @@ class TestRbcPromptHashGolden:
     # Re-pinned for #150: a declared order-time USETYPE alone cannot establish
     # PERIOPERATIVE. Blessed by
     # test_declared_use_does_not_satisfy_perioperative_indication.
+    # Re-pinned for the 2026-09-22 clinician rulings (PR #248): an ICD-10 code
+    # alone never grounds an indication. Blessed by
+    # tests/unit/test_prompt_rulings_2026_09_22.py.
+    # Re-pinned for #249: SUB_THRESHOLD_HB is the lowest Hb in the 24 hours
+    # before the order, from the most recent transfusion in the window onward.
+    # Blessed by tests/unit/test_hb_min_24h.py together with the replay
+    # guardrail change.
+    # Re-pinned for the label/reasoning-conflict guardrail: the shared preamble
+    # now asks for the closing sentence "Final classification: X". Blessed by
+    # tests/unit/test_label_reasoning_conflict.py.
+    # Re-pinned for the 2026-09-27 owner ruling (case 68004713): an Hb exactly
+    # at the cohort floor is sub-threshold ("at or below"), and the restrictive
+    # rule starts ABOVE the floor. Blessed by
+    # tests/unit/test_prompt_rulings_2026_09_27.py and
+    # test_at_floor_hb_is_sub_threshold.
+    # Re-pinned for the 2026-11-09 clinician review: the shared indication
+    # vocabulary adds LAB TIMING (labs read at the dispense time). Blessed by
+    # tests/unit/test_prompt_rulings_2026_11_09.py. Re-pinned again when LAB
+    # TIMING was extended to the 'transfusion' label (same test file).
     RBC_HB_7_10_75_EMPTY_EVIDENCE = (
-        "fd9c9ed8265a020d01be556f146ead93b0a0bde76639b5676a1b733f596e3da0"
+        "78aa2f31c5b0c109e02cd828899f73174c80e34aee3f5062f7da8086c4133f61"
     )
     # Re-pinned for #93 boundary alignment: dispatch routes Hb >= 10.0 to this
     # template (engine ``hb_ge_10``), so its prose states the inclusive
@@ -1599,8 +1623,20 @@ class TestRbcPromptHashGolden:
     # ACTIVE_BLEEDING rule edit as the gray-zone golden above.
     # Re-pinned for the melena ruling — same shared ACTIVE_BLEEDING rule edit.
     # Re-pinned for #150 — same shared declared-use carve-out as above.
+    # Re-pinned for #249: the override template no longer says SUB_THRESHOLD_HB
+    # "cannot apply here"; the 24 h minimum can sit below the floor while the
+    # routing Hb is >= 10.
+    # Re-pinned for the closing-sentence rule, same shared preamble edit.
+    # Re-pinned for the 2026-09-27 inclusive-floor ruling: the shared
+    # SUB_THRESHOLD_HB definition and this template's 24 h-minimum sentence
+    # now read "at or below" the floor. Blessed by
+    # tests/unit/test_prompt_rulings_2026_09_27.py.
+    # Re-pinned for the 2026-11-09 clinician review: the shared indication
+    # vocabulary adds LAB TIMING (labs read at the dispense time). Blessed by
+    # tests/unit/test_prompt_rulings_2026_11_09.py. Re-pinned again when LAB
+    # TIMING was extended to the 'transfusion' label (same test file).
     RBC_HB_GT_10_75_EMPTY_EVIDENCE = (
-        "609f6524ad6be4735a61424ed1ba74759fc4c14bce6e0c9224592d35965bf39e"
+        "ef69f90220d73007449c05876ade065c9387964a6861b29749ac0194387ba94e"
     )
 
     def test_hb_7_10_review_cohort_7_5_hash_is_pinned(self) -> None:
@@ -1695,3 +1731,123 @@ class TestPlateletPromptWithholdPopulations:
             assert "TTP" not in rbc, f"RBC prompt ({mode}) must not mention TTP"
             assert "HIT" not in rbc, f"RBC prompt ({mode}) must not mention HIT"
             assert "ITP" not in rbc, f"RBC prompt ({mode}) must not mention ITP"
+
+
+class TestPlateletPromptTerminalLine:
+    """The platelet prompt must separate "not indicated" from "cannot judge".
+
+    WHY: the first real-data platelet run (2026-09-20) returned
+    INSUFFICIENT_EVIDENCE for orders whose count was on file and far above the
+    prophylaxis threshold (65k, 41k, 18k) with detailed notes documenting no
+    bleeding and no procedure. INSUFFICIENT_EVIDENCE drops out of the
+    inappropriate count, so those orders vanished from the doctor ranking. The
+    RBC prompts already draw this line (_RBC_OUTPUT_RULE); the platelet prompt
+    must draw the same one.
+    """
+
+    def test_adequate_notes_without_indication_are_inappropriate(self) -> None:
+        from bba.prompt_builder.system_prompt import platelet_system_prompt
+
+        prompt = platelet_system_prompt()
+        assert (
+            "adequate notes that document no positive indication are INAPPROPRIATE"
+            in prompt
+        )
+
+    def test_insufficient_evidence_is_reserved_for_thin_notes(self) -> None:
+        from bba.prompt_builder.system_prompt import platelet_system_prompt
+
+        prompt = platelet_system_prompt()
+        assert (
+            "INSUFFICIENT_EVIDENCE ONLY when the notes are genuinely silent" in prompt
+        )
+        # The old closing sentence told the model to answer INSUFFICIENT_EVIDENCE
+        # whenever no indication was written down; it must not survive.
+        assert "If the notes are silent rather than contrary" not in prompt
+
+    def test_documentation_absence_alone_still_never_inappropriate(self) -> None:
+        # Protects clinicians from being flagged for thin charting (CR-C2).
+        from bba.prompt_builder.system_prompt import platelet_system_prompt
+
+        assert (
+            "Documentation absence alone is never INAPPROPRIATE"
+            in platelet_system_prompt()
+        )
+
+
+class TestPlateletPromptExclusionOverride:
+    """An exclusion population overrides the low-count prophylaxis indications.
+
+    WHY: in the same run the model cleared a very severe aplastic anemia order
+    (count 1k, "No active bleeding") as APPROPRIATE by arguing that exclusion D
+    stops applying below 10,000 /uL, while a 5k aplastic anemia order went to
+    NEEDS_REVIEW. The signed policy withholds prophylactic platelets in these
+    populations at ANY count; the prompt must say so and must not let ATG /
+    cyclosporine immunosuppression pass as chemotherapy.
+    """
+
+    def test_exclusion_applies_at_any_count(self) -> None:
+        from bba.prompt_builder.system_prompt import platelet_system_prompt
+
+        prompt = platelet_system_prompt()
+        assert "however low the count" in prompt
+        assert "indications 4 and 5" in prompt
+
+    def test_immunosuppression_is_not_chemotherapy(self) -> None:
+        from bba.prompt_builder.system_prompt import platelet_system_prompt
+
+        prompt = platelet_system_prompt()
+        assert "ATG" in prompt and "is NOT chemotherapy" in prompt
+
+    def test_rbc_prompts_unchanged_by_platelet_terminal_line(self) -> None:
+        # RBC verdicts on file were produced from these prompts.
+        from bba.prompt_builder.system_prompt import system_prompt_for
+
+        for mode in ("HB_7_10_REVIEW",):
+            rbc = system_prompt_for(task_mode=mode, cohort_threshold=7.0)
+            assert "however low the count" not in rbc
+            assert "is NOT chemotherapy" not in rbc
+
+    def test_procedure_does_not_override_a_restrictive_exclusion_line(self) -> None:
+        # Codex P1 on #235: TTP / HIT / snakebite / ITP lines permit transfusion
+        # only for the condition they name (life-threatening bleeding, emergency
+        # surgery for ITP). A routine CVC or LP must not clear those patients —
+        # in TTP and HIT the transfusion is actively harmful.
+        from bba.prompt_builder.system_prompt import platelet_system_prompt
+
+        prompt = platelet_system_prompt()
+        assert "a procedure indication 1–3 does NOT override" in prompt
+        assert "or a procedure indication 1–3, grounded in the notes, supports" not in (
+            prompt
+        )
+
+    def test_hard_signals_follow_the_exclusion_override(self) -> None:
+        # Codex P2 on #235: a procedure clear the override PERMITS (e.g. CVC in
+        # aplastic anemia) must be reportable as procedure_indication=True;
+        # under the old blanket wording it reported no signal and the over-clear
+        # guardrail floored the permitted verdict to NEEDS_REVIEW.
+        from bba.prompt_builder.system_prompt import platelet_system_prompt
+
+        prompt = platelet_system_prompt()
+        assert "AND the EXCLUSION OVERRIDE above does not bar it" in prompt
+        assert (
+            "set each True ONLY when the evidence explicitly grounds the "
+            "indication AND no exclusion population applies" not in prompt
+        )
+        # Prophylaxis at a low count stays barred in every excluded population
+        # (aplastic anaemia on active therapy is indication 8 with its own
+        # signal, not an excluded population).
+        assert "within 24 hours), AND no exclusion population applies" in prompt
+
+    def test_standing_order_is_not_an_indication(self) -> None:
+        # Real-data run 2026-09-20: post-HSCT orders at 16k / 18k were cleared
+        # APPROPRIATE by citing the ward standing order "if plt < 20,000 give
+        # platelets", and the same orders flipped to NEEDS_REVIEW on another
+        # run. The signed policy threshold is <10,000 /uL (or expected below it
+        # within 24 hours); a local trigger written in the chart is the practice
+        # being audited, not evidence that the practice is indicated.
+        from bba.prompt_builder.system_prompt import platelet_system_prompt
+
+        prompt = platelet_system_prompt()
+        assert "standing order" in prompt
+        assert "is NOT a positive indication" in prompt

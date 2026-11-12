@@ -1,5 +1,7 @@
 # Missing-Hb elective cases: periop pre-pass + LLM deferral (NOT window extension)
 
+> Historical design record. Dates, rollout states, and proposed behavior below describe the original work and may be superseded. Use [current module contracts](CONTEXT.md) and the [operator guide](production-cli.md) for current behavior.
+
 > Handoff plan. Repo branch `feat/missing-hb-positive-evidence-bypass`. Data: `/tmp/bba_mini/`.
 
 ## Context

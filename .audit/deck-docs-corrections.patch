@@ -1,0 +1,240 @@
+--- clinical_audit_pitch_deck.html (preserved baseline)
++++ clinical_audit_pitch_deck.html (documentation corrections)
+@@ -583,6 +583,10 @@
+       align-items: stretch;
+     }
+ 
++    section[aria-labelledby="s8-title"] .decision-tree {
++      margin-bottom: 1.5rem;
++    }
++
+     .tree-node {
+       border: 1px solid var(--line);
+       border-radius: var(--radius);
+@@ -602,7 +606,7 @@
+ 
+     .tree-node span {
+       font-size: clamp(0.78rem, 0.88vw, 0.84rem);
+-      line-height: 1.28;
++      line-height: 1.5;
+       color: rgba(21, 23, 21, 0.66);
+     }
+ 
+@@ -821,8 +825,8 @@
+ 
+     .footer-note {
+       position: absolute;
+-      left: var(--slide-padding);
+-      right: var(--slide-padding);
++      left: clamp(1.2rem, 4vw, 4rem);
++      right: clamp(1.2rem, 4vw, 4rem);
+       bottom: clamp(0.6rem, 1.4vw, 1rem);
+       display: flex;
+       justify-content: space-between;
+@@ -1004,7 +1008,7 @@
+ 
+       .report-cell span {
+         font-size: clamp(0.78rem, 3vw, 0.84rem);
+-        line-height: 1.25;
++        line-height: 1.5;
+       }
+ 
+       .check {
+@@ -1129,7 +1133,7 @@
+       .plain-list li,
+       .threshold .outcome {
+         font-size: clamp(0.72rem, 0.96vw, 0.85rem);
+-        line-height: 1.28;
++        line-height: 1.5;
+       }
+ 
+       .threshold .range {
+@@ -1196,7 +1200,7 @@
+ 
+       .callout p {
+         font-size: clamp(0.72rem, 0.96vw, 0.84rem);
+-        line-height: 1.26;
++        line-height: 1.5;
+       }
+ 
+       .pipe-step span,
+@@ -1362,14 +1366,14 @@
+           <h2 id="s7-title" data-reveal>Cohort means audit context, not a permanent patient label</h2>
+         </div>
+         <div class="mini-grid" data-reveal>
+-          <div class="mini-card"><strong>Default</strong><span>No special context matched. Hb threshold: &lt; 7.0 g/dL.</span></div>
+-          <div class="mini-card"><strong>Cardiac surgery</strong><span>Recent cardiac or large-vessel operative context. Threshold: &lt; 7.5.</span></div>
+-          <div class="mini-card"><strong>Ortho + cardiac</strong><span>Orthopedic surgery plus cardiac-history evidence. Threshold: &lt; 8.0.</span></div>
+-          <div class="mini-card"><strong>ESRD + med signal</strong><span>ESRD diagnosis plus dialysis-context medication. Threshold: &lt; 8.0.</span></div>
++          <div class="mini-card"><strong>Default / ESRD</strong><span>Default and ESRD-EPO contexts use Hb &le; 7.0 g/dL.</span></div>
++          <div class="mini-card"><strong>Cardiac surgery</strong><span>Recent cardiac or large-vessel operative context. Threshold: &le; 7.5.</span></div>
++          <div class="mini-card"><strong>Orthopedic surgery</strong><span>An orthopedic operation is sufficient for the cohort. Threshold: &le; 8.0.</span></div>
++          <div class="mini-card"><strong>Heart disease</strong><span>Heart-disease diagnoses trigger the retained cardiopulmonary cohort label. Threshold: &le; 8.0.</span></div>
+           <div class="mini-card"><strong>MTP</strong><span>Massive-transfusion pattern. Bypasses Hb threshold as appropriate.</span></div>
+           <div class="mini-card"><strong>Active heme malignancy</strong><span>Heme diagnosis + recent chemo + ANC &lt; 500. Routes to review.</span></div>
+         </div>
+-        <p class="lead" data-reveal>If procedure data is unavailable, the app refuses to assume default 7.0 and routes the row to review.</p>
++        <p class="lead" data-reveal>For Hb above 7.0, unavailable procedure data routes to review rather than assuming the default cohort.</p>
+       </div>
+       <div class="footer-note"><span>Context before threshold</span><span>Slide 7</span></div>
+     </section>
+@@ -1381,49 +1385,41 @@
+           <h2 id="s8-title" data-reveal>First matching rule wins</h2>
+         </div>
+         <div class="decision-tree" data-reveal>
+-          <div class="tree-node warn"><b>No usable Hb?</b><span>INSUFFICIENT_EVIDENCE</span></div>
+-          <div class="tree-arrow">-&gt;</div>
+-          <div class="tree-node warn"><b>Unknown context?</b><span>NEEDS_REVIEW</span></div>
+-          <div class="tree-arrow">-&gt;</div>
+-          <div class="tree-node ok"><b>MTP pattern?</b><span>APPROPRIATE</span></div>
+-
+-          <div class="tree-node ok"><b>Procedure &le; 6h before?</b><span>APPROPRIATE</span></div>
+-          <div class="tree-arrow">-&gt;</div>
+-          <div class="tree-node ok"><b>Procedure &le; 72h after?</b><span>APPROPRIATE</span></div>
+-          <div class="tree-arrow">-&gt;</div>
+-          <div class="tree-node ok"><b>Acute Hb drop?</b><span>APPROPRIATE</span></div>
+-
+-          <div class="tree-node warn"><b>Non-threshold cohort?</b><span>NEEDS_REVIEW</span></div>
+-          <div class="tree-arrow">-&gt;</div>
+-          <div class="tree-node ok"><b>Hb below threshold?</b><span>APPROPRIATE unless safety flag</span></div>
+-          <div class="tree-arrow">-&gt;</div>
+-          <div class="tree-node warn"><b>Threshold to &lt;10?</b><span>NEEDS_REVIEW</span></div>
+-
+-          <div class="tree-node err"><b>Hb &ge; 10?</b><span>POTENTIALLY_INAPPROPRIATE</span></div>
+-          <div class="tree-node warn"><b>Hemodilution?</b><span>NEEDS_REVIEW</span></div>
+-          <div class="tree-node warn"><b>Single low Hb, no trend?</b><span>NEEDS_REVIEW</span></div>
+-          <div class="tree-node ok"><b>Final rows</b><span>Stored with rationale</span></div>
+-          <div class="tree-node warn"><b>Review rows</b><span>Evidence bundle + clinician adjudication</span></div>
++          <div class="tree-node ok"><b>1. Complete returns?</b><span>Routing exemption if supported and not contradicted</span></div>
++          <div class="tree-node ok"><b>2. Declared surgical use?</b><span>Configured order-level exemption</span></div>
++          <div class="tree-node warn"><b>3. Missing Hb?</b><span>INSUFFICIENT_EVIDENCE by default; opt-in evidence route differs</span></div>
++          <div class="tree-node ok"><b>4. Hb &le; 7.0?</b><span>APPROPRIATE before cohort review</span></div>
++          <div class="tree-node ok"><b>5. MTP?</b><span>APPROPRIATE</span></div>
++          <div class="tree-node warn"><b>6. Unknown context?</b><span>NEEDS_REVIEW for remaining Hb &gt; 7.0</span></div>
++          <div class="tree-node warn"><b>7. Legacy procedure route?</b><span>6h bypass or 72h review deferral only when declared-use exemption is off</span></div>
++          <div class="tree-node ok"><b>8. Acute Hb drop?</b><span>APPROPRIATE when the configured delta-Hb rule fires</span></div>
++          <div class="tree-node warn"><b>9. No numeric threshold?</b><span>NEEDS_REVIEW</span></div>
++          <div class="tree-node ok"><b>10. Hb &le; cohort floor?</b><span>APPROPRIATE unless remaining safety flags require review</span></div>
++          <div class="tree-node warn"><b>11. Above floor, Hb &lt; 10?</b><span>NEEDS_REVIEW</span></div>
++          <div class="tree-node err"><b>12. Hb &ge; 10?</b><span>POTENTIALLY_INAPPROPRIATE; review eligible evidence</span></div>
++          <div class="tree-node warn"><b>Model review</b><span>Requires signed privacy admission</span></div>
++          <div class="tree-node warn"><b>Evidence checks</b><span>Rejected claims remain review work</span></div>
++          <div class="tree-node ok"><b>Stored decisions</b><span>Evidence, provenance, and reviewer history</span></div>
+         </div>
+       </div>
+-      <div class="footer-note"><span>Clinical precedence</span><span>Slide 8</span></div>
++      <div class="footer-note"><span>Implemented RBC order; reservation checks and flags also apply. Clinical sign-off is separate.</span><span>Slide 8</span></div>
+     </section>
+ 
+     <section class="slide" aria-labelledby="s9-title">
+       <div class="slide-content stack">
+         <div class="tight-stack">
+           <p class="eyebrow" data-reveal>Hb tier</p>
+-          <h2 id="s9-title" data-reveal>The threshold is applied only after context and bypasses</h2>
++          <h2 id="s9-title" data-reveal>Universal low-Hb rule first, then cohort tiers</h2>
+         </div>
+         <div class="threshold-board" data-reveal>
+           <article class="threshold">
+             <mark>Tier 1</mark>
+-            <div class="range">&lt; threshold</div>
+-            <p class="outcome">Usually <strong>APPROPRIATE</strong>, unless hemodilution or isolated low Hb without trend requires review.</p>
++            <div class="range">&le; threshold</div>
++            <p class="outcome">Hb &le; 7.0 is <strong>APPROPRIATE</strong> before cohort review. At higher cohort floors, safety flags can require review.</p>
+           </article>
+           <article class="threshold">
+             <mark>Tier 2</mark>
+-            <div class="range">&lt; 10</div>
++            <div class="range">threshold &lt; Hb &lt; 10</div>
+             <p class="outcome"><strong>NEEDS_REVIEW</strong>. The gray zone is not automatically called appropriate or inappropriate.</p>
+           </article>
+           <article class="threshold">
+@@ -1435,8 +1431,8 @@
+         <div class="tag-row" data-reveal>
+           <span class="tag green">Default: 7.0</span>
+           <span class="tag green">Cardiac surgery: 7.5</span>
+-          <span class="tag green">Ortho-cardiac: 8.0</span>
+-          <span class="tag green">ESRD + med: 8.0</span>
++          <span class="tag green">Orthopedic surgery: 8.0</span>
++          <span class="tag green">ESRD-EPO: 7.0</span>
+           <span class="tag red">MTP: bypass</span>
+           <span class="tag red">Active heme: review</span>
+         </div>
+@@ -1448,29 +1444,29 @@
+       <div class="slide-content split">
+         <div class="stack">
+           <p class="eyebrow" data-reveal>Safety gates</p>
+-          <h2 id="s10-title" data-reveal>When the app deliberately refuses to auto-classify</h2>
+-          <p class="lead" data-reveal>These pathways protect the audit from over-reading incomplete or ambiguous evidence.</p>
++          <h2 id="s10-title" data-reveal>Review routes after earlier rules</h2>
++          <p class="lead" data-reveal>These checks apply to remaining Hb above 7.0 after earlier exits. They do not override the universal low-Hb rule.</p>
+         </div>
+         <div class="ledger" data-reveal>
+           <div class="ledger-row">
+             <div class="num">A</div>
+-            <div><div class="label">Unknown procedure context</div><div class="note">Missing procedure join is not treated as no procedure.</div></div>
++            <div><div class="label">Unknown procedure context</div><div class="note">For remaining Hb above 7.0, missing procedure data routes to review rather than a default cohort.</div></div>
+           </div>
+           <div class="ledger-row">
+             <div class="num">B</div>
+-            <div><div class="label">Hemodilution signal</div><div class="note">Hb below threshold plus at least 2 L crystalloid in prior 4 hours.</div></div>
++            <div><div class="label">Hemodilution signal</div><div class="note">7.0 &lt; Hb &le; cohort threshold, with at least 2 L crystalloid in the prior 4 hours.</div></div>
+           </div>
+           <div class="ledger-row">
+             <div class="num">C</div>
+-            <div><div class="label">Single low Hb without trend</div><div class="note">Isolated Hb &lt; 8 without a prior 24-hour comparator.</div></div>
++            <div><div class="label">Single low Hb without trend</div><div class="note">7.0 &lt; Hb &le; 8.0, within the cohort floor, without a prior 24-hour comparator.</div></div>
+           </div>
+           <div class="ledger-row">
+             <div class="num">D</div>
+-            <div><div class="label">Special or gray-zone context</div><div class="note">Active heme malignancy, threshold-to-10 Hb, and high-Hb rows require evidence review.</div></div>
++            <div><div class="label">Special or gray-zone context</div><div class="note">Remaining active heme, above-threshold Hb below 10, and high-Hb rows route to evidence review when no earlier rule applies.</div></div>
+           </div>
+         </div>
+       </div>
+-      <div class="footer-note"><span>Conservative by design</span><span>Slide 10</span></div>
++      <div class="footer-note"><span>Universal Hb &le; 7.0 takes precedence over these review checks</span><span>Slide 10</span></div>
+     </section>
+ 
+     <section class="slide slide--dark" aria-labelledby="s11-title">
+@@ -1478,21 +1474,21 @@
+         <div class="tight-stack">
+           <p class="eyebrow" data-reveal>LLM route</p>
+           <h2 id="s11-title" data-reveal>AI is used only for evidence review, then checked fail-closed</h2>
+-          <p class="lead" data-reveal>Rows needing clinical interpretation get a de-identified evidence bundle. Any quote that cannot be verified is not accepted.</p>
++          <p class="lead" data-reveal>Model submission requires signed admission for the exact redacted evidence. The verifier checks citations against that evidence and stops at the first failure.</p>
+         </div>
+         <div class="quote-layers" data-reveal>
+-          <div class="layer"><b>Evidence ID exists</b><span>The citation must point to a real evidence item.</span></div>
+-          <div class="layer"><b>Quote present</b><span>The quoted text must be long enough to verify.</span></div>
+-          <div class="layer"><b>Exact source match</b><span>The quote must appear in the evidence bundle.</span></div>
+-          <div class="layer"><b>No PHI leak</b><span>De-identification boundaries are preserved.</span></div>
+-          <div class="layer"><b>Schema valid</b><span>The model answer must fit the expected structure.</span></div>
+-          <div class="layer"><b>Classification gated</b><span>Failed grounding becomes NEEDS_REVIEW.</span></div>
++          <div class="layer"><b>Normalized text</b><span>NFC normalization gives quotes and sources a shared text representation.</span></div>
++          <div class="layer"><b>Contiguous match</b><span>The quote must match word-aligned source text.</span></div>
++          <div class="layer"><b>Cited source</b><span>The evidence ID must identify one supplied source.</span></div>
++          <div class="layer"><b>Unique within source</b><span>The normalized quote must have one aligned match.</span></div>
++          <div class="layer"><b>Minimum length</b><span>The production minimum is 25 normalized characters.</span></div>
++          <div class="layer"><b>Lab tuple integrity</b><span>Supported analyte, value, and unit triples must match the quote and source.</span></div>
+         </div>
+         <div class="callout" data-reveal>
+-          <p><strong>Fail-closed rule:</strong> a grounding failure is stored as <strong>NEEDS_REVIEW</strong> with review reason <strong>hallucination_suspect</strong>, not as appropriate or inappropriate.</p>
++          <p><strong>Fail-closed rule:</strong> if no attempt passes grounding, the pipeline stores <strong>NEEDS_REVIEW</strong> with review reason <strong>hallucination_suspect</strong>. A later passing attempt can supersede an earlier rejection.</p>
+         </div>
+       </div>
+-      <div class="footer-note"><span>Six mandatory quote-grounding checks</span><span>Slide 11</span></div>
++      <div class="footer-note"><span>Grounding checks establish citation support, not clinical truth or de-identification quality</span><span>Slide 11</span></div>
+     </section>
+ 
+     <section class="slide" aria-labelledby="s12-title">
+@@ -1523,8 +1519,8 @@
+           <h2 id="s13-title" data-reveal>The review questions for clinicians</h2>
+         </div>
+         <div class="two-column-list" data-reveal>
+-          <div class="check-item"><div class="check">1</div><div><b>Are the thresholds clinically correct?</b><span>Default, cardiac surgery, ortho-cardiac, ESRD-EPO, MTP, and active heme routing.</span></div></div>
+-          <div class="check-item"><div class="check">2</div><div><b>Are the bypasses acceptable?</b><span>MTP, peri-procedural 6h, pre-op 72h, and delta-Hb windows.</span></div></div>
++          <div class="check-item"><div class="check">1</div><div><b>Are the thresholds clinically correct?</b><span>Default, cardiac surgery, orthopedic surgery, heart disease, ESRD-EPO, MTP, and active heme routing.</span></div></div>
++          <div class="check-item"><div class="check">2</div><div><b>Are the bypasses acceptable?</b><span>MTP, hard perioperative evidence, delta-Hb, and the separately configured legacy procedure routes.</span></div></div>
+           <div class="check-item"><div class="check">3</div><div><b>Are review flags conservative enough?</b><span>Unknown context, hemodilution, single-low-Hb-no-trend, gray-zone Hb, and high Hb.</span></div></div>
+           <div class="check-item"><div class="check">4</div><div><b>Are exclusions appropriate?</b><span>Age, product, status, inpatient scope, referral scope, and diagnosis exclusions.</span></div></div>
+           <div class="check-item"><div class="check">5</div><div><b>Is the report clinically useful?</b><span>Does it support QI discussion without becoming punitive or real-time CDS?</span></div></div>

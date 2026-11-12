@@ -25,7 +25,7 @@ sub-threshold Hb that fell outside the 24h primary window.
 This script intentionally bypasses :class:`LlmClientConfig` and passes
 the model id directly to the transport. The production allow-set
 (``ALLOWED_MODELS``) is pinned to the bare aliases the live API returns
-(``claude-sonnet-5`` / ``claude-opus-4-8``), so the echoed model_id
+(``claude-sonnet-5-5`` / ``claude-opus-5-5``), so the echoed model_id
 validates natively at row construction — no runtime allow-set patch is
 needed here.
 
@@ -35,13 +35,33 @@ Environment variables:
   ``sample_bundle.py`` (default: ``/tmp/bba_mini``).
 * ``ANTHROPIC_API_KEY`` — required.
 * ``BBA_PILOT_LLM_MODEL`` — model id to use (default:
-  ``claude-sonnet-5``).
+  ``claude-sonnet-5-5``).
 * ``BBA_PILOT_RUN_ID`` — run id suffix for the audit_store (default:
   ``pilot-mini``). Bump to force re-run; the store is idempotent on
   (run_id, audit_id).
 * ``BBA_PILOT_ONLY_REQNO`` — comma-separated REQNOs; process/submit only
   those cases and MERGE their fresh records into the existing
   ``llm_report.json``. Always pair with a fresh ``BBA_PILOT_RUN_ID``.
+* ``BBA_PILOT_PLATELET_LLM`` — ``1`` submits platelet cases to the LLM
+  (default: the library flag ``PLATELET_LLM_ENABLED``, OFF). Costs one call
+  per deferred platelet order.
+* ``BBA_PILOT_PLATELET_TREND`` — ``1`` renders the projected 24 h platelet
+  count into the evidence and enables the count-trend floor (issue #237;
+  default: the library flag ``PLATELET_TREND_GUARDRAIL_ENABLED``, OFF).
+* ``BBA_PILOT_PLATELET_SPECIALIST_TARGET`` — ``1`` moves a platelet
+  INAPPROPRIATE to review when the count is below a target a consulting
+  specialist documented (ruling 2026-09-23; default: the library flag
+  ``PLATELET_SPECIALIST_TARGET_GUARDRAIL_ENABLED``, OFF).
+* ``BBA_PRIVACY_POLICY`` / ``BBA_PRIVACY_ARTIFACTS`` — trust-root policy file
+  and the issuer's ``{audit_id: PrivacyArtifact}`` map. Every submission needs
+  both; see ``issue_privacy_artifacts.py``.
+* ``BBA_PILOT_PRIVACY_PREPARE`` — path of a request file to write instead of
+  running: the exact prompt requests this run would submit, with raw note text
+  (mode 0600). Exits 0 before injection-flagged rows, privacy admission and
+  transport. Deterministic rows written earlier in the pass are identical in
+  the real run, which the idempotent store skips. Use the same
+  ``BBA_PILOT_RUN_ID`` as the real run. Incompatible with
+  ``BBA_PRIVACY_ARTIFACTS``.
 """
 
 from __future__ import annotations
@@ -60,6 +80,7 @@ from zoneinfo import ZoneInfo
 
 import bba.feature_flags as feature_flags
 from bba.audit_orders import (
+    AuditOrder,
     AuditOrdersConfig,
     BloodOrderInput,
     build_audit_orders,
@@ -68,6 +89,7 @@ from bba.audit_pipeline import PipelineRowContext
 from bba.audit_pipeline.pipeline import (
     _persist_bridge_gate_review_row,
     _persist_injection_flagged_row,
+    _persist_privacy_flagged_row,
     _persist_operation_unresolved_row,
     _persist_over_reservation_row,
     _persist_platelet_bridge_gate_review_row,
@@ -95,6 +117,7 @@ from bba.audit_pipeline.replay import (
 )
 from bba.audit_store import AuditStore, AuditStoreConfig
 from bba.cohort_detector import (
+    find_chemo_med,
     CohortAssignment,
     CohortInputs,
     CohortLabel,
@@ -114,12 +137,16 @@ from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import ClassifierInputs
 from bba.deterministic_classifier.rationales import RESERVE_AHEAD_RATIONALES
 from bba.declared_use import (
+    DECLARED_SURGICAL_LABELS,
     DeclaredUse,
     DeclaredUseLabel,
     collapse_usetype,
     label_for,
 )
-from bba.feature_flags import RETURNS_LEDGER_ENABLED
+from bba.feature_flags import (
+    PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED,
+    RETURNS_LEDGER_ENABLED,
+)
 from bba.returns_ledger import ReturnsSummary, rows_for_admission, summarize_returns
 from bba.evidence_bundle_builder import (
     DiagnosisRecord,
@@ -134,12 +161,16 @@ from bba.evidence_bundle_builder import (
     build_evidence_bundle,
 )
 from bba.hb_lookup import (
+    AnchorCandidate,
     EvidenceAnchor,
     HbLookupResult,
     HbObservation,
     parse_hb_value,
     resolve_evidence_anchor,
     resolve_hb_with_fallback,
+    resolve_lab_anchor,
+    TriggerDraws,
+    trigger_draws,
 )
 from bba.platelet_classifier import classify_platelet
 from bba.platelet_classifier.models import PlateletClassifierInputs
@@ -147,6 +178,7 @@ from bba.platelet_lookup import (
     PLATELET_LABEXM,
     PlateletObservation,
     lookup_platelet,
+    project_24h,
     parse_platelet_count,
 )
 from bba.preop_reservation import (
@@ -165,20 +197,40 @@ from bba.preop_reservation.planned_op import (
 )
 from bba.ingest.date_parser import parse_kcmh_english_date
 from bba.ingest.models import ParsedTimeOfDay
+from bba.deid_redactor.admission import (
+    PrivacyAdmissionError,
+    PrivacyAdmissionPolicy,
+    load_privacy_artifacts,
+)
 from bba.llm_client import AnthropicBatchTransport, BatchSubmissionRequest
 from bba.prompt_builder import EvidenceChunk, PromptBuildRequest, build_prompt
 from bba.vitals_extractor import PeriopSummary, extract_vitals
 
 from _anchor_candidates import build_anchor_candidates
 from _bdvsttrans_source import load_bdvsttrans_rows
+from _claude_cli_transport import ClaudeCliTransport
 from _hosxp_dt import _combine, _parse_hosxp_date, _parse_time
 from _periop_notes import vitals_notes_for
+from privacy_requests import (
+    PrivacyCase,
+    PrivacyPrepareError,
+    PrivacyRequests,
+    bangkok_anchor,
+    prepare_path,
+    write_requests,
+)
 
 WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
 BUNDLE = WORK / "bundle"
 AUDIT_STORE_ROOT = WORK / "data" / "audit_store"
 RUN_ID = os.environ.get("BBA_PILOT_RUN_ID", "pilot-mini")
-MODEL_ID = os.environ.get("BBA_PILOT_LLM_MODEL", "claude-sonnet-5")
+MODEL_ID = os.environ.get("BBA_PILOT_LLM_MODEL", "claude-sonnet-5-5")
+# ``anthropic-batch`` (default) submits an Anthropic Message Batch with
+# ANTHROPIC_API_KEY. ``claude-cli`` asks the local ``claude`` CLI on the
+# claude.ai subscription, one call per case, for A/B runs that should not
+# spend API credit (see _claude_cli_transport.py; rows carry ``_transport``).
+TRANSPORT = os.environ.get("BBA_PILOT_TRANSPORT", "anthropic-batch")
+CLI_WORKERS = int(os.environ.get("BBA_PILOT_CLI_WORKERS", "3"))
 # Single-case iteration knob: comma-separated REQNOs. When set, only the
 # matching orders are processed/submitted, and the fresh records are MERGED
 # into the existing llm_report.json (all other cases keep their records)
@@ -222,6 +274,50 @@ DECLARED_USETYPE_PILOT_ENABLED = (
     if _declared_env is not None
     else feature_flags.DECLARED_USETYPE_ENABLED
 )
+# Cohort-gated platelet prophylaxis auto-clear: MUST mirror run_pipeline.py so a
+# row the deterministic leg cleared is never re-submitted here. Same env
+# override (BBA_PILOT_PLATELET_AUTOCLEAR "1" on, anything else off).
+_plt_autoclear_env = os.environ.get("BBA_PILOT_PLATELET_AUTOCLEAR")
+PLATELET_AUTOCLEAR_PILOT_ENABLED = (
+    _plt_autoclear_env == "1"
+    if _plt_autoclear_env is not None
+    else PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED
+)
+
+# Platelet count-trend floor (issue #237): the projected 24 h count is rendered
+# into the evidence and the replay guardrail floors an unsupported "expected to
+# fall" clear. Same seam shape: BBA_PILOT_PLATELET_TREND "1" on, anything else
+# off, unset follows the library flag (default OFF). Read at import so it can
+# fold into CODE_VERSION below; main() sets the library flag from it.
+_plt_trend_env = os.environ.get("BBA_PILOT_PLATELET_TREND")
+PLATELET_TREND_PILOT_ENABLED = (
+    _plt_trend_env == "1"
+    if _plt_trend_env is not None
+    else feature_flags.PLATELET_TREND_GUARDRAIL_ENABLED
+)
+
+# Platelet specialist-target review floor (ruling 2026-09-23). Same seam shape:
+# BBA_PILOT_PLATELET_SPECIALIST_TARGET "1" on, anything else off, unset follows
+# the library flag (default OFF).
+_plt_specialist_env = os.environ.get("BBA_PILOT_PLATELET_SPECIALIST_TARGET")
+PLATELET_SPECIALIST_TARGET_PILOT_ENABLED = (
+    _plt_specialist_env == "1"
+    if _plt_specialist_env is not None
+    else feature_flags.PLATELET_SPECIALIST_TARGET_GUARDRAIL_ENABLED
+)
+
+
+# Platelet LLM leg pilot seam. The library flag stays default-OFF (no clinician
+# sign-off for the live pipeline); BBA_PILOT_PLATELET_LLM "1" lets a sandbox run
+# submit platelet cases without editing library source, anything else forces
+# off. Unset follows the library flag, so a plain run never submits platelets.
+# Resolved at call time (not folded into CODE_VERSION), so the library flag is
+# read live rather than frozen at import.
+def _platelet_llm_enabled() -> bool:
+    env = os.environ.get("BBA_PILOT_PLATELET_LLM")
+    return env == "1" if env is not None else feature_flags.PLATELET_LLM_ENABLED
+
+
 _msbos_env = os.environ.get("BBA_PILOT_MSBOS_RESERVATION")
 MSBOS_RESERVATION_PILOT_ENABLED = (
     _msbos_env == "1"
@@ -283,6 +379,15 @@ if MSBOS_RESERVATION_PILOT_ENABLED and MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED:
 if DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED:
     # +usetypeonly: USETYPE is the sole pre-op router; procedure facts are evidence.
     CODE_VERSION += "+usetypeonly"
+if PLATELET_TREND_PILOT_ENABLED:
+    # +plttrend (#237): the projection line changes the platelet prompt and the
+    # count-trend floor changes verdicts, so a flag-on run needs its own code
+    # identity; flag-off keeps the identity above exactly.
+    CODE_VERSION += "+plttrend"
+if PLATELET_SPECIALIST_TARGET_PILOT_ENABLED:
+    # +pltspecialist: the floor changes verdicts, so a flag-on run needs its
+    # own code identity; flag-off keeps the identity above exactly.
+    CODE_VERSION += "+pltspecialist"
 TZ_LOCAL = "Asia/Bangkok"
 INCPT_OPERATION_GROUPS = {"110", "111"}
 
@@ -562,21 +667,11 @@ csv.field_size_limit(sys.maxsize)
 
 # ============================================================
 # Live transport wrapper.
-#
-# The audit_pipeline orchestrator carries a cost guard that rejects
-# isinstance(transport, AnthropicBatchTransport) — useful for tests
-# but blocks live use too. Production callers compose the live
-# transport via a Protocol-compliant wrapper that is NOT a subclass.
 # ============================================================
 
 
 class RealAnthropicTransport:
-    """Production transport — delegates to AnthropicBatchTransport via composition.
-
-    The audit_pipeline.cost_guard's isinstance() check on
-    AnthropicBatchTransport blocks the test path; production callers use
-    a Protocol-compliant wrapper. This wrapper is exactly that.
-    """
+    """Pilot adapter for the library's authenticated live transport."""
 
     def __init__(
         self,
@@ -584,9 +679,13 @@ class RealAnthropicTransport:
         api_key: str,
         poll_interval_seconds: float = 30.0,
         max_wait_seconds: float = 3600.0,
+        privacy_policy: PrivacyAdmissionPolicy | None = None,
+        manifest_root: Path | None = None,
     ) -> None:
         self._inner = AnthropicBatchTransport(
             api_key=api_key,
+            privacy_policy=privacy_policy,
+            manifest_root=manifest_root,
             poll_interval_seconds=poll_interval_seconds,
             max_wait_seconds=max_wait_seconds,
         )
@@ -642,6 +741,82 @@ def _icd_codes(*raws: str | None) -> tuple[str, ...]:
 
 def _hash(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()[:32]
+
+
+def _last_rbc_order_before(
+    rbc_orders_by_an: dict[str, list[datetime]], an: str, order_utc: datetime
+) -> datetime | None:
+    """The most recent RBC dispense for this admission inside the 24 h before
+    ``order_utc`` (the order's own lab anchor), or None. Bounds the 24 h
+    minimum Hb (issue #249): a low that an earlier transfusion already
+    corrected must not make a later order sub-threshold. The map holds the
+    dispense times from ``_rbc_dispense_times_by_an``, the closest this leg has
+    to a transfusion time; the order being judged sits exactly at
+    ``order_utc`` and so never counts as its own earlier transfusion."""
+    earlier = [
+        t
+        for t in rbc_orders_by_an.get(an, ())
+        if t < order_utc and order_utc - t <= timedelta(hours=24)
+    ]
+    return max(earlier) if earlier else None
+
+
+def _rbc_dispense_times_by_an(
+    orders: Sequence[AuditOrder],
+    candidates_by_reqno: dict[str, list[AnchorCandidate]],
+) -> dict[str, list[datetime]]:
+    """Each admission's RBC dispense times, for the #249 transfusion cutoff.
+
+    An order with no usable dispense record is left out: nothing shows its
+    blood was given (issue #264, clinician sign-off 2026-11-11, option A). A
+    dispense recorded before the request is a data error and counts as none,
+    as in ``resolve_lab_anchor``.
+    """
+    by_an: dict[str, list[datetime]] = {}
+    for o in orders:
+        if o.component == "platelet":
+            continue
+        anchor = resolve_lab_anchor(
+            order_datetime=o.order_datetime,
+            candidates=candidates_by_reqno.get(o.reqno, []),
+        )
+        if anchor.reason == "issue_datetime":
+            by_an.setdefault(o.an, []).append(anchor.anchor_utc)
+    return by_an
+
+
+def _hb_trigger_anchor(
+    lab_dt: datetime,
+    reason: str,
+    display: str,
+    candidates: Sequence[AnchorCandidate],
+) -> datetime:
+    """The moment lookup_hb actually read the Hb from.
+
+    ``lab_dt`` when the primary lookup hit (reason ``order_datetime``);
+    otherwise the fallback candidate that supplied the Hb because nothing sat
+    in the 7 days before ``lab_dt``. The evidence flags are computed at this
+    same moment so they name the draws the guardrail judges."""
+    if reason == "order_datetime":
+        return lab_dt
+    return next(
+        c.anchor_utc for c in candidates if c.reason == reason and c.display == display
+    )
+
+
+def _hb_bundle_upper(
+    lab_dt: datetime, draws: TriggerDraws, window_anchor: datetime
+) -> datetime | None:
+    """Upper bound for the bundle's Hb history, or None to keep the window.
+
+    The bundle must reach ``lab_dt`` and every draw the guardrail judges, or
+    the model cannot see a value the guardrail reads (third review of the
+    dispense change). On the fallback ladder the 24 h minimum can be newer
+    than the current draw (fourth review), so the bound comes from the draws
+    themselves, not from the current draw."""
+    judged = (draws.current, draws.min_24h, draws.min_48h)
+    upper = max([lab_dt, *(d.datetime_utc for d in judged if d is not None)])
+    return upper if upper > window_anchor else None
 
 
 def _hb_observations(lab: list[dict[str, str]], an: str) -> list[HbObservation]:
@@ -1071,6 +1246,15 @@ def _render_payload(source: str, payload: dict[str, Any]) -> str:
         code = payload.get("icd10", "")
         name = payload.get("description") or ""
         return f"ICD-10 {code}: {name}".strip()
+    if source == "Lab" and payload.get("test") == "platelet_count":
+        # Platelet counts share the Lab source with Hb (builder
+        # _platelet_payload). The platelet prompt states thresholds per uL, so
+        # render the per-uL figure next to the reported x10^3 value.
+        val = payload.get("value_k_ul")
+        unit = payload.get("unit", "")
+        if val is None:
+            return ""
+        return f"Platelet count {val:g} {unit} ({val * 1000:,.0f} /uL)"
     if source == "Lab":
         ts = payload.get("timestamp", "")
         val = payload.get("value_g_dl", "")
@@ -1089,6 +1273,54 @@ def _render_payload(source: str, payload: dict[str, Any]) -> str:
         drug = payload.get("drug", "")
         return f"Med at {ts}: {drug}"
     return json.dumps(payload, sort_keys=True)
+
+
+def _annotate_platelet_lab(
+    text: str,
+    *,
+    timestamp_utc: datetime | None,
+    anchor_utc: datetime,
+    is_closest: bool,
+    projection_line: str | None = None,
+    anchor_label: str = "order",
+) -> str:
+    """Append the count's age (and the trigger marker) to a platelet Lab chunk.
+
+    Platelet analog of the RBC path's Hb flags: the closest count before the
+    anchor (dispense, or the order without one) is
+    the one the threshold rule applies to; older counts are trend context.
+    ``projection_line`` (issue #237) rides on the closest count only, so it is
+    citable under a real bundle id and read next to the trigger count.
+    """
+    flags: list[str] = []
+    if is_closest:
+        flags.append(f"closest pre-{anchor_label} platelet count")
+    if timestamp_utc is not None:
+        hrs = (anchor_utc - timestamp_utc).total_seconds() / 3600.0
+        flags.append(f"{hrs:.1f}h before {anchor_label}")
+    annotated = f"{text}  [{'; '.join(flags)}]" if flags else text
+    if is_closest and projection_line:
+        return f"{annotated}\n{projection_line}"
+    return annotated
+
+
+def _render_platelet_projection(
+    projected_k_ul: float | None, anchor_label: str = "order"
+) -> str:
+    """The evidence line for :func:`bba.platelet_lookup.project_24h` (issue #237).
+
+    The replay guardrail decides "expected to fall to 10,000 /uL or below within 24
+    hours" on this number, so the model is shown the same figure, per uL like
+    the prompt's thresholds. A missing projection is stated, not omitted."""
+    if projected_k_ul is None:
+        return (
+            "Projected platelet count in 24 h: not computable (needs two counts "
+            f"6 to 72 h apart in the 7 days before the {anchor_label})"
+        )
+    return (
+        "Projected platelet count in 24 h (straight line through the last two "
+        f"counts): {projected_k_ul * 1000:,.0f} /uL"
+    )
 
 
 def _incpt_evidence_chunks(
@@ -1153,9 +1385,15 @@ def _incpt_evidence_chunks(
             )
             if c
         ]
-        optract_name = (optract.get("NAME EN") or "").strip() or (
-            optract.get("NAME") or ""
-        ).strip()
+        name_en = (optract.get("NAME EN") or "").strip()
+        name_th = (optract.get("NAME") or "").strip()
+        # The Thai name is often the specific one ("การใส่ Double lumen
+        # catheter") under a generic English one ("Venous catheterization").
+        optract_name = (
+            f"{name_en} / {name_th}"
+            if name_en and name_th and name_th != name_en
+            else name_en or name_th
+        )
         group_name = (r.get("INCGRP → NAME") or r.get("INCGRP__NAME") or "").strip()
         hours = (dt - anchor).total_seconds() / 3600.0
         text = (
@@ -1178,6 +1416,54 @@ def _incpt_evidence_chunks(
         )
         next_eid += 1
     return tuple(chunks), next_eid
+
+
+PLATELET_INCPT_START_EID = 801
+"""First evidence id for platelet procedure-charge chunks; the same range the
+RBC path uses, clear of the bundle's own ids."""
+
+PLATELET_PROCEDURE_HOURS_AFTER_DISPENSE = 24
+"""How long after dispense a billed procedure still reaches the platelet
+model. The insertion usually follows the platelets: in 2025, 98 of 240 billed
+CVC / DLC insertions fell after midnight of the order day, all within 24 h of
+dispense."""
+
+
+def _platelet_procedure_chunks(
+    incpt: list[dict[str, str]],
+    optract_dict: dict[str, dict[str, str]],
+    *,
+    an: str,
+    order_utc: datetime,
+    dispense_utc: datetime,
+    window_start: datetime,
+    notes_window_end: datetime,
+) -> tuple[EvidenceChunk, ...]:
+    """Procedure-charge evidence for a platelet order.
+
+    Bedside CVC / DLC insertions, taps and LPs are rarely coded as procedures
+    but are billed (INCPT group 110). Clinician review 2026-11-09: "CVC is a
+    procedure"; in 2025, 240 of 3,696 eligible platelet orders had a billed
+    CVC / DLC insertion within 24 h that the platelet leg never showed the
+    model. Same rendering and start as the notes window; the end reaches
+    ``PLATELET_PROCEDURE_HOURS_AFTER_DISPENSE`` past ``dispense_utc`` when
+    that is later than the notes window's end. With no dispense record the
+    caller passes the order time, so the window ends 24 h after the order.
+    """
+    chunks, _ = _incpt_evidence_chunks(
+        incpt,
+        optract_dict,
+        an=an,
+        anchor=order_utc,
+        anchor_label="order",
+        window_start=window_start,
+        window_end=max(
+            notes_window_end,
+            dispense_utc + timedelta(hours=PLATELET_PROCEDURE_HOURS_AFTER_DISPENSE),
+        ),
+        start_eid=PLATELET_INCPT_START_EID,
+    )
+    return chunks
 
 
 def _build_inputs():
@@ -1312,9 +1598,11 @@ def _build_inputs():
 
 
 def main() -> None:
+    if TRANSPORT not in ("anthropic-batch", "claude-cli"):
+        sys.exit(
+            f"BBA_PILOT_TRANSPORT must be anthropic-batch or claude-cli, got {TRANSPORT!r}"
+        )
     api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        sys.exit("ANTHROPIC_API_KEY not set")
     if not BUNDLE.exists():
         sys.exit(f"bundle not found: {BUNDLE} (run sample_bundle.py first)")
 
@@ -1341,6 +1629,10 @@ def main() -> None:
     )
     feature_flags.DECLARED_USE_PREOP_EXEMPT_ENABLED = (
         DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED
+    )
+    feature_flags.PLATELET_TREND_GUARDRAIL_ENABLED = PLATELET_TREND_PILOT_ENABLED
+    feature_flags.PLATELET_SPECIALIST_TARGET_GUARDRAIL_ENABLED = (
+        PLATELET_SPECIALIST_TARGET_PILOT_ENABLED
     )
     if DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED and not DECLARED_USETYPE_PILOT_ENABLED:
         print(
@@ -1378,6 +1670,7 @@ def main() -> None:
     # PipelineRowContext model so the schema is untouched; consumed only when
     # emitting the JSON report below.
     anchor_by_id: dict[str, EvidenceAnchor] = {}
+    rbc_orders_by_an = _rbc_dispense_times_by_an(fr.included, candidates_by_reqno)
 
     for order in fr.included:
         if ONLY_REQNOS and order.reqno not in ONLY_REQNOS:
@@ -1391,18 +1684,24 @@ def main() -> None:
             usetype_values_by_hn_reqno.get(((order.hn or "").strip(), order.reqno), [])
         )
         # --- Platelet path (Phase 2, component="platelet") ---
-        # Only active when feature_flags.PLATELET_LLM_ENABLED is True.
+        # Only active when _platelet_llm_enabled() (BBA_PILOT_PLATELET_LLM=1,
+        # else feature_flags.PLATELET_LLM_ENABLED).
         # With the flag off, non-terminal platelet verdicts orphan intentionally
         # (matching the pipeline.py Stage C2 gate); INSUFFICIENT_EVIDENCE rows
         # were already persisted by the deterministic leg.
         if order.component == "platelet":
-            if not feature_flags.PLATELET_LLM_ENABLED:
+            if not _platelet_llm_enabled():
                 continue
             plt_obs = _plt_observations(lab, order.an)
+            plt_lab_anchor = resolve_lab_anchor(
+                order_datetime=order.order_datetime,
+                candidates=candidates_by_reqno.get(order.reqno, []),
+            ).anchor_utc
             plt_result = lookup_platelet(
                 observations=plt_obs,
-                anchor_utc=order.order_datetime,
+                anchor_utc=plt_lab_anchor,
             )
+            plt_projected = project_24h(observations=plt_obs, anchor_utc=plt_lab_anchor)
             # The evidence bundle (below) is built for EVERY platelet order,
             # including those with no usable count, so the returns short-circuit
             # can screen returns-first with the bundle's windowed peri-op — the
@@ -1513,6 +1812,10 @@ def main() -> None:
                         hn_hash=hn_hash,
                         an_hash=an_hash,
                         products=order.products_ordered,
+                        lab_anchor=plt_result.datetime_utc
+                        if plt_result.datetime_utc is not None
+                        and plt_result.datetime_utc > order.order_datetime
+                        else None,
                     ),
                     component="platelet",
                     diagnoses=plt_diagnoses,
@@ -1558,14 +1861,36 @@ def main() -> None:
                 PlateletClassifierInputs(
                     audit_id=order.audit_id,
                     platelet_count=plt_result.value_k_ul,
+                    diagnosis_codes=order.diagnosis_codes,
+                    platelet_freshness=plt_result.freshness,
+                    has_recent_chemo_med=find_chemo_med(
+                        _med_events(med, order.an), order.order_datetime
+                    )
+                    is not None,
+                    enable_prophylaxis_autoclear=PLATELET_AUTOCLEAR_PILOT_ENABLED,
                 )
             )
             # Compute the platelet reservation snapshot BEFORE the floor so a
             # reserved-but-uncounted order is not swallowed by it (see the
             # floor-defer note below). \x00AMBIG and a missing count are handled
             # inside evaluate_platelet_reservation, so no special-casing here.
+            # Only an order DECLARED for surgery / type-screen is a pre-op
+            # reservation, so only it enters the MSBOS platelet screen (user
+            # ruling 2026-09-20; the deterministic leg's overlay is likewise
+            # declared-only). A ward order with reserved units is a transfusion
+            # question for the LLM; screening it would turn every ward order
+            # into `no_planned_op` review. Keyed on the declared use itself, not
+            # on the pre-op transfusion exemption, so switching the exemption
+            # off does not switch the screen off. Narrower than the RBC arm by
+            # design: platelets have no reserve-ahead deferral, so an order
+            # with a blank/unjoined USETYPE is not screened.
             platelet_reservation_decision = None
-            if MSBOS_RESERVATION_PILOT_ENABLED and msbos_reference:
+            if (
+                MSBOS_RESERVATION_PILOT_ENABLED
+                and msbos_reference
+                and _declared_use_label_for_classifier(collapsed_usetype)
+                in DECLARED_SURGICAL_LABELS
+            ):
                 plt_op_events = _op_events(
                     iptsumoprt,
                     ipddchsumoprt,
@@ -1644,8 +1969,46 @@ def main() -> None:
                 # persisted by the pipeline library but is out-of-scope here.
                 continue
             plt_chunks: list[EvidenceChunk] = []
+            plt_lab_items = [
+                item
+                for item in bundle.items
+                if item.source == "Lab"
+                and dict(item.payload).get("test") == "platelet_count"
+                and item.timestamp_utc is not None
+            ]
+            closest_plt_id = (
+                max(plt_lab_items, key=lambda it: it.timestamp_utc).id
+                if plt_lab_items
+                else None
+            )
             for item in bundle.items:
                 text = _render_payload(item.source, dict(item.payload))
+                if (
+                    text.strip()
+                    and item.source == "Lab"
+                    and dict(item.payload).get("test") == "platelet_count"
+                ):
+                    text = _annotate_platelet_lab(
+                        text,
+                        timestamp_utc=item.timestamp_utc,
+                        anchor_utc=plt_lab_anchor,
+                        anchor_label=(
+                            "dispense"
+                            if plt_lab_anchor != order.order_datetime
+                            else "order"
+                        ),
+                        is_closest=item.id == closest_plt_id,
+                        projection_line=(
+                            _render_platelet_projection(
+                                plt_projected,
+                                "dispense"
+                                if plt_lab_anchor != order.order_datetime
+                                else "order",
+                            )
+                            if PLATELET_TREND_PILOT_ENABLED
+                            else None
+                        ),
+                    )
                 if text.strip():
                     plt_chunks.append(
                         EvidenceChunk(
@@ -1654,6 +2017,17 @@ def main() -> None:
                             text=text,
                         )
                     )
+            plt_chunks.extend(
+                _platelet_procedure_chunks(
+                    incpt,
+                    optract_dict,
+                    an=order.an,
+                    order_utc=order.order_datetime,
+                    dispense_utc=plt_lab_anchor,
+                    window_start=plt_notes_lo,
+                    notes_window_end=plt_notes_hi,
+                )
+            )
             if not plt_chunks:
                 print(
                     f"  WARN: empty chunks for platelet order {order.reqno}; "
@@ -1664,10 +2038,12 @@ def main() -> None:
                 PipelineRowContext.for_platelet(
                     order=order,
                     platelet_result=plt_result,
+                    platelet_projected_24h_k_ul=plt_projected,
+                    platelet_projection_computed=True,
                     hn_hash=hn_hash,
                     an_hash=an_hash,
-                    redactor_version="external-deid-gate-narrative-0.1",
-                    redactor_model_sha="0" * 64,
+                    redactor_version="not-applied",
+                    redactor_model_sha="unavailable",
                     policy_version="KCMH-PR17.2 / AABB-2023 (pilot)",
                     prompt_hash="0" * 64,
                     evidence_bundle_hash=bundle.bundle_hash,
@@ -1701,22 +2077,33 @@ def main() -> None:
         # keep "order", so their evidence text is byte-identical to before.
         anchor_label = "transfusion" if reanchored else "order"
 
-        hb_obs = _hb_observations(lab, order.an)
-        hb, _hb_anchor_display, _hb_anchor_reason = resolve_hb_with_fallback(
-            observations=hb_obs,
-            order_datetime=ev_anchor,
+        # Hb is read, flagged and guardrail-checked at one moment: the lab
+        # anchor (dispense time; clinician review 2026-11-09).
+        lab_dt = resolve_lab_anchor(
+            order_datetime=order.order_datetime,
             candidates=candidates_by_reqno.get(order.reqno, []),
+        ).anchor_utc
+        hb_label = anchor_label if lab_dt == ev_anchor else "dispense"
+        hb_obs = _hb_observations(lab, order.an)
+        hb_not_before = _last_rbc_order_before(rbc_orders_by_an, order.an, lab_dt)
+        hb, hb_anchor_display, hb_anchor_reason = resolve_hb_with_fallback(
+            observations=hb_obs,
+            order_datetime=lab_dt,
+            candidates=candidates_by_reqno.get(order.reqno, []),
+            not_before_utc=hb_not_before,
         )
-        # When the resolver anchored on a post-anchor draw (the fallback
-        # ladder), that draw is the Hb that routed this case to the LLM. Carry
-        # its timestamp so the evidence bundle's Hb upper bound includes it;
-        # otherwise the model adjudicates without the triggering value. None
-        # for the order-time path keeps the original pre-anchor-only window.
-        hb_bundle_anchor = (
-            hb.datetime_utc
-            if hb.datetime_utc is not None and hb.datetime_utc > ev_anchor
-            else None
+        hb_trigger_anchor = _hb_trigger_anchor(
+            lab_dt,
+            hb_anchor_reason,
+            hb_anchor_display,
+            candidates_by_reqno.get(order.reqno, []),
         )
+        draws = trigger_draws(
+            observations=hb_obs,
+            anchor_utc=hb_trigger_anchor,
+            not_before_utc=hb_not_before,
+        )
+        hb_bundle_anchor = _hb_bundle_upper(lab_dt, draws, ev_anchor)
 
         op_events = _op_events(
             iptsumoprt, ipddchsumoprt, incpt, optract_dict, icd9_dict, order.an
@@ -1780,7 +2167,7 @@ def main() -> None:
 
         crystalloid_events = tuple(m for m in med_events if _is_crystalloid(m.drug))
         crystalloid_liters = total_crystalloid_liters(
-            crystalloid_events, order.order_datetime
+            crystalloid_events, hb.datetime_utc or order.order_datetime
         )
 
         vitals_notes = vitals_notes_for(progress, focus, order.an, ev_anchor)
@@ -1828,7 +2215,7 @@ def main() -> None:
         # backward upper bound (ev_anchor) hides the peri-transfusion drop the
         # case is actually about. Widen the upper bound to the end of op-day +N
         # so the LLM sees the full trajectory. The builder mirrors this via
-        # OrderAnchor.hb_anchor (passed below). Non-reanchored orders keep the
+        # OrderAnchor.lab_anchor (passed below). Non-reanchored orders keep the
         # backward-only bound, so their bundles stay byte-identical.
         if reanchored:
             hb_op_day_hi = datetime.combine(
@@ -1901,7 +2288,7 @@ def main() -> None:
                     hn_hash=hn_hash,
                     an_hash=an_hash,
                     products=order.products_ordered,
-                    hb_anchor=hb_bundle_anchor,
+                    lab_anchor=hb_bundle_anchor,
                     window_anchor=ev_anchor if reanchored else None,
                 ),
                 diagnoses=diagnoses,
@@ -1917,28 +2304,33 @@ def main() -> None:
         # Hb chunks get extra annotations so the LLM can weight closest +
         # lowest values: each Hb item is tagged with hours-before-anchor
         # plus optional flags for "closest", "min in 24h", "min in 48h".
-        hb_payloads: list[tuple[str, float, datetime]] = []
-        for it in bundle.items:
-            if it.source != "Lab":
-                continue
-            p = dict(it.payload)
-            if "value_g_dl" not in p or it.timestamp_utc is None:
-                continue
-            hb_payloads.append((it.id, float(p["value_g_dl"]), it.timestamp_utc))
-
-        closest_id: str | None = None
-        min24_id: str | None = None
-        min48_id: str | None = None
-        if hb_payloads:
-            pre = [(i, v, t) for i, v, t in hb_payloads if t <= ev_anchor]
-            if pre:
-                closest_id = max(pre, key=lambda x: x[2])[0]
-                w24 = [x for x in pre if (ev_anchor - x[2]) <= timedelta(hours=24)]
-                if w24:
-                    min24_id = min(w24, key=lambda x: x[1])[0]
-                w48 = [x for x in pre if (ev_anchor - x[2]) <= timedelta(hours=48)]
-                if w48:
-                    min48_id = min(w48, key=lambda x: x[1])[0]
+        # The flags name the very draws lookup_hb judged (same source
+        # preference, same prior-transfusion cutoff), so the model and the
+        # replay guardrail reason on one Hb.
+        hb_item_ids = {
+            dict(it.payload).get("item_no"): it.id
+            for it in bundle.items
+            if it.source == "Lab" and "value_g_dl" in dict(it.payload)
+        }
+        closest_id = hb_item_ids.get(draws.current.item_no) if draws.current else None
+        min24_id = hb_item_ids.get(draws.min_24h.item_no) if draws.min_24h else None
+        min48_id = hb_item_ids.get(draws.min_48h.item_no) if draws.min_48h else None
+        unflagged = [
+            name
+            for name, draw, flag_id in (
+                ("closest", draws.current, closest_id),
+                ("24h minimum", draws.min_24h, min24_id),
+                ("48h minimum", draws.min_48h, min48_id),
+            )
+            if draw is not None and flag_id is None
+        ]
+        if unflagged:
+            print(
+                f"WARNING {order.reqno}: Hb {', '.join(unflagged)} draw judged by "
+                "the guardrail is missing from the evidence bundle",
+                file=sys.stderr,
+            )
+        flag_label = hb_label if hb_trigger_anchor == lab_dt else "lookup time"
 
         chunks: list[EvidenceChunk] = []
         for item in bundle.items:
@@ -1947,26 +2339,27 @@ def main() -> None:
                 continue
             if item.id in (closest_id, min24_id, min48_id):
                 ts = item.timestamp_utc
-                hrs = (ev_anchor - ts).total_seconds() / 3600.0 if ts else None
+                hrs = (lab_dt - ts).total_seconds() / 3600.0 if ts else None
                 flags: list[str] = []
                 if item.id == closest_id:
-                    flags.append(f"closest pre-{anchor_label} Hb")
+                    flags.append(f"closest pre-{flag_label} Hb")
                 if item.id == min24_id:
-                    flags.append(f"minimum in 24h pre-{anchor_label}")
+                    flags.append(f"minimum in 24h pre-{flag_label}")
                 if item.id == min48_id and item.id != min24_id:
-                    flags.append(f"minimum in 48h pre-{anchor_label}")
+                    flags.append(f"minimum in 48h pre-{flag_label}")
                 if hrs is not None:
-                    flags.append(f"{hrs:.1f}h before {anchor_label}")
+                    when = "before" if hrs >= 0 else "after"
+                    flags.append(f"{abs(hrs):.1f}h {when} {hb_label}")
                 text = f"{text}  [{'; '.join(flags)}]"
             elif item.source == "Lab" and "value_g_dl" in dict(item.payload):
                 ts = item.timestamp_utc
-                hrs = (ev_anchor - ts).total_seconds() / 3600.0 if ts else None
+                hrs = (lab_dt - ts).total_seconds() / 3600.0 if ts else None
                 if hrs is not None:
                     # Re-anchored bundles include op-day draws AFTER the
                     # transfusion (intra-op nadir, morning-after); render those
                     # as "after" instead of a negative "before".
                     when = "before" if hrs >= 0 else "after"
-                    text = f"{text}  [{abs(hrs):.1f}h {when} {anchor_label}]"
+                    text = f"{text}  [{abs(hrs):.1f}h {when} {hb_label}]"
             chunks.append(
                 EvidenceChunk(
                     evidence_id=item.id,
@@ -2036,21 +2429,42 @@ def main() -> None:
 
         guidance_lines = [
             "Hb weighting policy for this audit:",
-            "- The Hb value CLOSEST to the order datetime is the primary trigger.",
-            "- The LOWEST Hb in the 24h-pre-order window dominates the indication call.",
+            f"- The Hb value CLOSEST to the {hb_label} datetime is the primary trigger.",
+            f"- The LOWEST Hb in the 24h-pre-{hb_label} window dominates the indication call.",
             "- A 48h-window minimum is supportive but not primary.",
-            "- Hb values >48h before the order are background trend only.",
+            "- A laboratory (HEMATOLOGY) Hb outranks a point-of-care (POCT) Hb",
+            "  in the same window; the flags already follow that rule, so a",
+            "  flagged laboratory value can be older than an unflagged POCT one.",
+            f"- Hb values >48h before the {hb_label} are background trend only.",
+            *(
+                [
+                    f"- No Hb was drawn in the 7 days before the {hb_label}, so the",
+                    "  audit reads the first Hb after it, at the 'lookup time'",
+                    "  (a later blood-bank time); the flags are relative to that.",
+                ]
+                if flag_label == "lookup time"
+                else []
+            ),
+            *(
+                [
+                    "- 'dispense' is when the blood bank issued this order's blood.",
+                    "  It is the moment the order is judged at: an Hb drawn between",
+                    "  the order and dispense counts as pre-dispense.",
+                ]
+                if hb_label == "dispense"
+                else []
+            ),
             "Each Hb chunk above carries a bracketed flag for these positions.",
             "",
             "REASONING REQUIREMENT — transparency about non-primary Hb values:",
             "- If ANY sub-threshold Hb (< cohort threshold) exists in the 7-day",
-            "  pre-order history but falls OUTSIDE the 24h primary window,",
+            f"  pre-{hb_label} history but falls OUTSIDE the 24h primary window,",
             "  you MUST explicitly cite that value in reasoning_summary_en AND",
             "  reasoning_summary_th, naming the evidence id, the value, and the",
-            "  number of hours before the order it occurred.",
+            f"  number of hours before the {hb_label} it occurred.",
             "- State why that value is not the primary trigger (e.g. 'Hb 6.9",
-            "  g/dL [E_n] occurred 28 h pre-order, outside the 24h primary",
-            "  window; the closest pre-order Hb 7.1 g/dL [E_m] is gray-zone').",
+            f"  g/dL [E_n] occurred 28 h pre-{hb_label}, outside the 24h primary",
+            f"  window; the closest pre-{hb_label} Hb 7.1 g/dL [E_m] is gray-zone').",
             "- A reviewer must be able to verify from your reasoning that you",
             "  saw EVERY sub-threshold Hb in the 7-day window and explicitly",
             "  considered the temporal tradeoff between recency and value.",
@@ -2170,8 +2584,8 @@ def main() -> None:
                 an_hash=an_hash,
                 prior_rbc_units_24h=0,
                 prior_rbc_units_7d=0,
-                redactor_version="external-deid-gate-narrative-0.1",
-                redactor_model_sha="0" * 64,
+                redactor_version="not-applied",
+                redactor_model_sha="unavailable",
                 policy_version="KCMH-PR17.2 / AABB-2023 (pilot)",
                 prompt_hash="0" * 64,
                 evidence_bundle_hash=bundle.bundle_hash,
@@ -2232,6 +2646,17 @@ def main() -> None:
                 PlateletClassifierInputs(
                     audit_id=ctx.order.audit_id,
                     platelet_count=plt_count,
+                    diagnosis_codes=ctx.order.diagnosis_codes,
+                    platelet_freshness=(
+                        ctx.platelet_result.freshness
+                        if ctx.platelet_result is not None
+                        else None
+                    ),
+                    has_recent_chemo_med=find_chemo_med(
+                        _med_events(med, ctx.order.an), ctx.order.order_datetime
+                    )
+                    is not None,
+                    enable_prophylaxis_autoclear=PLATELET_AUTOCLEAR_PILOT_ENABLED,
                 )
             )
             if MSBOS_RESERVATION_PILOT_ENABLED:
@@ -2464,27 +2889,57 @@ def main() -> None:
                 )
         sys.exit("nothing to submit")
 
+    try:
+        privacy_prepare_path = prepare_path(os.environ)
+    except PrivacyPrepareError as exc:
+        sys.exit(str(exc))
+    privacy_policy_path = os.environ.get("BBA_PRIVACY_POLICY")
+    privacy_artifacts_path = os.environ.get("BBA_PRIVACY_ARTIFACTS")
+    privacy_policy = (
+        PrivacyAdmissionPolicy.from_file(Path(privacy_policy_path))
+        if privacy_policy_path
+        else None
+    )
+    privacy_artifacts = (
+        load_privacy_artifacts(Path(privacy_artifacts_path))
+        if privacy_artifacts_path
+        else {}
+    )
+    llm_contexts = [
+        ctx.model_copy(
+            update={
+                "evidence_chunks": privacy_artifacts[
+                    ctx.order.audit_id
+                ].evidence_chunks,
+            }
+        )
+        if ctx.order.audit_id in privacy_artifacts
+        else ctx
+        for ctx in llm_contexts
+    ]
+
     submissions: list[BatchSubmissionRequest] = []
     # Codex round-5 P2 (security): honor injection routing in the pilot leg. A
     # prompt whose scanner raised route_to_needs_review must NEVER be submitted
     # to Anthropic; it is quarantined to a local NEEDS_REVIEW row below,
     # mirroring the batch pipeline's _persist_injection_flagged_row.
     injection_flagged: list[PipelineRowContext] = []
+    prompt_requests: dict[str, PromptBuildRequest] = {}
     for ctx in llm_contexts:
         if ctx.component == "platelet":
             # Platelet review uses the dedicated PLATELET_REVIEW task mode
             # and system prompt (no Hb cohort threshold).
-            prompt = build_prompt(
-                PromptBuildRequest(
-                    task_mode="PLATELET_REVIEW",
-                    cohort_threshold=None,
-                    evidence_chunks=ctx.evidence_chunks,
-                    few_shot_examples=(),
-                )
+            request = PromptBuildRequest(
+                task_mode="PLATELET_REVIEW",
+                cohort_threshold=None,
+                evidence_chunks=ctx.evidence_chunks,
+                few_shot_examples=(),
             )
+            prompt = build_prompt(request)
             if prompt.route_to_needs_review:
                 injection_flagged.append(ctx)
                 continue
+            prompt_requests[ctx.order.audit_id] = request
             submissions.append(
                 BatchSubmissionRequest(
                     audit_id=ctx.order.audit_id,
@@ -2505,17 +2960,17 @@ def main() -> None:
             and cres.rationale in _RESERVE_AHEAD_RATIONALES
         )
         task_mode = rbc_task_mode(ctx.hb_result.value_g_dl, reserve_ahead=reserve_ahead)
-        prompt = build_prompt(
-            PromptBuildRequest(
-                task_mode=task_mode,
-                cohort_threshold=threshold,
-                evidence_chunks=ctx.evidence_chunks,
-                few_shot_examples=(),
-            )
+        request = PromptBuildRequest(
+            task_mode=task_mode,
+            cohort_threshold=threshold,
+            evidence_chunks=ctx.evidence_chunks,
+            few_shot_examples=(),
         )
+        prompt = build_prompt(request)
         if prompt.route_to_needs_review:
             injection_flagged.append(ctx)
             continue
+        prompt_requests[ctx.order.audit_id] = request
         submissions.append(
             BatchSubmissionRequest(
                 audit_id=ctx.order.audit_id,
@@ -2524,6 +2979,30 @@ def main() -> None:
                 prompt=prompt,
             )
         )
+
+    if privacy_prepare_path is not None:
+        anchors = {
+            ctx.order.audit_id: bangkok_anchor(ctx.order.order_datetime)
+            for ctx in llm_contexts
+        }
+        write_requests(
+            privacy_prepare_path,
+            PrivacyRequests(
+                run_id=RUN_ID,
+                cases={
+                    audit_id: PrivacyCase(
+                        anchor_date=anchors[audit_id], prompt_request=request
+                    )
+                    for audit_id, request in prompt_requests.items()
+                },
+            ),
+        )
+        print(
+            f"privacy prepare: exported {len(prompt_requests)}, "
+            f"injection-flagged skipped {len(injection_flagged)} "
+            f"-> {privacy_prepare_path}"
+        )
+        sys.exit(0)
 
     # Codex round-5 P2 (security): persist injection-flagged rows locally as
     # NEEDS_REVIEW — they were never sent to Anthropic. Mirrors the batch
@@ -2549,24 +3028,69 @@ def main() -> None:
             f"{len(injection_flagged)}"
         )
 
+    private_submissions: list[BatchSubmissionRequest] = []
+    context_by_id = {ctx.order.audit_id: ctx for ctx in llm_contexts}
+    for submission in submissions:
+        artifact = privacy_artifacts.get(submission.audit_id)
+        try:
+            if privacy_policy is None or artifact is None:
+                raise PrivacyAdmissionError("missing trusted redaction admission")
+            submission = submission.model_copy(
+                update={"privacy_attestation": artifact.attestation}
+            )
+            privacy_policy.verify(submission)
+        except PrivacyAdmissionError:
+            _persist_privacy_flagged_row(
+                context_by_id[submission.audit_id],
+                classifier_result=classifier_results.get(submission.audit_id),
+                audit_store=audit_store,
+                run_id=RUN_ID,
+            )
+        else:
+            context_by_id[submission.audit_id] = context_by_id[
+                submission.audit_id
+            ].model_copy(
+                update={
+                    "prompt_hash": submission.prompt.prompt_hash,
+                    "redactor_version": artifact.attestation.redactor_version.version,
+                    "redactor_model_sha": artifact.attestation.redactor_version.model_sha,
+                    "evidence_bundle_hash": artifact.attestation.redaction_hash,
+                }
+            )
+            private_submissions.append(submission)
+    submissions = private_submissions
+    llm_contexts = [context_by_id[ctx.order.audit_id] for ctx in llm_contexts]
+
     if not submissions:
-        print("  no clean submissions remaining after the injection filter")
+        print("  no submissions passed privacy and injection admission")
     else:
-        transport = RealAnthropicTransport(
-            api_key=api_key,
-            poll_interval_seconds=20.0,
-            # Anthropic batches have a 24h SLA; the old 1h cap gave up while
-            # the batch was still processing. Env-overridable for a shorter
-            # wait when iterating locally.
-            max_wait_seconds=float(os.environ.get("BBA_PILOT_BATCH_MAX_WAIT", "86400")),
-        )
+        transport: Any
+        if TRANSPORT == "claude-cli":
+            print(f"\nTransport: claude-cli (subscription, {CLI_WORKERS} workers)")
+            transport = ClaudeCliTransport(
+                batch_root=WORK / "cli_batches",
+                workers=CLI_WORKERS,
+                privacy_policy=privacy_policy,
+            )
+        else:
+            if not api_key:
+                sys.exit("ANTHROPIC_API_KEY not set")
+            transport = RealAnthropicTransport(
+                api_key=api_key,
+                privacy_policy=privacy_policy,
+                manifest_root=WORK / "api_request_manifests",
+                poll_interval_seconds=20.0,
+                # Anthropic batches have a 24h SLA; the old 1h cap gave up while
+                # the batch was still processing. Env-overridable for a shorter
+                # wait when iterating locally.
+                max_wait_seconds=float(
+                    os.environ.get("BBA_PILOT_BATCH_MAX_WAIT", "86400")
+                ),
+            )
         t0 = time.time()
         # Resume path: if BBA_PILOT_BATCH_ID is set, re-attach to an already-
-        # submitted batch instead of creating a new one. The deterministic
-        # context build above is reproducible, so ``submissions`` matches the
-        # original submission set and fetch_batch_results can rebuild each
-        # result's request_json. Use this after a Ctrl+C during polling so the
-        # in-flight batch is not abandoned and re-billed.
+        # submitted batch instead of creating a new one. The transport checks
+        # the exact stored manifest before fetching any response.
         resume_batch_id = os.environ.get("BBA_PILOT_BATCH_ID")
         if resume_batch_id:
             batch_id = resume_batch_id

@@ -1,13 +1,12 @@
-"""bba.deid_redactor — thai-medical-deid wrapper with role tokens + k-anonymity.
+"""bba.deid_redactor — thai-medical-deid wrapper with role tokens.
 
 See issue #17 for acceptance criteria. PRD §8 (Implementation Decisions)
 defines the wrapper's contract: a pinned-version post-processing layer on
 top of ``macsermkiat/thai-medical-deid`` that emits role-preserving tokens
-(``[ATTENDING]`` / ``[NURSE]`` / ``[PATIENT]`` / ``[FAMILY]``), enforces
-k-anonymity (k ≥ 5 on the ``{ward, ICD-3char, age-band, sex,
-admission-month}`` tuple), shifts literal dates to Δ-days-from-admission,
-caps age at 89, and flags semantic degradation when too many PERSON-class
-tokens cluster in a small window.
+(``[ATTENDING]`` / ``[NURSE]`` / ``[PATIENT]`` / ``[FAMILY]``), shifts
+literal dates to days from a caller-supplied anchor date, and flags
+semantic degradation when too many PERSON-class tokens cluster in a small
+window. No demographic field reaches the prompt, so the wrapper takes none.
 
 The wrapper is a *pure function* (no I/O, zero deps on Anthropic or HF
 transformers): the underlying redactor is plugged in via the
@@ -16,7 +15,6 @@ to the vendored ``thai-medical-deid`` package (``TRANSFORMERS_OFFLINE=1``
 + ``HF_HUB_OFFLINE=1`` per PRD §"Stack"); tests use deterministic stubs.
 """
 
-from bba.deid_redactor.age import apply_age_cap
 from bba.deid_redactor.phi_patterns import PHI_REGEXES
 from bba.deid_redactor.canonical import (
     build_envelope,
@@ -37,19 +35,11 @@ from bba.deid_redactor.exceptions import (
     DeidRedactorError,
     HashMismatchError,
 )
-from bba.deid_redactor.k_anonymity import (
-    compute_k_groups,
-    k_anonymity_passed,
-)
 from bba.deid_redactor.models import (
-    AGE_CAP,
     BackendRedactionResult,
-    K_ANONYMITY_MIN,
-    KAnonymityGate,
     NeedsReviewReason,
     NoteInput,
     PERSON_CLASS_TOKENS,
-    QuasiIdentifiers,
     RedactedNote,
     RedactionRequest,
     RedactionResult,
@@ -77,7 +67,6 @@ from bba.deid_redactor.roles import (
 from bba.deid_redactor.semantic import detect_semantic_degradation
 
 __all__ = [
-    "AGE_CAP",
     "ATTENDING_CUES",
     "BackendRedactionError",
     "BackendRedactionResult",
@@ -87,15 +76,12 @@ __all__ = [
     "DeidRedactorError",
     "FAMILY_CUES",
     "HashMismatchError",
-    "K_ANONYMITY_MIN",
-    "KAnonymityGate",
     "NURSE_CUES",
     "NeedsReviewReason",
     "NoteInput",
     "PATIENT_CUES",
     "PHI_REGEXES",
     "PERSON_CLASS_TOKENS",
-    "QuasiIdentifiers",
     "ROLE_CONTEXT_WINDOW",
     "RedactedNote",
     "RedactionRequest",
@@ -107,18 +93,15 @@ __all__ = [
     "RoleToken",
     "SEMANTIC_PERSON_THRESHOLD",
     "SEMANTIC_WINDOW_CHARS",
-    "apply_age_cap",
     "build_envelope",
     "canonical_serialize",
     "classify_honorific_in_span",
     "classify_role_by_cues",
-    "compute_k_groups",
     "compute_redaction_hash",
     "default_role_classifier",
     "detect_semantic_degradation",
     "extract_context",
     "format_offset",
-    "k_anonymity_passed",
     "parse_dates",
     "redact_bundle",
     "shift_date_spans_in_text",

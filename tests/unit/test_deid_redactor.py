@@ -27,7 +27,6 @@ from hypothesis import strategies as st
 from pydantic import ValidationError
 
 from bba.deid_redactor import (
-    AGE_CAP,
     ATTENDING_CUES,
     BackendRedactionError,
     BackendRedactionResult,
@@ -37,14 +36,11 @@ from bba.deid_redactor import (
     DeidRedactorError,
     FAMILY_CUES,
     HashMismatchError,
-    K_ANONYMITY_MIN,
-    KAnonymityGate,
     NURSE_CUES,
     NeedsReviewReason,
     NoteInput,
     PATIENT_CUES,
     PERSON_CLASS_TOKENS,
-    QuasiIdentifiers,
     ROLE_CONTEXT_WINDOW,
     RedactedNote,
     RedactionRequest,
@@ -56,17 +52,14 @@ from bba.deid_redactor import (
     RoleToken,
     SEMANTIC_PERSON_THRESHOLD,
     SEMANTIC_WINDOW_CHARS,
-    apply_age_cap,
     build_envelope,
     canonical_serialize,
     classify_role_by_cues,
-    compute_k_groups,
     compute_redaction_hash,
     default_role_classifier,
     detect_semantic_degradation,
     extract_context,
     format_offset,
-    k_anonymity_passed,
     parse_dates,
     redact_bundle,
     shift_dates_in_text,
@@ -107,23 +100,6 @@ def _stub_backend() -> _StubBackend:
     return _StubBackend(responses={})
 
 
-def _qi(
-    *,
-    ward: str = "W1",
-    icd_3char: str = "D62",
-    age_band: str = "60-69",
-    sex: str = "M",
-    admission_month: str = "2026-05",
-) -> QuasiIdentifiers:
-    return QuasiIdentifiers(
-        ward=ward,
-        icd_3char=icd_3char,
-        age_band=age_band,
-        sex=sex,
-        admission_month=admission_month,
-    )
-
-
 def _version(
     *,
     version: str = "0.1.0",
@@ -138,16 +114,12 @@ def _version(
 def _request(
     *,
     notes: tuple[NoteInput, ...] = (NoteInput(note_id="E1", text="plain note"),),
-    quasi_identifiers: QuasiIdentifiers | None = None,
-    admission_date: date = date(2026, 5, 10),
-    patient_age_years: int = 65,
+    anchor_date: date = date(2026, 5, 10),
     redactor_version: RedactorVersion | None = None,
 ) -> RedactionRequest:
     return RedactionRequest(
         notes=notes,
-        quasi_identifiers=quasi_identifiers or _qi(),
-        admission_date=admission_date,
-        patient_age_years=patient_age_years,
+        anchor_date=anchor_date,
         redactor_version=redactor_version or _version(),
     )
 
@@ -169,7 +141,6 @@ _PUBLIC_SURFACE_PINS = (
     DeidRedactorError,
     FAMILY_CUES,
     HashMismatchError,
-    KAnonymityGate,
     NURSE_CUES,
     PATIENT_CUES,
     PERSON_CLASS_TOKENS,
@@ -181,96 +152,7 @@ _PUBLIC_SURFACE_PINS = (
 
 
 # =============================================================================
-# AC4: k-anonymity gate (k >= 5 routes away)
-# =============================================================================
-
-
-class TestKAnonymityGate:
-    """k-anonymity: bundles with QI combos k<5 are routed to NEEDS_REVIEW."""
-
-    def test_k_anonymity_passed_at_threshold(self) -> None:
-        # k=5 is the boundary: PRD §8 says "k ≥ 5", so exactly 5 passes.
-        assert k_anonymity_passed(K_ANONYMITY_MIN) is True
-
-    def test_k_anonymity_failed_below_threshold(self) -> None:
-        assert k_anonymity_passed(K_ANONYMITY_MIN - 1) is False
-
-    def test_k_anonymity_failed_at_zero(self) -> None:
-        assert k_anonymity_passed(0) is False
-
-    def test_k_anonymity_passed_well_above_threshold(self) -> None:
-        assert k_anonymity_passed(50) is True
-
-    def test_k_anonymity_threshold_override(self) -> None:
-        # A stricter policy (k=10) is a future possibility; the function
-        # must honor the override so a config-time change does not need
-        # a code change.
-        assert k_anonymity_passed(7, k=10) is False
-        assert k_anonymity_passed(10, k=10) is True
-
-    def test_compute_k_groups_counts_each_qi_tuple(self) -> None:
-        qi_a = _qi(ward="W1")
-        qi_b = _qi(ward="W2")
-        groups = compute_k_groups([qi_a, qi_a, qi_a, qi_b, qi_b])
-        assert groups[qi_a] == 3
-        assert groups[qi_b] == 2
-
-    def test_compute_k_groups_order_independent(self) -> None:
-        qi_a = _qi(ward="W1")
-        qi_b = _qi(ward="W2")
-        groups_ab = compute_k_groups([qi_a, qi_b, qi_a, qi_a, qi_b])
-        groups_ba = compute_k_groups([qi_b, qi_a, qi_b, qi_a, qi_a])
-        assert dict(groups_ab) == dict(groups_ba)
-
-    def test_compute_k_groups_empty(self) -> None:
-        # Total function: empty population is a valid input.
-        groups = compute_k_groups([])
-        assert dict(groups) == {}
-
-    def test_compute_k_groups_returns_mapping(self) -> None:
-        groups = compute_k_groups([_qi()])
-        assert isinstance(groups, Mapping)
-
-
-# =============================================================================
-# AC6: age cap at 89
-# =============================================================================
-
-
-class TestAgeCap:
-    """Age cap is exactly 89 (HIPAA-derived); above → capped, exactly → not."""
-
-    def test_age_below_cap_unchanged(self) -> None:
-        capped, was_capped = apply_age_cap(65)
-        assert capped == 65
-        assert was_capped is False
-
-    def test_age_at_cap_unchanged(self) -> None:
-        # AGE_CAP is 89 itself, NOT > 89; the boundary is inclusive.
-        capped, was_capped = apply_age_cap(AGE_CAP)
-        assert capped == AGE_CAP
-        assert was_capped is False
-
-    def test_age_above_cap_collapsed_to_cap(self) -> None:
-        capped, was_capped = apply_age_cap(92)
-        assert capped == AGE_CAP
-        assert was_capped is True
-
-    def test_age_extreme_age_collapsed(self) -> None:
-        capped, was_capped = apply_age_cap(115)
-        assert capped == AGE_CAP
-        assert was_capped is True
-
-    def test_age_zero_unchanged(self) -> None:
-        # Neonatal ages are out-of-scope (PRD audit population is adult
-        # inpatients), but the function must not silently cap 0 to AGE_CAP.
-        capped, was_capped = apply_age_cap(0)
-        assert capped == 0
-        assert was_capped is False
-
-
-# =============================================================================
-# AC5: date-shift to Δ-days-from-admission
+# AC5: date-shift to days from the anchor date
 # =============================================================================
 
 
@@ -281,7 +163,7 @@ class TestDateShift:
         assert format_offset(days=0) == "Day 0"
 
     def test_format_offset_positive_has_explicit_plus(self) -> None:
-        # Explicit + sign prevents ambiguity with absolute day-of-admission.
+        # Explicit + sign prevents ambiguity with an absolute day number.
         assert format_offset(days=3) == "Day +3"
 
     def test_format_offset_negative_signed(self) -> None:
@@ -326,33 +208,33 @@ class TestDateShift:
         assert all(m.parsed.year >= 1900 for m in matches)
 
     def test_shift_dates_replaces_iso_with_offset(self) -> None:
-        admission = date(2026, 5, 10)
+        anchor = date(2026, 5, 10)
         text = "Admitted on 2026-05-10; rebleed on 2026-05-13"
-        shifted = shift_dates_in_text(text, admission_date=admission)
+        shifted = shift_dates_in_text(text, anchor_date=anchor)
         assert "2026-05-10" not in shifted
         assert "2026-05-13" not in shifted
         assert "Day 0" in shifted
         assert "Day +3" in shifted
 
     def test_shift_dates_replaces_negative_offset(self) -> None:
-        admission = date(2026, 5, 10)
+        anchor = date(2026, 5, 10)
         text = "Prior episode 2026-05-08"
-        shifted = shift_dates_in_text(text, admission_date=admission)
+        shifted = shift_dates_in_text(text, anchor_date=anchor)
         assert "Day -2" in shifted
 
     def test_shift_dates_leaves_non_matches_intact(self) -> None:
         # Numbers that are NOT dates (HN, room numbers) must pass through.
-        admission = date(2026, 5, 10)
+        anchor = date(2026, 5, 10)
         text = "BP 120/80 HR 72 in room 425 ward 7"
-        shifted = shift_dates_in_text(text, admission_date=admission)
+        shifted = shift_dates_in_text(text, anchor_date=anchor)
         assert shifted == text
 
     def test_shift_dates_deterministic(self) -> None:
         # Bundle-hash stability: same input → byte-identical output.
-        admission = date(2026, 5, 10)
+        anchor = date(2026, 5, 10)
         text = "Admit 2026-05-10 rebleed 2026-05-13"
-        a = shift_dates_in_text(text, admission_date=admission)
-        b = shift_dates_in_text(text, admission_date=admission)
+        a = shift_dates_in_text(text, anchor_date=anchor)
+        b = shift_dates_in_text(text, anchor_date=anchor)
         assert a == b
 
 
@@ -806,10 +688,6 @@ class TestCanonical:
                 "model_sha": "deadbeef",
                 "gazetteer_version": "v1",
             },
-            redacted_age=65,
-            age_capped=False,
-            k_anonymity_size=10,
-            k_anonymity_passed=True,
             route_to_needs_review=False,
             needs_review_reasons=[],
         )
@@ -825,10 +703,6 @@ class TestCanonical:
                 "model_sha": "deadbeef",
                 "gazetteer_version": "v1",
             },
-            redacted_age=65,
-            age_capped=False,
-            k_anonymity_size=10,
-            k_anonymity_passed=True,
             route_to_needs_review=False,
             needs_review_reasons=[],
         )
@@ -838,7 +712,7 @@ class TestCanonical:
         assert compute_redaction_hash(envelope) == expected
 
     def test_envelope_shape_is_locked(self) -> None:
-        # Exactly the 8 documented keys — extras would silently change
+        # Exactly the 4 documented keys — extras would silently change
         # the hash on downstream upgrades. Mirrors evidence_bundle_builder's
         # envelope-lock invariant.
         envelope = build_envelope(
@@ -848,20 +722,12 @@ class TestCanonical:
                 "model_sha": "deadbeef",
                 "gazetteer_version": "v1",
             },
-            redacted_age=65,
-            age_capped=False,
-            k_anonymity_size=10,
-            k_anonymity_passed=True,
             route_to_needs_review=False,
             needs_review_reasons=[],
         )
         assert set(envelope.keys()) == {
             "notes",
             "redactor_version",
-            "redacted_age",
-            "age_capped",
-            "k_anonymity_size",
-            "k_anonymity_passed",
             "route_to_needs_review",
             "needs_review_reasons",
         }
@@ -894,20 +760,12 @@ class TestRedactionResultValidation:
                 "model_sha": version.model_sha,
                 "gazetteer_version": version.gazetteer_version,
             },
-            redacted_age=65,
-            age_capped=False,
-            k_anonymity_size=10,
-            k_anonymity_passed=True,
             route_to_needs_review=False,
             needs_review_reasons=[],
         )
         return RedactionResult(
             notes=(),
             redactor_version=version,
-            redacted_age=65,
-            age_capped=False,
-            k_anonymity_size=10,
-            k_anonymity_passed=True,
             route_to_needs_review=False,
             needs_review_reasons=(),
             redaction_hash=(
@@ -927,42 +785,6 @@ class TestRedactionResultValidation:
 
 
 # =============================================================================
-# QuasiIdentifiers sex-code validation (codex review round 1, AC#4)
-# =============================================================================
-
-
-class TestQuasiIdentifiersSexValidation:
-    """Sex codes outside the canonical set must be rejected at construction.
-
-    Otherwise k-anonymity grouping would silently fragment when the same
-    population's sex values arrive in different free-form spellings
-    (``"Male"`` vs ``"M"`` vs ``"male"``).
-    """
-
-    def test_sex_M_accepted(self) -> None:
-        assert _qi(sex="M").sex == "M"
-
-    def test_sex_F_accepted(self) -> None:
-        assert _qi(sex="F").sex == "F"
-
-    def test_sex_U_accepted(self) -> None:
-        # ``U`` (unknown) covers HOSxP exports where sex is missing.
-        assert _qi(sex="U").sex == "U"
-
-    def test_sex_lowercase_rejected(self) -> None:
-        with pytest.raises(ValidationError):
-            _qi(sex="m")
-
-    def test_sex_full_word_rejected(self) -> None:
-        with pytest.raises(ValidationError):
-            _qi(sex="Male")
-
-    def test_sex_empty_rejected(self) -> None:
-        with pytest.raises(ValidationError):
-            _qi(sex="")
-
-
-# =============================================================================
 # Top-level redact_bundle orchestration (AC1, 4, 5, 6, 7, 8 in combination)
 # =============================================================================
 
@@ -977,44 +799,17 @@ class TestRedactBundleEndToEnd:
         result = redact_bundle(
             req,
             backend=backend,
-            k_gate=lambda qi: 10,
         )
         assert result.redactor_version == req.redactor_version
 
-    def test_age_capping_surfaces_on_result(self) -> None:
+    def test_plain_note_does_not_route(self) -> None:
+        # The request carries no demographics, so a readable note is the
+        # only input routing can depend on; a clean one must not route.
         backend = _stub_backend()
         backend.register("plain note", redacted="plain note")
-        req = _request(patient_age_years=95)
-        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
-        assert result.redacted_age == AGE_CAP
-        assert result.age_capped is True
-
-    def test_age_below_cap_unchanged_on_result(self) -> None:
-        backend = _stub_backend()
-        backend.register("plain note", redacted="plain note")
-        req = _request(patient_age_years=70)
-        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
-        assert result.redacted_age == 70
-        assert result.age_capped is False
-
-    def test_k_anonymity_pass_does_not_route(self) -> None:
-        backend = _stub_backend()
-        backend.register("plain note", redacted="plain note")
-        req = _request()
-        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 7)
-        assert result.k_anonymity_size == 7
-        assert result.k_anonymity_passed is True
-        # Without semantic degradation, no routing.
+        result = redact_bundle(_request(), backend=backend)
         assert result.route_to_needs_review is False
-
-    def test_k_anonymity_fail_routes(self) -> None:
-        backend = _stub_backend()
-        backend.register("plain note", redacted="plain note")
-        req = _request()
-        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 2)
-        assert result.k_anonymity_passed is False
-        assert result.route_to_needs_review is True
-        assert NeedsReviewReason.K_ANONYMITY_FAIL in result.needs_review_reasons
+        assert result.needs_review_reasons == ()
 
     def test_semantic_degradation_routes(self) -> None:
         # Backend emits 5 [PERSON] tokens in a tight window.
@@ -1028,7 +823,7 @@ class TestRedactBundleEndToEnd:
             ),
         )
         req = _request(notes=(NoteInput(note_id="E1", text="PHI heavy"),))
-        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
+        result = redact_bundle(req, backend=backend)
         assert result.route_to_needs_review is True
         assert NeedsReviewReason.SEMANTIC_DEGRADATION in result.needs_review_reasons
 
@@ -1043,11 +838,37 @@ class TestRedactBundleEndToEnd:
         )
         req = _request(
             notes=(NoteInput(note_id="E1", text="Admitted 2026-05-10 stable"),),
-            admission_date=date(2026, 5, 10),
+            anchor_date=date(2026, 5, 10),
         )
-        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
+        result = redact_bundle(req, backend=backend)
         assert "2026-05-10" not in result.notes[0].redacted_text
         assert "Day 0" in result.notes[0].redacted_text
+
+    def test_in_text_date_is_counted_from_anchor_date(self) -> None:
+        # The audit passes the order date as Day 0, so a transfusion note
+        # reads relative to the order rather than to an admission date the
+        # export does not carry.
+        text = "Hb 6.8 on 2026-05-07; PRBC given 2026-05-10"
+        backend = _stub_backend()
+        backend.register(text, redacted=text)
+        req = _request(
+            notes=(NoteInput(note_id="E1", text=text),),
+            anchor_date=date(2026, 5, 10),
+        )
+        result = redact_bundle(req, backend=backend)
+        assert result.notes[0].redacted_text == "Hb 6.8 on Day -3; PRBC given Day 0"
+
+    def test_stale_admission_date_field_is_rejected(self) -> None:
+        # The anchor moved from the admission date to the order date. A
+        # caller still passing admission_date= must fail loudly, not have
+        # the field silently dropped next to anchor_date.
+        with pytest.raises(ValidationError):
+            RedactionRequest(
+                notes=(NoteInput(note_id="E1", text="plain note"),),
+                anchor_date=date(2026, 5, 10),
+                admission_date=date(2026, 5, 1),  # type: ignore[call-arg]
+                redactor_version=_version(),
+            )
 
     def test_backend_date_span_shifted_to_offset(self) -> None:
         # The backend tagged a date PHI as a span and replaced it with
@@ -1070,10 +891,10 @@ class TestRedactBundleEndToEnd:
         )
         req = _request(
             notes=(NoteInput(note_id="E1", text="Admitted 2026-05-13 for low Hb"),),
-            admission_date=date(2026, 5, 10),
+            anchor_date=date(2026, 5, 10),
         )
-        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
-        # Backend-tagged [DATE] becomes Day +3 (May 13 vs admission May 10).
+        result = redact_bundle(req, backend=backend)
+        # Backend-tagged [DATE] becomes Day +3 (May 13 vs anchor May 10).
         assert "[DATE]" not in result.notes[0].redacted_text
         assert "Day +3" in result.notes[0].redacted_text
 
@@ -1098,9 +919,9 @@ class TestRedactBundleEndToEnd:
         )
         req = _request(
             notes=(NoteInput(note_id="E1", text="Seen on May 13, 2026"),),
-            admission_date=date(2026, 5, 10),
+            anchor_date=date(2026, 5, 10),
         )
-        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
+        result = redact_bundle(req, backend=backend)
         assert "[DATE]" in result.notes[0].redacted_text
 
     def test_backend_date_span_zero_offset(self) -> None:
@@ -1122,15 +943,14 @@ class TestRedactBundleEndToEnd:
         )
         req = _request(
             notes=(NoteInput(note_id="E1", text="Admitted 2026-05-10"),),
-            admission_date=date(2026, 5, 10),
+            anchor_date=date(2026, 5, 10),
         )
-        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
+        result = redact_bundle(req, backend=backend)
         assert "Day 0" in result.notes[0].redacted_text
 
     def test_backend_multiple_date_spans_shifted_in_order(self) -> None:
         # Two DATE spans, two [DATE] placeholders — must map in document
-        # order so the earlier admission_date offset lands at the
-        # earlier placeholder.
+        # order so the earlier offset lands at the earlier placeholder.
         backend = _stub_backend()
         backend.register(
             "Seen 2026-05-10 then 2026-05-15",
@@ -1152,9 +972,9 @@ class TestRedactBundleEndToEnd:
         )
         req = _request(
             notes=(NoteInput(note_id="E1", text="Seen 2026-05-10 then 2026-05-15"),),
-            admission_date=date(2026, 5, 10),
+            anchor_date=date(2026, 5, 10),
         )
-        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
+        result = redact_bundle(req, backend=backend)
         # Order matters: Day 0 must appear BEFORE Day +5 in the output.
         rendered = result.notes[0].redacted_text
         assert "[DATE]" not in rendered
@@ -1179,9 +999,9 @@ class TestRedactBundleEndToEnd:
         )
         req = _request(
             notes=(NoteInput(note_id="E1", text="Seen on [DATE]"),),
-            admission_date=date(2026, 5, 10),
+            anchor_date=date(2026, 5, 10),
         )
-        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
+        result = redact_bundle(req, backend=backend)
         assert "[DATE]" in result.notes[0].redacted_text
 
     def test_backend_date_span_more_spans_than_placeholders_raises(self) -> None:
@@ -1211,7 +1031,7 @@ class TestRedactBundleEndToEnd:
             notes=(NoteInput(note_id="E1", text="Seen 2026-05-10 and 2026-05-11"),),
         )
         with pytest.raises(BackendRedactionError):
-            redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
+            redact_bundle(req, backend=backend)
 
     def test_backend_date_span_count_mismatch_raises(self) -> None:
         # Contract: count of [DATE] placeholders in redacted text must
@@ -1235,7 +1055,7 @@ class TestRedactBundleEndToEnd:
             notes=(NoteInput(note_id="E1", text="Seen 2026-05-10 and 2026-05-11"),),
         )
         with pytest.raises(BackendRedactionError):
-            redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
+            redact_bundle(req, backend=backend)
 
     def test_person_role_upgraded_in_redacted_text(self) -> None:
         backend = _stub_backend()
@@ -1254,7 +1074,7 @@ class TestRedactBundleEndToEnd:
         req = _request(
             notes=(NoteInput(note_id="E1", text="Dr. Smith ordered 2U PRBC"),),
         )
-        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
+        result = redact_bundle(req, backend=backend)
         assert "[ATTENDING]" in result.notes[0].redacted_text
         assert "[PERSON]" not in result.notes[0].redacted_text
 
@@ -1268,7 +1088,6 @@ class TestRedactBundleEndToEnd:
             redact_bundle(
                 req,
                 backend=_BoomBackend(),
-                k_gate=lambda qi: 10,
             )
 
     def test_redact_bundle_is_pure_no_io(
@@ -1281,7 +1100,7 @@ class TestRedactBundleEndToEnd:
         backend = _stub_backend()
         backend.register("plain note", redacted="plain note")
         req = _request()
-        redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
+        redact_bundle(req, backend=backend)
         captured = capsys.readouterr()
         assert captured.out == ""
         assert captured.err == ""
@@ -1309,8 +1128,8 @@ class TestBundleHashStability:
         req = _request(
             notes=(NoteInput(note_id="E1", text="Dr. Smith ordered 2U PRBC"),),
         )
-        r1 = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
-        r2 = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
+        r1 = redact_bundle(req, backend=backend)
+        r2 = redact_bundle(req, backend=backend)
         assert r1.redaction_hash == r2.redaction_hash
 
     def test_different_version_different_hash(self) -> None:
@@ -1322,8 +1141,8 @@ class TestBundleHashStability:
         backend.register("plain note", redacted="plain note")
         req_v1 = _request(redactor_version=_version(version="0.1.0"))
         req_v2 = _request(redactor_version=_version(version="0.2.0"))
-        r1 = redact_bundle(req_v1, backend=backend, k_gate=lambda qi: 10)
-        r2 = redact_bundle(req_v2, backend=backend, k_gate=lambda qi: 10)
+        r1 = redact_bundle(req_v1, backend=backend)
+        r2 = redact_bundle(req_v2, backend=backend)
         assert r1.redaction_hash != r2.redaction_hash
 
     def test_different_text_different_hash(self) -> None:
@@ -1332,21 +1151,30 @@ class TestBundleHashStability:
         backend.register("note B", redacted="note B")
         req_a = _request(notes=(NoteInput(note_id="E1", text="note A"),))
         req_b = _request(notes=(NoteInput(note_id="E1", text="note B"),))
-        r_a = redact_bundle(req_a, backend=backend, k_gate=lambda qi: 10)
-        r_b = redact_bundle(req_b, backend=backend, k_gate=lambda qi: 10)
+        r_a = redact_bundle(req_a, backend=backend)
+        r_b = redact_bundle(req_b, backend=backend)
         assert r_a.redaction_hash != r_b.redaction_hash
 
     def test_hash_includes_routing_decision(self) -> None:
-        # k-anonymity decision is in the envelope, so a route-to-NEEDS_REVIEW
+        # The routing decision is in the envelope, so a route-to-NEEDS_REVIEW
         # change must yield a different hash even if every other byte is
         # identical. Without this, an audit row's hash could be re-used
         # for a routed result, breaking replay.
-        backend = _stub_backend()
-        backend.register("plain note", redacted="plain note")
-        req = _request()
-        r_pass = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
-        r_fail = redact_bundle(req, backend=backend, k_gate=lambda qi: 2)
-        assert r_pass.redaction_hash != r_fail.redaction_hash
+        def envelope(route: bool) -> Mapping[str, object]:
+            return build_envelope(
+                notes=[],
+                redactor_version={
+                    "version": "0.1.0",
+                    "model_sha": "deadbeef",
+                    "gazetteer_version": "v1",
+                },
+                route_to_needs_review=route,
+                needs_review_reasons=[],
+            )
+
+        assert compute_redaction_hash(envelope(False)) != compute_redaction_hash(
+            envelope(True)
+        )
 
 
 # =============================================================================
@@ -1506,7 +1334,7 @@ def test_redact_bundle_emits_correct_role_token_on_corpus(
     req = _request(
         notes=(NoteInput(note_id="E1", text=note_text),),
     )
-    result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
+    result = redact_bundle(req, backend=backend)
     rendered = result.notes[0].redacted_text
 
     expected_token = (
@@ -1521,58 +1349,6 @@ def test_redact_bundle_emits_correct_role_token_on_corpus(
 # =============================================================================
 # Property tests (hypothesis) — required for "deep" modules per PRD §"Testing"
 # =============================================================================
-
-
-# Strategy for valid quasi-identifier tuples. Constrained to the formats
-# the Pydantic model accepts so we exercise k-anonymity math, not validation.
-_ward_strategy = st.sampled_from(["W1", "W2", "W3", "ICU", "ER"])
-_icd_strategy = st.sampled_from(["D62", "D63", "I50", "K92", "N18"])
-_sex_strategy = st.sampled_from(["M", "F", "U"])
-_age_band_strategy = st.sampled_from(["20-29", "30-39", "60-69", "70-79", "90-99"])
-_month_strategy = st.sampled_from(["2026-01", "2026-05", "2026-12"])
-
-
-def _qi_strategy() -> st.SearchStrategy[QuasiIdentifiers]:
-    return st.builds(
-        QuasiIdentifiers,
-        ward=_ward_strategy,
-        icd_3char=_icd_strategy,
-        age_band=_age_band_strategy,
-        sex=_sex_strategy,
-        admission_month=_month_strategy,
-    )
-
-
-class TestKAnonymityProperties:
-    """Hypothesis property tests for k-anonymity math."""
-
-    @given(records=st.lists(_qi_strategy(), min_size=0, max_size=50))
-    @settings(deadline=None, max_examples=100)
-    def test_group_sizes_sum_to_record_count(
-        self, records: list[QuasiIdentifiers]
-    ) -> None:
-        # Total over every group's size == number of records.
-        # If this is ever false, compute_k_groups is dropping records.
-        groups = compute_k_groups(records)
-        assert sum(groups.values()) == len(records)
-
-    @given(records=st.lists(_qi_strategy(), min_size=1, max_size=20))
-    @settings(deadline=None, max_examples=100)
-    def test_every_input_qi_appears_in_groups(
-        self, records: list[QuasiIdentifiers]
-    ) -> None:
-        groups = compute_k_groups(records)
-        for r in records:
-            assert r in groups
-
-    @given(records=st.lists(_qi_strategy(), min_size=0, max_size=20))
-    @settings(deadline=None, max_examples=100)
-    def test_compute_k_groups_order_invariant(
-        self, records: list[QuasiIdentifiers]
-    ) -> None:
-        a = compute_k_groups(records)
-        b = compute_k_groups(list(reversed(records)))
-        assert dict(a) == dict(b)
 
 
 class TestSemanticDegradationProperties:
@@ -1599,31 +1375,31 @@ class TestDateShiftProperties:
     """Hypothesis property tests for the date-shift transform."""
 
     @given(
-        admission_year=st.integers(min_value=2020, max_value=2030),
-        admission_month=st.integers(min_value=1, max_value=12),
-        admission_day=st.integers(min_value=1, max_value=28),
+        anchor_year=st.integers(min_value=2020, max_value=2030),
+        anchor_month=st.integers(min_value=1, max_value=12),
+        anchor_day=st.integers(min_value=1, max_value=28),
         offset_days=st.integers(min_value=-100, max_value=100),
     )
     @settings(deadline=None, max_examples=50)
     def test_offset_round_trips_through_shift(
         self,
-        admission_year: int,
-        admission_month: int,
-        admission_day: int,
+        anchor_year: int,
+        anchor_month: int,
+        anchor_day: int,
         offset_days: int,
     ) -> None:
-        # Construct a (admission_date, note containing date_offset) and
+        # Construct a (anchor_date, note containing date_offset) and
         # assert the rewritten text contains the matching ``Day {±N}``
         # offset.
-        admission = date(admission_year, admission_month, admission_day)
+        anchor = date(anchor_year, anchor_month, anchor_day)
         from datetime import timedelta
 
-        in_text_date = admission + timedelta(days=offset_days)
+        in_text_date = anchor + timedelta(days=offset_days)
         # Skip values that fall outside 4-digit year range.
         if in_text_date.year < 1000 or in_text_date.year > 9999:
             return
         text = f"event on {in_text_date.isoformat()}"
-        shifted = shift_dates_in_text(text, admission_date=admission)
+        shifted = shift_dates_in_text(text, anchor_date=anchor)
         # Whatever the offset, the output must NOT contain the original
         # ISO date literal — the shift is total.
         assert in_text_date.isoformat() not in shifted
@@ -1645,8 +1421,8 @@ class TestBundleHashStabilityProperties:
             backend.register(text, redacted=text)
             notes.append(NoteInput(note_id=f"E{i + 1}", text=text))
         req = _request(notes=tuple(notes))
-        r1 = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
-        r2 = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
+        r1 = redact_bundle(req, backend=backend)
+        r2 = redact_bundle(req, backend=backend)
         assert r1.redaction_hash == r2.redaction_hash
 
 
@@ -1669,7 +1445,7 @@ class TestVersionStampThroughResult:
         backend.register("plain note", redacted="plain note")
         v = _version(version="1.2.3", model_sha="cafef00d", gazetteer_version="g-2.0")
         req = _request(redactor_version=v)
-        result = redact_bundle(req, backend=backend, k_gate=lambda qi: 10)
+        result = redact_bundle(req, backend=backend)
         assert result.redactor_version.version == "1.2.3"
         assert result.redactor_version.model_sha == "cafef00d"
         assert result.redactor_version.gazetteer_version == "g-2.0"

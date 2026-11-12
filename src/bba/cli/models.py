@@ -103,7 +103,7 @@ class AuditCommandInput(_FrozenModel):
     """
 
     input_csv: Path | None = None
-    run_id: str | None = None
+    run_id: SafeRunId | None = None
     force: bool = False
 
     @model_validator(mode="after")
@@ -121,7 +121,7 @@ class AuditCommandInput(_FrozenModel):
 class EvaluateCommandInput(_FrozenModel):
     """Inputs for ``bba evaluate --run-id ...``."""
 
-    run_id: str = Field(min_length=1)
+    run_id: SafeRunId
 
 
 class ReportCommandInput(_FrozenModel):

@@ -1,61 +1,35 @@
 ---
 title: Install
-description: Install blood_audit with uv and verify the CLI.
+description: Install the source checkout and verify the available CLI commands.
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
+Install Python 3.13 or later and uv. Use the lockfile to install the repository dependencies.
 
-<AtAGlance
-  items={[
-    { label: "Goal", value: "Create a reproducible local environment from uv.lock." },
-    { label: "Do first", value: "Install Python 3.13+ and uv 0.9.24+.", tone: "ok" },
-    { label: "Do not", value: "Do not set UV_LOCKED=1 with uv sync --frozen.", tone: "warn" },
-    { label: "Success check", value: "uv run bba --help prints six subcommands." },
-  ]}
-/>
-
-## Prerequisites
-
-| Requirement | Version |
-| --- | --- |
-| Python | ≥ 3.13 |
-| uv | ≥ 0.9.24 |
-| PostgreSQL | ≥ 14 (psycopg3 driver) |
-| Docker (for tests only) | latest |
-
-## Clone and sync
-
-```bash
+```sh
 git clone https://github.com/macsermkiat/blood_audit.git
 cd blood_audit
 uv sync --frozen
-```
-
-The lockfile is frozen. **Do not set `UV_LOCKED=1`** — it conflicts with
-`--frozen` in uv ≥ 0.9.
-
-## Verify the CLI
-
-```bash
 uv run bba --help
 ```
 
-You should see six subcommands. Three of them — `evaluate`,
-`serve-dashboard`, `sentinel` — raise `CliError` by design. That is
-**not a bug**; see [Integration seams](/blood_audit/en/operators/integration-seams/).
-(`report` is wired: it renders the monthly report from the audit store.)
+The help output lists six commands: `audit`, `evaluate`, `ingest`, `report`, `sentinel`, and `serve-dashboard`. Use each command's `--help` for its arguments.
 
-## GitHub Pages one-time setup (docs site only)
+The local audit mode needs no Postgres connection or provider key. Continue to [First audit run](/blood_audit/en/operators/first-audit-run/).
 
-Skip this if you are operating the pipeline, not publishing this docs site.
+## Install the live provider dependency
 
-If you are publishing this docs site from your own fork:
+For an approved live model deployment, sync the optional dependency group.
 
-1. Repository settings → **Pages** → Source: **GitHub Actions**.
-2. Merge a change touching `docs/**` to `main`.
-3. The `deploy-docs` workflow builds and deploys; the Pages URL lands in
-   the run summary.
+```sh
+uv sync --frozen --extra live
+```
 
-## Next steps
+Run live commands with `uv run --extra live bba ...` so uv retains that dependency. Complete the [model configuration](/blood_audit/en/operators/env-vars/#model-review) before running hospital data.
 
-Configure [environment variables](/blood_audit/en/operators/env-vars/).
+## Prepare a database deployment
+
+Use the source checkout when deploying model checkpoints or the reviewer service. The root Alembic migration project is an operational dependency and is not bundled in the standalone wheel. Apply the matching migrations and configure the required database roles before starting the service.
+
+The dashboard checks the review role's migration state and privileges. It requires an unprivileged reviewer role, an HTTPS reverse proxy, and an identity adapter that issues signed sessions. See [Deployment integrations](/blood_audit/en/operators/integration-seams/#serve-authenticated-review).
+
+Docker is needed for the container-backed Postgres tests, rather than for a local audit. The [testing guide](/blood_audit/en/developers/testing/) describes required database checks.

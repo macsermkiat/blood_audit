@@ -45,9 +45,11 @@ from bba.audit_pipeline.bleeding import (
     quote_indicates_melena,
     quote_negates_bleeding,
 )
+from bba.audit_pipeline.manifest import context_hash
 from bba.audit_pipeline.models import PipelineRowContext, PipelineRunResult
 from bba.audit_store import AuditRow, AuditStore, LlmCall
 from bba.audit_store.models import Classification, ReservationAssessment
+from bba.classifications import RETURNS_TERMINALS as _RETURNS_TERMINALS
 from bba.cohort_detector import CohortLabel
 from bba.deterministic_classifier import (
     PERIOP_MIN_EBL_ML,
@@ -67,8 +69,13 @@ from bba.platelet_classifier import (
 )
 from bba.platelet_guardrail import (
     PLATELET_OVERCLEAR_REVIEW_REASON,
+    PLATELET_SPECIALIST_TARGET_REVIEW_REASON,
+    PLATELET_TREND_REVIEW_REASON,
     platelet_overclear_suspect,
+    platelet_specialist_target_review,
+    platelet_trend_unsupported,
 )
+from bba.llm_client.conclusion import reasoning_conclusion
 from bba.platelet_guardrail.models import PlateletHardSignals
 from bba.preop_reservation.platelet_evaluate import REVIEW_REASONS
 from bba.quote_grounder.layers import (
@@ -96,14 +103,29 @@ for the adversarial-grounder case).
 def default_verifier(
     result: BatchSubmissionResult, context: PipelineRowContext
 ) -> bool:
-    """Phase-1 placeholder verifier: every attempt grounds.
+    """Ground every cited indication against the exact redacted evidence."""
+    from bba.quote_grounder import Citation, verify_citations
 
-    Replaced by :mod:`bba.quote_grounder` integration in the next
-    ticket. Until then, callers that want to exercise the
-    hallucination-suspect branch inject a stub returning ``False``.
-    """
-    _ = (result, context)
-    return True
+    payload = _reserve_ahead_input_payload(result)
+    if payload is None or _classification_from_result(result).parse_failure_reason:
+        return False
+    indications = payload.get("indications")
+    if not isinstance(indications, Sequence) or isinstance(indications, str | bytes):
+        return False
+    citations = []
+    for item in indications:
+        if not _indication_element_well_formed(item):
+            return False
+        citations.append(Citation(quote=item["quote"], cited_id=item["source_id"]))
+    if not citations:
+        return True
+    if any(not isinstance(c.text, str) for c in context.evidence_chunks):
+        return False
+    sources = tuple(
+        EvidenceSource(source_id=c.evidence_id, text=c.text)
+        for c in context.evidence_chunks
+    )
+    return all(v.passed for v in verify_citations(citations, sources))
 
 
 # =============================================================================
@@ -169,8 +191,6 @@ PREOP_OVER_RESERVATION_BRIDGE_UNCONFIRMED_REVIEW_REASON = (
 )
 PLANNED_OP_AMBIGUOUS_REVIEW_REASON = "ambiguous_planned_op"
 ALL_CANDIDATES_EXCLUDED_REVIEW_REASON = "all_candidates_excluded"
-
-_RETURNS_TERMINALS = frozenset({"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"})
 
 
 class ReservationEligibility(StrEnum):
@@ -558,7 +578,7 @@ def periop_contradiction(
 # classification. The prompt teaches the same clear-cut policy; this guardrail
 # is the deterministic net for when the model clears anyway.
 #
-# "Hard signal" is deterministic-only (B1): a genuinely low Hb (< 7.0), a hard
+# "Hard signal" is deterministic-only (B1): a genuinely low Hb (<= 7.0), a hard
 # peri-op signal, an MTP cohort, or hemodynamic instability. Bleeding /
 # symptomatic anaemia prose remains untrusted except for the one committee-
 # accepted exemption: an ACTIVE_BLEEDING indication with its own confidence
@@ -656,7 +676,8 @@ def _has_structured_hard_signal(context: PipelineRowContext) -> bool:
     """True iff ``context`` carries a deterministic hard signal that justifies
     an LLM APPROPRIATE in the gray zone (B1 exemption set).
 
-    Any one of: a genuinely low Hb (< 7.0 g/dL), an MTP cohort, or a
+    Any one of: a genuinely low Hb (<= 7.0 g/dL; inclusive per owner ruling
+    2026-09-27, case 68004713), an MTP cohort, or a
     windowed peri-op signal (:func:`_has_windowed_periop_exemption` — an
     intra-op transfusion / major EBL in both modes, or, only in legacy flag-OFF
     mode, a ``surgical_context`` with a completed op within
@@ -673,7 +694,7 @@ def _has_structured_hard_signal(context: PipelineRowContext) -> bool:
     the instability precondition of :func:`_qualified_hemodynamic_floor`,
     where the ruling's qualifiers decide floor-vs-assert."""
     hb = context.hb_result.value_g_dl
-    if hb is not None and hb < UNIVERSAL_LOW_HB_APPROPRIATE_THRESHOLD:
+    if hb is not None and hb <= UNIVERSAL_LOW_HB_APPROPRIATE_THRESHOLD:
         return True
     if context.cohort_assignment.label == CohortLabel.MTP:
         return True
@@ -781,9 +802,7 @@ def _grounded_indications(
     evidence bundle (quote_grounder Layers 2+3: the cited source exists and
     the quote is a word-boundary contiguous match inside it, NFC-normalized).
 
-    WHY: the batch path's verifier is still the Phase-1 pass-through
-    (:func:`default_verifier`), so a winning attempt does NOT guarantee its
-    quotes exist in the notes. The qualified-bleeding exemption turns prose
+    The qualified-bleeding exemption turns prose
     directly into a final APPROPRIATE with no human review (#94); feeding it
     an unverified quote would let a hallucinated bleed clear a withheld
     order. The committee's prose-trust decision (spec #89 #2) covers the
@@ -1050,24 +1069,36 @@ def _grounded_true_subthreshold_indication(
     context: PipelineRowContext,
 ) -> bool:
     """True iff a grounded SUB_THRESHOLD_HB citation at the shared
-    prose-trust bar is also structurally TRUE (hb strictly below the cohort
-    floor).
+    prose-trust bar is also structurally TRUE (the closest Hb, or the lowest
+    Hb in the 24 h before the order, at or below the cohort floor; the floor
+    itself qualifies per owner ruling 2026-09-27, case 68004713).
 
     WHY (Codex PR #97 round 3): the prompt defines SUB_THRESHOLD_HB as HARD,
     but :func:`_has_structured_hard_signal` only exempts the universal
-    Hb < 7.0. A row whose Hb sits below its own cohort floor can still be
+    Hb <= 7.0. A row whose Hb sits at or below its own cohort floor can still be
     LLM-routed when the deterministic leg withheld the value as unreliable
     (hemodilution flag, single low Hb with no trend) — asserting
     ``INAPPROPRIATE`` against a prompt-compliant clear there would contradict
     the prompt's own contract, so the caller floors it to a human instead.
-    The structural cross-check is the gate: an at/above-floor Hb mislabeled
+    The structural cross-check is the gate: an above-floor Hb mislabeled
     "sub-threshold" (the motivating over-clear class, spec #89 story 6)
     fails it and keeps the assert. Never auto-clears — the deterministic
     leg flagged the value as unreliable for a reason.
     """
-    hb = context.hb_result.value_g_dl
+    # Issue #249: the prompt defines SUB_THRESHOLD_HB on the lowest Hb in the
+    # 24 h before the order, so the structural check reads that minimum too;
+    # a lookup that did not compute it falls back to the closest value.
+    closest = context.hb_result.value_g_dl
+    lowest = context.hb_result.min_24h_g_dl
+    hb = (
+        closest
+        if lowest is None
+        else lowest
+        if closest is None
+        else min(closest, lowest)
+    )
     threshold = context.cohort_assignment.threshold
-    if hb is None or threshold is None or hb >= threshold:
+    if hb is None or threshold is None or hb > threshold:
         return False
     return _cited_at_prose_trust(grounded_indications, _SUBTHRESHOLD_HARD_CODES)
 
@@ -1115,6 +1146,13 @@ def _platelet_gate_result(
             audit_id=context.order.audit_id,
             platelet_count=count,
             enable_missing_platelet_defer=enable_missing_platelet_defer,
+            diagnosis_codes=context.order.diagnosis_codes,
+            platelet_freshness=context.platelet_result.freshness
+            if context.platelet_result is not None
+            else None,
+            enable_prophylaxis_autoclear=(
+                feature_flags.PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED
+            ),
         )
     )
 
@@ -1160,6 +1198,24 @@ class _Guardrail(Protocol):
     def __call__(
         self, verdict: _Verdict, ctx: _GuardrailContext, /
     ) -> _Verdict | None: ...
+
+
+LABEL_REASONING_CONFLICT_REVIEW_REASON = "label_reasoning_conflict"
+"""Typed ``review_reason`` for an answer whose ``classification`` contradicts
+the class its own ``reasoning_summary_en`` concludes (2026-09-22 rerun: 6 of
+364, five of them with the label written last). Neither the label nor the
+reasoning is trusted: the row goes to a human. Never asserted, never cleared."""
+
+
+def _label_reasoning_conflict_guardrail(
+    verdict: _Verdict, ctx: _GuardrailContext, /
+) -> _Verdict | None:
+    if verdict.review_reason is not None:
+        return None  # a parse failure already sent the row to review
+    concluded = reasoning_conclusion(ctx.summary_en)
+    if concluded is None or concluded == verdict.final_classification:
+        return None
+    return _Verdict("NEEDS_REVIEW", LABEL_REASONING_CONFLICT_REVIEW_REASON)
 
 
 def _reserve_ahead_guardrail(
@@ -1268,6 +1324,57 @@ def _platelet_overclear_guardrail(
     return None
 
 
+def _platelet_trend_guardrail(
+    verdict: _Verdict, ctx: _GuardrailContext, /
+) -> _Verdict | None:
+    # Issue #237: the model sets prophylactic_marrow_failure itself, so the
+    # over-clear guardrail above cannot catch an "expected to fall" clear on a
+    # flat or rising count; the projected count on the row context can.
+    if not (
+        feature_flags.PLATELET_TREND_GUARDRAIL_ENABLED
+        and ctx.row.component == "platelet"
+        and ctx.row.platelet_projection_computed
+        and ctx.platelet_hard_signals is not None
+    ):
+        return None
+    trigger_count = (
+        ctx.row.platelet_result.value_k_ul
+        if ctx.row.platelet_result is not None
+        else None
+    )
+    if platelet_trend_unsupported(
+        verdict.final_classification,
+        ctx.platelet_hard_signals,
+        trigger_count,
+        ctx.row.platelet_projected_24h_k_ul,
+    ):
+        return _Verdict("NEEDS_REVIEW", PLATELET_TREND_REVIEW_REASON)
+    return None
+
+
+def _platelet_specialist_target_guardrail(
+    verdict: _Verdict, ctx: _GuardrailContext, /
+) -> _Verdict | None:
+    # Ruling 2026-09-23: an order that followed a consultant's documented
+    # higher target goes to review, so the ordering doctor is not flagged.
+    if not (
+        feature_flags.PLATELET_SPECIALIST_TARGET_GUARDRAIL_ENABLED
+        and ctx.row.component == "platelet"
+        and ctx.platelet_hard_signals is not None
+    ):
+        return None
+    trigger_count = (
+        ctx.row.platelet_result.value_k_ul
+        if ctx.row.platelet_result is not None
+        else None
+    )
+    if platelet_specialist_target_review(
+        verdict.final_classification, ctx.platelet_hard_signals, trigger_count
+    ):
+        return _Verdict("NEEDS_REVIEW", PLATELET_SPECIALIST_TARGET_REVIEW_REASON)
+    return None
+
+
 def _empty_reasoning_overlay(
     verdict: _Verdict, ctx: _GuardrailContext, /
 ) -> _Verdict | None:
@@ -1281,10 +1388,15 @@ def _empty_reasoning_overlay(
 
 _PRIMARY_GUARDRAILS: Final[tuple[_Guardrail, ...]] = (
     _reserve_ahead_guardrail,
+    # Before every label-reading guardrail: a self-contradicting answer is
+    # evidence for neither class, so nothing below may assert on its label.
+    _label_reasoning_conflict_guardrail,
     _periop_contradiction_guardrail,
     _rbc_overclear_guardrail,
     _native_review_guardrail,
     _platelet_overclear_guardrail,
+    _platelet_trend_guardrail,
+    _platelet_specialist_target_guardrail,
 )
 
 _POST_TERMINAL_OVERLAYS: Final[tuple[_Guardrail, ...]] = (_empty_reasoning_overlay,)
@@ -1299,13 +1411,14 @@ def apply_batch_results(
     classifier_results: Mapping[str, ClassifierResult] | None = None,
     verifier: Verifier = default_verifier,
     enable_missing_platelet_defer: bool = False,
+    original_calls: Sequence[LlmCall] | None = None,
 ) -> PipelineRunResult:
     """Apply a single :class:`RawBatchResponse` to the audit_store.
 
     For each ``audit_id`` (grouped from ``response.results`` by
     ``custom_id``):
 
-    1. Verify each attempt via ``verifier`` (Phase-1 default: pass).
+    1. Verify each attempt against the supplied redacted evidence.
     2. Pick the winning attempt via the last-verifier-passed rule
        (user constraint #6). If no attempt passes verifier, surface
        the row as ``NEEDS_REVIEW`` with the ``hallucination_suspect``
@@ -1371,10 +1484,18 @@ def apply_batch_results(
         )
         calls = [
             _build_llm_call(
-                record.result, attempt_index=record.attempt_id, run_id=run_id
+                record.result,
+                attempt_index=record.attempt_id,
+                run_id=run_id,
+                context=context,
+                enable_missing_platelet_defer=enable_missing_platelet_defer,
             )
             for record in attempt_records
         ]
+        if original_calls is not None:
+            calls = [call for call in original_calls if call.audit_id == audit_id]
+            if len(calls) != len(attempt_records):
+                raise ValueError("cached attempt provenance does not match response")
         write_result = audit_store.write(row, calls)
         if not write_result.skipped_idempotent:
             persisted.append(audit_id)
@@ -1550,7 +1671,12 @@ def _build_audit_row(
             context=context,
             classifier_result=classifier_result,
             enable_missing_platelet_defer=enable_missing_platelet_defer,
-            review_reason="hallucination_suspect",
+            review_reason=(
+                _classification_from_result(last_result).parse_failure_reason
+                or "hallucination_suspect"
+            )
+            if last_result is not None
+            else "hallucination_suspect",
             verifier_pass=False,
             verifier_retries=max(len(attempts) - 1, 0),
             model_id=last_result.model_id if last_result else "unknown",
@@ -1929,7 +2055,12 @@ def _audit_row_for_platelet_reservation_review(
 
 
 def _build_llm_call(
-    result: BatchSubmissionResult, *, attempt_index: int, run_id: str
+    result: BatchSubmissionResult,
+    *,
+    attempt_index: int,
+    run_id: str,
+    context: PipelineRowContext | None = None,
+    enable_missing_platelet_defer: bool = False,
 ) -> LlmCall:
     """Translate one :class:`BatchSubmissionResult` into a persistable
     :class:`LlmCall` whose ``call_id`` is deterministic in the result's
@@ -1940,6 +2071,13 @@ def _build_llm_call(
     call_id = f"call-{result.custom_id}-{attempt_index}-{fingerprint}"
     return LlmCall(
         call_id=call_id,
+        attempt_index=attempt_index,
+        context_hash=context_hash(
+            context, enable_missing_platelet_defer=enable_missing_platelet_defer
+        )
+        if context is not None
+        else None,
+        response_headers=result.response_headers,
         audit_id=result.custom_id,
         run_id=run_id,
         model_id=result.model_id,

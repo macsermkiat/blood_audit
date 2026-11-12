@@ -1,103 +1,53 @@
 ---
 title: audit command
-description: Every flag of bba audit, the inputs it reads, and its idempotency contract.
+description: Inputs, configuration, persistence, and recovery behavior of bba audit.
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
-import CliCommandCard from "../../../../components/CliCommandCard.astro";
+`bba audit` validates a canonical HOSxP bundle, assembles orders, and commits audit classifications. It reads exports and writes local audit artifacts. It does not update HOSxP.
 
-:::caution[Phase 1 scope]
-In Phase 1, `bba audit` wraps the **ingest leg** of the pipeline. It
-validates the HOSxP CSV bundle, streams rows through normalization under
-`$BBA_DATA_DIR/audit/<run_id>/`, and records completion/run-state markers
-for idempotency. The LLM-driven analysis leg (deterministic classifier →
-evidence bundle → de-id → prompt → batch → quote ground → audit-store
-write) is implemented as separate modules but is **wired in Phase 1.5**.
-Until then, classification rows are not yet produced by this command.
-:::
+```sh
+uv run bba audit --input /srv/bba/export/BDVST.csv
+uv run bba audit --run-id RUN_ID
+```
 
-<AtAGlance
-  items={[
-    { label: "Reads", value: "A CSV path inside the HOSxP export bundle." },
-    { label: "Writes now", value: "Run-state markers after schema validation and row normalization.", tone: "ok" },
-    { label: "Writes later", value: "AuditRows, LlmCalls, and batch_runs in Phase 1.5." },
-    { label: "Failure style", value: "Missing env vars, schema drift, or incomplete bundles fail loud.", tone: "warn" },
-  ]}
-/>
+## Arguments
 
-<CliCommandCard
-  command="bba audit"
-  summary="Phase 1: validate and drain a HOSxP bundle with idempotent run-level semantics. Phase 1.5: also classify and write audit rows."
-  flags={[
-    { name: "--input INPUT_CSV", description: "Path to the HOSxP CSV bundle to ingest." },
-    { name: "--run-id RUN_ID", description: "Reuse a previously completed run_id (no-op unless --force)." },
-    { name: "--force", description: "Override run-level idempotency. Writes a compliance row to audit_log with idempotency_override=true." },
-  ]}
-  envVars={["BBA_DATA_DIR"]}
-  exitCodes={[
-    { code: 0, meaning: "Ingest complete and run_id marked complete, OR no-op because run_id was already complete." },
-    { code: 1, meaning: "CliError — usually a missing env var or an ingest validation failure." },
-  ]}
-  example={`uv run bba audit --input /var/data/exports/PHI_xxx_001.csv`}
-/>
+| Option | Contract |
+| --- | --- |
+| `--input PATH` | Path to `BDVST.csv` beside the other canonical CSVs. Computes a run identity from the bundle, schema, code version, and explicit application configuration. |
+| `--run-id ID` | Selects a recorded run. Resumes incomplete work from its recorded source snapshot when configuration still matches. A completed run is a no-op unless forced. |
+| `--force` | Bypasses the completed-run shortcut and appends an `audit_log` entry with `idempotency_override=true`. Committed results and request manifests remain immutable. |
 
-The other four subcommands (`evaluate`, `report`, `serve-dashboard`,
-`sentinel`) are [integration seams](/blood_audit/en/operators/integration-seams/)
-that fail loud by design.
+Exactly one of `--input` and `--run-id` is required. Runs sharing a run ID take the same run lock. Different run IDs can run concurrently.
 
-## When to use `--input` vs `--run-id`
+## Configuration and results
 
-- `--input INPUT_CSV` — first run for this bundle. Computes a `run_id`
-  from the input hash + schema fingerprint + code version, ingests, and
-  marks the run complete.
-- `--run-id RUN_ID` — re-attach to an already-completed run. With no
-  `--force`, this is a no-op (the run is already complete). With
-  `--force`, see below.
+`BBA_DATA_DIR` is required. Without `BBA_APPLICATION_CONFIG`, the application uses local mode with the `repository-policy` policy version. Deterministic decisions commit to the audit store. Cases that require model evidence commit as `NEEDS_REVIEW` with `privacy_admission_failed` without making a model call.
 
-## `--force` writes a compliance row
+An explicit application JSON file contributes its canonical JSON to the run identity. It selects `local`, `cassette`, or `live` transport and the policy version. Model submissions require signed evidence admission and durable Postgres checkpoints. See [Environment variables](/blood_audit/en/operators/env-vars/).
 
-When `--force` is set, the command writes an entry to `audit_log` with
-`idempotency_override=true` documenting that the re-run was forced. This
-preserves the audit trail for the QI committee. Do not bypass this by
-editing the run-state files directly.
+A completion marker is written only after committed `AuditRow` IDs are recorded. Ingested tables do not count as audit results. An empty eligible cohort fails. A platelet order suppressed within an MTP window intentionally emits no audit row.
 
-## Idempotency at the run level
+## Run identity and retained evidence
 
-Concurrent invocations on the same `run_id` are serialized via
-`store.acquire_run_lock`. Two parallel CLI processes cannot both pass
-the "already complete" guard and execute ingest twice. Concurrent
-audits of *different* inputs run in parallel without contention.
+The bundle's canonical CSV content, schema fingerprint, and package version determine the base identity. An explicit application configuration also contributes to the audit identity. Changing a secondary canonical CSV can therefore produce a different run ID.
 
-## Phase 1.5 (preview)
+The application copies the canonical bytes into a sealed source snapshot before classification. Snapshot files and the manifest use mode 0400 inside an owner-only directory with mode 0500. The application verifies the input identity, schema, configuration, and code version before using the snapshot. Exporter edits do not change the running audit.
 
-When the LLM analysis leg is wired, this command will additionally:
+Clinical rows, calls, request manifests, and ordinary analysis artifacts use owner-only files and directories. Existing storage with broader permissions or final symlinks is rejected. Keep `identity.key`, source bindings, snapshots, and committed records together under the approved backup and retention policy.
 
-- Build the evidence bundle, de-identify it, and submit the LLM_REVIEW
-  rows to the Anthropic Batch API.
-- Run the six fail-closed quote-grounding layers on every LLM response.
-- Write one `AuditRow` per audited order to the audit store, with
-  `rule_classification` and `final_classification` set.
-  `final_classification` includes the routing/reservation terminals
-  (`RETURNED_NOT_TRANSFUSED`, `PERIOP_TRANSFUSION_EXEMPT`,
-  `PREOP_OVER_RESERVATION`, flag-gated
-  `PREOP_RESERVATION_UNCONFIRMED`). For returned / peri-op-exempt rows
-  that carried a pre-op reservation, the MSBOS `reservation_annotation`
-  is embedded in the paired deterministic marker call's
-  `LlmCall.response_json` — `AuditRow` itself has no
-  `reservation_annotation` field (annotation, never a verdict change).
+## Resume interrupted work
 
-Batch progress is tracked in a `batch_runs` row per audited order
-(`pending` → `submitted` → `partial` → `complete`; `failed` is
-terminal). Crashes mid-batch resume automatically on the next run.
+Use `--run-id` with the recorded ID and matching application configuration. The sealed snapshot allows recovery even after the original exporter files are removed.
 
-## Safety boundaries
+Known submitted batches can recover using their stored identity and ordered calls. An uncertain remote submission requires operator reconciliation. The command does not silently resubmit an uncertain request. Preserve the checkpoint records and determine the provider outcome before continuing.
 
-- The command reads HOSxP exports only. Output is written under
-  `$BBA_DATA_DIR/audit/<run_id>/` and `$BBA_DATA_DIR/audit_runs/<run_id>/`.
-  HOSxP tables are never touched.
-- The command runs after the fact and stays silent. It does not send
-  real-time alerts to clinicians. This is quality improvement (QI), not
-  Software as a Medical Device (SaMD).
-- A completed `run_id` cannot be silently overwritten. Re-runs of the
-  same input always produce the same result in the same place. The
-  invariant lives in the run-state store and stays that way.
+## Evaluate changed policy or evidence
+
+Use a new approved `policy_version` in `BBA_APPLICATION_CONFIG` for changed analysis. Prepare signed evidence for that new run identity. Keep cassette contents fixed for a configured run.
+
+Obtaining a privacy artifact after a local run completes does not change its committed result. `--force` does not authorize replacing a classification, a request manifest, or a completed admission decision.
+
+## Platelet route limit
+
+`PLATELET_LLM_ENABLED` is false in the repository configuration. If a bundle contains platelet orders that require the disabled review route, the application rejects the uncommitted work and does not mark the run complete. A local audit is not a guarantee that every platelet order can complete. Confirm the approved deployment route before selecting a platelet cohort.

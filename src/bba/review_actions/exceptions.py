@@ -58,3 +58,7 @@ __all__ = (
     "OverrideRequiresReasonError",
     "PhiAccessLogIncompleteError",
 )
+
+
+class ReviewConflictError(Exception):
+    """The row revision or idempotency key conflicts with a prior decision."""

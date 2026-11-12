@@ -41,7 +41,11 @@ from bba.deterministic_classifier import (
 )
 from bba.deterministic_classifier.crystalloid import total_crystalloid_liters
 from bba.deterministic_classifier.models import ClassifierInputs, ClassifierResult
-from bba.hb_lookup import resolve_evidence_anchor, resolve_hb_with_fallback
+from bba.hb_lookup import (
+    resolve_evidence_anchor,
+    resolve_hb_with_fallback,
+    resolve_lab_anchor,
+)
 from bba.returns_ledger import (
     Disposition,
     ReturnsSummary,
@@ -456,15 +460,19 @@ def run_preflight() -> PreflightResult:
             order_datetime=order.order_datetime,
             candidates=candidates_by_reqno.get(order.reqno, ()),
         )
+        lab_dt = resolve_lab_anchor(
+            order_datetime=order.order_datetime,
+            candidates=candidates_by_reqno.get(order.reqno, ()),
+        ).anchor_utc
         hb, _hb_anchor_display, _hb_anchor_reason = resolve_hb_with_fallback(
             observations=_build_hb_observations(lab, order.an),
-            order_datetime=evidence_anchor.anchor_utc,
+            order_datetime=lab_dt,
             candidates=candidates_by_reqno.get(order.reqno, ()),
         )
         med_events = _build_med_events(med, order.an)
         crystalloid_liters = total_crystalloid_liters(
             tuple(event for event in med_events if _is_crystalloid(event.drug)),
-            order.order_datetime,
+            hb.datetime_utc or order.order_datetime,
         )
         anc = _latest_anc(lab, order.an, order.order_datetime)
         cohort = assign_cohort(

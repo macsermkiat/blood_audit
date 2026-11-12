@@ -33,6 +33,19 @@ MSBOS_PLANNED_OP_PICKER_V2_ENABLED
 DECLARED_USE_PREOP_EXEMPT_ENABLED
     Exempts orders whose declared use is surgery or type-screen from the
     Hb-appropriateness judgment. Default: True.
+PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED
+    Lets the deterministic platelet gate clear a fresh count <= 10 on a
+    heme-malignancy / chemo admission with no withhold population. Default: True
+    (hematology sign-off 2026-09-20).
+PLATELET_TREND_GUARDRAIL_ENABLED
+    Floors an LLM platelet clear to review when it rests only on "expected to
+    fall to 10,000 /uL or below within 24 hours" and the straight-line projection
+    through the last two counts does not support that (issue #237).
+    Default: False.
+PLATELET_SPECIALIST_TARGET_GUARDRAIL_ENABLED
+    Moves an LLM platelet INAPPROPRIATE to review when the trigger count sits
+    below a platelet target a consulting specialist documented (ruling
+    2026-09-23). Default: False.
 """
 
 from __future__ import annotations
@@ -45,6 +58,55 @@ PLATELET_LLM_ENABLED: bool = False
 Stage C2 reads this flag to decide whether to route PLATELET_REVIEW orders
 through the LLM client. The flag is defined here and defaulted to False so
 the RBC path is byte-identical regardless of the platelet feature state.
+"""
+
+PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED: bool = True
+"""Enable the cohort-gated platelet prophylaxis auto-clear (default: ON).
+
+Default-ON since the hematology sign-off of 2026-09-20 (sign-off note,
+decisions 1-7: threshold 10 x10^3/uL, D61.1 as indication, MDS only with
+chemotherapy evidence, Z51.1 alone qualifies, exclusion list + D59.3, fresh
+count only, no bleeding check; "rule may be switched on for the pilot": yes).
+Set ``BBA_PILOT_PLATELET_AUTOCLEAR=0`` to force it off for a pilot run.
+
+When True, :func:`bba.platelet_classifier.classify_platelet` may return a
+terminal ``APPROPRIATE`` for a platelet order whose FRESH count is at or below
+``PLATELET_PROPHYLAXIS_THRESHOLD`` (10 ×10³/µL; inclusive per owner ruling
+2026-09-27) on an admission carrying a
+heme-malignancy / chemotherapy / transplant diagnosis and none of the
+policy's withhold populations (ITP, TTP/TMA, HIT, aplastic anaemia, dengue,
+snakebite). This is the medicine policy's first platelet row expressed on
+structured codes only. When False the classifier is byte-identical to v1 and
+auto-clears nothing (CR-C1).
+"""
+
+PLATELET_TREND_GUARDRAIL_ENABLED: bool = False
+"""Enable the platelet count-trend floor (default: OFF).
+
+Clinician ruling 2026-09-21 (issue #237): "expected to fall to 10,000 /uL or
+below within 24 hours" (inclusive per owner ruling 2026-09-27) means a straight-line projection through the last two
+pre-order counts, extended 24 h past the latest count. When True,
+:func:`bba.platelet_guardrail.platelet_trend_unsupported` floors an LLM
+``APPROPRIATE`` to ``NEEDS_REVIEW`` (``platelet_trend_unsupported``) when the
+only true hard signal is ``prophylactic_marrow_failure``, the trigger count is
+above 10 x10^3/uL, and the projection is missing or above 10. When False
+replay is byte-identical to before. Set ``BBA_PILOT_PLATELET_TREND=1`` to
+enable it for a pilot run; it stays OFF until the sandbox result is read.
+"""
+
+PLATELET_SPECIALIST_TARGET_GUARDRAIL_ENABLED: bool = False
+"""Enable the platelet specialist-target review floor (default: OFF).
+
+Ruling 2026-09-23 (REQNO 68012561: hemoptysis at 89,000 /uL, chest team "keep
+plt 100,000"): an order that fails policy but follows a consulting specialist's
+documented target must not flag the ordering doctor as inappropriate. The target
+must be documented before the order (user decision 2026-09-23): in 68012561 the
+advice first appears 32 h after the order, so that case stays INAPPROPRIATE. When True,
+:func:`bba.platelet_guardrail.platelet_specialist_target_review` moves an LLM
+``INAPPROPRIATE`` to ``NEEDS_REVIEW`` (``platelet_specialist_target``) when the
+trigger count is below the target the model reported. When False replay is
+byte-identical to before. Set ``BBA_PILOT_PLATELET_SPECIALIST_TARGET=1`` to
+enable it for a pilot run; it stays OFF until the sandbox result is read.
 """
 
 RESERVE_AHEAD_ROUTER_ENABLED: bool = False
@@ -137,6 +199,9 @@ __all__: Sequence[str] = (
     "MSBOS_PLANNED_OP_PICKER_V2_ENABLED",
     "MSBOS_RESERVATION_ENABLED",
     "PLATELET_LLM_ENABLED",
+    "PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED",
+    "PLATELET_SPECIALIST_TARGET_GUARDRAIL_ENABLED",
+    "PLATELET_TREND_GUARDRAIL_ENABLED",
     "RESERVE_AHEAD_ROUTER_ENABLED",
     "RETURNS_LEDGER_ENABLED",
 )

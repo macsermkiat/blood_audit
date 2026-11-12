@@ -15,11 +15,16 @@ transport is detected. Tests opt in by invoking the guard before
 
 from __future__ import annotations
 
+import os
+import sys
+
 from bba.audit_pipeline.exceptions import LiveAnthropicApiError
 from bba.llm_client import AnthropicBatchTransport, AnthropicTransport
 
 
-def assert_test_safe_transport(transport: AnthropicTransport) -> None:
+def assert_test_safe_transport(
+    transport: AnthropicTransport, *, allow_live_api: bool = False
+) -> None:
     """Raise :class:`LiveAnthropicApiError` if ``transport`` is the live
     Anthropic Batch API client.
 
@@ -28,7 +33,11 @@ def assert_test_safe_transport(transport: AnthropicTransport) -> None:
     still considered live. The cassette transport
     (:class:`bba.llm_client.CassetteTransport`) passes through silently.
     """
-    if isinstance(transport, AnthropicBatchTransport):
+    if isinstance(transport, AnthropicBatchTransport) and (
+        not allow_live_api
+        or "pytest" in sys.modules
+        or "PYTEST_CURRENT_TEST" in os.environ
+    ):
         raise LiveAnthropicApiError(
             f"live Anthropic transport {type(transport).__name__!r} detected "
             "in a test context; tests MUST inject CassetteTransport. "

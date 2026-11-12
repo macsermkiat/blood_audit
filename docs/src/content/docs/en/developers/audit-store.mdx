@@ -1,34 +1,15 @@
 ---
 title: Audit store
-description: How the audit store persists AuditRow + LlmCall, and how run-level idempotency is enforced.
+description: Immutable result rows, ordered model calls, and recoverable commit ordering.
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
+`bba.audit_store` persists `AuditRow` results and `LlmCall` records in Parquet. A row represents one audited component order. Model-call records preserve individual attempts and their provenance. Deterministic and privacy-rejected rows use explicit marker-call provenance rather than claiming a model or redactor ran.
 
-`bba.audit_store` is the persistence boundary for audit results.
-Two record types are persisted immutably:
+Both models are frozen Pydantic records. Nested JSON values are deeply frozen. The model boundary rejects naive datetimes and normalizes aware datetimes to UTC. Identifiers use `SafeId`, which rejects empty values, path separators, `.` and `..`.
 
-- **`AuditRow`** — one row per audited RBC order. Fields follow the PRD
-  "Output schema" verbatim.
-- **`LlmCall`** — one row per Anthropic API call, joined back to its
-  `audit_id`. The `extended_thinking_blocks` payload is the cold-storage
-  candidate after 90 days.
+## Classification fields
 
-Both models are `frozen=True` Pydantic; nested JSON fields use
-`FrozenJsonList` / `FrozenJsonDict` so post-construction mutation raises
-`TypeError`. Datetimes are tz-aware UTC at the model boundary; naive
-datetimes are rejected.
-
-<AtAGlance
-  items={[
-    { label: "Persists", value: "AuditRow and LlmCall records." },
-    { label: "Invariant", value: "Rows are immutable, tz-aware UTC, and SafeId-keyed.", tone: "ok" },
-    { label: "Idempotency", value: "Duplicate (audit_id, run_id, code_version) writes no-op." },
-    { label: "Phase 1", value: "CLI writes ingest/run markers; AuditRow path is wired in Phase 1.5.", tone: "warn" },
-  ]}
-/>
-
-## Stored `Classification` literals
+`rule_classification` records the deterministic result. `final_classification` records the result after model verification and guardrails, when those steps apply. Both use the stored classification vocabulary:
 
 ```python
 Classification = Literal[
@@ -44,60 +25,32 @@ Classification = Literal[
 ]
 ```
 
-The last four are routing / reservation terminals added by the returns
-ledger, declared-use USETYPE, and MSBOS reservation arms:
-`RETURNED_NOT_TRANSFUSED` and `PERIOP_TRANSFUSION_EXEMPT` are
-deterministic-final and **excluded from appropriateness scoring**;
-`PREOP_OVER_RESERVATION` is the MSBOS over-reservation finding;
-`PREOP_RESERVATION_UNCONFIRMED` is flag-gated (default-off).
+`RETURNED_NOT_TRANSFUSED` and `PERIOP_TRANSFUSION_EXEMPT` are excluded from appropriateness scoring. Reservation findings remain separate from transfusion-indication judgments.
 
-`AuditRow` carries two classification fields:
+`LLM_REVIEW` is an internal routing concept. `hallucination_suspect` and `privacy_admission_failed` are review reasons. None is a stored classification literal.
 
-- `rule_classification` — the deterministic classifier's output.
-- `final_classification` — the winner after the LLM leg and quote
-  grounding (same nine literals).
+## Commit ordering and idempotency
 
-**Routing concepts that are not stored**:
+A write persists its call records first, then the result row, and finally the commit marker. Result reads require a valid commit marker. An interrupted write can therefore leave a call without publishing a partial result.
 
-- `LLM_REVIEW` — a routing label inside the deterministic classifier
-  used to decide whether to invoke the LLM. Not a stored classification.
-- `hallucination_suspect` — set as `review_reason` (a string field) on
-  rows where quote grounding failed. The row's `final_classification`
-  becomes `NEEDS_REVIEW`.
+A committed `(audit_id, run_id, code_version)` makes a repeated write a no-op. Read APIs accept a code-version filter so a result cannot accidentally join calls from another version. Individual calls preserve `attempt_index`, model identity, and request provenance. Recovery uses the same ordered attempts and verification rules as normal execution.
 
-## Phase 1 vs Phase 1.5
+The CLI writes real `AuditRow` results through this store. Its separate completion marker records successful application completion. `--force` bypasses that CLI shortcut and logs the override. It does not replace immutable results. Changed analysis requires a new policy or configuration identity.
 
-In Phase 1, `bba audit` validates/drains the HOSxP bundle under
-`$BBA_DATA_DIR/audit/<run_id>/` and records completion markers under
-`$BBA_DATA_DIR/audit_runs/<run_id>/` via a file-backed `AuditRunStore`.
-The audit store's `AuditRow` write path is exercised by the module's own
-tests but is **not yet wired** through the CLI.
+## Recovery manifests
 
-In Phase 1.5, when `bba.audit_pipeline.run_pipeline` is invoked from
-the CLI, the audit store starts persisting `AuditRow` per audited
-order, with per-row checkpointing in the `batch_runs` Postgres table.
+Run-context manifests bind clinical context, feature flags, and policy configuration. Batch manifests additionally bind ordered audit IDs, exact requests, and model settings. Transport manifests bind provider payloads and the remote batch ID.
 
-## Related Postgres tables (wired in Phase 1.5)
+Cached results are reusable only when the exact request identity matches. A batch ID or a prompt hash alone is insufficient. Recovery rejects evidence, model, policy, or code-version drift and reruns grounding before publishing a reconstructed result. If remote submission may have happened without a durable binding, reconcile that outcome before resubmission.
 
-| Table | Owned by | Purpose |
-| --- | --- | --- |
-| `batch_runs` | `bba.audit_pipeline` | Five-state machine (`pending → submitted → partial → complete`; `failed` is terminal). Resume-on-startup re-queries non-terminal rows. |
-| `review_actions` | `bba.review_actions` | Per-physician review actions recorded from the dashboard. |
+## Storage and Postgres
 
-DSN handling: always use the `+psycopg` driver suffix. SQLAlchemy
-routes bare `postgresql://` URLs to psycopg2 by default; this project
-ships psycopg3. The canonical converter is
-`bba.review_actions.models.ReviewActionsConfig.sqlalchemy_dsn`.
+Audit rows, calls, and manifests use owner-only directories and files. Existing files with unsafe permissions or final symlinks are rejected. Sealed source snapshots use read-only permissions. Treat all these artifacts as clinical records.
 
-## Cold storage
+Postgres holds `batch_runs` checkpoints and `review_actions` adjudication history. These stores have separate migration and role requirements. Set `BBA_DB_URL` to a runtime DSN such as `postgresql://user@host/database`. The SQLAlchemy review adapter converts that DSN through `ReviewActionsConfig.sqlalchemy_dsn`. Do not pass a `postgresql+psycopg://` SQLAlchemy URL to a direct psycopg connection.
 
-`AuditRow.extended_thinking_blocks` and other heavy payloads are
-candidates for cold-storage migration after 90 days. The migration
-respects the tz-aware-UTC invariant (a naive timestamp on either side
-of the cutoff comparison raises `ValueError` at construction).
+## Retention
 
-## Safe-ID invariant
+`migrate_cold_storage` supports moving older extended-thinking payloads to cold storage. The documented retention interval is 90 days. Migration is an explicit operation, not an automatic property of a stored row.
 
-`audit_id`, `run_id`, `call_id` all use the `SafeId` type — non-empty
-`[A-Za-z0-9._-]+`, not `.` or `..`. These flow directly into Parquet
-filenames; the model boundary prevents path traversal.
+The current model and storage contracts are in `src/bba/audit_store/models.py` and `src/bba/audit_store/store.py`. Recovery checks live in `src/bba/audit_pipeline/manifest.py` and `src/bba/audit_pipeline/resume.py`.

@@ -1,0 +1,9 @@
+:root {color-scheme: light; font-family: system-ui, sans-serif; color:#172033; background:#f5f7fa}
+body {margin:0; line-height:1.5} header {background:white; border-bottom:1px solid #c8d0da; padding:1rem 2rem}
+nav {display:flex; gap:1.5rem} main {max-width:85rem; margin:auto; padding:2rem} section {max-width:100%}
+a {color:#2446a8} a:hover {text-decoration-thickness:2px} a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible {outline:3px solid #cb7b00; outline-offset:3px}
+h1 {font-size:1.7rem} h2 {font-size:1.2rem} section > div {background:white; border:1px solid #c8d0da; border-radius:.4rem; padding:1.2rem; margin:1rem 0}
+dl {display:grid; grid-template-columns:minmax(9rem,1fr) 2fr; gap:.4rem} dt {color:#475569} dd {margin:0; overflow-wrap:anywhere}
+table {width:100%; border-collapse:collapse; background:white} th,td {padding:.8rem; border-bottom:1px solid #c8d0da; text-align:left; vertical-align:top} th {background:#e9eef5} caption {text-align:left; margin:.8rem 0}
+form {margin:1rem 0} label {display:block; margin:.8rem 0} input,select,textarea,button {font:inherit; padding:.5rem; border:1px solid #64748b; border-radius:.25rem} textarea {display:block; width:min(95%,45rem)} button {background:#2446a8; color:white; cursor:pointer; margin:.5rem .5rem .5rem 0} fieldset {border:1px solid #c8d0da; padding:1rem} pre {white-space:pre-wrap; overflow-wrap:anywhere} .skip-link {position:absolute;left:-9999px}.skip-link:focus {left:1rem;top:1rem;background:white;padding:1rem}
+@media(max-width:700px) {main {padding:1rem} table {display:block;overflow-x:auto} dl {grid-template-columns:1fr} dd {margin-bottom:.7rem}}

@@ -165,8 +165,8 @@ class TestPlateletAllowList:
         assert set(PLATELET_PRODUCTS) == expected
 
     def test_includes_irradiated_variants(self) -> None:
-        # Divergence from RBC_PRODUCTS (which excludes irradiated variants):
-        # an irradiated platelet is still a platelet transfusion to audit.
+        # Same rule as RBC_PRODUCTS (LDPRCI / LPRCI): an irradiated platelet
+        # is still a platelet transfusion to audit.
         assert is_platelet_product("LDPPCI")
         assert is_platelet_product("SDPFI")
 

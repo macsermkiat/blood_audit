@@ -1,28 +1,15 @@
-<table id="queue-table" class="min-w-full bg-white border border-slate-200 text-sm">
-  <thead class="bg-slate-100">
-    <tr>
-      <th class="px-3 py-2 text-left">audit_id</th>
-      <th class="px-3 py-2 text-left">order datetime</th>
-      <th class="px-3 py-2 text-right">Hb</th>
-      <th class="px-3 py-2 text-right">confidence</th>
-      <th class="px-3 py-2 text-left">classification</th>
-      <th class="px-3 py-2 text-left">ward</th>
-      <th class="px-3 py-2 text-left">reason</th>
-    </tr>
-  </thead>
+<table id="queue-table">
+  <caption>Unresolved red cell and platelet cases. Code version {{ code_version }}.</caption>
+  <thead><tr><th scope="col">Case</th><th scope="col">Component</th><th scope="col">Order time in Bangkok</th><th scope="col">Component laboratory result</th><th scope="col">Confidence</th><th scope="col">Classification</th><th scope="col">Ward</th><th scope="col">Review reason</th></tr></thead>
   <tbody>
-    {% for item in items %}
-    <tr class="border-t border-slate-100 hover:bg-slate-50">
-      <td class="px-3 py-2"><a href="/case/{{ item.audit_id }}" class="text-indigo-600 hover:underline">{{ item.audit_id }}</a></td>
-      <td class="px-3 py-2">{{ item.order_datetime.isoformat() }}</td>
-      <td class="px-3 py-2 text-right">{% if item.hb_freshness == "missing" %}<span class="text-slate-400" title="no Hb documented">—</span>{% else %}{{ "%.1f"|format(item.hb_value) }}{% endif %}</td>
-      <td class="px-3 py-2 text-right">{{ "%.2f"|format(item.confidence) }}</td>
-      <td class="px-3 py-2">{{ item.final_classification }}</td>
-      <td class="px-3 py-2">{{ item.ward_id }}</td>
-      <td class="px-3 py-2">{{ item.review_reason or "" }}</td>
+  {% for item in items %}
+    <tr>
+      <td><a href="/case/{{ item.audit_id }}?run_id={{ item.run_id }}">{{ item.audit_id }}</a><br>Run {{ item.run_id }}</td>
+      <td>{{ "Platelet" if item.component == "platelet" else "Red cell" }}</td>
+      <td>{{ item.order_datetime|bangkok }}</td>
+      <td>{% if item.component == "platelet" %}Platelets {% if item.platelet_value is not none and item.platelet_freshness != "missing" %}{{ item.platelet_value }} ×10⁹/L{% else %}not documented{% endif %}{% elif item.hb_freshness == "missing" %}Hb not documented{% else %}Hb {{ "%.1f"|format(item.hb_value) }} g/dL{% endif %}</td>
+      <td>{{ "%.2f"|format(item.confidence) }}</td><td>{{ item.final_classification }}</td><td>{{ item.ward_id }}</td><td>{{ item.review_reason or "Review flagged" }}</td>
     </tr>
-    {% else %}
-    <tr><td colspan="7" class="px-3 py-4 text-center text-slate-500">no NEEDS_REVIEW items in today's snapshot</td></tr>
-    {% endfor %}
+  {% else %}<tr><td colspan="8">No unresolved cases requiring review in this snapshot.</td></tr>{% endfor %}
   </tbody>
 </table>

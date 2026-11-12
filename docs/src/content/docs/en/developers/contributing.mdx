@@ -1,76 +1,32 @@
 ---
 title: Contributing
-description: Repository conventions, branch naming, and the ralph-loop ticket workflow.
+description: Focused changes, verification, and review conventions.
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
+Read the affected module's exports, callers, tests, and current documentation before editing. Keep the change focused and preserve unrelated work in the checkout.
 
-<AtAGlance
-  items={[
-    { label: "Branch", value: "Use feat/, fix/, docs/, chore/, test/, ci/, etc." },
-    { label: "Merge style", value: "Use gh pr merge --merge; keep merge commits.", tone: "ok" },
-    { label: "Required docs", value: "Update docs/CONTEXT.md for new public concepts." },
-    { label: "Review", value: "Run Codex review before closing the ticket.", tone: "warn" },
-  ]}
-/>
+## Create a branch
 
-## Branch naming
-
-Use one of: `feat/`, `fix/`, `refactor/`, `docs/`, `chore/`, `perf/`, `test/`, `ci/`.
-
-Direct push to `main` is hook-blocked. All changes go through PRs.
-
-## Commit messages
-
-Conventional commits:
-
-```text
-<type>: <description>
-
-<optional body>
-```
-
-Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`,
-`style`. The `Co-Authored-By` line is disabled globally.
-
-## PR merge style
-
-Repo convention is `gh pr merge --merge` (merge commit, not squash) so
-the per-commit story is preserved.
-
-## The ralph-loop ticket workflow
-
-Per-ticket workflow used for every module in Phase 1:
+Use a descriptive branch under `feat/`, `fix/`, `refactor/`, `docs/`, `chore/`, `perf/`, `test/`, or `ci/`. For parallel work, create a separate worktree:
 
 ```bash
-./scripts/ralph_ticket.sh <N> <module_path>
+git worktree add ../blood_audit-topic -b docs/topic main
 ```
 
-This generates a three-step Claude Code workflow:
+A worktree isolates files and branch state. `git worktree prune` removes stale metadata, not a working directory that you still need.
 
-1. `/tdd` — scaffold failing tests + the public interface (RED).
-2. `/ralph-loop` — iterate red → green → refactor until
-   `<promise>ISSUE-N-COMPLETE</promise>` fires.
-3. `/codex:review` — independent review on the diff via the GitHub Codex bot.
+## Verify the change
 
-After review passes, close the issue (`gh issue close N`) and merge the PR.
+Write a failing test for a behavior change, then implement the smallest fix. Test the business reason for the behavior, including the boundaries that would change an audit outcome. Use synthetic fixtures for clinical context.
 
-## Parallel work via worktrees
+Run the blocking checks in [Testing](/blood_audit/en/developers/testing/). Include database integration for changes to batch checkpoints or review actions. Report skips and unavailable validation explicitly. For documentation changes, build the site and inspect the affected pages and links.
 
-```bash
-git worktree add ../blood_audit-<branch> -b feat/<branch> main
-```
+Update current public contracts in `docs/CONTEXT.md` and the relevant operator, developer, or clinical pages. Keep dated implementation history separate from current instructions.
 
-Prune stale worktrees explicitly — `git worktree prune` does not remove
-directories on disk.
+## Commit and review
 
-## After merging
+Use a conventional commit message such as `fix: reject changed recovery evidence` or `docs: correct model admission setup`. Keep commits focused. Follow repository branch protection and review requirements when opening a pull request.
 
-Append new public concepts to `docs/CONTEXT.md` (the module glossary).
-That file is transcluded into [Module glossary](/blood_audit/en/reference/module-glossary/).
+The repository convention uses merge commits through `gh pr merge --merge`. Confirm the required checks and independent review before merging. A green build does not establish clinical validation or deployment readiness.
 
-## Codex review
-
-Trigger a Codex pass with `@codex review` as a PR comment. The bot
-returns within ~30-90 seconds with P1/P2/P3 findings or
-"Didn't find any major issues" if clean.
+`scripts/ralph_ticket.sh` supports the repository's ticket workflow. It generates test-first implementation and review steps. Use it when working through that workflow. It is not a prerequisite for understanding or testing a module.

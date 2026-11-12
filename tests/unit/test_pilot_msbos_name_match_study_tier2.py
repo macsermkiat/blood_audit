@@ -418,7 +418,7 @@ def test_injection_shaped_event_name_is_xml_escaped_in_user_turn_only(
         "tools",
         "tool_choice",
     }
-    assert request["model"] == "claude-sonnet-5"
+    assert request["model"] == "claude-sonnet-5-5"
     assert request["max_tokens"] == 512
     assert request["tool_choice"] == {
         "type": "tool",

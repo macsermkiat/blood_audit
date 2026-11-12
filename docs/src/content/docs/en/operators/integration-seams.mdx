@@ -1,55 +1,53 @@
 ---
-title: Integration seams
-description: Three CLI subcommands raise CliError by design — they are deployment hand-offs, not bugs.
+title: Deployment integrations
+description: Configure review labels, monitoring comparisons, and authenticated dashboard access.
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
-import IntegrationSeamCard from "../../../../components/IntegrationSeamCard.astro";
+`evaluate`, `report`, `sentinel`, and `serve-dashboard` are working CLI commands. Their inputs identify the reviewed labels, committed runs, database roles, or authenticated reviewer. Configure those inputs before using the commands.
 
-Three subcommands of `bba` raise `CliError` when invoked in Phase 1. This is
-**by design**: the underlying modules ship and are tested, but the CLI
-hand-off requires deployment-specific wiring (auth, stores, resolvers)
-that does not belong in Phase 1. Do not "fix" them.
+## Evaluate reviewed labels
 
-(`bba report` used to be the fourth seam; it is now **wired** — it
-renders committee CSVs, per-physician CSVs, and the PDF from the audit
-store, resolving ward/physician attribution from `BBA_BDVST_CSV` /
-`BBA_DCT_CSV`.)
+Create a UTF-8 CSV with exactly `audit_id,classification` as its header. Every reviewed ID must exist in the selected run and code version. Duplicate IDs, unknown labels, an empty label file, and unmatched cases fail validation.
 
-<AtAGlance
-  items={[
-    { label: "Pattern", value: "The module exists; the CLI adapter is intentionally missing." },
-    { label: "Reason", value: "Deployment-specific auth, PHI lookup, scheduler, or store wiring is required.", tone: "warn" },
-    { label: "Operator action", value: "Treat CliError as an expected hand-off until Phase 1.5." },
-    { label: "Do not", value: "Do not add fake defaults just to make the command run.", tone: "err" },
-  ]}
-/>
+```sh
+uv run bba evaluate --run-id RUN_ID --labels /srv/bba/reviewed.csv
+```
 
-<IntegrationSeamCard
-  command="bba evaluate --run-id RUN_ID"
-  missingGlue="Composition of bba.eval_harness primitives (stratified_sample, agreement, cluster_ci) into an end-to-end harness."
-  rationale="Phase 1 ships the primitives; the harness shape depends on which gold-standard cohort the deployment selects."
-/>
+Use `--code-version VERSION` to select an older committed version. The command prints the path of a persisted JSON result containing agreement metrics, reviewed and unreviewed counts, and input digests. It does not assign reference labels to unreviewed cases.
 
-<IntegrationSeamCard
-  command="bba serve-dashboard --port PORT"
-  missingGlue="A DashboardConfig with concrete store handles, PHI resolvers, and authentication middleware."
-  rationale="The FastAPI app exists in src/bba/dashboard/. Production auth and PHI handling vary per deployment."
-/>
+## Compare committed runs
 
-<IntegrationSeamCard
-  command="bba sentinel --weekly | --quarterly"
-  missingGlue="A deployment-side scheduler and a notification channel. The structlog stub ships now; Slack, email, and paging are Phase 1.5."
-  rationale="The sentinel already computes kappa (κ) agreement between reviewers and runs the sequential probability ratio test (SPRT) for golden-set drift. The deployment team decides who receives alerts and how."
-/>
+Create a monitoring JSON file with `baseline_run`, `current_run`, `baseline_code_version`, `current_code_version`, and `sentinel`. The `sentinel` object follows `bba.monitoring.SentinelManifest` and contains `size`, `seed`, `audit_ids`, and a timezone-aware `built_at`.
 
-## Why fail loud instead of running with defaults?
+Each unique sentinel ID must exist in both selected runs. The baseline and current selections must differ by run ID or code version.
 
-Each of these seams touches PHI, billing, or clinician notification. A
-silent default could leak data or alert the wrong people. The CLI surfaces
-the missing contract explicitly so the deployer wires it deliberately.
+```sh
+uv run bba sentinel --weekly --manifest /srv/bba/monitoring-runs.json
+uv run bba sentinel --quarterly --manifest /srv/bba/monitoring-runs.json
+```
 
-## When will these be wired?
+Weekly mode compares paired classifications. Quarterly mode compares classifications and cited indications. Choose exactly one cadence. These commands compare already committed re-audits and print a persisted JSON report path. Your deployment schedules the comparison and handles notifications.
 
-Phase 1.5, after the M8 pilot signs off. Tracked under the
-deployment-readiness epic in the project repo, not as a code bug.
+## Serve authenticated review
+
+Apply the matching review-action migrations and configure an unprivileged reviewer database role. The review store rejects incorrect privileges or migration state before operating. Keep the source checkout available because standalone wheels omit the root Alembic migration project.
+
+Set `BBA_DB_URL`, `BBA_DASHBOARD_AUTH_SECRET`, and `BBA_DASHBOARD_PUBLIC_ORIGIN`. Also set `BBA_BDVST_CSV` and `BBA_DCT_CSV` for attribution. The authentication secret needs at least 32 UTF-8 bytes. The public origin must be the externally visible HTTPS origin.
+
+```sh
+uv run bba serve-dashboard --port 8000 --run-id RUN_ID --code-version VERSION
+```
+
+The CLI listens on `127.0.0.1`. Put it behind your HTTPS reverse proxy. A trusted identity adapter authenticates the reviewer and calls `bba.dashboard.auth.sign_session` with the verified `Reviewer`, shared secret, and an expiry no more than one hour away.
+
+The adapter sets the `bba_session` cookie with `Secure`, `HttpOnly`, `SameSite=Strict`, and `Path=/`. Requests without a valid signed session receive HTTP 401. Adjudication forms use session-bound CSRF tokens and expected decision revisions to reject stale changes.
+
+Dashboard aggregate views cover red-cell rows. The review queue can include committed platelet cases.
+
+The CLI does not issue identities or accept reviewer identity from a form. Unredacted PHI lookup is unavailable in this CLI composition. A deployment that needs lookup must supply an authorized resolver through the app factory.
+
+## Prepare model admission separately
+
+The model modes require an approved local redaction service and Ed25519-signed evidence. The audit application verifies the public key and exact evidence binding. It does not own the issuer's private signing key. See [Model review settings](/blood_audit/en/operators/env-vars/#model-review).
+
+An uncertain provider submission needs operator reconciliation. Preserve batch checkpoints and establish the remote outcome before continuing. Repeated invocation must not become a new submission of an uncertain request.

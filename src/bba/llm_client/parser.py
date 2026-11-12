@@ -140,6 +140,9 @@ def parse_platelet_structured_response(result: BatchSubmissionResult) -> ParseOu
         active_bleeding=response.active_bleeding,
         procedure_indication=response.procedure_indication,
         prophylactic_marrow_failure=response.prophylactic_marrow_failure,
+        intracranial_bleed_indication=response.intracranial_bleed_indication,
+        aplastic_active_therapy_indication=response.aplastic_active_therapy_indication,
+        specialist_target_per_ul=response.specialist_platelet_target_per_ul,
     )
 
     return ParseOutcome(

@@ -164,10 +164,10 @@ class ReportFooter(BaseModel):
 
     * ``policy_version`` — KCMH PR-17.x policy revision that drove the
       deterministic classifier.
-    * ``model_id`` — snapshot-pinned Anthropic model identifier.
+    * ``model_id`` is the model identifier, or a sorted JSON array when mixed.
     * ``redactor_version`` — version of the ``thai-medical-deid`` package.
     * ``redactor_model_sha`` — SHA of the redactor's HuggingFace model.
-    * ``prompt_hash`` — SHA of the system prompt + few-shot bundle.
+    * ``prompt_hash`` identifies one prompt, or the aggregate of per-row prompts.
     * ``evidence_bundle_hash`` — SHA of the canonical evidence-bundle
       schema (the input contract for the LLM call). Note: per-row
       evidence-bundle hashes live on the individual AuditRows, not on
@@ -356,6 +356,22 @@ class PipelineHealthRow(BaseModel):
 # =============================================================================
 
 
+class ReportRowProvenance(BaseModel):
+    """The original technical identity of a row included in a report run."""
+
+    model_config = ConfigDict(frozen=True)
+
+    audit_id: SafeFsId
+    run_id: SafeFsId
+    code_version_slug: str
+    model_id: str
+    policy_version: str
+    prompt_hash: str
+    evidence_bundle_hash: str
+    redactor_version: str
+    redactor_model_sha: str
+
+
 class ReportInputs(BaseModel):
     """The full input contract for :func:`generate_monthly_report`.
 
@@ -372,6 +388,7 @@ class ReportInputs(BaseModel):
     footer: ReportFooter
     output_dir: Path
     physician_ids_for_own_view: tuple[str, ...] = ()
+    provenance: tuple[ReportRowProvenance, ...] = ()
 
 
 class ReportArtifacts(BaseModel):
@@ -396,6 +413,7 @@ class ReportArtifacts(BaseModel):
     physician_own_view_csv_paths: Mapping[str, Path]
     pdf_path: Path
     footer: ReportFooter
+    provenance_path: Path | None = None
 
 
 # =============================================================================

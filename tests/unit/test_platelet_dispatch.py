@@ -501,7 +501,7 @@ def test_apply_batch_results_platelet_row_sets_component(tmp_path):
     ctx = _platelet_ctx("audit-plt-009", platelet_count=75.0)
     result_item = BatchSubmissionResult(
         custom_id="audit-plt-009",
-        model_id="claude-sonnet-5",
+        model_id="claude-sonnet-5-5",
         raw_response_json={
             "content": [
                 {
@@ -1477,6 +1477,7 @@ def test_resume_with_pipeline_config_preserves_missing_count_defer(tmp_path):
     from pipeline_config and the re-emitted row carries rule_classification=
     NEEDS_REVIEW — matching the original submission verdict."""
     from bba.audit_pipeline.models import BatchRun, BatchRunState
+    from bba.audit_pipeline.manifest import context_hash
     from bba.audit_pipeline.resume import resume_on_startup
     from bba.audit_store import LlmCall
 
@@ -1486,6 +1487,8 @@ def test_resume_with_pipeline_config_preserves_missing_count_defer(tmp_path):
     # Seed the orphan LlmCall (crashed after phase 1, before phase 2 commit)
     orphan_call = LlmCall(
         call_id="call-defer-plt-001",
+        attempt_index=0,
+        context_hash=context_hash(ctx, enable_missing_platelet_defer=True),
         audit_id="audit-plt-defer",
         run_id="run-defer",
         model_id=SONNET_MODEL_ID,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from bba.classifications import RETURNS_TERMINALS as _RETURNS_TERMINALS
+
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -62,10 +64,6 @@ _PLATELET_OVER_REASONS = (
     "over_neuraxial",
     "over_cardiac_cpb",
 )
-
-# Source of truth: audit_pipeline/replay.py:158. Kept local to avoid the
-# preop_reservation <-> audit_pipeline import cycle.
-_RETURNS_TERMINALS = frozenset({"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"})
 
 
 class PilotReportError(Exception):

@@ -14,6 +14,8 @@ not by trusting a downstream caller to filter rows before distribution.
 
 from __future__ import annotations
 
+import json
+from datetime import date
 from pathlib import Path
 
 from bba.report_generator.aggregate import (
@@ -71,13 +73,8 @@ _MONTH_NAMES: tuple[str, ...] = (
 )
 
 
-def _month_label(month: object) -> str:
-    """Render ``month`` as ``"May 2026"``.
-
-    ``month`` is :data:`FirstOfMonth` (a ``date``); the Pydantic validator
-    has already enforced day=1, so the month name + year is unambiguous.
-    """
-    return f"{_MONTH_NAMES[month.month - 1]} {month.year}"  # type: ignore[attr-defined]
+def _month_label(month: date) -> str:
+    return f"{_MONTH_NAMES[month.month - 1]} {month.year}"
 
 
 def generate_monthly_report(inputs: ReportInputs) -> ReportArtifacts:
@@ -170,11 +167,23 @@ def generate_monthly_report(inputs: ReportInputs) -> ReportArtifacts:
         f"{committee_section_set - set(csv_paths.keys())}"
     )
 
+    provenance_path = output_dir / "provenance.json"
+    provenance_path.write_text(
+        json.dumps(
+            [row.model_dump(mode="json") for row in inputs.provenance],
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     return ReportArtifacts(
         csv_paths=csv_paths,
         physician_own_view_csv_paths=physician_csv_paths,
         pdf_path=pdf_path,
         footer=inputs.footer,
+        provenance_path=provenance_path,
     )
 
 

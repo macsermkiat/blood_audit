@@ -7,6 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "alembic>=1.14",
     "click>=8.1",
+    "cryptography>=46",
     "duckdb>=1.5.2",
     "fastapi>=0.136.1",
     "httpx>=0.28.1",
@@ -27,6 +28,11 @@ dependencies = [
 
 [project.scripts]
 bba = "bba.cli.main:cli"
+
+[project.optional-dependencies]
+live = [
+    "anthropic>=0.116,<1",
+]
 
 [build-system]
 requires = ["uv_build>=0.9.24,<0.10.0"]

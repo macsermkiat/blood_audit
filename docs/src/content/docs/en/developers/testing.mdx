@@ -1,79 +1,38 @@
 ---
 title: Testing
-description: How to run unit, integration, and testcontainers Postgres tests.
+description: Local checks, required Postgres integration, and offline model fixtures.
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
-
-<AtAGlance
-  items={[
-    { label: "Blocking gates", value: "ruff, ruff format, mypy src, pytest.", tone: "ok" },
-    { label: "Advisory gate", value: "mypy tests is allowed to warn until test helper debt is paid.", tone: "warn" },
-    { label: "Docker", value: "Postgres tests auto-skip when Docker/testcontainers is unavailable." },
-    { label: "LLM tests", value: "Cassette-backed only; cost guard blocks live API calls." },
-  ]}
-/>
-
-## Quality gates (local)
-
-A clean working tree should pass:
+Run the blocking source checks from the repository root:
 
 ```bash
-uv sync
+uv sync --frozen --extra live
 uv run ruff check .
 uv run ruff format --check .
-uv run mypy src                # Success on src/
-uv run mypy tests              # ~676 errors expected (advisory)
-uv run pytest -q
+uv run mypy src
+BBA_REQUIRE_POSTGRES_TESTS=1 uv run --extra live pytest -q --tb=short --cov=src/bba --cov-fail-under=80 --cov-report=term-missing
 ```
 
-Expected pytest output without Docker: ~3771 pass / ~49 skip / 0 errors
-(verified 2026-07-22 at the picker-v2 wave). With Docker running, the
-testcontainers-postgres tests exercise instead of skipping and the skip
-count drops to single digits.
+The `live` extra installs the provider SDK so transport tests can import it. Tests still reject live provider calls. Start Docker before the required Postgres run.
 
-## Why `mypy tests` has hundreds of advisory errors
+## Required Postgres tests
 
-Type-helper sloppiness in test fixtures: `float` passed where
-`int | None` is expected, raw `str` where `Literal[...]` is expected.
-None can mask a real bug in `src/`. CI annotates as a warning, not a
-failure. Cleanup is tracked as a separate ticket — do not bundle it
-into unrelated PRs.
+`tests/conftest.py` provides the shared Postgres 16 container fixture. With `BBA_REQUIRE_POSTGRES_TESTS=1`, missing dependencies or an unavailable Docker daemon fail the test run. CI sets this variable and enforces at least 80 percent source coverage.
 
-## Docker-dependent tests must auto-skip
+Without that variable, the shared fixture may skip when dependencies or Docker are unavailable. Container startup, migration, test-body, and teardown errors propagate after the availability checks. Do not catch those errors broadly and convert them into skips.
 
-Pattern used throughout `tests/unit/test_audit_pipeline_postgres.py`:
+Report skipped or deselected tests with their reasons. A run without database tests does not establish that database integration passes. Tests that require a local clinical workbook also need that separate input. Do not copy patient data into the repository to satisfy a fixture.
 
-```python
-import pytest
-pytest.importorskip("testcontainers.postgres")
-pytest.importorskip("docker")
+## Offline model tests
 
-# Then wrap container __enter__ in try/except → pytest.skip(...)
-```
+`bba.audit_pipeline.cost_guard` blocks live transport in test contexts. Use synthetic fixtures and cassette-backed responses. `tests/unit/test_llm_client.py` and `tests/unit/test_application_cassette.py` construct their cassette fixtures in temporary directories. A cassette recorded from clinical data remains sensitive even if its filename looks synthetic.
 
-This guarantees that contributors without Docker can still run the full
-suite without spurious failures.
+`tests/unit/test_application.py` checks local audit composition. `tests/unit/test_application_cassette.py` exercises admitted cassette requests. Production Postgres composition has its own integration tests. These establish application behavior on synthetic inputs, not clinical validity or hospital deployment readiness.
 
-## Anthropic tests are cassette-backed
+Grounding tests must exercise the real checks for source identity, normalized text, quote boundaries, uniqueness, and lab tuples. Recovery tests must prove that stale context and changed requests are rejected, and that repeated replay does not duplicate committed results.
 
-Live API calls are rejected by `src/bba/audit_pipeline/cost_guard.py`.
-Cassettes live under `tests/unit/cassettes/`. Never check in a cassette
-that was recorded against real PHI.
+## Type checks and CI
 
-## mypy strict is config-driven
+`pyproject.toml` sets strict mypy behavior for source code. `uv run mypy src` blocks CI. `uv run mypy tests` is advisory while test-helper typing debt remains. Advisory errors still deserve inspection because they can hide mistakes in fixtures or assertions.
 
-`pyproject.toml` enables `strict = true` under `[tool.mypy]`. Do **not**
-pass `--strict` on the CLI — the config is the contract. For per-module
-exceptions, add a `[[tool.mypy.overrides]]` block.
-
-## CI surface
-
-`.github/workflows/ci.yml` runs four jobs on push to `main` and on every
-PR:
-
-- `ruff (lint + format)` — strict.
-- `mypy (src strict, tests warn)` — `mypy src` blocks; `mypy tests`
-  is `continue-on-error: true` and surfaces a `::warning::` annotation.
-- `pytest (with docker)` — full suite including testcontainers.
-- `ci` — aggregator status check; point branch-protection at this one.
+`.github/workflows/ci.yml` runs lint and format checks, source typing, and pytest with Docker. The `ci` job aggregates those required results. Test totals change with the code and available fixtures, so use the current run output instead of a fixed expected pass count.

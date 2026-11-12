@@ -185,6 +185,10 @@ class ReviewActionsStore:
     def record_action(self, action: ReviewActionInput) -> ReviewAction:
         """Persist one reviewer decision; return the DB-assigned row."""
         self._ensure_migrated()
+        if action.run_id is not None:
+            from bba.review_actions.decisions import append_decision
+
+            return append_decision(self._ensure_pool(), action)
         try:
             with self._ensure_pool().connection() as conn:
                 with conn.cursor(row_factory=dict_row) as cur:
@@ -313,7 +317,8 @@ class ReviewActionsStore:
 
         query: sql.Composable = sql.SQL(
             "SELECT action_id, audit_id, reviewer_id, action, "
-            " override_reason, note, created_at "
+            " override_reason, note, created_at, run_id, code_version, row_hash, "
+            " expected_revision, submission_id, override_classification "
             "FROM review_actions"
         )
         if clauses:

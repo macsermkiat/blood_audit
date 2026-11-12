@@ -4,7 +4,7 @@ interface Step {
   question: string;
   evidence: string;
   yes: string;
-  route: "Final" | "LLM";
+  route: "Final" | "LLM" | "Conditional";
   tone: "ok" | "warn" | "err";
   otherwise: string;
 }
@@ -14,212 +14,176 @@ const isThai = Astro.url.pathname.includes("/th/");
 const englishSteps: Step[] = [
   {
     index: "1",
-    question: "No current pre-transfusion Hb?",
-    evidence: "Lab: Hb observations, 7-day lookback",
+    question: "No usable pre-order Hb?",
+    evidence: "Selected Hb from the seven-day lookup",
     yes: "INSUFFICIENT_EVIDENCE",
     route: "Final",
     tone: "warn",
-    otherwise: "Check global low-Hb rule",
+    otherwise: "Check the universal Hb rule",
   },
   {
     index: "2",
-    question: "Hb < 7.0 g/dL?",
-    evidence: "Lab: current Hb",
+    question: "Hb ≤ 7.0 g/dL?",
+    evidence: "Selected pre-order Hb",
     yes: "APPROPRIATE",
     route: "Final",
     tone: "ok",
-    otherwise: "Use cohort and bypass evidence",
+    otherwise: "Check MTP",
   },
   {
     index: "3",
-    question: "Cohort unknown?",
-    evidence: "Procedure join availability",
-    yes: "NEEDS_REVIEW",
-    route: "LLM",
-    tone: "warn",
-    otherwise: "Check MTP pattern",
+    question: "MTP cohort?",
+    evidence: "RBC order cluster and co-ordered components",
+    yes: "APPROPRIATE",
+    route: "Final",
+    tone: "ok",
+    otherwise: "Check unknown context",
   },
   {
     index: "4",
-    question: "Massive-transfusion-protocol cohort?",
-    evidence: "Blood orders: RBC units, FFP, platelets in 1 h",
-    yes: "APPROPRIATE",
-    route: "Final",
-    tone: "ok",
-    otherwise: "Check procedural bypasses",
+    question: "Unknown cohort?",
+    evidence: "Procedure data unavailable",
+    yes: "NEEDS_REVIEW",
+    route: "LLM",
+    tone: "warn",
+    otherwise: "Check the Hb drop",
   },
   {
     index: "5",
-    question: "Procedure <= 6 h before order?",
-    evidence: "IPTSUMOPRT + ICD9CM procedure timing",
+    question: "Delta-Hb trigger met?",
+    evidence: "Drop of ≥ 1.5 / 2.0 / 2.5 g/dL in 6 / 12 / 24 h",
     yes: "APPROPRIATE",
     route: "Final",
     tone: "ok",
-    otherwise: "Check pre-op crossmatch",
+    otherwise: "Check whether a cohort threshold exists",
   },
   {
     index: "6",
-    question: "Procedure <= 72 h after order?",
-    evidence: "IPTSUMOPRT + ICD9CM upcoming procedure",
-    yes: "APPROPRIATE",
-    route: "Final",
-    tone: "ok",
-    otherwise: "Check acute Hb drop",
+    question: "No numeric cohort threshold?",
+    evidence: "Remaining active haematology context",
+    yes: "NEEDS_REVIEW",
+    route: "LLM",
+    tone: "warn",
+    otherwise: "Compare Hb with the cohort threshold",
   },
   {
     index: "7",
-    question: "Delta-Hb trigger fired?",
-    evidence: "Lab: prior Hb drop in 6 / 12 / 24 h",
-    yes: "APPROPRIATE",
-    route: "Final",
-    tone: "ok",
-    otherwise: "Apply cohort threshold",
+    question: "Hb ≤ cohort threshold?",
+    evidence: "Threshold plus crystalloid and isolated-Hb checks",
+    yes: "APPROPRIATE, or NEEDS_REVIEW if a safety flag applies",
+    route: "Conditional",
+    tone: "warn",
+    otherwise: "Check the remaining Hb range",
   },
   {
     index: "8",
-    question: "No numeric threshold for cohort?",
-    evidence: "ICD-10 + MED + ANC for active heme context",
+    question: "Hb < 10 g/dL?",
+    evidence: "Hb above the cohort threshold",
     yes: "NEEDS_REVIEW",
     route: "LLM",
     tone: "warn",
-    otherwise: "Compare Hb to threshold",
+    otherwise: "Check the high-Hb rule",
   },
   {
     index: "9",
-    question: "Hb < cohort threshold?",
-    evidence: "Lab Hb + cohort threshold + MED crystalloid check",
-    yes: "APPROPRIATE unless safety flag",
-    route: "Final",
-    tone: "ok",
-    otherwise: "Check gray zone",
-  },
-  {
-    index: "10",
-    question: "Threshold <= Hb < 10?",
-    evidence: "Lab Hb + cohort threshold",
-    yes: "NEEDS_REVIEW",
-    route: "LLM",
-    tone: "warn",
-    otherwise: "High-Hb tier",
-  },
-  {
-    index: "11",
-    question: "Hb >= 10?",
-    evidence: "Lab Hb",
+    question: "Hb ≥ 10 g/dL?",
+    evidence: "No earlier rule has applied",
     yes: "POTENTIALLY_INAPPROPRIATE",
     route: "LLM",
     tone: "err",
-    otherwise: "Not reachable for valid Hb",
+    otherwise: "Not reached for a valid Hb",
   },
 ];
 
 const thaiSteps: Step[] = [
   {
     index: "1",
-    question: "ไม่มี Hb ก่อนให้เลือดที่ใช้ได้?",
-    evidence: "Lab: Hb observations, lookback 7 วัน",
+    question: "ไม่มี Hb ก่อนสั่งที่ใช้ได้?",
+    evidence: "Hb ที่เลือกจากการค้นย้อนหลังเจ็ดวัน",
     yes: "INSUFFICIENT_EVIDENCE",
     route: "Final",
     tone: "warn",
-    otherwise: "ตรวจ Hb < 7.0 ก่อน",
+    otherwise: "ตรวจกฎ Hb หลัก",
   },
   {
     index: "2",
-    question: "Hb < 7.0 g/dL?",
-    evidence: "Lab: current Hb",
+    question: "Hb ≤ 7.0 g/dL?",
+    evidence: "ค่า Hb ก่อนสั่งที่เลือกไว้",
     yes: "APPROPRIATE",
     route: "Final",
     tone: "ok",
-    otherwise: "ใช้ cohort และ bypass evidence ต่อ",
+    otherwise: "ตรวจ MTP",
   },
   {
     index: "3",
-    question: "Cohort unknown?",
-    evidence: "availability ของ procedure join",
-    yes: "NEEDS_REVIEW",
-    route: "LLM",
-    tone: "warn",
-    otherwise: "ตรวจ MTP pattern",
+    question: "เข้า cohort MTP?",
+    evidence: "กลุ่มคำสั่ง RBC และส่วนประกอบที่สั่งร่วม",
+    yes: "APPROPRIATE",
+    route: "Final",
+    tone: "ok",
+    otherwise: "ตรวจบริบทที่ไม่ทราบ",
   },
   {
     index: "4",
-    question: "เข้า pattern MTP?",
-    evidence: "Blood orders: RBC units, FFP, platelets ใน 1 ชั่วโมง",
-    yes: "APPROPRIATE",
-    route: "Final",
-    tone: "ok",
-    otherwise: "ตรวจ procedural bypass",
+    question: "ไม่ทราบ cohort?",
+    evidence: "ไม่มีข้อมูลหัตถการให้ตรวจ",
+    yes: "NEEDS_REVIEW",
+    route: "LLM",
+    tone: "warn",
+    otherwise: "ตรวจการลดลงของ Hb",
   },
   {
     index: "5",
-    question: "มี procedure ≤ 6h ก่อน order?",
-    evidence: "IPTSUMOPRT + ICD9CM procedure timing",
+    question: "Hb ลดถึงเกณฑ์?",
+    evidence: "ลด ≥ 1.5 / 2.0 / 2.5 g/dL ใน 6 / 12 / 24 ชั่วโมง",
     yes: "APPROPRIATE",
     route: "Final",
     tone: "ok",
-    otherwise: "ตรวจ pre-op crossmatch",
+    otherwise: "ตรวจว่ามีเกณฑ์ตัวเลขของ cohort หรือไม่",
   },
   {
     index: "6",
-    question: "มี procedure ≤ 72h หลัง order?",
-    evidence: "IPTSUMOPRT + ICD9CM upcoming procedure",
-    yes: "APPROPRIATE",
-    route: "Final",
-    tone: "ok",
-    otherwise: "ตรวจ acute Hb drop",
+    question: "ไม่มีเกณฑ์ตัวเลขของ cohort?",
+    evidence: "บริบทโลหิตวิทยาที่ยังเหลืออยู่",
+    yes: "NEEDS_REVIEW",
+    route: "LLM",
+    tone: "warn",
+    otherwise: "เทียบ Hb กับเกณฑ์ cohort",
   },
   {
     index: "7",
-    question: "Delta-Hb trigger ทำงาน?",
-    evidence: "Lab: prior Hb drop ใน 6 / 12 / 24h",
-    yes: "APPROPRIATE",
-    route: "Final",
-    tone: "ok",
-    otherwise: "ใช้ threshold ของ cohort",
+    question: "Hb ≤ เกณฑ์ cohort?",
+    evidence: "พิจารณาร่วมกับ crystalloid และ Hb ต่ำที่ไม่มีแนวโน้ม",
+    yes: "APPROPRIATE หรือ NEEDS_REVIEW หากมี safety flag",
+    route: "Conditional",
+    tone: "warn",
+    otherwise: "ตรวจช่วง Hb ที่เหลือ",
   },
   {
     index: "8",
-    question: "Cohort ไม่มี numeric threshold?",
-    evidence: "ICD-10 + MED + ANC สำหรับ active heme context",
+    question: "Hb < 10 g/dL?",
+    evidence: "Hb สูงกว่าเกณฑ์ cohort",
     yes: "NEEDS_REVIEW",
     route: "LLM",
     tone: "warn",
-    otherwise: "เทียบ Hb กับ threshold",
+    otherwise: "ตรวจกฎ Hb สูง",
   },
   {
     index: "9",
-    question: "Hb < threshold ของ cohort?",
-    evidence: "Lab Hb + cohort threshold + MED crystalloid check",
-    yes: "APPROPRIATE ยกเว้น safety flag",
-    route: "Final",
-    tone: "ok",
-    otherwise: "ตรวจ gray zone",
-  },
-  {
-    index: "10",
-    question: "threshold ≤ Hb < 10?",
-    evidence: "Lab Hb + cohort threshold",
-    yes: "NEEDS_REVIEW",
-    route: "LLM",
-    tone: "warn",
-    otherwise: "เข้าสู่ high-Hb tier",
-  },
-  {
-    index: "11",
-    question: "Hb ≥ 10?",
-    evidence: "Lab Hb",
+    question: "Hb ≥ 10 g/dL?",
+    evidence: "ไม่เข้าเงื่อนไขก่อนหน้า",
     yes: "POTENTIALLY_INAPPROPRIATE",
     route: "LLM",
     tone: "err",
-    otherwise: "ไม่ควรเกิดสำหรับ Hb ที่ valid",
+    otherwise: "ไม่เกิดขึ้นสำหรับ Hb ที่ใช้ได้",
   },
 ];
 
 const steps = isThai ? thaiSteps : englishSteps;
 
 const routeLabel = (route: Step["route"]) => {
-  if (!isThai) return route;
-  return route === "Final" ? "จบ ไม่เรียก LLM" : "ส่ง LLM";
+  if (!isThai) return route === "Conditional" ? "Final or review" : route;
+  return route === "Final" ? "จบโดยกฎ" : route === "Conditional" ? "จบหรือส่งทบทวน" : "ส่งทบทวนผ่าน LLM";
 };
 ---
 
@@ -227,13 +191,13 @@ const routeLabel = (route: Step["route"]) => {
   <figcaption id="algorithm-flow-title" class="algorithm-flow__caption">
     {isThai ? (
       <>
-        ลำดับ precedence ของ deterministic classifier: rule แรกที่ match จะชนะ
-        และมีเฉพาะ `NEEDS_REVIEW` กับ `POTENTIALLY_INAPPROPRIATE` ที่เข้าสู่เส้นทาง LLM
+        ลำดับกฎเริ่มต้นหลังการตรวจระดับคำสั่ง ผลแรกที่เข้าเงื่อนไขเป็นผลของคำสั่ง
+        เส้นทาง LLM ต้องผ่านการตรวจความเป็นส่วนตัวและการตั้งค่าที่อนุญาต
       </>
     ) : (
       <>
-        Deterministic classifier precedence. The first matching row wins; only
-        `NEEDS_REVIEW` and `POTENTIALLY_INAPPROPRIATE` continue to the LLM path.
+        Default rule order after order-level routing. The first matching result applies.
+        LLM review requires privacy admission and an enabled transport.
       </>
     )}
   </figcaption>
@@ -242,8 +206,8 @@ const routeLabel = (route: Step["route"]) => {
     <span class="algorithm-flow__eyebrow">{isThai ? "ข้อมูลเข้า" : "Inputs"}</span>
     <strong>
       {isThai
-        ? "คำสั่ง RBC + การหา Hb + cohort + เวลา procedure + crystalloid window"
-        : "RBC order + Hb lookup + cohort + procedure timing + crystalloid window"}
+        ? "คำสั่ง RBC ผล Hb บริบท cohort และประวัติ crystalloid"
+        : "RBC order, Hb lookup, cohort, and crystalloid history"}
     </strong>
   </div>
 

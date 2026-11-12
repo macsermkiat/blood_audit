@@ -1,77 +1,37 @@
 ---
-title: ภาพรวมสำหรับผู้ดูแลระบบ
-description: blood_audit คืออะไร สิ่งที่ต้องเตรียม และผลลัพธ์ที่ถือว่าสำเร็จ
+title: คู่มือผู้ดูแลระบบ
+description: เลือกรูปแบบการตรวจ เตรียมข้อมูล และส่งผลให้คณะกรรมการทบทวน
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
-import QiNotSamdBanner from "../../../../components/QiNotSamdBanner.astro";
+ใช้ `bba audit` ตรวจข้อมูลส่งออกจาก HOSxP ย้อนหลังและบันทึกผลการจัดประเภท เริ่มจาก [ติดตั้ง](/blood_audit/th/operators/install/) และ [ตรวจข้อมูลครั้งแรก](/blood_audit/th/operators/first-audit-run/)
 
-<QiNotSamdBanner variant="compact" />
+โหมด local ต้องใช้ Python, uv, ชุดข้อมูลครบถ้วน และพื้นที่เก็บข้อมูลถาวรที่จำกัดสิทธิ์ ไม่ต้องใช้ API key หรือ Postgres ระบบบันทึกผลที่กฎตัดสินได้ ส่วนกรณีที่ต้องใช้หลักฐานสำหรับโมเดลจะเป็น `NEEDS_REVIEW` พร้อมเหตุผล `privacy_admission_failed`
 
-<AtAGlance
-  title="สรุปสำหรับผู้ดูแล"
-  items={[
-    { label: "งานหลัก", value: "ติดตั้ง ตั้งค่า environment รัน ingest/audit แล้วส่งชุดข้อมูลออดิท" },
-    { label: "ต้องมีวันนี้", value: "Python/uv, BBA_DATA_DIR, พื้นที่เก็บข้อมูลที่เขียนได้ และ HOSxP export", tone: "ok" },
-    { label: "Phase 1.5", value: "Postgres และ Anthropic Batch API จะใช้เมื่อเชื่อมส่วน analysis" },
-    { label: "ความปลอดภัย", value: "ไม่มี real-time alert และ PHI ต้องถูก de-identify ก่อนออกจาก container", tone: "warn" },
-  ]}
-/>
+## เลือกงานที่ต้องทำ
 
-## เอกสารส่วนนี้สำหรับใคร
+| งาน | คู่มือ |
+| --- | --- |
+| ตรวจไฟล์และคอลัมน์จาก HOSxP | [นำเข้า CSV](/blood_audit/th/operators/ingest-csv/) |
+| ตรวจข้อมูลหรือทำงานที่ค้างต่อ | [คำสั่ง audit](/blood_audit/th/operators/audit-command/) |
+| เตรียมหลักฐานที่ลงลายมือชื่อสำหรับโมเดล | [ตัวแปรแวดล้อม](/blood_audit/th/operators/env-vars/) |
+| สร้าง HTML, JSON หรือ PDF รายเดือน | [สร้างรายงาน](/blood_audit/th/operators/generate-report/) |
+| ตั้งค่าหน้าทบทวนและเปรียบเทียบผลแต่ละรอบ | [การเชื่อมต่อระบบ](/blood_audit/th/operators/integration-seams/) |
+| ทำซ้ำขั้นตอนวิจัย pilot | [รัน pipeline](/blood_audit/th/operators/run-pipeline/) |
 
-คุณกำลังดูแล blood_audit ในนามทีม KCMH IT งานของคุณมี 4 ขั้นตอน:
+## เตรียมข้อมูลและพื้นที่เก็บ
 
-1. ติดตั้ง package
-2. ตั้งค่า environment variables ที่จำเป็น
-3. รัน `bba audit --input ...`; ใช้ `bba ingest` ก่อนเฉพาะเมื่อต้องการ
-   preflight ตรวจ bundle แยกต่างหาก
-4. ส่งชุดข้อมูลออดิทให้คณะกรรมการคุณภาพ (Quality Improvement, QI)
+วาง CSV มาตรฐานทั้ง 13 ไฟล์ไว้ด้วยกัน ผู้ส่งออกข้อมูลต้องกรองกลุ่มผู้ใหญ่ตามขอบเขตที่อนุมัติก่อน เพราะชุดข้อมูลนี้ไม่มีคอลัมน์อายุ ดู [ตารางข้อมูลนำเข้า](/blood_audit/th/operators/ingest-csv/#expected-tables)
 
-ส่วน subcommand อีก 4 ตัว คือ `evaluate`, `report`, `serve-dashboard`
-และ `sentinel` จะถูกเชื่อมต่อโดยทีม deployment ในภายหลัง หากต้องการทราบว่า
-ทำไมตอนนี้คำสั่งเหล่านี้จึง fail โดยตั้งใจ ดูได้ที่
-[Integration seams](/blood_audit/th/operators/integration-seams/)
+กำหนด `BBA_DATA_DIR` ให้เป็นพื้นที่ถาวรของบัญชีที่ใช้รันระบบ สำรอง `identity.key` พร้อมบันทึกการตรวจ เพราะคีย์นี้ใช้สร้างรหัสแทนผู้ป่วยและการนอนโรงพยาบาลให้คงที่ กำหนดอายุการเก็บและสิทธิ์เข้าถึง snapshot รายงาน และ log ตามนโยบายข้อมูลคลินิก
 
-## สิ่งที่ต้องเตรียมก่อนเริ่ม
+## เพิ่มการทบทวนด้วยโมเดล
 
-สำหรับ Phase 1 ตอนนี้:
+โหมด cassette และ live ต้องมีไฟล์ตั้งค่าแอป นโยบายตรวจลายมือชื่อ หลักฐานที่ลงลายมือชื่อแล้ว และ Postgres ที่ใช้เก็บ checkpoint โหมด live ต้องติดตั้ง dependency เพิ่ม มี API key และตั้ง `allow_live_api` เป็น `true`
 
-- **Python 3.13+** พร้อม [uv](https://github.com/astral-sh/uv) เวอร์ชัน ≥ 0.9.24
-- **ไดเรกทอรีข้อมูลถาวร** ที่ service user เขียนได้สำหรับ run-state markers
-- **ชุดข้อมูลส่งออกจาก HOSxP** — ดูรายละเอียดที่ [Ingest CSV](/blood_audit/th/operators/ingest-csv/)
+บริการลบข้อมูลระบุตัวบุคคลที่ได้รับอนุมัติเป็นผู้ถือโมเดลและ private signing key แอปตรวจเลือดรับเฉพาะ public key และหลักฐานที่ลงลายมือชื่อ CLI ไม่ได้ติดตั้งบริการลบข้อมูลหรือตั้งค่าระบบยืนยันตัวตนของโรงพยาบาลให้ ดู [การเชื่อมต่อระบบ](/blood_audit/th/operators/integration-seams/)
 
-สำหรับ Phase 1.5 เมื่อเชื่อม analysis/reporting:
+ผลนี้ใช้สำหรับการทบทวนคุณภาพย้อนหลัง ระบบไม่ส่งการแจ้งเตือนไปยังผู้รักษา และการรันสำเร็จไม่ใช่หลักฐานยืนยันความถูกต้องทางคลินิก
 
-- **PostgreSQL 14+** สำหรับ `batch_runs` และ review-action state
-  ต้องใช้ DSN ที่มี driver suffix `+psycopg` (psycopg3 ไม่ใช่ psycopg2)
-- **Anthropic API key** ที่เปิดใช้งาน Batch API ได้
+## ข้อจำกัดของเส้นทางเกล็ดเลือด
 
-## ผลลัพธ์เมื่อรันสำเร็จ
-
-1. `bba ingest <csv>` ตรวจสอบชุดข้อมูล คำนวณ hash และเขียน ingest completion marker ใต้ `$BBA_DATA_DIR/ingest/v1/`
-2. `bba audit --input <csv>` ใน Phase 1 จะ validate/drain bundle ภายใต้
-   `$BBA_DATA_DIR/audit/<run_id>/` และบันทึก run-state/compliance marker
-   ส่วนการเขียน `AuditRow` 1 แถวต่อคำสั่งให้เลือดที่ audit และการติดตาม
-   `batch_runs`/review state จะเชื่อมใน Phase 1.5
-3. การรันซ้ำด้วย input เดิมจะไม่ทำอะไรใหม่ ยกเว้นใส่ `--force`
-   (รายละเอียดดู [Run-level idempotency](/blood_audit/th/operators/troubleshooting/#run-level-idempotency))
-
-## สิ่งที่คาดหวังได้
-
-- ตัวจำแนก deterministic จะทำงานก่อนเสมอ เมื่อเชื่อม Phase 1.5 แล้ว
-  แถว `NEEDS_REVIEW` และ `POTENTIALLY_INAPPROPRIATE` จะเข้าสู่เส้นทาง LLM
-  ซึ่งอาจใช้เวลาหลายนาทีกว่าจะเสร็จ
-- มี exclusion แบบเด็ดขาดสำหรับผลิตภัณฑ์ที่ไม่ใช่ RBC, ผู้ป่วยอายุ < 15 ปี,
-  และ ICD-10 conditions ที่อยู่นอก scope ส่วนคำสั่งที่ไม่มี Hb ก่อนให้เลือด
-  จะถูกเก็บเป็น `INSUFFICIENT_EVIDENCE`
-- มี routing สามส่วนที่ default-ON ซึ่งปิดจบ (terminal) คำสั่งได้ก่อนถึง
-  นโยบาย Hb: คำสั่งที่คืนเลือดโดยไม่ได้ให้ (`RETURNED_NOT_TRANSFUSED`) และ
-  คำสั่งที่ระบุว่าเป็นงานผ่าตัด / type-and-screen (`PERIOP_TRANSFUSION_EXEMPT`)
-  จะไม่นับในการให้คะแนน ส่วนการจองเลือดเกิน MSBOS จะแสดงเป็น
-  `PREOP_OVER_RESERVATION`
-- PHI ทั้งหมดจะถูก de-identify ก่อนที่ข้อมูลใด ๆ จะออกจาก audit container
-
-## ขั้นถัดไป
-
-ไปต่อที่ [ติดตั้ง](/blood_audit/th/operators/install/)
+ค่า `PLATELET_LLM_ENABLED` ใน repository เป็น false หากมีคำสั่งเกล็ดเลือดที่ต้องส่งเข้าเส้นทางทบทวนซึ่งยังปิดอยู่ แอปจะปฏิเสธงานที่ยังบันทึกไม่ครบและไม่บันทึกว่ารอบนั้นเสร็จแล้ว ตรวจขอบเขตที่อนุมัติก่อนเลือกกลุ่มข้อมูลเกล็ดเลือด

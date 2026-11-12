@@ -303,6 +303,11 @@ class LlmCall(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     call_id: SafeId
+    attempt_index: int | None = Field(default=None, ge=0)
+    context_hash: str | None = None
+    response_headers: FrozenJsonDict = Field(
+        default_factory=dict, validate_default=True
+    )
     audit_id: SafeId
     run_id: SafeId
     model_id: str
@@ -315,7 +320,9 @@ class LlmCall(BaseModel):
     extended_thinking_blocks: FrozenJsonList | None
     cold_storage_uri: str | None
 
-    @field_serializer("request_json", "response_json", "extended_thinking_blocks")
+    @field_serializer(
+        "request_json", "response_json", "response_headers", "extended_thinking_blocks"
+    )
     def _serialize_frozen_payload(self, value: Any) -> Any:
         """Recursively thaw the per-call reproducibility record for JSON
         output (``None``-safe for ``extended_thinking_blocks``)."""

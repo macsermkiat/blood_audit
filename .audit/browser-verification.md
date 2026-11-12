@@ -1,0 +1,11 @@
+Browser verification uses synthetic AuditRows, a local uvicorn app, and a disposable PostgreSQL 16 container with the migrated unprivileged review role. No live identity provider or real patient data.
+
+The first actual override submission failed with 403. Chromium 155 sent `Origin: null` for the same-origin POST because the page advertised `Referrer-Policy: no-referrer`. The strict origin check then rejected the form. Network request 8 on browser page 4 proved the request was `Sec-Fetch-Site: same-origin` and carried a valid form token. This was missed by TestClient probes. The origin guard stays strict; the response policy must permit the same-origin form's Origin header.
+
+After changing the header to `same-origin`, the actual browser override form saved through a 303 redirect and displayed one decision in PostgreSQL-backed history. Reload and an exact resubmission preserved that single action. Reusing the old expected revision with a new submission ID returned HTTP 409 and the message that another reviewer changed the decision. The resolved red-cell case left the queue.
+
+A platelet escalation saved through the actual form and remained in the queue, with platelet count 15.0 ×10⁹/L rather than an Hb value. Both components displayed English/Thai reasoning, citation E1, evidence identity, and Asia/Bangkok times. Desktop width 1200 and the browser's minimum resized width 500 had no document-level horizontal overflow. The narrow queue table scrolls within its container. The resize request was 390 but Chromium's effective viewport was 500, so no 390px claim is made.
+
+A script fetch probe was blocked by the restrictive CSP, as expected. Resubmission and stale-write verification then used actual form navigation. This check used an explicitly trusted synthetic default reviewer; signed-session isolation and anonymous rejection were verified separately in the security suite. An external identity provider, reverse proxy, and TLS deployment were not exercised.
+
+The local harness can be rerun from the repository root with `PYTHONPATH=src:tests/unit .venv/bin/python .audit/browser-harness.py`, with Docker available. It serves only disposable synthetic data on loopback port 8766. Stop it with Ctrl-C to remove the disposable database and local evidence.

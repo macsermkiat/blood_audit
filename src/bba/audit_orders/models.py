@@ -25,9 +25,11 @@ from bba.ingest.models import ParsedTimeOfDay
 
 
 # Inclusion product allow-list (PRD §2 + issue #4): the three RBC products
-# present in the BDTYPE table. Anything else fails the product-inclusion gate
-# with reason ``"not_rbc_product"``.
-RBCProduct = Literal["LPRC", "LDPRC", "SDR"]
+# present in the BDTYPE table, plus their irradiated variants (LDPRCI / LPRCI,
+# added 2026-09-19 for the hematology cohort — an irradiated PRC is still a
+# red-cell transfusion judged on the same Hb triggers). Anything else fails
+# the product-inclusion gate with reason ``"not_rbc_product"``.
+RBCProduct = Literal["LPRC", "LDPRC", "SDR", "LDPRCI", "LPRCI"]
 
 
 # Blood-component family of an admitted order (Phase 2). Mirrors

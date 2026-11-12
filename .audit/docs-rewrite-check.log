@@ -1,0 +1,13 @@
+npm notice run blood-audit-docs@0.1.0 check
+npm notice run astro check
+(node:6793) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+17:53:54 [content] Syncing content
+17:53:54 [content] Synced content
+17:53:54 [types] Generated 191ms
+17:53:54 [check] Getting diagnostics for Astro files in /Users/admin/Project_Chatbot_research/blood_audit/docs...
+Result (12 files): 
+- 0 errors
+- 0 warnings
+- 0 hints
+

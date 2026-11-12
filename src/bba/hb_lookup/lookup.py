@@ -16,13 +16,14 @@ Per PRD §3 and Round 2 E3:
   conservative bleed signal. Any window triggering sets
   ``delta_hb_bypass = True`` for the deterministic classifier.
 * ``needs_review_single_low_hb`` fires when the chosen current Hb is
-  < 8 g/dL and no prior observation sits in the 24h window before it —
+  <= 8 g/dL and no prior observation sits in the 24h window before it —
   an isolated low value with no trend to interpret it against.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from bba.hb_lookup.models import (
@@ -33,6 +34,7 @@ from bba.hb_lookup.models import (
 )
 
 _LOOKBACK = timedelta(days=7)
+_MIN_WINDOW = timedelta(hours=24)
 _FRESH = timedelta(hours=24)
 _STALE_24_72 = timedelta(hours=72)
 _LOW_HB_REVIEW_THRESHOLD = 8.0
@@ -50,11 +52,16 @@ def lookup_hb(
     *,
     observations: Sequence[HbObservation],
     anchor_utc: datetime,
+    not_before_utc: datetime | None = None,
 ) -> HbLookupResult:
     """Return the most-recent Hb at or before ``anchor_utc`` with freshness + delta.
 
     ``observations`` must be the Hb observations for a single patient
     (caller filters by HN). ``anchor_utc`` must be tz-aware UTC.
+
+    ``not_before_utc`` bounds the 24 h minimum (``min_24h_g_dl``): pass the
+    datetime of the last transfusion inside the window so a low that the
+    transfusion already corrected does not count (issue #249).
 
     Order of ``observations`` is unimportant — the function sorts
     internally. When no observation lies in the 7-day lookback at or
@@ -80,6 +87,73 @@ def lookup_hb(
         delta_hb_bypass=bypass,
         delta_hb_windows=windows,
         needs_review_single_low_hb=needs_review,
+        min_24h_g_dl=_min_24h(before_anchor, anchor_utc, not_before_utc),
+    )
+
+
+def _window_min(
+    before_anchor: Sequence[HbObservation],
+    anchor_utc: datetime,
+    window_span: timedelta,
+    not_before_utc: datetime | None,
+) -> HbObservation | None:
+    """Lowest Hb in ``window_span`` before the anchor, from ``not_before_utc``
+    onward.
+
+    Same HEMATOLOGY-preferred source rule as :func:`_select_current`, so the
+    minimum and the current value are read from the same instrument."""
+    window = [
+        o
+        for o in before_anchor
+        if anchor_utc - o.datetime_utc <= window_span
+        and (not_before_utc is None or o.datetime_utc >= not_before_utc)
+    ]
+    if not window:
+        return None
+    hematology = [o for o in window if o.source == "HEMATOLOGY"]
+    pool: Sequence[HbObservation] = hematology if hematology else window
+    return min(pool, key=lambda o: (o.value_g_dl, -o.datetime_utc.timestamp()))
+
+
+def _min_24h(
+    before_anchor: Sequence[HbObservation],
+    anchor_utc: datetime,
+    not_before_utc: datetime | None,
+) -> float | None:
+    lowest = _window_min(before_anchor, anchor_utc, _MIN_WINDOW, not_before_utc)
+    return lowest.value_g_dl if lowest is not None else None
+
+
+@dataclass(frozen=True)
+class TriggerDraws:
+    """The draws :func:`lookup_hb` judges an order on, as observations.
+
+    ``current`` and ``min_24h`` are exactly the draws behind
+    ``value_g_dl`` and ``min_24h_g_dl``; ``min_48h`` applies the same source
+    and cutoff rules over 48 h. Evidence flags shown to the model must name
+    these draws, or the model reasons on a value the guardrail never sees.
+    """
+
+    current: HbObservation | None
+    min_24h: HbObservation | None
+    min_48h: HbObservation | None
+
+
+def trigger_draws(
+    *,
+    observations: Sequence[HbObservation],
+    anchor_utc: datetime,
+    not_before_utc: datetime | None = None,
+) -> TriggerDraws:
+    """The current, 24 h-minimum and 48 h-minimum draws at ``anchor_utc``."""
+    before_anchor = [o for o in observations if o.datetime_utc <= anchor_utc]
+    in_lookback = [o for o in before_anchor if anchor_utc - o.datetime_utc < _LOOKBACK]
+    if not in_lookback:
+        return TriggerDraws(current=None, min_24h=None, min_48h=None)
+    return TriggerDraws(
+        current=_select_current(in_lookback),
+        min_24h=_window_min(before_anchor, anchor_utc, _MIN_WINDOW, not_before_utc),
+        min_48h=_window_min(before_anchor, anchor_utc, 2 * _MIN_WINDOW, not_before_utc),
     )
 
 
@@ -168,8 +242,13 @@ def _single_low_hb(
     current: HbObservation,
     all_priors: Sequence[HbObservation],
 ) -> bool:
-    """True iff current is < 8 g/dL and no prior sits in its 24h window."""
-    if current.value_g_dl >= _LOW_HB_REVIEW_THRESHOLD:
+    """True iff current is <= 8 g/dL and no prior sits in its 24h window.
+
+    Inclusive at 8.0 since owner ruling 2026-09-27 (case 68004713): an Hb
+    exactly at an 8.0 cohort floor now qualifies as sub-threshold and would
+    auto-clear, so it needs the same isolated-value safety check as 7.9.
+    """
+    if current.value_g_dl > _LOW_HB_REVIEW_THRESHOLD:
         return False
     twenty_four_hours = timedelta(hours=24)
     has_prior_in_24h = any(

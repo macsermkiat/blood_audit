@@ -1,5 +1,7 @@
 # `bba.source_mapping` — the EMR→domain seam (design + glossary)
 
+> Historical design record. Dates, rollout states, and proposed behavior below describe the original work and may be superseded. Use [current module contracts](CONTEXT.md) and the [operator guide](production-cli.md) for current behavior.
+
 > Status: design only (no code yet). Produced via `/improve-codebase-architecture`,
 > candidate #1 (the Source-Mapping / EMR adapter seam). Goal steer from the user:
 > "make it generalize, don't overfit — scale-up later for production usage and

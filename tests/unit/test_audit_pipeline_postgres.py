@@ -30,23 +30,6 @@ from bba.audit_pipeline import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-@pytest.fixture(scope="session")
-def _postgres_container() -> Iterator[object]:
-    """Session-scoped Postgres container via testcontainers-python.
-
-    Imported lazily so a missing Docker daemon errors out on first use
-    rather than at test-collection time."""
-    pytest.importorskip("testcontainers.postgres")
-    pytest.importorskip("docker")
-    try:
-        from testcontainers.postgres import PostgresContainer
-
-        with PostgresContainer("postgres:16-alpine") as pg:
-            yield pg
-    except Exception as exc:  # pragma: no cover - environment-dependent
-        pytest.skip(f"Postgres testcontainer unavailable: {exc}")
-
-
 @pytest.fixture
 def fresh_db(_postgres_container: object) -> Iterator[str]:
     """Drop and recreate the public schema before each test, then run

@@ -3,8 +3,9 @@
 Strategy:
 
 1. Read BDVST + BDVSTDT from ``$BBA_PILOT_RAW_DIR``. Keep orders whose
-   line items contain at least one RBC product (BDTYPE in
-   {LPRC, LDPRC, SDR}), with BDVSTST in {4, 5}, REQTYPE == 'P',
+   line items contain at least one RBC product (the audit gate's
+   ``RBC_PRODUCTS`` allow-list, so the sampler and the pipeline agree on
+   what a red-cell order is), with BDVSTST in {4, 5}, REQTYPE == 'P',
    CANCELDATE NULL, AN non-null.
 2. Random-sample N (HN, REQNO) keys (seed configurable so reruns are
    reproducible), or, when ``BBA_PILOT_REQNO_FILE`` is set, take exactly the
@@ -43,6 +44,11 @@ Environment variables:
   ignored and the manifest records ``list`` as the seed. Exits, writing
   nothing, if the file is missing or empty, lists a REQNO twice, or lists one
   that is not an eligible RBC order or matches more than one (HN, AN).
+* ``BBA_PILOT_PLATELET_REQNO_FILE`` — same format, for platelet-ONLY orders:
+  the platelet sample is exactly those orders, ``BBA_PILOT_PLATELET_SAMPLE_N``
+  / ``BBA_PILOT_PLATELET_SEED`` are ignored and the manifest records ``list``.
+  Exits, writing nothing, on the same conditions as the RBC list (a mixed
+  RBC+platelet REQNO is not a platelet-ONLY order and is rejected).
 """
 
 from __future__ import annotations
@@ -54,6 +60,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from bba.audit_orders import RBC_PRODUCTS
 from bba.component_map import is_platelet_product
 
 SRC = Path(
@@ -75,8 +82,9 @@ SEED = int(os.environ.get("BBA_PILOT_SAMPLE_SEED", "20260519"))
 PLATELET_N = int(os.environ.get("BBA_PILOT_PLATELET_SAMPLE_N", "0"))
 PLATELET_SEED = int(os.environ.get("BBA_PILOT_PLATELET_SEED", "20260520"))
 REQNO_FILE = os.environ.get("BBA_PILOT_REQNO_FILE", "").strip()
+PLATELET_REQNO_FILE = os.environ.get("BBA_PILOT_PLATELET_REQNO_FILE", "").strip()
 
-RBC = {"LPRC", "LDPRC", "SDR"}
+RBC = RBC_PRODUCTS
 ELIGIBLE_STATUS = {"4", "5"}
 
 csv.field_size_limit(sys.maxsize)
@@ -217,9 +225,9 @@ def _read_reqno_file(path: Path) -> list[str]:
 
 
 def _select_listed(
-    candidates: list[tuple[str, str, str]], reqnos: list[str]
+    candidates: list[tuple[str, str, str]], reqnos: list[str], *, label: str = "RBC"
 ) -> list[tuple[str, str, str]]:
-    """The eligible RBC orders for ``reqnos``, in list order.
+    """The eligible ``label`` orders for ``reqnos``, in list order.
 
     Exits if a REQNO is not eligible, or if it matches more than one (HN, AN):
     REQNOs can be reused across patients, and silently picking one would put
@@ -231,9 +239,9 @@ def _select_listed(
     missing = [r for r in reqnos if r not in orders]
     if missing:
         sys.exit(
-            f"{len(missing)} listed REQNOs are not eligible RBC orders in "
-            f"{SRC / 'BDVST.csv'} (absent, cancelled, wrong status/type, or no RBC "
-            f"line item): {', '.join(missing[:20])}"
+            f"{len(missing)} listed REQNOs are not eligible {label} orders in "
+            f"{SRC / 'BDVST.csv'} (absent, cancelled, wrong status/type, or wrong "
+            f"line items): {', '.join(missing[:20])}"
         )
     ambiguous = [r for r in reqnos if len(orders[r]) > 1]
     if ambiguous:
@@ -249,6 +257,9 @@ def main() -> None:
     if not SRC.exists():
         sys.exit(f"BBA_PILOT_RAW_DIR not found: {SRC}")
     reqno_list = _read_reqno_file(Path(REQNO_FILE)) if REQNO_FILE else None
+    plt_reqno_list = (
+        _read_reqno_file(Path(PLATELET_REQNO_FILE)) if PLATELET_REQNO_FILE else None
+    )
     print(f"raw  : {SRC}")
     print(f"work : {WORK}")
     if reqno_list is not None:
@@ -308,7 +319,8 @@ def main() -> None:
     # random.Random(PLATELET_SEED) is constructed and used; it never shares state
     # with `rng`.
     platelet_sample: list[tuple[str, str, str]] = []
-    if PLATELET_N > 0:
+    plt_seed: int | str = PLATELET_SEED
+    if PLATELET_N > 0 or plt_reqno_list is not None:
         # Pass 1p — index BDVSTDT REQNOs where ALL line items are platelet
         # products.  Mixed RBC+platelet REQNOs carry at least one RBC code
         # and are tagged component="red_cell" by build_audit_orders — they
@@ -346,14 +358,20 @@ def main() -> None:
                     continue
                 plt_candidates.append((hn, row["REQNO"], an))
         print(f"BDVST: {len(plt_candidates)} eligible platelet orders")
-        if len(plt_candidates) < PLATELET_N:
-            sys.exit(
-                f"only {len(plt_candidates)} platelet candidates < PLATELET_N={PLATELET_N}"
+        if plt_reqno_list is not None:
+            platelet_sample = _select_listed(
+                plt_candidates, plt_reqno_list, label="platelet-only"
             )
-
-        # Separate rng — NEVER draws from the RBC rng.
-        plt_rng = random.Random(PLATELET_SEED)
-        platelet_sample = plt_rng.sample(plt_candidates, PLATELET_N)
+            plt_seed = "list"
+        else:
+            if len(plt_candidates) < PLATELET_N:
+                sys.exit(
+                    f"only {len(plt_candidates)} platelet candidates < "
+                    f"PLATELET_N={PLATELET_N}"
+                )
+            # Separate rng — NEVER draws from the RBC rng.
+            plt_rng = random.Random(PLATELET_SEED)
+            platelet_sample = plt_rng.sample(plt_candidates, PLATELET_N)
         print("\nSampled platelet (HN, REQNO, AN):")
         for s in platelet_sample:
             print(" ", s)
@@ -447,11 +465,18 @@ def main() -> None:
                 in all_pairs
             ),
         )
+    # Cut by admission (related_reqnos), not by sampled REQNO: the returns
+    # pre-flight attributes an in-window "gave blood" note on an all-returned
+    # order to a NOT-returned unit of a sibling order on the same admission, and
+    # it prefers this copy when present. A REQNO-only cut hides every unsampled
+    # sibling and yields a false "hidden transfusion" HOLD (68019920 -> 68020779
+    # on the 2026-09 rebuild). Every consumer joins by REQNO exactly, so the
+    # extra rows cannot change a verdict.
     if (SRC / "BDVSTTRANS.csv").exists():
         _filter(
             "BDVSTTRANS.csv",
             "BDVSTTRANS.csv",
-            lambda r: (r.get("Reqno") or r.get("REQNO")) in all_reqnos,
+            lambda r: (r.get("Reqno") or r.get("REQNO")) in related_reqnos,
             cols=BDVSTTRANS_COLS,
         )
 
@@ -470,7 +495,7 @@ def main() -> None:
         for s in sample:
             writer.writerow([s[0], s[1], s[2], "rbc", rbc_seed])
         for s in platelet_sample:
-            writer.writerow([s[0], s[1], s[2], "platelet", PLATELET_SEED])
+            writer.writerow([s[0], s[1], s[2], "platelet", plt_seed])
     print(
         f"\nManifest: {manifest} ({len(sample)} rbc, {len(platelet_sample)} platelet)"
     )

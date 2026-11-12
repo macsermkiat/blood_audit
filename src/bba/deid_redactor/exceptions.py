@@ -10,7 +10,7 @@ Two raise paths exist in the wrapper:
   exception types (the backend is plugged in via the
   :class:`bba.deid_redactor.models.RedactorBackend` Protocol).
 
-NEEDS_REVIEW routing (k-anonymity fail / semantic degradation) is NOT an
+NEEDS_REVIEW routing (semantic degradation) is NOT an
 exception — it is a value on :class:`bba.deid_redactor.models.RedactionResult`.
 Quality-gate failures must travel through the audit chain so reviewers can
 audit them, not raise mid-pipeline and lose the bundle.
@@ -36,11 +36,8 @@ class BackendRedactionError(DeidRedactorError):
 class DateShiftError(DeidRedactorError):
     """A date inside the redacted text could not be shifted.
 
-    Raised when the date-shift step encounters a parseable date that is
-    before the admission date by more than the configured slack (a date
-    parser bug — the audit pipeline expects clinical dates to be at or after
-    admission), or when admission_date is naive (violating the project's
-    tz-aware-UTC contract — see :mod:`bba.ingest`).
+    Reserved for the date-shift step; the current transforms do not raise
+    it.
     """
 
 

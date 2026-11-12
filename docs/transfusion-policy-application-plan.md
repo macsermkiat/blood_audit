@@ -1,5 +1,7 @@
 # Applying the Chula DRAFT transfusion policies to blood_audit
 
+> Historical design record. Dates, rollout states, and proposed behavior below describe the original work and may be superseded. Use [current module contracts](CONTEXT.md) and the [operator guide](production-cli.md) for current behavior.
+
 **Status:** Phase 1 IMPLEMENTED — PR #83, deploy-gated on the two §4 clinician
 rulings (CR-H1, CR-M1). Phase 2 PLANNED (re-scoped per §8), not built.
 **Reviews:** grill + adversarial passes complete 2026-07-07 (§8); verification

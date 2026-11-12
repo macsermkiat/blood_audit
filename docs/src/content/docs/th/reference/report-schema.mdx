@@ -1,62 +1,65 @@
 ---
 title: โครงสร้างรายงาน
-description: โครงสร้างรายงาน QI และกฎ classification ที่ต้องรักษาไว้
+description: ไฟล์รายงาน ผลจำแนก และข้อมูลที่มาระดับแถว
 ---
 
-import AtAGlance from "../../../../components/AtAGlance.astro";
+รายละเอียดคอลัมน์อยู่ใน [`docs/report-schema.md`](https://github.com/macsermkiat/blood_audit/blob/main/docs/report-schema.md) ส่วน builder และ writer เป็นตัวกำหนดไฟล์ที่สร้างจริง หน้านี้สรุปพฤติกรรมปัจจุบัน
 
-<AtAGlance
-  title="สรุป schema"
-  items={[
-    { label: "Canonical file", value: "docs/report-schema.md" },
-    { label: "Sections", value: "hospital, ward, indication, cohort, pipeline health และ physician own-view" },
-    { label: "Privacy", value: "physician own-view แยกต่อแพทย์", tone: "ok" },
-    { label: "Classification", value: "INSUFFICIENT_EVIDENCE ห้ามรวมเข้า INAPPROPRIATE", tone: "warn" },
-  ]}
-/>
-
-## Output layout
+## โครงสร้างไฟล์
 
 ```text
 $BBA_DATA_DIR/reports/<run_id>/
-  hospital_trend.csv                      # committee
-  ward_scorecard.csv                      # committee
-  indication_distribution.csv             # committee
-  cohort_exception.csv                    # committee
-  pipeline_health.csv                     # committee
-  physician_own_view_<physician_id>.csv   # หนึ่งไฟล์ต่อแพทย์
-  report_<YYYY-MM-DD>.pdf                 # committee PDF
+  hospital_trend.csv
+  ward_scorecard.csv
+  indication_distribution.csv
+  cohort_exception.csv
+  pipeline_health.csv
+  physician_own_view_<physician_id>.csv
+  report_<YYYY-MM-DD>.pdf
+  provenance.json
 ```
 
-CLI `bba report --run-id <id>` **เชื่อมแล้ว**: ดึง `ReportInputs` จาก
-audit store, resolve ward/physician attribution จาก `BBA_BDVST_CSV` /
-`BBA_DCT_CSV` และเขียน committee CSVs, per-physician CSVs และ PDF
-ไว้ใต้ `$BBA_DATA_DIR/reports/<run_id>/`
+`bba report --run-id <id>` อ่านแถว audit ที่บันทึกแล้ว และใช้ `BBA_BDVST_CSV` กับ `BBA_DCT_CSV` เพื่อระบุ ward และแพทย์ builder เลือกเฉพาะ `component = "red_cell"` ก่อนรวมผล ชุดที่มีแต่เกล็ดเลือดจึงสร้างรายงาน RBC ไม่ได้
 
-## กฎ classification
+## ผลจำแนกและการรวมในรายงาน
 
-คอลัมน์ `final_classification` มาจาก audit store และเป็น 1 ใน 9 ค่า:
-5 classification หลัก (`APPROPRIATE`, `INAPPROPRIATE`, `NEEDS_REVIEW`,
-`INSUFFICIENT_EVIDENCE`, `POTENTIALLY_INAPPROPRIATE`) บวก terminal
-ด้าน routing/การจองเลือดอีก 4 ค่า:
+| `final_classification` | วิธีนับ |
+| --- | --- |
+| `APPROPRIATE` | เหมาะสม |
+| `INAPPROPRIATE` | ไม่เหมาะสม |
+| `NEEDS_REVIEW` | ต้องทบทวน |
+| `INSUFFICIENT_EVIDENCE` | หลักฐานไม่พอ แยกเป็นกลุ่มของตน |
+| `PREOP_OVER_RESERVATION` | รวมฝั่ง inappropriate |
+| `RETURNED_NOT_TRANSFUSED` | ไม่รวมคะแนน |
+| `PERIOP_TRANSFUSION_EXEMPT` | ไม่รวมคะแนน |
+| `POTENTIALLY_INAPPROPRIATE` | ต้องกำหนดตัวแปลงผลอย่างชัดเจน |
+| `PREOP_RESERVATION_UNCONFIRMED` | ต้องกำหนดตัวแปลงผลอย่างชัดเจน |
 
-- `PREOP_OVER_RESERVATION` — การจองเลือดเกิน MSBOS; คิดคะแนนเป็น
-  `INAPPROPRIATE` ใน report aggregates
-- `PREOP_RESERVATION_UNCONFIRMED` — อยู่หลัง flag, ปิดโดยค่าเริ่มต้น
-- `RETURNED_NOT_TRANSFUSED` — returns terminal;
-  **ถูกตัดออกจากการคิดคะแนน**
-- `PERIOP_TRANSFUSION_EXEMPT` — terminal จาก returns / declared-use;
-  **ถูกตัดออกจากการคิดคะแนน**
+`LLM_REVIEW` เป็นชื่อเส้นทาง ไม่ใช่ค่าที่เก็บใน classification เมื่อ grounding ไม่ผ่าน ระบบเก็บผลให้ทบทวนพร้อมเหตุผล โมเดลข้อมูลสรุประดับโรงพยาบาล ward และ cohort มี `over_reservation_count` แต่ยังไม่มีคอลัมน์แยกนี้ใน CSV
 
-aggregate model ของ `hospital_trend`, `ward_scorecard` และ
-`cohort_exception` มี field `over_reservation_count` เพิ่ม แต่ CSV writer
-ยังไม่ serialize เป็นคอลัมน์ — header ของไฟล์ CSV ที่ออกมายังเหมือนเดิม
+## ฟิลด์สรุประดับ run
 
-`INSUFFICIENT_EVIDENCE` ต้องอยู่เป็น class แยก เพราะหมายถึงหลักฐานไม่พอ
-ไม่ใช่หลักฐานว่าการให้เลือดไม่เหมาะสม การรวมค่านี้เข้า `INAPPROPRIATE`
-จะทำให้รายงาน QI บิดความหมาย
+CSV ทุกแถวข้อมูลมีฟิลด์ต่อไปนี้ รวมถึงแถวสังเคราะห์สำหรับส่วนที่ไม่มีข้อมูล PDF แสดงส่วนสรุปเดียวกันทุกหน้า
 
-## Reproducibility fields
+| ฟิลด์ | ความหมาย |
+| --- | --- |
+| `policy_version` | รหัสนโยบายที่ตรงกันในแถว RBC ของ run |
+| `model_id` | รหัสโมเดลเดียว หรือ JSON list ที่เรียงแล้วหากมีหลายค่า ผลจากกฎใช้ `deterministic` |
+| `redactor_version` | เวอร์ชัน redactor รวมค่า `not-applied` หากมีแถวที่ไม่ได้ใช้ |
+| `redactor_model_sha` | รหัส checkpoint หรือ `unavailable` หากไม่ได้ใช้ redactor |
+| `prompt_hash` | hash เดียวกัน หรือ hash รวมของคู่ audit ID และ prompt hash ที่เรียงแล้ว |
+| `evidence_bundle_hash` | hash รวมของคู่ audit ID และ evidence hash รายแถวที่เรียงแล้ว |
 
-รายงานควรมี hash ของ policy, model, redactor, prompt และ evidence bundle
-เพื่อให้ตรวจย้อนหลังได้ว่าผลลัพธ์เกิดจากข้อมูลและกฎชุดใด
+builder ตรวจ code version, policy, เดือนตามเวลาท้องถิ่น และ redactor ที่ใช้ ก่อนตัดแถวที่ไม่คิดคะแนน ความแตกต่างของ model หรือ prompt แสดงในข้อมูลสรุปและข้อมูลรายแถว
+
+## ที่มาระดับแถว
+
+`provenance.json` เก็บ `audit_id`, `run_id`, `code_version_slug`, `model_id`, `policy_version`, `prompt_hash`, `evidence_bundle_hash`, `redactor_version` และ `redactor_model_sha` ของทุกแถว RBC รวมแถวที่ยกเว้นจากคะแนน ส่วน CSV รวมผลเก็บเพียงฟิลด์สรุประดับ run
+
+## เดือนและอัตรา
+
+`ReportInputs.month` เป็นวันที่หนึ่งของเดือน ช่วงนับเริ่มต้นเดือนและสิ้นสุดก่อนต้นเดือนถัดไปในเขตเวลา Asia/Bangkok ส่วน timestamp ในฐานข้อมูลเก็บเป็น UTC
+
+อัตรา inappropriate คือ `inappropriate / total_orders` หลังคัดส่วนประกอบ ยกเว้นแถว และแปลง classification แล้ว ผลรวมสัดส่วนข้อบ่งชี้อาจเกินหนึ่งเพราะคำสั่งเดียวมีหลายข้อบ่งชี้ได้ Quartile เทียบแพทย์ใช้แพทย์ทุกคนที่อยู่ในเดือนรายงาน แม้ขอไฟล์รายแพทย์เพียงบางคน
+
+ดู [ผลลัพธ์รายงาน](/blood_audit/th/clinical/report-output/) สำหรับผู้รับและข้อจำกัดการเข้าถึง และ [สร้างรายงาน](/blood_audit/th/operators/generate-report/) สำหรับคำสั่ง

@@ -20,6 +20,7 @@ from collections.abc import Sequence
 
 from bba.vitals_extractor.components import BLOOD_COMPONENT, RBC_COMPONENT
 from bba.vitals_extractor.models import (
+    AdministrationCategory,
     AdministrationFinding,
     AdministrationSummary,
     VitalsNote,
@@ -104,7 +105,7 @@ _ADMINISTERED_VERB_RE = re.compile(
     re.IGNORECASE,
 )
 
-_CUES = (
+_CUES: tuple[tuple[AdministrationCategory, re.Pattern[str]], ...] = (
     ("gave_blood", _GAVE_BLOOD_RE),
     ("unit_count", _UNIT_COUNT_RE),
     ("post_transfusion", _POST_TRANSFUSION_RE),
@@ -171,7 +172,7 @@ def scan_administration(notes: Sequence[VitalsNote]) -> AdministrationSummary:
     line that does not match the strict negative-context guard. Iterating notes
     in timestamp order makes selection deterministic across input shuffles.
     """
-    found: dict[str, AdministrationFinding] = {}
+    found: dict[AdministrationCategory, AdministrationFinding] = {}
 
     for note in sorted(notes, key=lambda n: (n.timestamp, n.source, n.text)):
         line_start = 0
@@ -220,10 +221,10 @@ def _clause_around(line: str, start: int, end: int) -> str:
 
 
 def _finding(
-    category: str, note: VitalsNote, start: int, end: int
+    category: AdministrationCategory, note: VitalsNote, start: int, end: int
 ) -> AdministrationFinding:
     return AdministrationFinding(
-        category=category,  # type: ignore[arg-type]  # narrowed by call sites
+        category=category,
         snippet=_snippet(note.text, start, end),
         at=note.timestamp,
         source=note.source,

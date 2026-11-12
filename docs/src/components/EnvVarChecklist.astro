@@ -3,81 +3,74 @@ interface EnvVar {
   name: string;
   example: string;
   purpose: string;
-  phase: "1" | "1.5";
+  requiredFor: string;
 }
 
 interface Props {
   vars?: EnvVar[];
 }
 
+const isThai = Astro.url.pathname.includes("/th/");
 const defaultVars: EnvVar[] = [
   {
     name: "BBA_DATA_DIR",
-    example: "/var/lib/blood_audit/data",
-    purpose:
-      "Persistent root for ingest/audit run markers today and Parquet audit outputs once Phase 1.5 storage is wired. Read by every CLI invocation.",
-    phase: "1",
+    example: "/srv/bba/data",
+    purpose: isThai
+      ? "พื้นที่ถาวรที่จำกัดสิทธิ์สำหรับผลการตรวจ snapshot และ identity.key"
+      : "Private persistent storage for audit results, source snapshots, and identity.key.",
+    requiredFor: isThai ? "ตรวจแบบ local" : "local audit",
+  },
+  {
+    name: "BBA_APPLICATION_CONFIG",
+    example: "/srv/bba/config/application.json",
+    purpose: isThai
+      ? "ไฟล์ JSON สำหรับ policy version และ transport ค่าเริ่มต้นใช้โหมด local"
+      : "JSON policy version and transport settings. The default transport is local.",
+    requiredFor: isThai ? "ตั้งค่าโมเดล" : "configured model review",
+  },
+  {
+    name: "BBA_PRIVACY_POLICY",
+    example: "/srv/bba/config/privacy-policy.json",
+    purpose: isThai
+      ? "นโยบายที่ระบุ public key และ redactor ที่อนุมัติ"
+      : "Trust policy naming the verification public key and approved redactor.",
+    requiredFor: isThai ? "ส่งหลักฐานให้โมเดล" : "model admission",
+  },
+  {
+    name: "BBA_PRIVACY_ARTIFACTS",
+    example: "/srv/bba/admission/artifacts.json",
+    purpose: isThai
+      ? "หลักฐานที่ลบข้อมูลแล้วและ attestation ที่ลงลายมือชื่อ แยกตาม audit ID"
+      : "Exact redacted evidence and signed attestations keyed by audit ID.",
+    requiredFor: isThai ? "ส่งหลักฐานให้โมเดล" : "model admission",
   },
   {
     name: "BBA_DB_URL",
-    example: "postgresql+psycopg://bba@localhost/blood_audit",
-    purpose:
-      "Postgres DSN for batch_runs and review_actions. Read by the Phase 1.5 LLM analysis leg, not by Phase 1 ingest. Use the +psycopg driver suffix.",
-    phase: "1.5",
+    example: "postgresql://bba@localhost/blood_audit",
+    purpose: isThai
+      ? "Postgres ที่ทำ migration แล้วสำหรับ model checkpoint หรือ review actions ใช้บัญชีและสิทธิ์ตามงาน"
+      : "Migrated Postgres for model checkpoints or review actions, using the role required for that task.",
+    requiredFor: isThai ? "โมเดลหรือ dashboard" : "model review or dashboard",
   },
   {
     name: "ANTHROPIC_API_KEY",
-    example: "sk-ant-…",
-    purpose:
-      "Batch API key for the LLM analysis leg. Read by Phase 1.5 wiring, not by Phase 1 ingest.",
-    phase: "1.5",
+    example: isThai ? "ส่งผ่านระบบ secret" : "supplied through secret storage",
+    purpose: isThai
+      ? "ใช้เฉพาะ transport แบบ live อย่าแสดงค่าใน log หรือภาพหน้าจอ"
+      : "Used only by live transport. Keep the value out of logs and screenshots.",
+    requiredFor: isThai ? "โมเดล live" : "live transport",
   },
 ];
-
-const isThai = Astro.url.pathname.includes("/th/");
-
-const thaiVars: EnvVar[] = [
-  {
-    name: "BBA_DATA_DIR",
-    example: "/var/lib/blood_audit/data",
-    purpose:
-      "ไดเรกทอรีหลักแบบถาวรสำหรับ run markers ของ ingest/audit ในปัจจุบัน และ Parquet audit outputs เมื่อเชื่อม storage ใน Phase 1.5 แล้ว",
-    phase: "1",
-  },
-  {
-    name: "BBA_DB_URL",
-    example: "postgresql+psycopg://bba@localhost/blood_audit",
-    purpose:
-      "Postgres DSN สำหรับ batch_runs และ review_actions ใช้ใน Phase 1.5 เมื่อเชื่อม LLM analysis; ต้องมี driver suffix +psycopg",
-    phase: "1.5",
-  },
-  {
-    name: "ANTHROPIC_API_KEY",
-    example: "sk-ant-...",
-    purpose:
-      "API key สำหรับ Batch API ของ LLM analysis ใช้ใน Phase 1.5 ไม่ได้ใช้ในส่วน ingest ของ Phase 1",
-    phase: "1.5",
-  },
-];
-
-const { vars = isThai ? thaiVars : defaultVars } = Astro.props;
-
-const phaseLabel = (phase: EnvVar["phase"]) =>
-  phase === "1"
-    ? isThai ? "จำเป็น · Phase 1" : "required · Phase 1"
-    : "Phase 1.5";
-
-const phasePill = (phase: EnvVar["phase"]) =>
-  phase === "1" ? "ba-pill ba-pill--err" : "ba-pill ba-pill--warn";
+const { vars = defaultVars } = Astro.props;
 ---
 
-<section class="env-checklist" aria-label="blood_audit environment variables">
+<section class="env-checklist" aria-label={isThai ? "ตัวแปรแวดล้อมหลัก" : "Core environment settings"}>
   <ul class="env-checklist__list" role="list">
     {vars.map((v) => (
       <li class="env-row">
         <div class="env-row__head">
           <code class="env-row__name">{v.name}</code>
-          <span class={phasePill(v.phase)}>{phaseLabel(v.phase)}</span>
+          <span class="ba-pill">{v.requiredFor}</span>
         </div>
         <p class="env-row__purpose">{v.purpose}</p>
         <code class="env-row__example" aria-label={isThai ? "ค่าตัวอย่าง" : "Example value"}>{v.example}</code>
