@@ -97,15 +97,31 @@ class LengthLimitedNer:
 _PLACEHOLDER = re.compile(r"\[[A-Z_]+\]")
 
 
+def _merge_same_label(entities):
+    merged: list[dict] = []
+    for entity in sorted(entities, key=lambda e: e["start"]):
+        last = merged[-1] if merged else None
+        if (
+            last is not None
+            and last["entity_group"] == entity["entity_group"]
+            and entity["start"] <= last["end"] + 1
+        ):
+            merged[-1] = {**last, "end": max(last["end"], entity["end"])}
+        else:
+            merged.append(dict(entity))
+    return merged
+
+
 def ner_driven_module():
-    """Mimic anonymize_batch masking exactly the spans the NER pipeline returns."""
+    """Mimic anonymize_batch masking exactly the spans the NER pipeline returns,
+    unioning same-label overlaps as deid's merge_entities does."""
 
     def anonymize_batch(ner, texts):
         out = []
         for text, entities in zip(texts, ner(texts, batch_size=1)):
             final = text
             protected = [m.span() for m in _PLACEHOLDER.finditer(text)]
-            for entity in sorted(entities, key=lambda e: -e["start"]):
+            for entity in reversed(_merge_same_label(entities)):
                 if any(
                     entity["start"] < hi and lo < entity["end"] for lo, hi in protected
                 ):
@@ -118,6 +134,33 @@ def ner_driven_module():
     return SimpleNamespace(
         anonymize_batch=anonymize_batch, _THAI_DIGIT_TABLE=THAI_DIGITS
     )
+
+
+class WholeTextIdNer:
+    """Tags ``code`` as an ID only in a text longer than ``limit`` and ``name``
+    as a person only in a text of at most ``limit`` characters, so the whole
+    note yields the ID and a window yields the name."""
+
+    def __init__(self, code: str, name: str, limit: int) -> None:
+        self._code = code
+        self._name = name
+        self._limit = limit
+
+    def __call__(self, texts, *, batch_size=None, stride=None):
+        out = []
+        for text in texts:
+            if len(text) > self._limit:
+                tagged = [(self._code, "HOSPITAL_IDS")]
+            else:
+                tagged = [(self._name, "PERSON"), (self._code, "HOSPITAL_IDS")]
+            out.append(
+                [
+                    {"start": m.start(), "end": m.end(), "entity_group": group}
+                    for name, group in tagged
+                    for m in re.finditer(re.escape(name), text)
+                ]
+            )
+        return out
 
 
 class ContextShiftNer:

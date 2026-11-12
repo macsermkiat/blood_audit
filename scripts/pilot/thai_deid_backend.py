@@ -12,7 +12,7 @@ from __future__ import annotations
 import ast
 import difflib
 import hashlib
-import importlib.util
+import importlib
 import importlib.metadata
 import os
 import re
@@ -34,22 +34,18 @@ _PLACEHOLDER = re.compile(r"\[[A-Z_]+\]")
 # The tokenizer truncates at 510 tokens; without overlapping windows the NER
 # never sees names past that point in a long note.
 NER_STRIDE = 128
-# Measured on 12 real long notes: NER over 400-char segments found 10 names,
-# the strided pass over the whole chunk 2, and none the segments missed.
-NER_SEGMENT_CHARS = 400
+# Measured on 12 real long notes: NER over 400-char pieces found 10 names, the
+# strided pass over the whole chunk 2. Windows overlap by 150 chars, so a name
+# shorter than that lies whole in some window instead of being cut in two.
+NER_WINDOW_CHARS = 400
+NER_WINDOW_STEP = 250
 
 
-def split_segments(text: str, limit: int = NER_SEGMENT_CHARS) -> list[str]:
-    """Contiguous pieces of at most ``limit`` chars that rejoin to ``text``."""
-    segments: list[str] = []
-    position = 0
-    while len(text) - position > limit:
-        window = text[position : position + limit]
-        cut = window.rfind("\n") + 1 or window.rfind(" ") + 1 or limit
-        segments.append(text[position : position + cut])
-        position += cut
-    segments.append(text[position:])
-    return segments
+def _window_starts(length: int) -> list[int]:
+    starts = [0]
+    while starts[-1] + NER_WINDOW_CHARS < length:
+        starts.append(starts[-1] + NER_WINDOW_STEP)
+    return starts
 
 
 class ThaiDeidSetupError(RuntimeError):
@@ -63,12 +59,23 @@ def _with_stride(ner: Any) -> Any:
     return strided
 
 
-def _persons_only(ner: Any) -> Any:
+def windowed_person_ner(ner: Any) -> Any:
+    """PERSON entities from overlapping windows, offsets mapped to the full text."""
+
     def persons(texts: Any, **kwargs: Any) -> Any:
-        return [
-            [e for e in entities if e.get("entity_group") == "PERSON"]
-            for entities in ner(texts, **kwargs)
-        ]
+        results: list[list[dict[str, Any]]] = []
+        for text in texts:
+            starts = _window_starts(len(text))
+            windows = [text[s : s + NER_WINDOW_CHARS] for s in starts]
+            found: list[dict[str, Any]] = []
+            for offset, entities in zip(starts, ner(windows, **kwargs)):
+                found.extend(
+                    {**e, "start": e["start"] + offset, "end": e["end"] + offset}
+                    for e in entities
+                    if e.get("entity_group") == "PERSON"
+                )
+            results.append(sorted(found, key=lambda e: e["start"]))
+        return results
 
     return persons
 
@@ -82,17 +89,17 @@ class ThaiMedicalDeidBackend:
         try:
             ner = _with_stride(self._ner)
             # Pass 1 sees the whole text so regex patterns never straddle a
-            # cut. On a long note, pass 2 re-runs NER on short segments, where
-            # name recall holds. It adds names only: on pass-1 output the model
-            # also tags vitals, dates and diagnoses (seen on real notes), and
-            # deid's placeholder overlap check keeps pass 1's tokens intact.
+            # cut. On a long note, pass 2 re-runs NER over overlapping windows
+            # of pass 1's output, where name recall holds. It adds names only:
+            # on pass-1 output the model also tags vitals, dates and diagnoses
+            # (seen on real notes), and deid's placeholder overlap check keeps
+            # pass 1's tokens intact.
             final = str(self._module.anonymize_batch(ner, [text])[0][0])
-            if len(final) > NER_SEGMENT_CHARS:
-                final = "".join(
-                    str(redacted)
-                    for redacted, _ in self._module.anonymize_batch(
-                        _persons_only(ner), split_segments(final)
-                    )
+            if len(final) > NER_WINDOW_CHARS:
+                final = str(
+                    self._module.anonymize_batch(windowed_person_ner(ner), [final])[0][
+                        0
+                    ]
                 )
         except Exception as exc:
             # The exception text can quote the note; keep only its type.
@@ -158,16 +165,23 @@ def _git(deid_repo: Path, *args: str) -> str:
     return done.stdout.strip()
 
 
-def _pipeline_version(entry: Path) -> str:
+def _read_entry(deid_repo: Path) -> bytes:
+    try:
+        return (deid_repo / ENTRY_RELPATH).read_bytes()
+    except OSError as exc:
+        raise ThaiDeidSetupError(f"cannot read {deid_repo / ENTRY_RELPATH}") from exc
+
+
+def _pipeline_version(source: bytes) -> str:
     """Read PIPELINE_VERSION from source so the policy needs no torch import."""
-    for node in ast.parse(entry.read_text(encoding="utf-8")).body:
+    for node in ast.parse(source).body:
         if isinstance(node, ast.Assign) and any(
             isinstance(t, ast.Name) and t.id == "PIPELINE_VERSION" for t in node.targets
         ):
             value = ast.literal_eval(node.value)
             if isinstance(value, str) and value:
                 return value
-    raise ThaiDeidSetupError(f"PIPELINE_VERSION not found in {entry}")
+    raise ThaiDeidSetupError("PIPELINE_VERSION not found in the entry file")
 
 
 def model_manifest(model_dir: Path) -> bytes:
@@ -196,11 +210,31 @@ def _dist_version(distribution: str) -> str:
         raise ThaiDeidSetupError(f"{distribution} is not installed") from exc
 
 
+ADAPTER_REDACTOR_MODULES = ("redactor", "roles", "date_shift", "semantic", "canonical")
+
+
+def _adapter_files() -> tuple[Path, ...]:
+    """This adapter plus the in-repo modules whose output is the signed text."""
+    modules = [
+        importlib.import_module(f"bba.deid_redactor.{name}")
+        for name in ADAPTER_REDACTOR_MODULES
+    ]
+    return (Path(__file__), *(Path(str(m.__file__)) for m in modules))
+
+
 def _adapter_digest() -> str:
-    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:16]
+    lines = "".join(
+        f"{path.name}  {hashlib.sha256(path.read_bytes()).hexdigest()}\n"
+        for path in _adapter_files()
+    )
+    return hashlib.sha256(lines.encode("utf-8")).hexdigest()[:16]
 
 
 def redactor_version(deid_repo: Path, model_dir: Path) -> RedactorVersion:
+    return _version_for(deid_repo, model_dir, _read_entry(deid_repo))
+
+
+def _version_for(deid_repo: Path, model_dir: Path, source: bytes) -> RedactorVersion:
     if _git(deid_repo, "status", "--porcelain"):
         raise ThaiDeidSetupError(
             "thai-medical-deid checkout has uncommitted changes; the version "
@@ -214,9 +248,10 @@ def redactor_version(deid_repo: Path, model_dir: Path) -> RedactorVersion:
     return RedactorVersion(
         version=(
             f"thai-medical-deid@{head}"
-            f"+{_pipeline_version(deid_repo / ENTRY_RELPATH)}"
+            f"+{_pipeline_version(source)}"
             f"+stride{NER_STRIDE}"
-            f"+seg{NER_SEGMENT_CHARS}"
+            f"+win{NER_WINDOW_CHARS}-{NER_WINDOW_STEP}"
+            f"+entry-{hashlib.sha256(source).hexdigest()[:16]}"
             f"+transformers-{_dist_version('transformers')}"
             f"+tokenizers-{_dist_version('tokenizers')}"
             f"+torch-{_dist_version('torch')}"
@@ -227,24 +262,25 @@ def redactor_version(deid_repo: Path, model_dir: Path) -> RedactorVersion:
     )
 
 
-def _import_entry(entry: Path) -> ModuleType:
-    spec = importlib.util.spec_from_file_location("deidentify_nun", entry)
-    if spec is None or spec.loader is None:
-        raise ThaiDeidSetupError(f"cannot import {entry}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+def _exec_entry(entry: Path, source: bytes) -> ModuleType:
+    # Compiling the bytes that were hashed, not importing by path, keeps a
+    # stale or planted bytecode cache from running unpinned code.
+    module = ModuleType("deidentify_nun")
+    module.__file__ = str(entry)
+    exec(compile(source, str(entry), "exec"), module.__dict__)
     return module
 
 
 def load_backend(
     deid_repo: Path, model_dir: Path
 ) -> tuple[ThaiMedicalDeidBackend, RedactorVersion]:
-    version = redactor_version(deid_repo, model_dir)
+    source = _read_entry(deid_repo)
+    version = _version_for(deid_repo, model_dir, source)
     # Both must precede the import: the redactor imports transformers at load,
     # and a bytecode cache would dirty the checkout the version vouches for.
     os.environ["HF_HUB_OFFLINE"] = "1"
     sys.dont_write_bytecode = True
-    module = _import_entry(deid_repo / ENTRY_RELPATH)
+    module = _exec_entry(deid_repo / ENTRY_RELPATH, source)
     if not module._THAI_FIRST_NAMES or not module._THAI_FAMILY_NAMES:
         raise ThaiDeidSetupError(
             "Thai name gazetteer is empty (PyThaiNLP corpora missing); refusing "

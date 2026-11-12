@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
+import py_compile
 import subprocess
 import sys
 from datetime import date
@@ -19,18 +21,20 @@ from bba.deid_redactor import (
 )
 from bba.deid_redactor.exceptions import BackendRedactionError
 from thai_deid_backend import (
-    NER_SEGMENT_CHARS,
+    NER_WINDOW_CHARS,
+    NER_WINDOW_STEP,
     ThaiDeidSetupError,
     ThaiMedicalDeidBackend,
     load_backend,
     model_manifest,
     redactor_version,
-    split_segments,
+    windowed_person_ner,
 )
 import thai_deid_backend
 from thai_deid_fakes import (
     ContextShiftNer,
     LengthLimitedNer,
+    WholeTextIdNer,
     WindowedNer,
     fake_module,
     ner_driven_module,
@@ -126,11 +130,11 @@ def test_name_past_the_ner_truncation_point_is_masked_through_redact_bundle():
     assert redacted.endswith("Called by Dr. [ATTENDING] at night.")
 
 
-def test_name_the_model_misses_in_a_long_note_is_masked_by_the_segment_pass():
+def test_name_the_model_misses_in_a_long_note_is_masked_by_the_window_pass():
     name = "Somchai Jaidee"
     text = "Hb 6.8 stable. " * 40 + f"Called by Dr. {name} at night."
-    ner = LengthLimitedNer((), (name,), limit=NER_SEGMENT_CHARS)
-    assert len(text) > NER_SEGMENT_CHARS
+    ner = LengthLimitedNer((), (name,), limit=NER_WINDOW_CHARS)
+    assert len(text) > NER_WINDOW_CHARS
 
     redacted = _redact(ThaiMedicalDeidBackend(ner_driven_module(), ner), text)
 
@@ -138,9 +142,9 @@ def test_name_the_model_misses_in_a_long_note_is_masked_by_the_segment_pass():
     assert redacted.endswith("Called by Dr. [ATTENDING] at night.")
 
 
-def test_segment_pass_leaves_a_pass_one_placeholder_as_one_token():
+def test_window_pass_leaves_a_pass_one_placeholder_as_one_token():
     text = "RN Alice noted. " + "Hb 6.8 stable. " * 40 + "Dr. Bob agreed."
-    ner = LengthLimitedNer(("Alice",), ("Bob",), limit=NER_SEGMENT_CHARS)
+    ner = LengthLimitedNer(("Alice",), ("Bob",), limit=NER_WINDOW_CHARS)
     backend = ThaiMedicalDeidBackend(ner_driven_module(), ner)
 
     result = backend.redact(text)
@@ -152,27 +156,74 @@ def test_segment_pass_leaves_a_pass_one_placeholder_as_one_token():
     assert _redact(backend, text).startswith("RN [NURSE] noted.")
 
 
-def test_segments_rejoin_exactly_and_never_exceed_the_limit():
-    text = "word " * 300 + "x" * 900 + "\n" + "line two " * 100
-
-    segments = split_segments(text)
-
-    assert "".join(segments) == text
-    assert all(len(s) <= NER_SEGMENT_CHARS for s in segments)
+def _filler(length: int) -> str:
+    return ("Hb 6.8 stable. " * (length // 15 + 1))[:length]
 
 
-def test_segments_cut_after_the_last_newline_before_the_last_space():
-    head = "a" * 100 + " " + "b" * 100 + "\n"
-    text = head + "c " * 200
+def test_name_straddling_a_non_overlapping_window_edge_is_masked_whole():
+    # The name spans the 400 mark: neither [0,400) nor a [400,800) window holds
+    # it, but the overlapping window starting at 250 does.
+    name = "Somchai Jaidee"
+    text = _filler(395) + name + _filler(600)
+    ner = LengthLimitedNer((), (name,), limit=NER_WINDOW_CHARS)
+    assert text.index(name) < NER_WINDOW_CHARS < text.index(name) + len(name)
 
-    assert split_segments(text, 300)[0] == head
+    redacted = ThaiMedicalDeidBackend(ner_driven_module(), ner).redact(text).text
+
+    assert "Somchai" not in redacted
+    assert "Jaidee" not in redacted
+    assert redacted.count("[PERSON]") == 1
 
 
-def test_segments_cut_after_the_last_space_without_a_newline_else_hard():
-    spaced = "aaaa bbbb cccc"
-    assert split_segments(spaced, 10) == ["aaaa bbbb ", "cccc"]
-    assert split_segments("x" * 25, 10) == ["x" * 10, "x" * 10, "x" * 5]
-    assert split_segments("", 10) == [""]
+def test_entity_offsets_map_back_for_a_name_in_the_third_window():
+    name = "Somchai Jaidee"
+    text = _filler(700) + name + _filler(300)
+    position = text.index(name)
+    second_end = NER_WINDOW_STEP + NER_WINDOW_CHARS
+    third_start = 2 * NER_WINDOW_STEP
+    assert second_end <= position
+    assert position + len(name) <= third_start + NER_WINDOW_CHARS
+    ner = LengthLimitedNer((), (name,), limit=NER_WINDOW_CHARS)
+
+    result = ThaiMedicalDeidBackend(ner_driven_module(), ner).redact(text)
+
+    assert result.text == _filler(700) + "[PERSON]" + _filler(300)
+    (span,) = result.spans
+    assert text[span.start : span.end] == name
+
+
+def test_window_pass_runs_on_pass_one_output_not_the_original_text():
+    code = "MRN-4471"
+    name = "Somchai"
+    text = _filler(300) + f" {code} " + _filler(300) + f" Dr. {name} agreed."
+    ner = WholeTextIdNer(code, name, limit=NER_WINDOW_CHARS)
+
+    redacted = ThaiMedicalDeidBackend(ner_driven_module(), ner).redact(text).text
+
+    assert code not in redacted
+    assert name not in redacted
+    assert "[HOSPITAL_IDS]" in redacted
+
+
+def test_windowed_ner_gives_one_sorted_person_list_per_text_with_scores_kept():
+    seen: list[list[int]] = []
+
+    def ner(windows, **kwargs):
+        seen.append([len(w) for w in windows])
+        return [
+            [
+                {"start": 5, "end": 9, "entity_group": "PERSON", "score": 0.9},
+                {"start": 1, "end": 3, "entity_group": "DATE", "score": 0.8},
+            ]
+            for _ in windows
+        ]
+
+    out = windowed_person_ner(ner)(["x" * 1000, "short"], batch_size=1)
+
+    assert seen == [[400, 400, 400, 250], [5]]
+    assert [e["start"] for e in out[0]] == [5, 255, 505, 755]
+    assert all(e["score"] == 0.9 and e["entity_group"] == "PERSON" for e in out[0])
+    assert out[1] == [{"start": 5, "end": 9, "entity_group": "PERSON", "score": 0.9}]
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -222,17 +273,18 @@ def deid_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def test_version_names_the_commit_pipeline_weights_and_gazetteer(deid_checkout):
-    repo, model_dir, _ = deid_checkout
+    repo, model_dir, entry = deid_checkout
     head = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True
     ).stdout.strip()
 
     version = redactor_version(repo, model_dir)
 
-    adapter = hashlib.sha256(Path(thai_deid_backend.__file__).read_bytes())
+    entry_sha = hashlib.sha256(entry.read_bytes()).hexdigest()[:16]
     assert version.version == (
-        f"thai-medical-deid@{head}+pv1+stride128+seg400+transformers-5.1+tokenizers-0.2"
-        f"+torch-2.3+adapter-{adapter.hexdigest()[:16]}"
+        f"thai-medical-deid@{head}+pv1+stride128+win400-250+entry-{entry_sha}"
+        f"+transformers-5.1+tokenizers-0.2+torch-2.3"
+        f"+adapter-{thai_deid_backend._adapter_digest()}"
     )
     assert version.model_sha == hashlib.sha256(model_manifest(model_dir)).hexdigest()
     assert version.gazetteer_version == "pythainlp-9.9"
@@ -302,12 +354,12 @@ def test_empty_name_gazetteer_is_refused(deid_checkout):
         load_backend(repo, model_dir)
 
 
-def test_segment_pass_adds_names_but_not_ids_or_vitals():
+def test_window_pass_adds_names_but_not_ids_or_vitals():
     # On real pass-1 output the model tagged a BP range and a date as
     # HOSPITAL_IDS; pass 2 exists for names only.
     text = "BP 79-111/42 stable. " + "Hb 6.8 stable. " * 40 + "Dr. Bob agreed."
     ner = LengthLimitedNer(
-        (), ("Bob",), limit=NER_SEGMENT_CHARS, short_only_ids=("79-111/42",)
+        (), ("Bob",), limit=NER_WINDOW_CHARS, short_only_ids=("79-111/42",)
     )
 
     redacted = _redact(ThaiMedicalDeidBackend(ner_driven_module(), ner), text)
@@ -325,3 +377,98 @@ def test_short_chunk_is_not_redacted_twice():
     result = ThaiMedicalDeidBackend(ner_driven_module(), ner).redact(text)
 
     assert result.text == "ICD-10 [HOSPITAL_IDS]: Melaena"
+
+
+def test_a_changed_entry_file_changes_the_version(deid_checkout):
+    repo, model_dir, entry = deid_checkout
+
+    def entry_pin() -> str:
+        return next(
+            part
+            for part in redactor_version(repo, model_dir).version.split("+")
+            if part.startswith("entry-")
+        )
+
+    pinned = entry_pin()
+
+    entry.write_text(entry.read_text() + "# reviewed edit\n")
+    _git(repo, "commit", "-q", "-am", "edit")
+
+    assert entry_pin() != pinned
+
+
+def test_load_backend_runs_the_bytes_it_pinned_not_a_planted_bytecode_cache(
+    deid_checkout, tmp_path: Path
+):
+    repo, model_dir, entry = deid_checkout
+    (repo / ".gitignore").write_text("__pycache__/\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "ignore caches")
+    planted = tmp_path / "planted.py"
+    planted.write_text(entry.read_text() + 'PLANTED = "yes"\n')
+    cache = Path(importlib.util.cache_from_source(str(entry)))
+    cache.parent.mkdir()
+    py_compile.compile(
+        str(planted),
+        cfile=str(cache),
+        invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH,
+    )
+
+    backend, _ = load_backend(repo, model_dir)
+
+    assert not hasattr(backend._module, "PLANTED")
+    assert backend._module.__name__ == "deidentify_nun"
+    assert backend._module.__file__ == str(entry)
+
+
+def test_load_backend_refuses_a_module_whose_pipeline_version_differs(deid_checkout):
+    repo, model_dir, entry = deid_checkout
+    entry.write_text(entry.read_text() + 'PIPELINE_VERSION = "pv2"\n')
+    _git(repo, "commit", "-q", "-am", "late reassignment")
+
+    with pytest.raises(ThaiDeidSetupError, match="PIPELINE_VERSION differs"):
+        load_backend(repo, model_dir)
+
+
+def test_adapter_digest_covers_the_adapter_and_the_post_processing_modules():
+    names = [path.name for path in thai_deid_backend._adapter_files()]
+
+    assert names == [
+        "thai_deid_backend.py",
+        "redactor.py",
+        "roles.py",
+        "date_shift.py",
+        "semantic.py",
+        "canonical.py",
+    ]
+
+
+@pytest.mark.parametrize("index", range(6))
+def test_adapter_digest_changes_when_any_covered_file_changes(
+    index: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    copies = []
+    for original in thai_deid_backend._adapter_files():
+        copy = tmp_path / original.name
+        copy.write_bytes(original.read_bytes())
+        copies.append(copy)
+    monkeypatch.setattr(thai_deid_backend, "_adapter_files", lambda: tuple(copies))
+    pinned = thai_deid_backend._adapter_digest()
+
+    copies[index].write_bytes(copies[index].read_bytes() + b"\n# edit\n")
+
+    assert thai_deid_backend._adapter_digest() != pinned
+
+
+def test_manifest_follows_a_symlinked_directory(tmp_path: Path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "vocab.txt").write_bytes(b"v")
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    (snapshot / "model.safetensors").write_bytes(b"w")
+    (snapshot / "tokenizer").symlink_to(outside, target_is_directory=True)
+
+    manifest = model_manifest(snapshot).decode()
+
+    assert f"tokenizer/vocab.txt  {hashlib.sha256(b'v').hexdigest()}\n" in manifest

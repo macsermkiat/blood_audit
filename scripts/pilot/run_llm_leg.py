@@ -57,9 +57,11 @@ Environment variables:
   both; see ``issue_privacy_artifacts.py``.
 * ``BBA_PILOT_PRIVACY_PREPARE`` — path of a request file to write instead of
   running: the exact prompt requests this run would submit, with raw note text
-  (mode 0600). Exits 0 before any row write for flagged cases or any
-  transport. Use the same ``BBA_PILOT_RUN_ID`` as the real run. Incompatible
-  with ``BBA_PRIVACY_ARTIFACTS``.
+  (mode 0600). Exits 0 before injection-flagged rows, privacy admission and
+  transport. Deterministic rows written earlier in the pass are identical in
+  the real run, which the idempotent store skips. Use the same
+  ``BBA_PILOT_RUN_ID`` as the real run. Incompatible with
+  ``BBA_PRIVACY_ARTIFACTS``.
 """
 
 from __future__ import annotations
