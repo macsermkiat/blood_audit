@@ -45,10 +45,6 @@ from bba.audit_pipeline.bleeding import (
     quote_indicates_melena,
     quote_negates_bleeding,
 )
-from bba.audit_pipeline.hard_quote import (
-    quote_documents_acs,
-    quote_documents_instability,
-)
 from bba.audit_pipeline.manifest import context_hash
 from bba.audit_pipeline.models import PipelineRowContext, PipelineRunResult
 from bba.audit_store import AuditRow, AuditStore, LlmCall
@@ -1304,50 +1300,19 @@ def _grounded_hard_indication(
 
     Owner decision (2026-11-17): the audit runs without routine human
     review, so a grounded citation at the prose-trust bar of shock
-    (HEMODYNAMIC_INSTABILITY) or ACS whose quote documents the condition,
-    or a structurally TRUE sub-floor Hb, clears the order. This supersedes ruling #98's bleeding / ischemia /
+    (HEMODYNAMIC_INSTABILITY), ACS, or a structurally TRUE sub-floor Hb
+    clears the order. Whether the quote describes a current condition is
+    the model's judgment: a keyword screen was tried on PR #274 and
+    misread most real wording in both directions, so none is applied. This supersedes ruling #98's bleeding / ischemia /
     fluid-refractory qualifiers for a cited instability, and clears a
     sub-floor Hb the deterministic leg held as unconfirmed
     (single-low-Hb, hemodilution). Soft reasons still get asserted.
     """
-    order_date = _order_local_date(context)
     return (
-        _cited_documenting_quote(
-            grounded_indications, _ACS_HARD_CODES, quote_documents_acs, order_date
-        )
-        or _cited_documenting_quote(
-            grounded_indications,
-            _HEMODYNAMIC_HARD_CODES,
-            quote_documents_instability,
-            order_date,
-        )
+        _grounded_acs_indication(grounded_indications)
+        or _cited_at_prose_trust(grounded_indications, _HEMODYNAMIC_HARD_CODES)
         or _grounded_true_subthreshold_indication(grounded_indications, context)
     )
-
-
-def _cited_documenting_quote(
-    grounded_indications: tuple[dict[str, object], ...],
-    codes: frozenset[str],
-    documents: Callable[[str, date], bool],
-    order_date: date,
-) -> bool:
-    """True iff one grounded citation carries a code in ``codes`` at the
-    prose-trust bar AND its own quote positively documents the condition
-    (:mod:`bba.audit_pipeline.hard_quote`): a negated, rule-out, history or
-    stale-dated mention ("no signs of shock", "R/O ACS", "old MI 2015")
-    grounds but does not clear."""
-    for indication in grounded_indications:
-        code = indication.get("code")
-        quote = indication.get("quote")
-        if (
-            isinstance(code, str)
-            and code.strip().upper() in codes
-            and isinstance(quote, str)
-            and _confidence_at_prose_trust_bar(indication.get("confidence"))
-            and documents(quote, order_date)
-        ):
-            return True
-    return False
 
 
 def _native_review_guardrail(

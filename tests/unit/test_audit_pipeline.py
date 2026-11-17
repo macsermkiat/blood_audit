@@ -4303,54 +4303,37 @@ class TestLlmOverclearGuardrail:
         assert row.final_classification == "INAPPROPRIATE"
         assert row.review_reason == LLM_NATIVE_REVIEW_ASSERT_REASON
 
-    @pytest.mark.parametrize(
-        ("code", "evidence", "quote"),
-        [
-            # Reviewer probes on PR #274: each quote grounds and carries a
-            # hard code at 0.9, but documents the ABSENCE or the HISTORY of
-            # the condition. Clearing these would turn a misread into an
-            # unreviewed APPROPRIATE, so the over-clear is asserted.
-            (
-                "HEMODYNAMIC_INSTABILITY",
-                "Vitals: BP 120/70, no signs of shock, warm peripheries",
-                "BP 120/70, no signs of shock",
-            ),
-            (
-                "ACS",
-                "Cardio: R/O ACS, troponin negative x2, ECG unchanged",
-                "R/O ACS, troponin negative x2",
-            ),
-            (
-                "ACS",
-                "PMH: old MI 2015 s/p PCI, ACS 2019; now stable angina free",
-                "old MI 2015 s/p PCI, ACS 2019",
-            ),
-            (
-                "HEMODYNAMIC_INSTABILITY",
-                "Hx. 1/5/69: septic shock on Levophed, now off pressors",
-                "Hx. 1/5/69: septic shock on Levophed",
-            ),
-        ],
-    )
-    def test_hard_code_quote_without_current_condition_asserts(
-        self, tmp_path: object, code: str, evidence: str, quote: str
+    def test_hard_code_citation_is_trusted_without_text_screen(
+        self, tmp_path: object
     ) -> None:
+        # Owner decision 2026-11-17: whether a grounded hard-code quote
+        # describes a current condition is the model's judgment. A keyword
+        # screen was tried on PR #274 and misread most real wording in both
+        # directions, so it was removed. This pins the accepted risk: a
+        # grounded, high-confidence ACS citation clears even when a human
+        # would read the quote as a rule-out. The next run lists every
+        # hard-code clear for a clinician spot-check.
         ctx = _row_context(
-            audit_id=f"audit-oc-hardneg-{code}-{len(quote)}",
+            audit_id="audit-oc-acs-trusted",
             classification="NEEDS_REVIEW",
             hb_value=9.4,
-            evidence_text=evidence,
+            evidence_text="Cardio: R/O ACS, troponin negative x2, ECG unchanged",
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
             classification="APPROPRIATE",
             indications=[
-                {"code": code, "quote": quote, "source_id": "E1", "confidence": 0.9}
+                {
+                    "code": "ACS",
+                    "quote": "R/O ACS, troponin negative x2",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
             ],
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
-        assert row.final_classification == "INAPPROPRIATE"
-        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+        assert row.final_classification == "APPROPRIATE"
+        assert row.review_reason is None
 
     def test_cited_shock_at_exact_confidence_bar_stays_appropriate(
         self, tmp_path: object

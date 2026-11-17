@@ -28,7 +28,6 @@ __all__ = [
     "has_life_threatening_marker",
     "is_active_bleeding_code",
     "marker_occurrence_negated",
-    "mask_stale_dated_spans",
     "parse_max_volume_ml",
     "qualified_bleeding_exempt",
     "quote_indicates_melena",
@@ -554,7 +553,7 @@ def _anchor_ce_date(day: int, month: int, year_token: int) -> date | None:
         return None
 
 
-def mask_stale_dated_spans(text: str, order_date: date) -> str:
+def _mask_stale_dated_spans(text: str, order_date: date) -> str:
     """Return ``text`` with every span governed by a stale date anchor blanked.
 
     A date anchor governs the text after it up to the next anchor or newline
@@ -598,7 +597,7 @@ def bleeding_quote_is_stale(quote: str, order_date: date) -> bool:
     accompaniment that would floor an over-clear to ``NEEDS_REVIEW`` instead
     of asserting the ``INAPPROPRIATE`` the stale-date gate is meant to
     enforce. Shares the exact forward-governance masking
-    (:func:`mask_stale_dated_spans`) the major-bleed exemption uses, so the
+    (:func:`_mask_stale_dated_spans`) the major-bleed exemption uses, so the
     two temporal screens cannot drift.
 
     Two-part contract:
@@ -619,7 +618,7 @@ def bleeding_quote_is_stale(quote: str, order_date: date) -> bool:
       quote, where the stale non-negated mention defeats it, so the negation
       re-screen must run here on the MASKED text.
     """
-    masked = mask_stale_dated_spans(quote, order_date)
+    masked = _mask_stale_dated_spans(quote, order_date)
     if masked == quote:
         return False
     lowered = masked.lower()
@@ -650,7 +649,7 @@ def qualified_bleeding_exempt(
     When ``order_date`` (source-wall-clock calendar date of the order) is
     given, quote spans governed by a date anchor more than
     :data:`LLM_OVERCLEAR_MAX_BLEED_AGE_DAYS` older are blanked first
-    (:func:`mask_stale_dated_spans`): a quantified index bleed from weeks
+    (:func:`_mask_stale_dated_spans`): a quantified index bleed from weeks
     ago must not clear today's order even when bleeding is still ongoing
     (owner ruling, case 68080335). ``order_date=None`` preserves the
     pre-gate behaviour for callers without an order moment.
@@ -693,7 +692,7 @@ def qualified_bleeding_exempt(
         # Temporal gate (case 68080335): figures charted under a stale date
         # anchor describe an old episode, not this order's bleed.
         screened = (
-            quote if order_date is None else mask_stale_dated_spans(quote, order_date)
+            quote if order_date is None else _mask_stale_dated_spans(quote, order_date)
         )
         # Known limitation (spec #89 §3.c locks the parser as a plain mL
         # reader): parse_max_volume_ml is context-free, so an IV-fluid /
