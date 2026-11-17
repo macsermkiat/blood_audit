@@ -21,11 +21,12 @@ OVERRIDE_EXPLANATIONS: dict[str, str] = {
         "intra-operative transfusion or major operative blood loss) or a cited "
         "bleed the model is confident in (0.8 or more) from the current episode "
         "that is over 300 mL (a quote that mentions melena cannot use the "
-        "volume test) or marked life-threatening. A confidently cited ACS, "
-        "instability with bleeding or fluid-refractory shock, or a "
-        "SUB_THRESHOLD_HB citation whose Hb really is at or below the cohort "
-        "floor sends the order to human review instead. This order had none of "
-        "these"
+        "volume test) or marked life-threatening. Runs from 2026-11-17 also "
+        "accept a confidently cited ACS or shock whose quote is found in the "
+        "notes, or a SUB_THRESHOLD_HB citation whose Hb really is at or below the "
+        "cohort floor; earlier runs sent those to human review or, for shock "
+        "without bleeding or fluid-refractoriness, asserted INAPPROPRIATE. This "
+        "order had none of the reasons its run accepted"
     ),
     "llm_native_review_asserted_inappropriate": (
         "The model found no hard indication and no qualifying bleed, and the "

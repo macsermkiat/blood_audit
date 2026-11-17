@@ -98,11 +98,11 @@ _LITRE_UNITS: frozenset[str] = frozenset({"l", "liter", "liters"})
 # major-bleed exemption on the >300 mL volume test — it clears only via a
 # documented life-threatening / shock marker (the shock pathway) or a
 # qualifying low Hb (the sub-threshold pathway), both handled elsewhere.
-# Melena + documented hypotension is a hemorrhagic-shock picture that still
-# floors to human review ("with shock we care"): the prompt routes that
-# combination to a HEMODYNAMIC_INSTABILITY citation, and the replay floor
-# reads these terms out of the instability citation's own quote as its
-# bleeding accompaniment (Codex PR #103).
+# Melena + documented hypotension is a hemorrhagic-shock picture ("with
+# shock we care"): the prompt routes that combination to a
+# HEMODYNAMIC_INSTABILITY citation. Since the owner decision of 2026-11-17
+# that citation clears an over-clear outright; the replay floor still reads
+# these terms out of the instability quote for a native hedge (Codex PR #103).
 _MELENA_TERMS: tuple[str, ...] = (
     "melena",
     "melaena",
@@ -156,9 +156,9 @@ def is_active_bleeding_code(code: str) -> bool:
     """True iff ``code`` is ACTIVE_BLEEDING-family with no negation qualifier.
 
     Shared with the replay guardrail's hemodynamic-accompaniment check
-    (owner ruling on #98): a hypotension citation only floors to review when
-    real bleeding evidence accompanies it, judged by the same code-family
-    rules as the exemption itself."""
+    (owner ruling on #98, now applied to native hedges and the structured
+    vitals arm only): real bleeding evidence accompanying instability is
+    judged by the same code-family rules as the exemption itself."""
     upper = code.upper()
     return upper.startswith(_ACTIVE_BLEEDING_PREFIX) and not _code_negation_qualified(
         upper

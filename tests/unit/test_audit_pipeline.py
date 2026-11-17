@@ -3122,14 +3122,9 @@ class TestLlmOverclearGuardrail:
         assert row.final_classification == "INAPPROPRIATE"
         assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
 
-    def test_grounded_acs_overclear_floors_to_review(self, tmp_path: object) -> None:
-        # Codex PR #97 P1: ACS is in the prompt's HARD vocabulary but has no
-        # structured extractor and no prose exemption path, so asserting
-        # INAPPROPRIATE would flip a prompt-compliant ACS clear into an
-        # unreviewed committee verdict. A grounded, high-confidence ACS
-        # citation floors to a human instead. It does NOT auto-clear:
-        # extending prose auto-clear trust beyond qualified bleeding is a
-        # committee decision (spec #89 accepted it for bleeding only).
+    def test_grounded_acs_overclear_stays_appropriate(self, tmp_path: object) -> None:
+        # Owner decision 2026-11-17 (fully automated audit): a grounded, high-confidence ACS citation is a hard reason
+        # the prompt defines, so the model's APPROPRIATE stands with no human review.
         ctx = _row_context(
             audit_id="audit-oc-acs",
             classification="NEEDS_REVIEW",
@@ -3150,9 +3145,9 @@ class TestLlmOverclearGuardrail:
             reasoning_en="active ischemia justifies the gray-zone transfusion",
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
-        assert row.final_classification == "NEEDS_REVIEW"
-        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
-        assert row.needs_human_review is True
+        assert row.final_classification == "APPROPRIATE"
+        assert row.review_reason is None
+        assert row.needs_human_review is False
 
     def test_low_confidence_acs_still_asserts(self, tmp_path: object) -> None:
         # Below the shared 0.8 prose-trust bar an ACS citation is not honored.
@@ -3228,14 +3223,12 @@ class TestLlmOverclearGuardrail:
             }
         )
 
-    def test_grounded_true_subthreshold_overclear_floors_to_review(
+    def test_grounded_true_subthreshold_overclear_stays_appropriate(
         self, tmp_path: object
     ) -> None:
-        # Codex PR #97 round 3: the prompt defines SUB_THRESHOLD_HB (Hb
-        # strictly below the cohort floor) as HARD. When the claim is
-        # structurally TRUE (hb < threshold; the deterministic leg withheld
-        # only because the value was unreliable), asserting INAPPROPRIATE
-        # would contradict the prompt's own contract — floor to a human.
+        # Owner decision 2026-11-17 (fully automated audit): a single Hb below the patient's own cohort floor
+        # (7.6 vs 8.0) is a hard reason even when the deterministic leg held it as
+        # unconfirmed, so a grounded SUB_THRESHOLD_HB clear stands (case 68033005).
         ctx = self._single_low_hb_ctx("audit-oc-subthr", hb=7.6, threshold=8.0)
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
@@ -3251,17 +3244,16 @@ class TestLlmOverclearGuardrail:
             reasoning_en="single Hb below the 8.0 cohort floor",
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
-        assert row.final_classification == "NEEDS_REVIEW"
-        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
-        assert row.needs_human_review is True
+        assert row.final_classification == "APPROPRIATE"
+        assert row.review_reason is None
+        assert row.needs_human_review is False
 
-    def test_grounded_at_floor_subthreshold_overclear_floors_to_review(
+    def test_grounded_at_floor_subthreshold_overclear_stays_appropriate(
         self, tmp_path: object
     ) -> None:
         # Owner ruling 2026-09-27 (case 68004713): an Hb exactly AT the cohort
-        # floor is sub-threshold. A grounded SUB_THRESHOLD_HB citation on an
-        # isolated 8.0 against the 8.0 floor is structurally TRUE, so it must
-        # floor to a human rather than be asserted INAPPROPRIATE.
+        # floor is sub-threshold. Owner decision 2026-11-17 (fully automated audit): the grounded
+        # SUB_THRESHOLD_HB clear on an isolated 8.0 against the 8.0 floor stands.
         ctx = self._single_low_hb_ctx("audit-oc-atfloor", hb=8.0, threshold=8.0)
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
@@ -3277,16 +3269,16 @@ class TestLlmOverclearGuardrail:
             reasoning_en="single Hb at the 8.0 cohort floor",
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
-        assert row.final_classification == "NEEDS_REVIEW"
-        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+        assert row.final_classification == "APPROPRIATE"
+        assert row.review_reason is None
+        assert row.needs_human_review is False
 
-    def test_grounded_24h_minimum_below_floor_floors_to_review(
+    def test_grounded_24h_minimum_below_floor_stays_appropriate(
         self, tmp_path: object
     ) -> None:
-        # Issue #249: closest Hb 8.1 (at the 8.0 floor) but 7.9 twelve hours
-        # earlier. The prompt defines SUB_THRESHOLD_HB on the 24 h minimum, so
-        # a citation of the 7.9 is structurally TRUE; asserting INAPPROPRIATE
-        # against it would reverse the clinician's ruling.
+        # Issue #249: closest Hb 8.1 but 7.9 twelve hours earlier. The prompt
+        # defines SUB_THRESHOLD_HB on the 24 h minimum, so a citation of the
+        # 7.9 is structurally TRUE and clears (owner decision 2026-11-17).
         ctx = _row_context(
             audit_id="audit-oc-min24",
             classification="NEEDS_REVIEW",
@@ -3311,8 +3303,9 @@ class TestLlmOverclearGuardrail:
             reasoning_en="lowest Hb in the 24 h before the order is below the floor",
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
-        assert row.final_classification == "NEEDS_REVIEW"
-        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+        assert row.final_classification == "APPROPRIATE"
+        assert row.review_reason is None
+        assert row.needs_human_review is False
 
     def test_structurally_false_subthreshold_claim_still_asserts(
         self, tmp_path: object
@@ -3391,11 +3384,11 @@ class TestLlmOverclearGuardrail:
         assert row.review_reason is None
         assert row.needs_human_review is True
 
-    def test_bare_hypotension_overclear_asserts(self, tmp_path: object) -> None:
-        # Owner ruling (#98, 2026-07-11): hypotension — even on pressors —
-        # without evidence of active bleeding, severe organ ischemia, or
-        # fluid-refractoriness is NOT a transfusion indication; the assert
-        # stands. Deliberately narrows the round-5 floor.
+    def test_cited_shock_overclear_stays_appropriate(self, tmp_path: object) -> None:
+        # Owner decision 2026-11-17 (fully automated audit): grounded HEMODYNAMIC_INSTABILITY (hypotension on a
+        # pressor) at the prose-trust bar is a hard reason, so the model's APPROPRIATE
+        # stands. Supersedes ruling #98's bleeding / ischemia / fluid-refractory
+        # qualifiers for a cited instability (cases 68025806, 68024967).
         ctx = _row_context(
             audit_id="audit-oc-hemo",
             classification="NEEDS_REVIEW",
@@ -3416,10 +3409,11 @@ class TestLlmOverclearGuardrail:
             reasoning_en="documented hypotension on vasopressor support",
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
-        assert row.final_classification == "INAPPROPRIATE"
-        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+        assert row.final_classification == "APPROPRIATE"
+        assert row.review_reason is None
+        assert row.needs_human_review is False
 
-    def test_hypotension_with_active_bleed_citation_floors(
+    def test_native_hedge_hypotension_with_active_bleed_citation_floors(
         self, tmp_path: object
     ) -> None:
         # Owner ruling qualifier (1): grounded instability accompanied by a
@@ -3437,7 +3431,7 @@ class TestLlmOverclearGuardrail:
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
-            classification="APPROPRIATE",
+            classification="NEEDS_REVIEW",
             indications=[
                 {
                     "code": "HEMODYNAMIC_INSTABILITY",
@@ -3455,36 +3449,11 @@ class TestLlmOverclearGuardrail:
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "NEEDS_REVIEW"
-        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+        assert row.review_reason is None
 
-    def test_fluid_refractory_hypotension_floors(self, tmp_path: object) -> None:
-        # Owner ruling qualifier (3): instability documented as unresponsive
-        # to fluid resuscitation floors to a human.
-        ctx = _row_context(
-            audit_id="audit-oc-hemo-refractory",
-            classification="NEEDS_REVIEW",
-            hb_value=9.4,
-            evidence_text=(
-                "BP 82/50 despite fluid resuscitation 1000 mL, start Levophed"
-            ),
-        )
-        response = _periop_llm_response(
-            audit_id=ctx.order.audit_id,
-            classification="APPROPRIATE",
-            indications=[
-                {
-                    "code": "HEMODYNAMIC_INSTABILITY",
-                    "quote": "BP 82/50 despite fluid resuscitation 1000 mL",
-                    "source_id": "E1",
-                    "confidence": 0.9,
-                }
-            ],
-        )
-        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
-        assert row.final_classification == "NEEDS_REVIEW"
-        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
-
-    def test_melena_shock_instability_citation_floors(self, tmp_path: object) -> None:
+    def test_native_hedge_melena_shock_instability_citation_floors(
+        self, tmp_path: object
+    ) -> None:
         # Codex PR #103: the prompt routes melena + shock to a
         # HEMODYNAMIC_INSTABILITY citation instead of ACTIVE_BLEEDING (owner
         # ruling: melena is digested blood), so the hemorrhagic-shock
@@ -3499,7 +3468,7 @@ class TestLlmOverclearGuardrail:
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
-            classification="APPROPRIATE",
+            classification="NEEDS_REVIEW",
             indications=[
                 {
                     "code": "HEMODYNAMIC_INSTABILITY",
@@ -3511,9 +3480,9 @@ class TestLlmOverclearGuardrail:
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "NEEDS_REVIEW"
-        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+        assert row.review_reason is None
 
-    def test_negated_melena_instability_citation_asserts(
+    def test_native_hedge_negated_melena_instability_citation_asserts(
         self, tmp_path: object
     ) -> None:
         # The melena arm is negation-aware: a denied melena inside the
@@ -3527,7 +3496,7 @@ class TestLlmOverclearGuardrail:
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
-            classification="APPROPRIATE",
+            classification="NEEDS_REVIEW",
             indications=[
                 {
                     "code": "HEMODYNAMIC_INSTABILITY",
@@ -3539,9 +3508,9 @@ class TestLlmOverclearGuardrail:
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "INAPPROPRIATE"
-        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+        assert row.review_reason == LLM_NATIVE_REVIEW_ASSERT_REASON
 
-    def test_stale_dated_melena_instability_citation_asserts(
+    def test_native_hedge_stale_dated_melena_instability_citation_asserts(
         self, tmp_path: object
     ) -> None:
         # Same temporal screen as the family-code arm (case 68080335): a
@@ -3556,7 +3525,7 @@ class TestLlmOverclearGuardrail:
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
-            classification="APPROPRIATE",
+            classification="NEEDS_REVIEW",
             indications=[
                 {
                     "code": "HEMODYNAMIC_INSTABILITY",
@@ -3570,9 +3539,9 @@ class TestLlmOverclearGuardrail:
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "INAPPROPRIATE"
-        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+        assert row.review_reason == LLM_NATIVE_REVIEW_ASSERT_REASON
 
-    def test_denial_list_melena_instability_citation_asserts(
+    def test_native_hedge_denial_list_melena_instability_citation_asserts(
         self, tmp_path: object
     ) -> None:
         # Codex PR #103 round 2: a comma-distributed denial inside the
@@ -3589,7 +3558,7 @@ class TestLlmOverclearGuardrail:
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
-            classification="APPROPRIATE",
+            classification="NEEDS_REVIEW",
             indications=[
                 {
                     "code": "HEMODYNAMIC_INSTABILITY",
@@ -3603,9 +3572,9 @@ class TestLlmOverclearGuardrail:
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "INAPPROPRIATE"
-        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+        assert row.review_reason == LLM_NATIVE_REVIEW_ASSERT_REASON
 
-    def test_affirmed_melena_synonym_with_denied_bleed_still_floors(
+    def test_native_hedge_affirmed_melena_synonym_with_denied_bleed_still_floors(
         self, tmp_path: object
     ) -> None:
         # Codex PR #103 round 3: the floor's quote_negates_bleeding veto
@@ -3621,7 +3590,7 @@ class TestLlmOverclearGuardrail:
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
-            classification="APPROPRIATE",
+            classification="NEEDS_REVIEW",
             indications=[
                 {
                     "code": "HEMODYNAMIC_INSTABILITY",
@@ -3633,9 +3602,9 @@ class TestLlmOverclearGuardrail:
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "NEEDS_REVIEW"
-        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+        assert row.review_reason is None
 
-    def test_still_active_melena_instability_citation_floors(
+    def test_native_hedge_still_active_melena_instability_citation_floors(
         self, tmp_path: object
     ) -> None:
         # Codex PR #103 round 2: "melena not controlled" is an ONGOING
@@ -3650,7 +3619,7 @@ class TestLlmOverclearGuardrail:
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
-            classification="APPROPRIATE",
+            classification="NEEDS_REVIEW",
             indications=[
                 {
                     "code": "HEMODYNAMIC_INSTABILITY",
@@ -3662,9 +3631,9 @@ class TestLlmOverclearGuardrail:
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "NEEDS_REVIEW"
-        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+        assert row.review_reason is None
 
-    def test_hypotension_with_negated_bleed_citation_asserts(
+    def test_native_hedge_hypotension_with_negated_bleed_citation_asserts(
         self, tmp_path: object
     ) -> None:
         # A risk/history-qualified bleed code is not bleeding evidence; the
@@ -3679,7 +3648,7 @@ class TestLlmOverclearGuardrail:
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
-            classification="APPROPRIATE",
+            classification="NEEDS_REVIEW",
             indications=[
                 {
                     "code": "HEMODYNAMIC_INSTABILITY",
@@ -3697,9 +3666,9 @@ class TestLlmOverclearGuardrail:
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "INAPPROPRIATE"
-        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+        assert row.review_reason == LLM_NATIVE_REVIEW_ASSERT_REASON
 
-    def test_hypotension_with_negated_bleed_quote_asserts(
+    def test_native_hedge_hypotension_with_negated_bleed_quote_asserts(
         self, tmp_path: object
     ) -> None:
         # Codex PR #99 round 2: an ACTIVE_BLEEDING-coded citation whose
@@ -3717,7 +3686,7 @@ class TestLlmOverclearGuardrail:
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
-            classification="APPROPRIATE",
+            classification="NEEDS_REVIEW",
             indications=[
                 {
                     "code": "HEMODYNAMIC_INSTABILITY",
@@ -3735,9 +3704,11 @@ class TestLlmOverclearGuardrail:
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "INAPPROPRIATE"
-        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+        assert row.review_reason == LLM_NATIVE_REVIEW_ASSERT_REASON
 
-    def test_hypotension_with_stale_dated_bleed_asserts(self, tmp_path: object) -> None:
+    def test_native_hedge_hypotension_with_stale_dated_bleed_asserts(
+        self, tmp_path: object
+    ) -> None:
         # Case 68080335 / PR #100 Codex: a bleed charted for an event weeks
         # before the order is not the CURRENT hemorrhagic picture. It must
         # not supply qualifier-(1) accompaniment for a bare-hypotension
@@ -3758,7 +3729,7 @@ class TestLlmOverclearGuardrail:
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
-            classification="APPROPRIATE",
+            classification="NEEDS_REVIEW",
             indications=[
                 {
                     "code": "HEMODYNAMIC_INSTABILITY",
@@ -3776,9 +3747,9 @@ class TestLlmOverclearGuardrail:
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "INAPPROPRIATE"
-        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+        assert row.review_reason == LLM_NATIVE_REVIEW_ASSERT_REASON
 
-    def test_hypotension_with_current_dated_bleed_floors(
+    def test_native_hedge_hypotension_with_current_dated_bleed_floors(
         self, tmp_path: object
     ) -> None:
         # Guard against over-correction: a CURRENT-episode dated bleed (14/5/69
@@ -3800,7 +3771,7 @@ class TestLlmOverclearGuardrail:
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
-            classification="APPROPRIATE",
+            classification="NEEDS_REVIEW",
             indications=[
                 {
                     "code": "HEMODYNAMIC_INSTABILITY",
@@ -3818,7 +3789,7 @@ class TestLlmOverclearGuardrail:
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "NEEDS_REVIEW"
-        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+        assert row.review_reason is None
 
     def test_structured_bare_hypotension_overclear_asserts(
         self, tmp_path: object
@@ -3953,7 +3924,7 @@ class TestLlmOverclearGuardrail:
         assert row.final_classification == "INAPPROPRIATE"
         assert row.review_reason == LLM_NATIVE_REVIEW_ASSERT_REASON
 
-    def test_hypotension_with_negated_bleed_synonym_asserts(
+    def test_native_hedge_hypotension_with_negated_bleed_synonym_asserts(
         self, tmp_path: object
     ) -> None:
         # Codex PR #99 round 4: a negated bleed SYNONYM ("denies melena")
@@ -3968,7 +3939,7 @@ class TestLlmOverclearGuardrail:
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
-            classification="APPROPRIATE",
+            classification="NEEDS_REVIEW",
             indications=[
                 {
                     "code": "HEMODYNAMIC_INSTABILITY",
@@ -3986,9 +3957,11 @@ class TestLlmOverclearGuardrail:
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "INAPPROPRIATE"
-        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+        assert row.review_reason == LLM_NATIVE_REVIEW_ASSERT_REASON
 
-    def test_hypotension_with_comma_denial_list_asserts(self, tmp_path: object) -> None:
+    def test_native_hedge_hypotension_with_comma_denial_list_asserts(
+        self, tmp_path: object
+    ) -> None:
         # Codex PR #99 round 5: "denies bleeding, melena" is one denial
         # distributed across a comma list — the comma must not shield
         # "melena" from the negator and float bare hypotension to review.
@@ -4002,7 +3975,7 @@ class TestLlmOverclearGuardrail:
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
-            classification="APPROPRIATE",
+            classification="NEEDS_REVIEW",
             indications=[
                 {
                     "code": "HEMODYNAMIC_INSTABILITY",
@@ -4020,9 +3993,9 @@ class TestLlmOverclearGuardrail:
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "INAPPROPRIATE"
-        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+        assert row.review_reason == LLM_NATIVE_REVIEW_ASSERT_REASON
 
-    def test_hypotension_with_contrastive_bleed_clause_floors(
+    def test_native_hedge_hypotension_with_contrastive_bleed_clause_floors(
         self, tmp_path: object
     ) -> None:
         # Codex PR #99 round 6: "denies hematemesis but melena ongoing"
@@ -4040,7 +4013,7 @@ class TestLlmOverclearGuardrail:
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
-            classification="APPROPRIATE",
+            classification="NEEDS_REVIEW",
             indications=[
                 {
                     "code": "HEMODYNAMIC_INSTABILITY",
@@ -4058,9 +4031,9 @@ class TestLlmOverclearGuardrail:
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "NEEDS_REVIEW"
-        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+        assert row.review_reason is None
 
-    def test_hypotension_with_uncontrolled_bleed_double_negative_floors(
+    def test_native_hedge_hypotension_with_uncontrolled_bleed_double_negative_floors(
         self, tmp_path: object
     ) -> None:
         # Codex PR #99 round 7: "bleeding not controlled after pressure"
@@ -4078,7 +4051,7 @@ class TestLlmOverclearGuardrail:
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
-            classification="APPROPRIATE",
+            classification="NEEDS_REVIEW",
             indications=[
                 {
                     "code": "HEMODYNAMIC_INSTABILITY",
@@ -4096,9 +4069,9 @@ class TestLlmOverclearGuardrail:
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "NEEDS_REVIEW"
-        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+        assert row.review_reason is None
 
-    def test_hypotension_with_label_value_denial_asserts(
+    def test_native_hedge_hypotension_with_label_value_denial_asserts(
         self, tmp_path: object
     ) -> None:
         # Codex PR #99 round 8: a checklist-style label-value denial
@@ -4112,7 +4085,7 @@ class TestLlmOverclearGuardrail:
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
-            classification="APPROPRIATE",
+            classification="NEEDS_REVIEW",
             indications=[
                 {
                     "code": "HEMODYNAMIC_INSTABILITY",
@@ -4130,9 +4103,9 @@ class TestLlmOverclearGuardrail:
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "INAPPROPRIATE"
-        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+        assert row.review_reason == LLM_NATIVE_REVIEW_ASSERT_REASON
 
-    def test_hypotension_with_unresolved_bleed_adverb_floors(
+    def test_native_hedge_hypotension_with_unresolved_bleed_adverb_floors(
         self, tmp_path: object
     ) -> None:
         # Codex PR #99 round 8: "bleeding not yet resolved" is explicitly
@@ -4148,7 +4121,7 @@ class TestLlmOverclearGuardrail:
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
-            classification="APPROPRIATE",
+            classification="NEEDS_REVIEW",
             indications=[
                 {
                     "code": "HEMODYNAMIC_INSTABILITY",
@@ -4166,9 +4139,9 @@ class TestLlmOverclearGuardrail:
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "NEEDS_REVIEW"
-        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+        assert row.review_reason is None
 
-    def test_hypotension_with_denied_bleed_unrelated_rescue_asserts(
+    def test_native_hedge_hypotension_with_denied_bleed_unrelated_rescue_asserts(
         self, tmp_path: object
     ) -> None:
         # Codex PR #99 round 9: the still-active rescue must bind its OWN
@@ -4185,7 +4158,7 @@ class TestLlmOverclearGuardrail:
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
-            classification="APPROPRIATE",
+            classification="NEEDS_REVIEW",
             indications=[
                 {
                     "code": "HEMODYNAMIC_INSTABILITY",
@@ -4203,9 +4176,11 @@ class TestLlmOverclearGuardrail:
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "INAPPROPRIATE"
-        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+        assert row.review_reason == LLM_NATIVE_REVIEW_ASSERT_REASON
 
-    def test_negated_refractory_wording_does_not_floor(self, tmp_path: object) -> None:
+    def test_native_hedge_negated_refractory_wording_does_not_floor(
+        self, tmp_path: object
+    ) -> None:
         # Codex PR #99 round 4: qualifier (3) requires POSITIVE
         # unresponsiveness to fluids. "not refractory after IV fluids" is
         # documented responsiveness — bare hypotension, assert stands.
@@ -4217,7 +4192,7 @@ class TestLlmOverclearGuardrail:
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
-            classification="APPROPRIATE",
+            classification="NEEDS_REVIEW",
             indications=[
                 {
                     "code": "HEMODYNAMIC_INSTABILITY",
@@ -4229,9 +4204,9 @@ class TestLlmOverclearGuardrail:
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "INAPPROPRIATE"
-        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+        assert row.review_reason == LLM_NATIVE_REVIEW_ASSERT_REASON
 
-    def test_bare_refractory_token_floors(self, tmp_path: object) -> None:
+    def test_native_hedge_bare_refractory_token_floors(self, tmp_path: object) -> None:
         # Positive control for the screened token: un-negated "refractory"
         # in the instability citation's own quote still floors.
         ctx = _row_context(
@@ -4242,7 +4217,7 @@ class TestLlmOverclearGuardrail:
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
-            classification="APPROPRIATE",
+            classification="NEEDS_REVIEW",
             indications=[
                 {
                     "code": "HEMODYNAMIC_INSTABILITY",
@@ -4254,9 +4229,11 @@ class TestLlmOverclearGuardrail:
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "NEEDS_REVIEW"
-        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+        assert row.review_reason is None
 
-    def test_pre_negated_despite_phrase_still_floors(self, tmp_path: object) -> None:
+    def test_native_hedge_pre_negated_despite_phrase_still_floors(
+        self, tmp_path: object
+    ) -> None:
         # Guard against over-screening: "not improving despite fluid
         # resuscitation" is GENUINE refractoriness (the negation binds
         # "improving", not the refractory phrase). Only the
@@ -4272,7 +4249,7 @@ class TestLlmOverclearGuardrail:
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
-            classification="APPROPRIATE",
+            classification="NEEDS_REVIEW",
             indications=[
                 {
                     "code": "HEMODYNAMIC_INSTABILITY",
@@ -4286,9 +4263,9 @@ class TestLlmOverclearGuardrail:
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "NEEDS_REVIEW"
-        assert row.review_reason == LLM_OVERCLEAR_REVIEW_REASON
+        assert row.review_reason is None
 
-    def test_low_confidence_refractory_quote_does_not_floor(
+    def test_native_hedge_low_confidence_refractory_quote_does_not_floor(
         self, tmp_path: object
     ) -> None:
         # Codex PR #99 P2: qualifier (3) requires the fluid-refractory quote
@@ -4306,7 +4283,7 @@ class TestLlmOverclearGuardrail:
         )
         response = _periop_llm_response(
             audit_id=ctx.order.audit_id,
-            classification="APPROPRIATE",
+            classification="NEEDS_REVIEW",
             indications=[
                 {
                     "code": "HEMODYNAMIC_INSTABILITY",
@@ -4324,7 +4301,127 @@ class TestLlmOverclearGuardrail:
         )
         row = _apply_single_row(ctx, response, tmp_path=tmp_path)
         assert row.final_classification == "INAPPROPRIATE"
-        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+        assert row.review_reason == LLM_NATIVE_REVIEW_ASSERT_REASON
+
+    def test_hard_code_citation_is_trusted_without_text_screen(
+        self, tmp_path: object
+    ) -> None:
+        # Owner decision 2026-11-17: whether a grounded hard-code quote
+        # describes a current condition is the model's judgment. A keyword
+        # screen was tried on PR #274 and misread most real wording in both
+        # directions, so it was removed. This pins the accepted risk: a
+        # grounded, high-confidence ACS citation clears even when a human
+        # would read the quote as a rule-out. The next run lists every
+        # hard-code clear for a clinician spot-check.
+        ctx = _row_context(
+            audit_id="audit-oc-acs-trusted",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="Cardio: R/O ACS, troponin negative x2, ECG unchanged",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "ACS",
+                    "quote": "R/O ACS, troponin negative x2",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "APPROPRIATE"
+        assert row.review_reason is None
+
+    def test_cited_shock_at_exact_confidence_bar_stays_appropriate(
+        self, tmp_path: object
+    ) -> None:
+        # The 0.8 prose-trust bar is inclusive, same as the bleed exemption.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-bar",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="septic shock, start norepinephrine 0.1 mcg/kg/min",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "septic shock, start norepinephrine",
+                    "source_id": "E1",
+                    "confidence": 0.8,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "APPROPRIATE"
+        assert row.review_reason is None
+
+    def test_cited_shock_clears_high_hb_override(self, tmp_path: object) -> None:
+        # Hb >= 10 is withheld as POTENTIALLY_INAPPROPRIATE; a documented
+        # shock quote is a hard override there too (2026-11-17).
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-highhb",
+            classification="POTENTIALLY_INAPPROPRIATE",
+            hb_value=11.2,
+            evidence_text="ABP 70/40, MAP 50 on Levophed, hematemesis ongoing",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "ABP 70/40, MAP 50 on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "APPROPRIATE"
+        assert row.review_reason is None
+
+    def test_cited_shock_beats_structured_vitals_bleed_floor(
+        self, tmp_path: object
+    ) -> None:
+        # Structured SBP < 90 plus a sub-exemption bleed floors to review on
+        # its own; a documented shock citation on the same row clears first.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-order",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            sbp=LLM_OVERCLEAR_UNSTABLE_SBP - 8.0,
+            evidence_text=(
+                "hypotension on Levophed; "
+                "intramuscular hematoma with active bleeding at Lt. thigh"
+            ),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "hypotension on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                },
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "intramuscular hematoma with active bleeding",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                },
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "APPROPRIATE"
+        assert row.review_reason is None
 
     def test_low_confidence_hemodynamic_still_asserts(self, tmp_path: object) -> None:
         ctx = _row_context(

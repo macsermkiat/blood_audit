@@ -580,13 +580,19 @@ def periop_contradiction(
 #
 # "Hard signal" is deterministic-only (B1): a genuinely low Hb (<= 7.0), a hard
 # peri-op signal, an MTP cohort, or hemodynamic instability. Bleeding /
-# symptomatic anaemia prose remains untrusted except for the one committee-
-# accepted exemption: an ACTIVE_BLEEDING indication with its own confidence
+# symptomatic anaemia prose remains untrusted except for the committee-
+# accepted bleed exemption (plus the hard codes below, 2026-11-17): an ACTIVE_BLEEDING indication with its own confidence
 # >= 0.8 and either volume strictly > 300 mL or a life-threatening marker (see
 # bleeding.py), and whose quote GROUNDS in the row's own evidence bundle
 # (:func:`_grounded_indications` — the batch path's verifier is still the
 # Phase-1 pass-through, so quote existence must be checked here, not assumed).
 # Small or merely qualitative bleeds do not clear the guardrail.
+#
+# Owner decision 2026-11-17 (the audit runs without routine human review):
+# a grounded, high-confidence citation of a prompt-defined HARD code the
+# structured system cannot dismiss — ACS, HEMODYNAMIC_INSTABILITY, or a
+# structurally TRUE SUB_THRESHOLD_HB — also clears
+# (:func:`_grounded_hard_indication`). Soft reasons are still asserted.
 # =============================================================================
 
 LLM_OVERCLEAR_REVIEW_REASON = "llm_overclear_suspect"
@@ -597,14 +603,12 @@ kinds of narrow paths: (1) an over-clear whose tool payload is missing a
 schema-required list field (:func:`_rbc_payload_well_formed`) — drift may
 have dropped cited evidence, so the row floors to human review instead of
 asserting ``INAPPROPRIATE`` on evidence-absence we cannot distinguish from
-loss; (2) an over-clear citing a grounded, high-confidence, prompt-defined
-hard indication the structured system cannot dismiss — ACS (no extractor
-exists), HEMODYNAMIC_INSTABILITY prose the vitals snapshot cannot see
-(documented shock / pressors), or a structurally TRUE sub-floor Hb the
-deterministic leg withheld as unreliable
-(:func:`_cited_at_prose_trust` / :func:`_grounded_true_subthreshold_indication`).
-Neither asserting nor auto-clearing is safe on those. Historical pre-#94
-rows also carry this value.
+loss; (2) an over-clear whose only instability is the structured SBP < 90 /
+HR > 120 snapshot, accompanied by a grounded sub-exemption bleed citation
+(:func:`_qualified_hemodynamic_floor`). Since the owner decision of
+2026-11-17, a grounded ACS, HEMODYNAMIC_INSTABILITY, or structurally TRUE
+SUB_THRESHOLD_HB citation no longer floors here: it clears
+(:func:`_grounded_hard_indication`). Historical rows also carry this value.
 """
 
 LLM_OVERCLEAR_ASSERT_REASON = "llm_overclear_asserted_inappropriate"
@@ -873,11 +877,12 @@ def _grounded_administration_evidence(
 #   * HEMODYNAMIC_INSTABILITY — the structured extractor sees one vitals
 #     snapshot (SBP < 90 / HR > 120); the prompt's definition also covers
 #     documented shock / pressor support that only lives in prose (round 5).
-#     Owner ruling (#98, 2026-07-11): bare hypotension — even on pressors —
-#     is NOT a transfusion indication; the citation floors ONLY when
-#     accompanied by (1) grounded active-bleeding evidence (incl. melena in
-#     the instability citation's own quote, Codex PR #103), (2) severe organ
-#     ischemia (the separate ACS floor), or (3) fluid-refractory language.
+#     Owner ruling (#98, 2026-07-11) qualifiers — (1) grounded active-
+#     bleeding evidence (incl. melena in the instability citation's own
+#     quote, Codex PR #103), (2) severe organ ischemia (the separate ACS
+#     floor), or (3) fluid-refractory language — now apply only to a native
+#     hedge and to the structured-vitals arm. A grounded over-clear citation
+#     clears outright (owner decision 2026-11-17).
 _ACS_HARD_CODES: frozenset[str] = frozenset({"ACS"})
 _HEMODYNAMIC_HARD_CODES: frozenset[str] = frozenset({"HEMODYNAMIC_INSTABILITY"})
 
@@ -943,10 +948,9 @@ def _cited_at_prose_trust(
     shared prose-trust confidence bar.
 
     WHY: a prompt-defined HARD code the structured system cannot dismiss
-    must not be asserted against — the caller floors the row to
-    ``NEEDS_REVIEW`` instead. It never auto-clears, because extending prose
-    auto-clear trust beyond qualified bleeding is a committee decision
-    (spec #89 accepted bleeding only).
+    must not be asserted against. On an over-clear it lets the model's
+    ``APPROPRIATE`` stand (:func:`_grounded_hard_indication`, owner decision
+    2026-11-17); on a native hedge it keeps the row in review.
     """
     for indication in grounded_indications:
         code = indication.get("code")
@@ -971,6 +975,11 @@ def _qualified_hemodynamic_floor(
     """Hemodynamic instability — a grounded HEMODYNAMIC_INSTABILITY citation
     at the prose-trust bar OR the structured SBP < 90 / HR > 120 snapshot
     (Codex PR #99 round 3) — accompanied by transfusion-relevant evidence.
+
+    Since the owner decision of 2026-11-17 a documented instability citation
+    clears an over-clear before this runs, so on that path only the
+    structured snapshot plus a bleed citation reaches it; the cited,
+    fluid-refractory and melena arms below now serve the native hedge.
 
     Owner ruling (#98, 2026-07-11): hypotension without evidence of active
     bleeding, severe organ ischemia, or fluid-refractoriness is not a
@@ -1079,11 +1088,11 @@ def _grounded_true_subthreshold_indication(
     LLM-routed when the deterministic leg withheld the value as unreliable
     (hemodilution flag, single low Hb with no trend) — asserting
     ``INAPPROPRIATE`` against a prompt-compliant clear there would contradict
-    the prompt's own contract, so the caller floors it to a human instead.
-    The structural cross-check is the gate: an above-floor Hb mislabeled
-    "sub-threshold" (the motivating over-clear class, spec #89 story 6)
-    fails it and keeps the assert. Never auto-clears — the deterministic
-    leg flagged the value as unreliable for a reason.
+    the prompt's own contract. Since the owner decision of 2026-11-17 the
+    model's clear stands (:func:`_grounded_hard_indication`): the model read
+    the notes the deterministic leg could not. The structural cross-check is
+    the gate: an above-floor Hb mislabeled "sub-threshold" (the motivating
+    over-clear class, spec #89 story 6) fails it and keeps the assert.
     """
     # Issue #249: the prompt defines SUB_THRESHOLD_HB on the lowest Hb in the
     # 24 h before the order, so the structural check reads that minimum too;
@@ -1275,15 +1284,35 @@ def _rbc_overclear_guardrail(
     grounded_indications = ctx.get_grounded_indications()
     if qualified_bleeding_exempt(
         grounded_indications, order_date=_order_local_date(ctx.row)
-    ):
+    ) or _grounded_hard_indication(grounded_indications, ctx.row):
         return None
-    if (
-        _grounded_acs_indication(grounded_indications)
-        or _qualified_hemodynamic_floor(grounded_indications, ctx.row)
-        or _grounded_true_subthreshold_indication(grounded_indications, ctx.row)
-    ):
+    if _qualified_hemodynamic_floor(grounded_indications, ctx.row):
         return _Verdict("NEEDS_REVIEW", LLM_OVERCLEAR_REVIEW_REASON)
     return _Verdict("INAPPROPRIATE", LLM_OVERCLEAR_ASSERT_REASON)
+
+
+def _grounded_hard_indication(
+    grounded_indications: tuple[dict[str, object], ...],
+    context: PipelineRowContext,
+) -> bool:
+    """True iff the model quoted a prompt-defined HARD indication that the
+    audit trusts enough to let its ``APPROPRIATE`` stand.
+
+    Owner decision (2026-11-17): the audit runs without routine human
+    review, so a grounded citation at the prose-trust bar of shock
+    (HEMODYNAMIC_INSTABILITY), ACS, or a structurally TRUE sub-floor Hb
+    clears the order. Whether the quote describes a current condition is
+    the model's judgment: a keyword screen was tried on PR #274 and
+    misread most real wording in both directions, so none is applied. This supersedes ruling #98's bleeding / ischemia /
+    fluid-refractory qualifiers for a cited instability, and clears a
+    sub-floor Hb the deterministic leg held as unconfirmed
+    (single-low-Hb, hemodilution). Soft reasons still get asserted.
+    """
+    return (
+        _grounded_acs_indication(grounded_indications)
+        or _cited_at_prose_trust(grounded_indications, _HEMODYNAMIC_HARD_CODES)
+        or _grounded_true_subthreshold_indication(grounded_indications, context)
+    )
 
 
 def _native_review_guardrail(
