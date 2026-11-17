@@ -4303,6 +4303,143 @@ class TestLlmOverclearGuardrail:
         assert row.final_classification == "INAPPROPRIATE"
         assert row.review_reason == LLM_NATIVE_REVIEW_ASSERT_REASON
 
+    @pytest.mark.parametrize(
+        ("code", "evidence", "quote"),
+        [
+            # Reviewer probes on PR #274: each quote grounds and carries a
+            # hard code at 0.9, but documents the ABSENCE or the HISTORY of
+            # the condition. Clearing these would turn a misread into an
+            # unreviewed APPROPRIATE, so the over-clear is asserted.
+            (
+                "HEMODYNAMIC_INSTABILITY",
+                "Vitals: BP 120/70, no signs of shock, warm peripheries",
+                "BP 120/70, no signs of shock",
+            ),
+            (
+                "ACS",
+                "Cardio: R/O ACS, troponin negative x2, ECG unchanged",
+                "R/O ACS, troponin negative x2",
+            ),
+            (
+                "ACS",
+                "PMH: old MI 2015 s/p PCI, ACS 2019; now stable angina free",
+                "old MI 2015 s/p PCI, ACS 2019",
+            ),
+            (
+                "HEMODYNAMIC_INSTABILITY",
+                "Hx. 1/5/69: septic shock on Levophed, now off pressors",
+                "Hx. 1/5/69: septic shock on Levophed",
+            ),
+        ],
+    )
+    def test_hard_code_quote_without_current_condition_asserts(
+        self, tmp_path: object, code: str, evidence: str, quote: str
+    ) -> None:
+        ctx = _row_context(
+            audit_id=f"audit-oc-hardneg-{code}-{len(quote)}",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text=evidence,
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {"code": code, "quote": quote, "source_id": "E1", "confidence": 0.9}
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "INAPPROPRIATE"
+        assert row.review_reason == LLM_OVERCLEAR_ASSERT_REASON
+
+    def test_cited_shock_at_exact_confidence_bar_stays_appropriate(
+        self, tmp_path: object
+    ) -> None:
+        # The 0.8 prose-trust bar is inclusive, same as the bleed exemption.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-bar",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            evidence_text="septic shock, start norepinephrine 0.1 mcg/kg/min",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "septic shock, start norepinephrine",
+                    "source_id": "E1",
+                    "confidence": 0.8,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "APPROPRIATE"
+        assert row.review_reason is None
+
+    def test_cited_shock_clears_high_hb_override(self, tmp_path: object) -> None:
+        # Hb >= 10 is withheld as POTENTIALLY_INAPPROPRIATE; a documented
+        # shock quote is a hard override there too (2026-11-17).
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-highhb",
+            classification="POTENTIALLY_INAPPROPRIATE",
+            hb_value=11.2,
+            evidence_text="ABP 70/40, MAP 50 on Levophed, hematemesis ongoing",
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "ABP 70/40, MAP 50 on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "APPROPRIATE"
+        assert row.review_reason is None
+
+    def test_cited_shock_beats_structured_vitals_bleed_floor(
+        self, tmp_path: object
+    ) -> None:
+        # Structured SBP < 90 plus a sub-exemption bleed floors to review on
+        # its own; a documented shock citation on the same row clears first.
+        ctx = _row_context(
+            audit_id="audit-oc-hemo-order",
+            classification="NEEDS_REVIEW",
+            hb_value=9.4,
+            sbp=LLM_OVERCLEAR_UNSTABLE_SBP - 8.0,
+            evidence_text=(
+                "hypotension on Levophed; "
+                "intramuscular hematoma with active bleeding at Lt. thigh"
+            ),
+        )
+        response = _periop_llm_response(
+            audit_id=ctx.order.audit_id,
+            classification="APPROPRIATE",
+            indications=[
+                {
+                    "code": "HEMODYNAMIC_INSTABILITY",
+                    "quote": "hypotension on Levophed",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                },
+                {
+                    "code": "ACTIVE_BLEEDING",
+                    "quote": "intramuscular hematoma with active bleeding",
+                    "source_id": "E1",
+                    "confidence": 0.9,
+                },
+            ],
+        )
+        row = _apply_single_row(ctx, response, tmp_path=tmp_path)
+        assert row.final_classification == "APPROPRIATE"
+        assert row.review_reason is None
+
     def test_low_confidence_hemodynamic_still_asserts(self, tmp_path: object) -> None:
         ctx = _row_context(
             audit_id="audit-oc-hemo-lowconf",

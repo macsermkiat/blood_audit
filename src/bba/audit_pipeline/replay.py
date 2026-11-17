@@ -45,6 +45,10 @@ from bba.audit_pipeline.bleeding import (
     quote_indicates_melena,
     quote_negates_bleeding,
 )
+from bba.audit_pipeline.hard_quote import (
+    quote_documents_acs,
+    quote_documents_instability,
+)
 from bba.audit_pipeline.manifest import context_hash
 from bba.audit_pipeline.models import PipelineRowContext, PipelineRunResult
 from bba.audit_store import AuditRow, AuditStore, LlmCall
@@ -580,8 +584,8 @@ def periop_contradiction(
 #
 # "Hard signal" is deterministic-only (B1): a genuinely low Hb (<= 7.0), a hard
 # peri-op signal, an MTP cohort, or hemodynamic instability. Bleeding /
-# symptomatic anaemia prose remains untrusted except for the one committee-
-# accepted exemption: an ACTIVE_BLEEDING indication with its own confidence
+# symptomatic anaemia prose remains untrusted except for the committee-
+# accepted bleed exemption (plus the hard codes below, 2026-11-17): an ACTIVE_BLEEDING indication with its own confidence
 # >= 0.8 and either volume strictly > 300 mL or a life-threatening marker (see
 # bleeding.py), and whose quote GROUNDS in the row's own evidence bundle
 # (:func:`_grounded_indications` — the batch path's verifier is still the
@@ -976,6 +980,11 @@ def _qualified_hemodynamic_floor(
     at the prose-trust bar OR the structured SBP < 90 / HR > 120 snapshot
     (Codex PR #99 round 3) — accompanied by transfusion-relevant evidence.
 
+    Since the owner decision of 2026-11-17 a documented instability citation
+    clears an over-clear before this runs, so on that path only the
+    structured snapshot plus a bleed citation reaches it; the cited,
+    fluid-refractory and melena arms below now serve the native hedge.
+
     Owner ruling (#98, 2026-07-11): hypotension without evidence of active
     bleeding, severe organ ischemia, or fluid-refractoriness is not a
     transfusion indication and stays asserted, however the instability was
@@ -1295,17 +1304,50 @@ def _grounded_hard_indication(
 
     Owner decision (2026-11-17): the audit runs without routine human
     review, so a grounded citation at the prose-trust bar of shock
-    (HEMODYNAMIC_INSTABILITY), ACS, or a structurally TRUE sub-floor Hb
-    clears the order. This supersedes ruling #98's bleeding / ischemia /
+    (HEMODYNAMIC_INSTABILITY) or ACS whose quote documents the condition,
+    or a structurally TRUE sub-floor Hb, clears the order. This supersedes ruling #98's bleeding / ischemia /
     fluid-refractory qualifiers for a cited instability, and clears a
     sub-floor Hb the deterministic leg held as unconfirmed
     (single-low-Hb, hemodilution). Soft reasons still get asserted.
     """
+    order_date = _order_local_date(context)
     return (
-        _grounded_acs_indication(grounded_indications)
-        or _cited_at_prose_trust(grounded_indications, _HEMODYNAMIC_HARD_CODES)
+        _cited_documenting_quote(
+            grounded_indications, _ACS_HARD_CODES, quote_documents_acs, order_date
+        )
+        or _cited_documenting_quote(
+            grounded_indications,
+            _HEMODYNAMIC_HARD_CODES,
+            quote_documents_instability,
+            order_date,
+        )
         or _grounded_true_subthreshold_indication(grounded_indications, context)
     )
+
+
+def _cited_documenting_quote(
+    grounded_indications: tuple[dict[str, object], ...],
+    codes: frozenset[str],
+    documents: Callable[[str, date], bool],
+    order_date: date,
+) -> bool:
+    """True iff one grounded citation carries a code in ``codes`` at the
+    prose-trust bar AND its own quote positively documents the condition
+    (:mod:`bba.audit_pipeline.hard_quote`): a negated, rule-out, history or
+    stale-dated mention ("no signs of shock", "R/O ACS", "old MI 2015")
+    grounds but does not clear."""
+    for indication in grounded_indications:
+        code = indication.get("code")
+        quote = indication.get("quote")
+        if (
+            isinstance(code, str)
+            and code.strip().upper() in codes
+            and isinstance(quote, str)
+            and _confidence_at_prose_trust_bar(indication.get("confidence"))
+            and documents(quote, order_date)
+        ):
+            return True
+    return False
 
 
 def _native_review_guardrail(
