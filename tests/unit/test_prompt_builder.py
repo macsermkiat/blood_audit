@@ -1611,8 +1611,12 @@ class TestRbcPromptHashGolden:
     # vocabulary adds LAB TIMING (labs read at the dispense time). Blessed by
     # tests/unit/test_prompt_rulings_2026_11_09.py. Re-pinned again when LAB
     # TIMING was extended to the 'transfusion' label (same test file).
+    # Re-pinned for REQNO 68004139: PERIOPERATIVE now means an intra-op
+    # transfusion or EBL >= PERIOP_MIN_EBL_ML, and being post-op is not by
+    # itself an indication. Blessed by
+    # tests/unit/test_periop_indication_scope.py.
     RBC_HB_7_10_75_EMPTY_EVIDENCE = (
-        "78aa2f31c5b0c109e02cd828899f73174c80e34aee3f5062f7da8086c4133f61"
+        "1c2ed9f3700734a5fa75bab36238094025d819ce5ba5b34e34ec7fbd732b2536"
     )
     # Re-pinned for #93 boundary alignment: dispatch routes Hb >= 10.0 to this
     # template (engine ``hb_ge_10``), so its prose states the inclusive
@@ -1635,8 +1639,9 @@ class TestRbcPromptHashGolden:
     # vocabulary adds LAB TIMING (labs read at the dispense time). Blessed by
     # tests/unit/test_prompt_rulings_2026_11_09.py. Re-pinned again when LAB
     # TIMING was extended to the 'transfusion' label (same test file).
+    # Re-pinned for REQNO 68004139, same shared PERIOPERATIVE edit as above.
     RBC_HB_GT_10_75_EMPTY_EVIDENCE = (
-        "ef69f90220d73007449c05876ade065c9387964a6861b29749ac0194387ba94e"
+        "f458bb93a414f27566e065283acbc59e74f6f415ad75af5b9e8f4043138f73f7"
     )
 
     def test_hb_7_10_review_cohort_7_5_hash_is_pinned(self) -> None:

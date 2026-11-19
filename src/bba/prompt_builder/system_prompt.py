@@ -28,6 +28,7 @@ from __future__ import annotations
 import unicodedata
 from typing import Final
 
+from bba.deterministic_classifier import PERIOP_MIN_EBL_ML
 from bba.prompt_builder.exceptions import (
     UnknownTaskModeError,
     UnsupportedCohortThresholdError,
@@ -92,10 +93,14 @@ _RBC_INDICATION_VOCABULARY: Final[str] = (
     "  • HEMODYNAMIC_INSTABILITY — SBP < 90 mmHg, HR > 120 bpm, or documented "
     "shock;\n"
     "  • ACS — acute coronary syndrome / active myocardial ischemia;\n"
-    "  • PERIOPERATIVE — a true peri-operative context (an operation within the "
-    "peri-op window). A declared order-time use code (BDVSTDT.USETYPE) alone "
-    "does NOT satisfy PERIOPERATIVE; an actual operative event must be "
-    "documented.\n"
+    "  • PERIOPERATIVE — blood given for operative blood loss from the current "
+    "operation: a documented intra-operative transfusion, or a documented "
+    f"estimated blood loss (EBL) of at least {PERIOP_MIN_EBL_ML} mL from that "
+    "operation. Being post-operative is NOT by itself an indication: an order "
+    "for a post-op patient on the ward (e.g. post-op day 1) with neither of "
+    "these is judged on Hb, bleeding and instability like any other order. A "
+    "declared order-time use code (BDVSTDT.USETYPE) alone does NOT satisfy "
+    "PERIOPERATIVE.\n"
     "  • MTP — massive-transfusion-protocol activation;\n"
     "  • SUB_THRESHOLD_HB — the lowest Hb in the 24 hours before the order is "
     "at or below the cohort floor of {cohort_threshold} g/dL. The lowest "
@@ -156,7 +161,8 @@ _RBC_OUTPUT_RULE: Final[str] = (
     "defer. When you return APPROPRIATE, cite the hard indication verbatim and "
     "tag it with its code. Draw the terminal line precisely: adequate notes that "
     "document no hard indication (a stable patient with no bleeding, instability, "
-    "ischemia, peri-op context, MTP, or genuine sub-threshold Hb) are "
+    "ischemia, qualifying operative blood loss, MTP, or genuine sub-threshold "
+    "Hb) are "
     "INAPPROPRIATE; return INSUFFICIENT_EVIDENCE ONLY when the notes are "
     "genuinely silent or too thin to support any judgment. Documentation absence "
     "alone is never INAPPROPRIATE, but adequate notes describing no hard "
