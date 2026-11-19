@@ -128,6 +128,7 @@ from bba.cohort_detector import (
 from bba.component_map import ComponentFamily
 from bba.deterministic_classifier import (
     NON_BLOOD_PROCEDURE_ICD9,
+    PERIOP_MIN_EBL_ML,
     ClassifierResult,
     classify,
     is_blood_requiring_procedure,
@@ -1195,6 +1196,28 @@ def _has_note_derived_periop(payload: dict[str, Any]) -> bool:
         or payload.get("intraop_transfusion")
         or payload.get("findings")
     )
+
+
+_PERIOP_EVIDENCE_GUIDANCE: tuple[str, ...] = (
+    "PERI-OPERATIVE EVIDENCE — quote-or-deny requirement:",
+    "- A pinned 'PERI-OP SIGNALS' item is present above (surgical",
+    "  context / estimated blood loss / intra-op transfusion",
+    "  recovered from the free-text narrative).",
+    "- A surgery documented ONLY in a free-text note still proves the",
+    "  operation happened. Empty structured procedure rows do NOT negate",
+    "  it — do NOT write 'no operative procedure documented' when the",
+    "  narrative shows one.",
+    "- Only a documented intra-op transfusion or an EBL of at least",
+    f"  {PERIOP_MIN_EBL_ML} mL satisfies PERIOPERATIVE. A surgery alone, or",
+    "  the patient being post-op, does not; judge that order on Hb,",
+    "  bleeding and instability like any other.",
+    "- For EACH peri-op fact in that item you MUST either quote the",
+    "  supporting snippet (naming its evidence id) in",
+    "  reasoning_summary_en AND reasoning_summary_th, OR explicitly",
+    "  state why you reject it.",
+    "- Silently ignoring the peri-op signal is the failure mode this",
+    "  requirement exists to prevent (Case 107 / REQNO 68074627).",
+)
 
 
 def _render_administration(payload: dict[str, Any]) -> str:
@@ -2475,23 +2498,7 @@ def main() -> None:
             it.source == "Periop" and _has_note_derived_periop(dict(it.payload))
             for it in bundle.items
         ):
-            guidance_lines += [
-                "",
-                "PERI-OPERATIVE EVIDENCE — quote-or-deny requirement:",
-                "- A pinned 'PERI-OP SIGNALS' item is present above (surgical",
-                "  context / estimated blood loss / intra-op transfusion",
-                "  recovered from the free-text narrative).",
-                "- A surgery, EBL, or intra-op transfusion documented ONLY in a",
-                "  free-text note SATISFIES the peri-operative indication. Empty",
-                "  structured procedure rows do NOT negate it — do NOT write",
-                "  'no operative procedure documented' when the narrative shows one.",
-                "- For EACH peri-op fact in that item you MUST either quote the",
-                "  supporting snippet (naming its evidence id) in",
-                "  reasoning_summary_en AND reasoning_summary_th, OR explicitly",
-                "  state why you reject it.",
-                "- Silently ignoring the peri-op signal is the failure mode this",
-                "  requirement exists to prevent (Case 107 / REQNO 68074627).",
-            ]
+            guidance_lines += ["", *_PERIOP_EVIDENCE_GUIDANCE]
         chunks.append(
             EvidenceChunk(
                 evidence_id=f"E{next_eid}",
