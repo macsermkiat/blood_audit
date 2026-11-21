@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,9 @@ if str(PILOT_DIR) not in sys.path:
     sys.path.insert(0, str(PILOT_DIR))
 
 from _claude_cli_transport import (  # noqa: E402
+    MAX_CONSECUTIVE_CLI_ERRORS,
+    THROTTLE_BACKOFF_FIRST_S,
+    CliBatchStopped,
     CliOutcome,
     ClaudeCliTransport,
     build_cli_argv,
@@ -303,25 +307,270 @@ class TestUncertainFailure:
             )
         assert (tmp_path / batch_id / "a1.inflight").exists()
 
-    def test_session_limit_fails_the_rest_of_the_batch_without_calling(
+
+# Verbatim CLI messages: the first from the September 2026 A/B, the second
+# recorded 348 times in the January 2025 v2 audit store.
+OBSERVED_LIMIT_MESSAGES = (
+    "You've hit your session limit \u00b7 resets 11:30am",
+    "You've hit your 5-hour limit \u00b7 resets 3:30am (Asia/Bangkok)",
+)
+
+
+class _FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.slept: list[float] = []
+
+    def clock(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.now += seconds
+
+
+def _cli_limit(message: str, returncode: int = 1) -> CliOutcome:
+    return CliOutcome(
+        stdout=json.dumps({"is_error": True, "result": message, "session_id": "s"}),
+        stderr="",
+        returncode=returncode,
+    )
+
+
+def _error_summaries(batch_dir: Path) -> list[dict[str, object]]:
+    return [json.loads(p.read_text()) for p in sorted(batch_dir.glob("errors/*.json"))]
+
+
+class TestThrottle:
+    @pytest.mark.parametrize("message", OBSERVED_LIMIT_MESSAGES)
+    def test_limit_message_is_retried_after_backoff(
+        self, tmp_path: Path, message: str
+    ) -> None:
+        clock = _FakeClock()
+        call_times: list[float] = []
+        outcomes = iter([_cli_limit(message, returncode=3), _cli_success({"x": 1})])
+
+        def runner(argv: list[str], stdin: str) -> CliOutcome:
+            call_times.append(clock.now)
+            return next(outcomes)
+
+        transport = ClaudeCliTransport(
+            batch_root=tmp_path,
+            workers=1,
+            runner=runner,
+            clock=clock.clock,
+            sleep=clock.sleep,
+        )
+        req = _request("a1")
+        batch_id = transport.submit_batch_only(
+            model=MODEL, requests=[req], prompt_cache_enabled=True
+        )
+        (result,) = transport.fetch_batch_results(
+            batch_id, model=MODEL, requests=[req], prompt_cache_enabled=True
+        ).results
+
+        assert len(call_times) == 2
+        assert call_times[1] > call_times[0]
+        assert result.raw_response_json["content"][0]["type"] == "tool_use"
+        batch_dir = tmp_path / batch_id
+        assert (batch_dir / "a1.json").exists()
+        assert not list(batch_dir.glob("*.inflight"))
+
+    def test_throttle_writes_a_summary_without_prompt_or_message_text(
         self, tmp_path: Path
     ) -> None:
+        clock = _FakeClock()
+        outcomes = iter(
+            [_cli_limit(OBSERVED_LIMIT_MESSAGES[1], returncode=3), _cli_success({})]
+        )
+        transport = ClaudeCliTransport(
+            batch_root=tmp_path,
+            workers=1,
+            runner=lambda argv, stdin: next(outcomes),
+            clock=clock.clock,
+            sleep=clock.sleep,
+        )
+        req = _request("a1")
+        batch_id = transport.submit_batch_only(
+            model=MODEL, requests=[req], prompt_cache_enabled=True
+        )
+        transport.fetch_batch_results(
+            batch_id, model=MODEL, requests=[req], prompt_cache_enabled=True
+        )
+
+        batch_dir = tmp_path / batch_id
+        (summary,) = _error_summaries(batch_dir)
+        assert summary["audit_id"] == "a1"
+        assert summary["error_class"] == "throttled"
+        assert summary["exit_code"] == 3
+        assert isinstance(summary["duration_ms"], int)
+        assert summary["resets"] == "3:30am (Asia/Bangkok)"
+        raw = next(batch_dir.glob("errors/*.json")).read_text()
+        for leaked in ("evidence", "System A", "hit your"):
+            assert leaked not in raw
+
+    def test_unanswered_cases_resume_after_the_budget_stops_the_batch(
+        self, tmp_path: Path
+    ) -> None:
+        calls: list[str] = []
+
+        def throttling_after_two(argv: list[str], stdin: str) -> CliOutcome:
+            calls.append(stdin)
+            if len(calls) <= 2:
+                return _cli_success({"classification": "APPROPRIATE"})
+            return _cli_limit(OBSERVED_LIMIT_MESSAGES[1])
+
+        reqs = [_request(f"a{i}") for i in range(5)]
+        first = ClaudeCliTransport(
+            batch_root=tmp_path,
+            workers=1,
+            runner=throttling_after_two,
+            throttle_wait_s=0,
+        )
+        batch_id = first.submit_batch_only(
+            model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        with pytest.raises(CliBatchStopped, match=batch_id):
+            first.fetch_batch_results(
+                batch_id, model=MODEL, requests=reqs, prompt_cache_enabled=True
+            )
+        # Two answers saved, one call revealed the limit, nothing else asked.
+        assert len(calls) == 3
+        batch_dir = tmp_path / batch_id
+        assert sorted(p.name for p in batch_dir.glob("a*.json")) == [
+            "a0.json",
+            "a1.json",
+        ]
+        assert not list(batch_dir.glob("*.inflight"))
+
+        resumed: list[str] = []
+
+        def answering(argv: list[str], stdin: str) -> CliOutcome:
+            resumed.append(stdin)
+            return _cli_success({"classification": "APPROPRIATE"})
+
+        second = ClaudeCliTransport(batch_root=tmp_path, workers=1, runner=answering)
+        response = second.fetch_batch_results(
+            batch_id, model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        assert len(resumed) == 3
+        assert all(
+            r.raw_response_json["content"][0]["type"] == "tool_use"
+            for r in response.results
+        )
+
+    def test_persistent_throttle_waits_within_budget_then_stops(
+        self, tmp_path: Path
+    ) -> None:
+        clock = _FakeClock()
+        calls: list[str] = []
+
+        def runner(argv: list[str], stdin: str) -> CliOutcome:
+            calls.append(stdin)
+            return _cli_limit(OBSERVED_LIMIT_MESSAGES[1])
+
+        reqs = [_request(f"a{i}") for i in range(3)]
+        transport = ClaudeCliTransport(
+            batch_root=tmp_path,
+            workers=1,
+            runner=runner,
+            clock=clock.clock,
+            sleep=clock.sleep,
+            throttle_wait_s=600,
+        )
+        batch_id = transport.submit_batch_only(
+            model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        with pytest.raises(CliBatchStopped):
+            transport.fetch_batch_results(
+                batch_id, model=MODEL, requests=reqs, prompt_cache_enabled=True
+            )
+        assert len(calls) > 1
+        assert 0 < sum(clock.slept) <= 600
+        # Every probe re-asked the first case; the others were never sent.
+        assert set(calls) == {calls[0]}
+
+    def test_concurrent_refusals_share_one_backoff(self, tmp_path: Path) -> None:
+        # Three workers hit the limit at once. That is one throttle episode:
+        # a budget of exactly one first backoff must still let all retry.
+        clock = _FakeClock()
+        lock = threading.Lock()
+        first_round = threading.Barrier(3)
+        # Retries are held until every worker has recorded its refusal, so
+        # an early success cannot end the episode first.
+        retries = threading.Barrier(3)
+        calls: list[str] = []
+
+        def runner(argv: list[str], stdin: str) -> CliOutcome:
+            with lock:
+                calls.append(stdin)
+                n = len(calls)
+            if n <= 3:
+                first_round.wait(timeout=5)
+                with lock:
+                    clock.now += 5
+                return _cli_limit(OBSERVED_LIMIT_MESSAGES[1])
+            retries.wait(timeout=2)
+            return _cli_success({"classification": "APPROPRIATE"})
+
+        reqs = [_request(f"a{i}") for i in range(3)]
+        transport = ClaudeCliTransport(
+            batch_root=tmp_path,
+            workers=3,
+            runner=runner,
+            clock=clock.clock,
+            sleep=clock.sleep,
+            throttle_wait_s=THROTTLE_BACKOFF_FIRST_S,
+        )
+        batch_id = transport.submit_batch_only(
+            model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        response = transport.fetch_batch_results(
+            batch_id, model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        assert len(calls) == 6
+        assert all(
+            r.raw_response_json["content"][0]["type"] == "tool_use"
+            for r in response.results
+        )
+
+    def test_unrecognised_error_streak_stops_the_batch(self, tmp_path: Path) -> None:
         calls: list[str] = []
 
         def runner(argv: list[str], stdin: str) -> CliOutcome:
             calls.append(stdin)
             return CliOutcome(
-                stdout=json.dumps(
-                    {
-                        "is_error": True,
-                        "result": "You've hit your session limit · resets 11:30am",
-                    }
-                ),
+                stdout=json.dumps({"is_error": True, "result": "new wording"}),
                 stderr="",
-                returncode=0,
+                returncode=1,
             )
 
-        reqs = [_request(f"a{i}") for i in range(5)]
+        reqs = [_request(f"a{i}") for i in range(12)]
+        transport = ClaudeCliTransport(batch_root=tmp_path, workers=1, runner=runner)
+        batch_id = transport.submit_batch_only(
+            model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        with pytest.raises(CliBatchStopped):
+            transport.fetch_batch_results(
+                batch_id, model=MODEL, requests=reqs, prompt_cache_enabled=True
+            )
+        assert len(calls) == MAX_CONSECUTIVE_CLI_ERRORS
+        assert len(set(calls)) == len(calls)
+
+    def test_isolated_errors_do_not_stop_the_batch(self, tmp_path: Path) -> None:
+        calls: list[str] = []
+
+        def runner(argv: list[str], stdin: str) -> CliOutcome:
+            calls.append(stdin)
+            if len(calls) % 2:
+                return CliOutcome(
+                    stdout=json.dumps({"is_error": True, "result": "API Error: 500"}),
+                    stderr="",
+                    returncode=1,
+                )
+            return _cli_success({"classification": "APPROPRIATE"})
+
+        reqs = [_request(f"a{i}") for i in range(12)]
         transport = ClaudeCliTransport(batch_root=tmp_path, workers=1, runner=runner)
         batch_id = transport.submit_batch_only(
             model=MODEL, requests=reqs, prompt_cache_enabled=True
@@ -329,16 +578,29 @@ class TestUncertainFailure:
         response = transport.fetch_batch_results(
             batch_id, model=MODEL, requests=reqs, prompt_cache_enabled=True
         )
-        # One call revealed the limit; no retries and no further cases asked.
-        assert len(calls) == 1
-        assert all(
-            r.raw_response_json["stop_reason"] == "cli_error" for r in response.results
+        assert len(calls) == 12
+        stops = [r.raw_response_json["stop_reason"] for r in response.results]
+        assert stops.count("cli_error") == 6
+
+    def test_non_json_failure_summary_keeps_exit_code_not_stderr(
+        self, tmp_path: Path
+    ) -> None:
+        def runner(argv: list[str], stdin: str) -> CliOutcome:
+            return CliOutcome(stdout="not json", stderr="boom", returncode=2)
+
+        transport = ClaudeCliTransport(batch_root=tmp_path, workers=1, runner=runner)
+        req = _request("a1")
+        batch_id = transport.submit_batch_only(
+            model=MODEL, requests=[req], prompt_cache_enabled=True
         )
-        assert all(
-            "session limit" in r.raw_response_json["_cli_error"]
-            for r in response.results
+        transport.fetch_batch_results(
+            batch_id, model=MODEL, requests=[req], prompt_cache_enabled=True
         )
-        assert not any((tmp_path / batch_id).glob("a*.json"))
+        batch_dir = tmp_path / batch_id
+        (summary,) = _error_summaries(batch_dir)
+        assert summary["error_class"] == "non_json_output"
+        assert summary["exit_code"] == 2
+        assert "boom" not in next(batch_dir.glob("errors/*.json")).read_text()
 
 
 @pytest.mark.parametrize("change", ["model", "evidence", "membership", "run"])
