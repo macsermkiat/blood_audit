@@ -10,15 +10,19 @@ untouched:
 * ``submit_batch_only`` creates ``<batch_root>/<batch_id>/`` with a manifest
   and returns the id (no model call yet).
 * ``fetch_batch_results`` runs each pending request once, ``workers`` at a
-  time. Completed answers are checkpointed. An uncertain outcome retains an
-  inflight marker and requires reconciliation before another execution.
-  Resume uses ``BBA_PILOT_BATCH_ID=<batch_id>`` under the original
+  time. Each outcome, an answer or an error, is checkpointed and never asked
+  again, because an errored call may still have been served. An inflight
+  marker without an outcome means a run died mid-call; the batch then
+  refuses to start and prints the command that clears the marker. Resume
+  uses ``BBA_PILOT_BATCH_ID=<batch_id>`` under the original
   ``BBA_PILOT_RUN_ID`` and exact request configuration.
 * When the CLI reports the subscription limit every worker waits and the
   case is asked again, backing off up to a wait budget. Past the budget, or
-  after ``MAX_CONSECUTIVE_CLI_ERRORS`` other errors in a row, no further
-  case is asked and :class:`CliBatchStopped` is raised. Refused cases keep
-  no inflight marker, so the resume asks exactly the unanswered ones.
+  after ``MAX_CONSECUTIVE_CLI_ERRORS`` errors in a row that point at the CLI
+  rather than one case, no further case is asked and
+  :class:`CliBatchStopped` is raised. A refused case, or a call ended by
+  Ctrl+C, saves nothing, so the resume asks exactly the cases without an
+  outcome.
 * Each failed attempt leaves ``errors/<audit_id>.<time>.<attempt>.json``
   with the error class, exit code and duration, never prompt, stderr or
   response text.
@@ -127,11 +131,22 @@ def build_cli_argv(*, model: str, payload: dict[str, Any]) -> tuple[list[str], s
 # (September 2026) and "You've hit your 5-hour limit · resets 3:30am
 # (Asia/Bangkok)" (January 2025 v2 run).
 _THROTTLE_PATTERN = re.compile(
-    r"hit your [\w -]*limit|session limit|usage limit|rate limit", re.IGNORECASE
+    r"hit your [\w -]*limit|session limit|usage limit|rate limit|rate_limit_error",
+    re.IGNORECASE,
 )
+# ASCII only: the reset time is copied into summaries, so it must never pick
+# up note text.
 _RESETS_PATTERN = re.compile(
-    r"resets (\d{1,2}(?::\d{2})?\s?[ap]m(?: \([\w/+-]+\))?)", re.IGNORECASE
+    r"resets (\d{1,2}(?::\d{2})?\s?[ap]m(?: \([A-Za-z]+(?:/[A-Za-z_+-]+)?\))?)",
+    re.IGNORECASE | re.ASCII,
 )
+# Failures that point at the CLI or the account rather than at one case. A
+# run of them stops the batch; per-case failures (no structured output,
+# structured-output retries exhausted, timeout) do not.
+_SYSTEMIC_ERROR_CLASSES = frozenset(
+    {"non_json_output", "non_object_output", "cli_is_error"}
+)
+_INTERRUPTED = "interrupted"
 
 
 def _failure_class(text: str, fallback: str) -> str:
@@ -181,8 +196,13 @@ def _envelope_from_cli(model: str, outcome: CliOutcome) -> dict[str, Any]:
     if data.get("is_error"):
         # Only an error result is matched: an answer without structured
         # output is model prose, which may quote the evidence.
+        fallback = (
+            "structured_output_retries"
+            if data.get("subtype") == "error_max_structured_output_retries"
+            else "cli_is_error"
+        )
         return _error_envelope(
-            model, detail, session_id, _failure_class(detail, "cli_is_error")
+            model, detail, session_id, _failure_class(detail, fallback)
         )
     if not isinstance(structured, dict):
         return _error_envelope(model, detail, session_id, "no_structured_output")
@@ -207,8 +227,14 @@ def _envelope_from_cli(model: str, outcome: CliOutcome) -> dict[str, Any]:
     }
 
 
-def _is_error(envelope: dict[str, Any]) -> bool:
-    return envelope.get("stop_reason") == "cli_error"
+def _uncertain_message(markers: Sequence[Path]) -> str:
+    paths = " ".join(f"'{marker}'" for marker in markers)
+    return (
+        f"CLI outcome uncertain for {len(markers)} case(s): a run stopped "
+        "mid-call without saving the outcome, and the call may have been "
+        "served. To ask them again, make sure no other run uses this batch, "
+        f"then run: rm {paths}"
+    )
 
 
 class _BatchGate:
@@ -253,6 +279,10 @@ class _BatchGate:
         with self._lock:
             self.stop_reason = self.stop_reason or reason
         self._stopped.set()
+
+    @property
+    def interrupted(self) -> bool:
+        return self.stop_reason == _INTERRUPTED
 
     def answered(self) -> None:
         with self._lock:
@@ -371,38 +401,38 @@ class ClaudeCliTransport:
                 ):
                     raise ValueError("cached request differs from original manifest")
         pending = [r for r in requests if not self._result_path(batch_dir, r).exists()]
+        markers = [
+            marker
+            for r in pending
+            if (marker := self._marker_path(batch_dir, r)).exists()
+        ]
+        if markers:
+            raise ValueError(_uncertain_message(markers))
         print(
-            f"  claude-cli: {len(requests) - len(pending)} answers on disk, "
+            f"  claude-cli: {len(requests) - len(pending)} outcomes on disk, "
             f"{len(pending)} to ask ({self._workers} workers)"
         )
         with ThreadPoolExecutor(max_workers=self._workers) as pool:
             try:
-                failed = dict(
-                    pool.map(
-                        lambda r: (r.audit_id, self._run_one(batch_dir, model, r)),
-                        pending,
-                    )
-                )
+                for _ in pool.map(
+                    lambda r: self._run_one(batch_dir, model, r), pending
+                ):
+                    pass
             except BaseException:
-                # Wake workers waiting out a backoff so the pool can shut down.
-                self._gate.stop("interrupted")
+                # Wake workers waiting out a backoff so the pool can shut down,
+                # and mark calls still running as ended by the interrupt.
+                self._gate.stop(_INTERRUPTED)
                 raise
 
         if self._gate.stop_reason:
-            answered = sum(self._result_path(batch_dir, r).exists() for r in requests)
-            uncertain = len(list(batch_dir.glob("*.inflight")))
+            saved = sum(self._result_path(batch_dir, r).exists() for r in requests)
             raise CliBatchStopped(
                 f"claude-cli batch {batch_id} stopped: {self._gate.stop_reason}. "
-                f"{answered}/{len(requests)} answers on disk, {uncertain} uncertain "
-                f"(.inflight) outcomes to reconcile. Resume with "
+                f"{saved}/{len(requests)} cases have a saved outcome; the resume "
+                f"asks the other {len(requests) - saved}. Resume with "
                 f"BBA_PILOT_BATCH_ID={batch_id} under the same BBA_PILOT_RUN_ID."
             )
-        results = tuple(
-            failed[r.audit_id]
-            if failed.get(r.audit_id) is not None
-            else self._load_result(batch_dir, model, r)
-            for r in requests
-        )
+        results = tuple(self._load_result(batch_dir, model, r) for r in requests)
         return RawBatchResponse(batch_id=batch_id, results=results)
 
     def submit_batch(
@@ -436,81 +466,100 @@ class ClaudeCliTransport:
     def _result_path(batch_dir: Path, request: BatchSubmissionRequest) -> Path:
         return batch_dir / f"{request.audit_id}.json"
 
+    @staticmethod
+    def _marker_path(batch_dir: Path, request: BatchSubmissionRequest) -> Path:
+        return batch_dir / f"{request.audit_id}.inflight"
+
     def _run_one(
         self, batch_dir: Path, model: str, request: BatchSubmissionRequest
-    ) -> BatchSubmissionResult | None:
-        """Ask the CLI for one case.
+    ) -> None:
+        """Ask the CLI for one case and save its outcome.
 
-        A successful answer is checkpointed and the caller reads it back.
-        An error is returned for local review while its inflight marker
-        prevents repeating an execution whose remote outcome is unknown.
-        A case refused by the subscription limit is asked again after the
-        backoff; if the batch stops first it keeps no marker, because no
-        answer exists to duplicate.
+        An answer or an error is saved, and a saved case is never asked
+        again: an errored call may still have been served. A case refused by
+        the subscription limit is asked again after the backoff. If the batch
+        stops first, or Ctrl+C ends the call, nothing is saved and the resume
+        asks the case. The inflight marker outlives this call only when the
+        process dies mid-call.
         """
         payload = build_anthropic_request(
             request, model=model, prompt_cache_enabled=False
         )
         result_path = self._result_path(batch_dir, request)
         if result_path.exists():
-            return None
-        intent_path = result_path.with_suffix(".inflight")
+            return
+        intent_path = self._marker_path(batch_dir, request)
         try:
             write_private_bytes(intent_path, canonical_bytes(payload))
         except FileExistsError as exc:
-            raise ValueError(
-                "CLI attempt outcome is uncertain; reconcile before resubmitting"
-            ) from exc
+            raise ValueError(_uncertain_message([intent_path])) from exc
         if result_path.exists():
             unlink_private(intent_path)
-            return None
+            return
         started = datetime.now(UTC)
         t0 = self._clock()
         attempts = 0
-        envelope: dict[str, Any] | None = None
         while self._gate.wait_turn():
             attempts += 1
             call_started = self._clock()
-            argv, stdin = build_cli_argv(model=model, payload=payload)
-            outcome = self._runner(argv, stdin)
+            envelope, exit_code = self._ask(model, payload)
             duration_ms = int((self._clock() - call_started) * 1000)
-            envelope = _envelope_from_cli(model, outcome)
-            label = envelope.get("_cli_error_class") or envelope.get("stop_reason")
+            error_class = envelope.get("_cli_error_class")
+            label = error_class or envelope.get("stop_reason")
             print(f"    {request.audit_id}: {label} in {duration_ms / 1000:.0f}s")
-            if not _is_error(envelope):
+            if error_class is None:
                 self._gate.answered()
-                break
-            self._write_error_summary(
-                batch_dir, request.audit_id, attempts, outcome, envelope, duration_ms
-            )
-            if envelope["_cli_error_class"] != "throttled":
-                self._gate.failed()
-                break
-            self._gate.throttled(call_started, _resets(envelope))
-        if envelope is None or envelope.get("_cli_error_class") == "throttled":
-            unlink_private(intent_path)
-            return None
-        record = {
-            "response": envelope,
-            "request": payload,
-            "request_timestamp": started.isoformat(),
-            "latency_ms": int((self._clock() - t0) * 1000),
-            "attempts": attempts,
-        }
-        if _is_error(envelope):
-            return self._result_from_record(model, request, record)
-        write_private_bytes(result_path, canonical_bytes(record))
+            else:
+                resets = _resets(envelope)
+                self._write_error_summary(
+                    batch_dir,
+                    request.audit_id,
+                    attempts,
+                    error_class,
+                    exit_code,
+                    duration_ms,
+                    resets,
+                )
+                if self._gate.interrupted:
+                    # Ctrl+C reaches the claude child too, so this failure is
+                    # the interrupt, not the case's outcome.
+                    break
+                if error_class == "throttled":
+                    self._gate.throttled(call_started, resets)
+                    continue
+                if error_class in _SYSTEMIC_ERROR_CLASSES:
+                    self._gate.failed()
+            record = {
+                "response": envelope,
+                "request": payload,
+                "request_timestamp": started.isoformat(),
+                "latency_ms": int((self._clock() - t0) * 1000),
+                "attempts": attempts,
+            }
+            write_private_bytes(result_path, canonical_bytes(record))
+            break
         unlink_private(intent_path)
-        return None
+
+    def _ask(
+        self, model: str, payload: dict[str, Any]
+    ) -> tuple[dict[str, Any], int | None]:
+        argv, stdin = build_cli_argv(model=model, payload=payload)
+        try:
+            outcome = self._runner(argv, stdin)
+        except subprocess.TimeoutExpired as exc:
+            detail = f"claude timed out after {exc.timeout:.0f}s"
+            return _error_envelope(model, detail, None, "timeout"), None
+        return _envelope_from_cli(model, outcome), outcome.returncode
 
     @staticmethod
     def _write_error_summary(
         batch_dir: Path,
         audit_id: str,
         attempt: int,
-        outcome: CliOutcome,
-        envelope: dict[str, Any],
+        error_class: str,
+        exit_code: int | None,
         duration_ms: int,
+        resets: str | None,
     ) -> None:
         errors_dir = batch_dir / "errors"
         private_directory(errors_dir)
@@ -519,10 +568,10 @@ class ClaudeCliTransport:
             "audit_id": audit_id,
             "attempt": attempt,
             "at": at.isoformat(),
-            "error_class": envelope["_cli_error_class"],
-            "exit_code": outcome.returncode,
+            "error_class": error_class,
+            "exit_code": exit_code,
             "duration_ms": duration_ms,
-            "resets": _resets(envelope),
+            "resets": resets,
         }
         name = f"{audit_id}.{at:%Y%m%dT%H%M%S%f}.{attempt}.json"
         write_private_bytes(errors_dir / name, canonical_bytes(summary))
