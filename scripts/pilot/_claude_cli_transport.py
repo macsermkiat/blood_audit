@@ -13,8 +13,15 @@ untouched:
   time. Completed answers are checkpointed. An uncertain outcome retains an
   inflight marker and requires reconciliation before another execution.
   Resume uses ``BBA_PILOT_BATCH_ID=<batch_id>`` under the original
-  ``BBA_PILOT_RUN_ID`` and exact request configuration. Once the CLI reports
-  the session limit the rest of the batch fails fast.
+  ``BBA_PILOT_RUN_ID`` and exact request configuration.
+* When the CLI reports the subscription limit every worker waits and the
+  case is asked again, backing off up to a wait budget. Past the budget, or
+  after ``MAX_CONSECUTIVE_CLI_ERRORS`` other errors in a row, no further
+  case is asked and :class:`CliBatchStopped` is raised. Refused cases keep
+  no inflight marker, so the resume asks exactly the unanswered ones.
+* Each failed attempt leaves ``errors/<audit_id>.<time>.<attempt>.json``
+  with the error class, exit code and duration, never prompt, stderr or
+  response text.
 
 Each call is ``claude -p --model M --tools "" --json-schema <tool input
 schema> --system-prompt <system blocks>`` with the user blocks on stdin. The
@@ -30,6 +37,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import subprocess
 import threading
@@ -56,6 +64,16 @@ from bba.secure_files import (
 TRANSPORT_NAME = "claude-cli"
 _TOOL_NAME = "classify_transfusion_order"
 _CLI_TIMEOUT_S = 900.0
+THROTTLE_BACKOFF_FIRST_S = 60.0
+THROTTLE_BACKOFF_MAX_S = 1800.0
+# The claude.ai limit window is five hours, so a six-hour budget lets an
+# unattended run outlast one window per throttle episode.
+THROTTLE_WAIT_S = 6 * 3600.0
+MAX_CONSECUTIVE_CLI_ERRORS = 5
+
+
+class CliBatchStopped(RuntimeError):
+    """The batch stopped before asking every case; answered cases are on disk."""
 
 
 @dataclass(frozen=True)
@@ -105,13 +123,36 @@ def build_cli_argv(*, model: str, payload: dict[str, Any]) -> tuple[list[str], s
     return argv, user_text
 
 
-def _error_envelope(model: str, detail: str, session_id: str | None) -> dict[str, Any]:
+# Observed CLI wording: "You've hit your session limit · resets 11:30am"
+# (September 2026) and "You've hit your 5-hour limit · resets 3:30am
+# (Asia/Bangkok)" (January 2025 v2 run).
+_THROTTLE_PATTERN = re.compile(
+    r"hit your [\w -]*limit|session limit|usage limit|rate limit", re.IGNORECASE
+)
+_RESETS_PATTERN = re.compile(
+    r"resets (\d{1,2}(?::\d{2})?\s?[ap]m(?: \([\w/+-]+\))?)", re.IGNORECASE
+)
+
+
+def _failure_class(text: str, fallback: str) -> str:
+    return "throttled" if _THROTTLE_PATTERN.search(text) else fallback
+
+
+def _resets(envelope: dict[str, Any]) -> str | None:
+    match = _RESETS_PATTERN.search(envelope.get("_cli_error") or "")
+    return match.group(1) if match else None
+
+
+def _error_envelope(
+    model: str, detail: str, session_id: str | None, error_class: str
+) -> dict[str, Any]:
     # Same shape as transport._result_from_batch_entry's error path: no
     # content, so the parser raises EMPTY_RESPONSE and the row routes to
     # NEEDS_REVIEW with the detail preserved for the reviewer.
     return {
         "_transport": TRANSPORT_NAME,
         "_cli_error": detail,
+        "_cli_error_class": error_class,
         "_cli_session_id": session_id,
         "id": "",
         "type": "message",
@@ -127,14 +168,24 @@ def _envelope_from_cli(model: str, outcome: CliOutcome) -> dict[str, Any]:
         data = json.loads(outcome.stdout)
     except ValueError:
         detail = f"claude exited {outcome.returncode}; stderr: {outcome.stderr.strip()[:2000]}"
-        return _error_envelope(model, detail, None)
+        return _error_envelope(
+            model, detail, None, _failure_class(outcome.stderr, "non_json_output")
+        )
     if not isinstance(data, dict):
-        return _error_envelope(model, "CLI result is not an object", None)
+        return _error_envelope(
+            model, "CLI result is not an object", None, "non_object_output"
+        )
     session_id = data.get("session_id")
     structured = data.get("structured_output")
-    if data.get("is_error") or not isinstance(structured, dict):
-        detail = str(data.get("result") or "no structured_output in CLI result")
-        return _error_envelope(model, detail, session_id)
+    detail = str(data.get("result") or "no structured_output in CLI result")
+    if data.get("is_error"):
+        # Only an error result is matched: an answer without structured
+        # output is model prose, which may quote the evidence.
+        return _error_envelope(
+            model, detail, session_id, _failure_class(detail, "cli_is_error")
+        )
+    if not isinstance(structured, dict):
+        return _error_envelope(model, detail, session_id, "no_structured_output")
     return {
         "_transport": TRANSPORT_NAME,
         "_cli_session_id": session_id,
@@ -160,16 +211,87 @@ def _is_error(envelope: dict[str, Any]) -> bool:
     return envelope.get("stop_reason") == "cli_error"
 
 
-# The claude.ai subscription meters a rolling session; once the CLI reports
-# the limit every further call fails the same way until the reset time, so
-# retrying or asking the next case only burns wall clock.
-_QUOTA_PATTERN = re.compile(r"session limit|usage limit|rate limit", re.IGNORECASE)
+class _BatchGate:
+    """Shared by the workers: the throttle backoff and the batch stop reason.
 
+    The subscription limit refuses every call until it resets, so one
+    backoff per throttle episode holds all workers. Calls already in flight
+    when the limit is first seen join that backoff instead of doubling it.
+    """
 
-def _is_quota_exhausted(envelope: dict[str, Any]) -> bool:
-    return _is_error(envelope) and bool(
-        _QUOTA_PATTERN.search(envelope.get("_cli_error") or "")
-    )
+    def __init__(
+        self,
+        *,
+        wait_budget_s: float,
+        clock: Callable[[], float],
+        sleep: Callable[[float], object] | None,
+    ) -> None:
+        self._lock = threading.Lock()
+        self._budget = wait_budget_s
+        self._clock = clock
+        # The default sleep is the stop event, so stop() ends a backoff early.
+        self._stopped = threading.Event()
+        self._sleep = sleep or self._stopped.wait
+        self._backoff = 0.0
+        self._waited = 0.0
+        self._resume_at = -math.inf
+        self._last_throttle = -math.inf
+        self._errors_in_a_row = 0
+        self.stop_reason: str | None = None
+
+    def wait_turn(self) -> bool:
+        while True:
+            with self._lock:
+                if self.stop_reason:
+                    return False
+                delay = self._resume_at - self._clock()
+            if delay <= 0:
+                return True
+            self._sleep(delay)
+
+    def stop(self, reason: str) -> None:
+        with self._lock:
+            self.stop_reason = self.stop_reason or reason
+        self._stopped.set()
+
+    def answered(self) -> None:
+        with self._lock:
+            self._backoff = 0.0
+            self._waited = 0.0
+            self._errors_in_a_row = 0
+
+    def failed(self) -> None:
+        with self._lock:
+            self._errors_in_a_row += 1
+            count = self._errors_in_a_row
+        if count >= MAX_CONSECUTIVE_CLI_ERRORS:
+            self.stop(f"{count} CLI errors in a row")
+
+    def throttled(self, call_started: float, resets: str | None) -> None:
+        with self._lock:
+            if self.stop_reason or call_started < self._last_throttle:
+                return
+            self._backoff = (
+                min(THROTTLE_BACKOFF_MAX_S, self._backoff * 2)
+                if self._backoff
+                else THROTTLE_BACKOFF_FIRST_S
+            )
+            reset_note = f", resets {resets}" if resets else ""
+            over_budget = self._waited + self._backoff > self._budget
+            if not over_budget:
+                self._waited += self._backoff
+                self._last_throttle = self._clock()
+                self._resume_at = self._last_throttle + self._backoff
+            backoff = self._backoff
+        if over_budget:
+            self.stop(
+                f"subscription limit outlasted the {self._budget:.0f}s wait "
+                f"budget{reset_note}"
+            )
+            return
+        print(
+            f"  claude-cli: subscription limit{reset_note}; retrying in {backoff:.0f}s"
+        )
 
 
 class ClaudeCliTransport:
@@ -180,16 +302,17 @@ class ClaudeCliTransport:
         workers: int = 3,
         privacy_policy: PrivacyAdmissionPolicy | None = None,
         runner: Runner | None = None,
+        throttle_wait_s: float = THROTTLE_WAIT_S,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], object] | None = None,
     ) -> None:
         self._privacy_policy = privacy_policy
         self._live = runner is None
         self._root = batch_root
         self._workers = max(1, workers)
         self._runner = runner or _subprocess_runner
-        # Set by the first worker that sees the subscription limit; the rest
-        # of the batch then fails fast with the same message.
-        self._quota_error: str | None = None
-        self._quota_lock = threading.Lock()
+        self._clock = clock
+        self._gate = _BatchGate(wait_budget_s=throttle_wait_s, clock=clock, sleep=sleep)
 
     def submit_batch_only(
         self,
@@ -253,22 +376,33 @@ class ClaudeCliTransport:
             f"{len(pending)} to ask ({self._workers} workers)"
         )
         with ThreadPoolExecutor(max_workers=self._workers) as pool:
-            failed = dict(
-                pool.map(
-                    lambda r: (r.audit_id, self._run_one(batch_dir, model, r)), pending
+            try:
+                failed = dict(
+                    pool.map(
+                        lambda r: (r.audit_id, self._run_one(batch_dir, model, r)),
+                        pending,
+                    )
                 )
-            )
+            except BaseException:
+                # Wake workers waiting out a backoff so the pool can shut down.
+                self._gate.stop("interrupted")
+                raise
 
+        if self._gate.stop_reason:
+            answered = sum(self._result_path(batch_dir, r).exists() for r in requests)
+            uncertain = len(list(batch_dir.glob("*.inflight")))
+            raise CliBatchStopped(
+                f"claude-cli batch {batch_id} stopped: {self._gate.stop_reason}. "
+                f"{answered}/{len(requests)} answers on disk, {uncertain} uncertain "
+                f"(.inflight) outcomes to reconcile. Resume with "
+                f"BBA_PILOT_BATCH_ID={batch_id} under the same BBA_PILOT_RUN_ID."
+            )
         results = tuple(
             failed[r.audit_id]
             if failed.get(r.audit_id) is not None
             else self._load_result(batch_dir, model, r)
             for r in requests
         )
-        if self._quota_error:
-            print(
-                f"  claude-cli: stopped early, subscription limit: {self._quota_error}"
-            )
         return RawBatchResponse(batch_id=batch_id, results=results)
 
     def submit_batch(
@@ -310,6 +444,9 @@ class ClaudeCliTransport:
         A successful answer is checkpointed and the caller reads it back.
         An error is returned for local review while its inflight marker
         prevents repeating an execution whose remote outcome is unknown.
+        A case refused by the subscription limit is asked again after the
+        backoff; if the batch stops first it keeps no marker, because no
+        answer exists to duplicate.
         """
         payload = build_anthropic_request(
             request, model=model, prompt_cache_enabled=False
@@ -328,35 +465,67 @@ class ClaudeCliTransport:
             unlink_private(intent_path)
             return None
         started = datetime.now(UTC)
-        t0 = time.monotonic()
-        if self._quota_error:
-            envelope = _error_envelope(model, self._quota_error, None)
-            executed = False
-        else:
+        t0 = self._clock()
+        attempts = 0
+        envelope: dict[str, Any] | None = None
+        while self._gate.wait_turn():
+            attempts += 1
+            call_started = self._clock()
             argv, stdin = build_cli_argv(model=model, payload=payload)
-            envelope = _envelope_from_cli(model, self._runner(argv, stdin))
-            executed = True
-            if _is_quota_exhausted(envelope):
-                with self._quota_lock:
-                    self._quota_error = envelope["_cli_error"]
-        latency_ms = int((time.monotonic() - t0) * 1000)
+            outcome = self._runner(argv, stdin)
+            duration_ms = int((self._clock() - call_started) * 1000)
+            envelope = _envelope_from_cli(model, outcome)
+            label = envelope.get("_cli_error_class") or envelope.get("stop_reason")
+            print(f"    {request.audit_id}: {label} in {duration_ms / 1000:.0f}s")
+            if not _is_error(envelope):
+                self._gate.answered()
+                break
+            self._write_error_summary(
+                batch_dir, request.audit_id, attempts, outcome, envelope, duration_ms
+            )
+            if envelope["_cli_error_class"] != "throttled":
+                self._gate.failed()
+                break
+            self._gate.throttled(call_started, _resets(envelope))
+        if envelope is None or envelope.get("_cli_error_class") == "throttled":
+            unlink_private(intent_path)
+            return None
         record = {
             "response": envelope,
             "request": payload,
             "request_timestamp": started.isoformat(),
-            "latency_ms": latency_ms,
-            "attempts": int(executed),
+            "latency_ms": int((self._clock() - t0) * 1000),
+            "attempts": attempts,
         }
-        print(
-            f"    {request.audit_id}: {envelope.get('stop_reason')} in {latency_ms / 1000:.0f}s"
-        )
         if _is_error(envelope):
-            if not executed:
-                unlink_private(intent_path)
             return self._result_from_record(model, request, record)
         write_private_bytes(result_path, canonical_bytes(record))
         unlink_private(intent_path)
         return None
+
+    @staticmethod
+    def _write_error_summary(
+        batch_dir: Path,
+        audit_id: str,
+        attempt: int,
+        outcome: CliOutcome,
+        envelope: dict[str, Any],
+        duration_ms: int,
+    ) -> None:
+        errors_dir = batch_dir / "errors"
+        private_directory(errors_dir)
+        at = datetime.now(UTC)
+        summary = {
+            "audit_id": audit_id,
+            "attempt": attempt,
+            "at": at.isoformat(),
+            "error_class": envelope["_cli_error_class"],
+            "exit_code": outcome.returncode,
+            "duration_ms": duration_ms,
+            "resets": _resets(envelope),
+        }
+        name = f"{audit_id}.{at:%Y%m%dT%H%M%S%f}.{attempt}.json"
+        write_private_bytes(errors_dir / name, canonical_bytes(summary))
 
     def _load_result(
         self, batch_dir: Path, model: str, request: BatchSubmissionRequest
@@ -382,4 +551,12 @@ class ClaudeCliTransport:
         )
 
 
-__all__ = ("ClaudeCliTransport", "CliOutcome", "build_cli_argv")
+__all__ = (
+    "MAX_CONSECUTIVE_CLI_ERRORS",
+    "THROTTLE_BACKOFF_FIRST_S",
+    "THROTTLE_WAIT_S",
+    "ClaudeCliTransport",
+    "CliBatchStopped",
+    "CliOutcome",
+    "build_cli_argv",
+)

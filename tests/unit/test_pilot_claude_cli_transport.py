@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -533,6 +534,31 @@ class TestThrottle:
             r.raw_response_json["content"][0]["type"] == "tool_use"
             for r in response.results
         )
+
+    def test_interrupt_ends_a_backoff_wait(self, tmp_path: Path) -> None:
+        # a0 is refused and its worker starts a real 60 s backoff; a Ctrl+C
+        # (raised here from a1's call) must end that wait, not join it.
+        refused = threading.Event()
+
+        def runner(argv: list[str], stdin: str) -> CliOutcome:
+            if "a0" in stdin:
+                refused.set()
+                return _cli_limit(OBSERVED_LIMIT_MESSAGES[1])
+            refused.wait(timeout=5)
+            time.sleep(0.2)
+            raise KeyboardInterrupt
+
+        reqs = [_request("a1"), _request("a0")]
+        transport = ClaudeCliTransport(batch_root=tmp_path, workers=2, runner=runner)
+        batch_id = transport.submit_batch_only(
+            model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        started = time.monotonic()
+        with pytest.raises(KeyboardInterrupt):
+            transport.fetch_batch_results(
+                batch_id, model=MODEL, requests=reqs, prompt_cache_enabled=True
+            )
+        assert time.monotonic() - started < THROTTLE_BACKOFF_FIRST_S / 4
 
     def test_unrecognised_error_streak_stops_the_batch(self, tmp_path: Path) -> None:
         calls: list[str] = []

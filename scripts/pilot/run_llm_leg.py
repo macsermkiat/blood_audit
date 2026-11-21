@@ -209,7 +209,7 @@ from bba.vitals_extractor import PeriopSummary, extract_vitals
 
 from _anchor_candidates import build_anchor_candidates
 from _bdvsttrans_source import load_bdvsttrans_rows
-from _claude_cli_transport import ClaudeCliTransport
+from _claude_cli_transport import THROTTLE_WAIT_S, CliBatchStopped, ClaudeCliTransport
 from _hosxp_dt import _combine, _parse_hosxp_date, _parse_time
 from _periop_notes import vitals_notes_for
 from privacy_requests import (
@@ -232,6 +232,11 @@ MODEL_ID = os.environ.get("BBA_PILOT_LLM_MODEL", "claude-sonnet-5-5")
 # spend API credit (see _claude_cli_transport.py; rows carry ``_transport``).
 TRANSPORT = os.environ.get("BBA_PILOT_TRANSPORT", "anthropic-batch")
 CLI_WORKERS = int(os.environ.get("BBA_PILOT_CLI_WORKERS", "3"))
+# Seconds claude-cli may wait out one subscription-limit episode before it
+# stops the run for a BBA_PILOT_BATCH_ID resume; 0 stops at the first refusal.
+CLI_THROTTLE_WAIT_S = float(
+    os.environ.get("BBA_PILOT_CLI_THROTTLE_WAIT", str(THROTTLE_WAIT_S))
+)
 # Single-case iteration knob: comma-separated REQNOs. When set, only the
 # matching orders are processed/submitted, and the fresh records are MERGED
 # into the existing llm_report.json (all other cases keep their records)
@@ -3078,6 +3083,7 @@ def main() -> None:
                 batch_root=WORK / "cli_batches",
                 workers=CLI_WORKERS,
                 privacy_policy=privacy_policy,
+                throttle_wait_s=CLI_THROTTLE_WAIT_S,
             )
         else:
             if not api_key:
@@ -3115,12 +3121,17 @@ def main() -> None:
             print(f"  batch_id = {batch_id}")
             print(f"  (resume with: BBA_PILOT_BATCH_ID={batch_id})")
         print("  polling (this can take a while)...")
-        response = transport.fetch_batch_results(
-            batch_id,
-            model=MODEL_ID,
-            requests=submissions,
-            prompt_cache_enabled=True,
-        )
+        try:
+            response = transport.fetch_batch_results(
+                batch_id,
+                model=MODEL_ID,
+                requests=submissions,
+                prompt_cache_enabled=True,
+            )
+        except CliBatchStopped as exc:
+            # No row from this batch reached the audit store, so a resume
+            # under the same run id persists every case of the batch.
+            sys.exit(str(exc))
         elapsed = time.time() - t0
         print(f"  batch complete in {elapsed:.1f}s; {len(response.results)} results")
 
