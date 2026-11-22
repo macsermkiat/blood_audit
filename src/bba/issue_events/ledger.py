@@ -12,7 +12,7 @@ from datetime import date, datetime
 
 from bba.ingest.row_timestamp import RowTimestamp
 from bba.ingest.time_parser import parse_hosxp_time
-from bba.issue_events.models import IssuedUnit, LedgerUnits
+from bba.issue_events.models import TRANSFUSED_STATUSES, IssuedUnit, LedgerUnits
 from bba.returns_ledger import physical_unit_rows, rows_for_admission, terminal_status
 
 
@@ -20,7 +20,9 @@ def units_from_ledger(trans_rows: Sequence[Mapping[str, str]], an: str) -> Ledge
     """Collapse a REQNO's ledger rows on admission ``an`` to physical units.
 
     Rows on another admission are dropped. A unit with no parseable
-    PAYDATE/PAYTIME on any of its rows was never issued and is only counted.
+    PAYDATE/PAYTIME on any of its rows was never issued and is only counted,
+    unless its terminal status says it was dispensed or transfused: that is a
+    ledger defect and raises rather than dropping a transfusion.
     """
     if not an:
         raise ValueError(
@@ -30,7 +32,13 @@ def units_from_ledger(trans_rows: Sequence[Mapping[str, str]], an: str) -> Ledge
     reserved = 0
     for rows in physical_unit_rows(rows_for_admission(trans_rows, an)):
         issue_at = _earliest(rows, "PAYDATE", "PAYTIME")
+        status = terminal_status([_cell(row, "UNITSTAT") for row in rows])
         if issue_at is None:
+            if status in TRANSFUSED_STATUSES:
+                raise ValueError(
+                    f"ledger unit with terminal status {status} has no readable "
+                    "PAYDATE/PAYTIME; it left the bank but cannot be anchored"
+                )
             reserved += 1
             continue
         first = rows[0]
@@ -39,13 +47,16 @@ def units_from_ledger(trans_rows: Sequence[Mapping[str, str]], an: str) -> Ledge
                 dnrno=_cell(first, "DNRNO"),
                 seqno=_cell(first, "SEQNO"),
                 bdtype=_cell(first, "BDTYPE"),
-                status=terminal_status([_cell(row, "UNITSTAT") for row in rows]),
+                status=status,
                 issue_at=issue_at,
                 returned_at=_earliest(rows, "RTNDATE", "RTNTIME"),
                 given_at=_earliest(rows, "GIVEDATE", "GIVETIME"),
             )
         )
-    return LedgerUnits(issued=tuple(issued), units_reserved_not_issued=reserved)
+    return LedgerUnits(
+        issued=tuple(sorted(issued, key=lambda unit: unit.issue_order)),
+        units_reserved_not_issued=reserved,
+    )
 
 
 def _cell(row: Mapping[str, str], key: str) -> str:

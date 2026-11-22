@@ -17,9 +17,12 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 # new Hb draw. Part of the code identity (plan 4.1): changing it re-keys events.
 ISSUE_EVENT_GAP = timedelta(hours=4)
 
-# Terminal UNITSTAT codes of a unit that left the bank and came back unused:
-# 3 returned, 7 crossmatch-incompatible (never given).
-NOT_TRANSFUSED_STATUSES = frozenset({"3", "7"})
+# Terminal UNITSTAT codes. A unit that left the bank and came back unused is
+# returned (3) or crossmatch-incompatible (7, never given). Dispensed (2) and
+# transfused (5) units count as transfused.
+RETURNED_STATUS = "3"
+NOT_TRANSFUSED_STATUSES = frozenset({RETURNED_STATUS, "7"})
+TRANSFUSED_STATUSES = frozenset({"2", "5"})
 
 
 class IssuedUnit(BaseModel):
@@ -48,15 +51,19 @@ class IssuedUnit(BaseModel):
 
     @property
     def returned(self) -> bool:
-        """Came back untransfused; keyed on status, never on a return date."""
+        """Returned to the bank; keyed on status, never on a return date."""
+        return self.status == RETURNED_STATUS
+
+    @property
+    def not_transfused(self) -> bool:
         return self.status in NOT_TRANSFUSED_STATUSES
 
 
 class LedgerUnits(BaseModel):
     """One REQNO's BDVSTTRANS units on the order's admission.
 
-    Units with no issue time never left the bank (crossmatch holds); they form
-    no event and are only counted.
+    ``issued`` is in issue order. Units with no issue time never left the bank
+    (crossmatch holds); they form no event and are only counted.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -86,9 +93,10 @@ class IssueEvent(BaseModel):
 
     @property
     def units_returned(self) -> int:
+        """Units with terminal status 3, as the returns ledger counts them."""
         return sum(1 for unit in self.units if unit.returned)
 
     @property
     def all_returned(self) -> bool:
         """No unit was transfused: the event is RETURNED_NOT_TRANSFUSED."""
-        return all(unit.returned for unit in self.units)
+        return all(unit.not_transfused for unit in self.units)
