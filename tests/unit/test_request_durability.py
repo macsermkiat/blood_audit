@@ -168,15 +168,18 @@ def test_malformed_cli_output_preserves_uncertainty_without_reexecution(tmp_path
     batch = transport.submit_batch_only(
         model=helpers["MODEL"], requests=[request], prompt_cache_enabled=False
     )
-    transport.fetch_batch_results(
+    (first,) = transport.fetch_batch_results(
         batch, model=helpers["MODEL"], requests=[request], prompt_cache_enabled=False
-    )
+    ).results
     assert len(calls) == 1
-    with pytest.raises(ValueError, match="uncertain"):
-        transport.fetch_batch_results(
-            batch,
-            model=helpers["MODEL"],
-            requests=[request],
-            prompt_cache_enabled=False,
-        )
+    # The uncertain outcome is saved as an error for review, so a second
+    # fetch returns it instead of asking the CLI again.
+    (second,) = transport.fetch_batch_results(
+        batch,
+        model=helpers["MODEL"],
+        requests=[request],
+        prompt_cache_enabled=False,
+    ).results
     assert len(calls) == 1
+    assert second.raw_response_json["stop_reason"] == "cli_error"
+    assert second.raw_response_json == first.raw_response_json
