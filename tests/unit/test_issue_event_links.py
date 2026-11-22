@@ -196,6 +196,14 @@ def test_own_order_placed_after_the_issue_links_anyway_and_is_flagged() -> None:
     assert link.latest_before is None
 
 
+def test_own_order_placed_at_the_issue_time_is_not_after_it() -> None:
+    own = order("R-OWN", 2.0, status="4")
+
+    (link,) = link_events(own, (event(2.0),), (own,))
+
+    assert not link.order_after_issue
+
+
 def test_another_issued_request_can_be_the_fresh_order() -> None:
     other = order("R-OTHER", 10.0, status="4")
 
