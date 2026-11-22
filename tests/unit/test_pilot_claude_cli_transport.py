@@ -880,6 +880,31 @@ class TestThrottle:
             )
         assert "rm " not in str(stopped.value)
 
+    def test_throttle_stop_after_broken_cases_lists_no_deletions(
+        self, tmp_path: Path
+    ) -> None:
+        # Broken cases before a throttle stop are saved and unrelated to the
+        # stop, so the operator must not be told to delete them.
+        broken = CliOutcome(stdout="", stderr="odd", returncode=1)
+        outcomes = iter(
+            [broken] * 3 + [_cli_limit("You've hit your session limit")] * 2
+        )
+        reqs = [_request(f"a{i}") for i in range(5)]
+        transport = ClaudeCliTransport(
+            batch_root=tmp_path,
+            workers=1,
+            throttle_wait_s=0,
+            runner=lambda argv, stdin: next(outcomes),
+        )
+        batch_id = transport.submit_batch_only(
+            model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        with pytest.raises(CliBatchStopped) as stopped:
+            transport.fetch_batch_results(
+                batch_id, model=MODEL, requests=reqs, prompt_cache_enabled=True
+            )
+        assert "rm " not in str(stopped.value)
+
     def test_per_case_error_resets_the_systemic_streak(self, tmp_path: Path) -> None:
         # A structured-output failure means the model was reached, so it
         # breaks a run of CLI failures instead of adding to it.
