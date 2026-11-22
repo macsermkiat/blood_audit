@@ -11,11 +11,7 @@ untouched:
   and returns the id (no model call yet).
 * ``fetch_batch_results`` runs each pending request once, ``workers`` at a
   time. Each outcome, an answer or an error, is checkpointed and never asked
-  again, because an errored call may still have been served. The exception
-  is an error of a systemic class (see ``_SYSTEMIC_ERROR_CLASSES``): it is
-  held in memory, and saved only once a later call shows the CLI serves
-  (or the batch ends without the breaker tripping). If the breaker trips or
-  Ctrl+C ends the run, held outcomes are dropped and the resume asks them. An inflight
+  again, because an errored call may still have been served. An inflight
   marker without an outcome means a run died mid-call; the batch then
   refuses to start and prints the command that clears the marker. Resume
   uses ``BBA_PILOT_BATCH_ID=<batch_id>`` under the original
@@ -24,9 +20,12 @@ untouched:
   case is asked again, backing off up to a wait budget. Past the budget, or
   after ``MAX_CONSECUTIVE_CLI_ERRORS`` errors in a row that point at the CLI
   rather than one case, no further case is asked and
-  :class:`CliBatchStopped` is raised. A refused case, a held systemic error
-  at the stop, or a call ended by Ctrl+C saves nothing, so the resume asks exactly the cases without an
-  outcome.
+  :class:`CliBatchStopped` is raised. The stop names the cases of that
+  streak, whose errored outcomes are already saved, and the ``rm`` command
+  that asks them again on purpose. A call that reached the model (an answer,
+  or a per-case structured-output failure) ends the streak; a timeout leaves
+  it alone. A refused case, or a call ended by Ctrl+C, saves nothing, so the
+  resume asks exactly the cases without an outcome.
 * Each failed attempt leaves ``errors/<audit_id>.<time>.<attempt>.json``
   with the error class, exit code and duration, never prompt, stderr or
   response text.
@@ -269,7 +268,7 @@ class _BatchGate:
         self._waited = 0.0
         self._resume_at = -math.inf
         self._last_throttle = -math.inf
-        self._errors_in_a_row = 0
+        self._streak: list[str] = []
         self.stop_reason: str | None = None
 
     def wait_turn(self) -> bool:
@@ -295,12 +294,21 @@ class _BatchGate:
         with self._lock:
             self._backoff = 0.0
             self._waited = 0.0
-            self._errors_in_a_row = 0
+            self._streak = []
 
-    def failed(self) -> None:
+    def reached_model(self) -> None:
         with self._lock:
-            self._errors_in_a_row += 1
-            count = self._errors_in_a_row
+            self._streak = []
+
+    @property
+    def streak(self) -> tuple[str, ...]:
+        with self._lock:
+            return tuple(self._streak)
+
+    def failed(self, audit_id: str) -> None:
+        with self._lock:
+            self._streak.append(audit_id)
+            count = len(self._streak)
         if count >= MAX_CONSECUTIVE_CLI_ERRORS:
             self.stop(f"{count} CLI errors in a row")
 
@@ -350,8 +358,6 @@ class ClaudeCliTransport:
         self._runner = runner or _subprocess_runner
         self._clock = clock
         self._gate = _BatchGate(wait_budget_s=throttle_wait_s, clock=clock, sleep=sleep)
-        self._held_lock = threading.Lock()
-        self._held: list[tuple[Path, Path, dict[str, Any]]] = []
 
     def submit_batch_only(
         self,
@@ -421,21 +427,17 @@ class ClaudeCliTransport:
             f"  claude-cli: {len(requests) - len(pending)} outcomes on disk, "
             f"{len(pending)} to ask ({self._workers} workers)"
         )
-        try:
-            with ThreadPoolExecutor(max_workers=self._workers) as pool:
-                try:
-                    for _ in pool.map(
-                        lambda r: self._run_one(batch_dir, model, r), pending
-                    ):
-                        pass
-                except BaseException:
-                    # Wake workers waiting out a backoff so the pool can shut
-                    # down, and mark calls still running as ended by the
-                    # interrupt.
-                    self._gate.stop(_INTERRUPTED)
-                    raise
-        finally:
-            self._settle_held(keep=not self._gate.stop_reason)
+        with ThreadPoolExecutor(max_workers=self._workers) as pool:
+            try:
+                for _ in pool.map(
+                    lambda r: self._run_one(batch_dir, model, r), pending
+                ):
+                    pass
+            except BaseException:
+                # Wake workers waiting out a backoff so the pool can shut down,
+                # and mark calls still running as ended by the interrupt.
+                self._gate.stop(_INTERRUPTED)
+                raise
 
         if self._gate.stop_reason:
             saved = sum(self._result_path(batch_dir, r).exists() for r in requests)
@@ -444,9 +446,23 @@ class ClaudeCliTransport:
                 f"{saved}/{len(requests)} cases have a saved outcome; the resume "
                 f"asks the other {len(requests) - saved}. Resume with "
                 f"BBA_PILOT_BATCH_ID={batch_id} under the same BBA_PILOT_RUN_ID."
+                + self._reask_advice(batch_dir)
             )
         results = tuple(self._load_result(batch_dir, model, r) for r in requests)
         return RawBatchResponse(batch_id=batch_id, results=results)
+
+    def _reask_advice(self, batch_dir: Path) -> str:
+        streak = self._gate.streak
+        if self._gate.interrupted or not streak:
+            return ""
+        files = " ".join(f"'{batch_dir / f'{a}.json'}'" for a in streak)
+        return (
+            f" The {len(streak)} errored cases of the streak ({', '.join(streak)}) "
+            "are already saved and a resume does not ask them. To ask them again "
+            "on purpose, make sure no other run uses this batch, then run: "
+            f"rm {files}. Warning: a cli_is_error call may already have been "
+            "served, so asking it again can spend a second call."
+        )
 
     def submit_batch(
         self,
@@ -520,11 +536,11 @@ class ClaudeCliTransport:
             error_class = envelope.get("_cli_error_class")
             label = error_class or envelope.get("stop_reason")
             print(f"    {request.audit_id}: {label} in {duration_ms / 1000:.0f}s")
-            if error_class is None or error_class in _SERVED_ERROR_CLASSES:
+            if error_class is None:
                 self._gate.answered()
-                if not self._gate.stop_reason:
-                    self._settle_held(keep=True)
-            if error_class is not None:
+            else:
+                if error_class in _SERVED_ERROR_CLASSES:
+                    self._gate.reached_model()
                 resets = _resets(envelope)
                 self._write_error_summary(
                     batch_dir,
@@ -543,7 +559,7 @@ class ClaudeCliTransport:
                     self._gate.throttled(call_started, resets)
                     continue
                 if error_class in _SYSTEMIC_ERROR_CLASSES:
-                    self._gate.failed()
+                    self._gate.failed(request.audit_id)
             record = {
                 "response": envelope,
                 "request": payload,
@@ -551,25 +567,9 @@ class ClaudeCliTransport:
                 "latency_ms": int((self._clock() - t0) * 1000),
                 "attempts": attempts,
             }
-            if error_class in _SYSTEMIC_ERROR_CLASSES:
-                # The CLI may not have served this case at all. Keep the
-                # marker and hold the outcome until the batch shows whether
-                # the CLI works; the held list is settled by the caller.
-                with self._held_lock:
-                    self._held.append((result_path, intent_path, record))
-                return
             write_private_bytes(result_path, canonical_bytes(record))
             break
         unlink_private(intent_path)
-
-    def _settle_held(self, *, keep: bool) -> None:
-        """Save held systemic outcomes, or drop them so the resume asks again."""
-        with self._held_lock:
-            held, self._held = self._held, []
-        for result_path, intent_path, record in held:
-            if keep:
-                write_private_bytes(result_path, canonical_bytes(record))
-            unlink_private(intent_path)
 
     def _ask(
         self, model: str, payload: dict[str, Any]
