@@ -269,6 +269,7 @@ class _BatchGate:
         self._resume_at = -math.inf
         self._last_throttle = -math.inf
         self._streak: list[str] = []
+        self._tripped: list[str] = []
         self.stop_reason: str | None = None
 
     def wait_turn(self) -> bool:
@@ -301,16 +302,23 @@ class _BatchGate:
             self._streak = []
 
     @property
-    def streak(self) -> tuple[str, ...]:
+    def tripped_streak(self) -> tuple[str, ...]:
+        """Cases saved with a CLI error by the streak that tripped the breaker,
+        plus in-flight calls that failed after it; empty for any other stop."""
         with self._lock:
-            return tuple(self._streak)
+            return tuple(self._tripped)
 
     def failed(self, audit_id: str) -> None:
         with self._lock:
             self._streak.append(audit_id)
+            if self._tripped:
+                self._tripped.append(audit_id)
+                return
+            if self.stop_reason or len(self._streak) < MAX_CONSECUTIVE_CLI_ERRORS:
+                return
+            self._tripped = list(self._streak)
             count = len(self._streak)
-        if count >= MAX_CONSECUTIVE_CLI_ERRORS:
-            self.stop(f"{count} CLI errors in a row")
+        self.stop(f"{count} CLI errors in a row")
 
     def throttled(self, call_started: float, resets: str | None) -> None:
         with self._lock:
@@ -452,8 +460,8 @@ class ClaudeCliTransport:
         return RawBatchResponse(batch_id=batch_id, results=results)
 
     def _reask_advice(self, batch_dir: Path) -> str:
-        streak = self._gate.streak
-        if self._gate.interrupted or not streak:
+        streak = self._gate.tripped_streak
+        if not streak:
             return ""
         files = " ".join(f"'{batch_dir / f'{a}.json'}'" for a in streak)
         return (
