@@ -76,9 +76,22 @@ def rows_for_admission(
 def physical_units(trans_rows: Sequence[Mapping[str, str]]) -> list[str]:
     """Collapse ledger rows to one terminal ``UNITSTAT`` per physical unit.
 
-    Groups rows sharing a non-blank ``(DNRNO, SEQNO, BDTYPE)`` — the
-    physical-unit key in the complete export — and reduces each group to its
-    terminal status (:func:`terminal_status`). ``BDTYPE`` is part of the key
+    Each :func:`physical_unit_rows` group reduces to its terminal status
+    (:func:`terminal_status`).
+    """
+    return [
+        terminal_status([str(row.get("UNITSTAT") or "").strip() for row in group])
+        for group in physical_unit_rows(trans_rows)
+    ]
+
+
+def physical_unit_rows(
+    trans_rows: Sequence[Mapping[str, str]],
+) -> list[list[Mapping[str, str]]]:
+    """Group ledger rows into one list of lifecycle rows per physical unit.
+
+    Groups rows sharing a non-blank ``(DNRNO, SEQNO, BDTYPE)``, the
+    physical-unit key in the complete export. ``BDTYPE`` is part of the key
     because ``(DNRNO, SEQNO)`` alone collides across distinct products of one
     donation (e.g. split ``SDRF``/``SDRF2`` units, or a pooled ``LDPC1..4``) and
     across a unit's irradiation relabel (``X`` vs ``X+I``); keying on ``BDTYPE``
@@ -94,8 +107,7 @@ def physical_units(trans_rows: Sequence[Mapping[str, str]]) -> list[str]:
     on every row; this only guards a malformed line. Order is preserved for
     determinism.
     """
-    groups: dict[tuple[object, ...], list[str]] = {}
-    order: list[tuple[object, ...]] = []
+    groups: dict[tuple[object, ...], list[Mapping[str, str]]] = {}
     for idx, row in enumerate(trans_rows):
         dnrno = str(row.get("DNRNO") or "").strip()
         seqno = str(row.get("SEQNO") or "").strip()
@@ -106,11 +118,8 @@ def physical_units(trans_rows: Sequence[Mapping[str, str]]) -> list[str]:
         key: tuple[object, ...] = (
             (dnrno, seqno, bdtype) if (dnrno and seqno and bdtype) else (None, idx)
         )
-        if key not in groups:
-            groups[key] = []
-            order.append(key)
-        groups[key].append(str(row.get("UNITSTAT") or "").strip())
-    return [terminal_status(groups[key]) for key in order]
+        groups.setdefault(key, []).append(row)
+    return list(groups.values())
 
 
 def _parse_ordered_amount(unitamt_lines: list[str]) -> int | None:

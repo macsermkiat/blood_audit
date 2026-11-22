@@ -12,6 +12,7 @@ from collections.abc import Sequence
 
 from bba.returns_ledger.models import Disposition, ReturnsSummary
 from bba.returns_ledger.summarize import (
+    physical_unit_rows,
     physical_units,
     rows_for_admission,
     summarize_returns,
@@ -21,6 +22,7 @@ from bba.returns_ledger.summarize import (
 __all__: Sequence[str] = (
     "Disposition",
     "ReturnsSummary",
+    "physical_unit_rows",
     "physical_units",
     "rows_for_admission",
     "summarize_returns",
