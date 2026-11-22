@@ -753,6 +753,181 @@ class TestThrottle:
         stops = [r.raw_response_json["stop_reason"] for r in response.results]
         assert stops.count("cli_error") == 6
 
+    def test_breaker_stop_names_the_streak_and_resume_reasks_after_delete(
+        self, tmp_path: Path
+    ) -> None:
+        # A broken login trips the breaker. Each errored outcome is saved at
+        # once (a cli_is_error call may have been served), so the stop names
+        # the streak's audit ids and the delete command that re-asks them.
+        per_case = CliOutcome(
+            stdout=json.dumps(
+                {
+                    "is_error": True,
+                    "subtype": "error_max_structured_output_retries",
+                    "result": "",
+                }
+            ),
+            stderr="",
+            returncode=0,
+        )
+        broken = CliOutcome(stdout="", stderr="not logged in", returncode=1)
+        first_run = iter([per_case] + [broken] * MAX_CONSECUTIVE_CLI_ERRORS)
+        reqs = [_request(f"a{i}") for i in range(12)]
+        first = ClaudeCliTransport(
+            batch_root=tmp_path,
+            workers=1,
+            runner=lambda argv, stdin: next(first_run),
+        )
+        batch_id = first.submit_batch_only(
+            model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        batch_dir = tmp_path / batch_id
+        with pytest.raises(CliBatchStopped) as stopped:
+            first.fetch_batch_results(
+                batch_id, model=MODEL, requests=reqs, prompt_cache_enabled=True
+            )
+        message = str(stopped.value)
+        streak = [f"a{i}" for i in range(1, 1 + MAX_CONSECUTIVE_CLI_ERRORS)]
+        assert "6/12 cases have a saved outcome" in message
+        assert "may already have been served" in message
+        files = " ".join(f"'{batch_dir / f'{a}.json'}'" for a in streak)
+        assert f"rm {files}" in message
+        assert "a0" not in message.replace(batch_id, "")
+        assert "not logged in" not in message
+        assert all((batch_dir / f"{a}.json").exists() for a in streak)
+
+        for audit_id in streak:
+            (batch_dir / f"{audit_id}.json").unlink()
+        resumed: list[str] = []
+
+        def answering(argv: list[str], stdin: str) -> CliOutcome:
+            resumed.append(stdin)
+            return _cli_success({"classification": "APPROPRIATE"})
+
+        second = ClaudeCliTransport(batch_root=tmp_path, workers=1, runner=answering)
+        response = second.fetch_batch_results(
+            batch_id, model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        assert _asked(resumed) == sorted(f"a{i}" for i in range(1, 12))
+        stops = [r.raw_response_json["stop_reason"] for r in response.results]
+        assert stops[0] == "cli_error"
+        assert stops[1:] == ["tool_use"] * 11
+
+    def test_systemic_outcome_is_saved_immediately_and_never_held(
+        self, tmp_path: Path
+    ) -> None:
+        # The first call fails; the runner checks that its outcome is already
+        # on disk before the second call starts.
+        reqs = [_request("a0"), _request("a1")]
+        calls: list[bool] = []
+        batch_dir_holder: list[Path] = []
+
+        def runner(argv: list[str], stdin: str) -> CliOutcome:
+            calls.append((batch_dir_holder[0] / "a0.json").exists())
+            if len(calls) == 1:
+                return CliOutcome(stdout="", stderr="odd", returncode=1)
+            return _cli_success({"classification": "APPROPRIATE"})
+
+        transport = ClaudeCliTransport(batch_root=tmp_path, workers=1, runner=runner)
+        batch_id = transport.submit_batch_only(
+            model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        batch_dir_holder.append(tmp_path / batch_id)
+        transport.fetch_batch_results(
+            batch_id, model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        assert calls == [False, True]
+
+    def test_stop_message_lists_only_the_current_streak(self, tmp_path: Path) -> None:
+        # Systemic errors that a served answer ended are not part of the
+        # streak the breaker stopped on.
+        broken = CliOutcome(stdout="", stderr="odd", returncode=1)
+        ok = _cli_success({"classification": "APPROPRIATE"})
+        sequence = [broken, broken, ok] + [broken] * MAX_CONSECUTIVE_CLI_ERRORS
+        outcomes = iter(sequence)
+        reqs = [_request(f"a{i}") for i in range(len(sequence) + 2)]
+        transport = ClaudeCliTransport(
+            batch_root=tmp_path, workers=1, runner=lambda argv, stdin: next(outcomes)
+        )
+        batch_id = transport.submit_batch_only(
+            model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        with pytest.raises(CliBatchStopped) as stopped:
+            transport.fetch_batch_results(
+                batch_id, model=MODEL, requests=reqs, prompt_cache_enabled=True
+            )
+        message = str(stopped.value)
+        for i in range(3, 3 + MAX_CONSECUTIVE_CLI_ERRORS):
+            assert f"a{i}.json" in message
+        for i in (0, 1, 2):
+            assert f"a{i}.json" not in message
+
+    def test_throttle_stop_lists_no_deletions(self, tmp_path: Path) -> None:
+        # A refused case saves nothing, so the stop has nothing to delete.
+        reqs = [_request("a0"), _request("a1")]
+        transport = ClaudeCliTransport(
+            batch_root=tmp_path,
+            workers=1,
+            throttle_wait_s=0,
+            runner=lambda argv, stdin: _cli_limit("You've hit your session limit"),
+        )
+        batch_id = transport.submit_batch_only(
+            model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        with pytest.raises(CliBatchStopped) as stopped:
+            transport.fetch_batch_results(
+                batch_id, model=MODEL, requests=reqs, prompt_cache_enabled=True
+            )
+        assert "rm " not in str(stopped.value)
+
+    def test_throttle_stop_after_broken_cases_lists_no_deletions(
+        self, tmp_path: Path
+    ) -> None:
+        # Broken cases before a throttle stop are saved and unrelated to the
+        # stop, so the operator must not be told to delete them.
+        broken = CliOutcome(stdout="", stderr="odd", returncode=1)
+        outcomes = iter(
+            [broken] * 3 + [_cli_limit("You've hit your session limit")] * 2
+        )
+        reqs = [_request(f"a{i}") for i in range(5)]
+        transport = ClaudeCliTransport(
+            batch_root=tmp_path,
+            workers=1,
+            throttle_wait_s=0,
+            runner=lambda argv, stdin: next(outcomes),
+        )
+        batch_id = transport.submit_batch_only(
+            model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        with pytest.raises(CliBatchStopped) as stopped:
+            transport.fetch_batch_results(
+                batch_id, model=MODEL, requests=reqs, prompt_cache_enabled=True
+            )
+        assert "rm " not in str(stopped.value)
+
+    def test_per_case_error_resets_the_systemic_streak(self, tmp_path: Path) -> None:
+        # A structured-output failure means the model was reached, so it
+        # breaks a run of CLI failures instead of adding to it.
+        per_case = CliOutcome(
+            stdout=json.dumps({"is_error": False, "result": "prose"}),
+            stderr="",
+            returncode=0,
+        )
+        broken = CliOutcome(stdout="", stderr="odd", returncode=1)
+        sequence = [broken] * 4 + [per_case] + [broken] * 4
+        outcomes = iter(sequence)
+        reqs = [_request(f"a{i}") for i in range(len(sequence))]
+        transport = ClaudeCliTransport(
+            batch_root=tmp_path, workers=1, runner=lambda argv, stdin: next(outcomes)
+        )
+        batch_id = transport.submit_batch_only(
+            model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        response = transport.fetch_batch_results(
+            batch_id, model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        assert len(response.results) == len(sequence)
+
     def test_non_json_failure_summary_keeps_exit_code_not_stderr(
         self, tmp_path: Path
     ) -> None:
@@ -1004,15 +1179,24 @@ def _load_llm_leg(module_name: str) -> object:
 
 
 @pytest.mark.parametrize("raw", ["nan", "inf", "-1", "six hours"])
-def test_invalid_throttle_wait_fails_at_startup(
+def test_invalid_throttle_wait_fails_when_claude_cli_is_built(
     monkeypatch: pytest.MonkeyPatch, raw: str
 ) -> None:
     monkeypatch.setenv("BBA_PILOT_CLI_THROTTLE_WAIT", raw)
+    module = _load_llm_leg(f"pilot_run_llm_leg_throttle_wait_{raw.replace(' ', '_')}")
     with pytest.raises(SystemExit, match="BBA_PILOT_CLI_THROTTLE_WAIT"):
-        _load_llm_leg(f"pilot_run_llm_leg_throttle_wait_{raw.replace(' ', '_')}")
+        getattr(module, "_cli_throttle_wait_s")()
+
+
+def test_invalid_throttle_wait_does_not_block_other_transports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BBA_PILOT_CLI_THROTTLE_WAIT", "six hours")
+    monkeypatch.delenv("BBA_PILOT_TRANSPORT", raising=False)
+    _load_llm_leg("pilot_run_llm_leg_throttle_wait_unused")
 
 
 def test_zero_throttle_wait_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BBA_PILOT_CLI_THROTTLE_WAIT", "0")
     module = _load_llm_leg("pilot_run_llm_leg_throttle_wait_zero")
-    assert getattr(module, "CLI_THROTTLE_WAIT_S") == 0.0
+    assert getattr(module, "_cli_throttle_wait_s")() == 0.0

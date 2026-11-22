@@ -20,9 +20,12 @@ untouched:
   case is asked again, backing off up to a wait budget. Past the budget, or
   after ``MAX_CONSECUTIVE_CLI_ERRORS`` errors in a row that point at the CLI
   rather than one case, no further case is asked and
-  :class:`CliBatchStopped` is raised. A refused case, or a call ended by
-  Ctrl+C, saves nothing, so the resume asks exactly the cases without an
-  outcome.
+  :class:`CliBatchStopped` is raised. The stop names the cases of that
+  streak, whose errored outcomes are already saved, and the ``rm`` command
+  that asks them again on purpose. A call that reached the model (an answer,
+  or a per-case structured-output failure) ends the streak; a timeout leaves
+  it alone. A refused case, or a call ended by Ctrl+C, saves nothing, so the
+  resume asks exactly the cases without an outcome.
 * Each failed attempt leaves ``errors/<audit_id>.<time>.<attempt>.json``
   with the error class, exit code and duration, never prompt, stderr or
   response text.
@@ -146,6 +149,9 @@ _RESETS_PATTERN = re.compile(
 _SYSTEMIC_ERROR_CLASSES = frozenset(
     {"non_json_output", "non_object_output", "cli_is_error"}
 )
+# Per-case failures that still prove the model was reached: they end a run of
+# systemic errors. A timeout proves nothing either way.
+_SERVED_ERROR_CLASSES = frozenset({"structured_output_retries", "no_structured_output"})
 _INTERRUPTED = "interrupted"
 
 
@@ -262,7 +268,8 @@ class _BatchGate:
         self._waited = 0.0
         self._resume_at = -math.inf
         self._last_throttle = -math.inf
-        self._errors_in_a_row = 0
+        self._streak: list[str] = []
+        self._tripped: list[str] = []
         self.stop_reason: str | None = None
 
     def wait_turn(self) -> bool:
@@ -288,14 +295,30 @@ class _BatchGate:
         with self._lock:
             self._backoff = 0.0
             self._waited = 0.0
-            self._errors_in_a_row = 0
+            self._streak = []
 
-    def failed(self) -> None:
+    def reached_model(self) -> None:
         with self._lock:
-            self._errors_in_a_row += 1
-            count = self._errors_in_a_row
-        if count >= MAX_CONSECUTIVE_CLI_ERRORS:
-            self.stop(f"{count} CLI errors in a row")
+            self._streak = []
+
+    @property
+    def tripped_streak(self) -> tuple[str, ...]:
+        """Cases saved with a CLI error by the streak that tripped the breaker,
+        plus in-flight calls that failed after it; empty for any other stop."""
+        with self._lock:
+            return tuple(self._tripped)
+
+    def failed(self, audit_id: str) -> None:
+        with self._lock:
+            self._streak.append(audit_id)
+            if self._tripped:
+                self._tripped.append(audit_id)
+                return
+            if self.stop_reason or len(self._streak) < MAX_CONSECUTIVE_CLI_ERRORS:
+                return
+            self._tripped = list(self._streak)
+            count = len(self._streak)
+        self.stop(f"{count} CLI errors in a row")
 
     def throttled(self, call_started: float, resets: str | None) -> None:
         with self._lock:
@@ -431,9 +454,23 @@ class ClaudeCliTransport:
                 f"{saved}/{len(requests)} cases have a saved outcome; the resume "
                 f"asks the other {len(requests) - saved}. Resume with "
                 f"BBA_PILOT_BATCH_ID={batch_id} under the same BBA_PILOT_RUN_ID."
+                + self._reask_advice(batch_dir)
             )
         results = tuple(self._load_result(batch_dir, model, r) for r in requests)
         return RawBatchResponse(batch_id=batch_id, results=results)
+
+    def _reask_advice(self, batch_dir: Path) -> str:
+        streak = self._gate.tripped_streak
+        if not streak:
+            return ""
+        files = " ".join(f"'{batch_dir / f'{a}.json'}'" for a in streak)
+        return (
+            f" The {len(streak)} errored cases of the streak ({', '.join(streak)}) "
+            "are already saved and a resume does not ask them. To ask them again "
+            "on purpose, make sure no other run uses this batch, then run: "
+            f"rm {files}. Warning: a cli_is_error call may already have been "
+            "served, so asking it again can spend a second call."
+        )
 
     def submit_batch(
         self,
@@ -510,6 +547,8 @@ class ClaudeCliTransport:
             if error_class is None:
                 self._gate.answered()
             else:
+                if error_class in _SERVED_ERROR_CLASSES:
+                    self._gate.reached_model()
                 resets = _resets(envelope)
                 self._write_error_summary(
                     batch_dir,
@@ -528,7 +567,7 @@ class ClaudeCliTransport:
                     self._gate.throttled(call_started, resets)
                     continue
                 if error_class in _SYSTEMIC_ERROR_CLASSES:
-                    self._gate.failed()
+                    self._gate.failed(request.audit_id)
             record = {
                 "response": envelope,
                 "request": payload,

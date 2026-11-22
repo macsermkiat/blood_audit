@@ -236,6 +236,12 @@ CLI_WORKERS = int(os.environ.get("BBA_PILOT_CLI_WORKERS", "3"))
 
 
 def _cli_throttle_wait_s() -> float:
+    """Seconds claude-cli may wait out one subscription-limit episode.
+
+    Past it the run stops for a BBA_PILOT_BATCH_ID resume; 0 stops at the
+    first refusal. Read where the transport is built, so other transports
+    never see this variable.
+    """
     raw = os.environ.get("BBA_PILOT_CLI_THROTTLE_WAIT", str(THROTTLE_WAIT_S))
     try:
         seconds = float(raw)
@@ -249,9 +255,6 @@ def _cli_throttle_wait_s() -> float:
     return seconds
 
 
-# Seconds claude-cli may wait out one subscription-limit episode before it
-# stops the run for a BBA_PILOT_BATCH_ID resume; 0 stops at the first refusal.
-CLI_THROTTLE_WAIT_S = _cli_throttle_wait_s()
 # Single-case iteration knob: comma-separated REQNOs. When set, only the
 # matching orders are processed/submitted, and the fresh records are MERGED
 # into the existing llm_report.json (all other cases keep their records)
@@ -3098,7 +3101,7 @@ def main() -> None:
                 batch_root=WORK / "cli_batches",
                 workers=CLI_WORKERS,
                 privacy_policy=privacy_policy,
-                throttle_wait_s=CLI_THROTTLE_WAIT_S,
+                throttle_wait_s=_cli_throttle_wait_s(),
             )
         else:
             if not api_key:
