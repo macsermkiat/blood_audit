@@ -99,7 +99,9 @@ def link_events(
     Event 1 links to ``own``. Event k > 1 links to the latest candidate placed
     in (event k-1 issue, event k issue], else to ``own`` as a standing order.
     Candidates on another admission or family are ignored; ties on placement
-    time break on REQNO so the link is deterministic.
+    time break on REQNO so the link is deterministic. ``own`` is a candidate
+    too: placed after event 1 (``order_after_issue``), it is event 2's fresh
+    order.
     """
     anchors = [e.issue_datetime for e in events]
     if anchors != sorted(anchors):

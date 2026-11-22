@@ -160,6 +160,18 @@ def test_later_event_with_no_new_order_is_standing_on_the_own_order() -> None:
     assert [link.latest_before for link in links] == [other, other]
 
 
+def test_fresh_window_starts_at_the_previous_event_not_the_first() -> None:
+    # The order that caused event 2 is not a new decision for event 3.
+    fresh = order("R-F2", 10.0)
+    links = link_events(OWN, (event(2.0), event(12.0), event(30.0)), (OWN, fresh))
+
+    assert [(link.tag, link.linked.reqno) for link in links] == [
+        ("own", "R-OWN"),
+        ("fresh_order", "R-F2"),
+        ("standing_order", "R-OWN"),
+    ]
+
+
 @pytest.mark.parametrize("status", ["6", "7", "11", "12"])
 def test_refused_and_cancelled_orders_are_never_candidates(status: str) -> None:
     assert candidate_order(bdvst_row("R-X", status=status)) is None
