@@ -753,6 +753,111 @@ class TestThrottle:
         stops = [r.raw_response_json["stop_reason"] for r in response.results]
         assert stops.count("cli_error") == 6
 
+    def test_systemic_outcomes_before_the_breaker_stop_are_asked_on_resume(
+        self, tmp_path: Path
+    ) -> None:
+        # A broken login makes every call fail the same way. The CLI never
+        # served an answer, so those cases must not become saved NEEDS_REVIEW
+        # rows; the per-case error before them is a real outcome and stays.
+        per_case = CliOutcome(
+            stdout=json.dumps(
+                {
+                    "is_error": True,
+                    "subtype": "error_max_structured_output_retries",
+                    "result": "",
+                }
+            ),
+            stderr="",
+            returncode=0,
+        )
+        broken = CliOutcome(stdout="", stderr="not logged in", returncode=1)
+        first_run = iter([per_case] + [broken] * MAX_CONSECUTIVE_CLI_ERRORS)
+        reqs = [_request(f"a{i}") for i in range(12)]
+        first = ClaudeCliTransport(
+            batch_root=tmp_path,
+            workers=1,
+            runner=lambda argv, stdin: next(first_run),
+        )
+        batch_id = first.submit_batch_only(
+            model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        with pytest.raises(CliBatchStopped, match="1/12 cases have a saved outcome"):
+            first.fetch_batch_results(
+                batch_id, model=MODEL, requests=reqs, prompt_cache_enabled=True
+            )
+        assert not list((tmp_path / batch_id).glob("*.inflight"))
+
+        resumed: list[str] = []
+
+        def answering(argv: list[str], stdin: str) -> CliOutcome:
+            resumed.append(stdin)
+            return _cli_success({"classification": "APPROPRIATE"})
+
+        second = ClaudeCliTransport(batch_root=tmp_path, workers=1, runner=answering)
+        response = second.fetch_batch_results(
+            batch_id, model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        assert _asked(resumed) == sorted(f"a{i}" for i in range(1, 12))
+        stops = [r.raw_response_json["stop_reason"] for r in response.results]
+        assert stops[0] == "cli_error"
+        assert stops[1:] == ["tool_use"] * 11
+
+    def test_systemic_outcome_is_saved_once_a_later_call_proves_the_cli_works(
+        self, tmp_path: Path
+    ) -> None:
+        # Below the breaker count the error is one case's problem: it is
+        # saved as soon as another call is served, and never asked again.
+        outcomes = iter(
+            [
+                CliOutcome(stdout="", stderr="odd", returncode=1),
+                _cli_success({"classification": "APPROPRIATE"}),
+            ]
+        )
+        calls: list[str] = []
+
+        def runner(argv: list[str], stdin: str) -> CliOutcome:
+            calls.append(stdin)
+            return next(outcomes)
+
+        reqs = [_request("a0"), _request("a1")]
+        first = ClaudeCliTransport(batch_root=tmp_path, workers=1, runner=runner)
+        batch_id = first.submit_batch_only(
+            model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        first.fetch_batch_results(
+            batch_id, model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        second = ClaudeCliTransport(batch_root=tmp_path, workers=1, runner=runner)
+        response = second.fetch_batch_results(
+            batch_id, model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        assert len(calls) == 2
+        stops = [r.raw_response_json["stop_reason"] for r in response.results]
+        assert stops == ["cli_error", "tool_use"]
+
+    def test_per_case_error_resets_the_systemic_streak(self, tmp_path: Path) -> None:
+        # A structured-output failure means the model was reached, so it
+        # breaks a run of CLI failures instead of adding to it.
+        per_case = CliOutcome(
+            stdout=json.dumps({"is_error": False, "result": "prose"}),
+            stderr="",
+            returncode=0,
+        )
+        broken = CliOutcome(stdout="", stderr="odd", returncode=1)
+        sequence = [broken] * 4 + [per_case] + [broken] * 4
+        outcomes = iter(sequence)
+        reqs = [_request(f"a{i}") for i in range(len(sequence))]
+        transport = ClaudeCliTransport(
+            batch_root=tmp_path, workers=1, runner=lambda argv, stdin: next(outcomes)
+        )
+        batch_id = transport.submit_batch_only(
+            model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        response = transport.fetch_batch_results(
+            batch_id, model=MODEL, requests=reqs, prompt_cache_enabled=True
+        )
+        assert len(response.results) == len(sequence)
+
     def test_non_json_failure_summary_keeps_exit_code_not_stderr(
         self, tmp_path: Path
     ) -> None:
@@ -1004,15 +1109,24 @@ def _load_llm_leg(module_name: str) -> object:
 
 
 @pytest.mark.parametrize("raw", ["nan", "inf", "-1", "six hours"])
-def test_invalid_throttle_wait_fails_at_startup(
+def test_invalid_throttle_wait_fails_when_claude_cli_is_built(
     monkeypatch: pytest.MonkeyPatch, raw: str
 ) -> None:
     monkeypatch.setenv("BBA_PILOT_CLI_THROTTLE_WAIT", raw)
+    module = _load_llm_leg(f"pilot_run_llm_leg_throttle_wait_{raw.replace(' ', '_')}")
     with pytest.raises(SystemExit, match="BBA_PILOT_CLI_THROTTLE_WAIT"):
-        _load_llm_leg(f"pilot_run_llm_leg_throttle_wait_{raw.replace(' ', '_')}")
+        getattr(module, "_cli_throttle_wait_s")()
+
+
+def test_invalid_throttle_wait_does_not_block_other_transports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BBA_PILOT_CLI_THROTTLE_WAIT", "six hours")
+    monkeypatch.delenv("BBA_PILOT_TRANSPORT", raising=False)
+    _load_llm_leg("pilot_run_llm_leg_throttle_wait_unused")
 
 
 def test_zero_throttle_wait_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BBA_PILOT_CLI_THROTTLE_WAIT", "0")
     module = _load_llm_leg("pilot_run_llm_leg_throttle_wait_zero")
-    assert getattr(module, "CLI_THROTTLE_WAIT_S") == 0.0
+    assert getattr(module, "_cli_throttle_wait_s")() == 0.0
