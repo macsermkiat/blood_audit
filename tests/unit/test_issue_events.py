@@ -248,7 +248,9 @@ def test_stray_return_date_on_a_dispensed_unit_is_not_a_return() -> None:
     ("statuses", "all_returned", "units_returned"),
     [
         (("3", "3"), True, 2),
-        (("3", "7"), True, 2),  # crossmatch-incompatible was never given
+        # Crossmatch-incompatible was never given, but it is not a return:
+        # issue_units_returned must agree with the returns-ledger count.
+        (("3", "7"), True, 1),
         (("3", "2"), False, 1),  # mixed: judged as a transfusion
         (("5", "2"), False, 0),
     ],
@@ -278,14 +280,28 @@ def test_identical_issue_times_order_by_donor_sequence_and_product() -> None:
         row("A", seqno="1", bdtype="SDRF", pay=same),
     ]
 
-    (event,) = events_for(rows)
-
-    assert [(u.dnrno, u.seqno, u.bdtype) for u in event.units] == [
+    expected = [
         ("A", "1", "SDRF"),
         ("A", "1", "SDRF2"),
         ("A", "2", "LDPRC"),
         ("B", "1", "LDPRC"),
     ]
+
+    ledger = units_from_ledger(rows, AN)
+    (event,) = cluster_events(ledger.issued, (OWN_ORDER,))
+
+    assert [(u.dnrno, u.seqno, u.bdtype) for u in ledger.issued] == expected
+    assert [(u.dnrno, u.seqno, u.bdtype) for u in event.units] == expected
+
+
+def test_dispensed_unit_without_a_readable_issue_time_fails_loud() -> None:
+    # A dispensed or transfused unit did leave the bank. Counting it as never
+    # issued would drop a transfusion from the audit without a trace.
+    dispensed = row("D1", unitstat="2", pay=at(2.0))
+    dispensed["PAYTIME"] = ""
+
+    with pytest.raises(ValueError, match="status 2"):
+        units_from_ledger([dispensed], AN)
 
 
 def test_ledger_needs_the_order_admission() -> None:
