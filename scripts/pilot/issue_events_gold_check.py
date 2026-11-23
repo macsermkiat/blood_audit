@@ -73,8 +73,6 @@ import run_pipeline as rp
 from _gold_check_hb import cutoff_counts, gold_hb_mismatches
 from _gold_check_returns import (
     gold_returns_mismatches,
-    load_unitamt,
-    reqno_summaries,
     reqno_total_mismatches,
     returns_counts,
 )
@@ -150,6 +148,12 @@ EXPECTED_TOTALS = {
     "returns_plan13_pool_all_returned_2025_red_cell": 1_928,
     "returns_plan13_pool_all_returned_2025_platelet": 80,
     "returns_plan13_pool_mixed_2025": 1_170,
+    # Owner decision 1.3 (2026-11-23): an all-returned event is
+    # RETURNED_NOT_TRANSFUSED even when its REQNO issued fewer units than
+    # ordered, so the event summary agrees with the #249 cutoff's flag.
+    "returns_audit_not_transfused_2025_red_cell": 1_902,
+    "returns_audit_not_transfused_2025_platelet": 78,
+    "returns_audit_disposition_differs_from_all_returned_2025": 0,
 }
 # Owner decision 8.15 (c), amended 2026-11-22.
 SURGERY_FEE_GROUP = "111"
@@ -665,15 +669,13 @@ def main() -> int:
     ]
     cutoffs = cutoff_counts(audit, red_cell_events)
     ans = {q: orders[q].an for q in results}
-    reqnos = reqno_summaries(ans, trans_rows, load_unitamt(export, set(results)))
     returns = returns_counts(
         audit,
-        reqnos,
         results,
         {q: o.candidate.component for q, o in orders.items() if o.candidate},
         lambda q: eligible(orders[q]),
     )
-    total_out, total_seen = reqno_total_mismatches(ans, trans_rows, results, reqnos)
+    total_out, total_seen = reqno_total_mismatches(ans, trans_rows, results)
     failures += len(total_out)
     print(
         f"reqno totals = events + reserved: {dict(total_seen)}; {len(total_out)} mismatch(es)"
@@ -700,7 +702,7 @@ def main() -> int:
         mismatches, seen = gold_mismatches(gold_rows, orders, results, doctors)
         audit_out, audit_seen = audit_mismatches(gold_rows, orders, audit)
         hb_out, hb_seen = gold_hb_mismatches(gold_rows, export, audit)
-        returns_out, returns_seen = gold_returns_mismatches(gold_rows, audit, reqnos)
+        returns_out, returns_seen = gold_returns_mismatches(gold_rows, audit)
         mismatches += audit_out + hb_out + returns_out
         seen += audit_seen + hb_seen + returns_seen
         failures += len(mismatches)

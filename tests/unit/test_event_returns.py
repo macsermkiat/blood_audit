@@ -74,8 +74,7 @@ def event_summaries(
     scoped = rows_for_admission(rows, AN)
     reqno = summarize_returns(scoped, unitamt_lines)
     return reqno, [
-        summarize_event_returns([u.status for u in e.units], reqno)
-        for e in events_of(scoped)
+        summarize_event_returns([u.status for u in e.units]) for e in events_of(scoped)
     ]
 
 
@@ -159,15 +158,15 @@ def test_reserved_not_issued_unit_is_neither_issued_nor_returned_on_the_event() 
     assert event.disposition == "transfused"
 
 
-def test_event_under_an_uncovered_order_is_inconclusive() -> None:
-    # Fail closed as the REQNO does: with fewer units in the ledger than were
-    # ordered, a missing unit could be a transfusion in this event.
+def test_all_returned_event_is_not_transfused_when_its_reqno_issued_short() -> None:
+    # Owner decision 1.3: two units ordered, one issued and returned. The
+    # REQNO still fails closed; the event is judged on the units it issued.
     rows = [row("D1", "3", at(1))]
 
     reqno, [event] = event_summaries(rows, ["2"])
 
-    assert reqno.disposition == event.disposition == "inconclusive"
-    assert event.units_returned == 1
+    assert reqno.disposition == "inconclusive"
+    assert event.disposition == "not_transfused"
 
 
 def test_foreign_admission_units_are_in_neither_summary() -> None:
@@ -180,21 +179,22 @@ def test_foreign_admission_units_are_in_neither_summary() -> None:
 
 
 def test_an_event_without_units_is_rejected() -> None:
-    reqno = summarize_returns([row("D1", "3", at(1))], ["1"])
-
     with pytest.raises(ValueError, match="no units"):
-        summarize_event_returns([], reqno)
+        summarize_event_returns([])
 
 
+@pytest.mark.parametrize("ordered", ["2", "3"])
 @pytest.mark.parametrize("statuses", list(product("2357", repeat=2)))
 def test_event_screens_not_transfused_exactly_when_all_its_units_returned(
-    statuses: tuple[str, str],
+    statuses: tuple[str, str], ordered: str
 ) -> None:
     # The #249 cutoff skips an all-returned event as a prior transfusion; the
-    # classifier must agree on which events those are.
+    # classifier must agree on which events those are, also when the REQNO
+    # issued fewer units than ordered.
     rows = [row(f"D{i}", s, at(1)) for i, s in enumerate(statuses)]
 
-    _, [event_summary] = event_summaries(rows, ["2"])
+    _, [event_summary] = event_summaries(rows, [ordered])
     [event] = events_of(rows)
 
-    assert (event_summary.disposition == "not_transfused") is event.all_returned
+    expected = "not_transfused" if event.all_returned else "transfused"
+    assert event_summary.disposition == expected

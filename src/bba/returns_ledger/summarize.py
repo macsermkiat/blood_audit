@@ -175,25 +175,19 @@ def summarize_returns(
     )
 
 
-def summarize_event_returns(
-    unit_statuses: Sequence[str], reqno: ReturnsSummary
-) -> ReturnsSummary:
+def summarize_event_returns(unit_statuses: Sequence[str]) -> ReturnsSummary:
     """One issue event's summary, counted like a REQNO's (blood_audit #276).
 
     ``unit_statuses`` are the terminal statuses of the event's issued units
-    (``AuditEvent.issue_unit_statuses``); ``reqno`` is the REQNO's
-    :func:`summarize_returns` over the same admission-scoped rows. Whether the
-    ledger covers the order is a REQNO fact, so the ordered amount and
-    ``ledger_complete`` are the REQNO's: an event of an under-covered REQNO
-    stays ``inconclusive``.
+    (``AuditEvent.issue_unit_statuses``). An event is its issued units, so its
+    ledger is complete by construction and it has no ordered amount of its
+    own. Owner decision 1.3: an event whose units all came back screens
+    ``not_transfused`` even when its REQNO issued fewer units than ordered;
+    the REQNO's coverage stays on the REQNO's :func:`summarize_returns`.
     """
     if not unit_statuses:
         raise ValueError("an issue event with no units has no returns summary")
-    return ReturnsSummary(
-        **_unit_counts(unit_statuses),
-        ordered_unit_amount=reqno.ordered_unit_amount,
-        ledger_complete=reqno.ledger_complete,
-    )
+    return ReturnsSummary(**_unit_counts(unit_statuses), ledger_complete=True)
 
 
 def _unit_counts(statuses: Sequence[str]) -> dict[str, int]:
