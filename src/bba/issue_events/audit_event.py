@@ -43,7 +43,10 @@ class AuditEvent(BaseModel):
     ``order`` is the REQNO's audit_orders row (its identity, order time and
     product family); ``link`` is the event and the order it is judged against.
     ``linked_usetype`` is the linked order's collapsed BDVSTDT USETYPE.
-    Built by :func:`build_audit_events`, which decides ``declared_use_applies``.
+    ``declared_use_applies`` says whether that declaration counts for this
+    event (owner decision 8.15 (c)); whether it exempts the event stays the
+    classifier's call, under its flags and gates, for either product family.
+    Built by :func:`build_audit_events`.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -199,6 +202,8 @@ def build_audit_events(
     maps an admission to its operation times: the caller decides what counts
     as an operation (owner decision 8.15 (c)).
     """
+    if any(t.tzinfo is None for times in operations.values() for t in times):
+        raise ValueError("operation times must be timezone-aware")
     by_reqno: dict[str, CandidateOrder] = {}
     by_scope: dict[tuple[str, Component], list[CandidateOrder]] = defaultdict(list)
     for candidate in candidates:

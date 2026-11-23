@@ -12,6 +12,7 @@ fictional year, shaped like the January 2025 gold cases.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -169,6 +170,16 @@ def test_event_audit_id_is_keyed_on_the_first_unit_after_the_tie_break() -> None
 
     # D-A and D-B left the bank at the same minute; D-A sorts first.
     assert first.audit_id == build_event_audit_id(HN, "R-OWN", ("D-A", "1", "LDPRC2"))
+
+
+def test_event_audit_id_formula_is_fixed() -> None:
+    # Signed runs bind audit_ids (plan 4.1): the formula itself is the contract.
+    payload = b"HN-TEST-1:R-OWN:D-A:1:LDPRC2"
+
+    assert (
+        build_event_audit_id(HN, "R-OWN", ("D-A", "1", "LDPRC2"))
+        == (hashlib.sha256(payload).hexdigest()[:32])
+    )
 
 
 def test_every_event_carries_the_legacy_order_id_as_its_parent() -> None:
@@ -443,6 +454,20 @@ def test_operation_on_another_admission_does_not_count() -> None:
 def test_included_order_without_its_ledger_fails_loud() -> None:
     with pytest.raises(ValueError, match="ledger"):
         build([bdvst("R-OWN")], {})
+
+
+def test_excluded_candidate_without_its_ledger_fails_loud() -> None:
+    with pytest.raises(ValueError, match="ledger"):
+        build([bdvst("R-THAL", diagnosis=("D561",))], {})
+
+
+def test_naive_operation_times_fail_loud() -> None:
+    with pytest.raises(ValueError, match="timezone"):
+        build(
+            [bdvst("R-OWN")],
+            {"R-OWN": ledger(unit("D-1", 1))},
+            operations={AN: [datetime(2030, 3, 2, 8, 0)]},
+        )
 
 
 def test_included_order_missing_from_the_candidates_fails_loud() -> None:

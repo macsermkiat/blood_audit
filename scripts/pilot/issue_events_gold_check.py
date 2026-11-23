@@ -107,6 +107,9 @@ EXPECTED_TOTALS = {
     "events_january_red_cell": 1_321,
     "events_january_platelet": 509,
     "units_family_mismatch_2025": 1,
+    # Owner decision 8.15 (c): red-cell later events linked to a fresh order
+    # declaring USETYPE 2/3, over all eligible requests (measure6.py).
+    "fresh_declaring_red_cell_events_2025": 258,
     # Plan 6.2 January invariants for the audit records.
     "audit_event_records_january": 1_812,
     "audit_event_reqnos_january": 1_178,
@@ -241,6 +244,12 @@ def totals(orders: dict[str, Order], results: Results) -> Counter[str]:
         got["units_reserved_not_issued_2025"] += ledger.units_reserved_not_issued
         got["units_family_mismatch_2025"] += sum(
             unit_family(u.bdtype) != o.candidate.component for u in ledger.issued
+        )
+        got["fresh_declaring_red_cell_events_2025"] += sum(
+            link.tag == "fresh_order"
+            and o.candidate.component == "red_cell"
+            and orders[link.linked.reqno].usetype in {"2", "3"}
+            for link in links
         )
     return got
 
