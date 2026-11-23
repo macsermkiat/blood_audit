@@ -128,8 +128,9 @@ class Bundle:
         status: str = "2",
         an: str = "A1",
         bdtype: str = "LDPRC2",
+        stray_return: bool = False,
     ) -> None:
-        returned = status == "3"
+        returned = status == "3" or stray_return
         self.add(
             "BDVSTTRANS.csv",
             reqno,
@@ -264,6 +265,8 @@ def test_case_21_gives_one_row_per_issue_event_with_the_hb_at_its_issue(
     assert {r["parent_audit_id"] for r in rows} != {r["audit_id"] for r in rows}
     assert rows[0]["issue_datetime_local"] == "2025-01-10 12:36:00"
     assert rows[1]["order_to_issue_hours"] == "7.00"
+    assert rows[3]["declared_use_applies"] == "True"
+    assert rows[3]["classification"] == "PERIOP_TRANSFUSION_EXEMPT"
     assert [r["linked_order_emrtype"] for r in rows] == ["", "", "", "2"]
 
 
@@ -278,6 +281,18 @@ def test_case_21_event_1_all_returned_is_returned_not_transfused(
     assert rows[0]["returned_blood_datetime_local"] == "2025-01-10 13:36:00"
     assert rows[1]["returns_disposition"] == "transfused"
     assert rows[1]["returned_blood_datetime_local"] == ""
+
+
+def test_stray_return_date_on_a_dispensed_unit_is_not_a_return(
+    pipeline: tuple[ModuleType, Path],
+) -> None:
+    b = Bundle()
+    b.order("R1")
+    b.unit("R1", "1", 2.0, stray_return=True)
+    rows = _events(_run(pipeline, b), "R1")
+
+    assert rows[0]["returns_disposition"] == "transfused"
+    assert rows[0]["returned_blood_datetime_local"] == ""
 
 
 def test_later_event_hb_minimum_starts_after_the_last_transfusing_event(
@@ -546,3 +561,19 @@ def test_platelet_event_is_gated_on_the_count_at_its_issue(
     assert rows[0]["platelet_count_k_ul"] == "8.0"
     assert rows[0]["platelet_anchor_datetime_local"] == "2025-01-10 14:00:00"
     assert rows[0]["returns_disposition"] == "transfused"
+
+
+def test_event_context_is_read_at_the_issue_not_at_the_order(
+    pipeline: tuple[ModuleType, Path],
+) -> None:
+    b = Bundle()
+    b.order("C1")
+    b.operation(4.0, icd9="8151")
+    b.add("Lab.csv", "H1", "A1", _day(5), _time(5), "290093", "900")
+    b.unit("C1", "1", 10.0)
+    b.hb(9, "7.5")
+    rows = _events(_run(pipeline, b), "C1")
+
+    assert rows[0]["procedure_proximity_hours"] == "6.0"
+    assert rows[0]["upcoming_procedure_hours"] == ""
+    assert rows[0]["anc_value"] == "900"
