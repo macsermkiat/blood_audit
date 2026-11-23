@@ -25,6 +25,12 @@ events, links each event to its order, and compares:
   anaesthesia charges, AS056-AS059: owner decision 8.15 (c)). The January
   record counts of plan 6.2 are asserted; 2025 counts are printed.
 
+* per gold event (PR 4, ``_gold_check_hb.py``): the #249 cutoff event and
+  the Hb read at the event anchor with it, against gold.csv's
+  ``prior_event_cutoff_*`` and ``hb_*`` columns. Plan 1.3's #249 prior
+  counts are asserted on its own pool; the same counts on the audit records,
+  and how many events get a cutoff, are printed.
+
 It also prints link counts over 2025 and January (plan 2.2), unasserted.
 
 Output is counts only. A gold mismatch line names the REQNO, the event and
@@ -56,6 +62,7 @@ from datetime import datetime
 from pathlib import Path
 
 import run_pipeline as rp
+from _gold_check_hb import cutoff_counts, gold_hb_mismatches
 from _hosxp_dt import _parse_hosxp_date, _parse_time
 
 from bba.attribution import load_reqno_to_doctor
@@ -89,6 +96,7 @@ EXPORT_TABLES = (
     "Diagnosis.csv",
     "IPTSUMOPRT.csv",
     "INCPT_OPRTACT.csv",
+    "Lab.csv",
 )
 YEAR, JANUARY = "2025", "2025-01"
 
@@ -116,6 +124,9 @@ EXPECTED_TOTALS = {
     "audit_no_issue_records_january": 5,
     "audit_excluded_records_january": 15,
     "audit_excluded_measured_events_january": 18,
+    # Plan 1.3 #249 priors over every eligible red-cell event (measure3.py).
+    "cutoff_plan13_pool_any_prior_within_24h_2025": 3_828,
+    "cutoff_plan13_pool_latest_prior_all_returned_2025": 208,
 }
 # Owner decision 8.15 (c), amended 2026-11-22.
 SURGERY_FEE_GROUP = "111"
@@ -621,7 +632,16 @@ def main() -> int:
         r["reqno"] for r in gold_rows
     }
     audit = audit_records(export, orders, audited, results)
-    got = totals(orders, results) + audit_totals(orders, audit)
+    red_cell_events = [
+        (o.an, q, link.event)
+        for q, (_, links) in results.items()
+        if eligible(o := orders[q])
+        and o.candidate
+        and o.candidate.component == "red_cell"
+        for link in links
+    ]
+    cutoffs = cutoff_counts(audit, red_cell_events)
+    got = totals(orders, results) + audit_totals(orders, audit) + cutoffs
     for name, want in EXPECTED_TOTALS.items():
         ok = got[name] == want
         failures += not ok
@@ -631,14 +651,18 @@ def main() -> int:
     for name, count in sorted(audit_totals(orders, audit).items()):
         if name not in EXPECTED_TOTALS:
             print(f"info {name}: {count:,}")
+    for name, count in sorted(cutoffs.items()):
+        if name not in EXPECTED_TOTALS:
+            print(f"info {name}: {count:,}")
 
     if not gold_rows:
         print("skip: gold comparison (BBA_ISSUE_EVENTS_GOLD_CSV unset)")
     else:
         mismatches, seen = gold_mismatches(gold_rows, orders, results, doctors)
         audit_out, audit_seen = audit_mismatches(gold_rows, orders, audit)
-        mismatches += audit_out
-        seen += audit_seen
+        hb_out, hb_seen = gold_hb_mismatches(gold_rows, export, audit)
+        mismatches += audit_out + hb_out
+        seen += audit_seen + hb_seen
         failures += len(mismatches)
         print(f"gold: {dict(seen)}; {len(mismatches)} mismatch(es)")
         for line in mismatches:
