@@ -16,7 +16,7 @@ downstream stage consumes :class:`AuditOrder` rows (one per included
 
 from bba.audit_orders.anchor import AnchorResolution, resolve_anchor
 from bba.audit_orders.exceptions import AuditOrdersError, UnrecoverableAnchorError
-from bba.audit_orders.identity import build_audit_id
+from bba.audit_orders.identity import build_audit_id, build_event_audit_id
 from bba.audit_orders.models import (
     AuditOrder,
     AuditOrdersConfig,
@@ -63,6 +63,7 @@ __all__ = [
     "UnrecoverableAnchorError",
     "build_audit_id",
     "build_audit_orders",
+    "build_event_audit_id",
     "check_an_scoped",
     "check_cancelled",
     "check_hemoglobinopathy",

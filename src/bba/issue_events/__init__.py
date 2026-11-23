@@ -10,6 +10,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from bba.issue_events.audit_event import (
+    AuditEvent,
+    AuditEvents,
+    ExcludedReqno,
+    build_audit_events,
+)
 from bba.issue_events.cluster import cluster_events
 from bba.issue_events.ledger import units_from_ledger
 from bba.issue_events.link import (
@@ -28,12 +34,16 @@ from bba.issue_events.models import (
 
 __all__: Sequence[str] = (
     "ISSUE_EVENT_GAP",
+    "AuditEvent",
+    "AuditEvents",
     "CandidateOrder",
     "EventLink",
+    "ExcludedReqno",
     "IssueEvent",
     "IssuedUnit",
     "LedgerUnits",
     "LinkTag",
+    "build_audit_events",
     "candidate_order",
     "cluster_events",
     "link_events",

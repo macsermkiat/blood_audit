@@ -38,4 +38,16 @@ def build_audit_id(hn: str, reqno: str) -> str:
     return hashlib.sha256(payload).hexdigest()[:_AUDIT_ID_LENGTH]
 
 
-__all__ = ("build_audit_id",)
+def build_event_audit_id(hn: str, reqno: str, unit_key: tuple[str, str, str]) -> str:
+    """Return the stable audit_id of one issue event of ``(hn, reqno)``.
+
+    ``unit_key`` is the ``(DNRNO, SEQNO, BDTYPE)`` of the event's first unit
+    in issue order. Events of one REQNO start with different units, so their
+    ids are disjoint; :func:`build_audit_id` stays the REQNO's parent id.
+    """
+    dnrno, seqno, bdtype = unit_key
+    payload = f"{hn}:{reqno}:{dnrno}:{seqno}:{bdtype}".encode()
+    return hashlib.sha256(payload).hexdigest()[:_AUDIT_ID_LENGTH]
+
+
+__all__ = ("build_audit_id", "build_event_audit_id")
