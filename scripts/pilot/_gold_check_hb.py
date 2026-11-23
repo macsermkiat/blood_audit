@@ -97,15 +97,30 @@ def cutoff_counts(
         got["cutoff_transfused_differs_from_status_2_or_5_2025"] += (
             not e.link.event.all_returned
         ) != any(u.status in TRANSFUSING_STATUSES for u in e.link.event.units)
+        got["cutoff_under_another_reqno_2025"] += (
+            cutoff is not None and cutoff.order.reqno != e.order.reqno
+        )
     plain: dict[str, list[tuple[datetime, bool, str]]] = defaultdict(list)
     for an, reqno, ev in eligible_events:
         plain[an].append((ev.issue_datetime, ev.all_returned, reqno))
+    library = {
+        (e.order.reqno, e.issue_datetime): prior_transfusion_cutoff(pool[e.order.an], e)
+        for e in audit.events
+        if e.order.component == "red_cell"
+    }
     for lst in plain.values():
         lst.sort()
-        for i, (t, _, _) in enumerate(lst):
+        for i, (t, _, reqno) in enumerate(lst):
             prior = [
                 x for x in lst[:i] if x[0] < t and t - x[0] <= PRIOR_TRANSFUSION_WINDOW
             ]
+            if (reqno, t) in library:
+                c = library[(reqno, t)]
+                transfused = [x for x in prior if not x[1]]
+                naive = (transfused[-1][0], transfused[-1][2]) if transfused else None
+                mine = (c.issue_datetime, c.order.reqno) if c else None
+                got["cutoff_library_differs_from_inline_2025"] += naive != mine
+                got["cutoff_library_compared_inline_2025"] += 1
             got["cutoff_plan13_pool_any_prior_within_24h_2025"] += bool(prior)
             got["cutoff_plan13_pool_latest_prior_all_returned_2025"] += (
                 bool(prior) and prior[-1][1]

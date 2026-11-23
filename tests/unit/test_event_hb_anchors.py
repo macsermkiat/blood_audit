@@ -72,11 +72,13 @@ def order(
     )
 
 
-def unit(dnrno: str, issue_h: float, status: str = "2") -> IssuedUnit:
+def unit(
+    dnrno: str, issue_h: float, status: str = "2", bdtype: str = "LDPRC2"
+) -> IssuedUnit:
     return IssuedUnit(
         dnrno=dnrno,
         seqno="1",
-        bdtype="LDPRC2",
+        bdtype=bdtype,
         status=status,
         issue_at=at(issue_h),
         returned_at=None,
@@ -266,7 +268,7 @@ def test_transfusion_on_another_admission_is_ignored() -> None:
 def test_platelet_transfusion_does_not_cut_the_hb_window() -> None:
     events = audit_events(
         {
-            order("R-PLT", products=PLATELET): [unit("D-1", 1.0)],
+            order("R-PLT", products=PLATELET): [unit("D-1", 1.0, bdtype="LDPPC5")],
             order("R-RBC", 8.0): [unit("D-2", 10.0)],
         }
     )
@@ -278,7 +280,9 @@ def test_platelet_event_has_no_hb_cutoff() -> None:
     events = audit_events(
         {
             order("R-RBC"): [unit("D-1", 1.0)],
-            order("R-PLT", 8.0, products=PLATELET): [unit("D-2", 10.0)],
+            order("R-PLT", 8.0, products=PLATELET): [
+                unit("D-2", 10.0, bdtype="LDPPC5")
+            ],
         }
     )
 

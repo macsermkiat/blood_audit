@@ -9,18 +9,14 @@ pilot path until it switches to events.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import timedelta
 
-from bba.hb_lookup.anchor import (
-    AnchorCandidate,
-    EvidenceAnchor,
-    resolve_evidence_anchor,
-)
+from bba.hb_lookup.anchor import DEFAULT_REANCHOR_THRESHOLD, EvidenceAnchor
+from bba.hb_lookup.lookup import _MIN_WINDOW
 from bba.issue_events import AuditEvent
 
-# Issue #249: a transfusion this recent may already have corrected the low,
-# so the 24 h Hb minimum starts at it. Same window as the 24 h minimum.
-PRIOR_TRANSFUSION_WINDOW = timedelta(hours=24)
+# Issue #249: a transfusion inside the 24 h Hb minimum's window may already
+# have corrected the low, so the minimum starts at it.
+PRIOR_TRANSFUSION_WINDOW = _MIN_WINDOW
 
 
 def resolve_event_anchors(event: AuditEvent) -> EvidenceAnchor:
@@ -28,24 +24,19 @@ def resolve_event_anchors(event: AuditEvent) -> EvidenceAnchor:
 
     ``anchor_utc`` is the issue time. ``gap_hours`` is the time from the
     linked order to the issue. When that gap reaches the re-anchor threshold
-    (blood reserved ahead), ``reason`` is ``"issue_reanchor"``, the same
-    signal that widens the bundle's Hb window past the issue for the
-    REQNO-level path; otherwise it is ``"issue_datetime"``. ``display`` is
-    empty: local-time formatting belongs to the report writer.
+    of :func:`resolve_evidence_anchor` (blood reserved ahead), ``reason`` is
+    ``"issue_reanchor"``, the signal that widens the bundle's Hb window past
+    the issue; otherwise it is ``"issue_datetime"``. The lab anchor reason of
+    an event is always ``"issue_datetime"``. ``display`` is empty: local-time
+    formatting belongs to the report writer.
     """
-    issued = event.issue_datetime
-    reanchor = resolve_evidence_anchor(
-        order_datetime=event.linked_order_datetime,
-        candidates=(
-            AnchorCandidate(anchor_utc=issued, display="", reason="issue_datetime"),
-        ),
-    )
-    if reanchor.reason == "issue_reanchor":
-        return reanchor
+    gap = event.issue_datetime - event.linked_order_datetime
     return EvidenceAnchor(
-        anchor_utc=issued,
-        reason="issue_datetime",
-        gap_hours=event.order_to_issue_hours,
+        anchor_utc=event.issue_datetime,
+        reason=(
+            "issue_reanchor" if gap >= DEFAULT_REANCHOR_THRESHOLD else "issue_datetime"
+        ),
+        gap_hours=gap.total_seconds() / 3600,
         display="",
     )
 
@@ -55,7 +46,8 @@ def prior_transfusion_cutoff(
 ) -> AuditEvent | None:
     """The transfusion that bounds ``event``'s 24 h Hb minimum, or None.
 
-    The latest red-cell event on the same admission, under any REQNO, issued
+    The latest red-cell event in ``events_on_an`` on the same admission as
+    ``event`` (under any REQNO; a record on another admission is ignored), issued
     strictly before ``event`` and at most 24 h before it, that transfused at
     least one unit. An event whose units all came back (status 3 or 7) gave
     no blood and is skipped (#264 option A). A platelet event reads no Hb

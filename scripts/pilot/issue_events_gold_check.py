@@ -127,6 +127,10 @@ EXPECTED_TOTALS = {
     # Plan 1.3 #249 priors over every eligible red-cell event (measure3.py).
     "cutoff_plan13_pool_any_prior_within_24h_2025": 3_828,
     "cutoff_plan13_pool_latest_prior_all_returned_2025": 208,
+    # Per event, the library cutoff equals an inline re-derivation over the
+    # same records; and "not all returned" equals "has a status 2 or 5 unit".
+    "cutoff_library_differs_from_inline_2025": 0,
+    "cutoff_transfused_differs_from_status_2_or_5_2025": 0,
 }
 # Owner decision 8.15 (c), amended 2026-11-22.
 SURGERY_FEE_GROUP = "111"
