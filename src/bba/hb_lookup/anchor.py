@@ -127,6 +127,11 @@ class EvidenceAnchor:
     administration). ``gap_hours`` is the issue-minus-order lag in hours (0.0
     when not re-anchored); ``display`` is the issue anchor's local-time string
     for the review page ("" when not re-anchored).
+
+    An issue event (:func:`bba.hb_lookup.resolve_event_anchors`) is always
+    anchored on its issue time: ``reason`` is ``"issue_datetime"`` below the
+    re-anchor threshold, ``gap_hours`` is the linked-order-to-issue lag either
+    way, and ``display`` is "".
     """
 
     anchor_utc: datetime

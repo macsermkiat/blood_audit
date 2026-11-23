@@ -15,6 +15,11 @@ from bba.hb_lookup.anchor import (
     resolve_hb_with_fallback,
     resolve_lab_anchor,
 )
+from bba.hb_lookup.event_anchor import (
+    PRIOR_TRANSFUSION_WINDOW,
+    prior_transfusion_cutoff,
+    resolve_event_anchors,
+)
 from bba.hb_lookup.lookup import TriggerDraws, lookup_hb, trigger_draws
 from bba.hb_lookup.models import (
     DeltaHbWindow,
@@ -35,8 +40,11 @@ __all__ = [
     "HbSource",
     "lookup_hb",
     "parse_hb_value",
+    "PRIOR_TRANSFUSION_WINDOW",
+    "prior_transfusion_cutoff",
     "resolve_evidence_anchor",
     "resolve_hb_with_fallback",
+    "resolve_event_anchors",
     "resolve_lab_anchor",
     "TriggerDraws",
     "trigger_draws",
