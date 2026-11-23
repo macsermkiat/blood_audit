@@ -15,11 +15,21 @@ events, links each event to its order, and compares:
   the #276 latest-before REQNO, and whether the linked order's DCTREQ is the
   gold one (compared, never printed).
 
+* the audit records (plan 4.1-4.2, PR 3): audit_orders runs over the
+  eligible requests with their diagnoses, and ``build_audit_events`` turns
+  them into event records and REQNO-level excluded records. Per gold REQNO:
+  row type and reason, event count and sequence, distinct event audit_ids
+  under the REQNO's parent id, linkage fields, the linked USETYPE,
+  ``unit_family_mismatch`` and ``declared_use_applies`` (operations are
+  IPTSUMOPRT records, INCPT surgery fees, INCGRP 111, and general
+  anaesthesia charges, AS056-AS059: owner decision 8.15 (c)). The January
+  record counts of plan 6.2 are asserted; 2025 counts are printed.
+
 It also prints link counts over 2025 and January (plan 2.2), unasserted.
 
 Output is counts only. A gold mismatch line names the REQNO, the event and
-the field, with the gold and computed unit counts, status codes, link tags
-or REQNOs.
+the field, with the gold and computed unit counts, status codes, link tags,
+REQNOs, USETYPE codes or flags; never an HN, AN, DCTREQ or audit_id.
 Exit status 1 on any mismatch, or when the gold CSV is named but unreadable.
 
 Environment variables:
@@ -36,6 +46,7 @@ Usage: ``uv run python scripts/pilot/issue_events_gold_check.py``
 from __future__ import annotations
 
 import csv
+import logging
 import os
 import sys
 from collections import Counter, defaultdict
@@ -44,22 +55,41 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+import run_pipeline as rp
 from _hosxp_dt import _parse_hosxp_date, _parse_time
 
 from bba.attribution import load_reqno_to_doctor
-from bba.audit_orders import BloodOrderInput
+from bba.audit_orders import (
+    AuditOrdersConfig,
+    BloodOrderInput,
+    build_audit_id,
+    build_audit_orders,
+)
+from bba.declared_use import collapse_usetype
 from bba.issue_events import (
+    AuditEvent,
+    AuditEvents,
     CandidateOrder,
     EventLink,
+    ExcludedReqno,
     LedgerUnits,
+    build_audit_events,
     candidate_order,
     cluster_events,
     link_events,
     units_from_ledger,
 )
+from bba.issue_events.audit_event import unit_family
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-EXPORT_TABLES = ("BDVST.csv", "BDVSTDT.csv", "BDVSTTRANS.csv")
+EXPORT_TABLES = (
+    "BDVST.csv",
+    "BDVSTDT.csv",
+    "BDVSTTRANS.csv",
+    "Diagnosis.csv",
+    "IPTSUMOPRT.csv",
+    "INCPT_OPRTACT.csv",
+)
 YEAR, JANUARY = "2025", "2025-01"
 
 # per_issue_plan.md sections 0 and 1.1, measured over the same export.
@@ -76,7 +106,17 @@ EXPECTED_TOTALS = {
     "events_january": 1_830,
     "events_january_red_cell": 1_321,
     "events_january_platelet": 509,
+    "units_family_mismatch_2025": 1,
+    # Plan 6.2 January invariants for the audit records.
+    "audit_event_records_january": 1_812,
+    "audit_event_reqnos_january": 1_178,
+    "audit_no_issue_records_january": 5,
+    "audit_excluded_records_january": 15,
+    "audit_excluded_measured_events_january": 18,
 }
+# Owner decision 8.15 (c), amended 2026-11-22.
+SURGERY_FEE_GROUP = "111"
+GENERAL_ANAESTHESIA = frozenset({"AS056", "AS057", "AS058", "AS059"})
 ANCHOR_TOLERANCE_H = 0.006
 
 
@@ -89,6 +129,8 @@ class Order:
     status: str
     cancelled: bool
     req_month: str
+    record: BloodOrderInput
+    usetype: str | None
     candidate: CandidateOrder | None
 
     @property
@@ -108,8 +150,15 @@ def read_csv(path: Path) -> Iterator[dict[str, str]]:
 
 def load_orders(export: Path) -> dict[str, Order]:
     products: dict[str, list[str]] = defaultdict(list)
+    usetypes: dict[str, list[str]] = defaultdict(list)
     for r in read_csv(export / "BDVSTDT.csv"):
         products[r["REQNO"]].append(r["BDTYPE"])
+        usetypes[r["REQNO"]].append(r["USETYPE"])
+    diagnoses: dict[str, list[str]] = defaultdict(list)
+    for r in read_csv(export / "Diagnosis.csv"):
+        diagnoses[r["AN"]].append(r["ICD10"])
+    # Mixed USETYPE detail lines collapse to no declaration and log a warning.
+    logging.getLogger("bba.declared_use").setLevel(logging.ERROR)
     orders: dict[str, Order] = {}
     for r in read_csv(export / "BDVST.csv"):
         record = BloodOrderInput(
@@ -124,7 +173,7 @@ def load_orders(export: Path) -> dict[str, Order]:
             bdvst_date=_parse_hosxp_date(r["BDVSTDATE"]),
             bdvst_time=_parse_time(r["BDVSTTIME"]),
             products=tuple(products.get(r["REQNO"], [])),
-            diagnosis_codes=(),
+            diagnosis_codes=rp._icd_codes(*diagnoses.get(r["AN"], []), r["ICD10"]),
         )
         orders.setdefault(
             r["REQNO"],
@@ -136,6 +185,8 @@ def load_orders(export: Path) -> dict[str, Order]:
                 status=r["BDVSTST"],
                 cancelled=bool(r["CANCELDATE"]),
                 req_month=r["REQDATE"][:7],
+                record=record,
+                usetype=collapse_usetype(usetypes.get(r["REQNO"], [])),
                 candidate=candidate_order(record),
             ),
         )
@@ -188,6 +239,81 @@ def totals(orders: dict[str, Order], results: Results) -> Counter[str]:
             got[f"events_{scope}_{o.candidate.component}"] += len(links)
         got["issued_units_2025"] += len(ledger.issued)
         got["units_reserved_not_issued_2025"] += ledger.units_reserved_not_issued
+        got["units_family_mismatch_2025"] += sum(
+            unit_family(u.bdtype) != o.candidate.component for u in ledger.issued
+        )
+    return got
+
+
+def operation_times(export: Path, ans: set[str]) -> dict[str, list[datetime]]:
+    """Operation times per admission under owner decision 8.15 (c)."""
+    ipt: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for r in rp._normalize_iptsumoprt(
+        [r for r in read_csv(export / "IPTSUMOPRT.csv") if r["AN"] in ans]
+    ):
+        ipt[r["AN"]].append(r)
+    inc: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for r in rp._normalize_incpt(
+        [r for r in read_csv(export / "INCPT_OPRTACT.csv") if r["AN"] in ans]
+    ):
+        code = r.get("O__OPRTACT") or r.get("INCOME") or r.get("ORDERCODE") or ""
+        if r["INCGRP"] == SURGERY_FEE_GROUP or code in GENERAL_ANAESTHESIA:
+            inc[r["AN"]].append(r)
+    return {
+        an: [
+            e.operative_datetime
+            for e in rp._build_op_events(ipt[an], [], inc[an], {}, {}, an)
+        ]
+        for an in ans
+    }
+
+
+def audit_records(
+    export: Path, orders: dict[str, Order], audited: set[str], results: Results
+) -> AuditEvents:
+    """Plan PR 3: audit_orders, then one record per event or excluded REQNO."""
+    filtered = build_audit_orders(
+        [orders[q].record for q in sorted(audited)],
+        AuditOrdersConfig(code_version="issue-events-gold-check"),
+    )
+    return build_audit_events(
+        filtered,
+        {q: ledger for q, (ledger, _) in results.items()},
+        [o.candidate for o in orders.values() if o.candidate is not None],
+        usetypes={q: o.usetype for q, o in orders.items()},
+        operations=operation_times(export, {orders[q].an for q in audited}),
+    )
+
+
+def audit_totals(orders: dict[str, Order], audit: AuditEvents) -> Counter[str]:
+    """Plan 6.2 record counts per scope; January is asserted, 2025 printed."""
+    got: Counter[str] = Counter()
+    for scope in ("2025", "january"):
+        reqnos = {
+            e.order.reqno
+            for e in audit.events
+            if scope in scopes_of(orders[e.order.reqno])
+        }
+        got[f"audit_event_reqnos_{scope}"] = len(reqnos)
+    for e in audit.events:
+        for scope in scopes_of(orders[e.order.reqno]):
+            got[f"audit_event_records_{scope}"] += 1
+            got[f"audit_events_unit_family_mismatch_{scope}"] += e.unit_family_mismatch
+            got[f"audit_declared_use_applies_{scope}_{e.linkage_rule}"] += (
+                e.declared_use_applies
+            )
+            if e.linkage_rule == "fresh_order" and e.linked_usetype in {"2", "3"}:
+                got[f"audit_fresh_declaring_{scope}_{e.order.component}"] += 1
+                got[f"audit_fresh_declaring_applies_{scope}_{e.order.component}"] += (
+                    e.declared_use_applies
+                )
+    for r in audit.excluded:
+        for scope in scopes_of(orders[r.reqno]):
+            kind = "no_issue" if r.reason == "no_issue_record" else "excluded"
+            got[f"audit_{kind}_records_{scope}"] += 1
+            if kind == "excluded":
+                got[f"audit_excluded_measured_events_{scope}"] += r.events_in_reqno
+                got[f"audit_excluded_reason_{scope}_{r.reason}"] += 1
     return got
 
 
@@ -322,6 +448,121 @@ def event_mismatches(
     return out
 
 
+def audit_mismatches(
+    gold_rows: list[dict[str, str]], orders: dict[str, Order], audit: AuditEvents
+) -> tuple[list[str], Counter[str]]:
+    """Compare the PR 3 audit records of each gold REQNO with gold.csv."""
+    events: dict[str, list[AuditEvent]] = defaultdict(list)
+    for e in audit.events:
+        events[e.order.reqno].append(e)
+    excluded = {r.reqno: r for r in audit.excluded}
+    by_reqno: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for r in gold_rows:
+        by_reqno[r["reqno"]].append(r)
+    out: list[str] = []
+    seen: Counter[str] = Counter()
+    for q, rows in by_reqno.items():
+        parent = build_audit_id(orders[q].hn, q)
+        got, record = events.get(q, []), excluded.get(q)
+        kind = rows[0]["row_type"]
+        if kind != "event":
+            seen[f"audit_reqno_records_{kind}"] += record is not None
+            out += reqno_record_mismatches(q, rows[0], got, record, parent)
+            continue
+        if record is not None:
+            out.append(f"{q} row_type: gold event got {record.reason}")
+        want_seqs = sorted(int(r["event_seq"]) for r in rows)
+        if [e.event_seq for e in got] != want_seqs:
+            out.append(
+                f"{q} event_seq: gold {want_seqs} got {[e.event_seq for e in got]}"
+            )
+            continue
+        ids = {e.audit_id for e in got}
+        if len(ids) != len(got) or parent in ids:
+            out.append(
+                f"{q} event audit_ids are not disjoint from each other and the parent"
+            )
+        if {e.parent_audit_id for e in got} != {parent}:
+            out.append(f"{q} parent_audit_id is not the REQNO's legacy audit_id")
+        for r in rows:
+            seen["audit_event_records"] += 1
+            seen[f"audit_declared_use_applies_{r['declared_use_applies']}"] += 1
+            out += audit_event_mismatches(q, r, got[int(r["event_seq"]) - 1])
+    return out, seen
+
+
+def audit_event_mismatches(q: str, gold: dict[str, str], e: AuditEvent) -> list[str]:
+    tag = f"{q} ev{gold['event_seq']}"
+    before = e.linked_reqno_latest_before or ""
+    # gold.csv has no unit_family_mismatch column; no gold unit crosses
+    # families (plan 1.1 measured 1 such unit in 2025, outside the gold set).
+    fields = (
+        ("events_in_reqno", gold["events_in_reqno"], str(e.events_in_reqno)),
+        ("issue_units", gold["issue_units"], str(e.issue_units)),
+        ("unit_statuses", gold["unit_statuses"], "".join(e.issue_unit_statuses)),
+        (
+            "units_reserved_not_issued",
+            gold["units_reserved_not_issued"],
+            str(e.units_reserved_not_issued),
+        ),
+        ("linkage_tag", gold["linkage_tag"], e.linkage_rule),
+        ("linked_reqno", gold["linked_reqno"], e.linked_reqno),
+        ("linked_order_status", gold["linked_order_status"], e.linked_order_status),
+        ("linked_reqno_latest_before", gold["linked_reqno_latest_before"], before),
+        ("linked_usetype", gold["linked_usetype"], e.linked_usetype or ""),
+        ("unit_family_mismatch", "false", str(e.unit_family_mismatch).lower()),
+        (
+            "declared_use_applies",
+            gold["declared_use_applies"],
+            str(e.declared_use_applies).lower(),
+        ),
+    )
+    out = [
+        f"{tag} {name}: gold {want} got {got}"
+        for name, want, got in fields
+        if want != got
+    ]
+    if (
+        abs(e.order_to_issue_hours - float(gold["order_to_issue_h"]))
+        > ANCHOR_TOLERANCE_H
+    ):
+        out.append(f"{tag} order_to_issue_h differs")
+    return out
+
+
+def reqno_record_mismatches(
+    q: str,
+    gold: dict[str, str],
+    got: list[AuditEvent],
+    record: object,
+    parent: str,
+) -> list[str]:
+    if got:
+        return [f"{q} gold {gold['row_type']} row got {len(got)} event records"]
+    if record is None:
+        return [f"{q} gold {gold['row_type']} row got no REQNO-level record"]
+    assert isinstance(record, ExcludedReqno)
+    out = [
+        f"{q} {name}: gold {want} got {have}"
+        for name, want, have in (
+            ("reason", gold["reason"], record.reason),
+            ("events_in_reqno", gold["events_in_reqno"], str(record.events_in_reqno)),
+            (
+                "units_reserved_not_issued",
+                gold["units_reserved_not_issued"],
+                str(record.units_reserved_not_issued),
+            ),
+            ("event_seq", gold["event_seq"], ""),
+        )
+        if want != have
+    ]
+    if not record.audit_id == record.parent_audit_id == parent:
+        out.append(f"{q} REQNO-level audit_id is not the legacy audit_id")
+    if record.event_seq is not None:
+        out.append(f"{q} REQNO-level record has an event_seq")
+    return out
+
+
 def main() -> int:
     export = Path(
         os.environ.get("BBA_PILOT_RAW_DIR")
@@ -367,18 +608,28 @@ def main() -> int:
         events = cluster_events(units.issued, [c.placed_at for c in scope])
         results[q] = (units, link_events(own, events, scope))
 
-    got = totals(orders, results)
+    audited = {q for q in results if eligible(orders[q])} | {
+        r["reqno"] for r in gold_rows
+    }
+    audit = audit_records(export, orders, audited, results)
+    got = totals(orders, results) + audit_totals(orders, audit)
     for name, want in EXPECTED_TOTALS.items():
         ok = got[name] == want
         failures += not ok
         print(f"{'ok ' if ok else 'BAD'} {name}: expected {want:,} got {got[name]:,}")
     for name, count in sorted(link_counts(orders, results, doctors).items()):
         print(f"info {name}: {count:,}")
+    for name, count in sorted(audit_totals(orders, audit).items()):
+        if name not in EXPECTED_TOTALS:
+            print(f"info {name}: {count:,}")
 
     if not gold_rows:
         print("skip: gold comparison (BBA_ISSUE_EVENTS_GOLD_CSV unset)")
     else:
         mismatches, seen = gold_mismatches(gold_rows, orders, results, doctors)
+        audit_out, audit_seen = audit_mismatches(gold_rows, orders, audit)
+        mismatches += audit_out
+        seen += audit_seen
         failures += len(mismatches)
         print(f"gold: {dict(seen)}; {len(mismatches)} mismatch(es)")
         for line in mismatches:
