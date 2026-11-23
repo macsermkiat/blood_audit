@@ -33,7 +33,9 @@ class ReturnsSummary(BaseModel):
     (``==5``) and crossmatch-incompatible (``==7``) units, records the ordered
     unit amount summed from the order's BDVSTDT ``UNITAMT`` lines, and reports
     whether the ledger COVERS the order (``ledger_complete`` =
-    ``units_total >= ordered_unit_amount``).
+    ``units_total >= ordered_unit_amount``). An issue event's summary
+    (:func:`summarize_event_returns`) has no ordered amount and is complete by
+    construction, so its disposition reads its units alone.
 
     ``disposition`` is derived (see :meth:`disposition`):
 
