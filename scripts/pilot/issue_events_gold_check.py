@@ -77,6 +77,7 @@ from _gold_check_returns import (
     returns_counts,
 )
 from _hosxp_dt import _parse_hosxp_date, _parse_time
+from _periop_operations import operations_by_an
 
 from bba.attribution import load_reqno_to_doctor
 from bba.audit_orders import (
@@ -155,9 +156,6 @@ EXPECTED_TOTALS = {
     "returns_audit_not_transfused_2025_platelet": 78,
     "returns_audit_disposition_differs_from_all_returned_2025": 0,
 }
-# Owner decision 8.15 (c), amended 2026-11-22.
-SURGERY_FEE_GROUP = "111"
-GENERAL_ANAESTHESIA = frozenset({"AS056", "AS057", "AS058", "AS059"})
 ANCHOR_TOLERANCE_H = 0.006
 
 
@@ -294,25 +292,15 @@ def totals(orders: dict[str, Order], results: Results) -> Counter[str]:
 
 def operation_times(export: Path, ans: set[str]) -> dict[str, list[datetime]]:
     """Operation times per admission under owner decision 8.15 (c)."""
-    ipt: dict[str, list[dict[str, str]]] = defaultdict(list)
-    for r in rp._normalize_iptsumoprt(
-        [r for r in read_csv(export / "IPTSUMOPRT.csv") if r["AN"] in ans]
-    ):
-        ipt[r["AN"]].append(r)
-    inc: dict[str, list[dict[str, str]]] = defaultdict(list)
-    for r in rp._normalize_incpt(
-        [r for r in read_csv(export / "INCPT_OPRTACT.csv") if r["AN"] in ans]
-    ):
-        code = r.get("O__OPRTACT") or r.get("INCOME") or r.get("ORDERCODE") or ""
-        if r["INCGRP"] == SURGERY_FEE_GROUP or code in GENERAL_ANAESTHESIA:
-            inc[r["AN"]].append(r)
-    return {
-        an: [
-            e.operative_datetime
-            for e in rp._build_op_events(ipt[an], [], inc[an], {}, {}, an)
-        ]
-        for an in ans
-    }
+    operations = operations_by_an(
+        rp._normalize_iptsumoprt(
+            [r for r in read_csv(export / "IPTSUMOPRT.csv") if r["AN"] in ans]
+        ),
+        rp._normalize_incpt(
+            [r for r in read_csv(export / "INCPT_OPRTACT.csv") if r["AN"] in ans]
+        ),
+    )
+    return {an: [op.at for op in operations.get(an, [])] for an in ans}
 
 
 def audit_records(
