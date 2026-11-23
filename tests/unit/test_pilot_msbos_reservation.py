@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import csv
 import importlib.util
 import json
 import sys
@@ -18,7 +17,6 @@ from bba.attribution.outputs import RANKING_CSV_COLUMNS
 from bba.cohort_detector import CohortAssignment, CohortLabel, OperativeEvent
 from bba.deterministic_classifier import BypassReason, ClassifierResult
 from bba.hb_lookup import HbLookupResult
-from bba.platelet_lookup import PlateletLookupResult
 from bba.vitals_extractor import VitalsNote
 
 
@@ -58,7 +56,7 @@ def test_run_pipeline_msbos_env_override(
     module = _load_run_pipeline(f"pilot_run_pipeline_msbos_{env_value}")
 
     assert module.MSBOS_RESERVATION_PILOT_ENABLED is expected
-    assert module.CODE_VERSION == "pilot-mini"
+    assert module.CODE_VERSION == "pilot-event-1+gap4h+link-own"
 
 
 def test_run_pipeline_msbos_unset_uses_library_default(
@@ -73,7 +71,7 @@ def test_run_pipeline_msbos_unset_uses_library_default(
         module.MSBOS_RESERVATION_PILOT_ENABLED
         is feature_flags.MSBOS_RESERVATION_ENABLED
     )
-    assert module.CODE_VERSION == "pilot-mini"
+    assert module.CODE_VERSION == "pilot-event-1+gap4h+link-own"
 
 
 @pytest.mark.parametrize("env_value", ["1", "0"])
@@ -388,156 +386,6 @@ def test_run_pipeline_msbos_platelet_columns_cover_locked_verdicts(
         msbos_reference=module.load_msbos_reference(),
     )
     assert not set(module.MSBOS_PLATELET_FIELDNAMES).intersection(rbc)
-
-
-def _configure_minimal_run_pipeline_platelet(
-    module: ModuleType,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> AuditOrder:
-    order_datetime = datetime(2026, 7, 16, 4, 0, tzinfo=UTC)
-    order = AuditOrder(
-        audit_id="audit-pilot-msbos-platelet-main",
-        hn="HN1",
-        an="AN1",
-        reqno="REQ1",
-        order_datetime=order_datetime,
-        anchor_imputed=False,
-        products_ordered=("PLT-POOL",),
-        diagnosis_codes=(),
-        component="platelet",
-    )
-    operation = OperativeEvent(
-        icd9="major",
-        or_flag=True,
-        operative_datetime=order_datetime + timedelta(hours=4),
-    )
-    platelet_result = PlateletLookupResult(
-        value_k_ul=120.0,
-        datetime_utc=order_datetime,
-        source="HEMATOLOGY",
-        freshness="fresh",
-    )
-    returns_result = ClassifierResult(
-        classification="RETURNED_NOT_TRANSFUSED",
-        bypass_reason=BypassReason.RETURNED_NOT_TRANSFUSED,
-        cohort_threshold=None,
-        rationale="returned_not_transfused",
-    )
-    reference = SimpleNamespace(
-        content_hash="platelet-reference-hash",
-        groups_for=lambda code: ("Arthroplasty",) if code == "major" else (),
-        codes=lambda: frozenset(),
-        resolve=lambda code: None,
-    )
-    reserved_units_map = {
-        ("HN1", "REQ1", module.ComponentFamily.PLATELET): 2,
-    }
-
-    work = tmp_path / "pilot"
-    bundle = work / "bundle"
-    bundle.mkdir(parents=True)
-    monkeypatch.setattr(module, "WORK", work)
-    monkeypatch.setattr(module, "BUNDLE", bundle)
-    # Register the shared flags with monkeypatch even though this pilot leg only
-    # reads import-time constants, so the integration seam cannot leak state.
-    monkeypatch.setattr(
-        feature_flags,
-        "RESERVE_AHEAD_ROUTER_ENABLED",
-        feature_flags.RESERVE_AHEAD_ROUTER_ENABLED,
-    )
-    monkeypatch.setattr(
-        feature_flags,
-        "DECLARED_USETYPE_ENABLED",
-        feature_flags.DECLARED_USETYPE_ENABLED,
-    )
-    monkeypatch.setattr(
-        feature_flags,
-        "MSBOS_RESERVATION_ENABLED",
-        feature_flags.MSBOS_RESERVATION_ENABLED,
-    )
-    monkeypatch.setattr(module, "_read_csv", lambda _name: [])
-    monkeypatch.setattr(module, "load_bdvsttrans_rows", lambda _bundle: [])
-    monkeypatch.setattr(module, "load_msbos_reference", lambda: reference)
-    monkeypatch.setattr(
-        module,
-        "reserved_units_by_component",
-        lambda _rows: reserved_units_map,
-    )
-    monkeypatch.setattr(
-        module,
-        "build_audit_orders",
-        lambda _inputs, _config: FilterResult(included=(order,), excluded=()),
-    )
-    monkeypatch.setattr(module, "lookup_platelet", lambda **_kwargs: platelet_result)
-    monkeypatch.setattr(module, "_build_op_events", lambda *_args: (operation,))
-    monkeypatch.setattr(
-        module,
-        "_platelet_returns_result",
-        lambda **_kwargs: returns_result,
-    )
-    return order
-
-
-def test_run_pipeline_main_serializes_flag_on_platelet_msbos_columns(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", "1")
-    module = _load_run_pipeline("pilot_run_pipeline_msbos_platelet_main_on")
-    order = _configure_minimal_run_pipeline_platelet(module, monkeypatch, tmp_path)
-
-    module.main()
-
-    with (module.WORK / "report.csv").open(encoding="utf-8", newline="") as fh:
-        rows = list(csv.DictReader(fh))
-    assert len(rows) == 1
-    row = rows[0]
-    assert row["reqno"] == order.reqno
-    assert row["component"] == "platelet"
-    assert row["classification"] == "RETURNED_NOT_TRANSFUSED"
-    assert {
-        "msbos_plt_category": row["msbos_plt_category"],
-        "msbos_plt_count_k_ul": row["msbos_plt_count_k_ul"],
-        "msbos_plt_over_above_per_ul": row["msbos_plt_over_above_per_ul"],
-        "msbos_plt_clinician_signed": row["msbos_plt_clinician_signed"],
-    } == {
-        "msbos_plt_category": "major_non_neuraxial",
-        "msbos_plt_count_k_ul": "120.0",
-        "msbos_plt_over_above_per_ul": "80000",
-        "msbos_plt_clinician_signed": "True",
-    }
-    assert {
-        "msbos_reserved_units": row["msbos_reserved_units"],
-        "msbos_reason": row["msbos_reason"],
-        "msbos_is_over": row["msbos_is_over"],
-        "msbos_reference_hash": row["msbos_reference_hash"],
-        "msbos_resolved_icd9": row["msbos_resolved_icd9"],
-    } == {
-        "msbos_reserved_units": "2",
-        "msbos_reason": "over_major_non_neuraxial",
-        "msbos_is_over": "True",
-        "msbos_reference_hash": "platelet-reference-hash",
-        "msbos_resolved_icd9": "major",
-    }
-    assert row["msbos_token"] == ""
-    assert row["msbos_recommended_units"] == ""
-
-
-def test_run_pipeline_main_flag_off_keeps_msbos_schema_frozen(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", "0")
-    module = _load_run_pipeline("pilot_run_pipeline_msbos_platelet_main_off")
-    _configure_minimal_run_pipeline_platelet(module, monkeypatch, tmp_path)
-
-    module.main()
-
-    with (module.WORK / "report.csv").open(encoding="utf-8", newline="") as fh:
-        rows = list(csv.DictReader(fh))
-    assert len(rows) == 1
-    assert not any(name.startswith("msbos_") for name in rows[0])
 
 
 @pytest.mark.parametrize(

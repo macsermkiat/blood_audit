@@ -13,14 +13,37 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
-# The exact report.csv schema as of ticket #120 (flag OFF). Freezing it here
-# guards the "flag-off reproduces today's report byte-for-byte" acceptance
-# criterion against accidental base-column edits.
+# The exact report.csv base schema (flag OFF), one row per issue event since
+# blood_audit #276 (plan 4.2: event identity, linkage and cutoff columns; the
+# PICK-based dispense_datetime_local dropped). Freezing it here makes any
+# base-column edit fail loudly.
 EXPECTED_BASE_FIELDNAMES = [
+    "audit_id",
+    "parent_audit_id",
     "reqno",
+    "event_seq",
+    "events_in_reqno",
     "an",
     "order_datetime_utc",
     "anchor_imputed",
+    "issue_datetime_local",
+    "issue_units",
+    "issue_units_returned",
+    "issue_unit_statuses",
+    "units_reserved_not_issued",
+    "unit_family_mismatch",
+    "linked_reqno",
+    "linked_order_datetime_local",
+    "linked_order_status",
+    "linkage_rule",
+    "linked_reqno_latest_before",
+    "order_after_issue",
+    "attributed_doctor_differs",
+    "order_to_issue_hours",
+    "declared_use_applies",
+    "prior_event_cutoff_local",
+    "linked_order_emrtype",
+    "linked_order_bdlevelemr",
     "evidence_anchor_reason",
     "evidence_anchor_datetime_local",
     "reanchor_gap_hours",
@@ -41,7 +64,6 @@ EXPECTED_BASE_FIELDNAMES = [
     "upcoming_procedure_hours",
     "crystalloid_liters_prior_4h",
     "anc_value",
-    "dispense_datetime_local",
     "use_datetime_local",
     "returned_blood_datetime_local",
     "classification",
