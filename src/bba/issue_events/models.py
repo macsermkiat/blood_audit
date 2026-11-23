@@ -13,15 +13,16 @@ from datetime import timedelta
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
+from bba.returns_ledger import INCOMPAT_STATUS, RETURNED_STATUS
+
 # Plan 1.2: the last gap bucket where most consecutive red-cell issues carry no
 # new Hb draw. Part of the code identity (plan 4.1): changing it re-keys events.
 ISSUE_EVENT_GAP = timedelta(hours=4)
 
-# Terminal UNITSTAT codes. A unit that left the bank and came back unused is
-# returned (3) or crossmatch-incompatible (7, never given). Dispensed (2) and
-# transfused (5) units count as transfused.
-RETURNED_STATUS = "3"
-NOT_TRANSFUSED_STATUSES = frozenset({RETURNED_STATUS, "7"})
+# A unit that left the bank and came back unused is returned or
+# crossmatch-incompatible (never given). Dispensed (2) and transfused (5)
+# units count as transfused.
+NOT_TRANSFUSED_STATUSES = frozenset({RETURNED_STATUS, INCOMPAT_STATUS})
 TRANSFUSED_STATUSES = frozenset({"2", "5"})
 
 

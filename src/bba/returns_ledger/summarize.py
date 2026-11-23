@@ -25,16 +25,16 @@ from collections.abc import Mapping, Sequence
 
 from bba.returns_ledger.models import ReturnsSummary
 
-_RETURNED_STATUS = "3"
-_TRANSFUSED_STATUS = "5"
-_INCOMPAT_STATUS = "7"
+RETURNED_STATUS = "3"
+TRANSFUSED_STATUS = "5"
+INCOMPAT_STATUS = "7"
 
 # Terminal disposition precedence when one physical unit carries several
 # lifecycle rows. Transfused wins so a given unit is never downgraded to
 # returned (fail safe — a false "not transfused" would clear a real
 # transfusion); then returned, then incompatible, then dispensed. Any other
 # status falls back to first-seen.
-_TERMINAL_PRECEDENCE = (_TRANSFUSED_STATUS, _RETURNED_STATUS, _INCOMPAT_STATUS, "2")
+_TERMINAL_PRECEDENCE = (TRANSFUSED_STATUS, RETURNED_STATUS, INCOMPAT_STATUS, "2")
 
 
 def terminal_status(statuses: Sequence[str]) -> str:
@@ -162,23 +162,44 @@ def summarize_returns(
         Raw ``UNITAMT`` strings from the order's BDVSTDT detail lines.
     """
     units = physical_units(trans_rows)
-    units_total = len(units)
-    units_returned = sum(1 for status in units if status == _RETURNED_STATUS)
-    units_transfused = sum(1 for status in units if status == _TRANSFUSED_STATUS)
-    units_incompat = sum(1 for status in units if status == _INCOMPAT_STATUS)
-
     ordered_unit_amount = _parse_ordered_amount(unitamt_lines)
     ledger_complete = (
-        units_total > 0
+        len(units) > 0
         and ordered_unit_amount is not None
-        and units_total >= ordered_unit_amount
+        and len(units) >= ordered_unit_amount
     )
-
     return ReturnsSummary(
-        units_total=units_total,
-        units_returned=units_returned,
-        units_transfused=units_transfused,
-        units_incompat=units_incompat,
+        **_unit_counts(units),
         ordered_unit_amount=ordered_unit_amount,
         ledger_complete=ledger_complete,
     )
+
+
+def summarize_event_returns(
+    unit_statuses: Sequence[str], reqno: ReturnsSummary
+) -> ReturnsSummary:
+    """One issue event's summary, counted like a REQNO's (blood_audit #276).
+
+    ``unit_statuses`` are the terminal statuses of the event's issued units
+    (``AuditEvent.issue_unit_statuses``); ``reqno`` is the REQNO's
+    :func:`summarize_returns` over the same admission-scoped rows. Whether the
+    ledger covers the order is a REQNO fact, so the ordered amount and
+    ``ledger_complete`` are the REQNO's: an event of an under-covered REQNO
+    stays ``inconclusive``.
+    """
+    if not unit_statuses:
+        raise ValueError("an issue event with no units has no returns summary")
+    return ReturnsSummary(
+        **_unit_counts(unit_statuses),
+        ordered_unit_amount=reqno.ordered_unit_amount,
+        ledger_complete=reqno.ledger_complete,
+    )
+
+
+def _unit_counts(statuses: Sequence[str]) -> dict[str, int]:
+    return {
+        "units_total": len(statuses),
+        "units_returned": sum(1 for s in statuses if s == RETURNED_STATUS),
+        "units_transfused": sum(1 for s in statuses if s == TRANSFUSED_STATUS),
+        "units_incompat": sum(1 for s in statuses if s == INCOMPAT_STATUS),
+    }

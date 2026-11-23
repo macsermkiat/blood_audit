@@ -31,6 +31,14 @@ events, links each event to its order, and compares:
   counts are asserted on its own pool; the same counts on the audit records,
   and how many events get a cutoff, are printed.
 
+* per gold event (PR 5, ``_gold_check_returns.py``): the event returns
+  summary (disposition, unit, returned, incompatible and transfused counts)
+  against gold.csv's ``all_returned``, ``expected_class`` and
+  ``unit_statuses``. For every clustered request, its events plus its
+  reserved-not-issued units must reproduce the REQNO-level totals. Plan 1.3's
+  all-returned counts are asserted on its own pool; the same counts on the
+  audit records are printed.
+
 It also prints link counts over 2025 and January (plan 2.2), unasserted.
 
 Output is counts only. A gold mismatch line names the REQNO, the event and
@@ -63,6 +71,13 @@ from pathlib import Path
 
 import run_pipeline as rp
 from _gold_check_hb import cutoff_counts, gold_hb_mismatches
+from _gold_check_returns import (
+    gold_returns_mismatches,
+    load_unitamt,
+    reqno_summaries,
+    reqno_total_mismatches,
+    returns_counts,
+)
 from _hosxp_dt import _parse_hosxp_date, _parse_time
 
 from bba.attribution import load_reqno_to_doctor
@@ -131,6 +146,10 @@ EXPECTED_TOTALS = {
     # same records; and "not all returned" equals "has a status 2 or 5 unit".
     "cutoff_library_differs_from_inline_2025": 0,
     "cutoff_transfused_differs_from_status_2_or_5_2025": 0,
+    # Plan 1.3 returned events: every eligible request, plain 4 h window.
+    "returns_plan13_pool_all_returned_2025_red_cell": 1_928,
+    "returns_plan13_pool_all_returned_2025_platelet": 80,
+    "returns_plan13_pool_mixed_2025": 1_170,
 }
 # Owner decision 8.15 (c), amended 2026-11-22.
 SURGERY_FEE_GROUP = "111"
@@ -645,7 +664,23 @@ def main() -> int:
         for link in links
     ]
     cutoffs = cutoff_counts(audit, red_cell_events)
-    got = totals(orders, results) + audit_totals(orders, audit) + cutoffs
+    ans = {q: orders[q].an for q in results}
+    reqnos = reqno_summaries(ans, trans_rows, load_unitamt(export, set(results)))
+    returns = returns_counts(
+        audit,
+        reqnos,
+        results,
+        {q: o.candidate.component for q, o in orders.items() if o.candidate},
+        lambda q: eligible(orders[q]),
+    )
+    total_out, total_seen = reqno_total_mismatches(ans, trans_rows, results, reqnos)
+    failures += len(total_out)
+    print(
+        f"reqno totals = events + reserved: {dict(total_seen)}; {len(total_out)} mismatch(es)"
+    )
+    for line in total_out:
+        print(f"BAD {line}")
+    got = totals(orders, results) + audit_totals(orders, audit) + cutoffs + returns
     for name, want in EXPECTED_TOTALS.items():
         ok = got[name] == want
         failures += not ok
@@ -655,7 +690,7 @@ def main() -> int:
     for name, count in sorted(audit_totals(orders, audit).items()):
         if name not in EXPECTED_TOTALS:
             print(f"info {name}: {count:,}")
-    for name, count in sorted(cutoffs.items()):
+    for name, count in sorted((cutoffs + returns).items()):
         if name not in EXPECTED_TOTALS:
             print(f"info {name}: {count:,}")
 
@@ -665,8 +700,9 @@ def main() -> int:
         mismatches, seen = gold_mismatches(gold_rows, orders, results, doctors)
         audit_out, audit_seen = audit_mismatches(gold_rows, orders, audit)
         hb_out, hb_seen = gold_hb_mismatches(gold_rows, export, audit)
-        mismatches += audit_out + hb_out
-        seen += audit_seen + hb_seen
+        returns_out, returns_seen = gold_returns_mismatches(gold_rows, audit, reqnos)
+        mismatches += audit_out + hb_out + returns_out
+        seen += audit_seen + hb_seen + returns_seen
         failures += len(mismatches)
         print(f"gold: {dict(seen)}; {len(mismatches)} mismatch(es)")
         for line in mismatches:

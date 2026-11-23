@@ -12,19 +12,25 @@ from collections.abc import Sequence
 
 from bba.returns_ledger.models import Disposition, ReturnsSummary
 from bba.returns_ledger.summarize import (
+    INCOMPAT_STATUS,
+    RETURNED_STATUS,
     physical_unit_rows,
     physical_units,
     rows_for_admission,
+    summarize_event_returns,
     summarize_returns,
     terminal_status,
 )
 
 __all__: Sequence[str] = (
+    "INCOMPAT_STATUS",
+    "RETURNED_STATUS",
     "Disposition",
     "ReturnsSummary",
     "physical_unit_rows",
     "physical_units",
     "rows_for_admission",
+    "summarize_event_returns",
     "summarize_returns",
     "terminal_status",
 )
