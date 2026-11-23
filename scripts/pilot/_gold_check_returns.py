@@ -7,9 +7,11 @@ and incompatible counts match gold's statuses.
 
 ``reqno_total_mismatches`` checks, for every request the script clustered,
 that its events plus its reserved-not-issued units add up to the REQNO
-counts from ``summarize_returns`` over the admission-scoped rows. Reserved
-units are found here from the raw PAYDATE/PAYTIME, not from
-``units_from_ledger``.
+counts from ``summarize_returns`` over the admission-scoped rows: each unit
+lands in exactly one event or the reserved set. Both sides share the unit
+collapsing, so this is a partition check, not a check that the REQNO counts
+are unchanged. Reserved units are found here from the raw PAYDATE/PAYTIME,
+not from ``units_from_ledger``.
 
 ``returns_counts`` gives the 2025 all-returned and mixed event counts on the
 audit records, how many disagree with the event's ``all_returned`` flag (the
@@ -140,15 +142,15 @@ def gold_returns_mismatches(
     gold_rows: list[dict[str, str]],
     audit: AuditEvents,
 ) -> tuple[list[str], Counter[str]]:
-    events: dict[tuple[str, str], AuditEvent] = {
-        (e.order.reqno, str(e.event_seq)): e for e in audit.events
+    events: dict[tuple[str, int], AuditEvent] = {
+        (e.order.reqno, e.event_seq): e for e in audit.events
     }
     out: list[str] = []
     seen: Counter[str] = Counter()
     for gold in gold_rows:
         if gold["row_type"] != "event":
             continue
-        q, seq = gold["reqno"], gold["event_seq"]
+        q, seq = gold["reqno"], int(gold["event_seq"])
         e = events.get((q, seq))
         if e is None:
             out.append(f"{q} ev{seq} returns: no audit event record")

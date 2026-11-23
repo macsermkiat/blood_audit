@@ -123,7 +123,12 @@ def test_reqno_totals_are_unchanged_and_equal_the_sum_of_its_events() -> None:
         ordered_unit_amount=4,
         ledger_complete=True,
     )
-    for field in ("units_total", "units_returned", "units_transfused"):
+    for field in (
+        "units_total",
+        "units_returned",
+        "units_transfused",
+        "units_incompat",
+    ):
         assert sum(getattr(e, field) for e in events) == getattr(reqno, field)
 
 
@@ -184,7 +189,9 @@ def test_an_event_without_units_is_rejected() -> None:
 
 
 @pytest.mark.parametrize("ordered", ["2", "3"])
-@pytest.mark.parametrize("statuses", list(product("2357", repeat=2)))
+@pytest.mark.parametrize(
+    "statuses", list(product(["1", "2", "3", "4", "5", "7", ""], repeat=2))
+)
 def test_event_screens_not_transfused_exactly_when_all_its_units_returned(
     statuses: tuple[str, str], ordered: str
 ) -> None:
