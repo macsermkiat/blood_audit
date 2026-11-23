@@ -15,11 +15,8 @@ The pilot scripts retain dataset-specific sampling and review artifacts. They us
 sample_bundle.py        →  bundle/        (11 sampled-down CSVs)
                         →  sample_manifest.csv
 
-run_pipeline.py         →  report.csv     (per-case deterministic verdict)
-
-preflight_declared_usetype.py
-                        →  preflight_declared_usetype.json
-                                            (read-only go-live evidence)
+run_pipeline.py         →  report.csv     (deterministic verdict per issue event)
+                        →  events_manifest.csv
 
 run_llm_leg.py          →  llm_report.json
                         →  data/audit_store/   (Parquet + markers)
@@ -47,7 +44,7 @@ build_review.py         →  review.html    (single page for human review;
 | `BBA_PILOT_RUN_ID` | `pilot-mini` | run_id stamped on audit_store rows |
 | `BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE` | `false` | Opt-in to the missing-Hb MTP / peri-procedural auto-APPROPRIATE pre-check (SEED — set `1`/`true` only after clinical sign-off) |
 | `BBA_PILOT_DECLARED_USETYPE` | `0` (off) | When set to `1`, threads BDVSTDT.USETYPE declared intent into both pilot legs and appends `declared_use_code` / `declared_use_label` to `report.csv` |
-| `BBA_PREFLIGHT_OUT` | `$BBA_PILOT_WORK_DIR/preflight_declared_usetype.json` | Output path for the declared-USETYPE preflight JSON artifact |
+| `BBA_BDVST_CSV` | `../Bloodbank/data/encrypted/BDVST.csv` | BDVST export with DCTREQ; `run_pipeline.py` reads it only to fill `attributed_doctor_differs`, the rankings for attribution |
 | `BBA_PILOT_ONLY_REQNO` | _(unset)_ | Comma-separated REQNOs: `run_llm_leg.py` processes/submits only those cases and MERGES the fresh records into the existing `llm_report.json` (other cases keep their records). Always pair with a fresh `BBA_PILOT_RUN_ID` — the store is idempotent on `(run_id, audit_id)`, so a reused run id keeps the stale row |
 | `BBA_PILOT_BATCH_MAX_WAIT` | `86400` | Seconds to wait for the Anthropic batch (default = the 24h batch SLA) |
 | `BBA_PILOT_TRANSPORT` | `anthropic-batch` | `claude-cli` runs the LLM leg through the local `claude` CLI on the claude.ai subscription, one `claude -p --json-schema` call per case, answers checkpointed under `$BBA_PILOT_WORK_DIR/cli_batches/<batch_id>/` (resume with `BBA_PILOT_BATCH_ID`). For A/B runs that should not spend API credit; NOT the production path, rows carry `_transport: claude-cli`. No `ANTHROPIC_API_KEY` needed |
@@ -69,8 +66,6 @@ export BBA_PRIVACY_ARTIFACTS=/path/to/approved-evidence.json
 
 uv run python scripts/pilot/sample_bundle.py         # sample 10 cases
 uv run python scripts/pilot/run_pipeline.py          # deterministic verdicts
-uv run python scripts/pilot/preflight_declared_usetype.py
-                                                      # read-only go-live evidence
 
 # Optional: run the ingest leg via the CLI on the sampled bundle
 export BBA_DATA_DIR="$BBA_PILOT_WORK_DIR/data"
@@ -118,6 +113,8 @@ anyway, set `BBA_PILOT_ALLOW_UNAUDITED=1`; the builder prints the reason it
 would have refused.
 
 ### Dev-test consortium (Claude Code, not a pipeline step)
+
+`dev_consortium/consortium.py`, `offline_reapply.py` and `fix_reasoning_split.py` predate issue events (#276) and still work per REQNO.
 
 While a prompt, schema or evidence change is being tested, a consortium of
 reviewers checks whether the answers the API returned are sound and correct. It
@@ -272,19 +269,12 @@ BBA_PILOT_RUN_ID=pilot-mini-reapply-v2 \
 uv run python scripts/pilot/offline_reapply.py
 ```
 
-### `preflight_returns_validation.py` — returns-ledger go-live evidence (#125)
+### `preflight_*.py` — superseded
 
-READ-ONLY. Produces the evidence a clinician owner needs before flipping
-`RETURNS_LEDGER_ENABLED` for a real run — reissue/partial-coverage prevalence,
-administration-note recall, the no-non-returned-unit invariant, and a go/hold
-summary. It never enables the feature and never changes pipeline behaviour.
-`BBA_PREFLIGHT_BDVSTTRANS` defaults to the bundle's `BDVSTTRANS.csv` (else the
-raw Bloodbank export).
-
-```bash
-uv run python scripts/pilot/preflight_returns_validation.py
-# → $BBA_PILOT_WORK_DIR/preflight_returns_validation.json
-```
+`preflight_declared_usetype.py` and `preflight_returns_validation.py` were
+one-off per-REQNO go-live evidence for the declared-use (#151) and returns (#125)
+seams. Since issue events (#276) they exit with a "superseded by issue events"
+message; the last working versions are in git history.
 
 ### `reconcile_verdict_sources.py` — pre-swap cross-check for doctor ranking
 
