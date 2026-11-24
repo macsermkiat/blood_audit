@@ -9,6 +9,7 @@ pilot path until it switches to events.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import datetime, timedelta
 
 from bba.hb_lookup.anchor import DEFAULT_REANCHOR_THRESHOLD, EvidenceAnchor
 from bba.hb_lookup.lookup import _MIN_WINDOW
@@ -17,6 +18,7 @@ from bba.issue_events import AuditEvent
 # Issue #249: a transfusion inside the 24 h Hb minimum's window may already
 # have corrected the low, so the minimum starts at it.
 PRIOR_TRANSFUSION_WINDOW = _MIN_WINDOW
+NOTES_WINDOW_WITHOUT_NEXT_ISSUE = timedelta(hours=24)
 
 
 def resolve_event_anchors(event: AuditEvent) -> EvidenceAnchor:
@@ -72,3 +74,24 @@ def prior_transfusion_cutoff(
         key=lambda e: (e.issue_datetime, e.order.reqno, e.event_seq),
         default=None,
     )
+
+
+def event_notes_window(
+    events_on_an: Iterable[AuditEvent], event: AuditEvent
+) -> tuple[datetime, datetime]:
+    """The ``[start, end)`` span of notes charted for ``event`` (UTC).
+
+    It starts at ``event``'s issue and ends at the next issue on the same
+    admission, under any REQNO and of either family; with no later issue, 24 h
+    after ``event``'s issue. A note charted at the next issue belongs to that
+    issue. The all-returned notes guard reads only this span (owner decision
+    2026-11-24), so a transfusion charted for another event cannot keep an
+    all-returned event from RETURNED_NOT_TRANSFUSED.
+    """
+    start = event.issue_datetime
+    later = (
+        e.issue_datetime
+        for e in events_on_an
+        if e.order.an == event.order.an and e.issue_datetime > start
+    )
+    return start, min(later, default=start + NOTES_WINDOW_WITHOUT_NEXT_ISSUE)

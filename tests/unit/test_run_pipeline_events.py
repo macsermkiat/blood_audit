@@ -55,6 +55,7 @@ TABLES = {
     "INCPT_OPRTACT.csv": "HN,AN,INCDATE,INCTIME,ORDERCODE,INCOME,CANCELDATE,"
     "INCGRP,O__OPRTACT",
     "ICD9CM.csv": "Icd9cm,Name,Orflag",
+    "IPDNRFOCUSDT.csv": "AN,PROGRESSDATE,PROGRESSTIME,ACTION,RESPONSE",
 }
 
 
@@ -154,6 +155,9 @@ class Bundle:
     def operation(self, hours: float, icd9: str = "7934", an: str = "A1") -> None:
         day = f"{(T0 + timedelta(hours=hours)):%B %d, %Y}, 12:00 AM"
         self.add("IPTSUMOPRT.csv", an, icd9, "1", day, _time(hours))
+
+    def note(self, hours: float, text: str, an: str = "A1") -> None:
+        self.add("IPDNRFOCUSDT.csv", an, _day(hours), _time(hours), "", text)
 
     def charge(
         self, hours: float, group: str, oprtact: str, ordercode: str = "X1"
@@ -577,3 +581,97 @@ def test_event_context_is_read_at_the_issue_not_at_the_order(
     assert rows[0]["procedure_proximity_hours"] == "6.0"
     assert rows[0]["upcoming_procedure_hours"] == ""
     assert rows[0]["anc_value"] == "900"
+
+
+INTRAOP_TRANSFUSION_NOTE = "intraop LPRC 2 units given"
+
+
+@pytest.mark.parametrize(
+    ("note_hours", "released"),
+    [(3.0, True), (30.0, False), (31.0, False)],
+    ids=["event-1-window", "event-2-issue-instant", "event-2-window"],
+)
+def test_all_returned_event_guard_reads_only_its_own_notes_window(
+    pipeline: tuple[ModuleType, Path], note_hours: float, released: bool
+) -> None:
+    """Owner decision 2026-11-24: a transfusion charted for an earlier event on
+    the admission must not keep a later all-returned event in the audit."""
+    b = Bundle()
+    b.order("W1")
+    b.unit("W1", "1", 2.0)
+    b.unit("W1", "2", 30.0, status="3")
+    b.note(note_hours, INTRAOP_TRANSFUSION_NOTE)
+    rows = _events(_run(pipeline, b), "W1")
+
+    assert rows[1]["returns_disposition"] == "not_transfused"
+    assert (rows[1]["classification"] == "RETURNED_NOT_TRANSFUSED") is released
+
+
+@pytest.mark.parametrize(
+    ("note_hours", "released"),
+    [(2.0, False), (25.75, False), (26.0, True)],
+    ids=["issue-instant", "inside-24h", "at-24h"],
+)
+def test_all_returned_event_with_no_later_issue_reads_24_hours_of_notes(
+    pipeline: tuple[ModuleType, Path], note_hours: float, released: bool
+) -> None:
+    b = Bundle()
+    b.order("W1")
+    b.unit("W1", "1", 2.0, status="3")
+    b.note(note_hours, INTRAOP_TRANSFUSION_NOTE)
+    rows = _events(_run(pipeline, b), "W1")
+
+    assert (rows[0]["classification"] == "RETURNED_NOT_TRANSFUSED") is released
+
+
+@pytest.mark.parametrize(
+    ("note_hours", "released"),
+    [(9.75, False), (10.0, True)],
+    ids=["before-next-issue", "at-next-issue"],
+)
+def test_next_issue_of_the_other_family_ends_the_notes_window(
+    pipeline: tuple[ModuleType, Path], note_hours: float, released: bool
+) -> None:
+    b = Bundle()
+    b.order("W1")
+    b.unit("W1", "1", 2.0, status="3")
+    b.order("PL1", hours=8, product="LDPPC", audited=False)
+    b.unit("PL1", "1", 10.0, bdtype="LDPPC5")
+    b.note(note_hours, INTRAOP_TRANSFUSION_NOTE)
+    rows = _events(_run(pipeline, b), "W1")
+
+    assert (rows[0]["classification"] == "RETURNED_NOT_TRANSFUSED") is released
+
+
+def test_all_returned_platelet_event_guard_reads_only_its_own_notes_window(
+    pipeline: tuple[ModuleType, Path],
+) -> None:
+    b = Bundle()
+    b.order("PT1", product="LDPPC")
+    b.unit("PT1", "1", 2.0, bdtype="LDPPC5")
+    b.unit("PT1", "2", 30.0, status="3", bdtype="LDPPC5")
+    b.note(3.0, INTRAOP_TRANSFUSION_NOTE)
+    rows = _events(_run(pipeline, b), "PT1")
+
+    assert rows[1]["classification"] == "RETURNED_NOT_TRANSFUSED"
+
+
+@pytest.mark.parametrize("picker_v2", [True, False], ids=["review", "over"])
+def test_all_returned_event_1_of_a_declaring_reqno_precedes_msbos_and_exemption(
+    pipeline: tuple[ModuleType, Path], monkeypatch: pytest.MonkeyPatch, picker_v2: bool
+) -> None:
+    """Owner decision 2026-11-24: no blood was given, so neither the reservation
+    verdict nor the declared-use exemption applies to event 1."""
+    monkeypatch.setattr(RP, "MSBOS_RESERVATION_PILOT_ENABLED", True)
+    monkeypatch.setattr(RP, "MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED", picker_v2)
+    b = Bundle()
+    b.order("M1", usetype="2", unitamt="4")
+    b.unit("M1", "1", 3.0, status="3")
+    b.unit("M1", "2", 44.0)
+    b.operation(5.0, icd9="0331" if picker_v2 else "0205")
+    b.hb(2, "12.0")
+    b.hb(43, "11.0")
+    rows = _events(_run(pipeline, b), "M1")
+
+    assert rows[0]["declared_use_applies"] == "True"
+    assert rows[0]["classification"] == "RETURNED_NOT_TRANSFUSED"

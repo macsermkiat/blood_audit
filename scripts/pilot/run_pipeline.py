@@ -71,6 +71,7 @@ from bba.feature_flags import (
 from bba.hb_lookup import (
     HbLookupResult,
     HbObservation,
+    event_notes_window,
     parse_hb_value,
     prior_transfusion_cutoff,
     resolve_event_anchors,
@@ -115,7 +116,7 @@ from bba.returns_ledger import (
     summarize_event_returns,
     summarize_returns,
 )
-from bba.vitals_extractor import PeriopSummary, scan_periop
+from bba.vitals_extractor import PeriopSummary, VitalsNote, scan_periop
 
 from _anchor_candidates import build_anchor_candidates
 from _bdvsttrans_source import load_bdvsttrans_rows
@@ -443,6 +444,44 @@ def _returns_periop_context_for_classifier(
             upcoming_procedure_hours=upcoming_procedure_hours,
         )
     return False
+
+
+def _event_window_periop(
+    notes: Sequence[VitalsNote],
+    events_on_an: Sequence[AuditEvent],
+    event: AuditEvent,
+    returns_summary: ReturnsSummary | None,
+) -> PeriopSummary | None:
+    """Peri-op findings in an all-returned event's own notes window, else None."""
+    if returns_summary is None or returns_summary.disposition != "not_transfused":
+        return None
+    start, end = event_notes_window(events_on_an, event)
+    return scan_periop([n for n in notes if start <= n.timestamp < end])
+
+
+def _classify_with_event_notes_guard(
+    inputs: ClassifierInputs, event_periop: PeriopSummary | None
+) -> ClassifierResult:
+    """``classify``, with the all-returned notes guard reading ``event_periop``.
+
+    Owner decision 2026-11-24: only notes charted in the event's own window
+    (:func:`event_notes_window`) can keep an all-returned event from
+    RETURNED_NOT_TRANSFUSED. The guard is the classifier's first rule, so a
+    release returns before any other rule reads the notes; a hold re-runs on
+    ``inputs``, so every later rule still reads the admission's notes.
+    """
+    if event_periop is not None:
+        released = classify(
+            inputs.model_copy(
+                update={
+                    "periop_intraop_transfusion": event_periop.intraop_transfusion,
+                    "periop_blood_loss_ml": event_periop.blood_loss_ml,
+                }
+            )
+        )
+        if released.classification == "RETURNED_NOT_TRANSFUSED":
+            return released
+    return classify(inputs)
 
 
 # Returns-ledger terminals that short-circuit the platelet gate, mirroring
@@ -1549,6 +1588,10 @@ def main() -> None:
             and msbos_reference is not None
             and event.event_seq == 1
         )
+        notes = vitals_notes_for(progress, focus, order.an, issue_at)
+        event_periop = _event_window_periop(
+            notes, events_by_an[order.an], event, returns_summary
+        )
         manifest.append(
             {
                 "HN": order.hn,
@@ -1566,13 +1609,13 @@ def main() -> None:
             # Returns-ledger short-circuit FIRST (mirror pipeline.run_pipeline's
             # platelet branch): an all-returned platelet event skips the platelet
             # gate exactly like the RBC path. Peri-op is scanned admission-wide
-            # (same as this leg's RBC path — the accepted #123 Risk #3), so the
-            # hard intra-op/EBL contradiction guard stays active; the model leg
-            # uses the windowed bundle summary instead.
+            # (same as this leg's RBC path — the accepted #123 Risk #3). For an
+            # all-returned event the notes guard is the only reader of peri-op
+            # here, so it gets the event's own notes window instead.
             plt_periop: PeriopSummary | None = None
             if RETURNS_LEDGER_ENABLED:
-                plt_periop = scan_periop(
-                    vitals_notes_for(progress, focus, order.an, issue_at)
+                plt_periop = (
+                    event_periop if event_periop is not None else scan_periop(notes)
                 )
             plt_returns_result = _platelet_returns_result(
                 audit_id=event.audit_id,
@@ -1743,9 +1786,9 @@ def main() -> None:
         # Here the deterministic-only leg scans the loaded notes so its
         # missing-Hb report mirrors the same hard signals (intra-op
         # transfusion / EBL >= PERIOP_MIN_EBL_ML) the LLM leg would see.
-        periop = scan_periop(vitals_notes_for(progress, focus, order.an, issue_at))
+        periop = scan_periop(notes)
 
-        clf = classify(
+        clf = _classify_with_event_notes_guard(
             ClassifierInputs(
                 audit_id=event.audit_id,
                 hb_result=hb,
@@ -1772,7 +1815,8 @@ def main() -> None:
                 enable_declared_use_preop_exemption=(
                     DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED
                 ),
-            )
+            ),
+            event_periop,
         )
 
         hb_disp = f"{hb.value_g_dl:.1f}" if hb.value_g_dl is not None else "----"

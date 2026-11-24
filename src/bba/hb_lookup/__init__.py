@@ -17,6 +17,7 @@ from bba.hb_lookup.anchor import (
 )
 from bba.hb_lookup.event_anchor import (
     PRIOR_TRANSFUSION_WINDOW,
+    event_notes_window,
     prior_transfusion_cutoff,
     resolve_event_anchors,
 )
@@ -38,6 +39,7 @@ __all__ = [
     "HbLookupResult",
     "HbObservation",
     "HbSource",
+    "event_notes_window",
     "lookup_hb",
     "parse_hb_value",
     "PRIOR_TRANSFUSION_WINDOW",
