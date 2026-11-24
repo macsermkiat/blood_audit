@@ -609,8 +609,8 @@ def test_all_returned_event_guard_reads_only_its_own_notes_window(
 
 @pytest.mark.parametrize(
     ("note_hours", "released"),
-    [(2.0, False), (25.75, False), (26.0, True)],
-    ids=["issue-instant", "inside-24h", "at-24h"],
+    [(1.75, True), (2.0, False), (25.75, False), (26.0, True)],
+    ids=["before-issue", "issue-instant", "inside-24h", "at-24h"],
 )
 def test_all_returned_event_with_no_later_issue_reads_24_hours_of_notes(
     pipeline: tuple[ModuleType, Path], note_hours: float, released: bool
@@ -643,17 +643,37 @@ def test_next_issue_of_the_other_family_ends_the_notes_window(
     assert (rows[0]["classification"] == "RETURNED_NOT_TRANSFUSED") is released
 
 
+@pytest.mark.parametrize(
+    ("note_hours", "released"),
+    [(3.0, True), (31.0, False)],
+    ids=["event-1-window", "event-2-window"],
+)
 def test_all_returned_platelet_event_guard_reads_only_its_own_notes_window(
-    pipeline: tuple[ModuleType, Path],
+    pipeline: tuple[ModuleType, Path], note_hours: float, released: bool
 ) -> None:
     b = Bundle()
     b.order("PT1", product="LDPPC")
     b.unit("PT1", "1", 2.0, bdtype="LDPPC5")
     b.unit("PT1", "2", 30.0, status="3", bdtype="LDPPC5")
-    b.note(3.0, INTRAOP_TRANSFUSION_NOTE)
+    b.note(note_hours, INTRAOP_TRANSFUSION_NOTE)
     rows = _events(_run(pipeline, b), "PT1")
 
-    assert rows[1]["classification"] == "RETURNED_NOT_TRANSFUSED"
+    assert (rows[1]["classification"] == "RETURNED_NOT_TRANSFUSED") is released
+
+
+def test_issue_at_the_same_instant_shares_the_notes_window(
+    pipeline: tuple[ModuleType, Path],
+) -> None:
+    """Red cells and platelets issued together for one operation share notes."""
+    b = Bundle()
+    b.order("W1")
+    b.unit("W1", "1", 2.0, status="3")
+    b.order("PL1", product="LDPPC", audited=False)
+    b.unit("PL1", "1", 2.0, bdtype="LDPPC5")
+    b.note(3.0, INTRAOP_TRANSFUSION_NOTE)
+    rows = _events(_run(pipeline, b), "W1")
+
+    assert rows[0]["classification"] != "RETURNED_NOT_TRANSFUSED"
 
 
 @pytest.mark.parametrize("picker_v2", [True, False], ids=["review", "over"])
