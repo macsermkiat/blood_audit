@@ -7,7 +7,7 @@ resolves paths and reports the reconciliation summary.
 
 Verdict source is selectable via ``BBA_VERDICT_SOURCE`` (spec #119 follow-up):
 
-* ``human`` (default) — the 300-case human review workbook (Sheet1 col J).
+* ``human`` — the 300-case human review workbook (Sheet1 col J).
   Superseded by issue events (blood_audit #276): the labels are per REQNO, the
   ranking is per event, and joining them is out of scope, so this source exits
   with a message. The per-REQNO version is in git history.
@@ -24,10 +24,10 @@ Verdict source is selectable via ``BBA_VERDICT_SOURCE`` (spec #119 follow-up):
 
 Environment variables:
 
-* ``BBA_VERDICT_SOURCE`` — ``human`` (default) or ``pipeline``.
+* ``BBA_VERDICT_SOURCE`` — ``pipeline`` (default) or ``human`` (superseded).
 * ``BBA_AUDIT_STORE_DIR`` — audit-store root (pipeline source; default:
   ``$BBA_DATA_DIR/audit_store``).
-* ``BBA_RUN_ID`` — scope the pipeline read to one run so each REQNO resolves to a
+* ``BBA_RUN_ID`` — scope the pipeline read to one run so each audit_id resolves to a
   single verdict (recommended for the pipeline source).
 * ``BBA_CODE_VERSION`` — optional; scope the pipeline read to one code version.
 * ``BBA_BDVST_CSV`` — BDVST export with REQNO + DCTREQ (default:
@@ -68,7 +68,7 @@ from bba.cli.identity import code_version
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _BLOODBANK = _REPO_ROOT.parent / "Bloodbank" / "data"
 
-VERDICT_SOURCE = os.environ.get("BBA_VERDICT_SOURCE", "human").strip().lower()
+VERDICT_SOURCE = os.environ.get("BBA_VERDICT_SOURCE", "pipeline").strip().lower()
 _DATA_DIR = os.environ.get("BBA_DATA_DIR")
 _AUDIT_STORE_RAW = os.environ.get("BBA_AUDIT_STORE_DIR") or (
     str(Path(_DATA_DIR) / "audit_store") if _DATA_DIR else ""

@@ -162,7 +162,7 @@ def _render_table(table: RankingTable) -> str:
         else ""
     )
     header_cells = (
-        '<th>Rank</th><th>Code</th><th>Name</th><th class="num">Orders (N)</th>'
+        '<th>Rank</th><th>Code</th><th>Name</th><th class="num">Events (N)</th>'
         '<th class="num">Appropriate</th><th class="num">Inappropriate</th>'
         '<th class="num">Unresolved</th>'
         f"{returns_header}"
@@ -225,19 +225,20 @@ def write_rankings_html(
     caveat = (
         f"Verdict source: {html.escape(verdict_source_label)}. "
         f"Tables are ranked by {bucket} rate among groups with "
-        f"N &ge; {min_orders} orders; groups below that threshold are "
+        f"N &ge; {min_orders} scored issue events; groups below that threshold are "
         "listed after the qualified rows, ranked by count, and shown "
-        "greyed — a rate computed on 1&ndash;4 orders is not comparable. "
-        f"Groups with zero {bucket} orders are omitted entirely. "
+        "greyed — a rate computed on 1&ndash;4 events is not comparable. "
+        f"Groups with zero {bucket} events are omitted entirely. "
         "Unresolved = needs-review + insufficient-evidence; cohort "
         "totals below cover all groups, including omitted ones. "
         "Mean Hb (g/dL) is the mean pre-transfusion haemoglobin over the "
-        "group's scorable red-cell orders, and Mean platelet "
+        "group's scorable red-cell issue events, and Mean platelet "
         "(&times;10&sup3;/&micro;L) the mean pre-transfusion platelet count "
-        "over its scorable platelet orders; n is how many of those orders "
+        "over its scorable platelet events; n is how many of those events "
         "carried a usable value, and a column shows &mdash; when none did. "
         "The range columns give the lowest and highest value among those "
-        "same orders."
+        "same events. Each issue event is credited to the doctor of its "
+        "linked order."
     )
     returns_total = (
         f"; {totals.returned_not_transfused} returned/not-transfused excluded"
@@ -246,7 +247,7 @@ def write_rankings_html(
         else ""
     )
     totals_line = (
-        f"Cohort totals: {totals.total} orders &mdash; "
+        f"Cohort totals: {totals.total} scored events &mdash; "
         f"{totals.appropriate} appropriate / "
         f"{totals.inappropriate} inappropriate / "
         f"{totals.unresolved} unresolved{returns_total}."
