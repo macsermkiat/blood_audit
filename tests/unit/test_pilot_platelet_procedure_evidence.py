@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 PILOT_DIR = Path(__file__).resolve().parents[2] / "scripts" / "pilot"
@@ -30,8 +30,7 @@ def _leg():
     return mod
 
 
-ORDER = datetime(2025, 8, 17, 15, 0, tzinfo=timezone.utc)  # 22:00 Bangkok
-DISPENSE = ORDER + timedelta(hours=1)  # 23:00 Bangkok
+ISSUE = datetime(2025, 8, 17, 16, 0, tzinfo=timezone.utc)  # 23:00 Bangkok
 WINDOW = (
     datetime(2025, 8, 15, 17, 0, tzinfo=timezone.utc),
     datetime(2025, 8, 17, 17, 0, tzinfo=timezone.utc),
@@ -61,8 +60,7 @@ def test_billed_dlc_insertion_reaches_platelet_evidence() -> None:
         [_charge("2025-08-17", "200000")],
         {},
         an="AN1",
-        order_utc=ORDER,
-        dispense_utc=DISPENSE,
+        issue_utc=ISSUE,
         window_start=WINDOW[0],
         notes_window_end=WINDOW[1],
     )
@@ -72,7 +70,7 @@ def test_billed_dlc_insertion_reaches_platelet_evidence() -> None:
     # Thai name is the one that says "Double lumen catheter", so both show.
     assert "Venous catheterization" in chunks[0].text
     assert "Double lumen catheter" in chunks[0].text
-    assert "-2.0h vs order" in chunks[0].text
+    assert "-3.0h vs dispense" in chunks[0].text
 
 
 def test_cancelled_and_out_of_window_charges_stay_out() -> None:
@@ -84,8 +82,7 @@ def test_cancelled_and_out_of_window_charges_stay_out() -> None:
         ],
         {},
         an="AN1",
-        order_utc=ORDER,
-        dispense_utc=DISPENSE,
+        issue_utc=ISSUE,
         window_start=WINDOW[0],
         notes_window_end=WINDOW[1],
     )
@@ -102,13 +99,12 @@ def test_insertion_billed_the_day_after_the_order_is_shown() -> None:
         [_charge("2025-08-18", "180000")],  # 18:00 Bangkok next day
         {},
         an="AN1",
-        order_utc=ORDER,
-        dispense_utc=DISPENSE,
+        issue_utc=ISSUE,
         window_start=WINDOW[0],
         notes_window_end=WINDOW[1],
     )
     assert len(chunks) == 1
-    assert "+20.0h vs order" in chunks[0].text
+    assert "+19.0h vs dispense" in chunks[0].text
 
 
 def test_insertion_more_than_24h_after_dispense_stays_out() -> None:
@@ -117,8 +113,7 @@ def test_insertion_more_than_24h_after_dispense_stays_out() -> None:
         [_charge("2025-08-18", "233000")],  # dispense + 24.5 h
         {},
         an="AN1",
-        order_utc=ORDER,
-        dispense_utc=DISPENSE,
+        issue_utc=ISSUE,
         window_start=WINDOW[0],
         notes_window_end=WINDOW[1],
     )

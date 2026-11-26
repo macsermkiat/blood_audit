@@ -12,12 +12,15 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 from bba import feature_flags
-from bba.audit_orders import AuditOrder, FilterResult
+from bba.audit_orders import AuditOrder
 from bba.attribution.outputs import RANKING_CSV_COLUMNS
 from bba.cohort_detector import CohortAssignment, CohortLabel, OperativeEvent
 from bba.deterministic_classifier import BypassReason, ClassifierResult
 from bba.hb_lookup import HbLookupResult
+from bba.issue_events import AuditEvent, AuditEvents
 from bba.vitals_extractor import VitalsNote
+
+from issue_event_bundle import event_inputs, one_event
 
 
 PILOT_DIR = Path(__file__).resolve().parents[2] / "scripts" / "pilot"
@@ -468,6 +471,7 @@ def test_msbos_deterministic_final_vocabulary_is_inert_when_flag_off(
 @pytest.mark.parametrize("env_value", ["0"])
 def test_msbos_flag_off_never_loads_reference_or_reservations(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
     env_value: str,
 ) -> None:
     monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", env_value)
@@ -483,7 +487,14 @@ def test_msbos_flag_off_never_loads_reference_or_reservations(
     monkeypatch.setattr(
         module, "_read_preferred_optional_csv", lambda _preferred, _fallback: []
     )
-    monkeypatch.setattr(module, "load_bdvsttrans_rows", lambda _bundle: [])
+    monkeypatch.setattr(module, "BUNDLE", tmp_path)
+    (tmp_path / "BDVST_RELATED.csv").write_text("")
+    monkeypatch.setattr(module, "load_bdvsttrans_rows", lambda _bundle: [{}])
+    monkeypatch.setattr(module, "related_orders", lambda *_a, **_k: ({}, {}))
+    no_events = AuditEvents(events=(), excluded=())
+    monkeypatch.setattr(
+        module, "build_issue_events", lambda *_a, **_k: (no_events, no_events)
+    )
 
     built = module._build_inputs()
 
@@ -555,7 +566,7 @@ def _configure_minimal_msbos_pilot(
     *,
     shipped_note: str,
     classifier_classification: str = "POTENTIALLY_INAPPROPRIATE",
-) -> AuditOrder:
+) -> AuditEvent:
     order_datetime = datetime(2026, 7, 16, 4, 0, tzinfo=UTC)
     order = AuditOrder(
         audit_id="audit-pilot-msbos-t3",
@@ -601,25 +612,11 @@ def _configure_minimal_msbos_pilot(
         administration_summary=None,
     )
     reference = module.load_msbos_reference()
-    built_inputs = (
-        [],
-        [],
-        [],
-        [],
-        [],
-        [],
-        {},
-        {},
-        [],
-        [],
-        {},
-        {},
-        {},
-        {},
-        {},
-        None,
-        reference,
-        {("HN1", "REQ1", module.ComponentFamily.RED_CELL): 5},
+    event = one_event(order)
+    built_inputs = event_inputs(
+        event,
+        msbos_reference=reference,
+        reserved_units={("HN1", "REQ1", module.ComponentFamily.RED_CELL): 5},
     )
 
     work = tmp_path / "pilot"
@@ -650,11 +647,6 @@ def _configure_minimal_msbos_pilot(
     )
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(module, "_build_inputs", lambda: built_inputs)
-    monkeypatch.setattr(
-        module,
-        "build_audit_orders",
-        lambda _inputs, _config: FilterResult(included=(order,), excluded=()),
-    )
     monkeypatch.setattr(module, "_hb_observations", lambda _rows, _an: ())
     monkeypatch.setattr(
         module,
@@ -680,15 +672,15 @@ def _configure_minimal_msbos_pilot(
     monkeypatch.setattr(module, "build_evidence_bundle", lambda **_kwargs: bundle)
     monkeypatch.setattr(
         module,
-        "classify",
-        lambda _inputs: ClassifierResult(
+        "classify_with_event_notes_guard",
+        lambda _inputs, _event_periop: ClassifierResult(
             classification=classifier_classification,
             bypass_reason=BypassReason.NONE,
             cohort_threshold=7.0,
             rationale="preop_defer_llm",
         ),
     )
-    return order
+    return event
 
 
 @pytest.mark.parametrize(
@@ -718,14 +710,14 @@ def test_flag_on_pilot_dispatches_conflicting_codes_from_shipped_notes(
     module = _load_run_llm_leg(
         f"pilot_run_llm_leg_t3_{expected_classification.lower()}"
     )
-    order = _configure_minimal_msbos_pilot(
+    event = _configure_minimal_msbos_pilot(
         module, monkeypatch, tmp_path, shipped_note=shipped_note
     )
 
     module.main()
 
     report = json.loads((module.WORK / "llm_report.json").read_text())
-    assert [record["audit_id"] for record in report] == [order.audit_id], (
+    assert [record["audit_id"] for record in report] == [event.audit_id], (
         "a locally persisted conflicting-code terminal must remain visible in the report"
     )
     assert report[0]["llm_final"]["final_classification"] == expected_classification

@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 
 import run_pipeline as rp
-from _anchor_candidates import build_anchor_candidates
+from _anchor_candidates import visit_fallback_candidates
 
 from bba.hb_lookup import (
     PRIOR_TRANSFUSION_WINDOW,
@@ -137,14 +137,8 @@ def gold_hb_mismatches(
     reqnos = {r["reqno"] for r in gold}
     ans = {e.order.an for (q, _), e in events.items() if q in reqnos}
     lab = list(_rows(export / "Lab.csv", "AN", ans))
-    bdvst = {r["REQNO"]: r for r in _rows(export / "BDVST.csv", "REQNO", reqnos)}
     bdvstdt = list(_rows(export / "BDVSTDT.csv", "REQNO", reqnos))
-    fallback = {
-        q: [c for c in cands if c.reason == "blood_bank_visit_fallback"]
-        for q, cands in build_anchor_candidates(
-            bdvstdt_rows=bdvstdt, bdvst_by_reqno=bdvst
-        ).items()
-    }
+    fallback = visit_fallback_candidates(bdvstdt)
     pool = _by_an(audit.events)
     observations = {an: rp._build_hb_observations(lab, an) for an in ans}
     out: list[str] = []
