@@ -33,12 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from bba.attribution import load_reqno_to_doctor
-from bba.audit_orders import (
-    AuditOrdersConfig,
-    BloodOrderInput,
-    FilterResult,
-    build_audit_orders,
-)
+from bba.audit_orders import AuditOrdersConfig, build_audit_orders
 from bba.cohort_detector import (
     find_chemo_med,
     CohortAssignment,
@@ -71,7 +66,6 @@ from bba.feature_flags import (
 from bba.hb_lookup import (
     HbLookupResult,
     HbObservation,
-    event_notes_window,
     parse_hb_value,
     prior_transfusion_cutoff,
     resolve_event_anchors,
@@ -79,14 +73,7 @@ from bba.hb_lookup import (
 )
 from bba.ingest.date_parser import parse_kcmh_english_date
 from bba.ingest.models import ParsedTimeOfDay
-from bba.issue_events import (
-    AuditEvent,
-    AuditEvents,
-    CandidateOrder,
-    build_audit_events,
-    candidate_order,
-    units_from_ledger,
-)
+from bba.issue_events import AuditEvent
 from bba.platelet_classifier import classify_platelet
 from bba.platelet_classifier.models import PlateletClassifierInputs
 from bba.platelet_lookup import (
@@ -116,7 +103,7 @@ from bba.returns_ledger import (
     summarize_event_returns,
     summarize_returns,
 )
-from bba.vitals_extractor import PeriopSummary, VitalsNote, scan_periop
+from bba.vitals_extractor import PeriopSummary, scan_periop
 
 from _anchor_candidates import build_anchor_candidates
 from _bdvsttrans_source import load_bdvsttrans_rows
@@ -128,7 +115,16 @@ from _hosxp_dt import (
     _parse_time,
 )
 from _periop_notes import vitals_notes_for
-from _periop_operations import operations_by_an
+from _pilot_events import (
+    EVENT_CODE_VERSION,
+    blood_order_input,
+    build_issue_events,
+    classify_with_event_notes_guard,
+    event_window_periop,
+    events_by_admission,
+    operation_times,
+    related_orders,
+)
 
 WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
 BUNDLE = WORK / "bundle"
@@ -192,10 +188,9 @@ MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED = (
 HB_HEM_CODE = "290095"
 HB_POCT_CODE = "500001"
 ANC_CODE = "290093"
-# Plan 4.1 base token: the 4 h issue-event window and the own-REQNO linkage
-# rule are part of the code identity. This leg has no store writer, so
-# AuditOrdersConfig.code_version is inert here and no seam suffixes apply.
-CODE_VERSION = "pilot-event-1+gap4h+link-own"
+# This leg has no store writer, so AuditOrdersConfig.code_version is inert
+# here and no seam suffixes apply.
+CODE_VERSION = EVENT_CODE_VERSION
 INCPT_OPERATION_GROUPS = {"110", "111"}
 
 CRYSTALLOID_KEYWORDS = (
@@ -444,44 +439,6 @@ def _returns_periop_context_for_classifier(
             upcoming_procedure_hours=upcoming_procedure_hours,
         )
     return False
-
-
-def _event_window_periop(
-    notes: Sequence[VitalsNote],
-    events_on_an: Sequence[AuditEvent],
-    event: AuditEvent,
-    returns_summary: ReturnsSummary | None,
-) -> PeriopSummary | None:
-    """Peri-op findings in an all-returned event's own notes window, else None."""
-    if returns_summary is None or returns_summary.disposition != "not_transfused":
-        return None
-    start, end = event_notes_window(events_on_an, event)
-    return scan_periop([n for n in notes if start <= n.timestamp < end])
-
-
-def _classify_with_event_notes_guard(
-    inputs: ClassifierInputs, event_periop: PeriopSummary | None
-) -> ClassifierResult:
-    """``classify``, with the all-returned notes guard reading ``event_periop``.
-
-    Owner decision 2026-11-24: only notes charted in the event's own window
-    (:func:`event_notes_window`) can keep an all-returned event from
-    RETURNED_NOT_TRANSFUSED. The guard is the classifier's first rule, so a
-    release returns before any other rule reads the notes; a hold re-runs on
-    ``inputs``, so every later rule still reads the admission's notes.
-    """
-    if event_periop is not None:
-        released = classify(
-            inputs.model_copy(
-                update={
-                    "periop_intraop_transfusion": event_periop.intraop_transfusion,
-                    "periop_blood_loss_ml": event_periop.blood_loss_ml,
-                }
-            )
-        )
-        if released.classification == "RETURNED_NOT_TRANSFUSED":
-            return released
-    return classify(inputs)
 
 
 # Returns-ledger terminals that short-circuit the platelet gate, mirroring
@@ -900,18 +857,6 @@ def _read_preferred_optional_csv(*names: str) -> list[dict[str, str]]:
     return []
 
 
-def _icd_codes(*raws: str | None) -> tuple[str, ...]:
-    out: list[str] = []
-    for raw in raws:
-        if not raw:
-            continue
-        for chunk in raw.replace(";", ",").split(","):
-            code = chunk.strip()
-            if code:
-                out.append(code)
-    return tuple(out)
-
-
 def _build_hb_observations(
     lab_rows: list[dict[str, str]], an: str
 ) -> list[HbObservation]:
@@ -1277,83 +1222,6 @@ def _emergency_by_reqno(
     }
 
 
-def _blood_order_input(
-    r: dict[str, str],
-    products_by_reqno: Mapping[str, list[str]],
-    diag_by_an: Mapping[str, list[str]],
-) -> BloodOrderInput:
-    reqno = r["REQNO"]
-    an = (r.get("AN") or "").strip() or None
-    return BloodOrderInput(
-        hn=r["HN"],
-        an=an,
-        reqno=reqno,
-        bdvstst=(r.get("BDVSTST") or "").strip(),
-        reqtype=(r.get("REQTYPE") or "").strip(),
-        canceldate=(r.get("CANCELDATE") or "").strip() or None,
-        req_date=_parse_hosxp_date(r.get("REQDATE") or ""),
-        req_time=_parse_time(r.get("REQTIME") or ""),
-        bdvst_date=_parse_hosxp_date(r.get("BDVSTDATE") or ""),
-        bdvst_time=_parse_time(r.get("BDVSTTIME") or ""),
-        products=tuple(products_by_reqno.get(reqno, [])),
-        diagnosis_codes=_icd_codes(*(diag_by_an.get(an or "", []) + [r.get("ICD10")])),
-    )
-
-
-def _build_issue_events(
-    audited: FilterResult,
-    related: Mapping[str, BloodOrderInput],
-    bdvsttrans: list[dict[str, str]],
-    *,
-    usetypes: Mapping[str, str | None],
-    operations: Mapping[str, Sequence[datetime]],
-) -> tuple[AuditEvents, AuditEvents]:
-    """This run's audit records, and the bundle's other audit records.
-
-    ``related`` holds every order on the run's admissions (BDVST_RELATED,
-    any status, any month). Each one that can have caused an issue splits
-    and links events. The eligible ones outside this run (another REQDATE
-    month, or not sampled) become audit records too; they are never
-    reported, only searched for a #249 prior transfusion (plan revision log
-    PR 4: a per-month pool silently loses cross-month cutoffs).
-    """
-    candidates: dict[str, CandidateOrder] = {
-        reqno: c
-        for reqno, record in related.items()
-        if (c := candidate_order(record)) is not None
-    }
-    run_reqnos = {o.reqno for o in audited.included} | {
-        x.reqno for x in audited.excluded
-    }
-    others = FilterResult(
-        included=build_audit_orders(
-            [related[q] for q in candidates if q not in run_reqnos],
-            AuditOrdersConfig(code_version=CODE_VERSION),
-        ).included,
-        excluded=(),
-    )
-    trans_by_reqno: dict[str, list[dict[str, str]]] = defaultdict(list)
-    for r in bdvsttrans:
-        trans_by_reqno[r.get("REQNO") or ""].append(r)
-
-    def records(orders: FilterResult) -> AuditEvents:
-        reqnos = [o.reqno for o in orders.included] + [x.reqno for x in orders.excluded]
-        ledgers = {
-            q: units_from_ledger(trans_by_reqno.get(q, []), candidates[q].an)
-            for q in reqnos
-            if q in candidates
-        }
-        return build_audit_events(
-            orders,
-            ledgers,
-            candidates.values(),
-            usetypes=usetypes,
-            operations=operations,
-        )
-
-    return records(audited), records(others)
-
-
 def _icd9_dict_from_rows(rows: list[dict[str, str]]) -> dict[str, dict[str, str]]:
     """Build the dotless-code -> {NAME, ORFLAG} ICD-9 dictionary from CSV rows."""
     return {
@@ -1382,12 +1250,6 @@ def main() -> None:
         sys.exit(f"{BUNDLE / 'BDVST_RELATED.csv'} missing; rebuild the bundle")
     bdvst_related = _read_csv("BDVST_RELATED.csv")
     bdvstdt_related = _read_csv("BDVSTDT_RELATED.csv")
-    if not any((r.get("BDVSTST") or "").strip() == "1" for r in bdvst_related):
-        sys.exit(
-            "BDVST_RELATED.csv has no status-1 (pending) order: the bundle was "
-            "cut without them, so fresh orders would silently link as standing "
-            "orders; rebuild it with sample_bundle.py"
-        )
     msbos_reference = (
         load_msbos_reference() if MSBOS_RESERVATION_PILOT_ENABLED else None
     )
@@ -1470,40 +1332,21 @@ def main() -> None:
         ):
             use_dt_by_reqno[reqno] = f"{use_date} (time missing)"
 
-    # Declared use per order, from (HN, REQNO) lines — NEVER bare REQNO: a REQNO
-    # recurs across admissions in the complete export, and a foreign admission's
-    # blank line + one surgical code would otherwise collapse as "not mixed" and
-    # attach a foreign declaration. BDVSTDT carries its own HN.
-    related_products: dict[str, list[str]] = defaultdict(list)
-    usetype_values_by_hn_reqno: dict[tuple[str, str], list[str]] = defaultdict(list)
-    for r in bdvstdt_related:
-        related_products[r["REQNO"]].append((r.get("BDTYPE") or "").strip())
-        usetype_values_by_hn_reqno[((r.get("HN") or "").strip(), r["REQNO"])].append(
-            (r.get("USETYPE") or "").strip()
-        )
-
     diag_by_an: dict[str, list[str]] = {}
     for r in diag:
         diag_by_an.setdefault(r.get("AN", ""), []).append(
             (r.get("ICD10") or "").strip()
         )
 
-    related: dict[str, BloodOrderInput] = {}
-    for r in bdvst_related:
-        if r["REQNO"] in related:
-            sys.exit(f"BDVST_RELATED.csv lists REQNO {r['REQNO']} twice")
-        related[r["REQNO"]] = _blood_order_input(r, related_products, diag_by_an)
-    missing = sorted(set(bdvst_by_reqno) - set(related))
-    if missing:
-        sys.exit(f"audited REQNOs missing from BDVST_RELATED.csv: {missing[:10]}")
-    usetypes = {
-        reqno: _collapsed_usetype_for(
-            usetype_values_by_hn_reqno.get(((record.hn or "").strip(), reqno), [])
-        )
-        for reqno, record in related.items()
-    }
+    related, usetypes = related_orders(
+        bdvst_related,
+        bdvstdt_related,
+        diag_by_an,
+        audited_reqnos=set(bdvst_by_reqno),
+        collapse_usetype=_collapsed_usetype_for,
+    )
 
-    inputs = [_blood_order_input(r, products_by_reqno, diag_by_an) for r in bdvst]
+    inputs = [blood_order_input(r, products_by_reqno, diag_by_an) for r in bdvst]
     filter_result = build_audit_orders(
         inputs,
         AuditOrdersConfig(code_version=CODE_VERSION),
@@ -1518,19 +1361,14 @@ def main() -> None:
         for ex in filter_result.excluded:
             print(f"  reqno={ex.reqno} reason={ex.reason} detail={ex.detail}")
 
-    audit, others = _build_issue_events(
+    audit, others = build_issue_events(
         filter_result,
         related,
         bdvsttrans,
         usetypes=usetypes,
-        operations={
-            an: [op.at for op in ops]
-            for an, ops in operations_by_an(iptsumoprt, incpt).items()
-        },
+        operations=operation_times(iptsumoprt, incpt),
     )
-    events_by_an: dict[str, list[AuditEvent]] = defaultdict(list)
-    for e in (*audit.events, *others.events):
-        events_by_an[e.order.an].append(e)
+    events_by_an = events_by_admission(audit, others)
     emergency = _emergency_by_reqno(bdvstdt_related)
     # The blood-bank visit is the only fallback left for a missing Hb: the
     # PICK/USE candidate no longer anchors anything (plan section 3).
@@ -1589,7 +1427,7 @@ def main() -> None:
             and event.event_seq == 1
         )
         notes = vitals_notes_for(progress, focus, order.an, issue_at)
-        event_periop = _event_window_periop(
+        event_periop = event_window_periop(
             notes, events_by_an[order.an], event, returns_summary
         )
         manifest.append(
@@ -1788,7 +1626,7 @@ def main() -> None:
         # transfusion / EBL >= PERIOP_MIN_EBL_ML) the LLM leg would see.
         periop = scan_periop(notes)
 
-        clf = _classify_with_event_notes_guard(
+        clf = classify_with_event_notes_guard(
             ClassifierInputs(
                 audit_id=event.audit_id,
                 hb_result=hb,
