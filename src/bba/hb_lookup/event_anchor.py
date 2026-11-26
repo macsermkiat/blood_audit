@@ -3,7 +3,7 @@
 An issue event is judged on the labs at the moment its blood left the bank,
 so its lab anchor and its evidence anchor are both the issue time. The
 REQNO-level resolvers in :mod:`bba.hb_lookup.anchor` stay for the per-order
-pilot path until it switches to events.
+``bba audit`` CLI (:mod:`bba.application`), which has not switched to events.
 """
 
 from __future__ import annotations

@@ -459,3 +459,87 @@ def test_both_legs_release_an_all_returned_event_on_the_same_notes_window(
 
     assert (det[returned] == "RETURNED_NOT_TRANSFUSED") is released
     assert (returned not in requests.cases) is released
+
+
+def test_msbos_judges_the_reservation_on_event_1_only(
+    leg: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Plan 1.6: the reservation is the order's, judged once. A later event of
+    the declaring REQNO is never a second PREOP_OVER_RESERVATION."""
+    monkeypatch.setattr(leg, "MSBOS_RESERVATION_PILOT_ENABLED", True)
+    monkeypatch.setattr(leg, "MSBOS_PLANNED_OP_PICKER_V2_PILOT_ENABLED", False)
+    b = Bundle()
+    b.order("M1", usetype="2", unitamt="4")
+    b.order("M2", hours=40, status="1", usetype="2", audited=False)
+    b.unit("M1", "1", 3.0)
+    b.unit("M1", "2", 44.0)
+    b.operation(5.0, icd9="0205")
+    b.operation(46.0, icd9="0205")
+    b.hb(2, "12.0")
+    b.hb(43, "11.0")
+
+    report = _run(leg, b)
+
+    assert [rec["audit_id"] for rec in report] == [_audit_id("M1", "1")]
+    final = report[0]["llm_final"]
+    assert isinstance(final, dict)
+    assert final["final_classification"] == "PREOP_OVER_RESERVATION"
+    store = leg.AuditStore(
+        leg.AuditStoreConfig(
+            root_dir=leg.AUDIT_STORE_ROOT, code_version=leg.CODE_VERSION
+        )
+    )
+    assert {r.audit_id for r in store.read_audit_results(run_id=leg.RUN_ID)} == {
+        _audit_id("M1", "1")
+    }
+
+
+def test_stored_row_is_judged_at_the_issue_and_the_report_keeps_the_order_time(
+    leg: ModuleType,
+) -> None:
+    """The replay guardrails and the note-date gate read the row's
+    order_datetime, so it holds the issue; the linked order time is reported."""
+    b = Bundle()
+    b.order("R1", hours=14)  # 22:00 on 10 January, Bangkok
+    b.unit("R1", "1", 19.0)  # issued 03:00 on 11 January
+    b.hb(18, "8.0")
+    report = _run(leg, b)
+
+    store = leg.AuditStore(
+        leg.AuditStoreConfig(
+            root_dir=leg.AUDIT_STORE_ROOT, code_version=leg.CODE_VERSION
+        )
+    )
+    (row,) = store.read_audit_results(run_id=leg.RUN_ID)
+    assert (
+        row.order_datetime.astimezone(leg.ZoneInfo("Asia/Bangkok")).strftime(
+            "%Y-%m-%d %H:%M"
+        )
+        == "2025-01-11 03:00"
+    )
+    assert report[0]["linked_order_datetime_local"] == "2025-01-10 22:00:00"
+
+
+@pytest.mark.parametrize(
+    ("issue_hours", "post_issue_hb_shown"),
+    [(10.0, False), (30.0, True)],
+    ids=["same-day-issue", "reserved-a-day-ahead"],
+)
+def test_hb_after_the_issue_is_shown_only_for_blood_reserved_a_day_ahead(
+    leg: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    issue_hours: float,
+    post_issue_hb_shown: bool,
+) -> None:
+    """Plan 3: the Hb window widens past the issue only when the issue came
+    24 h or more after the linked order (issue_reanchor)."""
+    b = Bundle()
+    b.order("R1")
+    b.unit("R1", "1", issue_hours)
+    b.hb(issue_hours - 1, "8.0")
+    b.hb(issue_hours + 3, "7.1")
+
+    requests = _prepare(leg, monkeypatch, b)
+
+    labs = _text(requests, _audit_id("R1", "1"), "Lab")
+    assert any(t.startswith("Hb 7.1") for t in labs) is post_issue_hb_shown

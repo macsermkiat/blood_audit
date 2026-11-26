@@ -286,9 +286,18 @@ def _merge_filtered_report(
     existing: list[dict[str, Any]],
     fresh: list[dict[str, Any]],
     targets: frozenset[str],
+    reqnos: frozenset[str] = frozenset(),
 ) -> list[dict[str, Any]]:
-    """Replace a filtered run's target audit_ids, purging those with no fresh row."""
-    retained = [rec for rec in existing if rec["audit_id"] not in targets]
+    """Replace a filtered run's target audit_ids, purging those with no fresh row.
+
+    Every record of a targeted REQNO goes too, so a REQNO-level (v2) record or
+    an event from an earlier window cannot sit beside the REQNO's new events.
+    """
+    retained = [
+        rec
+        for rec in existing
+        if rec["audit_id"] not in targets and rec.get("reqno") not in reqnos
+    ]
     retained_ids = {rec["audit_id"] for rec in retained}
     return retained + [rec for rec in fresh if rec["audit_id"] not in retained_ids]
 
@@ -1537,6 +1546,7 @@ def _event_report_fields(
         "events_in_reqno": event.events_in_reqno,
         "linked_reqno": event.linked_reqno,
         "linkage_rule": event.linkage_rule,
+        "linked_order_datetime_local": _fmt_utc_local(event.linked_order_datetime),
         "issue_datetime_local": _fmt_utc_local(event.issue_datetime),
         "issue_units": event.issue_units,
         "issue_units_returned": event.issue_units_returned,
@@ -1743,8 +1753,10 @@ def main() -> None:
         order = event.order
         # The row context carries the event's identity and is judged at the
         # issue: classify, the replay guardrails and the qualified-bleeding
-        # note-date gate all read ``order_datetime`` (plan section 3). The
-        # REQNO's own order time stays on ``order`` for the MSBOS screen.
+        # note-date gate all read ``order_datetime`` (plan section 3), so the
+        # store's AuditRow.order_datetime is the issue time; llm_report.json
+        # carries the linked order's time. The REQNO's own order time stays on
+        # ``order`` for the MSBOS screen.
         event_order = order.model_copy(
             update={"audit_id": event.audit_id, "order_datetime": event.issue_datetime}
         )
@@ -2898,7 +2910,7 @@ def main() -> None:
             # (Codex P2 on 727239a) — otherwise the review page keeps an
             # obsolete model verdict for a now-deterministic row.
             existing = json.loads(stale_out.read_text())
-            purged = _merge_filtered_report(existing, [], target_ids)
+            purged = _merge_filtered_report(existing, [], target_ids, ONLY_REQNOS)
             if len(purged) != len(existing):
                 stale_out.write_text(json.dumps(purged, indent=2, ensure_ascii=False))
                 print(
@@ -3247,8 +3259,11 @@ def main() -> None:
         # Then append this run's fresh records while preserving all untargeted
         # events. This prevents a stale model verdict surviving a no-submit run.
         existing = json.loads(out.read_text())
-        retained_count = sum(rec["audit_id"] not in target_ids for rec in existing)
-        report = _merge_filtered_report(existing, report, target_ids)
+        retained_count = sum(
+            rec["audit_id"] not in target_ids and rec.get("reqno") not in ONLY_REQNOS
+            for rec in existing
+        )
+        report = _merge_filtered_report(existing, report, target_ids, ONLY_REQNOS)
         print(
             f"  purged {len(existing) - retained_count} targeted stale record(s); "
             f"merged {len(report) - retained_count} fresh record(s)"

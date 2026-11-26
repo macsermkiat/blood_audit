@@ -198,6 +198,22 @@ def test_filtered_run_purges_target_with_no_fresh_llm_record() -> None:
     assert merged == [existing[0]]
 
 
+def test_reqno_rerun_purges_every_record_of_the_reqno() -> None:
+    """A REQNO-level v2 record must not sit beside the REQNO's new events."""
+    leg = _load_llm_leg()
+    existing = [
+        {"reqno": "R1", "audit_id": "v2-reqno-level"},
+        {"reqno": "R2", "audit_id": "other"},
+    ]
+    fresh = [{"reqno": "R1", "audit_id": "event-1"}]
+
+    merged = leg._merge_filtered_report(
+        existing, fresh, frozenset({"event-1"}), frozenset({"R1"})
+    )
+
+    assert merged == [existing[1], fresh[0]]
+
+
 def test_llm_leg_flag_off_disposition_inconclusive_not_screened(monkeypatch) -> None:
     """Flag-off byte identity: the helper forces ``inconclusive`` even for an
     all-returned summary, so classify never emits a returns terminal and the
