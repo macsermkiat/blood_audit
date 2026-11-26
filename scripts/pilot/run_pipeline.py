@@ -105,7 +105,7 @@ from bba.returns_ledger import (
 )
 from bba.vitals_extractor import PeriopSummary, scan_periop
 
-from _anchor_candidates import build_anchor_candidates
+from _anchor_candidates import visit_fallback_candidates
 from _bdvsttrans_source import load_bdvsttrans_rows
 from _hosxp_dt import (
     _combine,
@@ -1370,14 +1370,8 @@ def main() -> None:
     )
     events_by_an = events_by_admission(audit, others)
     emergency = _emergency_by_reqno(bdvstdt_related)
-    # The blood-bank visit is the only fallback left for a missing Hb: the
-    # PICK/USE candidate no longer anchors anything (plan section 3).
-    visit_fallback = {
-        reqno: [c for c in cands if c.reason == "blood_bank_visit_fallback"]
-        for reqno, cands in build_anchor_candidates(
-            bdvstdt_rows=bdvstdt, bdvst_by_reqno=bdvst_by_reqno
-        ).items()
-    }
+    # The blood-bank visit is the only fallback left for a missing Hb.
+    visit_fallback = visit_fallback_candidates(bdvstdt)
 
     print("\n" + "=" * 100)
     print(

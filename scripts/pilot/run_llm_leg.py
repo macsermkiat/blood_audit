@@ -40,8 +40,12 @@ Environment variables:
   ``pilot-mini``). Bump to force re-run; the store is idempotent on
   (run_id, audit_id).
 * ``BBA_PILOT_ONLY_REQNO`` — comma-separated REQNOs; process/submit only
-  those cases and MERGE their fresh records into the existing
-  ``llm_report.json``. Always pair with a fresh ``BBA_PILOT_RUN_ID``.
+  every issue event of those REQNOs and MERGE their fresh records into the
+  existing ``llm_report.json`` by audit_id. Always pair with a fresh
+  ``BBA_PILOT_RUN_ID``.
+* ``BBA_PILOT_ONLY_AUDIT_ID`` — comma-separated event audit_ids; the same,
+  for single issue events (the re-ask list). Combined with
+  ``BBA_PILOT_ONLY_REQNO``, either selects an event.
 * ``BBA_PILOT_PLATELET_LLM`` — ``1`` submits platelet cases to the LLM
   (default: the library flag ``PLATELET_LLM_ENABLED``, OFF). Costs one call
   per deferred platelet order.
@@ -80,12 +84,7 @@ from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import bba.feature_flags as feature_flags
-from bba.audit_orders import (
-    AuditOrder,
-    AuditOrdersConfig,
-    BloodOrderInput,
-    build_audit_orders,
-)
+from bba.audit_orders import AuditOrdersConfig, build_audit_orders
 from bba.audit_pipeline import PipelineRowContext
 from bba.audit_pipeline.pipeline import (
     _persist_bridge_gate_review_row,
@@ -149,7 +148,7 @@ from bba.feature_flags import (
     PLATELET_PROPHYLAXIS_AUTOCLEAR_ENABLED,
     RETURNS_LEDGER_ENABLED,
 )
-from bba.returns_ledger import ReturnsSummary, rows_for_admission, summarize_returns
+from bba.returns_ledger import ReturnsSummary, summarize_event_returns
 from bba.evidence_bundle_builder import (
     DiagnosisRecord,
     EvidenceInputs,
@@ -168,12 +167,13 @@ from bba.hb_lookup import (
     HbLookupResult,
     HbObservation,
     parse_hb_value,
-    resolve_evidence_anchor,
+    prior_transfusion_cutoff,
+    resolve_event_anchors,
     resolve_hb_with_fallback,
-    resolve_lab_anchor,
     TriggerDraws,
     trigger_draws,
 )
+from bba.issue_events import AuditEvent
 from bba.platelet_classifier import classify_platelet
 from bba.platelet_classifier.models import PlateletClassifierInputs
 from bba.platelet_lookup import (
@@ -208,11 +208,21 @@ from bba.llm_client import AnthropicBatchTransport, BatchSubmissionRequest
 from bba.prompt_builder import EvidenceChunk, PromptBuildRequest, build_prompt
 from bba.vitals_extractor import PeriopSummary, extract_vitals
 
-from _anchor_candidates import build_anchor_candidates
+from _anchor_candidates import visit_fallback_candidates
 from _bdvsttrans_source import load_bdvsttrans_rows
 from _claude_cli_transport import THROTTLE_WAIT_S, CliBatchStopped, ClaudeCliTransport
-from _hosxp_dt import _combine, _parse_hosxp_date, _parse_time
+from _hosxp_dt import _combine, _fmt_utc_local, _parse_hosxp_date, _parse_time
 from _periop_notes import vitals_notes_for
+from _pilot_events import (
+    EVENT_CODE_VERSION,
+    blood_order_input,
+    build_issue_events,
+    classify_with_event_notes_guard,
+    event_window_periop,
+    events_by_admission,
+    operation_times,
+    related_orders,
+)
 from privacy_requests import (
     PrivacyCase,
     PrivacyPrepareError,
@@ -255,28 +265,32 @@ def _cli_throttle_wait_s() -> float:
     return seconds
 
 
-# Single-case iteration knob: comma-separated REQNOs. When set, only the
-# matching orders are processed/submitted, and the fresh records are MERGED
-# into the existing llm_report.json (all other cases keep their records)
-# instead of overwriting it wholesale. Pair with a fresh BBA_PILOT_RUN_ID —
-# the store is idempotent on (run_id, audit_id), so re-using a run id that
-# already holds this case would keep the stale row.
-ONLY_REQNOS = frozenset(
-    v.strip()
-    for v in os.environ.get("BBA_PILOT_ONLY_REQNO", "").split(",")
-    if v.strip()
-)
+def _env_set(name: str) -> frozenset[str]:
+    return frozenset(
+        v.strip() for v in os.environ.get(name, "").split(",") if v.strip()
+    )
+
+
+# Single-case iteration knobs: comma-separated REQNOs (every issue event of
+# each) and event audit_ids. When either is set, only the selected events are
+# processed/submitted, and the fresh records are MERGED into the existing
+# llm_report.json by audit_id (every other event keeps its record) instead of
+# overwriting it wholesale. Pair with a fresh BBA_PILOT_RUN_ID — the store is
+# idempotent on (run_id, audit_id, code_version), so re-using a run id that
+# already holds this event would keep the stale row.
+ONLY_REQNOS = _env_set("BBA_PILOT_ONLY_REQNO")
+ONLY_AUDIT_IDS = _env_set("BBA_PILOT_ONLY_AUDIT_ID")
 
 
 def _merge_filtered_report(
     existing: list[dict[str, Any]],
     fresh: list[dict[str, Any]],
-    only_reqnos: frozenset[str],
+    targets: frozenset[str],
 ) -> list[dict[str, Any]]:
-    """Replace a filtered run's targets, purging targets with no fresh row."""
-    retained = [rec for rec in existing if rec["reqno"] not in only_reqnos]
-    retained_reqnos = {rec["reqno"] for rec in retained}
-    return retained + [rec for rec in fresh if rec["reqno"] not in retained_reqnos]
+    """Replace a filtered run's target audit_ids, purging those with no fresh row."""
+    retained = [rec for rec in existing if rec["audit_id"] not in targets]
+    retained_ids = {rec["audit_id"] for rec in retained}
+    return retained + [rec for rec in fresh if rec["audit_id"] not in retained_ids]
 
 
 # Operator opt-in for the missing-Hb positive-evidence pre-check (MTP /
@@ -375,13 +389,13 @@ DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED = (
 # every affected verdict instead of keeping stale pre-feature rows (AC "reusing a
 # stale identity does not leave pre-feature rows in place"). Declared-use flips
 # some orders to NEEDS_REVIEW, changing the submission set and verdicts, so it is
-# folded in the same way (Codex P2, PR #156). Flag-off keeps the original
-# "pilot-mini" identity, so a flag-off run is byte-identical to today. The seams
+# folded in the same way (Codex P2, PR #156). The base token is the issue-event
+# identity shared with run_pipeline.py (plan 4.1). The seams
 # are captured once at import and never toggled mid-run, so they are constant
 # across this process's batch submit and result apply. A changed BDVSTTRANS
 # ledger still needs a fresh BBA_PILOT_RUN_ID (it does not alter the code
 # identity); production folds the ledger into run identity separately (#121).
-CODE_VERSION = "pilot-mini"
+CODE_VERSION = EVENT_CODE_VERSION
 if RETURNS_LEDGER_ENABLED:
     CODE_VERSION += "+returns"
 if DECLARED_USETYPE_PILOT_ENABLED:
@@ -641,7 +655,8 @@ def _platelet_returns_result(
 
     This leg's caller passes the bundle's WINDOWED ``periop_summary`` (mirroring
     production and the RBC LLM path), so a remote same-admission surgery cannot
-    exempt an unrelated transfusion. The deterministic leg scans peri-op
+    exempt an unrelated transfusion; for an all-returned event it passes the
+    event's own notes window instead (owner decision 2026-11-24). The deterministic leg scans peri-op
     admission-wide (the accepted #123 Risk #3); the two legs can therefore differ
     only on that same documented det/model split.
 
@@ -751,62 +766,8 @@ def _read_preferred_optional_csv(*names: str) -> list[dict[str, str]]:
     return []
 
 
-def _icd_codes(*raws: str | None) -> tuple[str, ...]:
-    out: list[str] = []
-    for raw in raws:
-        if not raw:
-            continue
-        for chunk in raw.replace(";", ",").split(","):
-            code = chunk.strip()
-            if code:
-                out.append(code)
-    return tuple(out)
-
-
 def _hash(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()[:32]
-
-
-def _last_rbc_order_before(
-    rbc_orders_by_an: dict[str, list[datetime]], an: str, order_utc: datetime
-) -> datetime | None:
-    """The most recent RBC dispense for this admission inside the 24 h before
-    ``order_utc`` (the order's own lab anchor), or None. Bounds the 24 h
-    minimum Hb (issue #249): a low that an earlier transfusion already
-    corrected must not make a later order sub-threshold. The map holds the
-    dispense times from ``_rbc_dispense_times_by_an``, the closest this leg has
-    to a transfusion time; the order being judged sits exactly at
-    ``order_utc`` and so never counts as its own earlier transfusion."""
-    earlier = [
-        t
-        for t in rbc_orders_by_an.get(an, ())
-        if t < order_utc and order_utc - t <= timedelta(hours=24)
-    ]
-    return max(earlier) if earlier else None
-
-
-def _rbc_dispense_times_by_an(
-    orders: Sequence[AuditOrder],
-    candidates_by_reqno: dict[str, list[AnchorCandidate]],
-) -> dict[str, list[datetime]]:
-    """Each admission's RBC dispense times, for the #249 transfusion cutoff.
-
-    An order with no usable dispense record is left out: nothing shows its
-    blood was given (issue #264, clinician sign-off 2026-11-11, option A). A
-    dispense recorded before the request is a data error and counts as none,
-    as in ``resolve_lab_anchor``.
-    """
-    by_an: dict[str, list[datetime]] = {}
-    for o in orders:
-        if o.component == "platelet":
-            continue
-        anchor = resolve_lab_anchor(
-            order_datetime=o.order_datetime,
-            candidates=candidates_by_reqno.get(o.reqno, []),
-        )
-        if anchor.reason == "issue_datetime":
-            by_an.setdefault(o.an, []).append(anchor.anchor_utc)
-    return by_an
 
 
 def _hb_trigger_anchor(
@@ -1480,42 +1441,126 @@ def _platelet_procedure_chunks(
     optract_dict: dict[str, dict[str, str]],
     *,
     an: str,
-    order_utc: datetime,
-    dispense_utc: datetime,
+    issue_utc: datetime,
     window_start: datetime,
     notes_window_end: datetime,
 ) -> tuple[EvidenceChunk, ...]:
-    """Procedure-charge evidence for a platelet order.
+    """Procedure-charge evidence for a platelet issue event.
 
     Bedside CVC / DLC insertions, taps and LPs are rarely coded as procedures
     but are billed (INCPT group 110). Clinician review 2026-11-09: "CVC is a
     procedure"; in 2025, 240 of 3,696 eligible platelet orders had a billed
     CVC / DLC insertion within 24 h that the platelet leg never showed the
     model. Same rendering and start as the notes window; the end reaches
-    ``PLATELET_PROCEDURE_HOURS_AFTER_DISPENSE`` past ``dispense_utc`` when
-    that is later than the notes window's end. With no dispense record the
-    caller passes the order time, so the window ends 24 h after the order.
+    ``PLATELET_PROCEDURE_HOURS_AFTER_DISPENSE`` past the issue when that is
+    later than the notes window's end.
     """
     chunks, _ = _incpt_evidence_chunks(
         incpt,
         optract_dict,
         an=an,
-        anchor=order_utc,
-        anchor_label="order",
+        anchor=issue_utc,
+        anchor_label="dispense",
         window_start=window_start,
         window_end=max(
             notes_window_end,
-            dispense_utc + timedelta(hours=PLATELET_PROCEDURE_HOURS_AFTER_DISPENSE),
+            issue_utc + timedelta(hours=PLATELET_PROCEDURE_HOURS_AFTER_DISPENSE),
         ),
         start_eid=PLATELET_INCPT_START_EID,
     )
     return chunks
 
 
+def _selected_events(events: Sequence[AuditEvent]) -> list[AuditEvent]:
+    """The events this run processes: all, or those the ONLY knobs name.
+
+    An audit_id that names no event of this run is a typo or a stale re-ask
+    list (the window or linkage changed); it stops the run instead of
+    silently re-asking nothing.
+    """
+    if not ONLY_REQNOS and not ONLY_AUDIT_IDS:
+        return list(events)
+    unknown = ONLY_AUDIT_IDS - {e.audit_id for e in events}
+    if unknown:
+        sys.exit(
+            f"BBA_PILOT_ONLY_AUDIT_ID names {len(unknown)} audit_id(s) with no "
+            "issue event in this bundle"
+        )
+    return [
+        e
+        for e in events
+        if e.order.reqno in ONLY_REQNOS or e.audit_id in ONLY_AUDIT_IDS
+    ]
+
+
+_LINKAGE_TEXT = {
+    "own": "this request's own order",
+    "fresh_order": "a newer order placed after the previous issue",
+    "standing_order": "this request's order; no newer order was placed",
+}
+
+
+def _issue_event_chunk(event: AuditEvent, evidence_id: str) -> EvidenceChunk:
+    """The issue event's blood-bank facts, stated once for the model (plan 7).
+
+    Fact-only: which issue of the request this is, how many units it held
+    and returned, how long after the linked order it left the bank, and
+    whether that order's declared surgical use counts for it (8.15 (c)).
+    """
+    return EvidenceChunk(
+        evidence_id=evidence_id,
+        source="Issue_Event",
+        text=(
+            "ISSUE EVENT (blood bank record): this audit judges issue "
+            f"{event.event_seq} of {event.events_in_reqno} under this blood "
+            f"request. Units issued in this event: {event.issue_units}; "
+            f"returned to the blood bank unused: {event.issue_units_returned}. "
+            f"Linked order: {_LINKAGE_TEXT[event.linkage_rule]}; issued "
+            f"{event.order_to_issue_hours:.1f} h after that order. Declared "
+            "surgical use applies to this issue: "
+            f"{'yes' if event.declared_use_applies else 'no'}."
+        ),
+    )
+
+
+def _next_evidence_id(chunks: Sequence[EvidenceChunk]) -> str:
+    return f"E{max((int(c.evidence_id[1:]) for c in chunks), default=0) + 1}"
+
+
+def _event_report_fields(
+    event: AuditEvent, cutoff: AuditEvent | None
+) -> dict[str, Any]:
+    """Plan 4.3 per-event fields of an llm_report.json entry."""
+    return {
+        "parent_audit_id": event.parent_audit_id,
+        "event_seq": event.event_seq,
+        "events_in_reqno": event.events_in_reqno,
+        "linked_reqno": event.linked_reqno,
+        "linkage_rule": event.linkage_rule,
+        "issue_datetime_local": _fmt_utc_local(event.issue_datetime),
+        "issue_units": event.issue_units,
+        "issue_units_returned": event.issue_units_returned,
+        "order_to_issue_hours": round(event.order_to_issue_hours, 2),
+        "declared_use_applies": event.declared_use_applies,
+        "prior_event_cutoff_local": (
+            _fmt_utc_local(cutoff.issue_datetime) if cutoff is not None else ""
+        ),
+    }
+
+
 def _build_inputs():
-    """Return all the CSV slices the per-case loop needs."""
+    """Return the run's issue events and the CSV slices the per-event loop needs.
+
+    Events are built exactly as ``run_pipeline.py`` builds them
+    (``_pilot_events``), so both legs judge the same events against the same
+    #249 cutoff pool.
+    """
     bdvst = _read_csv("BDVST.csv")
     bdvstdt = _read_csv("BDVSTDT.csv")
+    if not (BUNDLE / "BDVST_RELATED.csv").exists():
+        sys.exit(f"{BUNDLE / 'BDVST_RELATED.csv'} missing; rebuild the bundle")
+    bdvst_related = _read_csv("BDVST_RELATED.csv")
+    bdvstdt_related = _read_csv("BDVSTDT_RELATED.csv")
     msbos_reference = (
         load_msbos_reference() if MSBOS_RESERVATION_PILOT_ENABLED else None
     )
@@ -1551,40 +1596,16 @@ def _build_inputs():
     }
 
     products_by_reqno: dict[str, list[str]] = {}
-    # Ordered unit amount per REQNO, one raw UNITAMT string per BDVSTDT detail
-    # line; summarize_returns parses these fail-closed (spec #119, ticket #124).
-    unitamt_lines_by_reqno: dict[str, list[str]] = {}
-    # Join key is (HN, REQNO), never bare REQNO: REQNO recurs across admissions,
-    # so a declaration from another HN must not attach to the audited order.
-    usetype_values_by_hn_reqno: dict[tuple[str, str], list[str]] = {}
     for r in bdvstdt:
-        reqno = r["REQNO"]
-        products_by_reqno.setdefault(reqno, []).append((r.get("BDTYPE") or "").strip())
-        unitamt_lines_by_reqno.setdefault(reqno, []).append(
-            (r.get("UNITAMT") or "").strip()
+        products_by_reqno.setdefault(r["REQNO"], []).append(
+            (r.get("BDTYPE") or "").strip()
         )
-        usetype_values_by_hn_reqno.setdefault(
-            ((r.get("HN") or "").strip(), reqno), []
-        ).append((r.get("USETYPE") or "").strip())
 
-    # Returns-ledger index: BDVSTTRANS joins audited orders by REQNO exactly
-    # (spec #119, ticket #124). One row per dispensed physical unit. Read ONLY
-    # when RETURNS_LEDGER_ENABLED, so a flag-off run never opens the optional
-    # ledger and stays byte-identical to today even if the file is malformed.
-    # Keys are uppercased so summarize_returns reads UNITSTAT; the index keys on
-    # the raw REQNO to match order.reqno and every other REQNO index (a one-sided
-    # strip would silently miss the join).
-    # Source: the canonical export at $BBA_BDVSTTRANS_CSV when set, else the
-    # bundle copy (rows already UPPERCASE-keyed by the shared loader).
-    bdvsttrans_by_reqno: dict[str, list[dict[str, str]]] = {}
-    if RETURNS_LEDGER_ENABLED:
-        for row in load_bdvsttrans_rows(BUNDLE):
-            bdvsttrans_by_reqno.setdefault(row.get("REQNO") or "", []).append(row)
-
-    bdvst_by_reqno = {r["REQNO"]: r for r in bdvst}
-    candidates_by_reqno = build_anchor_candidates(
-        bdvstdt_rows=bdvstdt, bdvst_by_reqno=bdvst_by_reqno
-    )
+    # The ledger is the issue events themselves, so it is read on every run:
+    # the canonical export at $BBA_BDVSTTRANS_CSV when set, else the bundle copy.
+    bdvsttrans = load_bdvsttrans_rows(BUNDLE)
+    if not bdvsttrans:
+        sys.exit("no BDVSTTRANS ledger rows: issue events cannot be built")
 
     diag_by_an: dict[str, list[str]] = {}
     diag_name_by_code: dict[str, str] = {}
@@ -1597,32 +1618,29 @@ def _build_inputs():
             if name:
                 diag_name_by_code.setdefault(code, name)
 
-    inputs: list[BloodOrderInput] = []
-    for r in bdvst:
-        hn = r["HN"]
-        reqno = r["REQNO"]
-        an = (r.get("AN") or "").strip() or None
-        inputs.append(
-            BloodOrderInput(
-                hn=hn,
-                an=an,
-                reqno=reqno,
-                bdvstst=(r.get("BDVSTST") or "").strip(),
-                reqtype=(r.get("REQTYPE") or "").strip(),
-                canceldate=(r.get("CANCELDATE") or "").strip() or None,
-                req_date=_parse_hosxp_date(r.get("REQDATE") or ""),
-                req_time=_parse_time(r.get("REQTIME") or ""),
-                bdvst_date=_parse_hosxp_date(r.get("BDVSTDATE") or ""),
-                bdvst_time=_parse_time(r.get("BDVSTTIME") or ""),
-                products=tuple(products_by_reqno.get(reqno, [])),
-                diagnosis_codes=_icd_codes(
-                    *(diag_by_an.get(an or "", []) + [r.get("ICD10")])
-                ),
-            )
-        )
+    related, usetypes = related_orders(
+        bdvst_related,
+        bdvstdt_related,
+        diag_by_an,
+        audited_reqnos={r["REQNO"] for r in bdvst},
+        collapse_usetype=_collapsed_usetype_for,
+    )
+    fr = build_audit_orders(
+        [blood_order_input(r, products_by_reqno, diag_by_an) for r in bdvst],
+        AuditOrdersConfig(code_version=CODE_VERSION),
+    )
+    print(f"audit_orders: included={len(fr.included)} excluded={len(fr.excluded)}")
+    audit, others = build_issue_events(
+        fr,
+        related,
+        bdvsttrans,
+        usetypes=usetypes,
+        operations=operation_times(iptsumoprt, incpt),
+    )
 
     return (
-        inputs,
+        audit,
+        events_by_admission(audit, others),
         lab,
         med,
         iptsumoprt,
@@ -1633,10 +1651,8 @@ def _build_inputs():
         progress,
         focus,
         diag_name_by_code,
-        candidates_by_reqno,
-        bdvsttrans_by_reqno,
-        unitamt_lines_by_reqno,
-        usetype_values_by_hn_reqno,
+        # The blood-bank visit is the only fallback left for a missing Hb.
+        visit_fallback_candidates(bdvstdt),
         oprtact_bridge,
         msbos_reference,
         reserved_units_map,
@@ -1688,7 +1704,8 @@ def main() -> None:
 
     AUDIT_STORE_ROOT.mkdir(parents=True, exist_ok=True)
     (
-        inputs,
+        audit,
+        events_by_an,
         lab,
         med,
         iptsumoprt,
@@ -1699,35 +1716,64 @@ def main() -> None:
         progress,
         focus,
         diag_name_by_code,
-        candidates_by_reqno,
-        bdvsttrans_by_reqno,
-        unitamt_lines_by_reqno,
-        usetype_values_by_hn_reqno,
+        visit_fallback,
         oprtact_bridge,
         msbos_reference,
         reserved_units_map,
     ) = _build_inputs()
 
-    fr = build_audit_orders(inputs, AuditOrdersConfig(code_version=CODE_VERSION))
-    print(f"audit_orders: included={len(fr.included)} excluded={len(fr.excluded)}")
-
+    selected = _selected_events(audit.events)
+    # The audit_ids a filtered run replaces in llm_report.json; None when the
+    # run is unfiltered and rewrites the report whole.
+    target_ids = (
+        frozenset(e.audit_id for e in selected)
+        if ONLY_REQNOS or ONLY_AUDIT_IDS
+        else None
+    )
     contexts: list[PipelineRowContext] = []
-    # Re-anchor provenance per order, keyed by audit_id. Kept out of the shared
-    # PipelineRowContext model so the schema is untouched; consumed only when
-    # emitting the JSON report below.
+    # Per-event provenance, keyed by audit_id. Kept out of the shared
+    # PipelineRowContext model so the schema is untouched; consumed by the
+    # classify loop (the all-returned notes guard) and the JSON report.
     anchor_by_id: dict[str, EvidenceAnchor] = {}
-    rbc_orders_by_an = _rbc_dispense_times_by_an(fr.included, candidates_by_reqno)
+    event_by_id: dict[str, AuditEvent] = {}
+    cutoff_by_id: dict[str, AuditEvent | None] = {}
+    event_periop_by_id: dict[str, PeriopSummary | None] = {}
 
-    for order in fr.included:
-        if ONLY_REQNOS and order.reqno not in ONLY_REQNOS:
-            continue
-        # Collapsed declared use for THIS order, keyed by (HN, REQNO). Computed
-        # before the component split (mirroring the deterministic leg) so the
-        # platelet returns short-circuit can gate the peri-op exemption
-        # (PR #194). Guarded so a flag-off run never calls collapse_usetype
-        # (which warns on mixed codes) — keeps flag-off byte-identical.
-        collapsed_usetype = _collapsed_usetype_for(
-            usetype_values_by_hn_reqno.get(((order.hn or "").strip(), order.reqno), [])
+    for event in selected:
+        order = event.order
+        # The row context carries the event's identity and is judged at the
+        # issue: classify, the replay guardrails and the qualified-bleeding
+        # note-date gate all read ``order_datetime`` (plan section 3). The
+        # REQNO's own order time stays on ``order`` for the MSBOS screen.
+        event_order = order.model_copy(
+            update={"audit_id": event.audit_id, "order_datetime": event.issue_datetime}
+        )
+        anchor = resolve_event_anchors(event)
+        issue_at = anchor.anchor_utc
+        anchor_by_id[event.audit_id] = anchor
+        event_by_id[event.audit_id] = event
+        # Declared use is the LINKED order's, and it counts for this event only
+        # when declared_use_applies (owner decision 8.15 (c)); the bundle shows
+        # it under the same gate.
+        declared_code = event.linked_usetype if event.declared_use_applies else None
+        declared_use = _declared_use_label_for_classifier(declared_code)
+        # Returns-ledger disposition per event (owner decision 1.3), behind
+        # the flag. Off -> the classifier sees "inconclusive".
+        returns_summary: ReturnsSummary | None = (
+            summarize_event_returns(event.issue_unit_statuses)
+            if RETURNS_LEDGER_ENABLED
+            else None
+        )
+        # PREOP_OVER_RESERVATION and the MSBOS screens judge the REQNO's
+        # reservation: a property of the order, judged once, on event 1.
+        judge_reservation = (
+            MSBOS_RESERVATION_PILOT_ENABLED
+            and msbos_reference is not None
+            and event.event_seq == 1
+        )
+        vitals_notes = vitals_notes_for(progress, focus, order.an, issue_at)
+        event_periop_by_id[event.audit_id] = event_window_periop(
+            vitals_notes, events_by_an[order.an], event, returns_summary
         )
         # --- Platelet path (Phase 2, component="platelet") ---
         # Only active when _platelet_llm_enabled() (BBA_PILOT_PLATELET_LLM=1,
@@ -1739,15 +1785,10 @@ def main() -> None:
             if not _platelet_llm_enabled():
                 continue
             plt_obs = _plt_observations(lab, order.an)
-            plt_lab_anchor = resolve_lab_anchor(
-                order_datetime=order.order_datetime,
-                candidates=candidates_by_reqno.get(order.reqno, []),
-            ).anchor_utc
-            plt_result = lookup_platelet(
-                observations=plt_obs,
-                anchor_utc=plt_lab_anchor,
-            )
-            plt_projected = project_24h(observations=plt_obs, anchor_utc=plt_lab_anchor)
+            # The count is read at the issue (plan 1.5; clinician ruling
+            # 2026-11-09: dispense time), like every other platelet evidence.
+            plt_result = lookup_platelet(observations=plt_obs, anchor_utc=issue_at)
+            plt_projected = project_24h(observations=plt_obs, anchor_utc=issue_at)
             # The evidence bundle (below) is built for EVERY platelet order,
             # including those with no usable count, so the returns short-circuit
             # can screen returns-first with the bundle's windowed peri-op — the
@@ -1755,12 +1796,6 @@ def main() -> None:
             # production / the deterministic leg's returns-before-gate precedence.
             hn_hash = _hash(order.hn)
             an_hash = _hash(order.an)
-            anchor_by_id[order.audit_id] = EvidenceAnchor(
-                anchor_utc=order.order_datetime,
-                display="",
-                reason="order",
-                gap_hours=0.0,
-            )
             plt_diagnoses: tuple[DiagnosisRecord, ...] = tuple(
                 DiagnosisRecord(icd10=code, description=diag_name_by_code.get(code))
                 for code in dict.fromkeys(order.diagnosis_codes)
@@ -1783,7 +1818,7 @@ def main() -> None:
             # the LLM cannot ground any signal and everything floors to review.
             # Reuse the same evidence-gathering helpers as the RBC path; swap
             # Hb history for platelet history and keep everything else.
-            plt_ev_anchor = order.order_datetime  # no re-anchoring for platelets
+            plt_ev_anchor = issue_at
             plt_local_tz = ZoneInfo(TZ_LOCAL)
             plt_order_date_local = plt_ev_anchor.astimezone(plt_local_tz).date()
             plt_notes_lo = datetime.combine(
@@ -1813,9 +1848,7 @@ def main() -> None:
                 MedRecord(timestamp=m.timestamp, drug=m.drug)
                 for m in plt_meds_in_window
             )
-            plt_vitals_notes = vitals_notes_for(
-                progress, focus, order.an, plt_ev_anchor
-            )
+            plt_vitals_notes = vitals_notes
             plt_vitals = extract_vitals(anchor=plt_ev_anchor, notes=plt_vitals_notes)
             plt_progress_for_bundle = tuple(
                 ProgressNote(timestamp=n.timestamp, text=n.text)
@@ -1860,8 +1893,9 @@ def main() -> None:
                         products=order.products_ordered,
                         lab_anchor=plt_result.datetime_utc
                         if plt_result.datetime_utc is not None
-                        and plt_result.datetime_utc > order.order_datetime
+                        and plt_result.datetime_utc > issue_at
                         else None,
+                        window_anchor=issue_at,
                     ),
                     component="platelet",
                     diagnoses=plt_diagnoses,
@@ -1874,25 +1908,22 @@ def main() -> None:
             )
             # Factual all-returned remains the first terminal. Declared pre-op
             # exemption is held until after T4 MSBOS screening because it waives
-            # the transfusion judgment, not reservation appropriateness.
-            plt_returns_summary = (
-                summarize_returns(
-                    rows_for_admission(
-                        bdvsttrans_by_reqno.get(order.reqno, []), order.an
-                    ),
-                    unitamt_lines_by_reqno.get(order.reqno, []),
-                )
-                if RETURNS_LEDGER_ENABLED
-                else None
-            )
+            # the transfusion judgment, not reservation appropriateness. For an
+            # all-returned event the notes guard reads the event's own notes
+            # window (owner decision 2026-11-24); otherwise the bundle's.
+            event_periop = event_periop_by_id[event.audit_id]
             plt_returns_result = None
             if RETURNS_LEDGER_ENABLED or DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED:
                 plt_returns_result = _platelet_returns_result(
-                    audit_id=order.audit_id,
-                    order_datetime=order.order_datetime,
-                    returns_summary=plt_returns_summary,
-                    periop=bundle.periop_summary,
-                    declared_use=_declared_use_label_for_classifier(collapsed_usetype),
+                    audit_id=event.audit_id,
+                    order_datetime=issue_at,
+                    returns_summary=returns_summary,
+                    periop=(
+                        event_periop
+                        if event_periop is not None
+                        else bundle.periop_summary
+                    ),
+                    declared_use=declared_use,
                 )
             if (
                 plt_returns_result is not None
@@ -1905,12 +1936,12 @@ def main() -> None:
             # a returns terminal wins over the platelet gate (production precedence).
             plt_clf = classify_platelet(
                 PlateletClassifierInputs(
-                    audit_id=order.audit_id,
+                    audit_id=event.audit_id,
                     platelet_count=plt_result.value_k_ul,
                     diagnosis_codes=order.diagnosis_codes,
                     platelet_freshness=plt_result.freshness,
                     has_recent_chemo_med=find_chemo_med(
-                        _med_events(med, order.an), order.order_datetime
+                        _med_events(med, order.an), issue_at
                     )
                     is not None,
                     enable_prophylaxis_autoclear=PLATELET_AUTOCLEAR_PILOT_ENABLED,
@@ -1932,10 +1963,9 @@ def main() -> None:
             # with a blank/unjoined USETYPE is not screened.
             platelet_reservation_decision = None
             if (
-                MSBOS_RESERVATION_PILOT_ENABLED
+                judge_reservation
                 and msbos_reference
-                and _declared_use_label_for_classifier(collapsed_usetype)
-                in DECLARED_SURGICAL_LABELS
+                and declared_use in DECLARED_SURGICAL_LABELS
             ):
                 plt_op_events = _op_events(
                     iptsumoprt,
@@ -2037,20 +2067,11 @@ def main() -> None:
                     text = _annotate_platelet_lab(
                         text,
                         timestamp_utc=item.timestamp_utc,
-                        anchor_utc=plt_lab_anchor,
-                        anchor_label=(
-                            "dispense"
-                            if plt_lab_anchor != order.order_datetime
-                            else "order"
-                        ),
+                        anchor_utc=issue_at,
+                        anchor_label="dispense",
                         is_closest=item.id == closest_plt_id,
                         projection_line=(
-                            _render_platelet_projection(
-                                plt_projected,
-                                "dispense"
-                                if plt_lab_anchor != order.order_datetime
-                                else "order",
-                            )
+                            _render_platelet_projection(plt_projected, "dispense")
                             if PLATELET_TREND_PILOT_ENABLED
                             else None
                         ),
@@ -2068,21 +2089,21 @@ def main() -> None:
                     incpt,
                     optract_dict,
                     an=order.an,
-                    order_utc=order.order_datetime,
-                    dispense_utc=plt_lab_anchor,
+                    issue_utc=issue_at,
                     window_start=plt_notes_lo,
                     notes_window_end=plt_notes_hi,
                 )
             )
             if not plt_chunks:
                 print(
-                    f"  WARN: empty chunks for platelet order {order.reqno}; "
-                    "skipping LLM submit"
+                    f"  WARN: empty chunks for platelet order {order.reqno} "
+                    f"event {event.event_seq}; skipping LLM submit"
                 )
                 continue
+            plt_chunks.append(_issue_event_chunk(event, _next_evidence_id(plt_chunks)))
             contexts.append(
                 PipelineRowContext.for_platelet(
-                    order=order,
+                    order=event_order,
                     platelet_result=plt_result,
                     platelet_projected_24h_k_ul=plt_projected,
                     platelet_projection_computed=True,
@@ -2095,54 +2116,40 @@ def main() -> None:
                     evidence_bundle_hash=bundle.bundle_hash,
                     evidence_chunks=tuple(plt_chunks),
                     platelet_reservation_decision=platelet_reservation_decision,
-                    declared_use=_declared_use_label_for_classifier(collapsed_usetype),
+                    declared_use=declared_use,
                 )
             )
             continue
 
         # --- Red-cell path (Phase 1, component="red_cell") ---
-        # (collapsed_usetype is computed above the component split.)
-        # Reserve-ahead elective orders are crossmatched days before they are
-        # transfused; re-anchor the evidence windows (Hb lookback, notes, CBC,
-        # meds, vitals, INCPT) onto the issue datetime so the model adjudicates
-        # the op-day context instead of the reservation-day window. Cohort and
-        # procedure proximity keep the REQ order anchor (the order-decision
-        # context). evidence_anchor == order.order_datetime when not re-anchored,
-        # so same-day orders are byte-identical to before. See
-        # bba.hb_lookup.resolve_evidence_anchor.
-        evidence_anchor = resolve_evidence_anchor(
-            order_datetime=order.order_datetime,
-            candidates=candidates_by_reqno.get(order.reqno, []),
-        )
-        ev_anchor = evidence_anchor.anchor_utc
-        reanchored = evidence_anchor.reason == "issue_reanchor"
-        anchor_by_id[order.audit_id] = evidence_anchor
-        # Display noun for hours-before-anchor flags. For re-anchored orders the
-        # windows hang off the transfusion datetime, so "before order" would be
-        # off by the reservation->transfusion gap (days). Non-reanchored cases
-        # keep "order", so their evidence text is byte-identical to before.
-        anchor_label = "transfusion" if reanchored else "order"
+        # The event is judged at its issue time: Hb, cohort, procedure
+        # proximity, crystalloid, ANC and every evidence window (Hb lookback,
+        # notes, CBC, meds, vitals, INCPT) read from it. When blood was issued
+        # 24 h or more after the linked order (reserve-ahead, issue_reanchor),
+        # the bundle's Hb window also reaches past the issue.
+        ev_anchor = issue_at
+        reanchored = anchor.reason == "issue_reanchor"
+        # Display noun for hours-before-anchor flags: the blood bank issue.
+        anchor_label = "dispense"
 
-        # Hb is read, flagged and guardrail-checked at one moment: the lab
-        # anchor (dispense time; clinician review 2026-11-09).
-        lab_dt = resolve_lab_anchor(
-            order_datetime=order.order_datetime,
-            candidates=candidates_by_reqno.get(order.reqno, []),
-        ).anchor_utc
-        hb_label = anchor_label if lab_dt == ev_anchor else "dispense"
+        # Hb is read, flagged and guardrail-checked at one moment: the issue
+        # (dispense time; clinician review 2026-11-09). Its 24 h minimum starts
+        # at the last transfusing red-cell event on the admission (#249).
+        lab_dt = issue_at
+        hb_label = anchor_label
         hb_obs = _hb_observations(lab, order.an)
-        hb_not_before = _last_rbc_order_before(rbc_orders_by_an, order.an, lab_dt)
+        cutoff = prior_transfusion_cutoff(events_by_an[order.an], event)
+        cutoff_by_id[event.audit_id] = cutoff
+        hb_not_before = cutoff.issue_datetime if cutoff is not None else None
+        fallback = visit_fallback.get(order.reqno, [])
         hb, hb_anchor_display, hb_anchor_reason = resolve_hb_with_fallback(
             observations=hb_obs,
             order_datetime=lab_dt,
-            candidates=candidates_by_reqno.get(order.reqno, []),
+            candidates=fallback,
             not_before_utc=hb_not_before,
         )
         hb_trigger_anchor = _hb_trigger_anchor(
-            lab_dt,
-            hb_anchor_reason,
-            hb_anchor_display,
-            candidates_by_reqno.get(order.reqno, []),
+            lab_dt, hb_anchor_reason, hb_anchor_display, fallback
         )
         draws = trigger_draws(
             observations=hb_obs,
@@ -2155,13 +2162,13 @@ def main() -> None:
             iptsumoprt, ipddchsumoprt, incpt, optract_dict, icd9_dict, order.an
         )
         med_events = _med_events(med, order.an)
-        anc = _latest_anc(lab, order.an, order.order_datetime)
+        anc = _latest_anc(lab, order.an, issue_at)
         cohort = assign_cohort(
             CohortInputs(
-                audit_id=order.audit_id,
+                audit_id=event.audit_id,
                 hn=order.hn,
                 an=order.an,
-                order_datetime=order.order_datetime,
+                order_datetime=issue_at,
                 procedure_events=op_events,
                 diagnosis_codes=order.diagnosis_codes,
                 med_events=med_events,
@@ -2183,12 +2190,11 @@ def main() -> None:
         prior_ops = [
             o
             for o in op_events
-            if o.operative_datetime <= order.order_datetime
-            and is_blood_requiring_procedure(o.icd9)
+            if o.operative_datetime <= issue_at and is_blood_requiring_procedure(o.icd9)
         ]
         proximity_h = (
             (
-                order.order_datetime
+                issue_at
                 - max(prior_ops, key=lambda o: o.operative_datetime).operative_datetime
             ).total_seconds()
             / 3600.0
@@ -2198,13 +2204,12 @@ def main() -> None:
         upcoming_ops = [
             o
             for o in op_events
-            if o.operative_datetime >= order.order_datetime
-            and is_blood_requiring_procedure(o.icd9)
+            if o.operative_datetime >= issue_at and is_blood_requiring_procedure(o.icd9)
         ]
         upcoming_h = (
             (
                 min(upcoming_ops, key=lambda o: o.operative_datetime).operative_datetime
-                - order.order_datetime
+                - issue_at
             ).total_seconds()
             / 3600.0
             if upcoming_ops
@@ -2213,10 +2218,9 @@ def main() -> None:
 
         crystalloid_events = tuple(m for m in med_events if _is_crystalloid(m.drug))
         crystalloid_liters = total_crystalloid_liters(
-            crystalloid_events, hb.datetime_utc or order.order_datetime
+            crystalloid_events, hb.datetime_utc or issue_at
         )
 
-        vitals_notes = vitals_notes_for(progress, focus, order.an, ev_anchor)
         vitals = extract_vitals(anchor=ev_anchor, notes=vitals_notes)
 
         # Issue #76: ship the narrative notes themselves (not just the regex
@@ -2335,7 +2339,7 @@ def main() -> None:
                     an_hash=an_hash,
                     products=order.products_ordered,
                     lab_anchor=hb_bundle_anchor,
-                    window_anchor=ev_anchor if reanchored else None,
+                    window_anchor=ev_anchor,
                 ),
                 diagnoses=diagnoses,
                 progress_notes=progress_for_bundle,
@@ -2343,7 +2347,7 @@ def main() -> None:
                 meds=meds_for_bundle,
                 hb_history=hb_for_bundle,
                 vitals=vital_records,
-                declared_use=_declared_use_record(collapsed_usetype),
+                declared_use=_declared_use_record(declared_code),
             )
         )
 
@@ -2372,7 +2376,7 @@ def main() -> None:
         ]
         if unflagged:
             print(
-                f"WARNING {order.reqno}: Hb {', '.join(unflagged)} draw judged by "
+                f"WARNING {order.reqno} event {event.event_seq}: Hb {', '.join(unflagged)} draw judged by "
                 "the guardrail is missing from the evidence bundle",
                 file=sys.stderr,
             )
@@ -2522,6 +2526,8 @@ def main() -> None:
             for it in bundle.items
         ):
             guidance_lines += ["", *_PERIOP_EVIDENCE_GUIDANCE]
+        chunks.append(_issue_event_chunk(event, f"E{next_eid}"))
+        next_eid += 1
         chunks.append(
             EvidenceChunk(
                 evidence_id=f"E{next_eid}",
@@ -2531,27 +2537,8 @@ def main() -> None:
         )
         next_eid += 1
 
-        if not chunks:
-            print(f"  WARN: empty chunks for {order.reqno}; skipping LLM submit")
-            continue
-
-        # Returns-ledger read path (spec #119, ticket #124), behind the flag.
-        # Off -> no ledger read, returns_summary stays None and the classifier
-        # sees "inconclusive", so the LLM leg's submission set is byte-identical
-        # to today. Joined by REQNO exactly, mirroring the deterministic leg.
-        returns_summary: ReturnsSummary | None = None
-        if RETURNS_LEDGER_ENABLED:
-            returns_summary = summarize_returns(
-                rows_for_admission(bdvsttrans_by_reqno.get(order.reqno, []), order.an),
-                unitamt_lines_by_reqno.get(order.reqno, []),
-            )
-
         reservation_decision = None
-        if (
-            MSBOS_RESERVATION_PILOT_ENABLED
-            and order.component == "red_cell"
-            and msbos_reference
-        ):
+        if judge_reservation and msbos_reference:
             rbc_pick = None
             if oprtact_bridge is not None:
                 planned, rbc_pick = planned_op_v2_for_events(
@@ -2603,7 +2590,7 @@ def main() -> None:
 
         contexts.append(
             PipelineRowContext(
-                order=order,
+                order=event_order,
                 hb_result=hb,
                 vitals_result=vitals,
                 cohort_assignment=cohort,
@@ -2625,7 +2612,7 @@ def main() -> None:
                 enable_missing_hb_positive_evidence=ENABLE_MISSING_HB_POSITIVE_EVIDENCE,
                 returns_summary=returns_summary,
                 reservation_decision=reservation_decision,
-                declared_use=_declared_use_label_for_classifier(collapsed_usetype),
+                declared_use=declared_use,
             )
         )
 
@@ -2749,7 +2736,7 @@ def main() -> None:
             llm_contexts.append(ctx)
             continue
         periop = ctx.periop_summary
-        cres = classify(
+        cres = classify_with_event_notes_guard(
             ClassifierInputs(
                 audit_id=ctx.order.audit_id,
                 hb_result=ctx.hb_result,
@@ -2780,7 +2767,8 @@ def main() -> None:
                 enable_declared_use_preop_exemption=(
                     DECLARED_USE_PREOP_EXEMPT_PILOT_ENABLED
                 ),
-            )
+            ),
+            event_periop_by_id[ctx.order.audit_id],
         )
         classifier_results[ctx.order.audit_id] = cres
         report_classifier_results[ctx.order.audit_id] = cres
@@ -2904,13 +2892,13 @@ def main() -> None:
         and not bridge_review_ctxs
     ):
         stale_out = WORK / "llm_report.json"
-        if ONLY_REQNOS and stale_out.exists():
+        if target_ids is not None and stale_out.exists():
             # A filtered run whose every target became deterministic-final
             # still must purge the targets' stale LLM records before exiting
             # (Codex P2 on 727239a) — otherwise the review page keeps an
             # obsolete model verdict for a now-deterministic row.
             existing = json.loads(stale_out.read_text())
-            purged = _merge_filtered_report(existing, [], ONLY_REQNOS)
+            purged = _merge_filtered_report(existing, [], target_ids)
             if len(purged) != len(existing):
                 stale_out.write_text(json.dumps(purged, indent=2, ensure_ascii=False))
                 print(
@@ -3011,8 +2999,11 @@ def main() -> None:
         )
 
     if privacy_prepare_path is not None:
+        # Day 0 of the date shift is the event's issue date (plan 8.16).
         anchors = {
-            ctx.order.audit_id: bangkok_anchor(ctx.order.order_datetime)
+            ctx.order.audit_id: bangkok_anchor(
+                event_by_id[ctx.order.audit_id].issue_datetime
+            )
             for ctx in llm_contexts
         }
         write_requests(
@@ -3168,10 +3159,14 @@ def main() -> None:
         print(f"  persisted audit rows: {len(write_summary.audit_ids_persisted)}")
 
     print("\n" + "=" * 120)
-    rows = list(audit_store.read_audit_results(run_id=RUN_ID))
+    # Only this code identity's rows: a row another code version committed
+    # under this run id (a REQNO-level v2 row, an older event rule) is stale.
+    rows = list(
+        audit_store.read_audit_results(run_id=RUN_ID, code_version=CODE_VERSION)
+    )
     rows_by_id = {r.audit_id: r for r in rows}
     print(
-        f"{'reqno':<10} {'det.verdict':<26} {'final':<26} "
+        f"{'reqno':<10} {'ev':<3} {'det.verdict':<26} {'final':<26} "
         f"{'conf':<6} {'review_reason':<22} {'reasoning_en (head)'}"
     )
     print("=" * 120)
@@ -3194,7 +3189,8 @@ def main() -> None:
         conf = f"{r.confidence:.2f}" if r else "—"
         rr = (r.review_reason or "—") if r else "—"
         print(
-            f"{ctx.order.reqno:<10} {det.classification:<26} "
+            f"{ctx.order.reqno:<10} {event_by_id[ctx.order.audit_id].event_seq:<3} "
+            f"{det.classification:<26} "
             f"{final:<26} {conf:<6} {rr[:20]:<22} {reasoning}"
         )
 
@@ -3202,20 +3198,19 @@ def main() -> None:
     for ctx in reported_ctxs:
         det = report_classifier_results[ctx.order.audit_id]
         r = rows_by_id.get(ctx.order.audit_id)
-        ev = anchor_by_id.get(ctx.order.audit_id)
+        ev = anchor_by_id[ctx.order.audit_id]
+        event = event_by_id[ctx.order.audit_id]
+        cutoff = cutoff_by_id.get(ctx.order.audit_id)
         report.append(
             {
                 "reqno": ctx.order.reqno,
                 "audit_id": ctx.order.audit_id,
-                "evidence_anchor": (
-                    {
-                        "reason": ev.reason,
-                        "datetime_local": ev.display,
-                        "gap_hours": round(ev.gap_hours, 1),
-                    }
-                    if ev is not None
-                    else None
-                ),
+                **_event_report_fields(event, cutoff),
+                "evidence_anchor": {
+                    "reason": ev.reason,
+                    "datetime_local": _fmt_utc_local(ev.anchor_utc),
+                    "gap_hours": round(ev.gap_hours, 1),
+                },
                 "deterministic": {
                     "classification": det.classification,
                     "rationale": det.rationale,
@@ -3246,14 +3241,14 @@ def main() -> None:
             }
         )
     out = WORK / "llm_report.json"
-    if ONLY_REQNOS and out.exists():
-        # Filtered run: purge every targeted REQNO first, including targets that
+    if target_ids is not None and out.exists():
+        # Filtered run: purge every targeted event first, including targets that
         # became deterministic-final and therefore produced no fresh LLM record.
         # Then append this run's fresh records while preserving all untargeted
-        # cases. This prevents a stale model verdict surviving a no-submit run.
+        # events. This prevents a stale model verdict surviving a no-submit run.
         existing = json.loads(out.read_text())
-        retained_count = sum(rec["reqno"] not in ONLY_REQNOS for rec in existing)
-        report = _merge_filtered_report(existing, report, ONLY_REQNOS)
+        retained_count = sum(rec["audit_id"] not in target_ids for rec in existing)
+        report = _merge_filtered_report(existing, report, target_ids)
         print(
             f"  purged {len(existing) - retained_count} targeted stale record(s); "
             f"merged {len(report) - retained_count} fresh record(s)"

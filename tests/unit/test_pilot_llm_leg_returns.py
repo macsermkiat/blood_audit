@@ -186,14 +186,14 @@ def test_declared_preop_rbc_without_ledger_skips_model() -> None:
     assert result.classification in leg.DETERMINISTIC_FINAL
 
 
-def test_only_reqnos_purges_target_with_no_fresh_llm_record() -> None:
+def test_filtered_run_purges_target_with_no_fresh_llm_record() -> None:
     leg = _load_llm_leg()
     existing = [
-        {"reqno": "KEEP", "llm_final": {"classification": "APPROPRIATE"}},
-        {"reqno": "TARGET", "llm_final": {"classification": "STALE"}},
+        {"reqno": "R1", "audit_id": "keep", "llm_final": {"x": "APPROPRIATE"}},
+        {"reqno": "R1", "audit_id": "target", "llm_final": {"x": "STALE"}},
     ]
 
-    merged = leg._merge_filtered_report(existing, [], frozenset({"TARGET"}))
+    merged = leg._merge_filtered_report(existing, [], frozenset({"target"}))
 
     assert merged == [existing[0]]
 
@@ -240,10 +240,24 @@ def test_llm_leg_code_version_is_flag_sensitive(monkeypatch) -> None:
     monkeypatch.setenv("BBA_PILOT_DECLARED_USE_PREOP_EXEMPT", "0")
 
     monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", True)
-    assert _load_llm_leg().CODE_VERSION == "pilot-mini+returns"
+    assert _load_llm_leg().CODE_VERSION == "pilot-event-1+gap4h+link-own+returns"
 
     monkeypatch.setattr(feature_flags, "RETURNS_LEDGER_ENABLED", False)
-    assert _load_llm_leg().CODE_VERSION == "pilot-mini"
+    assert _load_llm_leg().CODE_VERSION == "pilot-event-1+gap4h+link-own"
+
+
+def test_both_legs_share_the_issue_event_code_identity() -> None:
+    """Plan 4.1: the event window and linkage rule are one code identity for
+    both legs; the LLM leg only appends its seam suffixes."""
+    pilot_dir = Path(__file__).resolve().parents[2] / "scripts" / "pilot"
+    spec = importlib.util.spec_from_file_location(
+        "pilot_run_pipeline_codever", pilot_dir / "run_pipeline.py"
+    )
+    assert spec is not None and spec.loader is not None
+    pipeline = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pipeline)
+
+    assert _load_llm_leg().CODE_VERSION.startswith(pipeline.CODE_VERSION + "+")
 
 
 def test_llm_leg_periop_envelope_is_windowed(monkeypatch) -> None:

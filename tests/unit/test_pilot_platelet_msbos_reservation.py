@@ -11,9 +11,12 @@ from types import ModuleType, SimpleNamespace
 
 import bba.feature_flags as feature_flags
 import pytest
-from bba.audit_orders import AuditOrder, FilterResult
+from bba.audit_orders import AuditOrder
 from bba.cohort_detector import OperativeEvent
+from bba.issue_events import AuditEvent
 from bba.platelet_lookup import PlateletLookupResult
+
+from issue_event_bundle import event_inputs, one_event
 
 
 PILOT_DIR = Path(__file__).resolve().parents[2] / "scripts" / "pilot"
@@ -55,7 +58,7 @@ def _configure_platelet_pilot(
     planned_code: str,
     usetype_code: str = "2",
     library_platelet_llm: bool = True,
-) -> AuditOrder:
+) -> AuditEvent:
     order = AuditOrder(
         audit_id="audit-pilot-platelet-msbos",
         hn="HN1",
@@ -108,25 +111,9 @@ def _configure_platelet_pilot(
         if module.MSBOS_RESERVATION_PILOT_ENABLED
         else {}
     )
-    built_inputs = (
-        [],
-        [],
-        [],
-        [],
-        [],
-        [],
-        {},
-        {},
-        [],
-        [],
-        {},
-        {},
-        {},
-        {},
-        {("HN1", "REQ1"): [usetype_code]},
-        None,
-        reference,
-        reserved,
+    event = one_event(order, usetype=usetype_code)
+    built_inputs = event_inputs(
+        event, msbos_reference=reference, reserved_units=reserved
     )
 
     bundle_dir = root / "bundle"
@@ -154,18 +141,13 @@ def _configure_platelet_pilot(
     )
     monkeypatch.setattr(feature_flags, "PLATELET_LLM_ENABLED", library_platelet_llm)
     monkeypatch.setattr(module, "_build_inputs", lambda: built_inputs)
-    monkeypatch.setattr(
-        module,
-        "build_audit_orders",
-        lambda _inputs, _config: FilterResult(included=(order,), excluded=()),
-    )
     monkeypatch.setattr(module, "_plt_observations", lambda _rows, _an: ())
     monkeypatch.setattr(module, "lookup_platelet", lambda **_kwargs: platelet_result)
     monkeypatch.setattr(module, "_med_events", lambda *_args: ())
     monkeypatch.setattr(module, "vitals_notes_for", lambda *_args: ())
     monkeypatch.setattr(module, "build_evidence_bundle", lambda **_kwargs: bundle)
     monkeypatch.setattr(module, "_op_events", lambda *_args: (operation,))
-    return order
+    return event
 
 
 def _artifacts(
@@ -195,7 +177,7 @@ def test_flag_off_matches_pre_feature_behavior_and_never_reserves(
     monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", "0")
     monkeypatch.setenv("BBA_PILOT_DECLARED_USE_PREOP_EXEMPT", "0")
     module = _load_run_llm_leg("pilot_platelet_msbos_off")
-    order = _configure_platelet_pilot(
+    event = _configure_platelet_pilot(
         module, monkeypatch, tmp_path / "off", planned_code="0613"
     )
 
@@ -211,7 +193,7 @@ def test_flag_off_matches_pre_feature_behavior_and_never_reserves(
     rows, calls = _artifacts(module)
     # Exactly the pre-feature outcome: one injection-filtered NEEDS_REVIEW row.
     assert len(rows) == len(calls) == 1
-    assert rows[0]["audit_id"] == order.audit_id
+    assert rows[0]["audit_id"] == event.audit_id
     assert rows[0]["component"] == "platelet"
     assert rows[0]["final_classification"] == "NEEDS_REVIEW"
     assert rows[0]["review_reason"] == "injection_detected"
@@ -242,7 +224,7 @@ def test_flag_on_pilot_persists_platelet_reservation_terminal_and_reports_it(
 ) -> None:
     monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", "1")
     module = _load_run_llm_leg(f"pilot_platelet_msbos_on_{planned_code}")
-    order = _configure_platelet_pilot(
+    event = _configure_platelet_pilot(
         module, monkeypatch, tmp_path / planned_code, planned_code=planned_code
     )
 
@@ -250,7 +232,7 @@ def test_flag_on_pilot_persists_platelet_reservation_terminal_and_reports_it(
 
     rows, calls = _artifacts(module)
     assert len(rows) == len(calls) == 1
-    assert rows[0]["audit_id"] == order.audit_id
+    assert rows[0]["audit_id"] == event.audit_id
     assert rows[0]["component"] == "platelet"
     assert rows[0]["final_classification"] == expected_final
     assert rows[0]["review_reason"] == expected_reason
@@ -269,7 +251,7 @@ def test_flag_on_reserved_but_uncounted_order_reaches_reservation_review(
     # NEEDS_REVIEW row instead of being silently skipped.
     monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", "1")
     module = _load_run_llm_leg("pilot_platelet_msbos_missing_count")
-    order = _configure_platelet_pilot(
+    event = _configure_platelet_pilot(
         module, monkeypatch, tmp_path / "missing", planned_code="0613"
     )
     missing_count = PlateletLookupResult(
@@ -281,7 +263,7 @@ def test_flag_on_reserved_but_uncounted_order_reaches_reservation_review(
 
     rows, calls = _artifacts(module)
     assert len(rows) == len(calls) == 1
-    assert rows[0]["audit_id"] == order.audit_id
+    assert rows[0]["audit_id"] == event.audit_id
     assert rows[0]["component"] == "platelet"
     assert rows[0]["final_classification"] == "NEEDS_REVIEW"
     assert rows[0]["review_reason"] == "platelet_reservation_review"
@@ -301,7 +283,7 @@ def test_flag_on_ward_order_skips_reservation_screen_and_stays_llm_bound(
     # without an API call (floored to injection_detected).
     monkeypatch.setenv("BBA_PILOT_MSBOS_RESERVATION", "1")
     module = _load_run_llm_leg("pilot_platelet_msbos_ward")
-    order = _configure_platelet_pilot(
+    event = _configure_platelet_pilot(
         module,
         monkeypatch,
         tmp_path / "ward",
@@ -320,7 +302,7 @@ def test_flag_on_ward_order_skips_reservation_screen_and_stays_llm_bound(
 
     rows, calls = _artifacts(module)
     assert len(rows) == len(calls) == 1
-    assert rows[0]["audit_id"] == order.audit_id
+    assert rows[0]["audit_id"] == event.audit_id
     assert rows[0]["review_reason"] == "injection_detected"
     assert calls[0]["model_id"] == "injection-filter"
 
