@@ -7,7 +7,9 @@ are wrong. This script merges ``report.csv`` (deterministic final verdicts)
 with ``llm_report.json`` (LLM final verdicts, which replace the deterministic
 NEEDS_REVIEW / POTENTIALLY_INAPPROPRIATE they were routed from) and ranks one
 component at a time, so the mean / min / max trigger columns are Hb for RBC
-and platelet count for platelets. It replaces the scratch glue used for the
+and platelet count for platelets. Both files hold one record per issue event
+(blood_audit #276); they join on ``audit_id`` and each event is credited to
+the doctor of its ``linked_reqno``. It replaces the scratch glue used for the
 2026-09-19 hematology ranking, which was never committed.
 
     BBA_PILOT_WORK_DIR=/tmp/bba_hemato python scripts/pilot/rank_merged.py red_cell
@@ -23,10 +25,10 @@ import csv
 import json
 import os
 import sys
-from collections.abc import Mapping
 from pathlib import Path
 
 from bba.attribution import (
+    EventVerdict,
     build_rankings,
     load_dct_registry,
     load_order_labs,
@@ -48,38 +50,75 @@ COMPONENTS = ("red_cell", "platelet")
 ROUTED_TO_LLM = frozenset({"NEEDS_REVIEW", "POTENTIALLY_INAPPROPRIATE"})
 
 
-def merged_verdicts(work: Path, component: str) -> Mapping[str, str]:
-    """Final verdict per REQNO for one component: the LLM leg's where the
-    deterministic leg routed the order to it, else the deterministic leg's.
-    Excluded orders are left out. An LLM verdict for an order the report does
-    not know is an error, never a silent drop."""
-    with (work / "report.csv").open(encoding="utf-8") as f:
-        det = {r["reqno"]: r for r in csv.DictReader(f)}
-    llm = {
-        r["reqno"]: r["llm_final"]["final_classification"]
-        for r in json.loads((work / "llm_report.json").read_text(encoding="utf-8"))
-        if r.get("llm_final")
-    }
+def _report_rows_by_audit_id(path: Path) -> dict[str, dict[str, str]]:
+    """report.csv rows keyed by audit_id. A repeated audit_id would let one
+    event's verdict overwrite another's, so it fails loud."""
+    rows: dict[str, dict[str, str]] = {}
+    with path.open(encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            audit_id = (row.get("audit_id") or "").strip()
+            if not audit_id:
+                raise ValueError(
+                    f"{path} has a row without audit_id (a REQNO-level report "
+                    "from before issue events?); re-run run_pipeline.py"
+                )
+            if audit_id in rows:
+                raise ValueError(f"{path} holds audit_id {audit_id} twice")
+            rows[audit_id] = row
+    return rows
+
+
+def _llm_finals(path: Path) -> dict[str, str]:
+    """The LLM leg's final verdict per audit_id (records without one skipped)."""
+    finals: dict[str, str] = {}
+    for rec in json.loads(path.read_text(encoding="utf-8")):
+        if not rec.get("llm_final"):
+            continue
+        audit_id = rec["audit_id"]
+        if audit_id in finals:
+            raise ValueError(f"{path} holds audit_id {audit_id} twice")
+        finals[audit_id] = rec["llm_final"]["final_classification"]
+    return finals
+
+
+def merged_verdicts(work: Path, component: str) -> tuple[EventVerdict, ...]:
+    """Final verdict per issue event for one component: the LLM leg's where the
+    deterministic leg routed the event to it, else the deterministic leg's.
+    Excluded and no-issue REQNO-level rows are left out (listed, not scored).
+    An LLM verdict for an event the report does not know is an error, never a
+    silent drop."""
+    det = _report_rows_by_audit_id(work / "report.csv")
+    llm = _llm_finals(work / "llm_report.json")
     missing = sorted(set(llm) - set(det))
     if missing:
         raise ValueError(
-            f"{work / 'llm_report.json'} holds LLM verdicts for orders absent from "
+            f"{work / 'llm_report.json'} holds LLM verdicts for events absent from "
             f"{work / 'report.csv'} (stale report?): {missing[:10]}"
         )
-    out: dict[str, str] = {}
-    for reqno, row in det.items():
+    out: list[EventVerdict] = []
+    for audit_id, row in det.items():
         row_component = (row.get("component") or "red_cell").strip() or "red_cell"
         if row_component != component or row["classification"] == "excluded":
             continue
         # Only a verdict the deterministic leg ROUTED onward can be replaced by
         # the LLM leg's; a deterministic terminal (auto-clear, return, periop
         # exemption, MSBOS over-reservation) stands even if a stale LLM row
-        # exists for the same REQNO.
+        # exists for the same event.
         replaceable = row["classification"] in ROUTED_TO_LLM
-        out[reqno] = (
-            llm[reqno] if replaceable and reqno in llm else row["classification"]
+        out.append(
+            EventVerdict(
+                audit_id=audit_id,
+                reqno=row["reqno"],
+                linked_reqno=row["linked_reqno"],
+                component=row_component,
+                verdict=(
+                    llm[audit_id]
+                    if replaceable and audit_id in llm
+                    else row["classification"]
+                ),
+            )
         )
-    return out
+    return tuple(out)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -94,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     verdicts = merged_verdicts(WORK, component)
     if not verdicts:
-        print(f"no {component} orders in {WORK / 'report.csv'}", file=sys.stderr)
+        print(f"no {component} events in {WORK / 'report.csv'}", file=sys.stderr)
         return 1
     result = build_rankings(
         verdicts=verdicts,
@@ -112,14 +151,18 @@ def main(argv: list[str] | None = None) -> int:
         result,
         WORK / f"{component}_doctor_rankings.html",
         verdict_source_label=(
-            f"{result.totals.total} {component} orders; deterministic verdicts "
-            "with the LLM leg's final verdict where it ran"
+            f"{result.totals.total} scored {component} issue events; deterministic "
+            "verdicts with the LLM leg's final verdict where it ran; each event "
+            "credited to the doctor of its linked order"
         ),
     )
     t = result.totals
     print(
-        f"{component}: {t.total} orders (appropriate {t.appropriate} / "
-        f"inappropriate {t.inappropriate} / unresolved {t.unresolved})"
+        f"{component}: {len(verdicts)} events from "
+        f"{len({v.reqno for v in verdicts})} REQNOs; {t.total} scored "
+        f"(appropriate {t.appropriate} / inappropriate {t.inappropriate} / "
+        f"unresolved {t.unresolved}); returned {t.returned_not_transfused}, "
+        f"periop exempt {t.periop_transfusion_exempt}"
     )
     print(f"  {doctor_csv}\n  {dept_csv}\n  {html}")
     return 0

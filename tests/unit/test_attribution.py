@@ -17,6 +17,7 @@ collapse (Unresolved = NEEDS_REVIEW + INSUFFICIENT_EVIDENCE, per PRD
 from __future__ import annotations
 
 import csv
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -29,6 +30,7 @@ from bba.attribution import (
     UNATTRIBUTED_DEPARTMENT_ID,
     UNATTRIBUTED_DOCTOR_ID,
     DoctorRecord,
+    EventVerdict,
     GroupLabStats,
     OrderLabValue,
     RankedRow,
@@ -57,6 +59,7 @@ from bba.dashboard.models import PhysicianScorecard
 
 
 _REPORT_LAB_COLUMNS = (
+    "audit_id",
     "reqno",
     "component",
     "hb_value_g_dl",
@@ -78,8 +81,11 @@ def _write_report_csv(path: Path, rows: list[dict[str, str]]) -> Path:
     return path
 
 
-def _red_cell(reqno: str, hb: str, *, freshness: str = "fresh") -> dict[str, str]:
+def _red_cell(
+    reqno: str, hb: str, *, freshness: str = "fresh", audit_id: str | None = None
+) -> dict[str, str]:
     return {
+        "audit_id": reqno if audit_id is None else audit_id,
         "reqno": reqno,
         "component": "red_cell",
         "hb_value_g_dl": hb,
@@ -89,8 +95,11 @@ def _red_cell(reqno: str, hb: str, *, freshness: str = "fresh") -> dict[str, str
     }
 
 
-def _platelet(reqno: str, count: str, *, freshness: str = "fresh") -> dict[str, str]:
+def _platelet(
+    reqno: str, count: str, *, freshness: str = "fresh", audit_id: str | None = None
+) -> dict[str, str]:
     return {
+        "audit_id": reqno if audit_id is None else audit_id,
         "reqno": reqno,
         "component": "platelet",
         "hb_value_g_dl": "",
@@ -103,6 +112,19 @@ def _platelet(reqno: str, count: str, *, freshness: str = "fresh") -> dict[str, 
 # ---------------------------------------------------------------------------
 # Fixture helpers
 # ---------------------------------------------------------------------------
+
+
+def _events(
+    verdicts: Mapping[str, str], *, component: str = "red_cell"
+) -> tuple[EventVerdict, ...]:
+    """One-event REQNOs: each key is the audit_id, the REQNO and the linked
+    order at once, so a test about counting is not also a test about linkage."""
+    return tuple(
+        EventVerdict(
+            audit_id=key, reqno=key, linked_reqno=key, component=component, verdict=v
+        )
+        for key, v in verdicts.items()
+    )
 
 
 _DCT_HEADER = "Dct,Prefix,Fname,Lname,Deptlct,Deptname\n"
@@ -381,14 +403,14 @@ class TestHumanLabelVerdictSource:
 # ---------------------------------------------------------------------------
 
 
-def _audit_row(reqno: object, final_classification: str) -> SimpleNamespace:
+def _audit_row(audit_id: object, final_classification: str) -> SimpleNamespace:
     """A structural stand-in for :class:`bba.audit_store.models.AuditRow` —
     only the two fields :class:`SupportsVerdict` reads."""
-    return SimpleNamespace(reqno=reqno, final_classification=final_classification)
+    return SimpleNamespace(audit_id=audit_id, final_classification=final_classification)
 
 
 class TestPipelineVerdictSource:
-    def test_maps_reqno_to_final_classification(self) -> None:
+    def test_maps_audit_id_to_final_classification(self) -> None:
         rows = [
             _audit_row("68000001", "APPROPRIATE"),
             _audit_row("68000002", "INAPPROPRIATE"),
@@ -412,14 +434,14 @@ class TestPipelineVerdictSource:
         assert source() == first
         assert len(first) == 3
 
-    def test_identical_duplicate_reqno_tolerated(self) -> None:
+    def test_identical_duplicate_audit_id_tolerated(self) -> None:
         rows = [
             _audit_row("68000001", "APPROPRIATE"),
             _audit_row("68000001", "APPROPRIATE"),
         ]
         assert pipeline_verdict_source(rows)() == {"68000001": "APPROPRIATE"}
 
-    def test_conflicting_duplicate_reqno_fails_loud(self) -> None:
+    def test_conflicting_duplicate_audit_id_fails_loud(self) -> None:
         rows = [
             _audit_row("68000001", "APPROPRIATE"),
             _audit_row("68000001", "INAPPROPRIATE"),
@@ -428,7 +450,7 @@ class TestPipelineVerdictSource:
             pipeline_verdict_source(rows)()
 
     def test_empty_reqno_fails_loud(self) -> None:
-        with pytest.raises(ValueError, match="empty REQNO"):
+        with pytest.raises(ValueError, match="empty audit_id"):
             pipeline_verdict_source([_audit_row("  ", "APPROPRIATE")])()
 
     def test_empty_cohort_yields_empty_mapping(self) -> None:
@@ -481,7 +503,7 @@ class TestPipelineVerdictSource:
         )()
         assert verdicts == {"68000001": "PREOP_OVER_RESERVATION"}
 
-        (card,) = build_doctor_scorecards(verdicts, {}, {})
+        (card,) = build_doctor_scorecards(_events(verdicts), {}, {})
         assert card.total_orders == 1
         assert card.inappropriate_count == 1
         assert card.over_reservation_count == 1
@@ -497,7 +519,7 @@ class TestPipelineVerdictSource:
         )()
 
         result = build_rankings(
-            verdicts=verdicts,
+            verdicts=_events(verdicts),
             reqno_to_doctor={},
             dct_registry={},
         )
@@ -521,7 +543,7 @@ class TestPipelineVerdictSource:
         )()
 
         result = build_rankings(
-            verdicts=verdicts,
+            verdicts=_events(verdicts),
             reqno_to_doctor={},
             dct_registry={},
         )
@@ -607,7 +629,7 @@ class TestBuildScorecards:
 
     def test_doctor_scorecards_count_all_four_classifications(self) -> None:
         cards = build_doctor_scorecards(
-            self._VERDICTS, self._REQNO_TO_DOCTOR, self._REGISTRY
+            _events(self._VERDICTS), self._REQNO_TO_DOCTOR, self._REGISTRY
         )
         by_id = {c.physician_id: c for c in cards}
         card = by_id["302389"]
@@ -621,14 +643,14 @@ class TestBuildScorecards:
 
     def test_unattributed_orders_land_in_sentinel_bucket(self) -> None:
         cards = build_doctor_scorecards(
-            self._VERDICTS, self._REQNO_TO_DOCTOR, self._REGISTRY
+            _events(self._VERDICTS), self._REQNO_TO_DOCTOR, self._REGISTRY
         )
         by_id = {c.physician_id: c for c in cards}
         assert by_id[UNATTRIBUTED_DOCTOR_ID].total_orders == 1
 
     def test_scorecard_totals_reconcile_with_verdict_count(self) -> None:
         cards = build_doctor_scorecards(
-            self._VERDICTS, self._REQNO_TO_DOCTOR, self._REGISTRY
+            _events(self._VERDICTS), self._REQNO_TO_DOCTOR, self._REGISTRY
         )
         assert sum(c.total_orders for c in cards) == len(self._VERDICTS)
 
@@ -636,7 +658,7 @@ class TestBuildScorecards:
         # Human labels carry no model confidence; the reused dashboard
         # model requires the field, and this feature never renders it.
         cards = build_doctor_scorecards(
-            self._VERDICTS, self._REQNO_TO_DOCTOR, self._REGISTRY
+            _events(self._VERDICTS), self._REQNO_TO_DOCTOR, self._REGISTRY
         )
         assert all(c.average_confidence == 0.0 for c in cards)
 
@@ -644,7 +666,7 @@ class TestBuildScorecards:
         self,
     ) -> None:
         cards = build_doctor_scorecards(
-            {"r1": "APPROPRIATE"}, {"r1": "999999"}, self._REGISTRY
+            _events({"r1": "APPROPRIATE"}), {"r1": "999999"}, self._REGISTRY
         )
         (card,) = cards
         assert card.physician_id == "999999"
@@ -653,7 +675,7 @@ class TestBuildScorecards:
 
     def test_department_scorecards_group_by_deptlct(self) -> None:
         cards = build_department_scorecards(
-            self._VERDICTS, self._REQNO_TO_DOCTOR, self._REGISTRY
+            _events(self._VERDICTS), self._REQNO_TO_DOCTOR, self._REGISTRY
         )
         by_id = {c.ward_id: c for c in cards}
         assert by_id["1028000000"].total_orders == 3
@@ -664,7 +686,7 @@ class TestBuildScorecards:
 
     def test_output_sorted_by_group_id_for_determinism(self) -> None:
         cards = build_doctor_scorecards(
-            self._VERDICTS, self._REQNO_TO_DOCTOR, self._REGISTRY
+            _events(self._VERDICTS), self._REQNO_TO_DOCTOR, self._REGISTRY
         )
         ids = [c.physician_id for c in cards]
         assert ids == sorted(ids)
@@ -676,7 +698,7 @@ class TestBuildScorecards:
             "r3": "RETURNED_NOT_TRANSFUSED",
         }
         cards = build_doctor_scorecards(
-            verdicts,
+            _events(verdicts),
             {"r1": "302389", "r2": "302389", "r3": "302389"},
             self._REGISTRY,
         )
@@ -705,7 +727,7 @@ class TestBuildScorecards:
             "r4": "RETURNED_NOT_TRANSFUSED",
         }
         cards = build_doctor_scorecards(
-            verdicts,
+            _events(verdicts),
             {"r1": "302389", "r2": "302389", "r3": "302389", "r4": "302389"},
             self._REGISTRY,
         )
@@ -732,9 +754,11 @@ class TestBuildScorecards:
         verdicts = {"r1": "PREOP_OVER_RESERVATION"}
         reqno_to_doctor = {"r1": "302389"}
 
-        (doctor,) = build_doctor_scorecards(verdicts, reqno_to_doctor, self._REGISTRY)
+        (doctor,) = build_doctor_scorecards(
+            _events(verdicts), reqno_to_doctor, self._REGISTRY
+        )
         (department,) = build_department_scorecards(
-            verdicts, reqno_to_doctor, self._REGISTRY
+            _events(verdicts), reqno_to_doctor, self._REGISTRY
         )
         (ranked,) = rank_top_n(
             (doctor,),
@@ -990,7 +1014,7 @@ class TestWriteRankingsHtml:
         self, tmp_path: Path
     ) -> None:
         result = build_rankings(
-            verdicts={"r1": "INAPPROPRIATE", "r2": "APPROPRIATE"},
+            verdicts=_events({"r1": "INAPPROPRIATE", "r2": "APPROPRIATE"}),
             reqno_to_doctor={"r1": "302389", "r2": "302389"},
             dct_registry={
                 "302389": DoctorRecord(
@@ -1017,7 +1041,7 @@ class TestWriteRankingsHtml:
 
     def test_html_escapes_untrusted_names(self, tmp_path: Path) -> None:
         result = build_rankings(
-            verdicts={"r1": "INAPPROPRIATE"},
+            verdicts=_events({"r1": "INAPPROPRIATE"}),
             reqno_to_doctor={"r1": "302389"},
             dct_registry={
                 "302389": DoctorRecord(
@@ -1042,7 +1066,7 @@ class TestWriteRankingsHtml:
             "bba.attribution.outputs.RETURNS_LEDGER_ENABLED", False, raising=False
         )
         result = build_rankings(
-            verdicts={"r1": "INAPPROPRIATE"},
+            verdicts=_events({"r1": "INAPPROPRIATE"}),
             reqno_to_doctor={"r1": "302389"},
             dct_registry={},
         )
@@ -1061,7 +1085,7 @@ class TestWriteRankingsHtml:
             "bba.attribution.outputs.RETURNS_LEDGER_ENABLED", True, raising=False
         )
         result = build_rankings(
-            verdicts={"r1": "INAPPROPRIATE"},
+            verdicts=_events({"r1": "INAPPROPRIATE"}),
             reqno_to_doctor={"r1": "302389"},
             dct_registry={},
         )
@@ -1089,7 +1113,7 @@ class TestBuildRankings:
             "r5": "INSUFFICIENT_EVIDENCE",
         }
         result = build_rankings(
-            verdicts=verdicts,  # type: ignore[arg-type]
+            verdicts=_events(verdicts),
             reqno_to_doctor={"r1": "d1", "r2": "d1", "r3": "d2", "r4": "d2"},
             dct_registry={},
         )
@@ -1108,7 +1132,7 @@ class TestBuildRankings:
 
     def test_tables_carry_dimension_and_threshold_metadata(self) -> None:
         result = build_rankings(
-            verdicts={"r1": "APPROPRIATE"},
+            verdicts=_events({"r1": "APPROPRIATE"}),
             reqno_to_doctor={"r1": "d1"},
             dct_registry={},
         )
@@ -1198,7 +1222,7 @@ class TestRealDataReconciliation:
         verdicts = human_label_verdict_source(_REVIEW_XLSX)()
         assert len(verdicts) == 300
         result = build_rankings(
-            verdicts=verdicts,
+            verdicts=_events(verdicts),
             reqno_to_doctor=load_reqno_to_doctor(_BDVST_CSV),
             dct_registry=load_dct_registry(_DCT_CSV),
         )
@@ -1211,8 +1235,12 @@ class TestRealDataReconciliation:
         verdicts = human_label_verdict_source(_REVIEW_XLSX)()
         reqno_to_doctor = load_reqno_to_doctor(_BDVST_CSV)
         registry = load_dct_registry(_DCT_CSV)
-        doctor_cards = build_doctor_scorecards(verdicts, reqno_to_doctor, registry)
-        dept_cards = build_department_scorecards(verdicts, reqno_to_doctor, registry)
+        doctor_cards = build_doctor_scorecards(
+            _events(verdicts), reqno_to_doctor, registry
+        )
+        dept_cards = build_department_scorecards(
+            _events(verdicts), reqno_to_doctor, registry
+        )
         for cards in (doctor_cards, dept_cards):
             assert sum(c.total_orders for c in cards) == 300
             assert sum(c.appropriate_count for c in cards) == 162
@@ -1227,7 +1255,7 @@ class TestRealDataReconciliation:
         reqno_to_doctor = load_reqno_to_doctor(_BDVST_CSV)
         registry = load_dct_registry(_DCT_CSV)
         result = build_rankings(
-            verdicts=verdicts,
+            verdicts=_events(verdicts),
             reqno_to_doctor=reqno_to_doctor,
             dct_registry=registry,
         )
@@ -1237,7 +1265,9 @@ class TestRealDataReconciliation:
         # Only ~8 departments appear in the 300 (+ the unattributed
         # sentinel), and zero-count groups are excluded from a bucket's
         # ranking, so the department table is smaller than n=10.
-        dept_cards = build_department_scorecards(verdicts, reqno_to_doctor, registry)
+        dept_cards = build_department_scorecards(
+            _events(verdicts), reqno_to_doctor, registry
+        )
         bucket_positive = sum(1 for c in dept_cards if c.inappropriate_count > 0)
         assert len(result.departments.rows) == min(10, bucket_positive)
         for table in (result.doctors, result.departments):
@@ -1272,7 +1302,7 @@ class TestGroupLabStats:
 
 
 class TestLoadOrderLabs:
-    def test_loads_red_cell_hb_keyed_by_reqno(self, tmp_path: Path) -> None:
+    def test_loads_red_cell_hb_keyed_by_audit_id(self, tmp_path: Path) -> None:
         path = _write_report_csv(
             tmp_path / "report.csv",
             [_red_cell("68000001", "8.4"), _red_cell("68000002", "9.1")],
@@ -1288,12 +1318,14 @@ class TestLoadOrderLabs:
             tmp_path / "report.csv",
             [
                 {
+                    "audit_id": "68000001",
                     "reqno": "68000001",
                     "component": "",
                     "hb_value_g_dl": "8.4",
                     "hb_freshness": "fresh",
                 },
                 {
+                    "audit_id": "68000002",
                     "reqno": "68000002",
                     "component": "platelet",
                     "hb_value_g_dl": "9.1",
@@ -1344,7 +1376,7 @@ class TestLoadOrderLabs:
         with pytest.raises(ValueError, match="hb_freshness"):
             load_order_labs(bad)
 
-    def test_conflicting_duplicate_reqno_fails_loud(self, tmp_path: Path) -> None:
+    def test_conflicting_duplicate_audit_id_fails_loud(self, tmp_path: Path) -> None:
         path = _write_report_csv(
             tmp_path / "report.csv",
             [_red_cell("68000001", "8.4"), _red_cell("68000001", "9.9")],
@@ -1352,14 +1384,14 @@ class TestLoadOrderLabs:
         with pytest.raises(ValueError, match="two different lab records"):
             load_order_labs(path)
 
-    def test_identical_duplicate_reqno_tolerated(self, tmp_path: Path) -> None:
+    def test_identical_duplicate_audit_id_tolerated(self, tmp_path: Path) -> None:
         path = _write_report_csv(
             tmp_path / "report.csv",
             [_red_cell("68000001", "8.4"), _red_cell("68000001", "8.4")],
         )
         assert load_order_labs(path)["68000001"].hb_value_g_dl == 8.4
 
-    def test_rows_without_reqno_are_skipped(self, tmp_path: Path) -> None:
+    def test_rows_without_audit_id_are_skipped(self, tmp_path: Path) -> None:
         path = _write_report_csv(
             tmp_path / "report.csv",
             [_red_cell("", "8.4"), _red_cell("68000002", "9.1")],
@@ -1391,12 +1423,24 @@ def _mean_hb_scenario() -> tuple[
         ),
     }
     order_labs = {
-        "r1": OrderLabValue(reqno="r1", component="red_cell", hb_value_g_dl=8.0),
-        "r2": OrderLabValue(reqno="r2", component="red_cell", hb_value_g_dl=10.0),
-        "r3": OrderLabValue(reqno="r3", component="red_cell", hb_value_g_dl=7.0),
-        "r4": OrderLabValue(reqno="r4", component="red_cell", hb_value_g_dl=12.0),
-        "r5": OrderLabValue(reqno="r5", component="red_cell", hb_value_g_dl=6.0),
-        "r99": OrderLabValue(reqno="r99", component="red_cell", hb_value_g_dl=25.0),
+        "r1": OrderLabValue(
+            audit_id="r1", reqno="r1", component="red_cell", hb_value_g_dl=8.0
+        ),
+        "r2": OrderLabValue(
+            audit_id="r2", reqno="r2", component="red_cell", hb_value_g_dl=10.0
+        ),
+        "r3": OrderLabValue(
+            audit_id="r3", reqno="r3", component="red_cell", hb_value_g_dl=7.0
+        ),
+        "r4": OrderLabValue(
+            audit_id="r4", reqno="r4", component="red_cell", hb_value_g_dl=12.0
+        ),
+        "r5": OrderLabValue(
+            audit_id="r5", reqno="r5", component="red_cell", hb_value_g_dl=6.0
+        ),
+        "r99": OrderLabValue(
+            audit_id="r99", reqno="r99", component="red_cell", hb_value_g_dl=25.0
+        ),
     }
     return verdicts, reqno_to_doctor, dct_registry, order_labs
 
@@ -1404,7 +1448,9 @@ def _mean_hb_scenario() -> tuple[
 class TestAggregateLabStats:
     def test_doctor_means_exclude_non_scorable_and_out_of_cohort(self) -> None:
         verdicts, reqno_to_doctor, _registry, order_labs = _mean_hb_scenario()
-        stats = aggregate_doctor_lab_stats(verdicts, reqno_to_doctor, order_labs)
+        stats = aggregate_doctor_lab_stats(
+            _events(verdicts), reqno_to_doctor, order_labs
+        )
         # d1: r1(8) + r2(10); the returned r4(12) and out-of-cohort r99 excluded.
         assert stats["d1"].mean_hb == pytest.approx(9.0)
         assert stats["d1"].hb_order_n == 2
@@ -1416,7 +1462,7 @@ class TestAggregateLabStats:
     def test_department_means_pool_over_the_shared_department(self) -> None:
         verdicts, reqno_to_doctor, registry, order_labs = _mean_hb_scenario()
         stats = aggregate_department_lab_stats(
-            verdicts, reqno_to_doctor, registry, order_labs
+            _events(verdicts), reqno_to_doctor, registry, order_labs
         )
         # DEPT pools d1's r1,r2 and d2's r3 (returned r4 excluded): (8+10+7)/3.
         assert stats["DEPT"].mean_hb == pytest.approx(25.0 / 3.0)
@@ -1429,7 +1475,7 @@ class TestBuildRankingsMeanHb:
     def test_assembly_threads_mean_hb_onto_both_tables(self) -> None:
         verdicts, reqno_to_doctor, registry, order_labs = _mean_hb_scenario()
         result = build_rankings(
-            verdicts=verdicts,
+            verdicts=_events(verdicts),
             reqno_to_doctor=reqno_to_doctor,
             dct_registry=registry,
             order_labs=order_labs,
@@ -1451,7 +1497,7 @@ class TestBuildRankingsMeanHb:
         # Existing callers pass no lab mapping and must be unaffected.
         verdicts, reqno_to_doctor, registry, _labs = _mean_hb_scenario()
         result = build_rankings(
-            verdicts=verdicts,
+            verdicts=_events(verdicts),
             reqno_to_doctor=reqno_to_doctor,
             dct_registry=registry,
             min_orders=1,
@@ -1482,7 +1528,7 @@ class TestMeanHbOutput:
     def test_csv_appends_populated_mean_and_count(self, tmp_path: Path) -> None:
         verdicts, reqno_to_doctor, registry, order_labs = _mean_hb_scenario()
         result = build_rankings(
-            verdicts=verdicts,
+            verdicts=_events(verdicts),
             reqno_to_doctor=reqno_to_doctor,
             dct_registry=registry,
             order_labs=order_labs,
@@ -1509,10 +1555,10 @@ class TestMeanHbOutput:
         # lab-coverage gate.
         order_labs = dict(order_labs)
         order_labs["r3"] = OrderLabValue(
-            reqno="r3", component="red_cell", hb_value_g_dl=None
+            audit_id="r3", reqno="r3", component="red_cell", hb_value_g_dl=None
         )
         result = build_rankings(
-            verdicts=verdicts,
+            verdicts=_events(verdicts),
             reqno_to_doctor=reqno_to_doctor,
             dct_registry=registry,
             order_labs=order_labs,
@@ -1526,7 +1572,7 @@ class TestMeanHbOutput:
         assert "&mdash;" in html  # d2, no usable Hb
         assert "mean pre-transfusion" in html  # caveat sentence
 
-    def test_assembly_fails_loud_when_scorable_reqno_has_no_lab_row(self) -> None:
+    def test_assembly_fails_loud_when_scorable_event_has_no_lab_row(self) -> None:
         # A scorable REQNO absent from the lab source (stale / header-only /
         # wrong-run report.csv) must fail loud, not silently blank the column
         # (spec #131 user story 10). A present-but-unusable value is fine and
@@ -1534,9 +1580,9 @@ class TestMeanHbOutput:
         verdicts, reqno_to_doctor, registry, order_labs = _mean_hb_scenario()
         order_labs = dict(order_labs)
         del order_labs["r1"]  # scorable INAPPROPRIATE order, row now absent
-        with pytest.raises(ValueError, match="scorable REQNO"):
+        with pytest.raises(ValueError, match="scorable audit_id"):
             build_rankings(
-                verdicts=verdicts,
+                verdicts=_events(verdicts),
                 reqno_to_doctor=reqno_to_doctor,
                 dct_registry=registry,
                 order_labs=order_labs,
@@ -1567,7 +1613,7 @@ class TestGroupLabStatsPlatelet:
 
 
 class TestLoadOrderLabsPlatelet:
-    def test_loads_platelet_count_keyed_by_reqno(self, tmp_path: Path) -> None:
+    def test_loads_platelet_count_keyed_by_audit_id(self, tmp_path: Path) -> None:
         path = _write_report_csv(
             tmp_path / "report.csv", [_platelet("68000001", "45.0")]
         )
@@ -1582,6 +1628,7 @@ class TestLoadOrderLabsPlatelet:
             tmp_path / "report.csv",
             [
                 {
+                    "audit_id": "68000001",
                     "reqno": "68000001",
                     "component": "red_cell",
                     "hb_value_g_dl": "8.4",
@@ -1650,7 +1697,7 @@ class TestMeanPlateletIntegration:
         verdicts, reqno_to_doctor, registry, report_rows = _mixed_component_scenario()
         order_labs = load_order_labs(_write_report_csv(tmp_path / "r.csv", report_rows))
         result = build_rankings(
-            verdicts=verdicts,
+            verdicts=_events(verdicts),
             reqno_to_doctor=reqno_to_doctor,
             dct_registry=registry,
             order_labs=order_labs,
@@ -1678,7 +1725,7 @@ class TestMeanPlateletIntegration:
         # an em-dash (CSV empty / 0), with no error (#134 acceptance).
         verdicts, reqno_to_doctor, registry, order_labs = _mean_hb_scenario()
         result = build_rankings(
-            verdicts=verdicts,
+            verdicts=_events(verdicts),
             reqno_to_doctor=reqno_to_doctor,
             dct_registry=registry,
             order_labs=order_labs,
@@ -1705,7 +1752,7 @@ class TestMeanPlateletIntegration:
         verdicts, reqno_to_doctor, registry, report_rows = _mixed_component_scenario()
         order_labs = load_order_labs(_write_report_csv(tmp_path / "r.csv", report_rows))
         result = build_rankings(
-            verdicts=verdicts,
+            verdicts=_events(verdicts),
             reqno_to_doctor=reqno_to_doctor,
             dct_registry=registry,
             order_labs=order_labs,
@@ -1726,7 +1773,9 @@ class TestTriggerRange:
 
     def test_range_brackets_the_mean_per_doctor(self) -> None:
         verdicts, reqno_to_doctor, _registry, order_labs = _mean_hb_scenario()
-        stats = aggregate_doctor_lab_stats(verdicts, reqno_to_doctor, order_labs)
+        stats = aggregate_doctor_lab_stats(
+            _events(verdicts), reqno_to_doctor, order_labs
+        )
         assert (stats["d1"].hb_min, stats["d1"].hb_max) == (8.0, 10.0)
         assert (stats["d2"].hb_min, stats["d2"].hb_max) == (7.0, 7.0)
         # r4 (returned, Hb 12.0) is non-scorable and must not widen d1's range.
@@ -1746,7 +1795,7 @@ class TestTriggerRange:
     def test_assembly_threads_range_onto_rows(self) -> None:
         verdicts, reqno_to_doctor, registry, order_labs = _mean_hb_scenario()
         result = build_rankings(
-            verdicts=verdicts,
+            verdicts=_events(verdicts),
             reqno_to_doctor=reqno_to_doctor,
             dct_registry=registry,
             order_labs=order_labs,

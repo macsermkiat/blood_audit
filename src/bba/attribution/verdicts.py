@@ -1,16 +1,16 @@
 """Verdict sources — the swappable input to the scorecard aggregation.
 
-A :data:`VerdictSource` yields ``REQNO`` → 4-value
+A :data:`VerdictSource` yields a key → 4-value
 :data:`~bba.report_generator.models.Classification`. Two implementations
 ship:
 
 * :func:`human_label_verdict_source` — the 300-case human review
-  workbook (Sheet1 col J). Correct but thin per doctor.
-* :func:`pipeline_verdict_source` — the application's own per-order
-  verdicts (``bba.audit_store`` ``AuditRow.final_classification``) over
-  the full ~40k-order cohort. Far more orders per doctor. Only this
-  adapter differs; resolvers, aggregation, ranking, and outputs are
-  unchanged.
+  workbook (Sheet1 col J), keyed by ``REQNO``. Correct but thin per doctor.
+  The labels are per REQNO and predate the issue-event audit unit
+  (blood_audit #276); joining them to events is out of scope.
+* :func:`pipeline_verdict_source` — the application's own per-event
+  verdicts (``bba.audit_store`` ``AuditRow.final_classification``), keyed
+  by ``audit_id``: several events of one REQNO are distinct decisions.
 
 Which source the pilot *ranks* on is a separate decision. Promoting
 :func:`pipeline_verdict_source` to the default is gated on validating it
@@ -40,7 +40,8 @@ from bba.report_generator.models import Classification
 
 
 VerdictSource = Callable[[], Mapping[str, str]]
-"""Zero-argument callable yielding ``reqno -> Classification``."""
+"""Zero-argument callable yielding ``key -> Classification``: ``reqno`` for
+the human labels, ``audit_id`` for the pipeline's per-event verdicts."""
 
 
 HUMAN_LABEL_TO_CLASSIFICATION: Mapping[str, Classification] = MappingProxyType(
@@ -143,7 +144,7 @@ def human_label_verdict_source(
 
 
 class SupportsVerdict(Protocol):
-    """An audited order carrying its ``reqno`` and the pipeline's
+    """An audited issue event carrying its ``audit_id`` and the pipeline's
     ``final_classification`` — satisfied structurally by
     :class:`bba.audit_store.models.AuditRow`.
 
@@ -163,7 +164,7 @@ class SupportsVerdict(Protocol):
     """
 
     @property
-    def reqno(self) -> str: ...
+    def audit_id(self) -> str: ...
 
     @property
     def final_classification(self) -> str: ...
@@ -234,14 +235,14 @@ def pipeline_verdict_source(
     *,
     projector: VerdictProjector = strict_verdict_projector,
 ) -> VerdictSource:
-    """Return a :data:`VerdictSource` over the application's own per-order
-    verdicts — the full-cohort counterpart to
-    :func:`human_label_verdict_source`.
+    """Return a :data:`VerdictSource` over the application's own per-event
+    verdicts, keyed by ``audit_id``.
 
-    ``rows`` are audited orders (typically
+    ``rows`` are audited issue events (typically
     ``AuditStore.read_audit_results(run_id=...)`` scoped to one run so each
-    ``reqno`` appears once). They are materialized once here, so the
-    returned source is re-callable even if a generator is passed.
+    ``audit_id`` appears once). They are materialized once here, so the
+    returned source is re-callable even if a generator is passed. Two
+    events of one REQNO are two keys, never merged.
 
     ``projector`` narrows each order's audit-store
     ``final_classification`` onto the ranking layer's four values. The
@@ -250,11 +251,11 @@ def pipeline_verdict_source(
 
     Fail-loud contract (mirrors
     :func:`bba.attribution.order_doctor_map.load_reqno_to_doctor`): the
-    same ``reqno`` carrying two *different* projected verdicts raises
-    :class:`ValueError` naming the reqno — that only happens when the caller
+    same ``audit_id`` carrying two *different* projected verdicts raises
+    :class:`ValueError` naming it — that only happens when the caller
     mixed rows across runs/code-versions, which would silently mis-bucket
-    the order. An identical repeat is tolerated (idempotent re-read). An
-    empty ``reqno`` raises rather than collapsing distinct orders onto a
+    the event. An identical repeat is tolerated (idempotent re-read). An
+    empty ``audit_id`` raises rather than collapsing distinct events onto a
     blank key.
     """
     materialized = tuple(rows)
@@ -267,21 +268,21 @@ def pipeline_verdict_source(
     def read() -> Mapping[str, str]:
         verdicts: dict[str, str] = {}
         for row in materialized:
-            reqno = row.reqno.strip()
-            if reqno == "":
+            audit_id = row.audit_id.strip()
+            if audit_id == "":
                 raise ValueError(
-                    "audit row has an empty REQNO; refusing to key a verdict "
-                    "on a blank order id"
+                    "audit row has an empty audit_id; refusing to key a verdict "
+                    "on a blank event id"
                 )
             classification = projector(row.final_classification)
-            existing = verdicts.get(reqno)
+            existing = verdicts.get(audit_id)
             if existing is not None and existing != classification:
                 raise ValueError(
-                    f"REQNO {reqno} carries conflicting verdicts "
+                    f"audit_id {audit_id} carries conflicting verdicts "
                     f"{existing!r} and {classification!r}; scope the read to a "
-                    "single run_id so each order resolves to one classification"
+                    "single run_id so each event resolves to one classification"
                 )
-            verdicts[reqno] = classification
+            verdicts[audit_id] = classification
         return verdicts
 
     return read

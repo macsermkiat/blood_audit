@@ -53,6 +53,7 @@ def audit() -> ModuleType:
 
 def _record(audit: ModuleType, **overrides: object) -> object:
     base: dict[str, object] = {
+        "audit_id": "a1",
         "reqno": "R1",
         "component": "platelet",
         "label": "INAPPROPRIATE",
@@ -331,7 +332,7 @@ class TestLoadFindings:
     ) -> None:
         # A record that silently drops out of the audit is a record nobody
         # checked.
-        finding = audit.unmatched_report_finding("R9", "no audit-store row")
+        finding = audit.unmatched_report_finding("a9", "R9", "no audit-store row")
 
         assert finding.severity == "HIGH"
         assert finding.code == "response_not_auditable"
@@ -376,8 +377,8 @@ class TestLoadFindings:
         ]
         findings = audit.missing_result_findings(entries)
 
-        assert [(f.reqno, f.code, f.severity) for f in findings] == [
-            ("R1", "llm_result_missing", "HIGH")
+        assert [(f.audit_id, f.reqno, f.code, f.severity) for f in findings] == [
+            ("a1", "R1", "llm_result_missing", "HIGH")
         ]
         assert "llm_result_missing" in audit.RERUN_CODES
 
@@ -461,10 +462,10 @@ def test_an_answer_cut_off_at_the_output_limit_is_high_and_rerunnable(
 
 class TestRegexCandidateAfterJudging:
     def _candidate(self, audit: ModuleType) -> object:
-        return audit.Finding("R1", "label_contradicts_reasoning", "HIGH", "x")
+        return audit.Finding("a1", "R1", "label_contradicts_reasoning", "HIGH", "x")
 
     def test_judges_that_settled_it_take_over(self, audit: ModuleType) -> None:
-        settled = audit.settle_regex_candidates([self._candidate(audit)], {"R1"})
+        settled = audit.settle_regex_candidates([self._candidate(audit)], {"a1"})
         assert settled[0].severity == "LOW"
 
     def test_an_unsettled_candidate_keeps_blocking(self, audit: ModuleType) -> None:
@@ -517,3 +518,24 @@ class TestRowIdentity:
         # the report's summaries would audit a response nobody will read.
         rerun = self._row(reasoning_summary_en="Count 22,000 /uL. INAPPROPRIATE.")
         assert not audit.row_produced_entry(rerun, self._FINAL)
+
+
+def test_the_re_ask_list_names_only_the_flagged_event_of_a_reqno(
+    audit: ModuleType,
+) -> None:
+    # Two events of one REQNO (blood_audit #276): re-asking by REQNO would
+    # re-submit the sound event too and spend a call on it, so the list holds
+    # audit_ids for BBA_PILOT_ONLY_AUDIT_ID.
+    flagged = _record(
+        audit,
+        audit_id="ev2",
+        label=None,
+        final="NEEDS_REVIEW",
+        review_reason="schema_mismatch",
+        stop_reason="max_tokens",
+    )
+    sound = _record(audit, audit_id="ev1")
+    findings = [*audit.check_record(flagged), *audit.check_record(sound)]
+
+    assert audit.rerun_audit_ids(findings) == ["ev2"]
+    assert audit.RERUN_LIST == "llm_response_audit_ids.txt"

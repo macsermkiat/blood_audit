@@ -15,6 +15,11 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from bba.attribution.csv_support import require_columns
+from bba.attribution.models import (
+    UNATTRIBUTED_DOCTOR_ID,
+    DoctorRecord,
+    EventVerdict,
+)
 
 
 _REQUIRED_COLUMNS: tuple[str, ...] = ("REQNO", "DCTREQ")
@@ -48,3 +53,25 @@ def load_reqno_to_doctor(path: Path) -> Mapping[str, str]:
                 )
             mapping[reqno] = dctreq
     return mapping
+
+
+def attributed_doctor(event: EventVerdict, reqno_to_doctor: Mapping[str, str]) -> str:
+    """The doctor an event is credited to: ``DCTREQ`` of its linked order.
+
+    Plan 2.3: a fresh order placed between two issues of one REQNO carries the
+    later event to that order's doctor, not to the REQNO's. A linked order
+    with no ``DCTREQ`` lands on :data:`UNATTRIBUTED_DOCTOR_ID`.
+    """
+    return reqno_to_doctor.get(event.linked_reqno, UNATTRIBUTED_DOCTOR_ID)
+
+
+def attributed_department(
+    event: EventVerdict,
+    reqno_to_doctor: Mapping[str, str],
+    dct_registry: Mapping[str, DoctorRecord],
+) -> DoctorRecord | None:
+    """The registry record of the event's attributed doctor, when it names a
+    department; ``None`` sends the event to the unattributed department."""
+    doctor = reqno_to_doctor.get(event.linked_reqno)
+    record = dct_registry.get(doctor) if doctor is not None else None
+    return record if record is not None and record.deptlct else None

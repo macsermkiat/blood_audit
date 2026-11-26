@@ -7,8 +7,10 @@ label APPROPRIATE while their own reasoning concluded INAPPROPRIATE or
 NEEDS_REVIEW, and a clinician found it on case 1 of the review page. This step
 reads every current record (``llm_report.json`` + the audit store's raw tool
 payload) and reports what is wrong with the RESPONSES. The loop is: run the
-audit, fix the cause, re-run the flagged REQNOs (``BBA_PILOT_ONLY_REQNO``), run
-the audit again; build the page when it is clean.
+audit, fix the cause, re-run the flagged issue events
+(``BBA_PILOT_ONLY_AUDIT_ID``), run the audit again; build the page when it is
+clean. Records are per issue event (blood_audit #276): findings carry the
+event's audit_id and its REQNO.
 
 The pipeline step is the CODE checks: they run always, cost nothing, and are
 what build_review.py gates on (an audit of exactly this llm_report.json with no
@@ -35,8 +37,9 @@ Environment variables:
 * ``BBA_AUDIT_JUDGE_MODELS`` — comma-separated judge model ids.
 
 Outputs in the work dir: ``llm_response_audit.json``, ``llm_response_audit.csv``
-and ``llm_response_audit_reqnos.txt`` (REQNOs whose finding a re-run can fix,
-ready for ``BBA_PILOT_ONLY_REQNO``). Exit status 2 when any HIGH finding exists.
+and ``llm_response_audit_ids.txt`` (audit_ids of the events whose finding a
+re-run can fix, ready for ``BBA_PILOT_ONLY_AUDIT_ID``). Exit status 2 when any
+HIGH finding exists.
 """
 
 from __future__ import annotations
@@ -113,6 +116,7 @@ _TAG_RE = re.compile(r"</?[a-z_]+\s*/?>", re.IGNORECASE)
 
 @dataclass(frozen=True, slots=True)
 class ResponseRecord:
+    audit_id: str
     reqno: str
     component: str
     label: str | None
@@ -129,6 +133,7 @@ class ResponseRecord:
 
 @dataclass(frozen=True, slots=True)
 class Finding:
+    audit_id: str
     reqno: str
     code: str
     severity: Severity
@@ -160,18 +165,18 @@ def check_record(record: ResponseRecord) -> tuple[Finding, ...]:
     out: list[Finding] = []
 
     def add(code: str, severity: Severity, detail: str) -> None:
-        out.append(Finding(record.reqno, code, severity, detail))
+        out.append(Finding(record.audit_id, record.reqno, code, severity, detail))
 
     if record.stop_reason == "max_tokens":
         # The label is written last, so a cut-off answer has no classification.
         add(
             "response_truncated",
             "HIGH",
-            "the answer stopped at the output token limit: re-run this REQNO",
+            "the answer stopped at the output token limit: re-run this event",
         )
         return tuple(out)
     if record.review_reason in PARSE_FAILURE_REASONS:
-        add("parse_failure", "HIGH", f"{record.review_reason}: re-run this REQNO")
+        add("parse_failure", "HIGH", f"{record.review_reason}: re-run this event")
         return tuple(out)
     if record.label is None:
         add("label_missing", "HIGH", "tool payload carries no classification")
@@ -267,18 +272,19 @@ def missing_result_findings(
     dropped or unparsable): the page shows "LLM verdict missing" for them."""
     return tuple(
         Finding(
-            str(e.get("reqno", e.get("audit_id"))),
+            str(e["audit_id"]),
+            str(e.get("reqno") or ""),
             "llm_result_missing",
             "HIGH",
-            "report entry has no LLM result: re-run this REQNO",
+            "report entry has no LLM result: re-run this event",
         )
         for e in entries
         if "llm_final" in e and not e.get("llm_final")
     )
 
 
-def unmatched_report_finding(reqno: str, why: str) -> Finding:
-    return Finding(reqno, "response_not_auditable", "HIGH", why)
+def unmatched_report_finding(audit_id: str, reqno: str, why: str) -> Finding:
+    return Finding(audit_id, reqno, "response_not_auditable", "HIGH", why)
 
 
 def _majority(votes: Sequence[str]) -> str | None:
@@ -363,18 +369,18 @@ def judge_findings(
     for language, votes, contradiction_code in by_language:
         verdict = consortium_verdict(record.label, votes)
         told = f"label {record.label}; {language} judges read {', '.join(votes)}"
+        ids = (record.audit_id, record.reqno)
         if verdict == "contradiction":
-            out.append(Finding(record.reqno, contradiction_code, "HIGH", told, votes))
+            out.append(Finding(*ids, contradiction_code, "HIGH", told, votes))
         elif verdict == "split":
-            out.append(Finding(record.reqno, "consortium_split", "MEDIUM", told, votes))
+            out.append(Finding(*ids, "consortium_split", "MEDIUM", told, votes))
         elif verdict == "unavailable":
-            out.append(
-                Finding(record.reqno, "consortium_unavailable", "HIGH", told, votes)
-            )
+            out.append(Finding(*ids, "consortium_unavailable", "HIGH", told, votes))
     en_majority, th_majority = _majority(en), _majority(th)
     if en_majority and th_majority and en_majority != th_majority:
         out.append(
             Finding(
+                record.audit_id,
                 record.reqno,
                 "en_th_conclusion_mismatch",
                 "HIGH",
@@ -392,13 +398,13 @@ def english_settled(label: str | None, en: Sequence[str]) -> bool:
 
 
 def settle_regex_candidates(
-    findings: Sequence[Finding], settled_reqnos: set[str]
+    findings: Sequence[Finding], settled_audit_ids: set[str]
 ) -> list[Finding]:
     """The judges take over a regex candidate only where they settled it;
     elsewhere the candidate keeps its blocking severity."""
     return [
         replace(f, severity="LOW", detail=f.detail + " (regex; see consortium)")
-        if f.code == "label_contradicts_reasoning" and f.reqno in settled_reqnos
+        if f.code == "label_contradicts_reasoning" and f.audit_id in settled_audit_ids
         else f
         for f in findings
     ]
@@ -425,7 +431,6 @@ def judge_records(
     import anthropic  # lazy: the deterministic audit needs no SDK or key
 
     client = anthropic.Anthropic()
-    # Keyed by position, not REQNO: two patients can share a REQNO.
     jobs = [
         (index, language, model)
         for index in range(len(records))
@@ -451,10 +456,8 @@ def judge_records(
         en, th = tuple(cast[(index, "en")]), tuple(cast[(index, "th")])
         out.extend(judge_findings(record, en, th))
         if not english_settled(record.label, en):
-            unsettled.add(record.reqno)
-    # By REQNO, and conservative: a REQNO shared by two records is settled only
-    # when both are.
-    return tuple(out), {r.reqno for r in records} - unsettled
+            unsettled.add(record.audit_id)
+    return tuple(out), {r.audit_id for r in records} - unsettled
 
 
 def _tool_input(response_json: Any) -> dict[str, Any]:
@@ -503,11 +506,13 @@ def load_records(
     skipped: list[Finding] = [*missing_result_findings(entries)]
     for audit_id, entry in report.items():
         final = entry["llm_final"]
-        reqno = str(entry.get("reqno", audit_id))
+        reqno = str(entry.get("reqno") or "")
         row = rows.get(audit_id)
         if row is None:
             skipped.append(
-                unmatched_report_finding(reqno, "no audit-store row matches the report")
+                unmatched_report_finding(
+                    audit_id, reqno, "no audit-store row matches the report"
+                )
             )
             continue
         call = calls.get((audit_id, row.run_id))
@@ -517,13 +522,14 @@ def load_records(
             if from_model:
                 skipped.append(
                     unmatched_report_finding(
-                        reqno, "no stored tool payload for the row"
+                        audit_id, reqno, "no stored tool payload for the row"
                     )
                 )
             continue  # deterministic marker rows carry no model response
         component = getattr(row, "component", "red_cell") or "red_cell"
         records.append(
             ResponseRecord(
+                audit_id=audit_id,
                 reqno=reqno,
                 component=component,
                 label=tool.get("classification"),
@@ -544,6 +550,15 @@ def load_records(
             )
         )
     return tuple(records), tuple(skipped)
+
+
+RERUN_LIST = "llm_response_audit_ids.txt"
+
+
+def rerun_audit_ids(findings: Sequence[Finding]) -> list[str]:
+    """The events a re-run can fix, as the audit_ids BBA_PILOT_ONLY_AUDIT_ID
+    takes: a REQNO would re-ask every event of it, not only the flagged one."""
+    return sorted({f.audit_id for f in findings if f.code in RERUN_CODES})
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -580,7 +595,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if len(models) < MIN_STATED_VOTES:
             parser.error(f"--judge needs at least {MIN_STATED_VOTES} judge models")
         candidates = {
-            f.reqno for f in findings if f.code == "label_contradicts_reasoning"
+            f.audit_id for f in findings if f.code == "label_contradicts_reasoning"
         }
         to_judge = [
             r
@@ -589,7 +604,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             and r.review_reason not in PARSE_FAILURE_REASONS
             and (
                 args.judge == "all"
-                or r.reqno in candidates
+                or r.audit_id in candidates
                 or concluded_class(r.reasoning_en) is None
             )
         ]
@@ -600,8 +615,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         # The judges take over only the regex candidates they settled.
         findings = [*settle_regex_candidates(findings, settled), *judge_found]
 
-    high = sorted({f.reqno for f in findings if f.severity == "HIGH"})
-    rerun = sorted({f.reqno for f in findings if f.code in RERUN_CODES})
+    high = sorted({f.audit_id for f in findings if f.severity == "HIGH"})
+    rerun = rerun_audit_ids(findings)
     (WORK / "llm_response_audit.json").write_text(
         json.dumps(
             audit_payload(args.judge, report_sha256, len(records), findings),
@@ -611,9 +626,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     with (WORK / "llm_response_audit.csv").open("w", newline="") as fh:
         writer = csv.writer(fh)
-        writer.writerow(["reqno", "severity", "code", "detail"])
-        writer.writerows([f.reqno, f.severity, f.code, f.detail] for f in findings)
-    (WORK / "llm_response_audit_reqnos.txt").write_text(",".join(rerun))
+        writer.writerow(["audit_id", "reqno", "severity", "code", "detail"])
+        writer.writerows(
+            [f.audit_id, f.reqno, f.severity, f.code, f.detail] for f in findings
+        )
+    (WORK / RERUN_LIST).write_text(",".join(rerun))
 
     print(
         f"audited {len(records)} LLM responses in {WORK} "
@@ -623,8 +640,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         Counter((f.severity, f.code) for f in findings).items()
     ):
         print(f"  {severity:<6} {code:<34} {n}")
-    print(f"REQNOs with a HIGH finding: {len(high)}")
-    print(f"REQNOs a re-run can fix: {len(rerun)} -> llm_response_audit_reqnos.txt")
+    print(f"events with a HIGH finding: {len(high)}")
+    print(f"events a re-run can fix: {len(rerun)} -> {RERUN_LIST}")
     return 2 if high else 0
 
 
