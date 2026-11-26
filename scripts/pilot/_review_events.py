@@ -96,6 +96,22 @@ def review_cases(
                 f"REQNO {reqno} has neither events nor a REQNO-level row in "
                 "report.csv; the report and the manifests are from different runs"
             )
+    unlisted = sorted(
+        audit_id
+        for audit_id, row in report.items()
+        if (row.get("event_seq") or "").strip()
+        and audit_id not in {c["audit_id"] for c in cases}
+    )
+    if unlisted:
+        raise ValueError(
+            f"{len(unlisted)} event row(s) in report.csv are missing from "
+            f"events_manifest.csv (e.g. {unlisted[:5]})"
+        )
+    both = sorted(set(reqno_level) & set(events))
+    if both:
+        raise ValueError(
+            f"REQNO(s) with both event rows and a REQNO-level row: {both[:5]}"
+        )
     missing = sorted(c["audit_id"] for c in cases if c["audit_id"] not in report)
     if missing:
         raise ValueError(

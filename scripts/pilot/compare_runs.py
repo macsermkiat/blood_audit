@@ -13,8 +13,10 @@ writes into the v3 folder:
 * ``compare_v2_v3.csv``: per REQNO the v2 final verdict and Hb, the v3 event
   verdicts, Hb values and linkage tags;
 * ``compare_linkage_audit_ids.txt``: audit_ids of the events whose linked
-  order differs under the other linkage rule (``linked_reqno_latest_before``),
-  the events to re-ask if the owner changes the default (plan 7 step 3).
+  order or declared use would change under the other linkage rule: the linked
+  order differs (``linked_reqno_latest_before``), or a standing-order event's
+  own order declares USETYPE 2 or 3, which that rule would not gate off. These
+  are the events to re-ask if the owner changes the default (plan 7 step 3).
 
 Final verdicts are merged as ``rank_merged.py`` merges them: the LLM leg's
 verdict replaces a deterministic verdict that was routed to it.
@@ -36,6 +38,7 @@ from rank_merged import ROUTED_TO_LLM
 
 Row = Mapping[str, str]
 LINKAGE_LIST = "compare_linkage_audit_ids.txt"
+DECLARING_USETYPES = frozenset({"2", "3"})
 PER_REQNO_CSV = "compare_v2_v3.csv"
 
 
@@ -112,13 +115,25 @@ def compare(v2_dir: Path, v3_dir: Path) -> Comparison:
     for n in per_reqno_events.values():
         counts[f"events_per_reqno:{n if n < 5 else '5+'}"] += 1
 
-    relink = sorted(
+    relinked = {
         r["audit_id"]
         for r in events
         if (r.get("linked_reqno_latest_before") or "").strip()
         and r["linked_reqno_latest_before"] != r["linked_reqno"]
-    )
-    counts["events_relinked_under_latest_before"] = len(relink)
+    }
+    # The #276 rule has no standing_order tag, so a standing event whose own
+    # order declares surgery or type-and-screen would carry that declaration
+    # into the prompt there; here declared_use_applies is False (plan 8.15).
+    standing_declared = {
+        r["audit_id"]
+        for r in events
+        if r.get("linkage_rule") == "standing_order"
+        and (r.get("declared_use_code") or "").strip() in DECLARING_USETYPES
+    }
+    relink = sorted(relinked | standing_declared)
+    counts["events_relinked_under_latest_before"] = len(relinked)
+    counts["standing_events_whose_order_declares_use"] = len(standing_declared)
+    counts["events_to_re_ask_under_latest_before"] = len(relink)
 
     per_reqno: list[dict[str, str]] = []
     for v2 in v2_rows:

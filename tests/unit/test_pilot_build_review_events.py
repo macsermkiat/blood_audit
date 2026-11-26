@@ -42,7 +42,9 @@ _TRANS = (
 )
 
 
-def _render(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **overrides: str) -> str:
+def _render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **overrides: object
+) -> str:
     kwargs = {
         "manifest_csv": _MANIFEST,
         "report_csv": _REPORT,
@@ -165,3 +167,32 @@ def test_the_llm_verdict_joins_its_own_event(
 
     assert "(LLM not run" in _case(html, 1)
     assert "cls-inappropriate" in _case(html, 2)
+
+
+def test_evidence_windows_read_from_the_issue_not_the_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The REQNO was ordered in December; event 2 was issued on 7 January. An
+    # Hb drawn on 6 January is inside the 7-day window before the issue and
+    # outside the one before the order: both legs judged event 2 on it, so the
+    # page must show it.
+    bundle = {
+        "BDVST.csv": "REQNO,HN,AN,REQDATE,REQTIME,BDVSTDATE,BDVSTTIME\n"
+        "R21,HNX,AN1,2024-12-20,0800,2024-12-20,0800\n",
+        "Lab.csv": "AN,LABEXM,NAME_LABEXM,LVSTDATE,LVSTTIME,RESULT\n"
+        "AN1,290095,Hb,2025-01-06,1000,8.5\n",
+    }
+    html = _render(tmp_path, monkeypatch, bundle_files=bundle)
+
+    assert "Hb history (1 rows" in _case(html, 2)
+    assert "Hb history (0 rows" in _case(html, 1)
+
+
+def test_an_event_row_missing_from_the_events_manifest_fails_loud(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Otherwise the event would silently get no case on the page.
+    events = "\n".join(_EVENTS.splitlines()[:2]) + "\n"
+
+    with pytest.raises(ValueError, match="missing from events_manifest"):
+        _render(tmp_path, monkeypatch, events_csv=events)

@@ -95,6 +95,7 @@ def _render_review_with_rows(
     msbos_enabled: bool = False,
     events_csv: str = "HN,REQNO,AN,component,audit_id,event_seq\n",
     trans_csv: str = "",
+    bundle_files: dict[str, str] | None = None,
 ) -> bytes:
     report_csv, llm_json = _as_reqno_level_rows(report_csv, llm_json)
     bundle = root / "bundle"
@@ -123,6 +124,8 @@ def _render_review_with_rows(
     events_manifest.write_text(events_csv, encoding="utf-8")
     if trans_csv:
         (bundle / "BDVSTTRANS.csv").write_text(trans_csv, encoding="utf-8")
+    for name, text in (bundle_files or {}).items():
+        (bundle / name).write_text(text, encoding="utf-8")
     # A clean response audit, as audit_llm_responses.py leaves it (#239 gate).
     response_audit = root / "llm_response_audit.json"
     response_audit.write_text(

@@ -1433,6 +1433,8 @@ def main() -> None:
     det_events_by_reqno = events_by_reqno(det_by_audit_id)
 
     llm_by_audit_id = {r["audit_id"]: r for r in llm_report}
+    if len(llm_by_audit_id) != len(llm_report):
+        raise ValueError("llm_report.json holds an audit_id more than once")
 
     manifest_rows = review_cases(
         list(csv.DictReader(MANIFEST.open(encoding="utf-8"))),
