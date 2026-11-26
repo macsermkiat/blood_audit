@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 from types import ModuleType
@@ -48,10 +50,13 @@ def _render_empty_review(
     output = root / "review.html"
     manifest.write_text("", encoding="utf-8")
     report.write_text("", encoding="utf-8")
+    events_manifest = root / "events_manifest.csv"
+    events_manifest.write_text("", encoding="utf-8")
 
     monkeypatch.setattr(module, "WORK", root)
     monkeypatch.setattr(module, "BUNDLE", bundle)
     monkeypatch.setattr(module, "MANIFEST", manifest)
+    monkeypatch.setattr(module, "EVENTS_MANIFEST", events_manifest)
     monkeypatch.setattr(module, "DET_REPORT", report)
     monkeypatch.setattr(module, "LLM_REPORT", root / "missing-llm.json")
     monkeypatch.setattr(module, "ICD10_DICT_CSV", root / "missing-icd10.csv")
@@ -60,6 +65,23 @@ def _render_empty_review(
     monkeypatch.setattr(module, "MSBOS_RESERVATION_PILOT_ENABLED", msbos_enabled)
     module.main()
     return output.read_bytes()
+
+
+def _as_reqno_level_rows(report_csv: str, llm_json: str) -> tuple[str, str]:
+    """Give a fixture written before issue events an audit_id equal to its
+    REQNO and no event_seq, so each row renders as one REQNO-level case."""
+    reader = csv.DictReader(io.StringIO(report_csv))
+    fields = list(reader.fieldnames or [])
+    if not fields or "audit_id" in fields:
+        return report_csv, llm_json
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=["audit_id", *fields], lineterminator="\n")
+    writer.writeheader()
+    writer.writerows({"audit_id": row["reqno"], **row} for row in reader)
+    entries = json.loads(llm_json)
+    for entry in entries:
+        entry.setdefault("audit_id", entry["reqno"])
+    return out.getvalue(), json.dumps(entries)
 
 
 def _render_review_with_rows(
@@ -71,7 +93,10 @@ def _render_review_with_rows(
     report_csv: str,
     llm_json: str,
     msbos_enabled: bool = False,
+    events_csv: str = "HN,REQNO,AN,component,audit_id,event_seq\n",
+    trans_csv: str = "",
 ) -> bytes:
+    report_csv, llm_json = _as_reqno_level_rows(report_csv, llm_json)
     bundle = root / "bundle"
     bundle.mkdir(parents=True)
     for name in (
@@ -94,6 +119,10 @@ def _render_review_with_rows(
     manifest.write_text(manifest_csv, encoding="utf-8")
     report.write_text(report_csv, encoding="utf-8")
     llm_report.write_text(llm_json, encoding="utf-8")
+    events_manifest = root / "events_manifest.csv"
+    events_manifest.write_text(events_csv, encoding="utf-8")
+    if trans_csv:
+        (bundle / "BDVSTTRANS.csv").write_text(trans_csv, encoding="utf-8")
     # A clean response audit, as audit_llm_responses.py leaves it (#239 gate).
     response_audit = root / "llm_response_audit.json"
     response_audit.write_text(
@@ -111,6 +140,7 @@ def _render_review_with_rows(
     monkeypatch.setattr(module, "WORK", root)
     monkeypatch.setattr(module, "BUNDLE", bundle)
     monkeypatch.setattr(module, "MANIFEST", manifest)
+    monkeypatch.setattr(module, "EVENTS_MANIFEST", events_manifest)
     monkeypatch.setattr(module, "DET_REPORT", report)
     monkeypatch.setattr(module, "LLM_REPORT", llm_report)
     monkeypatch.setattr(module, "ICD10_DICT_CSV", root / "missing-icd10.csv")
@@ -448,26 +478,24 @@ def test_msbos_flag_on_renders_summary_cases_counts_glossary_and_css(
     assert "A&lt;B" in rendered
 
 
-def test_msbos_flag_on_rejects_duplicate_reqno_component_rows(
+def test_duplicate_audit_id_in_the_report_fails_loud(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # A repeated audit_id would let one case render another event's verdict
+    # and MSBOS annotation (plan #176 guard, per event since #276).
     module = _load_build_review()
-    with pytest.raises(
-        ValueError,
-        match=r"duplicate REQNO in report scope.*'R1'",
-    ):
+    with pytest.raises(ValueError, match=r"duplicate audit_id in report scope.*'e1'"):
         _render_review_with_rows(
             module,
             tmp_path,
             monkeypatch,
             manifest_csv="HN,REQNO,AN\n",
             report_csv=(
-                "reqno,classification,component\n"
-                "R1,RETURNED_NOT_TRANSFUSED,red_cell\n"
-                "R1,RETURNED_NOT_TRANSFUSED,platelet\n"
+                "audit_id,reqno,event_seq,classification,component\n"
+                "e1,R1,1,RETURNED_NOT_TRANSFUSED,red_cell\n"
+                "e1,R1,1,RETURNED_NOT_TRANSFUSED,red_cell\n"
             ),
             llm_json="[]",
-            msbos_enabled=True,
         )
 
 
@@ -1136,6 +1164,7 @@ def test_the_page_renders_the_report_the_gate_validated(
     module = _load_build_review()
     validated = [
         {
+            "audit_id": "R1",
             "reqno": "R1",
             "llm_final": {
                 "final_classification": "INAPPROPRIATE",
