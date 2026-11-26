@@ -25,11 +25,16 @@ from bba.attribution.models import (
     BucketTotals,
     Dimension,
     DoctorRecord,
+    EventVerdict,
     RankedRow,
     RankingResult,
     RankingTable,
 )
-from bba.attribution.order_doctor_map import load_reqno_to_doctor
+from bba.attribution.order_doctor_map import (
+    attributed_department,
+    attributed_doctor,
+    load_reqno_to_doctor,
+)
 from bba.attribution.outputs import (
     RANKING_CSV_COLUMNS,
     write_ranking_csv,
@@ -73,6 +78,7 @@ __all__ = [
     "DEFAULT_TOP_N",
     "Dimension",
     "DoctorRecord",
+    "EventVerdict",
     "GroupLabStats",
     "HUMAN_LABEL_TO_CLASSIFICATION",
     "OrderLabValue",
@@ -89,6 +95,8 @@ __all__ = [
     "VerdictSource",
     "aggregate_department_lab_stats",
     "aggregate_doctor_lab_stats",
+    "attributed_department",
+    "attributed_doctor",
     "build_department_scorecards",
     "build_doctor_scorecards",
     "build_rankings",

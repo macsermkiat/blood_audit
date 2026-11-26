@@ -7,9 +7,14 @@ resolves paths and reports the reconciliation summary.
 
 Verdict source is selectable via ``BBA_VERDICT_SOURCE`` (spec #119 follow-up):
 
-* ``human`` (default) — the 300-case human review workbook (Sheet1 col J).
-* ``pipeline`` — the application's own full-cohort per-order verdicts read from
-  the audit store, via the same :data:`bba.attribution.VerdictSource` seam. This
+* ``human`` — the 300-case human review workbook (Sheet1 col J).
+  Superseded by issue events (blood_audit #276): the labels are per REQNO, the
+  ranking is per event, and joining them is out of scope, so this source exits
+  with a message. The per-REQNO version is in git history.
+* ``pipeline`` — the application's own per-event verdicts read from the audit
+  store, via the same :data:`bba.attribution.VerdictSource` seam, joined to
+  ``report.csv`` by ``audit_id`` for each event's REQNO, linked order and lab
+  value. Each event is credited to the doctor of its linked order. This
   is what a live scorecard re-baseline uses once a run has committed audit rows;
   it pools the store-only ``POTENTIALLY_INAPPROPRIATE`` /
   ``PREOP_RESERVATION_UNCONFIRMED`` into Unresolved and passes the excluded
@@ -19,12 +24,10 @@ Verdict source is selectable via ``BBA_VERDICT_SOURCE`` (spec #119 follow-up):
 
 Environment variables:
 
-* ``BBA_VERDICT_SOURCE`` — ``human`` (default) or ``pipeline``.
-* ``BBA_REVIEW_XLSX`` — the human-review workbook (human source; default:
-  ``~/Downloads/Review การใช้เลือด.xlsx``).
+* ``BBA_VERDICT_SOURCE`` — ``pipeline`` (default) or ``human`` (superseded).
 * ``BBA_AUDIT_STORE_DIR`` — audit-store root (pipeline source; default:
   ``$BBA_DATA_DIR/audit_store``).
-* ``BBA_RUN_ID`` — scope the pipeline read to one run so each REQNO resolves to a
+* ``BBA_RUN_ID`` — scope the pipeline read to one run so each audit_id resolves to a
   single verdict (recommended for the pipeline source).
 * ``BBA_CODE_VERSION`` — optional; scope the pipeline read to one code version.
 * ``BBA_BDVST_CSV`` — BDVST export with REQNO + DCTREQ (default:
@@ -42,14 +45,15 @@ Outputs (in the work dir): ``doctor_ranking.csv``,
 
 from __future__ import annotations
 
+import csv
 import os
 import sys
 from collections.abc import Mapping
 from pathlib import Path
 
 from bba.attribution import (
+    EventVerdict,
     build_rankings,
-    human_label_verdict_source,
     load_dct_registry,
     load_order_labs,
     load_reqno_to_doctor,
@@ -64,13 +68,7 @@ from bba.cli.identity import code_version
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _BLOODBANK = _REPO_ROOT.parent / "Bloodbank" / "data"
 
-VERDICT_SOURCE = os.environ.get("BBA_VERDICT_SOURCE", "human").strip().lower()
-REVIEW_XLSX = Path(
-    os.environ.get(
-        "BBA_REVIEW_XLSX",
-        str(Path.home() / "Downloads" / "Review การใช้เลือด.xlsx"),
-    )
-)
+VERDICT_SOURCE = os.environ.get("BBA_VERDICT_SOURCE", "pipeline").strip().lower()
 _DATA_DIR = os.environ.get("BBA_DATA_DIR")
 _AUDIT_STORE_RAW = os.environ.get("BBA_AUDIT_STORE_DIR") or (
     str(Path(_DATA_DIR) / "audit_store") if _DATA_DIR else ""
@@ -93,6 +91,39 @@ REPORT_CSV = Path(os.environ.get("BBA_PILOT_REPORT_CSV", str(WORK / "report.csv"
 _EXCLUDED_FROM_SCORING = frozenset(
     {"RETURNED_NOT_TRANSFUSED", "PERIOP_TRANSFUSION_EXEMPT"}
 )
+
+
+HUMAN_SUPERSEDED = (
+    "BBA_VERDICT_SOURCE=human is superseded by issue events (blood_audit #276): "
+    "the review labels are per REQNO and the ranking is per event. Use "
+    "BBA_VERDICT_SOURCE=pipeline or rank_merged.py; the per-REQNO version is in "
+    "git history."
+)
+
+
+def _event_records(
+    verdicts: Mapping[str, str], report_csv: Path
+) -> tuple[EventVerdict, ...]:
+    """Per-event records: each audit-store verdict joined to its report.csv row
+    by audit_id. A verdict with no report row is a stale or wrong-run report."""
+    with report_csv.open(encoding="utf-8") as fh:
+        rows = {r["audit_id"]: r for r in csv.DictReader(fh) if r.get("audit_id")}
+    missing = sorted(set(verdicts) - set(rows))
+    if missing:
+        raise SystemExit(
+            f"{len(missing)} audit-store event(s) have no row in {report_csv} "
+            f"(e.g. {missing[:5]}); the report is stale or from another run"
+        )
+    return tuple(
+        EventVerdict(
+            audit_id=audit_id,
+            reqno=rows[audit_id]["reqno"],
+            linked_reqno=rows[audit_id]["linked_reqno"],
+            component=rows[audit_id]["component"],
+            verdict=verdict,
+        )
+        for audit_id, verdict in verdicts.items()
+    )
 
 
 def _resolve_verdicts() -> tuple[Mapping[str, str], str]:
@@ -184,24 +215,21 @@ def _resolve_verdicts() -> tuple[Mapping[str, str], str]:
                 "there are no scorable rows to rank"
             )
         label = (
-            f"{len(verdicts)}-order red_cell pipeline verdicts "
+            f"{len(verdicts)}-event red_cell pipeline verdicts "
             f"(audit store, run_id={RUN_ID or 'ALL'}, "
             f"code_version={CODE_VERSION_FILTER or 'ALL'})"
         )
         return verdicts, label
 
-    if VERDICT_SOURCE != "human":
-        raise SystemExit(
-            f"unknown BBA_VERDICT_SOURCE {VERDICT_SOURCE!r}; expected "
-            "'human' or 'pipeline'"
-        )
-    if not REVIEW_XLSX.exists():
-        raise SystemExit(f"missing review workbook (BBA_REVIEW_XLSX): {REVIEW_XLSX}")
-    verdicts = human_label_verdict_source(REVIEW_XLSX)()
-    return verdicts, f"human review ({REVIEW_XLSX.name}, Sheet1 col J)"
+    raise SystemExit(
+        f"unknown BBA_VERDICT_SOURCE {VERDICT_SOURCE!r}; expected 'pipeline' "
+        "('human' is superseded)"
+    )
 
 
 def main() -> int:
+    if VERDICT_SOURCE == "human":
+        raise SystemExit(HUMAN_SUPERSEDED)
     for path, label in (
         (BDVST_CSV, "BDVST export (BBA_BDVST_CSV)"),
         (DCT_CSV, "DCT registry (BBA_DCT_CSV)"),
@@ -214,7 +242,7 @@ def main() -> int:
 
     verdicts, source_label = _resolve_verdicts()
     result = build_rankings(
-        verdicts=verdicts,
+        verdicts=_event_records(verdicts, REPORT_CSV),
         reqno_to_doctor=load_reqno_to_doctor(BDVST_CSV),
         dct_registry=load_dct_registry(DCT_CSV),
         order_labs=load_order_labs(REPORT_CSV),
@@ -227,7 +255,7 @@ def main() -> int:
     html_path = write_rankings_html(
         result,
         WORK / "doctor_rankings.html",
-        verdict_source_label=f"{result.totals.total}-order ranked; {source_label}",
+        verdict_source_label=f"{result.totals.total}-event ranked; {source_label}",
     )
 
     t = result.totals

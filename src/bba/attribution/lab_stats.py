@@ -6,17 +6,18 @@ the mean Hb the group's red-cell orders were transfused at, and the mean
 platelet count its platelet orders were transfused at. The values are not
 recomputed here: the pipeline already emits per-order Hb / platelet counts
 (``hb_value_g_dl`` / ``platelet_count_k_ul``), their freshness, and the
-blood ``component`` in ``report.csv``. This module joins those onto the
-same scorable REQNO cohort the scorecards already count, so a returned /
-never-transfused or out-of-cohort order can never be presented as a
-trigger, and a group's sample size ``n`` can never exceed its Orders (N).
-The two components are kept strictly separate — a red-cell row never
-contributes to a platelet mean, or vice versa.
+blood ``component`` in ``report.csv``, one row per issue event. This
+module joins those onto the same scorable event cohort the scorecards
+already count, by ``audit_id``, so a returned / never-transfused or
+out-of-cohort event can never be presented as a trigger, and a group's
+sample size ``n`` can never exceed its Orders (N). Two events of one REQNO
+carry their own Hb. The two components are kept strictly separate — a
+red-cell row never contributes to a platelet mean, or vice versa.
 
 Strict reuse of the lookup layer's analytic ranges (Hb ``[2, 25]`` g/dL,
 platelet ``[1, 3000]`` ×10³/µL) means a corrupt reading cannot distort a
 mean, and the loader fails loud on schema drift or a conflicting duplicate
-REQNO — a silently dropped column or a concatenated export must never
+audit_id — a silently dropped column or a concatenated export must never
 quietly zero out the join.
 """
 
@@ -24,7 +25,7 @@ from __future__ import annotations
 
 import csv
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -32,8 +33,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from bba.attribution.csv_support import require_columns
 from bba.attribution.models import (
     UNATTRIBUTED_DEPARTMENT_ID,
-    UNATTRIBUTED_DOCTOR_ID,
     DoctorRecord,
+    EventVerdict,
+)
+from bba.attribution.order_doctor_map import (
+    attributed_department,
+    attributed_doctor,
 )
 
 # The lookup layer owns the plausibility bounds; reuse them rather than
@@ -56,6 +61,7 @@ _PLATELET = "platelet"
 _MISSING_FRESHNESS = "missing"
 
 _REQUIRED_COLUMNS: tuple[str, ...] = (
+    "audit_id",
     "reqno",
     "component",
     "hb_value_g_dl",
@@ -66,7 +72,7 @@ _REQUIRED_COLUMNS: tuple[str, ...] = (
 
 
 class OrderLabValue(BaseModel):
-    """One order's usable pre-transfusion lab value(s), keyed by REQNO.
+    """One issue event's usable pre-transfusion lab value(s), keyed by audit_id.
 
     ``hb_value_g_dl`` is the red-cell Hb only when it is genuinely usable
     (red-cell component, non-missing freshness, finite and in range);
@@ -76,6 +82,7 @@ class OrderLabValue(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    audit_id: str = Field(min_length=1)
     reqno: str = Field(min_length=1)
     component: str
     hb_value_g_dl: float | None = None
@@ -177,24 +184,27 @@ def _usable_value(
 
 
 def load_order_labs(path: Path) -> Mapping[str, OrderLabValue]:
-    """Read the pipeline ``report.csv`` into ``REQNO`` → :class:`OrderLabValue`.
+    """Read the pipeline ``report.csv`` into ``audit_id`` → :class:`OrderLabValue`.
 
     Fails loud — naming the file and column — on schema drift (a required
     column absent), mirroring the other attribution loaders: a renamed
-    column would silently zero out every trigger. A REQNO that re-appears
-    with a *conflicting* lab record fails loud (a corrupted or concatenated
-    export); an identical duplicate is tolerated.
+    column would silently zero out every trigger. An audit_id that
+    re-appears with a *conflicting* lab record fails loud (a corrupted or
+    concatenated export); an identical duplicate is tolerated. Several
+    events of one REQNO are distinct rows with distinct audit_ids.
     """
     labs: dict[str, OrderLabValue] = {}
     with path.open(newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         require_columns(reader.fieldnames, _REQUIRED_COLUMNS, path)
         for row in reader:
+            audit_id = (row["audit_id"] or "").strip()
             reqno = (row["reqno"] or "").strip()
-            if not reqno:
+            if not audit_id or not reqno:
                 continue
             component = (row["component"] or "").strip()
             record = OrderLabValue(
+                audit_id=audit_id,
                 reqno=reqno,
                 component=component,
                 hb_value_g_dl=_usable_value(
@@ -214,39 +224,45 @@ def load_order_labs(path: Path) -> Mapping[str, OrderLabValue]:
                     high=_PLATELET_MAX_K_UL,
                 ),
             )
-            existing = labs.get(reqno)
+            existing = labs.get(audit_id)
             if existing is not None and existing != record:
                 raise ValueError(
-                    f"{path} maps REQNO {reqno!r} to two different lab records "
-                    f"({existing!r} and {record!r}); REQNO must be unique — "
-                    "refusing to aggregate on a corrupted or concatenated export"
+                    f"{path} maps audit_id {audit_id!r} to two different lab "
+                    f"records ({existing!r} and {record!r}); audit_id must be "
+                    "unique — refusing to aggregate on a corrupted or "
+                    "concatenated export"
                 )
-            labs[reqno] = record
+            labs[audit_id] = record
     return labs
 
 
-def missing_lab_reqnos(
-    verdicts: Mapping[str, str],
+def missing_lab_audit_ids(
+    verdicts: Sequence[EventVerdict],
     order_labs: Mapping[str, OrderLabValue],
 ) -> list[str]:
-    """Scorable verdict REQNOs with no row at all in the lab source.
+    """Scorable events with no row at all in the lab source.
 
     A genuinely absent Hb still gets a ``report.csv`` row (with
     ``hb_freshness == "missing"``); a *missing row* instead means the
     source is stale, header-only, or from a different run — a partial join
     that must not be presented as a trigger. Returned sorted for a stable,
-    diagnosable message. Non-scorable (returns-terminal) REQNOs are exempt:
+    diagnosable message. Non-scorable (returns-terminal) events are exempt:
     they are held out of the denominator and need no lab row.
     """
     return sorted(
-        reqno
-        for reqno, classification in verdicts.items()
-        if classification not in _EXCLUDED_FROM_SCORING and reqno not in order_labs
+        event.audit_id
+        for event in verdicts
+        if event.verdict not in _EXCLUDED_FROM_SCORING
+        and event.audit_id not in order_labs
     )
 
 
 def _mean_or_none(values: list[float]) -> float | None:
-    return sum(values) / len(values) if values else None
+    """The mean, kept inside [min, max]: float rounding can put the mean of
+    equal values (three events at 11.7) a hair below their minimum."""
+    if not values:
+        return None
+    return min(max(math.fsum(values) / len(values), min(values)), max(values))
 
 
 def _stats_from(hb_values: list[float], platelet_values: list[float]) -> GroupLabStats:
@@ -266,28 +282,29 @@ def _stats_from(hb_values: list[float], platelet_values: list[float]) -> GroupLa
 
 
 def aggregate_doctor_lab_stats(
-    verdicts: Mapping[str, str],
+    verdicts: Sequence[EventVerdict],
     reqno_to_doctor: Mapping[str, str],
     order_labs: Mapping[str, OrderLabValue],
 ) -> Mapping[str, GroupLabStats]:
     """One :class:`GroupLabStats` per ordering doctor, over the scorable
-    REQNO cohort only.
+    event cohort only.
 
     Doctor identity resolves exactly as
-    :func:`bba.attribution.scorecards.build_doctor_scorecards` (a miss
-    lands on :data:`UNATTRIBUTED_DOCTOR_ID`), so the group ids line up with
-    the ranking rows. Returns terminals are skipped and lab rows outside
-    the verdict cohort are never consulted, so ``n <= Orders (N)``.
+    :func:`bba.attribution.scorecards.build_doctor_scorecards` (through the
+    linked order; a miss lands on the unattributed sentinel), so the group
+    ids line up with the ranking rows. Returns terminals are skipped and
+    lab rows outside the verdict cohort are never consulted, so
+    ``n <= Orders (N)``.
     """
     hb_by_doctor: dict[str, list[float]] = {}
     platelet_by_doctor: dict[str, list[float]] = {}
-    for reqno, classification in verdicts.items():
-        if classification in _EXCLUDED_FROM_SCORING:
+    for event in verdicts:
+        if event.verdict in _EXCLUDED_FROM_SCORING:
             continue
-        doctor = reqno_to_doctor.get(reqno, UNATTRIBUTED_DOCTOR_ID)
+        doctor = attributed_doctor(event, reqno_to_doctor)
         hb_by_doctor.setdefault(doctor, [])
         platelet_by_doctor.setdefault(doctor, [])
-        lab = order_labs.get(reqno)
+        lab = order_labs.get(event.audit_id)
         if lab is not None and lab.hb_value_g_dl is not None:
             hb_by_doctor[doctor].append(lab.hb_value_g_dl)
         if lab is not None and lab.platelet_count_k_ul is not None:
@@ -299,15 +316,15 @@ def aggregate_doctor_lab_stats(
 
 
 def aggregate_department_lab_stats(
-    verdicts: Mapping[str, str],
+    verdicts: Sequence[EventVerdict],
     reqno_to_doctor: Mapping[str, str],
     dct_registry: Mapping[str, DoctorRecord],
     order_labs: Mapping[str, OrderLabValue],
 ) -> Mapping[str, GroupLabStats]:
     """One :class:`GroupLabStats` per department (``Deptlct``), over the
-    scorable REQNO cohort only.
+    scorable event cohort only.
 
-    Department identity resolves via ``reqno`` → doctor → registry
+    Department identity resolves via ``linked_reqno`` → doctor → registry
     ``Deptlct`` exactly as
     :func:`bba.attribution.scorecards.build_department_scorecards` (any
     broken link lands on :data:`UNATTRIBUTED_DEPARTMENT_ID`), so the group
@@ -315,19 +332,14 @@ def aggregate_department_lab_stats(
     """
     hb_by_dept: dict[str, list[float]] = {}
     platelet_by_dept: dict[str, list[float]] = {}
-    for reqno, classification in verdicts.items():
-        if classification in _EXCLUDED_FROM_SCORING:
+    for event in verdicts:
+        if event.verdict in _EXCLUDED_FROM_SCORING:
             continue
-        doctor = reqno_to_doctor.get(reqno)
-        record = dct_registry.get(doctor) if doctor is not None else None
-        dept = (
-            record.deptlct
-            if record is not None and record.deptlct
-            else UNATTRIBUTED_DEPARTMENT_ID
-        )
+        record = attributed_department(event, reqno_to_doctor, dct_registry)
+        dept = record.deptlct if record is not None else UNATTRIBUTED_DEPARTMENT_ID
         hb_by_dept.setdefault(dept, [])
         platelet_by_dept.setdefault(dept, [])
-        lab = order_labs.get(reqno)
+        lab = order_labs.get(event.audit_id)
         if lab is not None and lab.hb_value_g_dl is not None:
             hb_by_dept[dept].append(lab.hb_value_g_dl)
         if lab is not None and lab.platelet_count_k_ul is not None:

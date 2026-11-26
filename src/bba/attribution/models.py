@@ -42,6 +42,26 @@ UNATTRIBUTED_DEPARTMENT_ID = "unattributed-department"
 record carries no ``Deptlct``."""
 
 
+class EventVerdict(BaseModel):
+    """One audited issue event's final verdict and the order it is credited to.
+
+    The audit unit is the issue event (blood_audit #276): one REQNO can hold
+    several events, and each is credited to the doctor of ``linked_reqno``,
+    the order that caused it (its own REQNO, a fresh order placed between two
+    issues, or its own REQNO again for a standing-order event). ``audit_id``
+    is the event key; a mapping keyed by REQNO or by linked REQNO would merge
+    distinct events.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    audit_id: str = Field(min_length=1)
+    reqno: str = Field(min_length=1)
+    linked_reqno: str = Field(min_length=1)
+    component: str
+    verdict: str
+
+
 class DoctorRecord(BaseModel):
     """One doctor row from the ``DCT.csv`` registry.
 

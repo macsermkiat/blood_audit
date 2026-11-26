@@ -16,12 +16,16 @@ to ``0.0`` and this feature's output writers never render it.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from bba.attribution.models import (
     UNATTRIBUTED_DEPARTMENT_ID,
-    UNATTRIBUTED_DOCTOR_ID,
     DoctorRecord,
+    EventVerdict,
+)
+from bba.attribution.order_doctor_map import (
+    attributed_department,
+    attributed_doctor,
 )
 from bba.dashboard.models import PhysicianScorecard, WardScorecard
 
@@ -51,22 +55,23 @@ def _count_classifications(
 
 
 def build_doctor_scorecards(
-    verdicts: Mapping[str, str],
+    verdicts: Sequence[EventVerdict],
     reqno_to_doctor: Mapping[str, str],
     dct_registry: Mapping[str, DoctorRecord],
 ) -> tuple[PhysicianScorecard, ...]:
     """One :class:`PhysicianScorecard` per distinct ordering doctor.
 
-    Orders without attribution land on :data:`UNATTRIBUTED_DOCTOR_ID`.
-    ``total_orders`` is the scorable denominator; returned/not-transfused
-    and peri-op-exempt orders remain visible in their own counters but are
+    Each event counts once, for the doctor of its linked order; events
+    without attribution land on :data:`UNATTRIBUTED_DOCTOR_ID`.
+    ``total_orders`` is the scorable event denominator; returned/not-transfused
+    and peri-op-exempt events remain visible in their own counters but are
     excluded from it. Output is sorted by ``physician_id`` for byte-stable
     artifacts.
     """
     groups: dict[str, list[str]] = {}
-    for reqno, classification in verdicts.items():
-        doctor = reqno_to_doctor.get(reqno, UNATTRIBUTED_DOCTOR_ID)
-        groups.setdefault(doctor, []).append(classification)
+    for event in verdicts:
+        doctor = attributed_doctor(event, reqno_to_doctor)
+        groups.setdefault(doctor, []).append(event.verdict)
 
     cards: list[PhysicianScorecard] = []
     for doctor in sorted(groups):
@@ -100,29 +105,28 @@ def build_doctor_scorecards(
 
 
 def build_department_scorecards(
-    verdicts: Mapping[str, str],
+    verdicts: Sequence[EventVerdict],
     reqno_to_doctor: Mapping[str, str],
     dct_registry: Mapping[str, DoctorRecord],
 ) -> tuple[WardScorecard, ...]:
     """One :class:`WardScorecard` per distinct department (``Deptlct``).
 
-    Resolution chain per order: ``reqno`` → doctor → registry
+    Resolution chain per event: ``linked_reqno`` → doctor → registry
     ``Deptlct``; any broken link lands on
     :data:`UNATTRIBUTED_DEPARTMENT_ID`. Same conservation and sorting
     guarantees as :func:`build_doctor_scorecards`.
     """
     groups: dict[str, list[str]] = {}
     names: dict[str, str] = {}
-    for reqno, classification in verdicts.items():
-        doctor = reqno_to_doctor.get(reqno)
-        record = dct_registry.get(doctor) if doctor is not None else None
-        if record is not None and record.deptlct:
+    for event in verdicts:
+        record = attributed_department(event, reqno_to_doctor, dct_registry)
+        if record is not None:
             dept = record.deptlct
             if record.deptname and dept not in names:
                 names[dept] = record.deptname
         else:
             dept = UNATTRIBUTED_DEPARTMENT_ID
-        groups.setdefault(dept, []).append(classification)
+        groups.setdefault(dept, []).append(event.verdict)
 
     cards: list[WardScorecard] = []
     for dept in sorted(groups):

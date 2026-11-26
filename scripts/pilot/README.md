@@ -22,7 +22,7 @@ run_llm_leg.py          →  llm_report.json
                         →  data/audit_store/   (Parquet + markers)
 
 audit_llm_responses.py  →  llm_response_audit.{json,csv}
-                        →  llm_response_audit_reqnos.txt
+                        →  llm_response_audit_ids.txt
                                             (checks the LLM RESPONSES; exit 2 on a HIGH finding)
 
 build_review.py         →  review.html    (single page for human review;
@@ -94,13 +94,14 @@ failures, answers cut off at the output token limit, label vs the class the
 reasoning appears to conclude, final verdict changed with no recorded reason,
 label written before the reasoning, citations, trigger value, summary language)
 and writes `llm_response_audit.{json,csv}` plus
-`llm_response_audit_reqnos.txt`, the REQNOs a re-run can fix.
+`llm_response_audit_ids.txt`, the audit_ids of the issue events a re-run can
+fix.
 
-The loop: run the audit; fix the cause; re-run those REQNOs under a fresh run
+The loop: run the audit; fix the cause; re-run those events under a fresh run
 id; run the audit again.
 
 ```bash
-BBA_PILOT_ONLY_REQNO="$(cat "$BBA_PILOT_WORK_DIR/llm_response_audit_reqnos.txt")" \
+BBA_PILOT_ONLY_AUDIT_ID="$(cat "$BBA_PILOT_WORK_DIR/llm_response_audit_ids.txt")" \
 BBA_PILOT_RUN_ID=pilot-mini-audit-fix-1 \
 uv run python scripts/pilot/run_llm_leg.py
 uv run python scripts/pilot/audit_llm_responses.py
