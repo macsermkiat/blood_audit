@@ -386,14 +386,16 @@ def test_llm_report_entry_carries_the_event_fields(leg: ModuleType) -> None:
 # --- the all-returned notes guard: both legs, one window ---------------------
 
 
-def _all_returned_second_event(product: str, bdtype: str, note_hours: float) -> Bundle:
+def _all_returned_second_event(
+    product: str, bdtype: str, second_issue: float, note_hours: float
+) -> Bundle:
     b = Bundle()
     b.order("W1", product=product)
     b.unit("W1", "1", 2.0, bdtype=bdtype)
-    b.unit("W1", "2", 30.0, status="3", bdtype=bdtype)
+    b.unit("W1", "2", second_issue, status="3", bdtype=bdtype)
     b.hb(1, "8.0")
-    b.hb(29, "8.2")
-    for hours in (1, 29):
+    b.hb(second_issue - 1, "8.2")
+    for hours in (1, second_issue - 1):
         b.add("Lab.csv", "H1", "A1", _day(hours), _time(hours), PLATELET_LABEXM, "40")
     b.note(note_hours, INTRAOP_TRANSFUSION_NOTE)
     return b
@@ -424,9 +426,9 @@ def _deterministic_classifications(
     ("product", "bdtype"), [("LPRC", "LDPRC2"), ("LDPPC", "LDPPC5")], ids=["rbc", "plt"]
 )
 @pytest.mark.parametrize(
-    ("note_hours", "released"),
-    [(3.0, True), (31.0, False)],
-    ids=["note-in-event-1-window", "note-in-own-window"],
+    ("second_issue", "note_hours", "released"),
+    [(30.0, 3.0, True), (10.0, 5.0, True), (30.0, 31.0, False)],
+    ids=["note-in-event-1-window", "note-on-the-same-day", "note-in-own-window"],
 )
 def test_both_legs_release_an_all_returned_event_on_the_same_notes_window(
     leg: ModuleType,
@@ -434,18 +436,25 @@ def test_both_legs_release_an_all_returned_event_on_the_same_notes_window(
     monkeypatch: pytest.MonkeyPatch,
     product: str,
     bdtype: str,
+    second_issue: float,
     note_hours: float,
     released: bool,
 ) -> None:
     """Owner decision 2026-11-24, in both legs: only a transfusion charted in
     the all-returned event's own window keeps it from RETURNED_NOT_TRANSFUSED,
-    and the LLM leg submits it exactly when the deterministic leg holds it."""
+    and the LLM leg submits it exactly when the deterministic leg holds it. A
+    note charted the same day for the earlier issue sits inside the bundle's
+    window but outside the event's, so only the event window releases it."""
     returned = _audit_id("W1", "2", bdtype)
     det = _deterministic_classifications(
-        tmp_path, monkeypatch, _all_returned_second_event(product, bdtype, note_hours)
+        tmp_path,
+        monkeypatch,
+        _all_returned_second_event(product, bdtype, second_issue, note_hours),
     )
     requests = _prepare(
-        leg, monkeypatch, _all_returned_second_event(product, bdtype, note_hours)
+        leg,
+        monkeypatch,
+        _all_returned_second_event(product, bdtype, second_issue, note_hours),
     )
 
     assert (det[returned] == "RETURNED_NOT_TRANSFUSED") is released
