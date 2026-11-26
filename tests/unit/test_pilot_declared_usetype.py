@@ -85,7 +85,12 @@ def test_run_pipeline_flag_off_report_schema_is_frozen(monkeypatch) -> None:
         "declared_use_code",
         "declared_use_label",
     ]
-    assert not any(name.startswith("declared_use_") for name in mod.REPORT_FIELDNAMES)
+    # declared_use_applies is an issue-event fact (plan 4.2), not a seam column.
+    assert not any(
+        name.startswith("declared_use_")
+        for name in mod.REPORT_FIELDNAMES
+        if name != "declared_use_applies"
+    )
     assert set(mod.DECLARED_USETYPE_FIELDNAMES).isdisjoint(
         mod.REPORT_FIELDNAMES + mod.RETURNS_LEDGER_FIELDNAMES
     )

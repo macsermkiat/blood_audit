@@ -416,11 +416,13 @@ def main() -> None:
         lambda r: r["REQNO"] in related_reqnos,
         cols=BDVST_COLS,
     )
+    # The emergency codes are report display columns of an issue event's linked
+    # order (#276, plan 1.7); kept off BDVSTDT.csv, whose ingest schema is fixed.
     _filter(
         "BDVSTDT.csv",
         "BDVSTDT_RELATED.csv",
         lambda r: r["REQNO"] in related_reqnos,
-        cols=BDVSTDT_COLS,
+        cols=[*BDVSTDT_COLS, "EMRTYPE", "BDLEVELEMR"],
     )
     _filter("Diagnosis.csv", "Diagnosis.csv", lambda r: r.get("AN") in all_ans)
     _filter("Lab.csv", "Lab.csv", lambda r: r.get("AN") in all_ans)

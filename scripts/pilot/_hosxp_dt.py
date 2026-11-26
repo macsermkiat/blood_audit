@@ -10,6 +10,7 @@ scripts. See ``docs/handoff-hb-anchor-unification.md``.
 from __future__ import annotations
 
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from bba.ingest.models import ParsedTimeOfDay
 from bba.ingest.row_timestamp import RowTimestamp
@@ -63,3 +64,8 @@ def _combine(d: date | None, t: ParsedTimeOfDay | None) -> datetime | None:
     if d is None or t is None:
         return None
     return RowTimestamp.from_parts(d, t, tz=TZ_LOCAL).utc
+
+
+def _fmt_utc_local(moment: datetime) -> str:
+    """Render an aware datetime as local wall-clock text, as the cells read."""
+    return moment.astimezone(ZoneInfo(TZ_LOCAL)).strftime("%Y-%m-%d %H:%M:%S")
