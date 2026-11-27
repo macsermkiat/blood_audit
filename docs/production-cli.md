@@ -43,6 +43,8 @@ Set `BBA_DB_URL` to a migrated Postgres database for admitted cassette or live m
 
 Set `BBA_BDVST_CSV` to the corresponding BDVST export and `BBA_DCT_CSV` to its doctor registry. The report uses `DCTREQ` to attribute a physician and department. The department fills the report's existing ward grouping.
 
+The report and the dashboard attribute each row by its REQNO. Use them only on audit stores written by `bba audit`. A research-pilot store holds one row per issue event, and the report would credit each `fresh_order` event to the doctor of the REQNO it was issued under instead of the doctor who placed the fresh order. Nothing stops that run or reports the error. See [module contracts](CONTEXT.md#application-path-stays-per-reqno).
+
 ```sh
 export BBA_BDVST_CSV=/srv/bba/export/BDVST.csv
 export BBA_DCT_CSV=/srv/bba/export/DCT.csv
