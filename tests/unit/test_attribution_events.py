@@ -20,6 +20,7 @@ from bba.attribution import (
     DoctorRecord,
     EventVerdict,
     OrderLabValue,
+    build_department_scorecards,
     build_doctor_scorecards,
     build_rankings,
     load_order_labs,
@@ -192,3 +193,27 @@ def test_equal_triggers_on_several_events_do_not_trip_the_range_invariant() -> N
     )
 
     assert result.doctors.rows[0].mean_hb == pytest.approx(11.7)
+
+
+def test_departments_follow_the_linked_order_doctor() -> None:
+    registry = {
+        "doc-own": DoctorRecord(
+            dct="doc-own", display_name="o", deptlct="OWN", deptname="Own"
+        ),
+        "doc-2": DoctorRecord(
+            dct="doc-2", display_name="t", deptlct="OTHER", deptname="Other"
+        ),
+    }
+    events = (
+        _event("ev1", _OWN, "APPROPRIATE"),
+        _event("ev2", _FRESH_2, "INAPPROPRIATE"),
+    )
+
+    cards = {
+        c.ward_id: c
+        for c in build_department_scorecards(events, _REQNO_TO_DOCTOR, registry)
+    }
+
+    assert cards["OWN"].appropriate_count == 1
+    assert cards["OWN"].inappropriate_count == 0
+    assert cards["OTHER"].inappropriate_count == 1

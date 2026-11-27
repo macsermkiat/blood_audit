@@ -1,7 +1,11 @@
 """Assemble a single HTML page bundling all source data + audit
 verdicts for human review.
 
-For each sampled (HN, REQNO, AN) key: render identity + anchor, the
+One case per issue event (blood_audit #276), numbered by the REQNO's place
+in the sample manifest and then by event_seq; a REQNO with no event
+(excluded, no_issue_record) keeps one REQNO-level case. Every case shows
+the REQNO's unit timeline above the evidence, and the evidence windows
+read from the event's issue time. For each case: render identity + anchor, the
 BDVST row, BDVSTDT line items, AN-scoped Diagnoses deduped by ICD-10
 (with the global ICD-10 description dictionary), Hb history (7-day
 pre-order), ANC history (±1d), CBC subset (Hb/Plt/WBC/Neutrophils),
@@ -14,7 +18,7 @@ Environment variables:
 
 * ``BBA_PILOT_WORK_DIR`` — input/output directory (default:
   ``/tmp/bba_mini``). Must contain ``bundle/``, ``report.csv``,
-  ``llm_report.json``, ``sample_manifest.csv``.
+  ``llm_report.json``, ``sample_manifest.csv``, ``events_manifest.csv``.
 * ``BBA_PILOT_ICD10_CSV`` — path to the HOSxP ICD-10 master dictionary
   (default: ``../Bloodbank/data/raw/ICD10.csv`` relative to the repo
   root). Missing-file is OK; the HTML falls back to the bundle's
@@ -31,7 +35,6 @@ import math
 import os
 import re
 import sys
-from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -47,6 +50,13 @@ from bba.verdict_override import verdict_override
 from bba.preop_reservation.reason_presentation import (
     WITHIN_REASONS as _MSBOS_WITHIN_REASONS,
     bucket_for,
+)
+
+from _review_events import (
+    events_by_reqno,
+    report_by_audit_id,
+    review_cases,
+    unit_timeline,
 )
 
 WORK = Path(os.environ.get("BBA_PILOT_WORK_DIR", "/tmp/bba_mini"))
@@ -65,6 +75,7 @@ LLM_REPORT = WORK / "llm_report.json"
 RESPONSE_AUDIT = WORK / "llm_response_audit.json"
 DET_REPORT = WORK / "report.csv"
 MANIFEST = WORK / "sample_manifest.csv"
+EVENTS_MANIFEST = WORK / "events_manifest.csv"
 OUT = WORK / "review.html"
 TZ_LOCAL = ZoneInfo("Asia/Bangkok")
 
@@ -928,12 +939,23 @@ def render_table(rows: list[dict[str, Any]], cols: list[str]) -> str:
     return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
 
 
-_SUMMARY_DATA_COLS = ["#", "REQNO", "HN", "AN", "Hb", "Cohort", "Threshold", "Returned"]
+_SUMMARY_DATA_COLS = [
+    "#",
+    "REQNO",
+    "Event",
+    "HN",
+    "AN",
+    "Hb",
+    "Cohort",
+    "Threshold",
+    "Returned",
+]
 # Mixed RBC + platelet pages add the component and the platelet trigger count
 # right after the identifiers; RBC-only pages keep the original columns.
 _SUMMARY_DATA_COLS_MIXED = [
     "#",
     "REQNO",
+    "Event",
     "Comp",
     "HN",
     "AN",
@@ -966,6 +988,98 @@ def _in_platelet_window(d: datetime | None, anchor: datetime | None) -> bool:
     if d is None or anchor is None:
         return False
     return d <= anchor and anchor - d < timedelta(days=WINDOW_PLATELET_DAYS)
+
+
+def _event_label(det: dict[str, str]) -> str:
+    """The "event k of n" header suffix of an event case; empty for a
+    REQNO-level row."""
+    seq = (det.get("event_seq") or "").strip()
+    if not seq:
+        return ""
+    return f" · event {esc(seq)} of {esc(det.get('events_in_reqno') or '?')}"
+
+
+def _event_meta_items(det: dict[str, str]) -> list[str]:
+    """Meta-strip lines naming the issue event and the order it is linked to.
+
+    The issue datetime is the anchor of every evidence window below. A
+    REQNO-level row has no issue; it shows the event count measured on it.
+    """
+    if not (det.get("event_seq") or "").strip():
+        return [
+            "<div><b>Issue events:</b> none judged "
+            f"({esc(det.get('events_in_reqno') or '0')} measured on this REQNO; "
+            f"{esc(det.get('units_reserved_not_issued') or '0')} unit(s) "
+            "reserved, not issued)</div>"
+        ]
+    returned = det.get("issue_units_returned") or "0"
+    return [
+        "<div><b>Issue datetime (event anchor):</b> "
+        f"{esc(det.get('issue_datetime_local') or '—')}</div>",
+        f"<div><b>Units in this event:</b> {esc(det.get('issue_units') or '—')} "
+        f"({esc(returned)} returned)</div>",
+        f"<div><b>Linked order:</b> {esc(det.get('linked_reqno') or '—')} "
+        f"({esc(det.get('linkage_rule') or '—')}; placed "
+        f"{esc(det.get('linked_order_datetime_local') or '—')}, "
+        f"{esc(det.get('order_to_issue_hours') or '—')} h before the issue)</div>",
+        "<div><b>Declared use applies:</b> "
+        f"{esc(det.get('declared_use_applies') or '—')} (linked order declares "
+        f"{esc(det.get('declared_use_label') or '—')})</div>",
+        "<div><b>Prior transfusion cutoff (#249):</b> "
+        f"{esc(det.get('prior_event_cutoff_local') or 'none')}</div>",
+    ]
+
+
+def _render_unit_timeline(
+    trans_rows: list[dict[str, str]],
+    an: str,
+    reqno_events: list[dict[str, str]],
+    det: dict[str, str],
+) -> str:
+    """The REQNO's unit timeline (plan 4.3), this case's event rows in bold.
+    A REQNO-level row (excluded, no_issue_record) has no judged event."""
+    if not reqno_events:
+        return (
+            "<h4>REQNO unit timeline</h4>"
+            "<p class='empty'>(no issue event judged for this REQNO: "
+            f"{esc(det.get('rationale') or '—')}; "
+            f"{esc(det.get('events_in_reqno') or '0')} measured)</p>"
+        )
+    event_seq = det.get("event_seq") or ""
+    units, reserved = unit_timeline(trans_rows, an, reqno_events)
+    cols = [
+        "Unit",
+        "Issued",
+        "Status",
+        "Returned",
+        "Event",
+        "Linkage",
+        "Linked REQNO",
+        "DCTREQ differs",
+        "Declared use applies",
+        "Declared use",
+    ]
+    body = "".join(
+        ("<tr class='this-event'>" if u["_seq"] == event_seq else "<tr>")
+        + "".join(
+            f"<td>{_unitstat_cell(u[c]) if c == 'Status' else esc(u[c])}</td>"
+            for c in cols
+        )
+        + "</tr>"
+        for u in units
+    )
+    head = "".join(f"<th>{esc(c)}</th>" for c in cols)
+    return (
+        "<h4>REQNO unit timeline</h4>"
+        f"<table class='unit-timeline'><tr>{head}</tr>{body}</table>"
+        f"<p class='empty'>{reserved} unit(s) reserved, not issued. Bold rows "
+        "are this case's event. Each event is credited to the doctor of its "
+        "linked order.</p>"
+    )
+
+
+def _unitstat_cell(code: str) -> str:
+    return esc(fmt_unitstat(code))
 
 
 def _platelet_meta_items(det: dict[str, str]) -> list[str]:
@@ -1160,9 +1274,13 @@ def _returns_units_text(det: dict[str, str]) -> str:
 
 def _returned_display(det: dict[str, str], trans_rows: list[dict[str, str]]) -> str:
     """Earliest return time plus the returned-unit count, so one returned bag
-    on a multi-bag order does not read as the whole order returned."""
-    returned_at = det.get("returned_blood_datetime_local") or _returned_blood_datetime(
-        trans_rows
+    on a multi-bag order does not read as the whole order returned. An event
+    row carries its own units' return time; the REQNO's ledger rows would
+    show another event's return (or a stray RTNDATE on a dispensed unit)."""
+    returned_at = det.get("returned_blood_datetime_local") or (
+        ""
+        if (det.get("event_seq") or "").strip()
+        else _returned_blood_datetime(trans_rows)
     )
     if not returned_at:
         return "—"
@@ -1247,6 +1365,8 @@ def main() -> None:
         sys.exit(f"bundle not found: {BUNDLE} (run sample_bundle.py first)")
     if not MANIFEST.exists():
         sys.exit(f"manifest not found: {MANIFEST}")
+    if not EVENTS_MANIFEST.exists():
+        sys.exit(f"events manifest not found: {EVENTS_MANIFEST} (run run_pipeline.py)")
 
     def _read(name: str) -> list[dict[str, str]]:
         with (BUNDLE / name).open(encoding="utf-8", newline="") as fh:
@@ -1307,23 +1427,20 @@ def main() -> None:
     print(f"ICD-10 dictionary: {len(icd10_dict)} codes")
 
     det_rows = list(csv.DictReader(DET_REPORT.open(encoding="utf-8")))
-    det_by_reqno = {r["reqno"]: r for r in det_rows}
-    if MSBOS_RESERVATION_PILOT_ENABLED:
-        # det_by_reqno joins on the bare REQNO, so ANY duplicate REQNO in the report
-        # scope (a REQNO reused across admissions, or an RBC+platelet split) would let
-        # one row silently overwrite another and mis-render its verdict/annotation. Fail
-        # loud instead (plan #176: "fail loud on duplicate REQNOs in the report scope").
-        reqno_counts = Counter((r.get("reqno") or "").strip() for r in det_rows)
-        dups = sorted(reqno for reqno, count in reqno_counts.items() if count > 1)
-        if dups:
-            raise ValueError(
-                "duplicate REQNO in report scope, cannot safely join "
-                f"MSBOS annotations: {dups}"
-            )
+    # One report row per issue event (plus REQNO-level excluded rows), joined
+    # on audit_id; a duplicate fails loud (plan #176 guard, now per event).
+    det_by_audit_id = report_by_audit_id(det_rows)
+    det_events_by_reqno = events_by_reqno(det_by_audit_id)
 
-    llm_by_reqno = {r["reqno"]: r for r in llm_report}
+    llm_by_audit_id = {r["audit_id"]: r for r in llm_report}
+    if len(llm_by_audit_id) != len(llm_report):
+        raise ValueError("llm_report.json holds an audit_id more than once")
 
-    manifest_rows = list(csv.DictReader(MANIFEST.open(encoding="utf-8")))
+    manifest_rows = review_cases(
+        list(csv.DictReader(MANIFEST.open(encoding="utf-8"))),
+        list(csv.DictReader(EVENTS_MANIFEST.open(encoding="utf-8"))),
+        det_by_audit_id,
+    )
     bdvst_by_reqno = {r["REQNO"]: r for r in bdvst}
     related_bdvst_by_reqno = {
         **bdvst_by_reqno,
@@ -1334,7 +1451,7 @@ def main() -> None:
     # Platelet pieces (component column, filter, neutral title) switch on only
     # when the page holds a platelet case, so an RBC-only page is unchanged.
     has_platelet_cases = any(
-        _is_platelet_case(m, det_by_reqno.get(m["REQNO"], {})) for m in manifest_rows
+        _is_platelet_case(m, det_by_audit_id[m["audit_id"]]) for m in manifest_rows
     )
     case_html_parts: list[str] = []
     summary_rows: list[dict[str, str]] = []
@@ -1355,28 +1472,27 @@ def main() -> None:
         reqno = m["REQNO"]
         an = m["AN"]
         bdv = bdvst_by_reqno.get(reqno, {})
-        det = det_by_reqno.get(reqno) or {}
+        audit_id = m["audit_id"]
+        event_seq = m["event_seq"]
+        det = det_by_audit_id[audit_id]
 
         anchor_date = (bdv.get("REQDATE") or "").split(" ")[0]
         anchor_time = fmt_time(bdv.get("REQTIME"))
         anchor_dt = parse_hosxp_datetime(
             bdv.get("REQDATE"), bdv.get("REQTIME")
         ) or parse_hosxp_datetime(bdv.get("BDVSTDATE"), bdv.get("BDVSTTIME"))
-        # Reserve-ahead elective orders re-window all evidence (Hb, notes, CBC,
-        # meds, procedures) onto the issue (PICK/USE) datetime; the displayed
-        # order anchor above stays REQTIME. Mirror the pipeline's re-anchor so
-        # the highlighted in-window rows match what the gate actually scored.
-        # Non-reanchored cases keep window_anchor == order anchor unchanged.
+        # Every evidence window (Hb, notes, CBC, meds, procedures, platelets)
+        # reads from the event's issue time, as both legs judged it; the
+        # displayed order anchor above stays REQTIME. issue_reanchor (issue 24 h
+        # or more after the linked order) only widens the Hb window. A
+        # REQNO-level row (excluded, no_issue_record) has no issue and keeps the
+        # order anchor.
         evidence_anchor_reason = (
             det.get("evidence_anchor_reason") or "order_datetime"
         ).strip()
         reanchored = evidence_anchor_reason == "issue_reanchor"
-        evidence_anchor_dt = parse_report_datetime(
-            det.get("evidence_anchor_datetime_local")
-        )
-        window_anchor_dt = (
-            evidence_anchor_dt if (reanchored and evidence_anchor_dt) else anchor_dt
-        )
+        issue_dt = parse_report_datetime(det.get("issue_datetime_local"))
+        window_anchor_dt = issue_dt or anchor_dt
         window_anchor_d = window_anchor_dt.date() if window_anchor_dt else None
         hb_anchor_dt = parse_report_datetime(det.get("hb_anchor_datetime_local"))
         hb_anchor_dt = hb_anchor_dt or window_anchor_dt
@@ -1391,9 +1507,9 @@ def main() -> None:
             else None
         )
         periop_notes_hi_d = notes_hi_d
-        if anchor_dt and upcoming_h is not None and 0 <= upcoming_h <= 72:
+        if window_anchor_dt and upcoming_h is not None and 0 <= upcoming_h <= 72:
             periop_hi = (
-                anchor_dt
+                window_anchor_dt
                 + timedelta(hours=upcoming_h)
                 + timedelta(days=WINDOW_PERIOP_NOTES_DAYS_AFTER)
             ).date()
@@ -1746,7 +1862,7 @@ def main() -> None:
                     seen_periop.add(key)
                     periop_evidence.append(row)
 
-        llm = llm_by_reqno.get(reqno)
+        llm = llm_by_audit_id.get(audit_id)
         det_class = det.get("classification") or "excluded"
         det_class_upper = det_class.upper()
         # Annotated RBC and platelet returns rows are counted together. A blank
@@ -1806,6 +1922,9 @@ def main() -> None:
             {
                 "#": str(i),
                 "REQNO": reqno,
+                "Event": (
+                    f"{event_seq} of {det.get('events_in_reqno')}" if event_seq else "—"
+                ),
                 "HN": _short(hn),
                 "AN": _short(an),
                 "Comp": "PLT" if _is_platelet_case(m, det) else "RBC",
@@ -1842,11 +1961,11 @@ def main() -> None:
             f"<div><b>HN:</b> <code>{esc(hn)}</code></div>",
             f"<div><b>AN:</b> <code>{esc(an)}</code></div>",
             f"<div><b>Order anchor:</b> {esc(anchor_date)} {esc(anchor_time)}</div>",
-            f"<div><b>Dispense datetime (BDVST PICK):</b> {esc(det.get('dispense_datetime_local') or '—')}</div>",
+            *_event_meta_items(det),
             f"<div><b>Use datetime (BDVSTDT USE):</b> {esc(det.get('use_datetime_local') or '—')}</div>",
             *(
                 [
-                    "<div><b><abbr title='Blood reserved this many hours before it was issued; all evidence windows (Hb, notes, CBC, meds, procedures) below are re-anchored onto the issue datetime instead of the reservation order anchor'>Evidence re-anchored to issue</abbr>:</b> "
+                    "<div><b><abbr title='Blood issued 24 h or more after the linked order; the Hb window below widens past the issue datetime'>Issue 24 h+ after order</abbr>:</b> "
                     f"{esc(det.get('evidence_anchor_datetime_local') or '—')} "
                     f"(+{esc(det.get('reanchor_gap_hours') or '—')}h after order)</div>"
                 ]
@@ -1882,9 +2001,9 @@ def main() -> None:
             ),
             "<div class='case-hd'>",
             (
-                f"<h3>Case {i} — REQNO {esc(reqno)} · Platelet order</h3>"
+                f"<h3>Case {i} — REQNO {esc(reqno)}{_event_label(det)} · Platelet order</h3>"
                 if is_platelet
-                else f"<h3>Case {i} — REQNO {esc(reqno)}</h3>"
+                else f"<h3>Case {i} — REQNO {esc(reqno)}{_event_label(det)}</h3>"
             ),
             f"<button class='mark-reviewed' data-case='{i}'"
             " onclick='toggleReviewed(this)'>Mark reviewed</button>",
@@ -1968,6 +2087,15 @@ def main() -> None:
         parts.append("</div>")
         parts.append("</div>")
 
+        parts.append(
+            _render_unit_timeline(
+                [r for r in bdvsttrans if _field(r, "REQNO", "Reqno") == reqno],
+                an,
+                det_events_by_reqno.get(reqno, []),
+                det,
+            )
+        )
+
         # Source data
         parts.append(
             "<div class='src-hd'><h4>Source data (real rows)</h4>"
@@ -1993,8 +2121,10 @@ def main() -> None:
                         "REQTIME": fmt_time(bdv.get("REQTIME")),
                         "BDVSTDATE": (bdv.get("BDVSTDATE") or "").split(" ")[0],
                         "BDVSTTIME": fmt_time(bdv.get("BDVSTTIME")),
-                        "PICKDATE": (bdv.get("PICKDATE") or "").split(" ")[0],
-                        "PICKTIME": fmt_time(bdv.get("PICKTIME")),
+                        "PICKDATE (not an anchor)": (bdv.get("PICKDATE") or "").split(
+                            " "
+                        )[0],
+                        "PICKTIME (not an anchor)": fmt_time(bdv.get("PICKTIME")),
                         "BDVSTSTATUS": fmt_status(bdv.get("BDVSTST"), bdvstst_dict),
                         "REQTYPE": fmt_reqtype(bdv.get("REQTYPE")),
                         "ICD10 (order reason)": order_icd10_disp,
@@ -2007,8 +2137,8 @@ def main() -> None:
                     "REQTIME",
                     "BDVSTDATE",
                     "BDVSTTIME",
-                    "PICKDATE",
-                    "PICKTIME",
+                    "PICKDATE (not an anchor)",
+                    "PICKTIME (not an anchor)",
                     "BDVSTSTATUS",
                     "REQTYPE",
                     "ICD10 (order reason)",
@@ -2130,7 +2260,7 @@ def main() -> None:
                 and (r.get("LABEXM") or "").strip() == PLATELET_LABEXM
                 and _in_platelet_window(
                     parse_hosxp_datetime(r.get("LVSTDATE"), r.get("LVSTTIME")),
-                    anchor_dt,
+                    window_anchor_dt,
                 )
             ]
             plt_rows.sort(key=lambda r: r["datetime"], reverse=True)
@@ -2497,6 +2627,7 @@ def main() -> None:
     .glossary-body dt { font-weight: 600; margin-top: 8px; }
     .glossary-body dd { margin-left: 0; color: var(--s-muted); }
     @media (max-width: 800px) { .glossary-body { column-count: 1; } }
+    .unit-timeline tr.this-event td { font-weight: 600; }
     /* Keyboard shortcut hint */
     .kbd-hint { font-size: 0.75rem; color: var(--s-muted); margin-bottom: 8px; }
     .kbd-dismiss { font-size: 0.75rem; padding: 1px 6px; margin-left: 8px; }
@@ -2512,7 +2643,8 @@ def main() -> None:
     }
     nav_links_items = "".join(
         f"<a href='#case-{i + 1}' data-case='{i + 1}'>"
-        f"#{i + 1} {m['REQNO']}{_FLAG_TITLE.get(tag, tag)}</a>"
+        f"#{i + 1} {m['REQNO']}{'/' + m['event_seq'] if m['event_seq'] else ''}"
+        f"{_FLAG_TITLE.get(tag, tag)}</a>"
         for i, (m, tag) in enumerate(zip(manifest_rows, case_mismatch_tags))
     )
     n_mismatches = sum(1 for t in case_mismatch_tags if t)
@@ -2599,12 +2731,12 @@ def main() -> None:
         n_platelet = sum(
             1
             for m in manifest_rows
-            if _is_platelet_case(m, det_by_reqno.get(m["REQNO"], {}))
+            if _is_platelet_case(m, det_by_audit_id[m["audit_id"]])
         )
         page_title = "KCMH blood component order appropriateness audit — human review"
         page_h1 = "KCMH Blood Component Order Appropriateness Audit — Human Review"
         orders_line = (
-            f"{n_cases} orders ({n_cases - n_platelet} RBC, {n_platelet} platelet)"
+            f"{n_cases} cases ({n_cases - n_platelet} RBC, {n_platelet} platelet)"
         )
         component_filter_html = (
             "\n    <label>Component: <select id='filter-component' "
@@ -2651,7 +2783,7 @@ def main() -> None:
         platelet_glossary_html = ""
         page_title = "KCMH RBC order appropriateness audit — human review"
         page_h1 = "KCMH RBC Order Appropriateness Audit — Human Review"
-        orders_line = f"{n_cases} RBC orders"
+        orders_line = f"{n_cases} RBC cases"
         component_filter_html = ""
     head = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
