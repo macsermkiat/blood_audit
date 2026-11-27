@@ -8,6 +8,13 @@ The output contains five committee CSVs, one own-view CSV per requested
 physician, a committee PDF, and `provenance.json`. The number of files therefore
 depends on the number of requested physicians.
 
+`bba report` counts one row per REQNO and attributes it through
+`AuditRow.reqno`. The research pilot writes one row per issue event; its files
+are described in [Pilot issue-event outputs](#pilot-issue-event-outputs). Do
+not render `bba report` from a pilot audit store. It would credit every
+`fresh_order` event to the doctor of the REQNO it was issued under, with no
+error.
+
 ## File layout
 
 ```
@@ -193,6 +200,95 @@ Single-row summary of the month's operational health.
 * Booleans render as lowercase `true` / `false` (no section currently emits
   bool cells, but the writer's contract supports them for forward
   compatibility with sentinel / dashboard sections).
+
+## Pilot issue-event outputs
+
+The research pilot (`scripts/pilot/`) audits one issue event per row (#276).
+The [issue-event design record](issue-event-plan.md) defines events, linkage,
+and identity. Both legs build events through `scripts/pilot/_pilot_events.py`.
+
+### `report.csv`
+
+`run_pipeline.py` writes one row per issue event, plus one REQNO-level row for
+each REQNO with no event rows. Existing columns keep their names and now
+describe the event. `dispense_datetime_local` (the PICK time) is gone;
+`use_datetime_local` stays as a display column. Seam columns (`returns_*`,
+`declared_use_*`, `msbos_*`) are appended when their flags are on, as before.
+
+| Column | Meaning |
+| --- | --- |
+| `audit_id` | Event id: `build_event_audit_id(hn, reqno, unit_key)` of the event's first unit. On a REQNO-level row it equals `parent_audit_id`. |
+| `parent_audit_id` | `build_audit_id(hn, reqno)`, the REQNO's id. It joins v3 rows to v1 and v2 rows. |
+| `reqno` | The REQNO the units were issued under. |
+| `event_seq` | 1-based event number within the REQNO. Empty on a REQNO-level row. |
+| `events_in_reqno` | Number of events the REQNO issued. On an excluded REQNO it is the measured count, 0 when the REQNO is not a linkage candidate. |
+| `order_datetime_utc` | Placement time of the REQNO's own order. |
+| `issue_datetime_local` | Event anchor: the first unit's `PAYDATE` and `PAYTIME`, Bangkok time. |
+| `issue_units` | Physical units in the event. |
+| `issue_units_returned` | Units with terminal status 3. Status-7 units are not counted here. |
+| `issue_unit_statuses` | Terminal `UNITSTAT` per unit in issue order, joined by `\|`. |
+| `units_reserved_not_issued` | REQNO units with no issue time (crossmatch holds). |
+| `unit_family_mismatch` | `True` when a unit code names another product family than the order, or no recognised family. |
+| `linked_reqno` | The order the event is judged against and credited to. |
+| `linked_order_datetime_local` | Placement time of the linked order. |
+| `linked_order_status` | `BDVSTST` of the linked order. |
+| `linkage_rule` | `own`, `fresh_order`, or `standing_order`. |
+| `linked_reqno_latest_before` | The order the #276 rule would link: the latest candidate placed at or before the issue. |
+| `order_after_issue` | `True` when the linked order was placed after the issue. |
+| `attributed_doctor_differs` | `True` when the linked order's `DCTREQ` differs from the REQNO's. Empty when either is unknown. Read from `BBA_BDVST_CSV`. |
+| `order_to_issue_hours` | Issue time minus linked order time, in hours. |
+| `declared_use_applies` | Whether the linked order's declared use counts for this event (owner decision 8.15 (c)). |
+| `prior_event_cutoff_local` | Issue time of the #249 prior transfusion that starts the 24 h Hb minimum. Empty when none. |
+| `linked_order_emrtype`, `linked_order_bdlevelemr` | Distinct `EMRTYPE` and `BDLEVELEMR` codes of the linked order. Display only. |
+| `evidence_anchor_reason` | Red-cell rows only. `issue_reanchor` when the linked order was placed 24 h or more before the issue, else `issue_datetime`. |
+| `evidence_anchor_datetime_local` | Red-cell rows only. Equals `issue_datetime_local`. |
+| `hb_anchor_reason` | `issue_datetime`, or a fallback-ladder reason when no Hb exists at the issue. |
+
+A REQNO-level row has `classification` = `excluded` and `rationale` set to
+the `audit_orders` exclusion reason or `no_issue_record`. It fills only
+`audit_id`, `parent_audit_id`, `reqno`, `event_seq` (empty),
+`events_in_reqno`, `units_reserved_not_issued`, `classification`, and
+`rationale`. It carries no `component`.
+
+With the returns seam on, `returns_disposition` and the `returns_units_*`
+counts describe the event. `returns_ordered_unit_amount` and
+`returns_ledger_complete` describe the REQNO. `returned_blood_datetime_local`
+reads only the event's status-3 units.
+
+`PREOP_OVER_RESERVATION` and the MSBOS columns are evaluated once per REQNO and
+written on event 1 only. An all-returned event 1 is `RETURNED_NOT_TRANSFUSED`
+ahead of the MSBOS review and the declared-use exemption.
+
+### `events_manifest.csv`
+
+`run_pipeline.py` writes one row per event with the columns `HN`, `REQNO`,
+`AN`, `component`, `audit_id`, and `event_seq`. `component` is `red_cell` or
+`platelet`; `sample_manifest.csv` uses `rbc` for the same family.
+`build_review.py` requires this file and exits without it.
+
+### `llm_report.json`
+
+`run_llm_leg.py` writes one entry per event that reached the LLM leg. Entries
+merge by `audit_id`. Each entry carries `audit_id` and `reqno`, the existing
+result fields, and these event fields: `parent_audit_id`, `event_seq`,
+`events_in_reqno`, `linked_reqno`, `linkage_rule`,
+`linked_order_datetime_local`, `issue_datetime_local`, `issue_units`,
+`issue_units_returned`, `order_to_issue_hours`, `declared_use_applies`, and
+`prior_event_cutoff_local`.
+
+The store's `AuditRow.order_datetime` holds the event's issue time, not the
+order time. Read the linked order time from `linked_order_datetime_local`.
+
+### `compare_runs.py` outputs
+
+`compare_runs.py <v2_dir> <v3_dir>` writes two files into the v3 folder.
+
+- `compare_v2_v3.csv` has one row per v2 REQNO found in the v2 `sample_manifest.csv`, with the columns `reqno`,
+  `v2_final`, `v2_hb`, `v3_events`, `v3_finals`, `v3_hbs`, and `v3_linkage`.
+  The `v3_*` lists join event values with `|` in `event_seq` order.
+- `compare_linkage_audit_ids.txt` is a comma-separated list of event
+  `audit_id`s to re-ask if the owner changes the linkage default. See the
+  [pilot README](../scripts/pilot/README.md#compare-a-v3-run-with-v2).
 
 ## Implementation references
 

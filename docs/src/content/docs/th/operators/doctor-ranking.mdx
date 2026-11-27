@@ -11,6 +11,8 @@ description: จัดอันดับผล pilot โดยใช้ตัว
 
 audit store ของขั้นโมเดลใน pilot ไม่มีผลที่กฎตัดสินจบหลายประเภท หากอ่านเฉพาะ store นี้ ตัวหารจะขาดคำสั่งเหล่านั้น ข้อจำกัดนี้เป็นของสคริปต์ pilot ไม่ใช่การประกอบผลทั้งหมดของแอปที่รองรับ
 
+pilot ตรวจแถวละหนึ่ง issue event แต่ละ event นับครั้งเดียว และนับให้แพทย์เจ้าของคำสั่งที่ event นั้นผูกอยู่ (`linked_reqno`) event แรกผูกกับ REQNO ของตัวเอง event ต่อ ๆ มาผูกกับคำสั่งใหม่ที่สั่งระหว่างการจ่ายเลือดสองครั้ง หรือในกรณี standing order ก็ผูกกับ REQNO ของตัวเองอีกครั้ง event หลัง ๆ ของ REQNO เดียวจึงอาจนับให้แพทย์คนอื่นได้
+
 กำหนด `BBA_PILOT_WORK_DIR` เป็นไดเรกทอรีผล pilot พร้อม `BBA_BDVST_CSV` และ `BBA_DCT_CSV` ที่ตรงกัน รันแต่ละผลิตภัณฑ์แยกกัน เพราะสถิติ trigger ใช้ผลตรวจคนละชนิด
 
 ```sh
@@ -18,16 +20,19 @@ uv run python scripts/pilot/rank_merged.py red_cell
 uv run python scripts/pilot/rank_merged.py platelet
 ```
 
-ผลโมเดลจะแทนผลจากกฎเฉพาะคำสั่งที่กฎส่งไปทบทวนต่อ ผลที่กฎตัดสินจบแล้วยังคงเดิม หากโมเดลมี `REQNO` ที่ไม่อยู่ในรายงาน สคริปต์จะหยุด
+ไฟล์ทั้งสองเชื่อมกันด้วย `audit_id` ผลโมเดลจะแทนผลจากกฎเฉพาะ event ที่กฎส่งไปทบทวนต่อ ผลที่กฎตัดสินจบแล้วยังคงเดิม หาก `audit_id` จากโมเดลไม่อยู่ในรายงาน หรือพบ `audit_id` ซ้ำ สคริปต์จะหยุด แถว `excluded` ระดับ REQNO ไม่นับรวมในการจัดอันดับ
 
 แต่ละผลิตภัณฑ์เขียน `<component>_doctor_ranking.csv`, `<component>_department_ranking.csv` และ `<component>_doctor_rankings.html` ใต้ `BBA_PILOT_WORK_DIR`
 
-## จัดอันดับจากคนทบทวนหรือผลที่บันทึกใน store
+## จัดอันดับจากผล pipeline ที่บันทึกใน store
 
-`rank_doctors.py` เลือกแหล่งผลด้วย `BBA_VERDICT_SOURCE` ค่าเริ่มต้น `human` อ่าน Sheet1 คอลัมน์ J ของ workbook ส่วน `pipeline` อ่านแถวเม็ดเลือดแดงของรอบที่เลือกจาก audit store ใช้แหล่งนี้เมื่อแถวที่บันทึกครอบคลุมประชากรที่ต้องการจัดอันดับ
+`rank_doctors.py` เลือกแหล่งผลด้วย `BBA_VERDICT_SOURCE` ค่าเริ่มต้น `pipeline` อ่านแถวเม็ดเลือดแดงของรอบที่เลือกจาก audit store แล้วเชื่อมแต่ละแถวกับ `report.csv` ด้วย `audit_id` store ของ pilot เก็บเฉพาะแถวจากขั้นโมเดล ดังนั้นให้ใช้แหล่งนี้เฉพาะเมื่อแถวที่บันทึกครอบคลุมประชากรที่ต้องการจัดอันดับ ถ้าไม่ครอบคลุม ให้ใช้ `rank_merged.py` แทน
+
+แหล่ง `human` เลิกใช้แล้ว สคริปต์จะหยุดพร้อมข้อความแจ้ง เพราะผลใน workbook ทบทวนเป็นราย REQNO แต่การจัดอันดับนับราย event `reconcile_verdict_sources.py` ที่เคยเทียบสองแหล่งนี้ราย REQNO ก็จะหยุดเช่นกัน
 
 ```sh
-export BBA_REVIEW_XLSX=/srv/bba/reviewed-labels.xlsx
+export BBA_RUN_ID=RUN_ID
+export BBA_AUDIT_STORE_DIR=/srv/bba/pilot/data/audit_store
 export BBA_BDVST_CSV=/srv/bba/export/BDVST.csv
 export BBA_DCT_CSV=/srv/bba/export/DCT.csv
 export BBA_PILOT_WORK_DIR=/srv/bba/pilot
@@ -35,26 +40,25 @@ export BBA_PILOT_REPORT_CSV=/srv/bba/pilot/report.csv
 uv run python scripts/pilot/rank_doctors.py
 ```
 
-กำหนดพาธเองเพื่อหลีกเลี่ยงค่าเริ่มต้นของงานวิจัยที่ชี้ไป workbook ในเครื่องและข้อมูล Bloodbank ข้าง repository หากขาดไฟล์ที่ต้องใช้ สคริปต์จะหยุด
+กำหนดพาธเองเพื่อหลีกเลี่ยงค่าเริ่มต้นของงานวิจัยที่ชี้ไปข้อมูล Bloodbank ข้าง repository หากขาดไฟล์ที่ต้องใช้ สคริปต์จะหยุด
 
 | ตัวแปร | การใช้งาน |
 | --- | --- |
-| `BBA_VERDICT_SOURCE` | ค่าเริ่มต้น `human` หรือเลือก `pipeline` |
-| `BBA_REVIEW_XLSX` | Workbook ของแหล่ง human ค่าเริ่มต้น `~/Downloads/Review การใช้เลือด.xlsx` |
+| `BBA_VERDICT_SOURCE` | ค่าเริ่มต้น `pipeline` ส่วน `human` เลิกใช้แล้ว หากเลือกค่านี้สคริปต์จะหยุด |
 | `BBA_BDVST_CSV` | ไฟล์คำสั่งที่มี `REQNO` และ `DCTREQ` ค่าเริ่มต้นงานวิจัย `../Bloodbank/data/encrypted/BDVST.csv` |
 | `BBA_DCT_CSV` | ทะเบียนแพทย์ ค่าเริ่มต้นงานวิจัย `../Bloodbank/data/raw/DCT.csv` |
 | `BBA_PILOT_WORK_DIR` | ไดเรกทอรีผล ค่าเริ่มต้น `/tmp/bba_mini` |
-| `BBA_PILOT_REPORT_CSV` | ข้อมูล trigger รายคำสั่ง ต้องใช้ทั้งสองแหล่ง ค่าเริ่มต้น `report.csv` ใน work directory |
+| `BBA_PILOT_REPORT_CSV` | `report.csv` ราย event ที่มี `audit_id`, `linked_reqno` และค่า trigger เป็นไฟล์ที่ขาดไม่ได้ ค่าเริ่มต้น `report.csv` ใน work directory |
 | `BBA_AUDIT_STORE_DIR` | Root ของ audit store สำหรับ pipeline หากไม่ตั้งจะใช้ `$BBA_DATA_DIR/audit_store` |
-| `BBA_RUN_ID` | ต้องระบุรอบเดียวเมื่อใช้ pipeline |
-| `BBA_CODE_VERSION` | รุ่นโค้ดของ pipeline เลือกได้ ใช้เมื่อรอบที่เลือกมีหลายรุ่นจนแยกผลไม่ได้ |
+| `BBA_RUN_ID` | ต้องระบุรอบเดียว |
+| `BBA_CODE_VERSION` | รุ่นโค้ด เลือกได้ ใช้เมื่อรอบที่เลือกมีแถวจากโค้ดมากกว่าหนึ่งรุ่น |
 
 สคริปต์เขียน `doctor_ranking.csv`, `department_ranking.csv` และ `doctor_rankings.html` ใน work directory และแสดงสรุปจำนวน verdict กลุ่มที่จัดอันดับ เกณฑ์จำนวนตัวอย่างขั้นต่ำ และจำนวนแถวผล
 
 ## ตีความแพทย์และแผนก
 
-`bba.attribution` จัดอันดับแพทย์และแผนก 10 อันดับแรก โดยแบ่งผลเป็นเหมาะสม ไม่เหมาะสม และยังไม่สรุป ระบบเชื่อม `REQNO` กับ `BDVST.DCTREQ` แล้วค้น `DCT.csv` แผนกจึงหมายถึงแผนกของแพทย์ผู้สั่ง
+`bba.attribution` จัดอันดับแพทย์และแผนก 10 อันดับแรก โดยแบ่งผลเป็นเหมาะสม ไม่เหมาะสม และยังไม่สรุป ระบบเชื่อม `linked_reqno` ของแต่ละ event กับ `BDVST.DCTREQ` แล้วค้น `DCT.csv` แผนกจึงหมายถึงแผนกของแพทย์เจ้าของคำสั่งที่ event ผูกอยู่ ตัวเลขที่นับเป็นจำนวน event ไม่ใช่จำนวน REQNO ยอดรวมของแพทย์คนหนึ่งจึงอาจมากกว่าจำนวนคำสั่งที่แพทย์คนนั้นสั่ง
 
-แหล่ง pipeline นับ `RETURNED_NOT_TRANSFUSED` และ `PERIOP_TRANSFUSION_EXEMPT` ในกลุ่มไม่นับคะแนน ส่วน `PREOP_OVER_RESERVATION` รวมอยู่ฝั่งไม่เหมาะสมและนับ `over_reservation_count` แยกด้วย ตรวจประชากรของแหล่งข้อมูลก่อนตีความอัตรา
+ทั้งสองสคริปต์ระบุแพทย์ให้ event ที่เป็น `RETURNED_NOT_TRANSFUSED` และ `PERIOP_TRANSFUSION_EXEMPT` ด้วย แต่นับไว้ในกลุ่มไม่นับคะแนน ส่วน `PREOP_OVER_RESERVATION` รวมอยู่ฝั่งไม่เหมาะสมและนับ `over_reservation_count` แยกด้วย ตรวจประชากรของแหล่งข้อมูลก่อนตีความอัตรา
 
-สคริปต์จัดอันดับแยกจาก `bba report` แต่รายงานและ dashboard ใช้ attribution loaders ชุดเดียวกัน ดูไฟล์ที่ต้องใช้ที่ [สร้างรายงาน](/blood_audit/th/operators/generate-report/)
+สคริปต์จัดอันดับแยกจาก `bba report` รายงานและ dashboard ใช้ attribution loaders ชุดเดียวกัน แต่ยังระบุแพทย์ตาม REQNO ของแต่ละแถว ห้ามรัน `bba report` หรือ `bba serve-dashboard` กับ audit store ของ pilot เพราะจะนับ event ที่มาจากคำสั่งใหม่ให้แพทย์ของ REQNO ที่ใช้จ่ายเลือดครั้งนั้น โดยไม่มีอะไรเตือนว่าผลผิด ดูไฟล์ที่ต้องใช้ที่ [สร้างรายงาน](/blood_audit/th/operators/generate-report/)

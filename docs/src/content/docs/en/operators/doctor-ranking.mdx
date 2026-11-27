@@ -11,6 +11,8 @@ Use `rank_merged.py` for the [research pilot](/blood_audit/en/operators/run-pipe
 
 The pilot's model audit store omits many deterministic terminal decisions. Reading only that store would leave those orders out of the denominator. This limitation concerns the pilot script workflow, rather than the supported application's full audit composition.
 
+The pilot audits one issue event per row. Each event counts once and is credited to the doctor of its linked order (`linked_reqno`). The linked order is the event's own REQNO for the first event, a fresh order placed between two issues, or the own REQNO again for a standing-order event. One REQNO's later events can therefore credit other doctors.
+
 Set `BBA_PILOT_WORK_DIR` to the pilot output directory and provide the corresponding `BBA_BDVST_CSV` and `BBA_DCT_CSV` exports. Run each component separately because the trigger statistics use different laboratory values.
 
 ```sh
@@ -18,16 +20,19 @@ uv run python scripts/pilot/rank_merged.py red_cell
 uv run python scripts/pilot/rank_merged.py platelet
 ```
 
-The model verdict replaces a deterministic verdict only when the deterministic result routed the order for further review. Deterministic terminal decisions remain final for the merge. A model `REQNO` absent from the report fails validation.
+The two files join on `audit_id`. The model verdict replaces a deterministic verdict only when the deterministic result routed the event for further review. Deterministic terminal decisions remain final for the merge. A model `audit_id` absent from the report fails validation, and so does a repeated `audit_id`. REQNO-level `excluded` rows are not ranked.
 
 Each component writes `<component>_doctor_ranking.csv`, `<component>_department_ranking.csv`, and `<component>_doctor_rankings.html` under `BBA_PILOT_WORK_DIR`.
 
-## Rank reviewed labels or stored pipeline rows
+## Rank stored pipeline rows
 
-`rank_doctors.py` selects a source through `BBA_VERDICT_SOURCE`. The default `human` source reads the review workbook's Sheet1, column J. The `pipeline` source reads red-cell rows from the selected run in an audit store. Select the latter only when its committed rows cover the population you intend to rank.
+`rank_doctors.py` selects a source through `BBA_VERDICT_SOURCE`. The default `pipeline` source reads red-cell rows from the selected run in an audit store and joins each to `report.csv` by `audit_id`. The pilot store holds model-leg rows only, so use this source only when its committed rows cover the population you intend to rank. Otherwise use `rank_merged.py`.
+
+The `human` source is superseded and exits with a message. The review workbook labels are per REQNO and the ranking is per event. `reconcile_verdict_sources.py`, which compared the two sources per REQNO, also exits.
 
 ```sh
-export BBA_REVIEW_XLSX=/srv/bba/reviewed-labels.xlsx
+export BBA_RUN_ID=RUN_ID
+export BBA_AUDIT_STORE_DIR=/srv/bba/pilot/data/audit_store
 export BBA_BDVST_CSV=/srv/bba/export/BDVST.csv
 export BBA_DCT_CSV=/srv/bba/export/DCT.csv
 export BBA_PILOT_WORK_DIR=/srv/bba/pilot
@@ -35,26 +40,25 @@ export BBA_PILOT_REPORT_CSV=/srv/bba/pilot/report.csv
 uv run python scripts/pilot/rank_doctors.py
 ```
 
-Set paths explicitly to avoid the research defaults that point to local workbooks and adjacent Bloodbank exports. Missing inputs fail the script.
+Set paths explicitly to avoid the research defaults that point to adjacent Bloodbank exports. Missing inputs fail the script.
 
 | Variable | Contract |
 | --- | --- |
-| `BBA_VERDICT_SOURCE` | `human` by default, or `pipeline`. |
-| `BBA_REVIEW_XLSX` | Human source workbook. Default is `~/Downloads/Review การใช้เลือด.xlsx`. |
+| `BBA_VERDICT_SOURCE` | `pipeline` by default. `human` is superseded and exits. |
 | `BBA_BDVST_CSV` | Order export with `REQNO` and `DCTREQ`. Research default is `../Bloodbank/data/encrypted/BDVST.csv`. |
 | `BBA_DCT_CSV` | Doctor registry. Research default is `../Bloodbank/data/raw/DCT.csv`. |
 | `BBA_PILOT_WORK_DIR` | Output directory. Default is `/tmp/bba_mini`. |
-| `BBA_PILOT_REPORT_CSV` | Per-order trigger statistics. Required for either source. Defaults to `report.csv` in the work directory. |
+| `BBA_PILOT_REPORT_CSV` | Per-event `report.csv` with `audit_id`, `linked_reqno`, and trigger values. Required. Defaults to `report.csv` in the work directory. |
 | `BBA_AUDIT_STORE_DIR` | Pipeline source audit-store root. Falls back to `$BBA_DATA_DIR/audit_store`. |
-| `BBA_RUN_ID` | Required single-run scope for the pipeline source. |
-| `BBA_CODE_VERSION` | Optional pipeline code-version scope. Use it when the selected run has ambiguous versions. |
+| `BBA_RUN_ID` | Required single-run scope. |
+| `BBA_CODE_VERSION` | Optional code-version scope. Use it when the selected run has rows from more than one code version. |
 
 The script writes `doctor_ranking.csv`, `department_ranking.csv`, and `doctor_rankings.html` in the work directory. Its reconciliation summary includes verdict counts, the ranked bucket, the minimum sample threshold, and output row counts.
 
 ## Interpret the attribution
 
-`bba.attribution` ranks the top 10 doctors and departments using appropriate, inappropriate, and unresolved buckets. `REQNO` links to `BDVST.DCTREQ`, which links to `DCT.csv`. Department means the ordering doctor's department.
+`bba.attribution` ranks the top 10 doctors and departments using appropriate, inappropriate, and unresolved buckets. Each event's `linked_reqno` links to `BDVST.DCTREQ`, which links to `DCT.csv`. Department means the department of the doctor who placed the linked order. Counts are events, not REQNOs, so a doctor's total can exceed the number of orders they placed.
 
-The pipeline source counts `RETURNED_NOT_TRANSFUSED` and `PERIOP_TRANSFUSION_EXEMPT` in an excluded bucket. It includes `PREOP_OVER_RESERVATION` on the inappropriate side and also records `over_reservation_count` separately. Check the selected source's population before interpreting rates.
+Both scripts attribute `RETURNED_NOT_TRANSFUSED` and `PERIOP_TRANSFUSION_EXEMPT` events and count them in an excluded bucket. Both count `PREOP_OVER_RESERVATION` on the inappropriate side and also record `over_reservation_count` separately. Check the selected source's population before interpreting rates.
 
-These ranking scripts are separate from `bba report`. The supported report and dashboard use the same attribution loaders. See [Generate the report](/blood_audit/en/operators/generate-report/) for their input contract.
+These ranking scripts are separate from `bba report`. The supported report and dashboard use the same attribution loaders, but they still attribute each row by its own REQNO. Do not run `bba report` or `bba serve-dashboard` on a pilot audit store. They would credit each fresh-order event to the doctor of the REQNO it was issued under, and nothing reports the error. See [Generate the report](/blood_audit/en/operators/generate-report/) for their input contract.

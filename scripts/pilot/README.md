@@ -29,6 +29,28 @@ build_review.py         →  review.html    (single page for human review;
                                             refuses LLM verdicts without a fresh, clean audit)
 ```
 
+## The audit unit is the issue event
+
+Since #276 both legs judge one issue event per row, not one REQNO. An issue
+event is the units one REQNO issued with no gap over 4 h and no new order for
+the same admission and family in between. Each event is judged at its first
+unit's issue time (`PAYDATE` + `PAYTIME`), against the order linked to it
+(`own`, `fresh_order`, or `standing_order`), and credited to that order's
+`DCTREQ`. `PICKTIME` is no longer an anchor. The
+[issue-event design record](../../docs/issue-event-plan.md) gives the rules and
+the measured scale. The [report schema](../../docs/report-schema.md#pilot-issue-event-outputs)
+lists the per-event columns.
+
+`scripts/pilot/_pilot_events.py` builds the events for both legs and holds
+`EVENT_CODE_VERSION` (`pilot-event-1+gap4h+link-own`). Changing the 4 h
+window, the linkage rule, or the event facts in the prompt needs a new base
+token and a fresh `BBA_PILOT_RUN_ID`. Audit IDs from REQNO-level runs (v1, v2)
+do not match event audit IDs; join them through `parent_audit_id`.
+
+The bundle must include pending (status 1) orders in `BDVST_RELATED.csv`.
+Without them, fresh orders would link as standing orders, so both legs exit.
+Rebuild an older bundle with `sample_bundle.py`.
+
 ## Environment variables
 
 | Variable | Default | Purpose |
@@ -43,10 +65,12 @@ build_review.py         →  review.html    (single page for human review;
 | `BBA_PILOT_LLM_MODEL` | `claude-sonnet-5-5` | Anthropic model id |
 | `BBA_PILOT_RUN_ID` | `pilot-mini` | run_id stamped on audit_store rows |
 | `BBA_PILOT_ENABLE_MISSING_HB_POSITIVE_EVIDENCE` | `false` | Opt-in to the missing-Hb MTP / peri-procedural auto-APPROPRIATE pre-check (SEED — set `1`/`true` only after clinical sign-off) |
-| `BBA_PILOT_DECLARED_USETYPE` | `0` (off) | When set to `1`, threads BDVSTDT.USETYPE declared intent into both pilot legs and appends `declared_use_code` / `declared_use_label` to `report.csv` |
+| `BBA_PILOT_DECLARED_USETYPE` | the library flag `DECLARED_USETYPE_ENABLED` (on) | `1` forces on, any other value forces off. When on, both pilot legs thread BDVSTDT.USETYPE declared intent into the classifier and `report.csv` gets `declared_use_code` / `declared_use_label`. `compare_runs.py` reads `declared_use_code` to find standing-order events whose order declares use |
 | `BBA_BDVST_CSV` | `../Bloodbank/data/encrypted/BDVST.csv` | BDVST export with DCTREQ; `run_pipeline.py` reads it only to fill `attributed_doctor_differs`, the rankings for attribution |
 | `BBA_PILOT_ONLY_REQNO` | _(unset)_ | Comma-separated REQNOs: `run_llm_leg.py` processes/submits only every issue event of those REQNOs and MERGES the fresh records into the existing `llm_report.json` by `audit_id` (other events keep their records). Always pair with a fresh `BBA_PILOT_RUN_ID` — the store is idempotent on `(run_id, audit_id, code_version)`, so a reused run id keeps the stale row |
-| `BBA_PILOT_ONLY_AUDIT_ID` | _(unset)_ | Comma-separated event `audit_id`s (the re-ask list): the same as `BBA_PILOT_ONLY_REQNO` for single issue events. An audit_id with no event in the bundle stops the run |
+| `BBA_PILOT_ONLY_AUDIT_ID` | _(unset)_ | Comma-separated event `audit_id`s (the re-ask list): the same as `BBA_PILOT_ONLY_REQNO` for single issue events. An audit_id with no event in the bundle stops the run. The two filters combine as a union: an event runs when its REQNO is in `BBA_PILOT_ONLY_REQNO` OR its audit_id is in `BBA_PILOT_ONLY_AUDIT_ID`. Unset `BBA_PILOT_ONLY_REQNO` for an audit_id re-ask. An empty value is the same as unset, so an empty re-ask list runs every event |
+| `BBA_PILOT_PRIVACY_PREPARE` | _(unset)_ | Path of a request file to write instead of submitting (prepare stage). See `issue_privacy_artifacts.py` for the prepare, issue, and llm order |
+| `BBA_PILOT_ALLOW_UNAUDITED` | _(unset)_ | `1` lets `build_review.py` build a page from model responses whose audit is missing, stale, or has a HIGH finding. Setting it is the data owner's decision for each run |
 | `BBA_PILOT_BATCH_MAX_WAIT` | `86400` | Seconds to wait for the Anthropic batch (default = the 24h batch SLA) |
 | `BBA_PILOT_TRANSPORT` | `anthropic-batch` | `claude-cli` runs the LLM leg through the local `claude` CLI on the claude.ai subscription, one `claude -p --json-schema` call per case, answers checkpointed under `$BBA_PILOT_WORK_DIR/cli_batches/<batch_id>/` (resume with `BBA_PILOT_BATCH_ID`). For A/B runs that should not spend API credit; NOT the production path, rows carry `_transport: claude-cli`. No `ANTHROPIC_API_KEY` needed |
 | `BBA_PILOT_CLI_WORKERS` | `3` | Concurrent `claude -p` processes when `BBA_PILOT_TRANSPORT=claude-cli` |
@@ -97,22 +121,55 @@ and writes `llm_response_audit.{json,csv}` plus
 `llm_response_audit_ids.txt`, the audit_ids of the issue events a re-run can
 fix.
 
-The loop: run the audit; fix the cause; re-run those events under a fresh run
-id; run the audit again.
+A record whose `review_reason` is `hallucination_suspect` is reported as a HIGH
+`parse_failure`, like the other parse-failure reasons, and lands on the re-ask
+list.
+
+### Re-ask the flagged events
+
+The loop: run the audit, fix the cause, re-ask the listed events under a fresh
+run id, and run the audit again. A re-ask goes through the same three privacy
+stages as the first pass, because the signed artifacts bind the run id.
+
+1. Check that `llm_response_audit_ids.txt` is not empty. An empty
+   `BBA_PILOT_ONLY_AUDIT_ID` means no filter, and the LLM leg would process
+   every event.
+2. Unset `BBA_PILOT_ONLY_REQNO`. The two filters combine as a union, so a
+   leftover REQNO list re-asks every event of those REQNOs as well as the
+   listed audit_ids.
+3. Pick a fresh `BBA_PILOT_RUN_ID` and new file names for the request and
+   artifact files, so the first pass's files stay in place. The month wrapper
+   script calls this suffix `SFX` (for example `_r2`).
+4. Run prepare, issue, and llm with the same run id, then audit again.
 
 ```bash
-BBA_PILOT_ONLY_AUDIT_ID="$(cat "$BBA_PILOT_WORK_DIR/llm_response_audit_ids.txt")" \
-BBA_PILOT_RUN_ID=pilot-mini-audit-fix-1 \
+unset BBA_PILOT_ONLY_REQNO
+export BBA_PILOT_ONLY_AUDIT_ID="$(cat "$BBA_PILOT_WORK_DIR/llm_response_audit_ids.txt")"
+export BBA_PILOT_RUN_ID=pilot-mini-r2
+SFX=_r2
+
+# prepare: write the exact prompt requests (raw notes, mode 0600)
+BBA_PILOT_PRIVACY_PREPARE="/secure/requests$SFX.json" \
 uv run python scripts/pilot/run_llm_leg.py
+
+# issue: redact and sign on the operator's machine (full command in issue_privacy_artifacts.py)
+$ISSUER issue --requests "/secure/requests$SFX.json" ... --out "/secure/artifacts$SFX.json"
+
+# llm: submit the admitted requests; fresh records merge into llm_report.json by audit_id
+BBA_PRIVACY_POLICY=/secure/policy.json \
+BBA_PRIVACY_ARTIFACTS="/secure/artifacts$SFX.json" \
+uv run python scripts/pilot/run_llm_leg.py
+
 uv run python scripts/pilot/audit_llm_responses.py
 ```
 
 `build_review.py` exits with an error when `llm_report.json` holds model
 responses and the audit is missing, read a different `llm_report.json` (the
 audit stores the report's SHA-256, so re-audit after every re-run), or carries a
-HIGH finding. Runs with no model responses need no audit. To build the page
-anyway, set `BBA_PILOT_ALLOW_UNAUDITED=1`; the builder prints the reason it
-would have refused.
+HIGH finding. Runs with no model responses need no audit.
+`BBA_PILOT_ALLOW_UNAUDITED=1` builds the page anyway and prints the reason the
+builder would have refused. Setting it is the data owner's decision for each
+run, not an operator default.
 
 ### Dev-test consortium (Claude Code, not a pipeline step)
 
@@ -142,18 +199,111 @@ conclude?" check for unattended runs; it bills `ANTHROPIC_API_KEY`.
 ## Re-running a single case
 
 To iterate on one case (e.g. after a prompt or guardrail change)
-without paying for a full batch, filter the LLM leg to that REQNO
-under a fresh run id, then rebuild the review — the fresh record is
-merged into `llm_report.json`; the other cases are untouched:
+without paying for a full batch, filter the LLM leg under a fresh run id,
+then rebuild the review. The fresh records merge into `llm_report.json` by
+`audit_id`, and the other events keep their records.
+`BBA_PILOT_ONLY_REQNO` re-runs every event of that REQNO;
+`BBA_PILOT_ONLY_AUDIT_ID` re-runs one event. Set only one of them. Every
+submission needs a signed privacy artifact for its run id. Without one, the
+event is stored as a local privacy-failed row and no model call happens. Run
+the prepare, issue, and llm stages as in the re-ask loop above. The block below
+shows only the filter and run-id settings that the three stages share:
 
 ```bash
-BBA_PILOT_ONLY_REQNO=68080335 \
-BBA_PILOT_RUN_ID=pilot-mini-68080335-v2 \
+BBA_PILOT_ONLY_AUDIT_ID=<event audit_id> \
+BBA_PILOT_RUN_ID=pilot-mini-one-event-v2 \
 uv run python scripts/pilot/run_llm_leg.py
 
 uv run python scripts/pilot/audit_llm_responses.py
 uv run python scripts/pilot/build_review.py
 ```
+
+## What the review page shows
+
+`build_review.py` reads `report.csv`, `llm_report.json`, `sample_manifest.csv`,
+and `events_manifest.csv`. It exits when `events_manifest.csv` is missing.
+
+- **One case per issue event.** Cases follow the REQNO order of
+  `sample_manifest.csv`, then `event_seq`. The header reads
+  `Case N — REQNO … · event k of n`. Case numbers count events, so a v2 case
+  number does not point at the same case on a v3 page.
+- **REQNO-level cases.** A REQNO that `audit_orders` excluded, or that issued no
+  unit (`no_issue_record`), keeps one case with no event label.
+- **Unit timeline.** Every event case shows the REQNO's issued units: issue
+  time, status, return time, the event each unit belongs to, and that event's
+  linkage, linked REQNO, DCTREQ-differs flag, and declared-use flags. The
+  timeline shows no DCTREQ code.
+- **PICK is display only.** `PICKDATE` and `PICKTIME` stay in the BDVST table,
+  labelled "not an anchor". Every evidence window reads from the event's issue
+  time.
+- **Joins fail loud.** The builder exits on a repeated `audit_id`, an event in
+  `events_manifest.csv` with no `report.csv` row or the reverse, a sampled
+  REQNO with neither events nor a REQNO-level row, or a timeline whose unit
+  count disagrees with `issue_units`. Each means the files come from different
+  runs.
+
+The page shows more notes than the model saw. The model's bundle holds
+`IPDNRFOCUSDT` notes charted in [issue - 24 h, issue + 24 h], at most 5 before
+the issue and 5 at or after it (`WINDOW_FOCUS`, `CAP_FOCUS_BEFORE`,
+`CAP_FOCUS_AFTER` in `src/bba/evidence_bundle_builder/builder.py`), and
+`IPDADMPROGRESS` notes in the same 24 h window, at most 8. The page lists
+notes by calendar day, from the day before the issue to the day after, with
+no cap. Peri-operative note sections extend to two days after an operation
+planned within 72 h of the issue. A note the reviewer sees on
+the page may be absent from the model's evidence. Check the model's cited
+evidence IDs before treating a missed note as a model error.
+
+## Compare a v3 run with v2
+
+`compare_runs.py` compares a REQNO-level run (v2) with an issue-event run (v3)
+and prints counts only. It joins through `parent_audit_id`, computing the v2
+side as `build_audit_id(HN, REQNO)` from the v2 `sample_manifest.csv`.
+
+```bash
+uv run python scripts/pilot/compare_runs.py <v2_dir> <v3_dir>
+```
+
+It reads `report.csv` and `llm_report.json` from both folders and
+`sample_manifest.csv` from the v2 folder. It writes nothing into the v2 folder
+and writes two files into the v3 folder.
+
+- `compare_v2_v3.csv`: per v2 REQNO, the v2 final verdict and Hb, and the v3
+  event verdicts, Hb values, and linkage tags.
+- `compare_linkage_audit_ids.txt`: the re-ask list if the owner changes the
+  linkage default. It holds the union of two sets of event audit_ids: events
+  whose `linked_reqno_latest_before` is set and differs from `linked_reqno`,
+  and `standing_order` events whose own order declares USETYPE 2 or 3
+  (`declared_use_code`). The second set is empty when the declared-use seam
+  is off, because `declared_use_code` is then absent.
+
+Final verdicts merge as `rank_merged.py` merges them. A v2 row whose REQNO is
+missing from the v2 `sample_manifest.csv` is skipped and only counted
+(`v2_rows_without_manifest_hn`). The command exits 1 when any other v2 row maps
+to no v3 row. That is expected for a subset run such as a gold
+run, where most v2 rows lie outside the subset.
+
+## Rank per event
+
+`rank_merged.py red_cell` and `rank_merged.py platelet` merge `report.csv`
+with `llm_report.json` by `audit_id` and rank one component at a time. Each
+event counts once and is credited to the `DCTREQ` of its `linked_reqno`, so a
+REQNO's later events can credit other doctors. `RETURNED_NOT_TRANSFUSED` and
+`PERIOP_TRANSFUSION_EXEMPT` events are attributed and held out of the scored
+denominator. REQNO-level `excluded` rows are not ranked.
+
+`rank_doctors.py` defaults to `BBA_VERDICT_SOURCE=pipeline`, which reads one
+run's red-cell rows from the audit store and joins them to `report.csv` by
+`audit_id`. The store holds LLM-leg rows only, so prefer `rank_merged.py` for
+complete denominators. `BBA_VERDICT_SOURCE=human` exits, because the review
+workbook labels are per REQNO and the ranking is per event.
+
+The doctor-profile tool kept outside this repository reads the same per-event
+outputs. It needs this code (PR 8 or later) in the checkout that
+`BBA_CODE_DIR` names.
+
+Do not use `bba report` or `bba serve-dashboard` on a pilot audit store. They
+attribute by REQNO and would credit fresh-order events to the wrong doctor
+without an error ([module contracts](../../docs/CONTEXT.md#application-path-stays-per-reqno)).
 
 ## What the LLM sees
 
@@ -278,20 +428,13 @@ one-off per-REQNO go-live evidence for the declared-use (#151) and returns (#125
 seams. Since issue events (#276) they exit with a "superseded by issue events"
 message; the last working versions are in git history.
 
-### `reconcile_verdict_sources.py` — pre-swap cross-check for doctor ranking
+### `reconcile_verdict_sources.py` — superseded
 
-The gate before Feature 2 (doctor/department ranking) swaps its input from the
-human-review workbook to the pipeline's own verdicts. Reads BOTH sources and,
-over the REQNOs they share, prints agreement plus the peri-op OVER-CLEAR count
-(orders the pipeline cleared that the reviewer called inappropriate) — which
-must be ~0 to trust the swap. Read-only and fail-loud (non-zero exit) if either
-source is missing or the two share no REQNOs.
-
-```bash
-BBA_RUN_ID=pilot-mini \
-BBA_AUDIT_STORE_DIR="$BBA_PILOT_WORK_DIR/data/audit_store" \
-uv run python scripts/pilot/reconcile_verdict_sources.py
-```
+It compared the audit store's verdict per REQNO with the human-review
+workbook's label per REQNO. Since issue events (#276) one REQNO can hold
+several events with different verdicts, so the script exits with a
+"superseded by issue events" message. The last working version is in git
+history.
 
 ### `fix_reasoning_split.py` — repair tag-leaked reasoning in an old report
 

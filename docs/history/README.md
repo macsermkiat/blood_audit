@@ -15,6 +15,7 @@ The original paths are retained so existing references continue to work.
 
 - [Administration confirmation](../administration-confirmation-plan.md).
 - [Declared USETYPE routing](../declared-usetype-plan.md).
+- [Issue-event audit unit](../issue-event-plan.md).
 - [Missing-Hb perioperative pre-pass](../missing-hb-periop-pre-pass-plan.md).
 - [MSBOS returns annotations](../msbos-returns-annotation-plan.md).
 - [Draft transfusion-policy application](../transfusion-policy-application-plan.md).
